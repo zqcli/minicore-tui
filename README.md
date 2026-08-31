@@ -14,9 +14,16 @@ and does not use Pi logos or branding.
 
 Phase 0 scaffold: package layout, MSRV tooling, `TerminalGuard`
 (alternate-screen lifecycle), dark/light `Theme`, and an empty fullscreen
-renderer with a small-terminal safety hint. The agent RPC process, app state,
-and the conversation UI arrive in later phases. Today `minicore-tui` shows a
-blank fullscreen; press `q` or `Ctrl+C` to quit.
+renderer with a small-terminal safety hint.
+
+Phase 1 adds the stdio RPC layer for the pinned agent contract:
+`src/protocol.rs` (wire DTOs, NDJSON frame parser, request builder) and
+`src/rpc.rs` (agent child lifecycle: one stdin writer fed only with requests
+verified against the agent's 1 MiB line bound, one stdout reader under an
+8 MiB frame bound, one stderr reader with UTF-8-safe 4096-byte lines, and a
+bounded event channel). The interactive app loop is not wired to the RPC
+layer yet; that is Phase 2. Running `minicore-tui` still shows a blank
+fullscreen; press `q` or `Ctrl+C` to quit.
 
 ## Requirements
 
