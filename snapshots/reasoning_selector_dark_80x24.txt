@@ -1,0 +1,24 @@
+MINICORE  v0.1.0
+
+Coding agent TUI
+q / Ctrl+C to quit
+
+Open a session — press q / Ctrl+C to quit
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│Select reasoning                                                              │
+│Current session: —                                                            │
+│New session setting: high                                                     │
+│  auto  Provider default                                                      │
+│  low  Light reasoning                                                        │
+│  medium  Moderate reasoning                                                  │
+│→ high  Deep reasoning                                                        │
+│(4/4)                                                                         │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+/project                                                              no session
+Idle

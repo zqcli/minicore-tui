@@ -1,0 +1,24 @@
+MINICORE  v0.1.0
+
+Coding agent TUI
+q / Ctrl+C to quit
+
+Open a session — press q / Ctrl+C to quit
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│Select profile                                                                │
+│>                                                                             │
+│→ coding  tools: read, edit, bash                                             │
+│  review  tools: read                                                         │
+│(1/2)                                                                         │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+/project                                                              no session
+Idle

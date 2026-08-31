@@ -311,3 +311,137 @@ fn light_theme_renders_identically_shaped_content() {
     assert!(content.contains("hello"));
     assert!(any_cell_matching(&terminal, |cell| cell.bg == Theme::light().user_message_bg));
 }
+
+// ---- Phase 4: selectors and the new-session form -----------------------
+
+#[test]
+fn selector_panel_replaces_the_composer_and_keeps_the_transcript_visible() {
+    let app = testapp::model_selector(ThemeKind::Dark);
+    let terminal = draw(&app, 80, 24);
+    let content = text(&terminal);
+    // The transcript stays visible above the dock (spec 24.1).
+    assert!(content.contains("MINICORE"));
+    assert!(content.contains("Select model"));
+    assert!(content.contains("Changing model creates a new session."));
+    assert!(content.contains("128k context"));
+    assert!(content.contains("✓ tools"));
+    assert!(content.contains("— tools"));
+    assert!(content.contains("✓ current"));
+    let dark = Theme::dark();
+    assert!(
+        any_cell_matching(&terminal, |cell| cell.bg == dark.selected_bg),
+        "the selected row uses selected_bg"
+    );
+    assert!(
+        any_cell_matching(&terminal, |cell| cell.symbol() == "→"
+            && cell.fg == dark.accent),
+        "the selection arrow is accent"
+    );
+    assert!(
+        any_cell_matching(&terminal, |cell| cell.symbol() == "┌"
+            && cell.fg == dark.border_accent),
+        "the panel border is accent"
+    );
+    assert!(
+        any_cell_matching(&terminal, |cell| cell.symbol() == "✓"
+            && cell.fg == dark.success),
+        "the current marker is success colored"
+    );
+}
+
+#[test]
+fn reasoning_selector_lists_only_supported_levels_with_the_current_session_header() {
+    let app = testapp::reasoning_selector(ThemeKind::Dark);
+    let terminal = draw(&app, 80, 24);
+    let content = text(&terminal);
+    assert!(content.contains("Select reasoning"));
+    assert!(content.contains("Current session: —"));
+    assert!(content.contains("New session setting: high"));
+    assert!(content.contains("Provider default"));
+    assert!(content.contains("Deep reasoning"));
+    // deep supports auto/low/medium/high; disabled is not listed.
+    assert!(content.contains("Moderate reasoning"));
+    assert!(!content.contains("No reasoning"));
+    assert!(
+        any_cell_matching(&terminal, |cell| cell.fg == Theme::dark().thinking_high),
+        "reasoning rows use the thinking colors"
+    );
+}
+
+#[test]
+fn session_selector_sorts_newest_first_and_marks_running_loaded_idle() {
+    let app = testapp::session_selector(ThemeKind::Dark);
+    let terminal = draw(&app, 80, 24);
+    let content = text(&terminal);
+    // updated_at descending: ses_main (5m) then ses_recent (15m) then ses_old (1d).
+    assert!(content.find("ses_main") < content.find("Web app"));
+    assert!(content.find("Web app") < content.find("Rust port"));
+    for marker in ["◉", "●", "○"] {
+        assert!(content.contains(marker), "missing status marker {marker}");
+    }
+    assert!(content.contains("5m"));
+    assert!(content.contains("15m"));
+    assert!(content.contains("1d"));
+    assert!(content.contains("/work/web"));
+}
+
+#[test]
+fn new_session_form_shows_all_fields_and_the_active_field_background() {
+    let app = testapp::new_session(ThemeKind::Dark);
+    let terminal = draw(&app, 80, 24);
+    let content = text(&terminal);
+    assert!(content.contains("New session"));
+    assert!(content.contains("workspace"));
+    assert!(content.contains("/project"));
+    assert!(content.contains("profile"));
+    assert!(content.contains("coding"));
+    assert!(content.contains("model"));
+    assert!(content.contains("deep"));
+    assert!(content.contains("reasoning"));
+    assert!(content.contains("high"));
+    assert!(content.contains("title"));
+    assert!(content.contains("Create session"));
+    assert!(
+        any_cell_matching(&terminal, |cell| cell.bg == Theme::dark().selected_bg),
+        "the active field row is highlighted"
+    );
+}
+
+#[test]
+fn empty_selector_search_shows_no_matching_items() {
+    let app = testapp::empty_model_search(ThemeKind::Dark);
+    let terminal = draw(&app, 80, 24);
+    assert!(text(&terminal).contains("No matching items"));
+}
+
+#[test]
+fn short_terminal_renders_an_8_row_selector_panel() {
+    let app = testapp::narrow_selector(ThemeKind::Dark);
+    let terminal = draw(&app, 60, 16);
+    let content = text(&terminal);
+    assert!(content.contains("Select model"));
+    assert!(
+        content.contains("MINICORE"),
+        "the transcript header stays above"
+    );
+    assert!(
+        any_cell_matching(&terminal, |cell| cell.bg == Theme::dark().selected_bg),
+        "the moved selection is highlighted"
+    );
+}
+
+#[test]
+fn selectors_render_on_both_themes_without_panicking() {
+    let fixtures: [fn(ThemeKind) -> App; 5] = [
+        testapp::new_session,
+        testapp::model_selector,
+        testapp::reasoning_selector,
+        testapp::session_selector,
+        testapp::profile_selector,
+    ];
+    for kind in [ThemeKind::Dark, ThemeKind::Light] {
+        for fixture in fixtures {
+            let _ = draw(&fixture(kind), 120, 40);
+        }
+    }
+}

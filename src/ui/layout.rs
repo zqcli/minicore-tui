@@ -27,6 +27,12 @@ pub fn composer_height(short: bool) -> u16 {
     if short { 3 } else { 5 }
 }
 
+/// Selector / new-session panel height: 8-14 rows, short terminals get the
+/// minimum (spec 24.2). The panel replaces the composer in the dock.
+pub fn panel_height(short: bool) -> u16 {
+    if short { 8 } else { 14 }
+}
+
 /// Footer row count: one row below 80 columns or below 24 rows, otherwise
 /// two (spec 14.3).
 pub fn footer_height(width: u16, height: u16) -> u16 {

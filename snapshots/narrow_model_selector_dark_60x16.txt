@@ -1,0 +1,16 @@
+MINICORE  v0.1.0
+
+Coding agent TUI
+q / Ctrl+C to quit
+
+Open a session — press q / Ctrl+C to quit
+
+┌──────────────────────────────────────────────────────────┐
+│Select model                                              │
+│Changing model creates a new session.                     │
+│>                                                         │
+│→ fast  32k context  — tools  • low/medium                │
+│  tiny  8k context  ✓ tools  • disabled/low               │
+│(2/3)                                                     │
+└──────────────────────────────────────────────────────────┘
+Idle                                             deep • high

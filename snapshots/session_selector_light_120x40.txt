@@ -1,0 +1,40 @@
+MINICORE  v0.1.0
+
+Coding agent TUI
+q / Ctrl+C to quit
+
+Open a session — press q / Ctrl+C to quit
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Select session                                                                                                        │
+│>                                                                                                                     │
+│→ ses_main                                                                                            deep · high   5m│
+│  ◉ /work/cli                                                                                                         │
+│  Web app                                                                                          fast · medium   15m│
+│  ○ /work/web                                                                                                         │
+│  Rust port                                                                                           deep · high   1d│
+│  ● /work/rust                                                                                                        │
+│(1/3)                                                                                                                 │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+/project                                                                                                      no session
+Idle

@@ -5,8 +5,9 @@
 //! mutability shortcuts.
 //!
 //! Phase 3 covers the transcript + fixed dock (status/composer/footer), the
-//! durable/live blocks, and markdown; selectors and full input are later
-//! phases.
+//! durable/live blocks, and markdown. Phase 4 replaces the composer in the
+//! dock with the new-session form and the session/model/reasoning/profile
+//! selectors; full input arrives in Phase 5.
 
 pub mod assistant;
 pub mod composer;
@@ -14,7 +15,9 @@ pub mod error;
 pub mod footer;
 pub mod header;
 pub mod layout;
+pub mod new_session;
 pub mod reasoning;
+pub mod selector;
 pub mod status;
 pub mod tool;
 pub mod transcript;
@@ -27,6 +30,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 
 use crate::app::{App, ConnectionState};
+use crate::state::selection::Dock;
 use crate::theme::Theme;
 
 #[cfg(test)]
@@ -52,11 +56,16 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
     let short = area.height < 24;
     let busy = layout::busy(app);
-    let composer_h = layout::composer_height(short);
+    // Selector / new-session panels replace the composer in the dock and
+    // are taller (spec 24.2); the composer keeps its Phase 3 height.
+    let panel = match &app.dock {
+        Dock::Composer => layout::composer_height(short),
+        _ => layout::panel_height(short),
+    };
     let footer_h = layout::footer_height(area.width, area.height);
     let notice_h = u16::from(!app.notices.is_empty());
     let status_h = u16::from(busy);
-    let dock_h = status_h + notice_h + composer_h + footer_h;
+    let dock_h = status_h + notice_h + panel + footer_h;
 
     let [transcript_area, dock_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(dock_h)]).areas(area);
@@ -69,7 +78,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     if notice_h == 1 {
         rows.push(Constraint::Length(1));
     }
-    rows.push(Constraint::Length(composer_h));
+    rows.push(Constraint::Length(panel));
     rows.push(Constraint::Length(footer_h));
     let chunks = Layout::vertical(rows).split(dock_area);
     let mut index = 0;
@@ -81,7 +90,14 @@ pub fn render(frame: &mut Frame, app: &App) {
         error::render_notice(frame, chunks[index], &theme, app.notices.back().unwrap());
         index += 1;
     }
-    composer::render(frame, chunks[index], app, &theme);
+    match &app.dock {
+        Dock::Composer => composer::render(frame, chunks[index], app, &theme),
+        Dock::NewSession(draft) => new_session::render(frame, chunks[index], &theme, draft),
+        Dock::SessionSelector(_)
+        | Dock::ModelSelector(_)
+        | Dock::ReasoningSelector(_)
+        | Dock::ProfileSelector(_) => selector::render(frame, chunks[index], app, &theme),
+    }
     index += 1;
     footer::render(frame, chunks[index], app, &theme);
 }

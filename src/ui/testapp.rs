@@ -3,10 +3,11 @@
 //! Used by the component and snapshot tests for the Phase 3 renderer.
 
 use std::path::PathBuf;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
-use crate::app::App;
+use crate::app::{App, ConnectionState};
 use crate::command::AppCommand;
 use crate::event::{AppEvent, RpcEvent};
 use crate::protocol::{
@@ -337,4 +338,175 @@ pub fn cjk(theme: ThemeKind) -> App {
         ),
     ];
     open_with(theme, "ses_1", Some("Task"), "high", entries)
+}
+
+// ---- Phase 4 fixtures: catalog boot + dock panels -----------------------
+
+/// Fixed clock so session-relative ages render deterministically in the
+/// snapshots (selector rows show `5m`/`15m`/`1d` against this instant).
+pub fn fixed_now() -> SystemTime {
+    UNIX_EPOCH + Duration::from_secs(1_800_000_000)
+}
+
+pub fn standard_catalog() -> (Value, Value, Value) {
+    (
+        json!([
+            {"id": "deep", "model_ref": "minicore/deep:v1", "context_window": 128000,
+             "supports_tools": true, "supported_reasoning": ["auto", "low", "medium", "high"]},
+            {"id": "fast", "model_ref": "minicore/fast:v1", "context_window": 32000,
+             "supports_tools": false, "supported_reasoning": ["low", "medium"]},
+            {"id": "tiny", "model_ref": "minicore/tiny:v1", "context_window": 8000,
+             "supports_tools": true, "supported_reasoning": ["disabled", "low"]}
+        ]),
+        json!([
+            {"id": "coding", "model": "deep", "reasoning": "high",
+             "tools": ["read", "edit", "bash"]},
+            {"id": "review", "model": "fast", "reasoning": "medium", "tools": ["read"]}
+        ]),
+        json!([
+            {"session_id": "ses_old", "title": "Rust port", "profile": "coding",
+             "workspace": "/work/rust", "model": "deep", "reasoning": "high",
+             "loaded": true, "instance_id": "i1",
+             "created_at": "2027-01-14T08:00:00.000Z", "updated_at": "2027-01-14T08:00:00.000Z"},
+            {"session_id": "ses_recent", "title": "Web app", "profile": "review",
+             "workspace": "/work/web", "model": "fast", "reasoning": "medium",
+             "loaded": false, "instance_id": null,
+             "created_at": "2027-01-15T07:45:00.000Z", "updated_at": "2027-01-15T07:45:00.000Z"},
+            {"session_id": "ses_main", "title": null, "profile": "coding",
+             "workspace": "/work/cli", "model": "deep", "reasoning": "high",
+             "loaded": true, "instance_id": "i2",
+             "created_at": "2027-01-15T07:55:00.000Z", "updated_at": "2027-01-15T07:55:00.000Z"}
+        ]),
+    )
+}
+
+/// Bootstraps to Ready with the given catalogs and a fixed clock.
+pub fn ready_catalog(theme: ThemeKind, models: Value, profiles: Value, sessions: Value) -> App {
+    let mut app = fresh(theme);
+    app.now = fixed_now;
+    let requests = take_requests(app.update(AppEvent::Bootstrap));
+    assert_eq!(requests.len(), 4);
+    for request in &requests {
+        let result = match request.method {
+            "agent.ping" => json!({"version": "0.2.0"}),
+            "model.list" => json!({"models": models.clone()}),
+            "profile.list" => json!({"profiles": profiles.clone()}),
+            "session.list" => json!({"sessions": sessions.clone()}),
+            other => panic!("unexpected bootstrap request: {other}"),
+        };
+        take_requests(respond(&mut app, request, result));
+    }
+    assert_eq!(app.connection, ConnectionState::Ready);
+    app
+}
+
+/// Opens and completes the initial chain for a session (used to give the
+/// model selector a current-session marker).
+pub fn open_session(app: &mut App, session_id: &str) {
+    let open = take_requests(app.update(AppEvent::OpenSession {
+        session_id: session_id.into(),
+    }));
+    assert_eq!(open.len(), 1);
+    let requests = take_requests(respond(
+        app,
+        &open[0],
+        json!({"session": session_info(session_id, Some("Task"), "high")}),
+    ));
+    let state = requests
+        .iter()
+        .find(|r| r.method == "session.state")
+        .unwrap();
+    let transcript = requests
+        .iter()
+        .find(|r| r.method == "session.transcript")
+        .unwrap();
+    take_requests(respond(
+        app,
+        state,
+        json!({
+            "session_id": session_id, "instance_id": "i2", "status": "idle",
+            "health": "healthy", "active_turn": null, "pending_interaction": null,
+            "conversation_seq": 0, "last_terminal": null
+        }),
+    ));
+    let commands = respond(app, transcript, page_json(vec![], true));
+    assert!(take_requests(commands).is_empty());
+}
+
+/// Marks a listed session as running via a real `session_state` event.
+pub fn set_session_running(app: &mut App, session_id: &str, instance: &str) {
+    let event = serde_json::from_value(json!({
+        "type": "session_state",
+        "data": {"state": {
+            "session_id": session_id, "instance_id": instance, "status": "running",
+            "health": "healthy", "active_turn": null, "pending_interaction": null,
+            "conversation_seq": 0, "last_terminal": null
+        }, "meta": {
+            "session_id": session_id, "instance_id": instance, "dropped_before": 0
+        }}
+    }))
+    .unwrap();
+    app.update(AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Notification(
+        RpcNotification::AgentEvent(event),
+    ))));
+}
+
+/// The new-session form on the standard catalog (defaults from the first
+/// profile: coding / deep / high).
+pub fn new_session(theme: ThemeKind) -> App {
+    let (models, profiles, sessions) = standard_catalog();
+    let mut app = ready_catalog(theme, models, profiles, sessions);
+    app.update(AppEvent::OpenNewSession);
+    app
+}
+
+/// The model selector with an active session so the current model is
+/// marked `✓ current` (spec 26.3).
+pub fn model_selector(theme: ThemeKind) -> App {
+    let (models, profiles, sessions) = standard_catalog();
+    let mut app = ready_catalog(theme, models, profiles, sessions);
+    open_session(&mut app, "ses_main");
+    app.update(AppEvent::OpenModelSelector);
+    app
+}
+
+/// The reasoning selector for the draft's model (deep → the full list).
+pub fn reasoning_selector(theme: ThemeKind) -> App {
+    let (models, profiles, sessions) = standard_catalog();
+    let mut app = ready_catalog(theme, models, profiles, sessions);
+    app.update(AppEvent::OpenReasoningSelector);
+    app
+}
+
+/// The session selector with running/loaded/idle markers (spec 28.5).
+pub fn session_selector(theme: ThemeKind) -> App {
+    let (models, profiles, sessions) = standard_catalog();
+    let mut app = ready_catalog(theme, models, profiles, sessions);
+    set_session_running(&mut app, "ses_main", "i2");
+    app.update(AppEvent::OpenSessionSelector);
+    app
+}
+
+/// The profile selector.
+pub fn profile_selector(theme: ThemeKind) -> App {
+    let (models, profiles, sessions) = standard_catalog();
+    let mut app = ready_catalog(theme, models, profiles, sessions);
+    app.update(AppEvent::OpenProfileSelector);
+    app
+}
+
+/// A model selector with a query that matches nothing (spec 26.2).
+pub fn empty_model_search(theme: ThemeKind) -> App {
+    let mut app = model_selector(theme);
+    app.update(AppEvent::SetSelectorQuery {
+        query: "zzzz".into(),
+    });
+    app
+}
+
+/// The model selector on the minimum 60x16 terminal (short panel, 8 rows).
+pub fn narrow_selector(theme: ThemeKind) -> App {
+    let mut app = model_selector(theme);
+    app.update(AppEvent::MoveSelector { delta: 1 });
+    app
 }

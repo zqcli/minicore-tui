@@ -12,7 +12,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::{App, ConnectionState};
 use crate::markdown::column_width;
-use crate::protocol::Reasoning;
+use crate::state::selection::reasoning_label;
 use crate::state::session::SessionView;
 use crate::state::tool::ToolStatus;
 use crate::theme::Theme;
@@ -100,16 +100,6 @@ fn status_line(
                 }
             }
         },
-    }
-}
-
-fn reasoning_label(reasoning: Reasoning) -> &'static str {
-    match reasoning {
-        Reasoning::Disabled => "disabled",
-        Reasoning::Auto => "auto",
-        Reasoning::Low => "low",
-        Reasoning::Medium => "medium",
-        Reasoning::High => "high",
     }
 }
 

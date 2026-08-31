@@ -6,20 +6,23 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use crate::command::AppCommand;
 use crate::event::{AppEvent, RpcEvent};
 use crate::protocol::{
     AgentEventWire, ConversationEntryWire, IncomingFrame, METHOD_LIST_MODELS, METHOD_LIST_PROFILES,
-    METHOD_LIST_SESSIONS, METHOD_PING, METHOD_SESSION_CREATE, METHOD_SESSION_OPEN, OutgoingRequest,
-    OutputChannelWire, Reasoning, RequestId, RpcNotification, RpcResponse, RpcResponseError,
-    SessionStateWire, SessionStatusWire, ToolOutcomeWire, ToolProgressWire, TranscriptPageWire,
-    TurnRef,
+    METHOD_LIST_SESSIONS, METHOD_PING, OutgoingRequest, OutputChannelWire, Reasoning, RequestId,
+    RpcNotification, RpcResponse, RpcResponseError, SessionStateWire, SessionStatusWire,
+    ToolOutcomeWire, ToolProgressWire, TranscriptPageWire, TurnRef,
 };
 use crate::rpc::RpcError;
 use crate::state::catalog::CatalogState;
 use crate::state::composer::Composer;
+use crate::state::selection::{
+    Dock, NewSessionField, NewSessionState, SELECTOR_PAGE, SelectorKind, SelectorState,
+    filtered_models, filtered_profiles, filtered_sessions, supported_reasoning,
+};
 use crate::state::session::{SessionId, SessionView, SessionsState};
 use crate::state::tool::{LiveTool, ToolStatus};
 use crate::state::transcript::{
@@ -84,7 +87,13 @@ pub enum RequestKind {
     ListModels,
     ListProfiles,
     ListSessions,
-    CreateSession,
+    CreateSession {
+        /// The `NewSessionState::draft_id` this create was issued for, to
+        /// route the response back to the matching draft (spec 25.5).
+        /// Programmatic creates use a sentinel that never matches a real
+        /// draft.
+        draft: u64,
+    },
     OpenSession(SessionId),
     SessionState(SessionId),
     Transcript {
@@ -121,9 +130,18 @@ pub struct App {
     pub reasoning_visible: bool,
     pub frame_count: u64,
     pub composer: Composer,
+    /// The dock panel below the transcript (spec 24.1).
+    pub dock: Dock,
+    /// The new-session draft while a model/reasoning/profile selector sits
+    /// on top of the form; `Some` only then (spec 26.4).
+    draft: Option<NewSessionState>,
+    /// Clock for session-relative ages; injectable so render output is
+    /// deterministic in tests. Read-only, never mutated by `update`.
+    pub now: fn() -> SystemTime,
     pub pending_requests: HashMap<RequestId, RequestKind>,
     next_request_id: RequestId,
     next_submission: u64,
+    next_draft_id: u64,
     bootstrap: BootstrapProgress,
     /// Guards the single "not ready" notice so a Failed/Starting connection
     /// cannot flood the user; reset when the app becomes Ready again.
@@ -191,9 +209,13 @@ impl App {
             reasoning_visible: true,
             frame_count: 0,
             composer: Composer::default(),
+            dock: Dock::Composer,
+            draft: None,
+            now: SystemTime::now,
             pending_requests: HashMap::new(),
             next_request_id: RequestId(0),
             next_submission: 0,
+            next_draft_id: 0,
             bootstrap: BootstrapProgress::default(),
             blocked_notice: false,
         }
@@ -256,6 +278,38 @@ impl App {
                 }
                 Vec::new()
             }
+            AppEvent::OpenNewSession => self.open_new_session(),
+            AppEvent::OpenSessionSelector => self.open_selector(SelectorKind::Session),
+            AppEvent::OpenModelSelector => self.open_selector(SelectorKind::Model),
+            AppEvent::OpenReasoningSelector => self.open_selector(SelectorKind::Reasoning),
+            AppEvent::OpenProfileSelector => self.open_selector(SelectorKind::Profile),
+            AppEvent::SetSelectorQuery { query } => {
+                if let Some(state) = self.selector_state_mut() {
+                    state.query = query;
+                    state.cursor = 0;
+                }
+                Vec::new()
+            }
+            AppEvent::MoveSelector { delta } => self.move_selector(delta),
+            AppEvent::PageSelector { delta } => self.page_selector(delta),
+            AppEvent::ConfirmDock => self.confirm_dock(),
+            AppEvent::CancelDock => self.cancel_dock(),
+            AppEvent::DockFieldStep { delta } => self.dock_field_step(delta),
+            AppEvent::NewSessionSetField { field, value } => {
+                if let Some(draft) = self.draft_mut() {
+                    // Frozen while a create is in flight.
+                    if draft.submitting {
+                        return Vec::new();
+                    }
+                    match field {
+                        NewSessionField::Workspace => draft.workspace = value,
+                        NewSessionField::Title => draft.title = value,
+                        _ => {}
+                    }
+                }
+                Vec::new()
+            }
+            AppEvent::SubmitNewSession => self.submit_new_session(),
         }
     }
 
@@ -265,6 +319,454 @@ impl App {
             .active
             .as_deref()
             .and_then(|session_id| self.sessions.known.get(session_id))
+    }
+
+    /// The current new-session draft, whether the form or a selector is
+    /// showing it (read-only).
+    pub fn new_session(&self) -> Option<&NewSessionState> {
+        self.draft.as_ref().or(match &self.dock {
+            Dock::NewSession(draft) => Some(draft),
+            _ => None,
+        })
+    }
+
+    // ---- dock & selectors (spec 24-28) -------------------------------
+
+    fn make_new_session_draft(&mut self) -> NewSessionState {
+        let draft_id = self.next_draft_id;
+        self.next_draft_id = self
+            .next_draft_id
+            .checked_add(1)
+            .expect("draft ids exhausted");
+        NewSessionState {
+            // Workspace is a plain string the agent validates (spec 25.4).
+            workspace: self
+                .catalogs
+                .default_workspace
+                .to_string_lossy()
+                .into_owned(),
+            profile: self.catalogs.next_profile.clone().unwrap_or_default(),
+            model: self
+                .catalogs
+                .next_model
+                .clone()
+                .or_else(|| self.catalogs.models.first().map(|model| model.id.clone()))
+                .unwrap_or_default(),
+            reasoning: self.catalogs.next_reasoning.unwrap_or(Reasoning::Auto),
+            title: String::new(),
+            field: NewSessionField::Workspace,
+            submitting: false,
+            error: None,
+            draft_id,
+        }
+    }
+
+    /// A fresh draft in the form; the catalog seats are snapshots only, so
+    /// the active session is never touched (spec 25.2).
+    fn open_new_session(&mut self) -> Vec<AppCommand> {
+        if !self.guard_ready() {
+            return Vec::new();
+        }
+        let draft = self.make_new_session_draft();
+        self.draft = None;
+        self.dock = Dock::NewSession(draft);
+        Vec::new()
+    }
+
+    /// The draft while it exists: the form in the dock, or the detached
+    /// copy under a model/reasoning/profile selector.
+    fn draft_mut(&mut self) -> Option<&mut NewSessionState> {
+        if let Some(draft) = &mut self.draft {
+            return Some(draft);
+        }
+        if let Dock::NewSession(draft) = &mut self.dock {
+            return Some(draft);
+        }
+        None
+    }
+
+    fn draft_matching(&mut self, draft_id: u64) -> Option<&mut NewSessionState> {
+        match &mut self.draft {
+            Some(draft) if draft.draft_id == draft_id => return Some(draft),
+            _ => {}
+        }
+        if let Dock::NewSession(draft) = &mut self.dock {
+            if draft.draft_id == draft_id {
+                return Some(draft);
+            }
+        }
+        None
+    }
+
+    fn selector_state(&self) -> Option<&SelectorState> {
+        match &self.dock {
+            Dock::SessionSelector(state)
+            | Dock::ModelSelector(state)
+            | Dock::ReasoningSelector(state)
+            | Dock::ProfileSelector(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    fn selector_state_mut(&mut self) -> Option<&mut SelectorState> {
+        match &mut self.dock {
+            Dock::SessionSelector(state)
+            | Dock::ModelSelector(state)
+            | Dock::ReasoningSelector(state)
+            | Dock::ProfileSelector(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    /// Opens `kind` and pre-selects the draft's current value. Opening
+    /// model/reasoning/profile guarantees a new-session draft exists so
+    /// the selection can never leak into the current session (spec 26.4).
+    fn open_selector(&mut self, kind: SelectorKind) -> Vec<AppCommand> {
+        if !self.guard_ready() {
+            return Vec::new();
+        }
+        // While a create is in flight the draft is frozen: opening a
+        // model/reasoning/profile selector, or confirming one from a field,
+        // must not leave the form or mutate the drafting session (spec
+        // 25.5). The session selector is unrelated and stays available.
+        if kind != SelectorKind::Session && self.new_session().is_some_and(|draft| draft.submitting)
+        {
+            return Vec::new();
+        }
+        let mut state = SelectorState::new(kind);
+        if kind != SelectorKind::Session {
+            self.ensure_new_session_draft();
+            let model = self
+                .new_session()
+                .map(|draft| draft.model.clone())
+                .unwrap_or_default();
+            let profile = self
+                .new_session()
+                .map(|draft| draft.profile.clone())
+                .unwrap_or_default();
+            let reasoning = self.new_session().map(|draft| draft.reasoning);
+            state.cursor = match kind {
+                SelectorKind::Model => filtered_models(&self.catalogs.models, "")
+                    .iter()
+                    .position(|candidate| candidate.id == model)
+                    .unwrap_or(0),
+                SelectorKind::Profile => filtered_profiles(&self.catalogs.profiles, "")
+                    .iter()
+                    .position(|candidate| candidate.id == profile)
+                    .unwrap_or(0),
+                SelectorKind::Reasoning => supported_reasoning(&self.catalogs.models, &model)
+                    .iter()
+                    .position(|level| Some(*level) == reasoning)
+                    .unwrap_or(0),
+                SelectorKind::Session => 0,
+            };
+        }
+        self.dock = match kind {
+            SelectorKind::Session => Dock::SessionSelector(state),
+            SelectorKind::Model => Dock::ModelSelector(state),
+            SelectorKind::Reasoning => Dock::ReasoningSelector(state),
+            SelectorKind::Profile => Dock::ProfileSelector(state),
+        };
+        Vec::new()
+    }
+
+    fn ensure_new_session_draft(&mut self) {
+        if self.draft.is_some() {
+            return;
+        }
+        let draft = match &self.dock {
+            Dock::NewSession(draft) => draft.clone(),
+            _ => self.make_new_session_draft(),
+        };
+        self.draft = Some(draft);
+    }
+
+    fn move_selector(&mut self, delta: i32) -> Vec<AppCommand> {
+        let (kind, query, cursor) = {
+            let Some(state) = self.selector_state() else {
+                return Vec::new();
+            };
+            (state.kind, state.query.clone(), state.cursor)
+        };
+        let count = self.selector_count(kind, &query);
+        if count == 0 {
+            return Vec::new();
+        }
+        if let Some(state) = self.selector_state_mut() {
+            state.cursor = (cursor as i64 + delta as i64).rem_euclid(count as i64) as usize;
+        }
+        Vec::new()
+    }
+
+    fn page_selector(&mut self, delta: i32) -> Vec<AppCommand> {
+        self.move_selector(delta * SELECTOR_PAGE as i32)
+    }
+
+    fn selector_count(&self, kind: SelectorKind, query: &str) -> usize {
+        match kind {
+            SelectorKind::Model => filtered_models(&self.catalogs.models, query).len(),
+            SelectorKind::Profile => filtered_profiles(&self.catalogs.profiles, query).len(),
+            SelectorKind::Reasoning => supported_reasoning(
+                &self.catalogs.models,
+                &self
+                    .new_session()
+                    .map(|draft| draft.model.clone())
+                    .unwrap_or_default(),
+            )
+            .len(),
+            SelectorKind::Session => filtered_sessions(&self.sessions.list, query).len(),
+        }
+    }
+
+    fn confirm_dock(&mut self) -> Vec<AppCommand> {
+        enum Target {
+            Composer,
+            NewSession(NewSessionField),
+            SessionSelector,
+            ModelSelector,
+            ReasoningSelector,
+            ProfileSelector,
+        }
+        let target = match &self.dock {
+            Dock::Composer => Target::Composer,
+            Dock::NewSession(draft) => Target::NewSession(draft.field),
+            Dock::SessionSelector(_) => Target::SessionSelector,
+            Dock::ModelSelector(_) => Target::ModelSelector,
+            Dock::ReasoningSelector(_) => Target::ReasoningSelector,
+            Dock::ProfileSelector(_) => Target::ProfileSelector,
+        };
+        match target {
+            Target::Composer => Vec::new(),
+            Target::SessionSelector => self.confirm_session_selector(),
+            Target::ModelSelector => self.confirm_model_item(),
+            Target::ReasoningSelector => self.confirm_reasoning_item(),
+            Target::ProfileSelector => self.confirm_profile_item(),
+            Target::NewSession(field) => match field {
+                NewSessionField::Profile => self.open_selector(SelectorKind::Profile),
+                NewSessionField::Model => self.open_selector(SelectorKind::Model),
+                NewSessionField::Reasoning => self.open_selector(SelectorKind::Reasoning),
+                NewSessionField::Create => self.submit_new_session(),
+                NewSessionField::Workspace | NewSessionField::Title => Vec::new(),
+            },
+        }
+    }
+
+    fn cancel_dock(&mut self) -> Vec<AppCommand> {
+        enum Target {
+            Composer,
+            SessionSelector,
+            NewSession,
+            Form,
+        }
+        let target = match &self.dock {
+            Dock::Composer => Target::Composer,
+            Dock::SessionSelector(_) => Target::SessionSelector,
+            Dock::NewSession(_) => Target::NewSession,
+            Dock::ModelSelector(_) | Dock::ReasoningSelector(_) | Dock::ProfileSelector(_) => {
+                Target::Form
+            }
+        };
+        match target {
+            Target::Composer => {}
+            Target::SessionSelector => self.dock = Dock::Composer,
+            Target::NewSession => {
+                self.draft = None;
+                self.dock = Dock::Composer;
+            }
+            Target::Form => self.close_selector_to_form(),
+        }
+        Vec::new()
+    }
+
+    fn close_selector_to_form(&mut self) {
+        if let Some(draft) = self.draft.take() {
+            self.dock = Dock::NewSession(draft);
+        }
+    }
+
+    fn dock_field_step(&mut self, delta: i32) -> Vec<AppCommand> {
+        const FIELDS: [NewSessionField; 6] = [
+            NewSessionField::Workspace,
+            NewSessionField::Profile,
+            NewSessionField::Model,
+            NewSessionField::Reasoning,
+            NewSessionField::Title,
+            NewSessionField::Create,
+        ];
+        if let Dock::NewSession(draft) = &mut self.dock {
+            let current = FIELDS
+                .iter()
+                .position(|field| *field == draft.field)
+                .unwrap_or(0) as i64;
+            draft.field = FIELDS[(current + delta as i64).rem_euclid(FIELDS.len() as i64) as usize];
+        }
+        Vec::new()
+    }
+
+    fn confirm_session_selector(&mut self) -> Vec<AppCommand> {
+        if !self.guard_ready() {
+            return Vec::new();
+        }
+        let (cursor, query, submitting) = {
+            let Some(state) = self.selector_state() else {
+                return Vec::new();
+            };
+            if state.kind != SelectorKind::Session {
+                return Vec::new();
+            }
+            (state.cursor, state.query.clone(), state.submitting)
+        };
+        // One open at a time; the pending response owns the panel.
+        if submitting {
+            return Vec::new();
+        }
+        let Some(selected) = filtered_sessions(&self.sessions.list, &query)
+            .get(cursor)
+            .map(|session| session.session_id.clone())
+        else {
+            return Vec::new();
+        };
+        if let Some(state) = self.selector_state_mut() {
+            state.submitting = true;
+            state.error = None;
+        }
+        vec![
+            self.request(RequestKind::OpenSession(selected.clone()), |id| {
+                OutgoingRequest::session_open(id, &selected)
+            }),
+        ]
+    }
+
+    fn confirm_model_item(&mut self) -> Vec<AppCommand> {
+        let selected = {
+            let Some(state) = self.selector_state() else {
+                return Vec::new();
+            };
+            if state.kind != SelectorKind::Model {
+                return Vec::new();
+            }
+            let Some(model) = filtered_models(&self.catalogs.models, &state.query)
+                .get(state.cursor)
+                .cloned()
+                .cloned()
+            else {
+                return Vec::new();
+            };
+            model
+        };
+        // The chosen reasoning is never downgraded; the reasoning selector
+        // (opened below) forces an explicit choice when unsupported (spec
+        // 26.4).
+        let incompatible = self
+            .new_session()
+            .is_some_and(|draft| !selected.supported_reasoning.contains(&draft.reasoning));
+        if let Some(draft) = self.draft_mut() {
+            draft.model = selected.id.clone();
+        }
+        if incompatible {
+            self.notice(
+                NoticeLevel::Warning,
+                format!(
+                    "{} may not support the current reasoning level; choose a supported one.",
+                    selected.id
+                ),
+            );
+        }
+        // Even when compatible the user explicitly confirms the level.
+        self.open_selector(SelectorKind::Reasoning)
+    }
+
+    fn confirm_reasoning_item(&mut self) -> Vec<AppCommand> {
+        let (cursor, kind) = {
+            let Some(state) = self.selector_state() else {
+                return Vec::new();
+            };
+            (state.cursor, state.kind)
+        };
+        if kind != SelectorKind::Reasoning {
+            return Vec::new();
+        }
+        let model = self
+            .new_session()
+            .map(|draft| draft.model.clone())
+            .unwrap_or_default();
+        let Some(selected) = supported_reasoning(&self.catalogs.models, &model)
+            .get(cursor)
+            .copied()
+        else {
+            // No supported values (unknown model): nothing to confirm.
+            return Vec::new();
+        };
+        if let Some(draft) = self.draft_mut() {
+            draft.reasoning = selected;
+        }
+        self.close_selector_to_form();
+        Vec::new()
+    }
+
+    fn confirm_profile_item(&mut self) -> Vec<AppCommand> {
+        let selected = {
+            let Some(state) = self.selector_state() else {
+                return Vec::new();
+            };
+            if state.kind != SelectorKind::Profile {
+                return Vec::new();
+            }
+            let Some(profile) = filtered_profiles(&self.catalogs.profiles, &state.query)
+                .get(state.cursor)
+                .cloned()
+                .cloned()
+            else {
+                return Vec::new();
+            };
+            profile
+        };
+        // Choosing a profile adopts its model/reasoning defaults; the user
+        // can still override both afterwards. The active session is never
+        // touched (spec 7-required, 25.2).
+        if let Some(draft) = self.draft_mut() {
+            draft.profile = selected.id.clone();
+            draft.model = selected.model.clone();
+            draft.reasoning = selected.reasoning;
+        }
+        self.close_selector_to_form();
+        Vec::new()
+    }
+
+    fn submit_new_session(&mut self) -> Vec<AppCommand> {
+        if !self.guard_ready() {
+            return Vec::new();
+        }
+        let Some(draft) = self.new_session().cloned() else {
+            return Vec::new();
+        };
+        // Submitting is gated while a create is already in flight (spec
+        // 25.5); the response re-enables it.
+        if draft.submitting {
+            return Vec::new();
+        }
+        if let Some(current) = self.draft_mut() {
+            current.submitting = true;
+            current.error = None;
+        }
+        let profile = (!draft.profile.is_empty()).then_some(draft.profile.as_str());
+        let model = (!draft.model.is_empty()).then_some(draft.model.as_str());
+        let title = (!draft.title.is_empty()).then_some(draft.title.as_str());
+        vec![self.request(
+            RequestKind::CreateSession {
+                draft: draft.draft_id,
+            },
+            |id| {
+                OutgoingRequest::session_create(
+                    id,
+                    &draft.workspace,
+                    profile,
+                    model,
+                    Some(draft.reasoning),
+                    title,
+                )
+            },
+        )]
     }
 
     fn next_request_id(&mut self) -> RequestId {
@@ -383,9 +885,11 @@ impl App {
         if !self.guard_ready() {
             return Vec::new();
         }
-        vec![self.request(RequestKind::CreateSession, |id| {
-            OutgoingRequest::session_create(id, workspace, profile, model, reasoning, title)
-        })]
+        vec![
+            self.request(RequestKind::CreateSession { draft: u64::MAX }, |id| {
+                OutgoingRequest::session_create(id, workspace, profile, model, reasoning, title)
+            }),
+        ]
     }
 
     fn open_session(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
@@ -399,17 +903,11 @@ impl App {
         ]
     }
 
-    /// The create/open response's `SessionInfo` is the UI truth for the
-    /// session: it activates the view and starts the state + transcript
-    /// chain (spec 25.5).
-    fn on_session_response(&mut self, method: &str, response: &RpcResponse) -> Vec<AppCommand> {
-        let session = match response.parse_session() {
-            Ok(result) => result.session,
-            Err(error) => {
-                self.notice(NoticeLevel::Error, format!("{method} failed: {error}"));
-                return Vec::new();
-            }
-        };
+    fn on_session_response(
+        &mut self,
+        response: &RpcResponse,
+    ) -> Result<Vec<AppCommand>, RpcResponseError> {
+        let session = response.parse_session()?.session;
         let session_id = session.session_id.clone();
         match self.sessions.known.get_mut(&session_id) {
             Some(view) => view.info = session,
@@ -430,7 +928,7 @@ impl App {
         // transcript, always from the last merged sequence (spec 13.7).
         let (fetch, after, gap_revision) = {
             let Some(view) = self.sessions.known.get(&session_id) else {
-                return commands;
+                return Ok(commands);
             };
             if view.loading {
                 (false, None, None)
@@ -455,7 +953,73 @@ impl App {
                 |id| OutgoingRequest::transcript(id, &session_id, after),
             ));
         }
-        commands
+        Ok(commands)
+    }
+
+    /// Create response: success closes the matching form and keeps the
+    /// activated session; failure keeps every draft field, unblocks
+    /// submitting, and reports the agent message on the form (spec 25.5).
+    fn on_create_response(&mut self, draft_id: u64, response: &RpcResponse) -> Vec<AppCommand> {
+        match self.on_session_response(response) {
+            Ok(commands) => {
+                // Success closes the new-session flow whenever the matching
+                // draft is around, including the defensive case of the app
+                // sitting on a selector while the create was in flight; a
+                // stale response (different id) never closes a newer draft.
+                let matches = self
+                    .draft
+                    .as_ref()
+                    .is_some_and(|draft| draft.draft_id == draft_id)
+                    || matches!(&self.dock, Dock::NewSession(draft) if draft.draft_id == draft_id);
+                if matches {
+                    self.draft = None;
+                    self.dock = Dock::Composer;
+                }
+                commands
+            }
+            Err(error) => match self.draft_matching(draft_id) {
+                Some(draft) => {
+                    draft.submitting = false;
+                    draft.error = Some(format!("{error}"));
+                    Vec::new()
+                }
+                None => {
+                    self.notice(
+                        NoticeLevel::Error,
+                        format!("session.create failed: {error}"),
+                    );
+                    Vec::new()
+                }
+            },
+        }
+    }
+
+    /// Open response: success activates the session and closes the
+    /// selector; failure keeps the selector, its query and selection, and
+    /// shows the error on the panel (spec 28.6). Programmatic opens (no
+    /// submitting selector) fall back to a notice.
+    fn on_open_response(&mut self, response: &RpcResponse) -> Vec<AppCommand> {
+        match self.on_session_response(response) {
+            Ok(commands) => {
+                let close = matches!(&self.dock, Dock::SessionSelector(state) if state.submitting);
+                if close {
+                    self.dock = Dock::Composer;
+                }
+                commands
+            }
+            Err(error) => {
+                let from_selector = matches!(&self.dock, Dock::SessionSelector(_));
+                if from_selector {
+                    if let Dock::SessionSelector(state) = &mut self.dock {
+                        state.submitting = false;
+                        state.error = Some(format!("{error}"));
+                    }
+                } else {
+                    self.notice(NoticeLevel::Error, format!("session.open failed: {error}"));
+                }
+                Vec::new()
+            }
+        }
     }
 
     fn on_session_state_response(
@@ -903,42 +1467,68 @@ impl App {
                 return Vec::new();
             }
         };
-        if let RequestKind::SendTurn {
-            session_id,
-            local_submission,
-        } = kind
-        {
-            let recovered = {
-                let Some(view) = self.sessions.known.get_mut(&session_id) else {
-                    return Vec::new();
-                };
-                let mut recovered = None;
-                if view
-                    .live
-                    .as_ref()
-                    .is_some_and(|live| live.local_submission == local_submission)
-                {
-                    if let Some(live) = view.live.take() {
-                        recovered = Some(live.user_text);
+        match kind {
+            RequestKind::SendTurn {
+                session_id,
+                local_submission,
+            } => {
+                let recovered = {
+                    let Some(view) = self.sessions.known.get_mut(&session_id) else {
+                        return Vec::new();
+                    };
+                    let mut recovered = None;
+                    if view
+                        .live
+                        .as_ref()
+                        .is_some_and(|live| live.local_submission == local_submission)
+                    {
+                        if let Some(live) = view.live.take() {
+                            recovered = Some(live.user_text);
+                        }
                     }
+                    view.transcript.blocks.retain(
+                        |block| !matches!(block, TranscriptBlock::User(card) if card.pending),
+                    );
+                    recovered
+                };
+                if let Some(text) = recovered {
+                    self.recovered_input = Some(text);
                 }
-                view.transcript
-                    .blocks
-                    .retain(|block| !matches!(block, TranscriptBlock::User(card) if card.pending));
-                recovered
-            };
-            if let Some(text) = recovered {
-                self.recovered_input = Some(text);
+                self.notice(
+                    NoticeLevel::Error,
+                    format!("failed to send the turn: {error}"),
+                );
             }
-            self.notice(
-                NoticeLevel::Error,
-                format!("failed to send the turn: {error}"),
-            );
-        } else {
-            self.notice(
-                NoticeLevel::Error,
-                format!("failed to send a request: {error}"),
-            );
+            RequestKind::CreateSession { draft } => match self.draft_matching(draft) {
+                Some(draft) => {
+                    draft.submitting = false;
+                    draft.error = Some(format!("failed to send session.create: {error}"));
+                }
+                None => self.notice(
+                    NoticeLevel::Error,
+                    format!("failed to send session.create: {error}"),
+                ),
+            },
+            RequestKind::OpenSession(_) => {
+                let from_selector = matches!(&self.dock, Dock::SessionSelector(_));
+                if from_selector {
+                    if let Dock::SessionSelector(state) = &mut self.dock {
+                        state.submitting = false;
+                        state.error = Some(format!("failed to send session.open: {error}"));
+                    }
+                } else {
+                    self.notice(
+                        NoticeLevel::Error,
+                        format!("failed to send session.open: {error}"),
+                    );
+                }
+            }
+            _ => {
+                self.notice(
+                    NoticeLevel::Error,
+                    format!("failed to send a request: {error}"),
+                );
+            }
         }
         Vec::new()
     }
@@ -1044,10 +1634,8 @@ impl App {
                 }
                 Err(error) => self.bootstrap_failure(METHOD_LIST_SESSIONS, error),
             },
-            RequestKind::CreateSession => {
-                self.on_session_response(METHOD_SESSION_CREATE, &response)
-            }
-            RequestKind::OpenSession(_) => self.on_session_response(METHOD_SESSION_OPEN, &response),
+            RequestKind::CreateSession { draft } => self.on_create_response(draft, &response),
+            RequestKind::OpenSession(_) => self.on_open_response(&response),
             RequestKind::SessionState(session_id) => {
                 self.on_session_state_response(&session_id, &response)
             }
@@ -3820,6 +4408,507 @@ mod tests {
             view.transcript.last_seq,
             Some(1),
             "no empty page advances last_seq"
+        );
+    }
+
+    // ---- Phase 4: dock and selectors ----------------------------------
+
+    fn catalog_json() -> (Value, Value, Value) {
+        (
+            json!([
+                {"id": "deep", "model_ref": "minicore/deep:v1", "context_window": 128000,
+                 "supports_tools": true, "supported_reasoning": ["auto", "low", "medium", "high"]},
+                {"id": "fast", "model_ref": "minicore/fast:v1", "context_window": 32000,
+                 "supports_tools": false, "supported_reasoning": ["low", "medium"]},
+                {"id": "tiny", "model_ref": "minicore/tiny:v1", "context_window": 8000,
+                 "supports_tools": true, "supported_reasoning": ["disabled", "low"]}
+            ]),
+            json!([
+                {"id": "coding", "model": "deep", "reasoning": "high",
+                 "tools": ["read", "edit", "bash"]},
+                {"id": "review", "model": "fast", "reasoning": "medium", "tools": ["read"]}
+            ]),
+            json!([
+                {"session_id": "ses_a", "title": "Alpha", "profile": "coding",
+                 "workspace": "/a", "model": "deep", "reasoning": "high",
+                 "loaded": true, "instance_id": "i1",
+                 "created_at": "2027-01-15T08:00:00.000Z", "updated_at": "2027-01-15T08:00:00.000Z"},
+                {"session_id": "ses_b", "title": "Beta", "profile": "review",
+                 "workspace": "/b", "model": "fast", "reasoning": "medium",
+                 "loaded": false, "instance_id": null,
+                 "created_at": "2027-01-15T07:00:00.000Z", "updated_at": "2027-01-15T07:00:00.000Z"}
+            ]),
+        )
+    }
+
+    fn ready_with_catalogs(app: &mut App) {
+        let (models, profiles, sessions) = catalog_json();
+        let requests = take_requests(app.update(AppEvent::Bootstrap));
+        assert_eq!(requests.len(), 4);
+        for request in &requests {
+            let result = match request.method {
+                "agent.ping" => json!({"version": "0.2.0"}),
+                "model.list" => json!({"models": models.clone()}),
+                "profile.list" => json!({"profiles": profiles.clone()}),
+                "session.list" => json!({"sessions": sessions.clone()}),
+                other => panic!("unexpected bootstrap request: {other}"),
+            };
+            take_requests(respond(app, request, result));
+        }
+        assert_eq!(app.connection, ConnectionState::Ready);
+    }
+
+    fn draft(app: &App) -> NewSessionState {
+        app.new_session()
+            .expect("a new-session draft exists")
+            .clone()
+    }
+
+    #[test]
+    fn open_new_session_seeds_the_draft_from_catalog_defaults() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(AppEvent::OpenNewSession);
+        let state = draft(&app);
+        assert_eq!(state.workspace, "/workspace");
+        assert_eq!(state.profile, "coding", "first profile becomes the default");
+        assert_eq!(state.model, "deep", "profile default model");
+        assert_eq!(
+            state.reasoning,
+            Reasoning::High,
+            "profile default reasoning"
+        );
+        assert!(!state.submitting);
+        assert!(matches!(&app.dock, Dock::NewSession(_)));
+    }
+
+    #[test]
+    fn dock_actions_are_gated_until_ready() {
+        let mut app = test_app();
+        app.update(AppEvent::OpenNewSession);
+        assert_eq!(app.dock, Dock::Composer, "not Ready yet");
+        let models = take_requests(app.update(AppEvent::Bootstrap))
+            .into_iter()
+            .map(|r| r.method)
+            .collect::<Vec<_>>();
+        assert_eq!(models.len(), 4);
+    }
+
+    #[test]
+    fn open_model_selector_from_the_composer_creates_a_draft_and_preselects() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(AppEvent::OpenModelSelector);
+        assert!(matches!(app.dock, Dock::ModelSelector(_)));
+        // Keys off the draft model default.
+        let cursor = match &app.dock {
+            Dock::ModelSelector(state) => state.cursor,
+            _ => panic!("model selector"),
+        };
+        assert_eq!(cursor, 0, "deep is the first model and the draft default");
+    }
+
+    #[test]
+    fn selecting_a_model_never_touches_the_current_session() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        let open = take_requests(app.update(AppEvent::OpenSession {
+            session_id: "ses_a".into(),
+        }));
+        take_requests(respond(
+            &mut app,
+            &open[0],
+            json!({"session": session_info("ses_a", Some("i1"))}),
+        ));
+        assert_eq!(app.sessions.active.as_deref(), Some("ses_a"));
+        let original_info = app.sessions.known["ses_a"].info.clone();
+
+        app.update(AppEvent::OpenModelSelector);
+        app.update(AppEvent::MoveSelector { delta: 1 }); // fast
+        app.update(AppEvent::ConfirmDock); // -> draft.model=fast, opens reasoning
+        assert!(matches!(app.dock, Dock::ReasoningSelector(_)));
+        assert_eq!(draft(&app).model, "fast");
+        // The current session is untouched in every layer.
+        assert_eq!(app.sessions.known["ses_a"].info, original_info);
+        assert_eq!(
+            app.catalogs.next_model.as_deref(),
+            Some("deep"),
+            "catalog defaults untouched"
+        );
+    }
+
+    #[test]
+    fn incompatible_reasoning_is_kept_and_reasoning_selector_still_opens() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(AppEvent::OpenNewSession);
+        // Draft.reasoning is high; fast only supports low/medium.
+        app.update(AppEvent::OpenModelSelector);
+        app.update(AppEvent::MoveSelector { delta: 1 }); // fast
+        app.update(AppEvent::ConfirmDock);
+        assert!(matches!(app.dock, Dock::ReasoningSelector(_)));
+        assert_eq!(
+            draft(&app).reasoning,
+            Reasoning::High,
+            "kept, never downgraded"
+        );
+        assert!(
+            app.notices
+                .iter()
+                .any(|n| n.text.contains("may not support"))
+        );
+        // The reasoning selector only lists what fast supports.
+        let supported = supported_reasoning(&app.catalogs.models, "fast");
+        assert_eq!(supported, vec![Reasoning::Low, Reasoning::Medium]);
+    }
+
+    #[test]
+    fn reasoning_selector_confirms_only_supported_values_into_the_draft() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(AppEvent::OpenReasoningSelector);
+        // The cursor preselects the draft value (high, index 3); step back
+        // to medium (index 2) and confirm.
+        app.update(AppEvent::MoveSelector { delta: -1 });
+        app.update(AppEvent::ConfirmDock);
+        assert!(matches!(app.dock, Dock::NewSession(_)));
+        assert_eq!(draft(&app).reasoning, Reasoning::Medium);
+    }
+
+    #[test]
+    fn reasoning_selector_with_unknown_model_is_empty_and_unconfirmable() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(AppEvent::OpenNewSession);
+        if let Some(draft) = app.draft_mut() {
+            draft.model = "no-such-model".into();
+        }
+        app.update(AppEvent::OpenReasoningSelector);
+        assert!(matches!(app.dock, Dock::ReasoningSelector(_)));
+        app.update(AppEvent::ConfirmDock);
+        assert!(
+            matches!(app.dock, Dock::ReasoningSelector(_)),
+            "nothing to confirm for an unknown model"
+        );
+    }
+
+    #[test]
+    fn profile_selection_adopts_the_profile_defaults() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(AppEvent::OpenNewSession);
+        app.update(AppEvent::OpenProfileSelector);
+        app.update(AppEvent::MoveSelector { delta: 1 }); // review
+        app.update(AppEvent::ConfirmDock);
+        assert!(matches!(app.dock, Dock::NewSession(_)));
+        let state = draft(&app);
+        assert_eq!(state.profile, "review");
+        assert_eq!(state.model, "fast", "profile default model adopted");
+        assert_eq!(
+            state.reasoning,
+            Reasoning::Medium,
+            "profile default reasoning adopted"
+        );
+        let _ = app.sessions.active; // the active session is absent: untouched
+    }
+
+    #[test]
+    fn session_selector_sorts_and_filters_case_insensitively() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        let raw = filtered_sessions(&app.sessions.list, "");
+        let ids: Vec<&str> = raw.iter().map(|s| s.session_id.as_str()).collect();
+        assert_eq!(ids, vec!["ses_a", "ses_b"], "updated_at descending");
+        let matching = filtered_sessions(&app.sessions.list, "BETA");
+        assert_eq!(matching.len(), 1, "title match is case-insensitive");
+        assert_eq!(matching[0].session_id, "ses_b");
+        let workspace = filtered_sessions(&app.sessions.list, "/a");
+        assert_eq!(workspace.len(), 1);
+        assert_eq!(workspace[0].session_id, "ses_a");
+    }
+
+    #[test]
+    fn session_selector_confirm_opens_and_closes_on_success() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(AppEvent::OpenSessionSelector);
+        app.update(AppEvent::MoveSelector { delta: 1 }); // ses_b (fast)
+        let commands = take_requests(app.update(AppEvent::ConfirmDock));
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].method, "session.open");
+        assert_eq!(commands[0].params["session_id"], json!("ses_b"));
+        assert!(matches!(&app.dock, Dock::SessionSelector(state) if state.submitting));
+        let commands = take_requests(respond(
+            &mut app,
+            &commands[0],
+            json!({"session": session_info("ses_b", Some("i9"))}),
+        ));
+        assert!(
+            matches!(app.dock, Dock::Composer),
+            "success closes the selector"
+        );
+        assert_eq!(app.sessions.active.as_deref(), Some("ses_b"));
+        // state + transcript chain follows the open.
+        assert_eq!(commands.len(), 2);
+    }
+
+    #[test]
+    fn session_open_failure_keeps_the_selector_query_and_selection() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(AppEvent::OpenSessionSelector);
+        app.update(AppEvent::SetSelectorQuery { query: "Al".into() });
+        let request = take_requests(app.update(AppEvent::ConfirmDock)).remove(0);
+        let commands = respond_error(&mut app, &request, "bad_session", "gone");
+        assert!(take_requests(commands).is_empty());
+        match &app.dock {
+            Dock::SessionSelector(state) => {
+                assert!(!state.submitting, "submit unblocks after failure");
+                assert_eq!(state.query, "Al", "query survives");
+                assert_eq!(state.cursor, 0, "selection survives");
+                assert!(state.error.as_deref().is_some_and(|e| e.contains("gone")));
+            }
+            other => panic!("selector must stay open, dock = {other:?}"),
+        }
+    }
+
+    #[test]
+    fn create_failure_keeps_every_draft_field_and_reports_the_error() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(AppEvent::OpenNewSession);
+        app.update(AppEvent::NewSessionSetField {
+            field: NewSessionField::Title,
+            value: "My task".into(),
+        });
+        app.update(AppEvent::DockFieldStep { delta: 5 }); // create
+        let request = take_requests(app.update(AppEvent::ConfirmDock)).remove(0);
+        assert_eq!(request.method, "session.create");
+        assert_eq!(request.params["title"], json!("My task"));
+        let commands = respond_error(&mut app, &request, "validation", "bad workspace");
+        assert!(take_requests(commands).is_empty());
+        let state = draft(&app);
+        assert!(!state.submitting);
+        assert_eq!(state.title, "My task", "fields are never cleared");
+        assert!(
+            state
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("bad workspace"))
+        );
+        assert!(matches!(app.dock, Dock::NewSession(_)));
+    }
+
+    #[test]
+    fn submit_new_session_is_gated_while_in_flight() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(AppEvent::OpenNewSession);
+        let first = take_requests(app.update(AppEvent::SubmitNewSession)).remove(0);
+        let second = app.update(AppEvent::SubmitNewSession);
+        assert!(take_requests(second).is_empty(), "no duplicate create");
+        let command = take_requests(respond_error(&mut app, &first, "internal", "boom"));
+        assert!(command.is_empty());
+        // Now submitting is unblocked.
+        let retry = take_requests(app.update(AppEvent::SubmitNewSession));
+        assert_eq!(retry.len(), 1);
+    }
+
+    #[test]
+    fn create_success_activates_the_new_session_and_closes_the_form() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(AppEvent::OpenNewSession);
+        let request = take_requests(app.update(AppEvent::SubmitNewSession)).remove(0);
+        let commands = take_requests(respond(
+            &mut app,
+            &request,
+            json!({"session": session_info("ses_new", Some("n1"))}),
+        ));
+        assert!(matches!(app.dock, Dock::Composer));
+        assert_eq!(app.sessions.active.as_deref(), Some("ses_new"));
+        assert_eq!(commands.len(), 2, "state + transcript chain");
+    }
+
+    #[test]
+    fn cancel_returns_to_the_composer_or_the_form() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        // NewSession -> composer.
+        app.update(AppEvent::OpenNewSession);
+        app.update(AppEvent::CancelDock);
+        assert!(matches!(app.dock, Dock::Composer));
+        // Model selector -> the form (never the composer when a draft flows).
+        app.update(AppEvent::OpenModelSelector);
+        app.update(AppEvent::CancelDock);
+        assert!(matches!(app.dock, Dock::NewSession(_)));
+        // Reasoning selector -> the form.
+        app.update(AppEvent::OpenReasoningSelector);
+        app.update(AppEvent::CancelDock);
+        assert!(matches!(app.dock, Dock::NewSession(_)));
+        // Session selector -> the composer.
+        app.update(AppEvent::OpenSessionSelector);
+        app.update(AppEvent::CancelDock);
+        assert!(matches!(app.dock, Dock::Composer));
+        // The composer text survives the whole dance.
+        app.update(crate::event::AppEvent::SetTheme(ThemeKind::Dark));
+    }
+
+    #[test]
+    fn stale_create_response_does_not_touch_a_newer_dock() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(AppEvent::OpenNewSession);
+        let stale = take_requests(app.update(AppEvent::SubmitNewSession)).remove(0);
+        // Cancel the form while the create is in flight, then open a fresh
+        // one; the stale failure must not leak into the new draft.
+        app.update(AppEvent::CancelDock);
+        app.update(AppEvent::OpenNewSession);
+        let commands = respond_error(&mut app, &stale, "validation", "stale boom");
+        assert!(take_requests(commands).is_empty());
+        let state = draft(&app);
+        assert!(
+            state.error.is_none(),
+            "stale failure stayed off the new draft"
+        );
+        assert!(!state.submitting);
+    }
+
+    #[test]
+    fn selectors_fields_and_field_edits_freeze_while_creating() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(AppEvent::OpenNewSession);
+        let in_flight = take_requests(app.update(AppEvent::SubmitNewSession));
+        assert_eq!(in_flight.len(), 1);
+        let workspace_before = draft(&app).workspace.clone();
+
+        // All three new-session selectors are blocked while submitting.
+        app.update(AppEvent::OpenModelSelector);
+        assert!(
+            matches!(app.dock, Dock::NewSession(_)),
+            "model selector blocked"
+        );
+        app.update(AppEvent::OpenReasoningSelector);
+        assert!(
+            matches!(app.dock, Dock::NewSession(_)),
+            "reasoning selector blocked"
+        );
+        app.update(AppEvent::OpenProfileSelector);
+        assert!(
+            matches!(app.dock, Dock::NewSession(_)),
+            "profile selector blocked"
+        );
+
+        // Field confirm (Enter on a selector field) is blocked as well.
+        app.update(AppEvent::DockFieldStep { delta: 1 }); // profile
+        app.update(AppEvent::ConfirmDock);
+        assert!(
+            matches!(app.dock, Dock::NewSession(_)),
+            "field confirm blocked"
+        );
+
+        // Field edits do not mutate the frozen draft.
+        app.update(AppEvent::NewSessionSetField {
+            field: NewSessionField::Workspace,
+            value: "/changed".into(),
+        });
+        assert_eq!(draft(&app).workspace, workspace_before);
+        assert!(draft(&app).submitting);
+
+        // The failure response unblocks and keeps the untouched draft.
+        let commands = take_requests(respond_error(&mut app, &in_flight[0], "internal", "boom"));
+        assert!(commands.is_empty());
+        assert!(matches!(app.dock, Dock::NewSession(_)));
+        assert_eq!(draft(&app).workspace, workspace_before);
+        assert!(!draft(&app).submitting);
+    }
+
+    #[test]
+    fn unexpected_selector_does_not_survive_a_matching_create_response() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(AppEvent::OpenNewSession);
+        let request = take_requests(app.update(AppEvent::SubmitNewSession)).remove(0);
+        // Defensive: even if the app ends up on a selector while the create
+        // is in flight, a matching success must resolve the whole flow.
+        app.draft = Some(draft(&app));
+        app.dock = Dock::ModelSelector(SelectorState::new(SelectorKind::Model));
+        let commands = take_requests(respond(
+            &mut app,
+            &request,
+            json!({"session": session_info("ses_new", Some("n1"))}),
+        ));
+        assert!(
+            matches!(app.dock, Dock::Composer),
+            "matching success closes the flow"
+        );
+        assert!(app.draft.is_none());
+        assert_eq!(app.sessions.active.as_deref(), Some("ses_new"));
+        assert!(commands.iter().any(|r| r.method == "session.state"));
+    }
+
+    #[test]
+    fn stale_create_success_does_not_close_a_newer_draft() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(AppEvent::OpenNewSession);
+        let stale = take_requests(app.update(AppEvent::SubmitNewSession)).remove(0);
+        app.update(AppEvent::CancelDock);
+        app.update(AppEvent::OpenNewSession);
+        let model_before = draft(&app).model.clone();
+        let commands = take_requests(respond(
+            &mut app,
+            &stale,
+            json!({"session": session_info("ses_late", Some("n9"))}),
+        ));
+        assert!(
+            matches!(app.dock, Dock::NewSession(_)),
+            "an old create response never closes the newer draft"
+        );
+        assert_eq!(draft(&app).model, model_before);
+        assert!(commands.iter().any(|r| r.method == "session.state"));
+    }
+
+    #[test]
+    fn move_selector_wraps_and_pages() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(AppEvent::OpenModelSelector);
+        app.update(AppEvent::MoveSelector { delta: 5 });
+        match &app.dock {
+            Dock::ModelSelector(state) => assert_eq!(state.cursor, 5 % 3),
+            _ => panic!("model selector"),
+        }
+        app.update(AppEvent::MoveSelector { delta: -1 });
+        match &app.dock {
+            Dock::ModelSelector(state) => assert_eq!(state.cursor, 4 % 3),
+            _ => panic!("model selector"),
+        }
+        app.update(AppEvent::PageSelector { delta: 1 });
+        match &app.dock {
+            Dock::ModelSelector(state) => assert_eq!(state.cursor, (4 % 3 + 6) % 3),
+            _ => panic!("model selector"),
+        }
+    }
+
+    #[test]
+    fn rpc_send_failure_on_create_clears_submitting_and_reports() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(AppEvent::OpenNewSession);
+        let request = take_requests(app.update(AppEvent::SubmitNewSession)).remove(0);
+        app.update(AppEvent::RpcSendFailed {
+            id: request.id,
+            error: RpcError::Closed,
+        });
+        let state = draft(&app);
+        assert!(!state.submitting);
+        assert!(
+            state
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("RPC process"))
         );
     }
 }

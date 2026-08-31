@@ -4,6 +4,7 @@
 
 pub mod catalog;
 pub mod composer;
+pub mod selection;
 pub mod session;
 pub mod tool;
 pub mod transcript;
@@ -11,6 +12,9 @@ pub mod turn;
 
 pub use catalog::CatalogState;
 pub use composer::Composer;
+pub use selection::{
+    Dock, NewSessionField, NewSessionState, SELECTOR_PAGE, SelectorKind, SelectorState,
+};
 pub use session::{ScrollState, SessionId, SessionView, SessionsState};
 pub use tool::{LiveTool, ToolStatus};
 pub use transcript::{

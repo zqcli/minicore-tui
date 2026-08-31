@@ -42,9 +42,26 @@ through `AppEvent`s (`Tick`, `SetTheme`, `ToggleReasoning`, `ToggleTools`,
 `ToggleTool`). Rendering is a pure read-only view: each frame is derived
 tight from state, and the per-block line caches from spec 19 are deferred
 to a later phase (they must be populated in `App::update`, never in
-`render`). Selectors, full composer editing, and slash commands are not
-implemented yet; the Phase 3 main loop constructs the app but does not
-start an agent (`q`/`Ctrl+C` still quit).
+`render`). Full composer editing and slash commands are not implemented
+yet; the Phase 3 main loop constructs the app but does not start an agent
+(`q`/`Ctrl+C` still quit).
+
+Phase 4 adds the dock selectors (development spec 24-28): the new-session
+form and the session/model/reasoning/profile selectors replace the
+composer inside the dock while the transcript stays visible. All selection
+state moves through semantic `AppEvent`s (`OpenNewSession`,
+`Open*Selector`, `SetSelectorQuery`, `MoveSelector`, `PageSelector`,
+`ConfirmDock`, `CancelDock`, `DockFieldStep`, `NewSessionSetField`,
+`SubmitNewSession`); key mapping arrives in Phase 5. Selecting a model or
+reasoning opens (or keeps) a new-session draft and **creates a new session**
+when confirmed — the active session is never modified, and `session.create`
+is the only bridge to a real session. The session selector sorts
+`session.list` by `updated_at` descending, filters case-insensitively over
+title/workspace/session_id/model/profile, and opens via `session.open`
+(keep-on-error, one in-flight open at a time). The new-session draft seeds
+workspace/profile/model/reasoning from the catalog defaults; workspace stays
+a plain string the agent validates. Tool cards, live-turn deltas, and the
+durable transcript behaviour from Phases 2-3 are unchanged.
 
 ## Requirements
 
@@ -91,6 +108,9 @@ cargo run -- --theme light
 
 ## Scope honesty
 
+- Selecting a model or reasoning always drives a new-session draft; it is
+  never a hot-swap of the current session. The current session only changes
+  when a create/open response activates it.
 - Model and reasoning are frozen when a session is created; changing them
   creates a new session.
 - Agent events are best effort and may be dropped; `turn.wait`,

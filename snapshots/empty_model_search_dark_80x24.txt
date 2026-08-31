@@ -1,0 +1,24 @@
+MINICORE  v0.1.0
+
+Coding agent TUI
+q / Ctrl+C to quit
+
+Open a session — press q / Ctrl+C to quit
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│Select model                                                                  │
+│Changing model creates a new session.                                         │
+│> zzzz                                                                        │
+│No matching items                                                             │
+│(0/0)                                                                         │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+/project                                                                    Task
+Idle                                                                 deep • high

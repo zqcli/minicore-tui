@@ -117,3 +117,103 @@ fn wide_120x40() {
 fn small_50x10() {
     snapshot(&testapp::chat(ThemeKind::Dark), "small_50x10", 50, 10);
 }
+
+#[test]
+fn new_session_dark_80x24() {
+    snapshot(
+        &testapp::new_session(ThemeKind::Dark),
+        "new_session_dark_80x24",
+        80,
+        24,
+    );
+}
+
+#[test]
+fn new_session_light_120x40() {
+    snapshot(
+        &testapp::new_session(ThemeKind::Light),
+        "new_session_light_120x40",
+        120,
+        40,
+    );
+}
+
+#[test]
+fn model_selector_dark_80x24() {
+    snapshot(
+        &testapp::model_selector(ThemeKind::Dark),
+        "model_selector_dark_80x24",
+        80,
+        24,
+    );
+}
+
+#[test]
+fn model_selector_light_120x40() {
+    snapshot(
+        &testapp::model_selector(ThemeKind::Light),
+        "model_selector_light_120x40",
+        120,
+        40,
+    );
+}
+
+#[test]
+fn reasoning_selector_dark_80x24() {
+    snapshot(
+        &testapp::reasoning_selector(ThemeKind::Dark),
+        "reasoning_selector_dark_80x24",
+        80,
+        24,
+    );
+}
+
+#[test]
+fn session_selector_dark_80x24() {
+    snapshot(
+        &testapp::session_selector(ThemeKind::Dark),
+        "session_selector_dark_80x24",
+        80,
+        24,
+    );
+}
+
+#[test]
+fn session_selector_light_120x40() {
+    snapshot(
+        &testapp::session_selector(ThemeKind::Light),
+        "session_selector_light_120x40",
+        120,
+        40,
+    );
+}
+
+#[test]
+fn profile_selector_dark_80x24() {
+    snapshot(
+        &testapp::profile_selector(ThemeKind::Dark),
+        "profile_selector_dark_80x24",
+        80,
+        24,
+    );
+}
+
+#[test]
+fn empty_model_search_dark_80x24() {
+    snapshot(
+        &testapp::empty_model_search(ThemeKind::Dark),
+        "empty_model_search_dark_80x24",
+        80,
+        24,
+    );
+}
+
+#[test]
+fn narrow_model_selector_dark_60x16() {
+    snapshot(
+        &testapp::narrow_selector(ThemeKind::Dark),
+        "narrow_model_selector_dark_60x16",
+        60,
+        16,
+    );
+}
