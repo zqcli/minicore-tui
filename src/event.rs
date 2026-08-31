@@ -13,7 +13,8 @@
 
 use std::process::ExitStatus;
 
-use crate::protocol::{FrameError, IncomingFrame};
+use crate::protocol::{FrameError, IncomingFrame, Reasoning, RequestId};
+use crate::rpc::RpcError;
 
 /// A transport event from the agent process or its pipes. Events from
 /// different tasks arrive without a promised total order; see the module
@@ -33,4 +34,36 @@ pub enum RpcEvent {
     /// The agent child ended. `None` means the exit status could not be
     /// obtained (the kill fallback path failed to reap).
     Exited(Option<ExitStatus>),
+}
+
+/// Everything the app loop hands to `App::update`. Tasks and the command
+/// executor only produce these; they never hold the app or mutate it
+/// directly (development spec 9.1).
+#[derive(Debug)]
+pub enum AppEvent {
+    /// Start discovery: ping + model/profile/session list, issued together.
+    /// The app is ready only after all four succeed.
+    Bootstrap,
+    /// Submit a non-empty message for a session (the composer arrives in
+    /// Phase 5; this keeps the send path exercised).
+    SubmitTurn { session_id: String, text: String },
+    /// Create and activate a session from catalog defaults (Phase 4 wires
+    /// the new-session UI to this).
+    CreateSession {
+        workspace: String,
+        profile: Option<String>,
+        model: Option<String>,
+        reasoning: Option<Reasoning>,
+        title: Option<String>,
+    },
+    /// Open (and activate) an existing session; re-opening an already
+    /// loaded session is idempotent.
+    OpenSession { session_id: String },
+    /// Request cancellation of the active turn (Esc arrives in Phase 5).
+    CancelTurn { session_id: String },
+    /// A transport event from the RPC background tasks.
+    Rpc(RpcEvent),
+    /// Executing an `AppCommand::Rpc` failed before any frame was written.
+    /// The corresponding pending request is removed inside `update`.
+    RpcSendFailed { id: RequestId, error: RpcError },
 }

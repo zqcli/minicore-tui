@@ -16,11 +16,27 @@ pub const METHOD_PING: &str = "agent.ping";
 pub const METHOD_LIST_MODELS: &str = "model.list";
 pub const METHOD_LIST_PROFILES: &str = "profile.list";
 pub const METHOD_LIST_SESSIONS: &str = "session.list";
+pub const METHOD_SESSION_CREATE: &str = "session.create";
+pub const METHOD_SESSION_OPEN: &str = "session.open";
+pub const METHOD_SESSION_STATE: &str = "session.state";
+pub const METHOD_TRANSCRIPT: &str = "session.transcript";
+pub const METHOD_TURN_SEND: &str = "turn.send";
+pub const METHOD_TURN_WAIT: &str = "turn.wait";
+pub const METHOD_TURN_CANCEL: &str = "turn.cancel";
 
 /// Monotonic request id, starting at 1 (spec 10.4). Never persisted.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct RequestId(pub u64);
+
+/// The exact identity of a running turn, echoed by `turn.send` and accepted
+/// by `turn.wait` and `turn.cancel`.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+pub struct TurnRef {
+    pub session_id: String,
+    pub instance_id: String,
+    pub turn_id: String,
+}
 
 /// One outbound NDJSON request line (spec 10.5).
 #[derive(Debug, Serialize)]
@@ -57,6 +73,75 @@ impl OutgoingRequest {
     pub fn list_sessions(id: RequestId) -> Self {
         Self::new(id, METHOD_LIST_SESSIONS, json!({}))
     }
+
+    /// `session.create` with the given workspace and optional overrides; the
+    /// agent fills in defaults for absent fields.
+    pub fn session_create(
+        id: RequestId,
+        workspace: &str,
+        profile: Option<&str>,
+        model: Option<&str>,
+        reasoning: Option<Reasoning>,
+        title: Option<&str>,
+    ) -> Self {
+        let params = SessionCreateParams {
+            workspace: workspace.to_owned(),
+            profile: profile.map(str::to_owned),
+            model: model.map(str::to_owned),
+            reasoning,
+            title: title.map(str::to_owned),
+        };
+        let params = serde_json::to_value(params).expect("session create params serialize");
+        Self::new(id, METHOD_SESSION_CREATE, params)
+    }
+
+    pub fn session_open(id: RequestId, session_id: &str) -> Self {
+        let params = SessionIdParams {
+            session_id: session_id.to_owned(),
+        };
+        let params = serde_json::to_value(params).expect("session params serialize");
+        Self::new(id, METHOD_SESSION_OPEN, params)
+    }
+
+    pub fn session_state(id: RequestId, session_id: &str) -> Self {
+        let params = SessionIdParams {
+            session_id: session_id.to_owned(),
+        };
+        let params = serde_json::to_value(params).expect("session params serialize");
+        Self::new(id, METHOD_SESSION_STATE, params)
+    }
+
+    /// One transcript page: entries strictly after `after`, or the whole
+    /// log when `after` is `None`. The agent's default page size is 100;
+    /// the app pages one page at a time.
+    pub fn transcript(id: RequestId, session_id: &str, after: Option<u64>) -> Self {
+        let params = TranscriptParams {
+            session_id: session_id.to_owned(),
+            after,
+            limit: TRANSCRIPT_PAGE_LIMIT,
+        };
+        let params = serde_json::to_value(params).expect("transcript params serialize");
+        Self::new(id, METHOD_TRANSCRIPT, params)
+    }
+
+    pub fn send_turn(id: RequestId, session_id: &str, text: &str) -> Self {
+        let params = SendTurnParams {
+            session_id: session_id.to_owned(),
+            text: text.to_owned(),
+        };
+        let params = serde_json::to_value(params).expect("turn params serialize");
+        Self::new(id, METHOD_TURN_SEND, params)
+    }
+
+    pub fn wait_turn(id: RequestId, turn: &TurnRef) -> Self {
+        let params = serde_json::to_value(turn).expect("turn ref serializes");
+        Self::new(id, METHOD_TURN_WAIT, params)
+    }
+
+    pub fn cancel_turn(id: RequestId, turn: &TurnRef) -> Self {
+        let params = serde_json::to_value(turn).expect("turn ref serializes");
+        Self::new(id, METHOD_TURN_CANCEL, params)
+    }
 }
 
 /// A complete incoming frame (spec 10.6).
@@ -71,7 +156,7 @@ pub enum IncomingFrame {
 /// the answer to a request.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RpcNotification {
-    AgentEvent(AgentEventEnvelope),
+    AgentEvent(AgentEventWire),
     Unknown { method: String },
 }
 
@@ -105,6 +190,30 @@ impl RpcResponse {
     }
 
     pub fn parse_sessions(&self) -> Result<SessionListResult, RpcResponseError> {
+        self.result_as()
+    }
+
+    pub fn parse_session(&self) -> Result<SessionResult, RpcResponseError> {
+        self.result_as()
+    }
+
+    pub fn parse_session_state(&self) -> Result<SessionStateWire, RpcResponseError> {
+        self.result_as()
+    }
+
+    pub fn parse_transcript(&self) -> Result<TranscriptPageWire, RpcResponseError> {
+        self.result_as()
+    }
+
+    pub fn parse_turn(&self) -> Result<TurnResult, RpcResponseError> {
+        self.result_as()
+    }
+
+    pub fn parse_turn_wait(&self) -> Result<TurnOutcomeWire, RpcResponseError> {
+        self.result_as()
+    }
+
+    pub fn parse_cancel(&self) -> Result<CancelledResult, RpcResponseError> {
         self.result_as()
     }
 }
@@ -145,14 +254,166 @@ pub struct RpcErrorData {
     pub retryable: bool,
 }
 
-/// The `agent.event` notification envelope. Per-event typed payloads arrive
-/// with the app state phase (spec 11.7); the raw `data` value is preserved
-/// here so the frame layer stays independent of the event kinds.
+/// Every `agent.event` payload the pinned agent can emit (spec 11.7). The
+/// `data` member of each event is modeled by the matching `*DataWire`
+/// struct. Unknown future event types parse as `Unknown` and stay
+/// ignorable; malformed payloads of known types are a protocol error.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct AgentEventEnvelope {
-    #[serde(rename = "type")]
-    pub event_type: String,
-    pub data: Value,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentEventWire {
+    SessionOpened {
+        data: SessionOpenedDataWire,
+    },
+    SessionClosed {
+        data: SessionClosedDataWire,
+    },
+    SessionState {
+        data: SessionStateDataWire,
+    },
+    TurnStarted {
+        data: TurnEventDataWire,
+    },
+    OutputDelta {
+        data: OutputDeltaDataWire,
+    },
+    ToolStarted {
+        data: ToolEventDataWire,
+    },
+    ToolProgress {
+        data: ToolProgressDataWire,
+    },
+    ToolFinished {
+        data: ToolFinishedDataWire,
+    },
+    InteractionRequested {
+        data: InteractionRequestedDataWire,
+    },
+    InteractionResolved {
+        data: InteractionResolvedDataWire,
+    },
+    TurnFinished {
+        data: TurnFinishedDataWire,
+    },
+    /// A future event type this client does not model.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Metadata carried by every agent event.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct EventMetaWire {
+    pub session_id: String,
+    pub instance_id: String,
+    pub dropped_before: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SessionOpenedDataWire {
+    pub session: SessionInfo,
+    pub meta: EventMetaWire,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SessionClosedDataWire {
+    pub session_id: String,
+    pub meta: EventMetaWire,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SessionStateDataWire {
+    pub state: SessionStateWire,
+    pub meta: EventMetaWire,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TurnEventDataWire {
+    pub turn: TurnRef,
+    pub meta: EventMetaWire,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct OutputDeltaDataWire {
+    pub turn: TurnRef,
+    pub channel: OutputChannelWire,
+    pub delta: String,
+    pub meta: EventMetaWire,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ToolEventDataWire {
+    pub turn: TurnRef,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub meta: EventMetaWire,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ToolProgressDataWire {
+    pub turn: TurnRef,
+    pub tool_call_id: String,
+    pub progress: ToolProgressWire,
+    pub meta: EventMetaWire,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ToolFinishedDataWire {
+    pub turn: TurnRef,
+    pub tool_call_id: String,
+    pub result: ToolResultWire,
+    pub meta: EventMetaWire,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct InteractionRequestedDataWire {
+    pub session_id: String,
+    pub interaction: PendingInteractionWire,
+    pub meta: EventMetaWire,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct InteractionResolvedDataWire {
+    pub session_id: String,
+    pub interaction_id: String,
+    pub meta: EventMetaWire,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TurnFinishedDataWire {
+    pub turn: TurnRef,
+    pub outcome: TurnOutcomeWire,
+    pub meta: EventMetaWire,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputChannelWire {
+    Text,
+    Reasoning,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ToolProgressWire {
+    pub message: Option<String>,
+    pub completed: Option<u64>,
+    pub total: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolOutcomeWire {
+    Success,
+    Failed,
+    Denied,
+    Cancelled,
+    InputProvided,
+}
+
+/// `tool_finished` result: outcome and byte size only; the durable content
+/// comes from the transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct ToolResultWire {
+    pub outcome: ToolOutcomeWire,
+    pub content_bytes: u64,
 }
 
 /// Why an incoming line failed as a frame. Every kind is fatal for the
@@ -224,7 +485,7 @@ pub fn parse_frame(line: &[u8]) -> Result<IncomingFrame, FrameError> {
             let params = envelope
                 .params
                 .ok_or_else(|| invalid("agent.event notification without params"))?;
-            let event = serde_json::from_value::<AgentEventEnvelope>(params)
+            let event = serde_json::from_value::<AgentEventWire>(params)
                 .map_err(|_| invalid("malformed agent.event params"))?;
             Ok(IncomingFrame::Notification(RpcNotification::AgentEvent(
                 event,
@@ -383,9 +644,230 @@ pub struct SessionInfo {
     pub updated_at: String,
 }
 
+/// Page size for `session.transcript`; the agent's default is 100.
+pub const TRANSCRIPT_PAGE_LIMIT: usize = 100;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SessionCreateParams {
+    pub workspace: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<Reasoning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SessionIdParams {
+    pub session_id: String,
+}
+
+/// The `session.create` / `session.open` result member.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SessionResult {
+    pub session: SessionInfo,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TranscriptParams {
+    pub session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<u64>,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SendTurnParams {
+    pub session_id: String,
+    pub text: String,
+}
+
+/// The `turn.send` result member: the exact turn identity.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TurnResult {
+    pub turn: TurnRef,
+}
+
+/// The `turn.cancel` result member.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct CancelledResult {
+    pub cancelled: bool,
+}
+
+/// The `session.state` return value; also the `session_state` event data.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SessionStateWire {
+    pub session_id: String,
+    pub instance_id: String,
+    pub status: SessionStatusWire,
+    pub health: SessionHealthWire,
+    pub active_turn: Option<String>,
+    pub pending_interaction: Option<PendingInteractionWire>,
+    pub conversation_seq: u64,
+    pub last_terminal: Option<TurnOutcomeWire>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionStatusWire {
+    Idle,
+    Running,
+    WaitingForInput,
+    Closing,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionHealthWire {
+    Healthy,
+    Degraded { diagnostic: DiagnosticWire },
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct PendingInteractionWire {
+    pub interaction_id: String,
+    pub turn_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    /// The tagged interaction kind; this TUI answers none of them.
+    pub kind: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct DiagnosticWire {
+    pub code: String,
+    pub category: String,
+    pub retryable: bool,
+}
+
+/// The `turn.wait` result member.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TurnOutcomeWire {
+    pub turn_id: String,
+    pub terminal: TurnTerminalWire,
+    pub usage: UsageWire,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnTerminalWire {
+    Completed,
+    CancelledByUser,
+    CancelledByShutdown,
+    CancelledByRestart,
+    BudgetExceeded,
+    Failed { diagnostic: DiagnosticWire },
+}
+
+/// Usage counters. The object is always present where specified; every
+/// member is optional on the wire.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+pub struct UsageWire {
+    #[serde(default)]
+    pub input_tokens: Option<u64>,
+    #[serde(default)]
+    pub output_tokens: Option<u64>,
+    #[serde(default)]
+    pub reasoning_tokens: Option<u64>,
+    #[serde(default)]
+    pub cache_read_tokens: Option<u64>,
+    #[serde(default)]
+    pub cache_write_tokens: Option<u64>,
+    #[serde(default)]
+    pub provider_total_tokens: Option<u64>,
+}
+
+/// One `session.transcript` page.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TranscriptPageWire {
+    pub entries: Vec<ConversationEntryWire>,
+    pub next_after: Option<u64>,
+    pub observed_head: u64,
+    pub complete: bool,
+}
+
+/// Durable conversation entries, externally tagged by the agent.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationEntryWire {
+    UserMessage(UserMessageViewWire),
+    AssistantMessage(AssistantMessageViewWire),
+    ToolResult(ToolResultViewWire),
+    Summary(SummaryViewWire),
+    TurnTerminal(TurnTerminalEntryViewWire),
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct UserMessageViewWire {
+    pub seq: u64,
+    pub turn_id: String,
+    pub text: String,
+    pub execution: TurnExecutionWire,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TurnExecutionWire {
+    pub model: String,
+    pub reasoning: Reasoning,
+    pub max_tool_rounds: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct AssistantMessageViewWire {
+    pub seq: u64,
+    pub turn_id: String,
+    pub model: String,
+    pub text: Option<String>,
+    pub reasoning: Option<String>,
+    pub tool_calls: Vec<ToolCallViewWire>,
+    pub usage: UsageWire,
+    pub finish_reason: String,
+    pub created_at: String,
+}
+
+/// Assistant tool calls never carry arguments on the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ToolCallViewWire {
+    pub tool_call_id: String,
+    pub name: String,
+    pub call_index: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ToolResultViewWire {
+    pub seq: u64,
+    pub turn_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub outcome: ToolOutcomeWire,
+    pub content: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SummaryViewWire {
+    pub seq: u64,
+    pub through: u64,
+    pub summary: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TurnTerminalEntryViewWire {
+    pub seq: u64,
+    pub turn_id: String,
+    pub terminal: TurnTerminalWire,
+    pub usage: UsageWire,
+    pub created_at: String,
+}
+
 /// Model reasoning levels the TUI understands. Unknown wire values are a
 /// protocol error (spec 11.5); the agent does not expose other levels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Reasoning {
     Auto,
@@ -478,7 +960,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_event_notification_parses_the_envelope() {
+    fn agent_event_notification_parses_typed_payloads() {
         let frame = parse_value(json!({
             "jsonrpc": "2.0",
             "method": "agent.event",
@@ -497,8 +979,13 @@ mod tests {
             IncomingFrame::Notification(RpcNotification::AgentEvent(event)) => event,
             _ => panic!("expected agent event notification"),
         };
-        assert_eq!(event.event_type, "output_delta");
-        assert_eq!(event.data["meta"]["dropped_before"], json!(2));
+        let AgentEventWire::OutputDelta { data } = event else {
+            panic!("expected an output delta event")
+        };
+        assert_eq!(data.channel, OutputChannelWire::Text);
+        assert_eq!(data.delta, "hi");
+        assert_eq!(data.turn.turn_id, "trn_1");
+        assert_eq!(data.meta.dropped_before, 2);
     }
 
     #[test]
@@ -716,5 +1203,279 @@ mod tests {
             panic!("expected response")
         };
         assert_eq!(response.parse_ping().unwrap().version, "0.2.0");
+    }
+
+    #[test]
+    fn turn_request_builders_match_the_wire_shapes() {
+        let frame =
+            serde_json::to_value(OutgoingRequest::send_turn(RequestId(5), "ses_1", "Hello"))
+                .unwrap();
+        assert_eq!(frame["method"], "turn.send");
+        assert_eq!(
+            frame["params"],
+            json!({"session_id": "ses_1", "text": "Hello"})
+        );
+
+        let turn = TurnRef {
+            session_id: "ses_1".into(),
+            instance_id: "ins_1".into(),
+            turn_id: "trn_1".into(),
+        };
+        let frame = serde_json::to_value(OutgoingRequest::wait_turn(RequestId(6), &turn)).unwrap();
+        assert_eq!(frame["method"], "turn.wait");
+        assert_eq!(
+            frame["params"],
+            json!({"session_id": "ses_1", "instance_id": "ins_1", "turn_id": "trn_1"})
+        );
+        let frame =
+            serde_json::to_value(OutgoingRequest::cancel_turn(RequestId(7), &turn)).unwrap();
+        assert_eq!(frame["method"], "turn.cancel");
+        assert_eq!(
+            frame["params"],
+            json!({"session_id": "ses_1", "instance_id": "ins_1", "turn_id": "trn_1"})
+        );
+    }
+
+    #[test]
+    fn transcript_builder_omits_none_after_and_sends_limit_100() {
+        let frame =
+            serde_json::to_value(OutgoingRequest::transcript(RequestId(8), "ses_1", None)).unwrap();
+        assert_eq!(frame["method"], "session.transcript");
+        assert_eq!(
+            frame["params"],
+            json!({"session_id": "ses_1", "limit": 100})
+        );
+        assert!(frame["params"].get("after").is_none());
+        let frame =
+            serde_json::to_value(OutgoingRequest::transcript(RequestId(9), "ses_1", Some(12)))
+                .unwrap();
+        assert_eq!(frame["params"]["after"], json!(12));
+    }
+
+    #[test]
+    fn session_create_builder_serializes_only_present_optional_fields() {
+        let frame = serde_json::to_value(OutgoingRequest::session_create(
+            RequestId(10),
+            "/project",
+            None,
+            None,
+            None,
+            None,
+        ))
+        .unwrap();
+        assert_eq!(frame["params"], json!({"workspace": "/project"}));
+        let frame = serde_json::to_value(OutgoingRequest::session_create(
+            RequestId(11),
+            "/project",
+            Some("coding"),
+            Some("deep"),
+            Some(Reasoning::High),
+            Some("Task"),
+        ))
+        .unwrap();
+        assert_eq!(
+            frame["params"],
+            json!({
+                "workspace": "/project",
+                "profile": "coding",
+                "model": "deep",
+                "reasoning": "high",
+                "title": "Task"
+            })
+        );
+    }
+
+    #[test]
+    fn session_state_fixture_parses_status_health_and_interaction() {
+        let state: SessionStateWire = serde_json::from_value(json!({
+            "session_id": "ses_1",
+            "instance_id": "ins_1",
+            "status": "waiting_for_input",
+            "health": {"degraded": {"diagnostic": {
+                "code": "provider_unavailable",
+                "category": "model",
+                "retryable": true
+            }}},
+            "active_turn": "trn_1",
+            "pending_interaction": {
+                "interaction_id": "int_1",
+                "turn_id": "trn_1",
+                "tool_call_id": "call_1",
+                "tool_name": "write",
+                "kind": {"type": "approval", "data": {"prompt": "Allow?", "risk": "medium"}}
+            },
+            "conversation_seq": 7,
+            "last_terminal": {
+                "turn_id": "trn_1",
+                "terminal": {"failed": {"diagnostic": {
+                    "code": "model_unavailable",
+                    "category": "model",
+                    "retryable": false
+                }}},
+                "usage": {"input_tokens": 10, "output_tokens": 4}
+            }
+        }))
+        .unwrap();
+        assert_eq!(state.status, SessionStatusWire::WaitingForInput);
+        assert!(matches!(state.health, SessionHealthWire::Degraded { .. }));
+        assert_eq!(state.conversation_seq, 7);
+        assert_eq!(
+            state.pending_interaction.as_ref().unwrap().tool_name,
+            "write"
+        );
+        let last = state.last_terminal.unwrap();
+        assert!(matches!(last.terminal, TurnTerminalWire::Failed { .. }));
+    }
+
+    #[test]
+    fn session_status_parses_all_snake_case_values() {
+        for (wire, status) in [
+            ("idle", SessionStatusWire::Idle),
+            ("running", SessionStatusWire::Running),
+            ("waiting_for_input", SessionStatusWire::WaitingForInput),
+            ("closing", SessionStatusWire::Closing),
+        ] {
+            assert_eq!(
+                serde_json::from_value::<SessionStatusWire>(json!(wire)).unwrap(),
+                status
+            );
+        }
+    }
+
+    #[test]
+    fn usage_members_default_to_none() {
+        let usage: UsageWire = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(usage.input_tokens, None);
+        assert_eq!(usage.provider_total_tokens, None);
+        assert!(serde_json::from_value::<UsageWire>(json!({"output_tokens": 3})).is_ok());
+    }
+
+    #[test]
+    fn transcript_page_fixture_parses_all_entry_tags() {
+        let page: TranscriptPageWire = serde_json::from_value(json!({
+            "entries": [
+                {"user_message": {
+                    "seq": 1,
+                    "turn_id": "trn_1",
+                    "text": "user text",
+                    "execution": {"model": "deep", "reasoning": "medium", "max_tool_rounds": 8},
+                    "created_at": "2026-01-02T03:04:05.006Z"
+                }},
+                {"assistant_message": {
+                    "seq": 2,
+                    "turn_id": "trn_1",
+                    "model": "deep",
+                    "text": "assistant text",
+                    "reasoning": "assistant reasoning",
+                    "tool_calls": [{"tool_call_id": "call-1", "name": "write", "call_index": 0}],
+                    "usage": {},
+                    "finish_reason": "tool_calls",
+                    "created_at": "2026-01-02T03:04:05.006Z"
+                }},
+                {"tool_result": {
+                    "seq": 3,
+                    "turn_id": "trn_1",
+                    "tool_call_id": "call-1",
+                    "tool_name": "write",
+                    "outcome": "denied",
+                    "content": "durable tool result",
+                    "created_at": "2026-01-02T03:04:05.006Z"
+                }},
+                {"summary": {
+                    "seq": 4,
+                    "through": 3,
+                    "summary": "durable summary",
+                    "created_at": "2026-01-02T03:04:05.006Z"
+                }},
+                {"turn_terminal": {
+                    "seq": 5,
+                    "turn_id": "trn_1",
+                    "terminal": {"failed": {"diagnostic": {
+                        "code": "model_unavailable",
+                        "category": "model",
+                        "retryable": false
+                    }}},
+                    "usage": {"input_tokens": 4},
+                    "created_at": "2026-01-02T03:04:05.006Z"
+                }}
+            ],
+            "next_after": 5,
+            "observed_head": 5,
+            "complete": false
+        }))
+        .unwrap();
+        assert_eq!(page.entries.len(), 5);
+        match &page.entries[1] {
+            ConversationEntryWire::AssistantMessage(assistant) => {
+                assert_eq!(assistant.tool_calls[0].name, "write");
+                assert!(assistant.text.is_some());
+            }
+            _ => panic!("expected an assistant entry"),
+        }
+        assert_eq!(page.next_after, Some(5));
+        assert!(!page.complete);
+    }
+
+    #[test]
+    fn agent_event_wire_parses_every_current_event_type() {
+        let fixtures = [
+            json!({"type": "session_opened", "data": {"session": {
+                "session_id": "ses_1", "title": null, "profile": "coding",
+                "workspace": "/p", "model": "deep", "reasoning": "high",
+                "loaded": true, "instance_id": "ins_1",
+                "created_at": "2026-01-02T03:04:05.006Z",
+                "updated_at": "2026-01-02T03:04:05.006Z"
+            }, "meta": {"session_id": "ses_1", "instance_id": "ins_1", "dropped_before": 0}}}),
+            json!({"type": "session_closed", "data": {"session_id": "ses_1",
+                "meta": {"session_id": "ses_1", "instance_id": "ins_1", "dropped_before": 0}}}),
+            json!({"type": "session_state", "data": {"state": {
+                "session_id": "ses_1", "instance_id": "ins_1", "status": "idle",
+                "health": "healthy", "active_turn": null, "pending_interaction": null,
+                "conversation_seq": 0, "last_terminal": null
+            }, "meta": {"session_id": "ses_1", "instance_id": "ins_1", "dropped_before": 0}}}),
+            json!({"type": "turn_started", "data": {"turn": {"session_id": "ses_1",
+                "instance_id": "ins_1", "turn_id": "trn_1"},
+                "meta": {"session_id": "ses_1", "instance_id": "ins_1", "dropped_before": 0}}}),
+            json!({"type": "output_delta", "data": {"turn": {"session_id": "ses_1",
+                "instance_id": "ins_1", "turn_id": "trn_1"}, "channel": "reasoning",
+                "delta": "hmm", "meta": {"session_id": "ses_1", "instance_id": "ins_1",
+                "dropped_before": 0}}}),
+            json!({"type": "tool_started", "data": {"turn": {"session_id": "ses_1",
+                "instance_id": "ins_1", "turn_id": "trn_1"}, "tool_call_id": "call-1",
+                "tool_name": "write", "meta": {"session_id": "ses_1", "instance_id": "ins_1",
+                "dropped_before": 0}}}),
+            json!({"type": "tool_progress", "data": {"turn": {"session_id": "ses_1",
+                "instance_id": "ins_1", "turn_id": "trn_1"}, "tool_call_id": "call-1",
+                "progress": {"message": "30%", "completed": 3, "total": 10},
+                "meta": {"session_id": "ses_1", "instance_id": "ins_1", "dropped_before": 0}}}),
+            json!({"type": "tool_finished", "data": {"turn": {"session_id": "ses_1",
+                "instance_id": "ins_1", "turn_id": "trn_1"}, "tool_call_id": "call-1",
+                "result": {"outcome": "success", "content_bytes": 1024},
+                "meta": {"session_id": "ses_1", "instance_id": "ins_1", "dropped_before": 0}}}),
+            json!({"type": "interaction_requested", "data": {"session_id": "ses_1",
+                "interaction": {"interaction_id": "int_1", "turn_id": "trn_1",
+                    "tool_call_id": "call-1", "tool_name": "ask", "kind": {"type": "approval"}},
+                "meta": {"session_id": "ses_1", "instance_id": "ins_1", "dropped_before": 0}}}),
+            json!({"type": "interaction_resolved", "data": {"session_id": "ses_1",
+                "interaction_id": "int_1", "meta": {"session_id": "ses_1",
+                "instance_id": "ins_1", "dropped_before": 0}}}),
+            json!({"type": "turn_finished", "data": {"turn": {"session_id": "ses_1",
+                "instance_id": "ins_1", "turn_id": "trn_1"},
+                "outcome": {"turn_id": "trn_1", "terminal": "completed", "usage": {}},
+                "meta": {"session_id": "ses_1", "instance_id": "ins_1", "dropped_before": 0}}}),
+        ];
+        for raw in fixtures {
+            serde_json::from_value::<AgentEventWire>(raw).expect("event fixture parses");
+        }
+    }
+
+    #[test]
+    fn unknown_agent_event_type_stays_ignorable() {
+        let event: AgentEventWire = serde_json::from_value(json!({
+            "type": "future_event",
+            "data": {"anything": true}
+        }))
+        .unwrap();
+        assert_eq!(event, AgentEventWire::Unknown);
     }
 }

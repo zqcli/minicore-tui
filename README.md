@@ -21,9 +21,19 @@ Phase 1 adds the stdio RPC layer for the pinned agent contract:
 `src/rpc.rs` (agent child lifecycle: one stdin writer fed only with requests
 verified against the agent's 1 MiB line bound, one stdout reader under an
 8 MiB frame bound, one stderr reader with UTF-8-safe 4096-byte lines, and a
-bounded event channel). The interactive app loop is not wired to the RPC
-layer yet; that is Phase 2. Running `minicore-tui` still shows a blank
-fullscreen; press `q` or `Ctrl+C` to quit.
+bounded event channel).
+
+Phase 2 adds the app state machine: `src/app.rs` owns all state via the
+single `App::update(AppEvent)` entry point, `src/state/` holds the pure-data
+session/transcript/turn/catalog structures, and `src/command.rs` describes
+outbound side effects for the future main loop. It covers bootstrap
+(ping + catalogs + sessions, Ready only after all four succeed), session
+create/open with paged `session.transcript` loading, live turns with
+`turn.send`/`turn.wait`/`turn.cancel`, and durable reconciliation: after a
+wait, the transcript is re-fetched and the live turn is replaced by durable
+blocks. The interactive app loop is not wired to the RPC layer yet; that is
+Phase 3+. Running `minicore-tui` still shows a blank fullscreen; press `q`
+or `Ctrl+C` to quit.
 
 ## Requirements
 

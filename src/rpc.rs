@@ -6,16 +6,14 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
 
-use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::event::RpcEvent;
-use crate::protocol::{FrameError, FrameErrorKind, OutgoingRequest, RequestId, parse_frame};
+use crate::protocol::{FrameError, FrameErrorKind, OutgoingRequest, parse_frame};
 
 /// Upper bound for one incoming RPC frame, excluding the trailing newline
 /// (spec 10.7). The reader enforces the bound before any byte is appended, so
@@ -43,12 +41,14 @@ const KILL_CHANNEL_CAPACITY: usize = 1;
 /// process closes the channels and aborts the tasks, dropping the child
 /// (`kill_on_drop`), so no agent process is left behind. Must be created
 /// inside a Tokio runtime.
+///
+/// Request ids are chosen by the caller (the app state in `App::update`);
+/// this type only forwards already-numbered requests.
 #[derive(Debug)]
 pub struct RpcProcess {
     requests: mpsc::Sender<Vec<u8>>,
     events: mpsc::Receiver<RpcEvent>,
     kill: mpsc::Sender<()>,
-    next_id: AtomicU64,
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -89,23 +89,23 @@ impl RpcProcess {
             requests: requests_tx,
             events: events_rx,
             kill: kill_tx,
-            next_id: AtomicU64::new(0),
             tasks,
         })
     }
 
-    /// Sends one request as a single NDJSON line and returns its assigned
-    /// id. Ids are monotonically increasing from 1 and never wrap around to 0
-    /// or get reused; correlation by id happens in the future app state
-    /// phase.
+    /// Sends one already-numbered request as a single NDJSON line. The id
+    /// was allocated by the caller and must already be registered in its
+    /// pending map before this returns, so a response can never beat the
+    /// registration.
     ///
     /// The serialized line (including the trailing newline) must fit the
     /// agent's 1 MiB request bound; oversized requests fail with the typed
     /// `RpcError::RequestTooLarge` (actual and maximum byte counts only, no
-    /// content) and are never written to the child.
-    pub async fn send(&self, method: &'static str, params: Value) -> Result<RequestId, RpcError> {
-        let id = self.next_id().ok_or(RpcError::RequestIdExhausted)?;
-        let bytes = serde_json::to_vec(&OutgoingRequest::new(id, method, params))?;
+    /// content) and are never written to the child. Channel or serialization
+    /// failures are synchronous too; the caller reports them back to the
+    /// app.
+    pub async fn send(&self, request: OutgoingRequest) -> Result<(), RpcError> {
+        let bytes = serde_json::to_vec(&request)?;
         let line_bytes = bytes.len() + 1;
         if line_bytes > MAX_REQUEST_LINE_BYTES {
             return Err(RpcError::RequestTooLarge {
@@ -117,28 +117,7 @@ impl RpcProcess {
             .send(bytes)
             .await
             .map_err(|_| RpcError::Closed)?;
-        Ok(id)
-    }
-
-    /// Allocates the next request id without ever producing 0 or reusing an
-    /// id; `None` once all ids are exhausted.
-    fn next_id(&self) -> Option<RequestId> {
-        let mut current = self.next_id.load(Ordering::Relaxed);
-        loop {
-            if current == u64::MAX {
-                return None;
-            }
-            let next = current + 1;
-            match self.next_id.compare_exchange_weak(
-                current,
-                next,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return Some(RequestId(next)),
-                Err(actual) => current = actual,
-            }
-        }
+        Ok(())
     }
 
     /// The next event from the agent; `None` once every background task has
@@ -184,8 +163,6 @@ pub enum RpcError {
         actual_bytes: usize,
         max_bytes: usize,
     },
-    #[error("request ids exhausted")]
-    RequestIdExhausted,
 }
 
 /// Writes one NDJSON request line and flushes it (spec 10.5).
@@ -385,8 +362,8 @@ async fn emit(events: &mpsc::Sender<RpcEvent>, event: RpcEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{IncomingFrame, RpcNotification};
-    use serde_json::json;
+    use crate::protocol::{IncomingFrame, RequestId, RpcNotification};
+    use serde_json::{Value, json};
     use tokio::io::{DuplexStream, duplex};
     use tokio::time::{Duration, timeout};
 
@@ -412,9 +389,13 @@ mod tests {
         OutgoingRequest::new(RequestId(id), method, json!({}))
     }
 
+    fn request_with_params(id: u64, params: Value) -> OutgoingRequest {
+        OutgoingRequest::new(RequestId(id), "agent.ping", params)
+    }
+
     /// Builds a process whose writer task is fed from the returned server
     /// half, so tests can observe exactly what would reach the child's stdin.
-    fn test_process(initial_id: u64) -> (RpcProcess, DuplexStream) {
+    fn test_process() -> (RpcProcess, DuplexStream) {
         let (client, server) = duplex(2 * 1024 * 1024);
         let (requests_tx, requests_rx) = mpsc::channel(8);
         let (events_tx, events_rx) = mpsc::channel(8);
@@ -423,7 +404,6 @@ mod tests {
             requests: requests_tx,
             events: events_rx,
             kill: kill_tx,
-            next_id: AtomicU64::new(initial_id),
             tasks: vec![tokio::spawn(stdin_writer(client, requests_rx, events_tx))],
         };
         (process, server)
@@ -488,7 +468,7 @@ mod tests {
         let (events_tx, mut events_rx) = mpsc::channel(16);
         tokio::spawn(stdout_reader(server, events_tx));
 
-        let event = r#"{"jsonrpc":"2.0","method":"agent.event","params":{"type":"output_delta","data":{"delta":"hi","meta":{"dropped_before":0}}}}"#;
+        let event = r#"{"jsonrpc":"2.0","method":"agent.event","params":{"type":"output_delta","data":{"turn":{"session_id":"ses_1","instance_id":"ins_1","turn_id":"trn_1"},"channel":"text","delta":"hi","meta":{"session_id":"ses_1","instance_id":"ins_1","dropped_before":0}}}}"#;
         let response =
             |id: u64| format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{{"version":"0.2.0"}}}}"#);
         // Interleaved frames, with response ids arriving out of order. The
@@ -666,13 +646,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_assigns_monotonic_ids_and_feeds_the_writer() {
-        let (process, mut server) = test_process(0);
+    async fn send_forwards_pre_numbered_requests_without_touching_ids() {
+        let (process, mut server) = test_process();
 
-        let first = process.send("agent.ping", json!({})).await.unwrap();
-        let second = process.send("model.list", json!({})).await.unwrap();
-        assert_eq!(first, RequestId(1));
-        assert_eq!(second, RequestId(2));
+        // Ids come from the caller and pass through untouched.
+        process.send(request(7, "agent.ping")).await.unwrap();
+        process.send(request(8, "model.list")).await.unwrap();
 
         let mut lines = Vec::new();
         timeout(TEST_TIMEOUT, read_lines(&mut server, &mut lines, 2))
@@ -681,8 +660,8 @@ mod tests {
         assert_eq!(lines.len(), 2);
         let first: Value = serde_json::from_slice(&lines[0]).unwrap();
         let second: Value = serde_json::from_slice(&lines[1]).unwrap();
-        assert_eq!(first["id"], json!(1));
-        assert_eq!(second["id"], json!(2));
+        assert_eq!(first["id"], json!(7));
+        assert_eq!(second["id"], json!(8));
         assert_eq!(second["method"], "model.list");
 
         // The kill control path is idempotent from the caller's side.
@@ -693,19 +672,21 @@ mod tests {
 
     #[tokio::test]
     async fn send_accepts_request_lines_up_to_one_megabyte() {
-        let (process, _server) = test_process(0);
+        let (process, _server) = test_process();
         // Exactly 1 MiB including the terminating newline is accepted.
         let params = params_with_line_bytes(MAX_REQUEST_LINE_BYTES);
-        let id = process.send("agent.ping", params).await.unwrap();
-        assert_eq!(id, RequestId(1));
+        process.send(request_with_params(1, params)).await.unwrap();
     }
 
     #[tokio::test]
     async fn send_rejects_oversized_lines_without_writing_them() {
-        let (process, mut server) = test_process(0);
+        let (process, mut server) = test_process();
         // One byte over the bound: rejected with the typed error.
         let params = params_with_line_bytes(MAX_REQUEST_LINE_BYTES + 1);
-        let error = process.send("agent.ping", params).await.unwrap_err();
+        let error = process
+            .send(request_with_params(1, params))
+            .await
+            .unwrap_err();
         match error {
             RpcError::RequestTooLarge {
                 actual_bytes,
@@ -729,9 +710,9 @@ mod tests {
 
         // UTF-8 counts in bytes, not characters: 400k three-byte CJK chars
         // exceed the bound despite a small character count.
-        let (process, _server) = test_process(0);
+        let (process, _server) = test_process();
         let error = process
-            .send("agent.ping", json!({ "x": "你".repeat(400_000) }))
+            .send(request_with_params(1, json!({ "x": "你".repeat(400_000) })))
             .await
             .unwrap_err();
         match error {
@@ -743,25 +724,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn request_ids_exhaust_at_u64_max_without_wrapping() {
-        let (process, _server) = test_process(u64::MAX - 1);
-        assert_eq!(
-            process.send("agent.ping", json!({})).await.unwrap(),
-            RequestId(u64::MAX)
+    async fn recv_ends_when_all_sender_tasks_are_gone() {
+        let (client, _server) = duplex(1024);
+        let (requests_tx, requests_rx) = mpsc::channel(4);
+        let (events_tx, events_rx) = mpsc::channel(4);
+        let (kill_tx, _kill_rx) = mpsc::channel(1);
+        // The writer is the only holder of the events sender. It watches the
+        // requests channel; a surrogate sender sits in the process so the
+        // writer's input can be closed without dropping the process.
+        let writer = tokio::spawn(stdin_writer(client, requests_rx, events_tx));
+        let (surrogate_tx, _surrogate_rx) = mpsc::channel(4);
+        let mut process = RpcProcess {
+            requests: surrogate_tx,
+            events: events_rx,
+            kill: kill_tx,
+            tasks: vec![writer],
+        };
+        drop(requests_tx);
+        assert!(
+            timeout(TEST_TIMEOUT, process.recv())
+                .await
+                .unwrap()
+                .is_none()
         );
-        assert!(matches!(
-            process.send("agent.ping", json!({})).await,
-            Err(RpcError::RequestIdExhausted)
-        ));
-        // The counter never wrapped and never produced 0.
-        assert_eq!(process.next_id.load(Ordering::Relaxed), u64::MAX);
+        drop(process);
+    }
 
-        let (process, _server) = test_process(u64::MAX);
-        assert!(matches!(
-            process.send("agent.ping", json!({})).await,
-            Err(RpcError::RequestIdExhausted)
-        ));
-        assert_eq!(process.next_id.load(Ordering::Relaxed), u64::MAX);
+    #[tokio::test]
+    async fn writer_failure_emits_a_protocol_error() {
+        let (client, server) = duplex(1024);
+        // The agent side is gone before the write: the writer must report a
+        // typed pipe failure instead of silently losing the request.
+        drop(server);
+        let (requests_tx, requests_rx) = mpsc::channel(4);
+        let (events_tx, mut events_rx) = mpsc::channel(4);
+        tokio::spawn(stdin_writer(client, requests_rx, events_tx));
+        requests_tx
+            .send(serde_json::to_vec(&request(1, "agent.ping")).unwrap())
+            .await
+            .unwrap();
+        match next_event(&mut events_rx).await {
+            RpcEvent::ProtocolError(error) => assert_eq!(error.kind, FrameErrorKind::Io),
+            other => panic!("expected an io protocol error, got: {other:?}"),
+        }
     }
 
     /// Spawns this test binary restricted to one helper test via libtest's
