@@ -56,12 +56,33 @@ state moves through semantic `AppEvent`s (`OpenNewSession`,
 reasoning opens (or keeps) a new-session draft and **creates a new session**
 when confirmed — the active session is never modified, and `session.create`
 is the only bridge to a real session. The session selector sorts
-`session.list` by `updated_at` descending, filters case-insensitively over
-title/workspace/session_id/model/profile, and opens via `session.open`
-(keep-on-error, one in-flight open at a time). The new-session draft seeds
-workspace/profile/model/reasoning from the catalog defaults; workspace stays
-a plain string the agent validates. Tool cards, live-turn deltas, and the
-durable transcript behaviour from Phases 2-3 are unchanged.
+`session.list` by `updated_at` descending (real RFC3339 instants, with
+deterministic fallbacks for unparsable timestamps), filters
+case-insensitively over title/workspace/session_id/model/profile, and
+opens via `session.open` (keep-on-error, one in-flight open at a time).
+The new-session draft seeds workspace/profile/model/reasoning from the
+catalog defaults; workspace stays a plain string the agent validates.
+Tool cards, live-turn deltas, and the durable transcript behaviour from
+Phases 2-3 are unchanged.
+
+Phase 5 adds input and local commands (development spec 22-23, 43): the
+main loop feeds raw `crossterm` terminal events into `AppEvent::Terminal`,
+the fixed `src/keymap.rs` maps keys to `Action`s (no dynamic key
+configuration), and only `App::update` mutates state. The composer is now
+a real `tui-textarea` wrapper with in-process history (100 entries),
+undo/redo, multi-line editing, and send-failure recovery. Slash commands
+(`/new`, `/resume`, `/sessions`, `/model`, `/reasoning`, `/theme dark|light`,
+`/clear`, `/help`, `/logs`, `/quit`) are parsed locally in `src/command.rs`;
+unknown commands only show a notice and never touch the wire. Help and
+Logs panels dock below the transcript (max 60%), and the transcript scrolls
+(`PageUp/PageDown/Home/End`, mouse wheel, follow-the-tail with a
+`↓ new output` marker) using geometry measured by the main loop and fed
+back via `AppEvent::Viewport`. The full key and command reference lives in
+docs/keybindings.md. Phase 5 still does not spawn the agent: RPC is
+impossible while the connection is `Starting`, and any RPC command reaching
+the main loop is reported as a send failure rather than silently dropped.
+The Phase 6 loop replaces the placeholder event handling without changing
+the App API.
 
 ## Requirements
 
@@ -75,6 +96,15 @@ ratatui      = "=0.29.0"    default-features off, feature crossterm
 crossterm    = "=0.28.1"    feature event-stream
 tui-textarea = "=0.7.0"     default-features off, feature crossterm
 ```
+
+## Keybindings and commands
+
+The full key table and slash-command reference live in
+[docs/keybindings.md](docs/keybindings.md). In short: `Ctrl+C` clears or
+(double press) quits, `F1` opens Help, `Ctrl+R` opens the session
+selector, `Ctrl+L` / `Shift+Tab` open the model/reasoning selectors, and
+`/new`, `/resume`, `/model`, `/reasoning`, `/theme dark|light`, `/clear`,
+`/help`, `/logs`, `/quit` are implemented locally.
 
 ## Build and test
 

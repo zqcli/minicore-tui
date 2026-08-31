@@ -1,7 +1,9 @@
-//! The composer (development spec 15.7, 21): a rounded border colored by the
-//! active session's reasoning level, placeholder text, and the hardware
-//! cursor positioned by `unicode-width` column math. Phase 3 holds the
-//! minimal text/cursor state; tui-textarea editing arrives in Phase 5.
+//! The composer (development spec 15.7, 21, 22.2): a rounded border colored
+//! by the active session's reasoning level, the buffered lines rendered
+//! read-only from the `Composer` wrapper (wrapped with the same
+//! `unicode-width` math as the transcript), a block cursor, and the
+//! hardware cursor positioned from the (row, column) cell so IME lands
+//! correctly on multi-line buffers.
 
 use ratatui::Frame;
 use ratatui::layout::{Margin, Rect};
@@ -10,11 +12,12 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Paragraph};
 
 use crate::app::App;
-use crate::markdown::{column_width, wrap_plain};
+use crate::markdown::{char_width, wrap_plain};
 use crate::theme::Theme;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let view = app.active_view();
+    let running = view.is_some_and(|view| view.live.is_some());
     let border_color = match view {
         Some(view) => theme.reasoning_color(view.info.reasoning),
         None => theme.thinking_disabled,
@@ -25,40 +28,211 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     frame.render_widget(block, area);
 
     let inner = area.inner(Margin::new(1, 1));
-    let running = view.is_some_and(|view| view.live.is_some());
-    let mut content: Vec<Line<'static>> = Vec::new();
-    if app.composer.text.is_empty() {
+    let width = inner.width as usize;
+    let contents = compose_lines(app, theme, width, running);
+    let (cursor_row, cursor_col) = cursor_cell(app, width);
+
+    // Keep the cursor row visible when the buffer overflows the panel.
+    let height = inner.height as usize;
+    let top = if contents.is_empty() {
+        0
+    } else {
+        cursor_row
+            .min(contents.len().saturating_sub(1))
+            .saturating_sub(height - 1)
+    };
+    let rows: Vec<Line<'static>> = contents.iter().skip(top).take(height).cloned().collect();
+    // Flat for the paragraph model does not apply here: forced rows.
+    let mut padded = rows;
+    while padded.len() < height {
+        padded.push(Line::default());
+    }
+    frame.render_widget(Paragraph::new(padded), inner);
+
+    // Block cursor + hardware cursor at the (row, column) cell, so IME
+    // composition and multi-line editing land on the right cell. The cursor
+    // column can sit exactly at the wrap boundary (== width), which has no
+    // cell: clamp drawing into the inner area while the helper keeps the
+    // true boundary column for logic.
+    let (cell_row, cell_col) = (cursor_row.saturating_sub(top), cursor_col);
+    let inner_w = inner.width as usize;
+    let draw_col = cell_col.min(inner_w.saturating_sub(1));
+    let x = inner.x + draw_col as u16;
+    let y = inner.y + cell_row as u16;
+    if x < inner.x + inner.width && y < inner.y + inner.height && inner_w > 0 && inner.height > 0 {
+        if let Some(cell) = frame.buffer_mut().cell_mut((x, y)) {
+            cell.set_fg(theme.page_bg);
+            cell.set_bg(theme.text);
+        }
+        frame.set_cursor_position((x, y));
+    }
+}
+
+/// The wrapped composer rows, styled as plain text (the buffer may be
+/// empty, in which case a placeholder row is returned by `compose_lines`).
+fn compose_lines(app: &App, theme: &Theme, width: usize, running: bool) -> Vec<Line<'static>> {
+    let style = Style::new().fg(theme.text);
+    if app.composer.is_empty() {
         let placeholder = if running {
             "Agent is working — Esc to cancel"
-        } else if view.is_none() {
+        } else if app.active_view().is_none() {
             "Create or open a session"
         } else {
             "Type a message…"
         };
-        content.push(Line::styled(placeholder, Style::new().fg(theme.muted)));
-    } else {
-        for line in wrap_plain(
-            &app.composer.text,
-            inner.width as usize,
-            Style::new().fg(theme.text),
-        ) {
-            content.push(line);
-        }
+        return vec![Line::styled(placeholder, Style::new().fg(theme.muted))];
     }
-    while content.len() < inner.height as usize {
-        content.push(Line::default());
+    let mut rows = Vec::new();
+    for raw in app.composer.lines() {
+        rows.extend(wrap_plain(raw, width, style));
     }
-    frame.render_widget(Paragraph::new(content), inner);
+    rows
+}
 
-    // Hardware cursor at the composer's caret. The column uses display
-    // cells (CJK = 2), never `String::len` (spec 8.4).
-    if !running && view.is_some() {
-        let prefix = app
-            .composer
-            .text
-            .get(..app.composer.cursor)
-            .unwrap_or(&app.composer.text);
-        let col = (column_width(prefix) as u16).min(inner.width.saturating_sub(1));
-        frame.set_cursor_position((inner.x + col, inner.y));
+/// The visual (row, col) of the block cursor in wrapped-cell space.
+/// `Composer::cursor()` is (row, **char index**, as tui-textarea reports);
+/// this converts to display columns here using the exact greedy rule as
+/// `wrap_plain`/`chunk_line`, so the rendered row/col always matches the
+/// wrapping the renderer (and the height estimator) use.
+fn cursor_cell(app: &App, width: usize) -> (usize, usize) {
+    let width = width.max(1);
+    let (line_index, char_col) = app.composer.cursor();
+    let mut cell_row = 0;
+    for (index, raw) in app.composer.lines().iter().enumerate() {
+        if index == line_index {
+            let (rows, col) = cursor_wrap_pos(raw, char_col, width);
+            return (cell_row + rows, col);
+        }
+        cell_row += wrap_plain(raw, width, Style::new()).len();
+    }
+    (0, 0)
+}
+
+/// Simulates the greedy wrap exactly like `chunk_line`: the visual row and
+/// display column of the cursor after `cursor_col` characters of `line`
+/// wrapped to `width`. The column may equal `width` at a wrap boundary.
+fn cursor_wrap_pos(line: &str, cursor_col: usize, width: usize) -> (usize, usize) {
+    let width = width.max(1);
+    let mut rows = 0usize;
+    let mut used = 0usize;
+    for (index, ch) in line.chars().enumerate() {
+        if index == cursor_col {
+            break;
+        }
+        let cw = char_width(ch);
+        if used + cw > width && used > 0 {
+            rows += 1;
+            used = 0;
+        }
+        used += cw;
+    }
+    (rows, used)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::App;
+    use crate::event::AppEvent;
+    use crate::theme::ThemeKind;
+    use ratatui::Terminal;
+    use ratatui::backend::{Backend, TestBackend};
+
+    fn app_with(text: &str) -> App {
+        let mut app = App::new(std::path::PathBuf::from("/ws"));
+        app.update(AppEvent::SetTheme(ThemeKind::Dark));
+        // Paste is a single bounded edit through App::update.
+        if !text.is_empty() {
+            app.update(AppEvent::Terminal(crossterm::event::Event::Paste(
+                text.to_owned(),
+            )));
+        }
+        app
+    }
+
+    #[test]
+    fn cursor_wrap_pos_matches_the_greedy_rule() {
+        // ASCII exactly at the wrap boundary (col == width).
+        assert_eq!(cursor_wrap_pos("abcdef", 6, 3), (1, 3));
+        assert_eq!(cursor_wrap_pos("abcdef", 5, 3), (1, 2));
+        assert_eq!(
+            cursor_wrap_pos("abcdef", 3, 3),
+            (0, 3),
+            "boundary col can equal width"
+        );
+        // CJK counts 2 columns each.
+        assert_eq!(cursor_wrap_pos("你好世界", 4, 4), (1, 4));
+        assert_eq!(cursor_wrap_pos("你好", 2, 4), (0, 4));
+        // Emoji + combining marks use display widths.
+        assert_eq!(cursor_wrap_pos("😀a\u{301}", 3, 4), (0, 3));
+        // width 1 and 0 are defensive.
+        assert_eq!(cursor_wrap_pos("ab", 2, 1), (1, 1));
+        assert_eq!(cursor_wrap_pos("ab", 2, 0), (1, 1));
+        // Multi logical lines: cursor_row counts whole previous lines.
+        // A trailing cursor past the end lands at the end.
+        assert_eq!(cursor_wrap_pos("hello world", 11, 4), (2, 3));
+    }
+
+    #[test]
+    fn cursor_cell_is_the_visual_wrapped_position() {
+        let app = app_with("abcdef\nghijkl");
+        // cursor() col is a char index from tui-textarea.
+        let (row, col) = app.composer.cursor();
+        assert_eq!((row, col), (1, 6));
+        assert_eq!(
+            cursor_cell(&app, 3),
+            (1 + 2, 3),
+            "row 0 wraps to 2 rows then row 1 ends at col 3"
+        );
+    }
+
+    #[test]
+    fn long_wrapped_line_cursor_is_visible_with_correct_hardware_position() {
+        let mut app = app_with("x".repeat(70).as_str());
+        // Move the cursor to the very end (char index 70) — row 0, col 70.
+        // Inner width is 78 -> 0..  ok, not wrapping. Now use a 79-char line
+        // so it wraps into two visual rows inside the 78-column inner area.
+        let long = "a".repeat(79);
+        app.composer.set_text(&long);
+        let (row, col) = app.composer.cursor();
+        assert_eq!((row, col), (0, 79));
+        let (cursor_row, cursor_col) = cursor_cell(&app, 78);
+        assert_eq!(
+            (cursor_row, cursor_col),
+            (1, 1),
+            "78 cols on row 0, cursor at 79th char starts row 1 col 1"
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::render(frame, &app))
+            .unwrap();
+        let pos = terminal.backend_mut().get_cursor_position().unwrap();
+        // Composer area: dock = footer(2) + composer(5) => composer at
+        // y=17..23, inner y=18..21, inner.x=1. Cursor row 1 -> y=19, col 1 -> x=2.
+        assert_eq!((pos.x, pos.y), (2, 19));
+    }
+
+    #[test]
+    fn cjk_cursor_hardware_position_uses_display_columns() {
+        let mut app = app_with("你好abc");
+        assert_eq!(app.composer.cursor(), (0, 5));
+        assert_eq!(
+            cursor_cell(&app, 78),
+            (0, 7),
+            "prefix 你好abc is 7 display columns"
+        );
+        app.update(AppEvent::Terminal(crossterm::event::Event::Key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Left,
+                crossterm::event::KeyModifiers::empty(),
+            ),
+        )));
+        assert_eq!(app.composer.cursor(), (0, 4));
+        assert_eq!(
+            cursor_cell(&app, 78),
+            (0, 6),
+            "col 4 = prefix 你好ab, 6 display columns"
+        );
     }
 }

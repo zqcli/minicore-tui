@@ -3,11 +3,13 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event};
 
 use minicore_tui::app::App;
 use minicore_tui::args;
+use minicore_tui::command::AppCommand;
 use minicore_tui::event::AppEvent;
+use minicore_tui::rpc::RpcError;
 use minicore_tui::terminal::{PanicHookGuard, TerminalGuard};
 use minicore_tui::ui;
 
@@ -52,9 +54,11 @@ fn main() -> ExitCode {
     }
 }
 
-/// Phase 3 loop: paints the fullscreen conversation (constructed, not yet
-/// connected to an agent) and repaints on resize or a ~10 Hz tick. Only
-/// `q` / `Ctrl+C` quit; input handling arrives in Phase 5.
+/// Phase 5 loop: terminal events become `AppEvent`s consumed by the single
+/// `App::update`, side effects execute after each update, and rendering is
+/// a pure read-only pass. The agent child and its RPC reader arrive in
+/// Phase 6, so any RPC command reaching this loop is reported as a send
+/// failure instead of being silently dropped.
 fn run_fullscreen(
     guard: &mut TerminalGuard,
     theme_kind: minicore_tui::theme::ThemeKind,
@@ -65,25 +69,53 @@ fn run_fullscreen(
     app.update(AppEvent::SetTheme(theme_kind));
 
     loop {
+        // The main loop measures geometry and feeds it back to `update`;
+        // the renderer never writes scroll state (spec 32).
+        let size = terminal.size()?;
+        let total = ui::transcript::total_lines(&app, size.width);
+        let dock = ui::layout::dock_rows(&app, size.width, size.height);
+        let visible = size.height.saturating_sub(dock) as usize;
+        app.update(AppEvent::Viewport {
+            total_lines: total,
+            visible_rows: visible,
+        });
+
         terminal.draw(|frame| ui::render(frame, &app))?;
+
         if event::poll(Duration::from_millis(100))? {
-            match event::read()? {
-                Event::Key(key) if is_quit(&key) => return Ok(()),
-                Event::Resize(..) | Event::Key(_) => {}
+            let event = event::read()?;
+            match event {
+                Event::Key(_) | Event::Paste(_) | Event::Mouse(_) => {
+                    let commands = app.update(AppEvent::Terminal(event));
+                    if run_commands(&mut app, commands)? {
+                        return Ok(());
+                    }
+                }
+                // Resize is picked up by the next frame's Viewport event.
                 _ => {}
             }
         }
-        app.update(AppEvent::Tick);
+        let commands = app.update(AppEvent::Tick);
+        if run_commands(&mut app, commands)? {
+            return Ok(());
+        }
     }
 }
 
-fn is_quit(key: &KeyEvent) -> bool {
-    if key.kind != KeyEventKind::Press {
-        return false;
+/// Executes side effects without ever mutating `App` directly; failures
+/// flow back as `AppEvent`s. Returns true when the loop should exit.
+fn run_commands(app: &mut App, commands: Vec<AppCommand>) -> io::Result<bool> {
+    for command in commands {
+        match command {
+            AppCommand::Quit => return Ok(true),
+            AppCommand::KillChild => {} // no child before Phase 6
+            AppCommand::Rpc(request) => {
+                app.update(AppEvent::RpcSendFailed {
+                    id: request.id,
+                    error: RpcError::Closed,
+                });
+            }
+        }
     }
-    match key.code {
-        KeyCode::Char('q') => true,
-        KeyCode::Char('c') => key.modifiers.contains(KeyModifiers::CONTROL),
-        _ => false,
-    }
+    Ok(false)
 }

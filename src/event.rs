@@ -13,6 +13,8 @@
 
 use std::process::ExitStatus;
 
+use crossterm::event::Event as CrosstermEvent;
+
 use crate::protocol::{FrameError, IncomingFrame, Reasoning, RequestId};
 use crate::rpc::RpcError;
 use crate::theme::ThemeKind;
@@ -137,4 +139,17 @@ pub enum AppEvent {
     },
     /// Submit the new-session form via `session.create`.
     SubmitNewSession,
+    // ---- Phase 5: input (spec 22-23, 43) ------------------------------
+    /// A raw terminal event (key, paste, mouse, resize) from the main
+    /// loop. The fixed `keymap` turns keys into `Action`s; only
+    /// `App::update` mutates state. Text moves in whole chunks (paste) or
+    /// single chars — never one render per character.
+    Terminal(CrosstermEvent),
+    /// The main loop measured the transcript geometry for this frame
+    /// (wrapped total rows and the rows visible in the transcript area).
+    /// Scroll clamping lives here, in `update`, never in the renderer.
+    Viewport {
+        total_lines: usize,
+        visible_rows: usize,
+    },
 }

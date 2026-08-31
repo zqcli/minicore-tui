@@ -3,22 +3,22 @@ MINICORE  v0.1.0
 Coding agent TUI
 q / Ctrl+C to quit
 
-Open a session — /new, Ctrl+R, or F1 for help
+Starting agent…
 
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│New session                                                                   │
-│workspace  /project                                                           │
-│profile    coding  →                                                          │
-│model      deep  →                                                            │
-│reasoning  high  →                                                            │
-│title      (optional)                                                         │
-│action     Create session                                                     │
-│Tab moves · Enter confirms · Esc closes                                       │
+│Agent logs                                                                    │
+│Captured stderr (newest first)                                                │
+│                                                                              │
+│agent 12:34:20  tool read: 128 lines                                          │
+│agent 12:34:13  session ses_1 opened                                          │
+│agent 12:34:12  loaded profile coding                                         │
+│                                                                              │
+│Esc closes this panel                                                         │
 │                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 /project                                                              no session
-Idle
+Starting

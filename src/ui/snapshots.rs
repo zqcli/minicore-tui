@@ -217,3 +217,53 @@ fn narrow_model_selector_dark_60x16() {
         16,
     );
 }
+
+#[test]
+fn help_dark_80x24() {
+    snapshot(&testapp::help(ThemeKind::Dark), "help_dark_80x24", 80, 24);
+}
+
+#[test]
+fn help_light_120x40() {
+    snapshot(
+        &testapp::help(ThemeKind::Light),
+        "help_light_120x40",
+        120,
+        40,
+    );
+}
+
+#[test]
+fn logs_dark_80x24() {
+    snapshot(&testapp::logs(ThemeKind::Dark), "logs_dark_80x24", 80, 24);
+}
+
+#[test]
+fn multiline_composer_dark_80x24() {
+    snapshot(
+        &testapp::multiline_composer(ThemeKind::Dark),
+        "multiline_composer_dark_80x24",
+        80,
+        24,
+    );
+}
+
+#[test]
+fn search_query_dark_80x24() {
+    snapshot(
+        &testapp::search_query(ThemeKind::Dark),
+        "search_query_dark_80x24",
+        80,
+        24,
+    );
+}
+
+#[test]
+fn new_output_marker_dark_80x24() {
+    snapshot(
+        &testapp::new_output_marker(ThemeKind::Dark),
+        "new_output_marker_dark_80x24",
+        80,
+        24,
+    );
+}

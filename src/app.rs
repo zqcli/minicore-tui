@@ -6,10 +6,13 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
-use crate::command::AppCommand;
+use crossterm::event::{Event as CrosstermEvent, MouseEvent, MouseEventKind};
+
+use crate::command::{AppCommand, CommandIssue, LocalCommand, is_slash_command, parse_command};
 use crate::event::{AppEvent, RpcEvent};
+use crate::keymap::{self, Action, EditorCursor};
 use crate::protocol::{
     AgentEventWire, ConversationEntryWire, IncomingFrame, METHOD_LIST_MODELS, METHOD_LIST_PROFILES,
     METHOD_LIST_SESSIONS, METHOD_PING, OutgoingRequest, OutputChannelWire, Reasoning, RequestId,
@@ -36,6 +39,13 @@ use crate::theme::ThemeKind;
 pub const MAX_AGENT_LOG_LINES: usize = 200;
 
 const MAX_NOTICES: usize = 32;
+
+/// How long a transient notice stays before `Tick` removes it (spec 33.2).
+const NOTICE_TTL: Duration = Duration::from_secs(5);
+
+/// The second Ctrl+C must follow the first within this window to quit
+/// (spec 22.1, 43.7).
+const DOUBLE_CTRL_C_WINDOW: Duration = Duration::from_secs(1);
 
 /// Fixed text for interactions this TUI cannot answer (spec 11.7, 37.4).
 pub const UNSUPPORTED_INTERACTION_NOTICE: &str =
@@ -121,17 +131,26 @@ pub struct App {
     pub notices: VecDeque<Notice>,
     /// The agent's stderr ring, newest last (spec 10.8).
     pub agent_logs: VecDeque<String>,
-    /// Text of the last failed turn submission, to restore into the
-    /// composer (Phase 5) when the send itself failed.
-    pub recovered_input: Option<String>,
     /// Visual state (spec 16, 30): palette, reasoning visibility, the frame
-    /// counter for the spinner, and the minimal Phase 3 composer.
+    /// counter for the spinner, and the Phase 5 composer.
     pub theme: ThemeKind,
     pub reasoning_visible: bool,
     pub frame_count: u64,
     pub composer: Composer,
     /// The dock panel below the transcript (spec 24.1).
     pub dock: Dock,
+    /// Measured transcript geometry for scroll math (total wrapped rows,
+    /// visible rows); written only via `AppEvent::Viewport` from the main
+    /// loop, never by the renderer.
+    pub viewport: (usize, usize),
+    /// Last measured total, to detect content that grew while scrolled up.
+    last_total: usize,
+    /// Manual scroll offset inside the Help/Logs panels.
+    pub panel_scroll: usize,
+    /// Double Ctrl+C window anchor.
+    ctrl_c_at: Option<Instant>,
+    /// Notice lifetime; a field so tests can shorten/past-expire it.
+    pub notice_ttl: Duration,
     /// The new-session draft while a model/reasoning/profile selector sits
     /// on top of the form; `Some` only then (spec 26.4).
     draft: Option<NewSessionState>,
@@ -204,12 +223,16 @@ impl App {
             sessions: SessionsState::default(),
             notices: VecDeque::new(),
             agent_logs: VecDeque::new(),
-            recovered_input: None,
             theme: ThemeKind::Dark,
             reasoning_visible: true,
             frame_count: 0,
             composer: Composer::default(),
             dock: Dock::Composer,
+            viewport: (0, 0),
+            last_total: 0,
+            panel_scroll: 0,
+            ctrl_c_at: None,
+            notice_ttl: NOTICE_TTL,
             draft: None,
             now: SystemTime::now,
             pending_requests: HashMap::new(),
@@ -246,6 +269,7 @@ impl App {
             AppEvent::RpcSendFailed { id, error } => self.on_send_failed(id, error),
             AppEvent::Tick => {
                 self.frame_count = self.frame_count.wrapping_add(1);
+                self.expire_notices();
                 Vec::new()
             }
             AppEvent::SetTheme(kind) => {
@@ -310,6 +334,15 @@ impl App {
                 Vec::new()
             }
             AppEvent::SubmitNewSession => self.submit_new_session(),
+            AppEvent::Terminal(event) => self.on_terminal(event),
+            AppEvent::Viewport {
+                total_lines,
+                visible_rows,
+            } => {
+                self.viewport = (total_lines, visible_rows);
+                self.clamp_transcript_scroll();
+                Vec::new()
+            }
         }
     }
 
@@ -338,13 +371,15 @@ impl App {
             .next_draft_id
             .checked_add(1)
             .expect("draft ids exhausted");
+        // Workspace is a plain string the agent validates (spec 25.4).
+        let workspace = self
+            .catalogs
+            .default_workspace
+            .to_string_lossy()
+            .into_owned();
+        let workspace_len = workspace.chars().count();
         NewSessionState {
-            // Workspace is a plain string the agent validates (spec 25.4).
-            workspace: self
-                .catalogs
-                .default_workspace
-                .to_string_lossy()
-                .into_owned(),
+            workspace,
             profile: self.catalogs.next_profile.clone().unwrap_or_default(),
             model: self
                 .catalogs
@@ -357,6 +392,7 @@ impl App {
             field: NewSessionField::Workspace,
             submitting: false,
             error: None,
+            field_cursor: workspace_len,
             draft_id,
         }
     }
@@ -534,6 +570,7 @@ impl App {
             Dock::ModelSelector(_) => Target::ModelSelector,
             Dock::ReasoningSelector(_) => Target::ReasoningSelector,
             Dock::ProfileSelector(_) => Target::ProfileSelector,
+            Dock::Help | Dock::Logs => Target::Composer,
         };
         match target {
             Target::Composer => Vec::new(),
@@ -557,6 +594,7 @@ impl App {
             SessionSelector,
             NewSession,
             Form,
+            Panel,
         }
         let target = match &self.dock {
             Dock::Composer => Target::Composer,
@@ -565,6 +603,7 @@ impl App {
             Dock::ModelSelector(_) | Dock::ReasoningSelector(_) | Dock::ProfileSelector(_) => {
                 Target::Form
             }
+            Dock::Help | Dock::Logs => Target::Panel,
         };
         match target {
             Target::Composer => {}
@@ -574,6 +613,7 @@ impl App {
                 self.dock = Dock::Composer;
             }
             Target::Form => self.close_selector_to_form(),
+            Target::Panel => self.dock = Dock::Composer,
         }
         Vec::new()
     }
@@ -767,6 +807,609 @@ impl App {
                 )
             },
         )]
+    }
+
+    // ---- Phase 5: input handling (spec 22-23, 32, 43) -----------------
+
+    /// Terminal events enter here; only the fixed keymap turns keys into
+    /// actions, and only this method mutates state.
+    fn on_terminal(&mut self, event: CrosstermEvent) -> Vec<AppCommand> {
+        match event {
+            CrosstermEvent::Key(key) => {
+                let action = keymap::map(self, key);
+                self.apply_action(action)
+            }
+            CrosstermEvent::Paste(text) => self.handle_paste(text),
+            CrosstermEvent::Mouse(mouse) => {
+                let action = self.mouse_action(mouse);
+                self.apply_action(action)
+            }
+            // Resize is consumed via AppEvent::Viewport (same frame).
+            _ => Vec::new(),
+        }
+    }
+
+    fn apply_action(&mut self, action: Action) -> Vec<AppCommand> {
+        use Action::*;
+        match action {
+            None => Vec::new(),
+            Quit => vec![AppCommand::Quit],
+            FirstCtrlC => self.ctrl_c(),
+            CtrlD => {
+                if self.composer.is_empty()
+                    && self.active_view().is_none_or(|view| view.live.is_none())
+                {
+                    vec![AppCommand::Quit]
+                } else {
+                    Vec::new()
+                }
+            }
+            TypeChar(c) => {
+                self.composer.type_char(c);
+                Vec::new()
+            }
+            Newline => {
+                self.composer.newline();
+                Vec::new()
+            }
+            Backspace => {
+                self.composer.backspace();
+                Vec::new()
+            }
+            Delete => {
+                self.composer.delete();
+                Vec::new()
+            }
+            CursorMove(direction) => self.composer_move(direction),
+            LineStart => {
+                self.composer.line_start();
+                Vec::new()
+            }
+            LineEnd => {
+                self.composer.line_end();
+                Vec::new()
+            }
+            WordDelete => {
+                self.composer.word_delete();
+                Vec::new()
+            }
+            Undo => {
+                self.composer.undo();
+                Vec::new()
+            }
+            Redo => {
+                self.composer.redo();
+                Vec::new()
+            }
+            Submit => self.submit_composer(),
+            HistoryPrev => {
+                self.composer.history_prev();
+                Vec::new()
+            }
+            HistoryNext => {
+                self.composer.history_next();
+                Vec::new()
+            }
+            OpenHelp => self.open_dock(Dock::Help),
+            OpenLogs => self.open_dock(Dock::Logs),
+            OpenSessions => self.open_selector(SelectorKind::Session),
+            OpenModel => self.open_selector(SelectorKind::Model),
+            OpenReasoning => self.open_selector(SelectorKind::Reasoning),
+            ToggleTools => {
+                if let Some(session_id) = self.sessions.active.as_ref().cloned() {
+                    if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                        view.tools_expanded = !view.tools_expanded;
+                    }
+                }
+                Vec::new()
+            }
+            ToggleReasoning => {
+                self.reasoning_visible = !self.reasoning_visible;
+                Vec::new()
+            }
+            CloseDock => self.cancel_dock(),
+            CancelTurn => self.cancel_active_turn(),
+            SelectorMove(delta) => self.move_selector(delta),
+            SelectorPage(delta) => self.page_selector(delta),
+            SelectorConfirm => self.confirm_dock(),
+            SelectorChar(c) => {
+                if let Some(state) = self.selector_state_mut() {
+                    state.query.push(c);
+                    state.cursor = 0;
+                }
+                Vec::new()
+            }
+            SelectorBackspace => {
+                if let Some(state) = self.selector_state_mut() {
+                    state.query.pop();
+                    state.cursor = 0;
+                }
+                Vec::new()
+            }
+            SelectorClear => {
+                if let Some(state) = self.selector_state_mut() {
+                    state.query.clear();
+                    state.cursor = 0;
+                }
+                Vec::new()
+            }
+            FieldStep(delta) => self.dock_field_step(delta),
+            FieldChar(c) => self.field_char(c),
+            FieldBackspace => self.field_backspace(),
+            FieldClear => self.field_clear(),
+            FieldCursor(delta) => self.field_cursor_move(delta),
+            FieldHome => self.field_cursor_home(),
+            FieldEnd => self.field_cursor_end(),
+            ScrollRows(delta) => self.scroll_focused(delta),
+            ScrollWindow(delta) => {
+                let visible = self.viewport.1.max(1) as i32;
+                self.scroll_focused(delta * visible)
+            }
+            ScrollTop => self.transcript_scroll_top(),
+            ScrollBottom => self.transcript_scroll_bottom(),
+        }
+    }
+
+    fn composer_move(&mut self, direction: EditorCursor) -> Vec<AppCommand> {
+        match direction {
+            EditorCursor::Left => self.composer.move_left(),
+            EditorCursor::Right => self.composer.move_right(),
+            // History recall at the buffer edges (spec 22.2): up on the
+            // first row, down on the last row.
+            EditorCursor::Up => {
+                if self.composer.at_first_line() {
+                    self.composer.history_prev();
+                } else {
+                    self.composer.move_up();
+                }
+            }
+            EditorCursor::Down => {
+                if self.composer.at_last_line() {
+                    self.composer.history_next();
+                } else {
+                    self.composer.move_down();
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    /// One Ctrl+C press: clears a non-empty composer, otherwise first
+    /// press warns and a second press within 1s quits (spec 22.1, 43.7).
+    fn ctrl_c(&mut self) -> Vec<AppCommand> {
+        if !self.composer.is_empty() {
+            self.composer.clear();
+            self.ctrl_c_at = None;
+            Vec::new()
+        } else if self
+            .ctrl_c_at
+            .is_some_and(|pressed| pressed.elapsed() < DOUBLE_CTRL_C_WINDOW)
+        {
+            vec![AppCommand::Quit]
+        } else {
+            self.ctrl_c_at = Some(Instant::now());
+            self.notice(NoticeLevel::Info, "Press Ctrl+C again to quit");
+            Vec::new()
+        }
+    }
+
+    /// Pasted text: CRLF/CR normalize to LF, inserted in one edit (no
+    /// per-character events). Composer keeps the newlines; selector queries
+    /// and new-session text fields flatten them (spec 43.7).
+    fn handle_paste(&mut self, text: String) -> Vec<AppCommand> {
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        match &self.dock {
+            Dock::Composer => {
+                if self.active_view().is_none_or(|view| view.live.is_none()) {
+                    self.composer.type_text(&normalized);
+                }
+            }
+            Dock::NewSession(_) => {
+                if !self.new_session().is_some_and(|draft| draft.submitting) {
+                    self.field_insert(&normalized.replace('\n', ""));
+                }
+            }
+            Dock::SessionSelector(_)
+            | Dock::ModelSelector(_)
+            | Dock::ReasoningSelector(_)
+            | Dock::ProfileSelector(_) => {
+                if let Some(state) = self.selector_state_mut() {
+                    state.query.push_str(&normalized.replace('\n', ""));
+                    state.cursor = 0;
+                }
+            }
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    fn mouse_action(&self, mouse: MouseEvent) -> Action {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                if self.selector_state().is_some() {
+                    Action::SelectorMove(-1)
+                } else {
+                    Action::ScrollRows(-3)
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                if self.selector_state().is_some() {
+                    Action::SelectorMove(1)
+                } else {
+                    Action::ScrollRows(3)
+                }
+            }
+            _ => Action::None,
+        }
+    }
+
+    /// Routes a scroll delta to the focused panel: selectors move their
+    /// selection, Help/Logs scroll their own view, everything else scrolls
+    /// the transcript.
+    fn scroll_focused(&mut self, delta: i32) -> Vec<AppCommand> {
+        if self.selector_state().is_some() {
+            return self.move_selector(delta);
+        }
+        match &self.dock {
+            Dock::Help | Dock::Logs => {
+                self.panel_scroll = (self.panel_scroll as i64 + delta as i64).max(0) as usize;
+            }
+            _ => self.transcript_scroll(delta),
+        }
+        Vec::new()
+    }
+
+    /// Transcript scroll: negative deltas leave the tail and store an
+    /// explicit offset from the top; positive deltas return toward the
+    /// tail and restore follow at the bottom (spec 32, 43.8).
+    fn transcript_scroll(&mut self, delta: i32) {
+        let Some(active) = self.sessions.active.clone() else {
+            return;
+        };
+        let Some(view) = self.sessions.known.get_mut(&active) else {
+            return;
+        };
+        let (total, visible) = self.viewport;
+        let visible = visible.max(1);
+        let max_offset = total.saturating_sub(visible);
+        if delta < 0 {
+            let amount = delta.unsigned_abs();
+            let anchor = if view.scroll.follow_tail {
+                max_offset
+            } else {
+                view.scroll.offset
+            };
+            view.scroll.follow_tail = false;
+            view.scroll.offset = anchor.saturating_sub(amount as usize);
+        } else {
+            let current = if view.scroll.follow_tail {
+                max_offset
+            } else {
+                view.scroll.offset
+            };
+            let next = current.saturating_add(delta as usize);
+            if next >= max_offset {
+                view.scroll.follow_tail = true;
+                view.scroll.offset = 0;
+                view.scroll.new_content = false;
+            } else {
+                view.scroll.follow_tail = false;
+                view.scroll.offset = next;
+            }
+        }
+    }
+
+    fn transcript_scroll_top(&mut self) -> Vec<AppCommand> {
+        if let Some(view) = self.active_session_mut() {
+            view.scroll.follow_tail = false;
+            view.scroll.offset = 0;
+        }
+        Vec::new()
+    }
+
+    fn transcript_scroll_bottom(&mut self) -> Vec<AppCommand> {
+        if let Some(view) = self.active_session_mut() {
+            view.scroll.follow_tail = true;
+            view.scroll.offset = 0;
+            view.scroll.new_content = false;
+        }
+        Vec::new()
+    }
+
+    /// Clamps the stored offset after a geometry/content change and marks
+    /// `new_content` when the transcript grew while the user scrolled up
+    /// (marker cleared by End/bottom scrolling).
+    fn clamp_transcript_scroll(&mut self) {
+        let (total, visible) = self.viewport;
+        let grew = total > self.last_total;
+        self.last_total = total;
+        if let Some(view) = self.active_session_mut() {
+            if grew && !view.scroll.follow_tail {
+                view.scroll.new_content = true;
+            }
+            let max_offset = total.saturating_sub(visible);
+            if !view.scroll.follow_tail {
+                view.scroll.offset = view.scroll.offset.min(max_offset);
+            }
+        }
+    }
+
+    fn active_session_mut(&mut self) -> Option<&mut SessionView> {
+        let active = self.sessions.active.clone()?;
+        self.sessions.known.get_mut(&active)
+    }
+
+    fn cancel_active_turn(&mut self) -> Vec<AppCommand> {
+        let Some(active) = self.sessions.active.clone() else {
+            return Vec::new();
+        };
+        self.cancel_turn(&active)
+    }
+
+    fn open_dock(&mut self, dock: Dock) -> Vec<AppCommand> {
+        if self.dock == dock {
+            return self.cancel_dock();
+        }
+        self.panel_scroll = 0;
+        self.dock = dock;
+        Vec::new()
+    }
+
+    /// Submitting the composer: slash lines are parsed locally; plain text
+    /// goes to the active session and clears the composer. Nothing is ever
+    /// silently swallowed; a missing agent or session gets a notice.
+    fn submit_composer(&mut self) -> Vec<AppCommand> {
+        if self.composer.is_empty() {
+            return Vec::new();
+        }
+        let content = self.composer.content();
+        if is_slash_command(&content) {
+            let commands = self.run_command(&content);
+            self.composer.clear();
+            return commands;
+        }
+        if !self.guard_ready() {
+            return Vec::new();
+        }
+        if self.active_view().is_some_and(|view| view.live.is_some()) {
+            return Vec::new();
+        }
+        let Some(active) = self.sessions.active.clone() else {
+            self.notice(
+                NoticeLevel::Info,
+                "Open or create a session first — /new or Ctrl+R.",
+            );
+            return Vec::new();
+        };
+        if content.trim().is_empty() {
+            return Vec::new();
+        }
+        self.composer.submit_pushed(&content);
+        self.composer.clear();
+        self.submit_turn(&active, content)
+    }
+
+    fn run_command(&mut self, content: &str) -> Vec<AppCommand> {
+        match parse_command(content) {
+            Err(CommandIssue::NotACommand) => Vec::new(),
+            Err(CommandIssue::Unknown(name)) => {
+                self.notice(
+                    NoticeLevel::Error,
+                    format!("unknown command `{name}` — try /help"),
+                );
+                Vec::new()
+            }
+            Err(CommandIssue::InvalidArgs(message)) => {
+                self.notice(NoticeLevel::Error, message);
+                Vec::new()
+            }
+            Ok(command) => self.apply_command(command),
+        }
+    }
+
+    fn apply_command(&mut self, command: LocalCommand) -> Vec<AppCommand> {
+        match command {
+            LocalCommand::New => self.open_new_session(),
+            LocalCommand::Resume | LocalCommand::Sessions => {
+                self.open_selector(SelectorKind::Session)
+            }
+            LocalCommand::Model => self.open_selector(SelectorKind::Model),
+            LocalCommand::Reasoning => self.open_selector(SelectorKind::Reasoning),
+            LocalCommand::Theme(kind) => {
+                self.theme = kind;
+                self.notice(NoticeLevel::Info, format!("theme: {kind:?}"));
+                Vec::new()
+            }
+            LocalCommand::Clear => self.clear_transcript(),
+            LocalCommand::Help => self.open_dock(Dock::Help),
+            LocalCommand::Logs => self.open_dock(Dock::Logs),
+            LocalCommand::Quit => vec![AppCommand::Quit],
+        }
+    }
+
+    /// `/clear` wipes only the local view of the active session and reloads
+    /// its transcript from the beginning; the agent session is untouched
+    /// and the command is refused while a turn is running (spec 23.3).
+    fn clear_transcript(&mut self) -> Vec<AppCommand> {
+        if !self.guard_ready() {
+            return Vec::new();
+        }
+        let Some(active) = self.sessions.active.clone() else {
+            self.notice(NoticeLevel::Info, "No session is open to clear.");
+            return Vec::new();
+        };
+        if self
+            .sessions
+            .known
+            .get(&active)
+            .is_some_and(|view| view.live.is_some())
+        {
+            self.notice(
+                NoticeLevel::Warning,
+                "Cannot clear while the agent is working; press Esc to cancel first.",
+            );
+            return Vec::new();
+        }
+        if let Some(view) = self.sessions.known.get_mut(&active) {
+            view.transcript.blocks.clear();
+            view.transcript.last_seq = None;
+            view.transcript.next_after = None;
+            view.transcript.complete = false;
+            view.scroll = crate::state::session::ScrollState::default();
+            view.loading = true;
+        }
+        vec![self.request(
+            RequestKind::Transcript {
+                session_id: active.clone(),
+                after: None,
+                gap_revision: None,
+            },
+            |id| OutgoingRequest::transcript(id, &active, None),
+        )]
+    }
+
+    /// Manual char insertion into the workspace/title field at the char
+    /// cursor (UTF-8 safe; never a byte offset).
+    fn field_char(&mut self, c: char) -> Vec<AppCommand> {
+        if self.new_session().is_some_and(|draft| draft.submitting) {
+            return Vec::new();
+        }
+        if let Some(draft) = self.draft_mut() {
+            let cursor = draft.field_cursor;
+            match draft.field {
+                NewSessionField::Workspace => {
+                    let offset = Self::char_to_byte(&draft.workspace, cursor);
+                    draft.workspace.insert(offset, c);
+                    draft.field_cursor = cursor + 1;
+                }
+                NewSessionField::Title => {
+                    let offset = Self::char_to_byte(&draft.title, cursor);
+                    draft.title.insert(offset, c);
+                    draft.field_cursor = cursor + 1;
+                }
+                _ => {}
+            }
+        }
+        Vec::new()
+    }
+
+    fn field_backspace(&mut self) -> Vec<AppCommand> {
+        if self.new_session().is_some_and(|draft| draft.submitting) {
+            return Vec::new();
+        }
+        if let Some(draft) = self.draft_mut() {
+            if draft.field_cursor == 0 {
+                return Vec::new();
+            }
+            let cursor = draft.field_cursor;
+            match draft.field {
+                NewSessionField::Workspace => {
+                    let offset = Self::char_to_byte(&draft.workspace, cursor);
+                    let previous = draft.workspace[..offset]
+                        .chars()
+                        .next_back()
+                        .map_or(0, char::len_utf8);
+                    draft.workspace.remove(offset - previous);
+                    draft.field_cursor = cursor - 1;
+                }
+                NewSessionField::Title => {
+                    let offset = Self::char_to_byte(&draft.title, cursor);
+                    let previous = draft.title[..offset]
+                        .chars()
+                        .next_back()
+                        .map_or(0, char::len_utf8);
+                    draft.title.remove(offset - previous);
+                    draft.field_cursor = cursor - 1;
+                }
+                _ => {}
+            }
+        }
+        Vec::new()
+    }
+
+    fn field_insert(&mut self, text: &str) -> Vec<AppCommand> {
+        if self.new_session().is_some_and(|draft| draft.submitting) {
+            return Vec::new();
+        }
+        if let Some(draft) = self.draft_mut() {
+            let cursor = draft.field_cursor;
+            match draft.field {
+                NewSessionField::Workspace => {
+                    let offset = Self::char_to_byte(&draft.workspace, cursor);
+                    draft.workspace.insert_str(offset, text);
+                    draft.field_cursor = cursor + text.chars().count();
+                }
+                NewSessionField::Title => {
+                    let offset = Self::char_to_byte(&draft.title, cursor);
+                    draft.title.insert_str(offset, text);
+                    draft.field_cursor = cursor + text.chars().count();
+                }
+                _ => {}
+            }
+        }
+        Vec::new()
+    }
+
+    fn field_clear(&mut self) -> Vec<AppCommand> {
+        if let Some(draft) = self.draft_mut() {
+            if !draft.submitting {
+                match draft.field {
+                    NewSessionField::Workspace => draft.workspace.clear(),
+                    NewSessionField::Title => draft.title.clear(),
+                    _ => {}
+                }
+                draft.field_cursor = 0;
+            }
+        }
+        Vec::new()
+    }
+
+    fn field_cursor_move(&mut self, delta: i32) -> Vec<AppCommand> {
+        if let Some(draft) = self.draft_mut() {
+            let len = match draft.field {
+                NewSessionField::Workspace => draft.workspace.chars().count(),
+                NewSessionField::Title => draft.title.chars().count(),
+                _ => return Vec::new(),
+            };
+            draft.field_cursor =
+                (draft.field_cursor as i64 + delta as i64).clamp(0, len as i64) as usize;
+        }
+        Vec::new()
+    }
+
+    fn field_cursor_home(&mut self) -> Vec<AppCommand> {
+        if let Some(draft) = self.draft_mut() {
+            draft.field_cursor = 0;
+        }
+        Vec::new()
+    }
+
+    fn field_cursor_end(&mut self) -> Vec<AppCommand> {
+        if let Some(draft) = self.draft_mut() {
+            let len = match draft.field {
+                NewSessionField::Workspace => draft.workspace.chars().count(),
+                NewSessionField::Title => draft.title.chars().count(),
+                _ => return Vec::new(),
+            };
+            draft.field_cursor = len;
+        }
+        Vec::new()
+    }
+
+    /// Byte offset of the `cursor`-th char (cursor is a char index).
+    fn char_to_byte(text: &str, cursor: usize) -> usize {
+        text.chars().take(cursor).map(char::len_utf8).sum::<usize>()
+    }
+
+    /// Removes every transient notice past its TTL in one pass, keeping
+    /// sticky notices and the insertion order; a newer transient never
+    /// shields an older one (spec 33.2).
+    fn expire_notices(&mut self) {
+        let now = Instant::now();
+        let ttl = self.notice_ttl;
+        self.notices.retain(|notice| {
+            notice.sticky || now.saturating_duration_since(notice.created_at) < ttl
+        });
     }
 
     fn next_request_id(&mut self) -> RequestId {
@@ -1336,7 +1979,7 @@ impl App {
             }
             Plan::Failed { recovered, error } => {
                 if let Some(text) = recovered {
-                    self.recovered_input = Some(text);
+                    self.composer.set_text(&text);
                 }
                 self.notice(NoticeLevel::Error, format!("turn send failed: {error}"));
                 Vec::new()
@@ -1492,7 +2135,7 @@ impl App {
                     recovered
                 };
                 if let Some(text) = recovered {
-                    self.recovered_input = Some(text);
+                    self.composer.set_text(&text);
                 }
                 self.notice(
                     NoticeLevel::Error,
@@ -2717,7 +3360,7 @@ mod tests {
         ));
         let view = &app.sessions.known["ses_1"];
         assert!(view.live.is_none());
-        assert_eq!(app.recovered_input.as_deref(), Some("hello"));
+        assert_eq!(app.composer.content(), "hello");
         assert!(
             !view
                 .transcript
@@ -2745,7 +3388,7 @@ mod tests {
         });
         assert!(take_requests(commands).is_empty());
         assert!(app.sessions.known["ses_1"].live.is_none());
-        assert_eq!(app.recovered_input.as_deref(), Some("hello"));
+        assert_eq!(app.composer.content(), "hello");
         assert!(!app.pending_requests.contains_key(&send_request.id));
     }
 
@@ -3429,7 +4072,6 @@ mod tests {
         let _ = app.pending_requests.len();
         let _ = app.notices.len();
         let _ = app.agent_logs.len();
-        let _ = app.recovered_input.clone();
         let _ = std::mem::size_of::<SessionInfo>();
     }
 
@@ -4197,7 +4839,7 @@ mod tests {
         });
         assert!(take_requests(commands).is_empty());
         assert!(app.sessions.known["ses_1"].live.is_none());
-        assert_eq!(app.recovered_input.as_deref(), Some(big.as_str()));
+        assert_eq!(app.composer.content(), big.as_str());
         assert!(!app.pending_requests.contains_key(&send_request.id));
     }
 
@@ -4910,5 +5552,528 @@ mod tests {
                 .as_deref()
                 .is_some_and(|e| e.contains("RPC process"))
         );
+    }
+
+    // ---- Phase 5: input (spec 22-23, 32, 43.7-8) ------------------------
+    use crossterm::event::{
+        Event as KTEvent, KeyCode as KC, KeyEvent as KEv, KeyEventKind as KEK, KeyModifiers as KM,
+        MouseEvent as MEv, MouseEventKind as MEK,
+    };
+
+    fn term_key(key: KEv) -> AppEvent {
+        AppEvent::Terminal(KTEvent::Key(key))
+    }
+    fn cd(code: KC, mods: KM, kind: KEK) -> AppEvent {
+        term_key(KEv::new_with_kind(code, mods, kind))
+    }
+    fn press(code: KC, mods: KM) -> AppEvent {
+        cd(code, mods, KEK::Press)
+    }
+    fn ch(c: char) -> AppEvent {
+        press(KC::Char(c), KM::empty())
+    }
+    fn ctrl(c: char) -> AppEvent {
+        press(KC::Char(c), KM::CONTROL)
+    }
+    fn enter() -> AppEvent {
+        press(KC::Enter, KM::empty())
+    }
+    fn esc() -> AppEvent {
+        press(KC::Esc, KM::empty())
+    }
+    fn shift_enter() -> AppEvent {
+        press(KC::Enter, KM::SHIFT)
+    }
+    fn paste(text: &str) -> AppEvent {
+        AppEvent::Terminal(KTEvent::Paste(text.to_owned()))
+    }
+    fn scroll_up() -> AppEvent {
+        AppEvent::Terminal(KTEvent::Mouse(MEv {
+            kind: MEK::ScrollUp,
+            column: 0,
+            row: 0,
+            modifiers: KM::empty(),
+        }))
+    }
+    fn scroll_down() -> AppEvent {
+        AppEvent::Terminal(KTEvent::Mouse(MEv {
+            kind: MEK::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KM::empty(),
+        }))
+    }
+
+    #[test]
+    fn typing_cjk_and_emoji_uses_char_offsets_never_bytes() {
+        let mut app = test_app();
+        for c in ['你', '好', '😀'] {
+            app.update(ch(c));
+        }
+        let (row, col) = app.composer.cursor();
+        assert_eq!(app.composer.content(), "你好😀");
+        assert_eq!(col, 3, "cursor is a char offset, not a byte offset");
+        assert_eq!(row, 0);
+        app.update(press(KC::Backspace, KM::empty()));
+        assert_eq!(app.composer.content(), "你好");
+    }
+
+    #[test]
+    fn enter_submits_clears_the_composer_and_pushes_history() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        open_session(&mut app, "ses_a", "i1");
+        for c in "hello world".chars() {
+            app.update(ch(c));
+        }
+        let commands = take_requests(app.update(enter()));
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].method, "turn.send");
+        assert_eq!(commands[0].params["text"], json!("hello world"));
+        assert!(app.composer.is_empty(), "the composer clears after submit");
+        assert_eq!(app.composer.history_len(), 1);
+    }
+
+    #[test]
+    fn ctrl_j_and_shift_enter_insert_newlines_not_submits() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        open_session(&mut app, "ses_a", "i1");
+        app.update(ch('a'));
+        app.update(shift_enter());
+        app.update(ch('b'));
+        let before = app.composer.lines().len();
+        let commands = app.update(ctrl('j'));
+        assert!(take_requests(commands).is_empty(), "Ctrl+J never submits");
+        assert_eq!(app.composer.lines().len(), before + 1);
+        assert_eq!(app.composer.content(), "a\nb\n");
+    }
+
+    #[test]
+    fn plain_enter_confirms_the_session_selector() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(press(KC::Char('r'), KM::CONTROL)); // open sessions
+        assert!(matches!(app.dock, Dock::SessionSelector(_)));
+        let commands = take_requests(app.update(enter()));
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].method, "session.open");
+        assert!(matches!(app.dock, Dock::SessionSelector(_))); // still open until the response
+    }
+
+    #[test]
+    fn paste_crlf_and_cjk_inserts_once_without_submitting() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        open_session(&mut app, "ses_a", "i1");
+        let commands = take_requests(app.update(paste("hello\r\nworld\r你😀")));
+        assert!(commands.is_empty(), "paste never submits");
+        assert_eq!(app.composer.content(), "hello\nworld\n你😀");
+        assert_eq!(app.composer.history_len(), 0);
+    }
+
+    #[test]
+    fn history_up_recalls_messages_and_down_returns_to_the_draft() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        open_session(&mut app, "ses_a", "i1");
+        for (index, text) in ["first", "second"].iter().enumerate() {
+            for c in text.chars() {
+                app.update(ch(c));
+            }
+            let request = take_requests(app.update(enter())).remove(0);
+            complete_history_turn(&mut app, &request, &format!("trn_h{index}"));
+        }
+        for c in "fresh".chars() {
+            app.update(ch(c));
+        }
+        // Up on the first row recalls history.
+        app.update(press(KC::Up, KM::empty()));
+        assert_eq!(app.composer.content(), "second");
+        app.update(press(KC::Up, KM::empty()));
+        assert_eq!(app.composer.content(), "first");
+        for _ in 0..4 {
+            app.update(press(KC::Down, KM::empty()));
+        }
+        assert_eq!(
+            app.composer.content(),
+            "fresh",
+            "down walks back to the live draft"
+        );
+        assert_eq!(app.composer.history_len(), 2);
+    }
+
+    /// Drives one submitted turn to completion so the session is idle again
+    /// (send -> wait -> state -> transcript), like the Phase 2 tests.
+    fn complete_history_turn(app: &mut App, send_request: &OutgoingRequest, turn_id: &str) {
+        let wait_request = {
+            let commands = take_requests(respond(
+                app,
+                send_request,
+                json!({"turn": turn_ref_json("ses_a", "i1", turn_id)}),
+            ));
+            assert_eq!(commands.len(), 1, "send success registers exactly one wait");
+            commands.into_iter().next().unwrap()
+        };
+        let commands = take_requests(respond(
+            app,
+            &wait_request,
+            outcome_json(turn_id, "completed"),
+        ));
+        let state = commands
+            .iter()
+            .find(|r| r.method == "session.state")
+            .unwrap();
+        let transcript = commands
+            .iter()
+            .find(|r| r.method == "session.transcript")
+            .unwrap();
+        take_requests(respond(app, state, state_json("ses_a", "i1", "idle")));
+        let commands = take_requests(respond(
+            app,
+            transcript,
+            page_json(vec![terminal_entry(1, turn_id)], None, 1, true),
+        ));
+        assert!(commands.is_empty());
+        assert!(app.sessions.known["ses_a"].live.is_none());
+    }
+
+    #[test]
+    fn composer_is_frozen_while_a_turn_runs_and_esc_cancels() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        open_session(&mut app, "ses_a", "i1");
+        let send = submit(&mut app, "ses_a", "work on it");
+        let turn = make_turn("ses_a", "i1", "trn_1");
+        take_requests(app.update(turn_started_event(&turn)));
+        assert!(app.sessions.known["ses_a"].live.is_some());
+
+        app.update(ch('x'));
+        assert_eq!(
+            app.composer.content(),
+            "",
+            "editing is disabled while running"
+        );
+        let commands = take_requests(app.update(enter()));
+        assert!(commands.is_empty(), "submit is disabled while running");
+        let commands = take_requests(app.update(esc()));
+        assert_eq!(commands.len(), 1, "Esc cancels the exact turn");
+        assert_eq!(commands[0].method, "turn.cancel");
+        // The send response still arrives; the cancel rides along.
+        let _ = &send;
+    }
+
+    #[test]
+    fn ctrl_c_clears_then_warns_then_quits_within_the_window() {
+        let mut app = test_app();
+        app.update(ch('t'));
+        app.update(ctrl('c'));
+        assert!(app.composer.is_empty(), "Ctrl+C clears content");
+        app.update(ctrl('c'));
+        assert!(matches!(app.dock, Dock::Composer));
+        assert!(app.notices.iter().any(|n| n.text.contains("again")));
+        let commands = app.update(ctrl('c'));
+        assert!(matches!(commands.as_slice(), [AppCommand::Quit]));
+    }
+
+    #[test]
+    fn ctrl_d_quits_only_when_empty_and_idle() {
+        let mut app = test_app();
+        let commands = app.update(ctrl('d'));
+        assert!(matches!(commands.as_slice(), [AppCommand::Quit]));
+        app.update(ch('x'));
+        assert!(take_requests(app.update(ctrl('d'))).is_empty());
+    }
+
+    #[test]
+    fn q_is_a_normal_character_everywhere_except_help() {
+        let mut app = test_app();
+        app.update(ch('q'));
+        assert_eq!(app.composer.content(), "q");
+        app.update(press(KC::F(1), KM::empty()));
+        assert!(matches!(app.dock, Dock::Help));
+        assert!(matches!(app.update(ch('q')).as_slice(), [AppCommand::Quit]));
+    }
+
+    #[test]
+    fn slash_commands_execute_locally_and_never_spawn_rpc_on_unknown() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        open_session(&mut app, "ses_a", "i1");
+        for c in "/theme light".chars() {
+            app.update(ch(c));
+        }
+        let commands = take_requests(app.update(enter()));
+        assert!(commands.is_empty(), "the theme command is local");
+        assert_eq!(app.theme, ThemeKind::Light);
+        assert!(app.composer.is_empty());
+
+        for c in "/fork".chars() {
+            app.update(ch(c));
+        }
+        let commands = take_requests(app.update(enter()));
+        assert!(commands.is_empty());
+        assert!(
+            app.notices
+                .iter()
+                .any(|n| n.text.contains("unknown command"))
+        );
+
+        // `/new` opens the form.
+        for c in "/new".chars() {
+            app.update(ch(c));
+        }
+        app.update(enter());
+        assert!(matches!(app.dock, Dock::NewSession(_)));
+    }
+
+    #[test]
+    fn invalid_slash_arguments_show_usage() {
+        let mut app = test_app();
+        for c in "/theme blue".chars() {
+            app.update(ch(c));
+        }
+        take_requests(app.update(enter()));
+        assert!(app.notices.iter().any(|n| n.text.contains("usage: /theme")));
+    }
+
+    #[test]
+    fn clear_slash_wipes_the_local_transcript_and_reloads() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        open_session(&mut app, "ses_a", "i1");
+        assert_eq!(app.sessions.known["ses_a"].transcript.blocks.len(), 0);
+        for c in "/clear".chars() {
+            app.update(ch(c));
+        }
+        let commands = take_requests(app.update(enter()));
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].method, "session.transcript");
+        assert_eq!(commands[0].params["after"], json!(null));
+    }
+
+    #[test]
+    fn quit_slash_and_help_logs_open_docks() {
+        let mut app = test_app();
+        for c in "/help".chars() {
+            app.update(ch(c));
+        }
+        take_requests(app.update(enter()));
+        assert!(matches!(app.dock, Dock::Help));
+        app.update(esc());
+        for c in "/logs".chars() {
+            app.update(ch(c));
+        }
+        take_requests(app.update(enter()));
+        assert!(matches!(app.dock, Dock::Logs));
+        app.update(esc());
+        for c in "/quit".chars() {
+            app.update(ch(c));
+        }
+        let commands = app.update(enter());
+        assert!(matches!(commands.as_slice(), [AppCommand::Quit]));
+    }
+
+    #[test]
+    fn selector_typing_backspace_and_clear_update_the_query() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(press(KC::Char('l'), KM::CONTROL));
+        app.update(ch('f'));
+        app.update(ch('a'));
+        match &app.dock {
+            Dock::ModelSelector(state) => assert_eq!(state.query, "fa"),
+            _ => panic!("model selector"),
+        }
+        app.update(press(KC::Backspace, KM::empty()));
+        match &app.dock {
+            Dock::ModelSelector(state) => assert_eq!(state.query, "f"),
+            _ => panic!("model selector"),
+        }
+        app.update(ctrl('u'));
+        match &app.dock {
+            Dock::ModelSelector(state) => assert!(state.query.is_empty()),
+            _ => panic!("model selector"),
+        }
+    }
+
+    #[test]
+    fn new_session_fields_edit_with_char_cursor_and_tabs_move() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(ch('/'));
+        app.update(ch('n'));
+        app.update(ch('e'));
+        app.update(ch('w'));
+        take_requests(app.update(enter()));
+        assert!(matches!(app.dock, Dock::NewSession(_)));
+
+        // workspace is the default field; type a CJK path.
+        for c in "你".chars() {
+            app.update(ch(c));
+        }
+        let state = app.new_session().cloned().unwrap();
+        assert_eq!(state.workspace, "/workspace你");
+        assert_eq!(
+            state.field_cursor, 11,
+            "the draft cursor sat at the end of the default workspace"
+        );
+        app.update(press(KC::Backspace, KM::empty()));
+        assert_eq!(app.new_session().unwrap().workspace, "/workspace");
+        assert_eq!(app.new_session().unwrap().field_cursor, 10);
+        // Tab to profile, which opens the profile selector on Enter.
+        app.update(press(KC::Tab, KM::empty()));
+        assert_eq!(app.new_session().unwrap().field, NewSessionField::Profile);
+        let commands = take_requests(app.update(enter()));
+        assert!(commands.is_empty());
+        assert!(matches!(app.dock, Dock::ProfileSelector(_)));
+    }
+
+    #[test]
+    fn paste_lands_in_selector_query_and_new_session_fields() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        app.update(press(KC::Char('r'), KM::CONTROL));
+        app.update(paste("web\r\napp"));
+        match &app.dock {
+            Dock::SessionSelector(state) => assert_eq!(state.query, "webapp"),
+            _ => panic!("session selector"),
+        }
+        app.update(esc());
+        app.update(paste("/neeaded")); // composer context
+        assert_eq!(app.composer.content(), "/neeaded");
+    }
+
+    #[test]
+    fn release_events_are_ignored() {
+        let mut app = test_app();
+        app.update(ch('a'));
+        let release = cd(KC::Char('b'), KM::empty(), KEK::Release);
+        app.update(release);
+        assert_eq!(app.composer.content(), "a");
+    }
+
+    #[test]
+    fn scrolling_leaves_the_tail_and_end_resumes_follow() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        open_session(&mut app, "ses_a", "i1");
+        app.update(AppEvent::Viewport {
+            total_lines: 20,
+            visible_rows: 5,
+        });
+        app.update(press(KC::PageUp, KM::empty()));
+        let view = &app.sessions.known["ses_a"];
+        assert!(!view.scroll.follow_tail);
+        assert_eq!(view.scroll.offset, 10, "one page up from the tail");
+        app.update(AppEvent::Viewport {
+            total_lines: 22,
+            visible_rows: 5,
+        });
+        let view = &app.sessions.known["ses_a"];
+        assert!(view.scroll.new_content, "marker set while scrolled up");
+        app.update(press(KC::End, KM::CONTROL));
+        let view = &app.sessions.known["ses_a"];
+        assert!(view.scroll.follow_tail);
+        assert!(!view.scroll.new_content, "End clears the marker");
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_in_three_row_steps_and_selectors_move() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        open_session(&mut app, "ses_a", "i1");
+        app.update(AppEvent::Viewport {
+            total_lines: 20,
+            visible_rows: 5,
+        });
+        app.update(scroll_up());
+        app.update(scroll_up());
+        let view = &app.sessions.known["ses_a"];
+        assert_eq!(view.scroll.offset, 9, "two wheel-up steps of three rows");
+        app.update(scroll_down());
+        app.update(scroll_down());
+        let view = &app.sessions.known["ses_a"];
+        assert!(view.scroll.follow_tail, "down to the tail restores follow");
+    }
+
+    #[test]
+    fn expired_transient_notices_are_removed_but_sticky_and_fresh_survive() {
+        let mut app = test_app();
+        app.notice_ttl = Duration::from_millis(5);
+        app.push_notice(Notice::new(
+            NoticeLevel::Info,
+            "old-transient".into(),
+            false,
+        ));
+        std::thread::sleep(Duration::from_millis(30));
+        app.push_notice(Notice::new(
+            NoticeLevel::Warning,
+            "keep-sticky".into(),
+            true,
+        ));
+        app.push_notice(Notice::new(
+            NoticeLevel::Info,
+            "fresh-transient".into(),
+            false,
+        ));
+        app.update(AppEvent::Tick);
+        let texts: Vec<String> = app.notices.iter().map(|n| n.text.clone()).collect();
+        assert_eq!(
+            texts,
+            vec!["keep-sticky".to_owned(), "fresh-transient".to_owned()],
+            "only sticky + unexpired survive, in order"
+        );
+    }
+
+    #[test]
+    fn notice_dock_row_disappears_when_every_transient_expires() {
+        let mut app = test_app();
+        app.notice_ttl = Duration::from_millis(5);
+        app.push_notice(Notice::new(NoticeLevel::Warning, "ephemeral".into(), false));
+        std::thread::sleep(Duration::from_millis(30));
+        app.update(AppEvent::Tick);
+        assert!(app.notices.is_empty());
+        let baseline = crate::ui::layout::dock_rows(&test_app(), 80, 24);
+        assert_eq!(
+            crate::ui::layout::dock_rows(&app, 80, 24),
+            baseline,
+            "no notice row after everything expired"
+        );
+    }
+
+    #[test]
+    fn sticky_unsupported_notice_survives_expiration() {
+        let mut app = test_app();
+        app.notice_ttl = Duration::ZERO;
+        app.sticky_notice(NoticeLevel::Warning, UNSUPPORTED_INTERACTION_NOTICE);
+        app.update(AppEvent::Tick);
+        assert_eq!(app.notices.len(), 1);
+        assert!(app.notices.back().unwrap().sticky);
+        assert!(
+            app.notices
+                .back()
+                .unwrap()
+                .text
+                .contains("does not support")
+        );
+    }
+
+    #[test]
+    fn resize_clamps_the_stored_offset() {
+        let mut app = test_app();
+        ready_with_catalogs(&mut app);
+        open_session(&mut app, "ses_a", "i1");
+        app.update(AppEvent::Viewport {
+            total_lines: 20,
+            visible_rows: 5,
+        });
+        app.update(press(KC::PageUp, KM::empty()));
+        app.update(AppEvent::Viewport {
+            total_lines: 8,
+            visible_rows: 5,
+        });
+        let view = &app.sessions.known["ses_a"];
+        assert_eq!(view.scroll.offset, 3, "clamped to a shrinking tail");
     }
 }

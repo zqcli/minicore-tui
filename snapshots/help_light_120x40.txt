@@ -1,0 +1,40 @@
+MINICORE  v0.1.0
+
+Coding agent TUI
+q / Ctrl+C to quit
+
+Starting agent…
+
+
+
+
+
+
+
+
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Help                                                                                                                  │
+│                                                                                                                      │
+│Global:                                                                                                               │
+│Ctrl+C  clear the composer; empty: press again to quit                                                                │
+│Ctrl+D  quit when the composer is empty and idle                                                                      │
+│F1  help; q closes it (q also quits on fatal errors)                                                                  │
+│Ctrl+R  session selector                                                                                              │
+│Ctrl+L  model selector (creates a new session)                                                                        │
+│Shift+Tab  reasoning selector (creates a new session)                                                                 │
+│Ctrl+O  expand/collapse all tool cards                                                                                │
+│Ctrl+T  show/hide reasoning                                                                                           │
+│PageUp/PageDown  scroll the transcript                                                                                │
+│Home / End  transcript top / tail                                                                                     │
+│Esc  close a panel; cancel the running turn                                                                           │
+│                                                                                                                      │
+│Composer:                                                                                                             │
+│Enter  send                                                                                                           │
+│Shift+Enter / Ctrl+J  newline                                                                                         │
+│Ctrl+A / Ctrl+E  line start / line end                                                                                │
+│Ctrl+W  delete previous word                                                                                          │
+│Ctrl+Z / Ctrl+Y  undo / redo                                                                                          │
+│Up / Down  message history at the buffer edges                                                                        │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+/project                                                                                                      no session
+Starting

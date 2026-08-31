@@ -12,8 +12,7 @@ use crate::protocol::{ModelInfo, ProfileInfo, Reasoning, SessionInfo};
 /// paging uses a stable constant rather than a viewport-dependent height.
 pub const SELECTOR_PAGE: usize = 6;
 
-/// What occupies the dock area below the transcript (spec 24.1). Help and
-/// logs arrive in Phase 5.
+/// What occupies the dock area below the transcript (spec 24.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dock {
     Composer,
@@ -22,6 +21,8 @@ pub enum Dock {
     ModelSelector(SelectorState),
     ReasoningSelector(SelectorState),
     ProfileSelector(SelectorState),
+    Help,
+    Logs,
 }
 
 /// The highlighted field in the new-session form (spec 25.3).
@@ -49,6 +50,9 @@ pub struct NewSessionState {
     pub field: NewSessionField,
     pub submitting: bool,
     pub error: Option<String>,
+    /// Char offset inside the editable workspace/title field being typed;
+    /// always on a char boundary.
+    pub field_cursor: usize,
     /// Marker carried by the `session.create` request issued for this
     /// draft; a response only touches the matching draft (spec 25.5).
     pub draft_id: u64,

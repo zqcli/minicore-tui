@@ -31,7 +31,7 @@ pub fn lines(theme: &Theme, app: &App) -> Vec<Line<'static>> {
         }
         ConnectionState::Failed(_) => Span::styled("Disconnected", Style::new().fg(theme.error)),
         ConnectionState::Ready => Span::styled(
-            "Open a session — press q / Ctrl+C to quit",
+            "Open a session — /new, Ctrl+R, or F1 for help",
             Style::new().fg(theme.muted),
         ),
     };

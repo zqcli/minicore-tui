@@ -1,0 +1,24 @@
+MINICORE  v0.1.0
+
+Coding agent TUI
+q / Ctrl+C to quit
+
+Starting agent…
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│Help                                                                          │
+│                                                                              │
+│Global:                                                                       │
+│Ctrl+C  clear the composer; empty: press again to quit                        │
+│Ctrl+D  quit when the composer is empty and idle                              │
+│F1  help; q closes it (q also quits on fatal errors)                          │
+│Ctrl+R  session selector                                                      │
+│Ctrl+L  model selector (creates a new session)                                │
+│Shift+Tab  reasoning selector (creates a new session)                         │
+│Ctrl+O  expand/collapse all tool cards                                        │
+│Ctrl+T  show/hide reasoning                                                   │
+│PageUp/PageDown  scroll the transcript                                        │
+└──────────────────────────────────────────────────────────────────────────────┘
+/project                                                              no session
+Starting

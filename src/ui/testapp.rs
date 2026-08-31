@@ -510,3 +510,101 @@ pub fn narrow_selector(theme: ThemeKind) -> App {
     app.update(AppEvent::MoveSelector { delta: 1 });
     app
 }
+
+/// The Help panel (F1).
+pub fn help(theme: ThemeKind) -> App {
+    let mut app = fresh(theme);
+    app.update(AppEvent::Terminal(crossterm::event::Event::Key(
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::F(1),
+            crossterm::event::KeyModifiers::empty(),
+        ),
+    )));
+    app
+}
+
+/// The Logs panel with a couple of captured stderr lines.
+pub fn logs(theme: ThemeKind) -> App {
+    let mut app = fresh(theme);
+    for line in [
+        "agent 12:34:12  loaded profile coding",
+        "agent 12:34:13  session ses_1 opened",
+        "agent 12:34:20  tool read: 128 lines",
+    ] {
+        app.update(AppEvent::Rpc(RpcEvent::AgentLogLine(line.into())));
+    }
+    // /logs opens the panel through the real command path.
+    for c in "/logs".chars() {
+        app.update(char_event(c));
+    }
+    app.update(AppEvent::Terminal(crossterm::event::Event::Key(
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::empty(),
+        ),
+    )));
+    app
+}
+
+/// A multiline composer buffer (paste path, one edit).
+pub fn multiline_composer(theme: ThemeKind) -> App {
+    let mut app = chat(theme);
+    app.update(AppEvent::Terminal(crossterm::event::Event::Paste(
+        "line one\nline two 你好😀\nline three\nline four\nline five\nline six".into(),
+    )));
+    app
+}
+
+/// A model selector with a visible search query.
+pub fn search_query(theme: ThemeKind) -> App {
+    let mut app = model_selector(theme);
+    app.update(AppEvent::SetSelectorQuery {
+        query: "fast".into(),
+    });
+    app
+}
+
+/// A transcript scrolled away from the tail with a new-output marker. The
+/// content is genuinely long so the renderer's own total exceeds the
+/// viewport (the marker reflects the real slice, not the reported total).
+pub fn new_output_marker(theme: ThemeKind) -> App {
+    let mut entries = Vec::new();
+    for i in 0..24 {
+        entries.push(user_entry(i * 2 + 1, &format!("trn_{i}"), "a user turn"));
+        entries.push(assistant_entry_with(
+            i * 2 + 2,
+            &format!("trn_{i}"),
+            &format!("A substantial assistant reply for block {i} with enough text to wrap over several rows."),
+            None,
+            json!([]),
+        ));
+    }
+    let mut app = open_with(theme, "ses_1", Some("Task"), "high", entries);
+    // The real wrapped total at the render width; the reducer measures the
+    // same way the main loop does.
+    let total = crate::ui::transcript::total_lines(&app, 80);
+    app.update(AppEvent::Viewport {
+        total_lines: total,
+        visible_rows: 10,
+    });
+    app.update(AppEvent::Terminal(crossterm::event::Event::Key(
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::PageUp,
+            crossterm::event::KeyModifiers::empty(),
+        ),
+    )));
+    app.update(AppEvent::Viewport {
+        total_lines: total + 2,
+        visible_rows: 10,
+    });
+    app
+}
+
+fn char_event(c: char) -> AppEvent {
+    AppEvent::Terminal(crossterm::event::Event::Key(
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char(c),
+            crossterm::event::KeyModifiers::empty(),
+        ),
+    ))
+}

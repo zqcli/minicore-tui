@@ -14,7 +14,9 @@ pub mod composer;
 pub mod error;
 pub mod footer;
 pub mod header;
+pub mod help;
 pub mod layout;
+pub mod logs;
 pub mod new_session;
 pub mod reasoning;
 pub mod selector;
@@ -58,8 +60,11 @@ pub fn render(frame: &mut Frame, app: &App) {
     let busy = layout::busy(app);
     // Selector / new-session panels replace the composer in the dock and
     // are taller (spec 24.2); the composer keeps its Phase 3 height.
+    // The panel is the composer (which now grows with its content), one of
+    // the selectors, or Help/Logs (spec 24.2).
     let panel = match &app.dock {
-        Dock::Composer => layout::composer_height(short),
+        Dock::Composer => layout::composer_height_phase5(app, area.width, area.height, short),
+        Dock::Help | Dock::Logs => layout::help_panel_height(area.height),
         _ => layout::panel_height(short),
     };
     let footer_h = layout::footer_height(area.width, area.height);
@@ -97,6 +102,8 @@ pub fn render(frame: &mut Frame, app: &App) {
         | Dock::ModelSelector(_)
         | Dock::ReasoningSelector(_)
         | Dock::ProfileSelector(_) => selector::render(frame, chunks[index], app, &theme),
+        Dock::Help => help::render(frame, chunks[index], app, &theme),
+        Dock::Logs => logs::render(frame, chunks[index], app, &theme),
     }
     index += 1;
     footer::render(frame, chunks[index], app, &theme);

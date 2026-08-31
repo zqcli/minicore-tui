@@ -7,18 +7,18 @@ Open a session — /new, Ctrl+R, or F1 for help
 
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│New session                                                                   │
-│workspace  /project                                                           │
-│profile    coding  →                                                          │
-│model      deep  →                                                            │
-│reasoning  high  →                                                            │
-│title      (optional)                                                         │
-│action     Create session                                                     │
-│Tab moves · Enter confirms · Esc closes                                       │
+│Select model                                                                  │
+│Changing model creates a new session.                                         │
+│> fast                                                                        │
+│→ fast  32k context  — tools  • low/medium                                    │
+│(1/1)                                                                         │
+│                                                                              │
+│                                                                              │
+│                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-/project                                                              no session
-Idle
+/project                                                                    Task
+Idle                                                                 deep • high

@@ -62,6 +62,32 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &Theme, draft: &NewSessionSt
         lines.push(Line::default());
     }
     frame.render_widget(Paragraph::new(lines), inner);
+
+    // A block cursor on the editable workspace/title field so IME and
+    // editing land visibly (read-only; the buffer lives in the draft).
+    if matches!(
+        draft.field,
+        NewSessionField::Workspace | NewSessionField::Title
+    ) {
+        let row_offset = if tall { 1 } else { 0 };
+        let row = inner.y + row_offset;
+        let value = match draft.field {
+            NewSessionField::Workspace => &draft.workspace,
+            _ => &draft.title,
+        };
+        let col = crate::markdown::column_width(&value[..char_to_byte(value, draft.field_cursor)]);
+        let x = inner.x + LABEL_WIDTH as u16 + col as u16;
+        if x < inner.x + inner.width && row < inner.y + inner.height {
+            if let Some(cell) = frame.buffer_mut().cell_mut((x, row)) {
+                cell.set_fg(theme.page_bg);
+                cell.set_bg(theme.text);
+            }
+        }
+    }
+}
+
+fn char_to_byte(text: &str, cursor: usize) -> usize {
+    text.chars().take(cursor).map(char::len_utf8).sum::<usize>()
 }
 
 /// One form row: a dim label, the field value (or a dim placeholder), a

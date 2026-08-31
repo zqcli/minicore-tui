@@ -445,3 +445,73 @@ fn selectors_render_on_both_themes_without_panicking() {
         }
     }
 }
+
+// ---- Phase 5: input rendering -------------------------------------------
+
+#[test]
+fn help_panel_lists_keys_and_safety_notes() {
+    let mut app = testapp::help(ThemeKind::Dark);
+    let terminal = draw(&app, 80, 24);
+    let content = text(&terminal);
+    assert!(content.contains("Help"));
+    assert!(content.contains("Ctrl+R"));
+    assert!(any_cell_matching(&terminal, |cell| cell.symbol() == "┌"
+        && cell.fg == Theme::dark().border_accent));
+    // Scroll to the bottom: the scope notes are on the final page.
+    for _ in 0..40 {
+        app.update(AppEvent::Terminal(crossterm::event::Event::Key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Down,
+                crossterm::event::KeyModifiers::empty(),
+            ),
+        )));
+    }
+    let terminal = draw(&app, 80, 24);
+    let content = text(&terminal);
+    assert!(content.contains("Slash commands"));
+    assert!(content.contains("Tools run automatically."));
+    assert!(content.contains("Bash is not sandboxed."));
+    assert!(content.contains("No approval UI"));
+}
+
+#[test]
+fn logs_panel_shows_bounded_agent_stderr_without_raw_frames() {
+    let app = testapp::logs(ThemeKind::Dark);
+    let terminal = draw(&app, 80, 24);
+    let content = text(&terminal);
+    assert!(content.contains("Agent logs"));
+    assert!(content.contains("loaded profile coding"));
+    assert!(!content.contains("jsonrpc"), "no raw RPC frames in logs");
+}
+
+#[test]
+fn multiline_composer_grows_the_panel_and_wraps_cjk() {
+    let app = testapp::multiline_composer(ThemeKind::Dark);
+    let terminal = draw(&app, 80, 24);
+    let content = text(&terminal);
+    assert!(content.contains("line one"));
+    assert!(content.contains("line two"));
+    assert!(
+        content.contains("你"),
+        "CJK renders (2 columns per char in the buffer)"
+    );
+    assert!(content.contains("line six"));
+    // Six wrapped rows plus two border rows: the panel outgrew the fixed 5.
+    let height = crate::ui::layout::composer_height_phase5(&app, 80, 24, false);
+    assert_eq!(height, 8, "the composer grew with the content");
+}
+
+#[test]
+fn selector_search_query_is_visible() {
+    let app = testapp::search_query(ThemeKind::Dark);
+    let terminal = draw(&app, 80, 24);
+    let content = text(&terminal);
+    assert!(content.contains("> fast"));
+}
+
+#[test]
+fn new_output_marker_renders_when_scrolled_away() {
+    let app = testapp::new_output_marker(ThemeKind::Dark);
+    let terminal = draw(&app, 80, 24);
+    assert!(text(&terminal).contains("↓ new output"));
+}

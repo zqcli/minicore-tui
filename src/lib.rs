@@ -20,6 +20,7 @@ pub mod args;
 pub mod command;
 pub mod error;
 pub mod event;
+pub mod keymap;
 pub mod markdown;
 pub mod protocol;
 pub mod rpc;
