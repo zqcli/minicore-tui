@@ -23,6 +23,7 @@ pub const METHOD_TRANSCRIPT: &str = "session.transcript";
 pub const METHOD_TURN_SEND: &str = "turn.send";
 pub const METHOD_TURN_WAIT: &str = "turn.wait";
 pub const METHOD_TURN_CANCEL: &str = "turn.cancel";
+pub const METHOD_SHUTDOWN: &str = "agent.shutdown";
 
 /// Monotonic request id, starting at 1 (spec 10.4). Never persisted.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -39,7 +40,7 @@ pub struct TurnRef {
 }
 
 /// One outbound NDJSON request line (spec 10.5).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct OutgoingRequest {
     #[serde(rename = "jsonrpc")]
     jsonrpc: &'static str,
@@ -142,6 +143,13 @@ impl OutgoingRequest {
         let params = serde_json::to_value(turn).expect("turn ref serializes");
         Self::new(id, METHOD_TURN_CANCEL, params)
     }
+
+    /// `agent.shutdown` starts the agent's orderly shutdown; the response
+    /// `{"ok":true}` is the final frame before the agent closes stdout and
+    /// exits (docs/rpc-contract.md).
+    pub fn shutdown(id: RequestId) -> Self {
+        Self::new(id, METHOD_SHUTDOWN, json!({}))
+    }
 }
 
 /// A complete incoming frame (spec 10.6).
@@ -214,6 +222,10 @@ impl RpcResponse {
     }
 
     pub fn parse_cancel(&self) -> Result<CancelledResult, RpcResponseError> {
+        self.result_as()
+    }
+
+    pub fn parse_shutdown(&self) -> Result<ShutdownResult, RpcResponseError> {
         self.result_as()
     }
 }
@@ -697,6 +709,12 @@ pub struct CancelledResult {
     pub cancelled: bool,
 }
 
+/// The `agent.shutdown` result member: `{"ok":true}` on success.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ShutdownResult {
+    pub ok: bool,
+}
+
 /// The `session.state` return value; also the `session_state` event data.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SessionStateWire {
@@ -867,9 +885,10 @@ pub struct TurnTerminalEntryViewWire {
 
 /// Model reasoning levels the TUI understands. Unknown wire values are a
 /// protocol error (spec 11.5); the agent does not expose other levels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Reasoning {
+    #[default]
     Auto,
     Disabled,
     Low,

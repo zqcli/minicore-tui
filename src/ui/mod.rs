@@ -53,7 +53,14 @@ pub fn render(frame: &mut Frame, app: &App) {
         return;
     }
     if let ConnectionState::Failed(reason) = &app.connection {
-        error::render_fatal(frame, area, &theme, reason, &app.agent_logs);
+        error::render_fatal(
+            frame,
+            area,
+            &theme,
+            reason,
+            app.child_exit_status.as_deref(),
+            &app.agent_logs,
+        );
         return;
     }
     let short = area.height < 24;

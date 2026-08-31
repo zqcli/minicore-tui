@@ -1,0 +1,1 @@
+{"jsonrpc": "2.0", "id": 2, "result": {"profiles": [{"id": "coding", "model": "gpt-4o", "reasoning": "high", "tools": ["read", "write", "edit", "apply_patch"]}, {"id": "review", "model": "fast", "reasoning": "medium", "tools": ["read"]}], "default": "coding"}}

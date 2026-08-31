@@ -73,6 +73,10 @@ pub enum AppEvent {
     },
     /// A transport event from the RPC background tasks.
     Rpc(RpcEvent),
+    /// All RPC producer tasks have ended and no buffered transport event
+    /// remains. The main loop disables its RPC select arm; the app remains
+    /// renderable so a fatal state can be acknowledged with `q`.
+    RpcChannelEnded,
     /// Executing an `AppCommand::Rpc` failed before any frame was written.
     /// The corresponding pending request is removed inside `update`.
     RpcSendFailed {
@@ -81,6 +85,13 @@ pub enum AppEvent {
     },
     /// Advance the visual frame counter (spinner animation, spec 15.6).
     Tick,
+    /// The user asked to leave (Ctrl+C twice, `/quit`, `q` in Help/Fatal) or
+    /// an OS signal fired. When the connection is alive the app enters
+    /// `ShuttingDown` and issues `agent.shutdown` once; a failed connection
+    /// exits immediately.
+    ShutdownRequested,
+    /// The main loop finished drawing this frame; clears the dirty flag.
+    Rendered,
     /// Select the color palette (spec 16.4).
     SetTheme(ThemeKind),
     /// Show or hide every reasoning run (spec 30.2).

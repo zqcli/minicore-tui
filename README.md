@@ -81,8 +81,24 @@ back via `AppEvent::Viewport`. The full key and command reference lives in
 docs/keybindings.md. Phase 5 still does not spawn the agent: RPC is
 impossible while the connection is `Starting`, and any RPC command reaching
 the main loop is reported as a send failure rather than silently dropped.
-The Phase 6 loop replaces the placeholder event handling without changing
-the App API.
+
+Phase 6 completes the wiring: the TUI owns `minicore-agent --stdio` for
+real. The flat CLI takes `--agent-bin` / `--agent-config` / `--workspace`
+plus per-session model/reasoning/profile defaults; the agent is spawned and
+validated **before** the alternate screen so failures are ordinary stderr
+errors. An async main loop (`tokio::select!`) multiplexes the RPC event
+channel and Crossterm's asynchronous `EventStream` (the application does not
+create a blocking terminal-reader thread), the 10 Hz tick, OS signals, and
+the 5-second shutdown kill-deadline, and
+applies every source through the single `App::update`. Rendering is
+throttled to 30 FPS by a `dirty` flag cleared by an explicit `Rendered`
+event. `agent.shutdown` is the only quit path for a live connection:
+`shutting down → agent.shutdown → (response, EOF, exit in any order) →
+Exit`, with a 5 s force-kill fallback; abnormal exits surface the fatal
+overlay, not an auto-restart. Protocol fixtures and integration tests
+(`tests/protocol.rs`, `tests/rpc_io.rs`, `tests/app_flow.rs`,
+`tests/render_snapshots.rs`, `tests/terminal_restore.rs`) are fully offline
+except the ignored real-agent E2E (`tests/agent_e2e.rs`).
 
 ## Requirements
 
@@ -119,15 +135,41 @@ cargo tree -p crossterm        # must list a single crossterm version
 ## Usage
 
 ```bash
-cargo run -- --theme dark
-cargo run -- --theme light
+cargo run -- --agent-config /path/to/agent.toml
+cargo run -- --agent-config agent.toml --workspace . --profile coding --reasoning high
 ```
 
 | Option | Description |
 |---|---|
+| `--agent-bin <PATH>` | minicore-agent binary (default `minicore-agent` on PATH) |
+| `--agent-config <PATH>` | agent config file (required; must exist) |
+| `--workspace <PATH>` | workspace for a new session (default: cwd; explicit values open a pre-filled new-session form) |
+| `--profile <ID>` | default profile for new sessions |
+| `--model <ID>` | default model for new sessions |
+| `--reasoning <auto\|disabled\|low\|medium\|high>` | default reasoning for new sessions |
 | `--theme <dark\|light>` | Color theme (default: `dark`) |
+| `--debug` | log RPC method/id/bytes/timing to a temp file (never content) |
 | `--version` | Print version |
 | `--help` | Print usage |
+
+The agent config must point at whatever model backend you use. This
+terminal frontend never calls a provider directly; the agent owns all model
+and data access.
+
+## Agent E2E (optional, offline by default)
+
+`tests/agent_e2e.rs` drives a real agent over stdio with the production
+RPC client and app state machine:
+
+```bash
+MINICORE_AGENT_BIN=/path/to/minicore-agent \
+MINICORE_AGENT_CONFIG=/path/to/loopback-mock-agent.toml \
+cargo test --test agent_e2e -- --ignored
+```
+
+The config must target a loopback mock (local model endpoint); the test
+refuses configs containing real provider keys/endpoints and never touches
+your real config or data dir.
 
 ## Backend contract baseline
 

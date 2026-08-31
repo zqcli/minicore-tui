@@ -160,37 +160,61 @@ type PanicHook = Box<dyn Fn(&PanicHookInfo<'_>) + Send + Sync + 'static>;
 /// `TerminalGuard::enter`, so a panic at any point after entry still leaves
 /// the terminal usable; panics before entry simply run the idempotent restore
 /// against an untouched terminal. A single guard is expected per process.
+///
+/// If this guard is dropped while the thread is unwinding, it deliberately
+/// leaves the delegating hook installed: `panic::take_hook` and
+/// `panic::set_hook` are forbidden during unwinding. When that panic is caught
+/// with `catch_unwind`, the wrapper can therefore remain installed until the
+/// process exits or later hook management restores it. This is safer than
+/// risking a second panic while preserving the original panic.
 pub struct PanicHookGuard {
-    previous: Arc<PanicHook>,
+    previous: Option<Arc<PanicHook>>,
 }
 
 impl PanicHookGuard {
     /// Saves the current hook and installs the terminal-restoring one.
+    ///
+    /// Hook management is skipped when called during unwinding because the
+    /// standard library forbids `take_hook` and `set_hook` in that state.
     pub fn install() -> Self {
+        if std::thread::panicking() {
+            return Self { previous: None };
+        }
         let previous: Arc<PanicHook> = Arc::new(panic::take_hook());
         let hook = Arc::clone(&previous);
         panic::set_hook(Box::new(move |info| {
             best_effort_restore_terminal();
             hook(info);
         }));
-        Self { previous }
+        Self {
+            previous: Some(previous),
+        }
     }
 }
 
-fn noop_hook(_: &PanicHookInfo<'_>) {}
-
 impl Drop for PanicHookGuard {
-    /// Reinstates the previously installed hook.
+    /// Reinstates the previously installed hook without ever starting a
+    /// second panic during unwinding.
     fn drop(&mut self) {
+        // `take_hook` and `set_hook` panic when called from a panicking
+        // thread. The panic hook has already restored the terminal, so leave
+        // its delegating wrapper in place and let the original panic proceed.
+        if std::thread::panicking() {
+            return;
+        }
+
+        let Some(previous) = self.previous.take() else {
+            return;
+        };
+
         // Remove our hook first, which releases its `Arc` clone, then move
         // the saved hook out and reinstall it.
         let current = panic::take_hook();
         drop(current);
-        let placeholder: Arc<PanicHook> = Arc::new(Box::new(noop_hook as fn(&PanicHookInfo<'_>)));
-        match Arc::try_unwrap(std::mem::replace(&mut self.previous, placeholder)) {
+        match Arc::try_unwrap(previous) {
             Ok(hook) => panic::set_hook(hook),
-            // Only reachable with multiple guards: keep delegating instead of
-            // leaving the process without a hook.
+            // Only reachable with multiple guards: keep delegating instead
+            // of leaving the process without a hook.
             Err(shared) => panic::set_hook(Box::new(move |info| shared(info))),
         }
     }
@@ -242,72 +266,72 @@ impl ScreenState {
 mod tests {
     use super::*;
 
-    const ALT_ENTER: &str = "\x1b[?1049h";
-    const ALT_LEAVE: &str = "\x1b[?1049l";
-    const PASTE_ON: &str = "\x1b[?2004h";
-    const PASTE_OFF: &str = "\x1b[?2004l";
-    const MOUSE_ON: &str = "\x1b[?1000h";
-    const MOUSE_OFF: &str = "\x1b[?1000l";
-    const CURSOR_HIDE: &str = "\x1b[?25l";
-    const CURSOR_SHOW: &str = "\x1b[?25h";
-
-    /// Writer that fails once when a specific escape sequence is written and
-    /// never records that sequence in its output.
-    #[derive(Debug)]
-    struct FailingWriter {
-        out: Vec<u8>,
-        fail_on: &'static str,
-        failed: bool,
-    }
-
-    impl FailingWriter {
-        fn fail_on(marker: &'static str) -> Self {
-            Self {
-                out: Vec::new(),
-                fail_on: marker,
-                failed: false,
-            }
-        }
-    }
-
-    impl io::Write for FailingWriter {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            if !self.failed && bytes_contain(buf, self.fail_on.as_bytes()) {
-                self.failed = true;
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "injected write failure",
-                ));
-            }
-            self.out.extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    fn bytes_contain(haystack: &[u8], needle: &[u8]) -> bool {
-        haystack
-            .windows(needle.len())
-            .any(|window| window == needle)
-    }
-
-    fn index_of(bytes: &[u8], needle: &str) -> usize {
-        let needle = needle.as_bytes();
-        bytes
-            .windows(needle.len())
-            .position(|window| window == needle)
-            .expect("escape marker should be present")
-    }
-
     /// These tests assert the ANSI command path. On Windows the mouse-capture
     /// command is applied through WinAPI rather than the writer, so the byte
     /// assertions only hold on unix.
     #[cfg(not(windows))]
     mod ansi_sequences {
         use super::*;
+
+        const ALT_ENTER: &str = "\x1b[?1049h";
+        const ALT_LEAVE: &str = "\x1b[?1049l";
+        const PASTE_ON: &str = "\x1b[?2004h";
+        const PASTE_OFF: &str = "\x1b[?2004l";
+        const MOUSE_ON: &str = "\x1b[?1000h";
+        const MOUSE_OFF: &str = "\x1b[?1000l";
+        const CURSOR_HIDE: &str = "\x1b[?25l";
+        const CURSOR_SHOW: &str = "\x1b[?25h";
+
+        /// Writer that fails once when a specific escape sequence is written
+        /// and never records that sequence in its output.
+        #[derive(Debug)]
+        struct FailingWriter {
+            out: Vec<u8>,
+            fail_on: &'static str,
+            failed: bool,
+        }
+
+        impl FailingWriter {
+            fn fail_on(marker: &'static str) -> Self {
+                Self {
+                    out: Vec::new(),
+                    fail_on: marker,
+                    failed: false,
+                }
+            }
+        }
+
+        impl io::Write for FailingWriter {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                if !self.failed && bytes_contain(buf, self.fail_on.as_bytes()) {
+                    self.failed = true;
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "injected write failure",
+                    ));
+                }
+                self.out.extend_from_slice(buf);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        fn bytes_contain(haystack: &[u8], needle: &[u8]) -> bool {
+            haystack
+                .windows(needle.len())
+                .any(|window| window == needle)
+        }
+
+        fn index_of(bytes: &[u8], needle: &str) -> usize {
+            let needle = needle.as_bytes();
+            bytes
+                .windows(needle.len())
+                .position(|window| window == needle)
+                .expect("escape marker should be present")
+        }
 
         #[test]
         fn entry_runs_screen_commands_in_spec_order() {

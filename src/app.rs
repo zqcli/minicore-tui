@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use crossterm::event::{Event as CrosstermEvent, MouseEvent, MouseEventKind};
@@ -43,6 +44,9 @@ const MAX_NOTICES: usize = 32;
 /// How long a transient notice stays before `Tick` removes it (spec 33.2).
 const NOTICE_TTL: Duration = Duration::from_secs(5);
 
+/// Maximum time allowed for the orderly `agent.shutdown` sequence.
+pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// The second Ctrl+C must follow the first within this window to quit
 /// (spec 22.1, 43.7).
 const DOUBLE_CTRL_C_WINDOW: Duration = Duration::from_secs(1);
@@ -79,11 +83,16 @@ pub struct Notice {
 }
 
 impl Notice {
+    #[cfg(test)]
     fn new(level: NoticeLevel, text: String, sticky: bool) -> Self {
+        Self::at(level, text, sticky, Instant::now())
+    }
+
+    fn at(level: NoticeLevel, text: String, sticky: bool, created_at: Instant) -> Self {
         Self {
             level,
             text,
-            created_at: Instant::now(),
+            created_at,
             sticky,
         }
     }
@@ -120,6 +129,20 @@ pub enum RequestKind {
     },
     WaitTurn(TurnRef),
     CancelTurn(TurnRef),
+    Shutdown,
+}
+
+/// CLI preferences injected at construction (spec 6.1). They only seed the
+/// catalog's next-session seats, so an existing session is never touched;
+/// a `None` seat lets the catalog default apply.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CliPrefs {
+    pub profile: Option<String>,
+    pub model: Option<String>,
+    pub reasoning: Option<Reasoning>,
+    /// When set and no session is active, a Ready app opens a pre-filled
+    /// new-session form (explicit `--workspace`; never auto-creates).
+    pub open_new_session_on_ready: bool,
 }
 
 /// All app and UI state. Only `App::update` mutates it; render code reads
@@ -129,8 +152,14 @@ pub struct App {
     pub catalogs: CatalogState,
     pub sessions: SessionsState,
     pub notices: VecDeque<Notice>,
+    /// Set by every `update` except `Rendered`, which clears it, so the main
+    /// loop can throttle draws (max 30 FPS) without missing a change.
+    pub dirty: bool,
     /// The agent's stderr ring, newest last (spec 10.8).
     pub agent_logs: VecDeque<String>,
+    /// Safe process status captured when the child reports `Exited`; it never
+    /// contains a raw frame or command-line content.
+    pub child_exit_status: Option<String>,
     /// Visual state (spec 16, 30): palette, reasoning visibility, the frame
     /// counter for the spinner, and the Phase 5 composer.
     pub theme: ThemeKind,
@@ -154,9 +183,24 @@ pub struct App {
     /// The new-session draft while a model/reasoning/profile selector sits
     /// on top of the form; `Some` only then (spec 26.4).
     draft: Option<NewSessionState>,
+    /// `agent.shutdown` was issued; the response routes to
+    /// `RequestKind::Shutdown` and the child exit ends the run.
+    shutdown_sent: bool,
+    /// Monotonic shutdown start/deadline, latched on the first shutdown
+    /// request and never extended by repeated quit or signal events.
+    shutdown_started_at: Option<Instant>,
+    shutdown_deadline: Option<Instant>,
+    /// The agent child ended while `ShuttingDown` (a `RpcEvent::Exited`).
+    shutdown_child_exited: bool,
+    /// When set, reaching `Ready` with no active session opens a pre-filled
+    /// new-session form (explicit `--workspace`).
+    open_new_session_on_ready: bool,
     /// Clock for session-relative ages; injectable so render output is
     /// deterministic in tests. Read-only, never mutated by `update`.
     pub now: fn() -> SystemTime,
+    /// Monotonic clock used for shutdown and transient timing. Production
+    /// uses `Instant::now`; tests may inject a virtual clock at construction.
+    monotonic_now: Arc<dyn Fn() -> Instant + Send + Sync>,
     pub pending_requests: HashMap<RequestId, RequestKind>,
     next_request_id: RequestId,
     next_submission: u64,
@@ -222,7 +266,9 @@ impl App {
             },
             sessions: SessionsState::default(),
             notices: VecDeque::new(),
+            dirty: false,
             agent_logs: VecDeque::new(),
+            child_exit_status: None,
             theme: ThemeKind::Dark,
             reasoning_visible: true,
             frame_count: 0,
@@ -234,6 +280,11 @@ impl App {
             ctrl_c_at: None,
             notice_ttl: NOTICE_TTL,
             draft: None,
+            shutdown_sent: false,
+            shutdown_started_at: None,
+            shutdown_deadline: None,
+            shutdown_child_exited: false,
+            open_new_session_on_ready: false,
             now: SystemTime::now,
             pending_requests: HashMap::new(),
             next_request_id: RequestId(0),
@@ -241,12 +292,100 @@ impl App {
             next_draft_id: 0,
             bootstrap: BootstrapProgress::default(),
             blocked_notice: false,
+            monotonic_now: Arc::new(Instant::now),
         }
+    }
+
+    /// Same as [`App::new`], with CLI preferences seeded into the catalog's
+    /// next-session seats (spec 6.1).
+    pub fn with_cli_prefs(default_workspace: PathBuf, prefs: CliPrefs) -> Self {
+        let mut app = Self::new(default_workspace);
+        app.catalogs.next_profile = prefs.profile;
+        app.catalogs.next_model = prefs.model;
+        app.catalogs.next_reasoning = prefs.reasoning;
+        app.open_new_session_on_ready = prefs.open_new_session_on_ready;
+        app
+    }
+
+    /// Constructs an app with a caller-supplied monotonic clock. This is
+    /// useful for deterministic lifecycle tests; production uses [`App::new`].
+    pub fn with_monotonic_clock<F>(default_workspace: PathBuf, clock: F) -> Self
+    where
+        F: Fn() -> Instant + Send + Sync + 'static,
+    {
+        let mut app = Self::new(default_workspace);
+        app.monotonic_now = Arc::new(clock);
+        app
+    }
+
+    fn instant_now(&self) -> Instant {
+        (self.monotonic_now)()
+    }
+
+    /// Whether the app currently needs a visual tick. The main loop sleeps
+    /// until the earliest of the spinner cadence, transient-notice expiry,
+    /// and the double-Ctrl+C window; `None` means idle and no timer is armed.
+    pub fn next_tick(&self) -> Option<Duration> {
+        let now = self.instant_now();
+        let mut earliest: Option<Duration> = None;
+        if self.sessions.known.values().any(|view| view.live.is_some()) {
+            earliest = Some(Duration::from_millis(100));
+        }
+        for notice in &self.notices {
+            if !notice.sticky {
+                let expiry = notice
+                    .created_at
+                    .checked_add(self.notice_ttl)
+                    .expect("notice expiry is representable");
+                let remaining = expiry.saturating_duration_since(now);
+                earliest = Some(earliest.map_or(remaining, |e| e.min(remaining)));
+            }
+        }
+        if let Some(at) = self.ctrl_c_at {
+            let expiry = at
+                .checked_add(DOUBLE_CTRL_C_WINDOW)
+                .expect("Ctrl+C expiry is representable");
+            let remaining = expiry.saturating_duration_since(now);
+            earliest = Some(earliest.map_or(remaining, |e| e.min(remaining)));
+        }
+        earliest
+    }
+
+    /// The main loop arms its 5-second kill fallback while this is true.
+    pub fn shutting_down(&self) -> bool {
+        self.connection == ConnectionState::ShuttingDown && !self.shutdown_child_exited
+    }
+
+    /// Remaining time in the latched shutdown window. An expired deadline is
+    /// deliberately returned as `Some(Duration::ZERO)` so a timer cannot be
+    /// accidentally disarmed at the exact cutoff.
+    pub fn shutdown_remaining(&self) -> Option<Duration> {
+        if !self.shutting_down() {
+            return None;
+        }
+        self.shutdown_deadline
+            .map(|deadline| deadline.saturating_duration_since(self.instant_now()))
+    }
+
+    /// Read-only: whether a request with this id is currently registered in
+    /// the pending map (tests pin the register-before-send contract).
+    pub fn request_is_pending(&self, id: RequestId) -> bool {
+        self.pending_requests.contains_key(&id)
+    }
+
+    /// Read-only: the pending kind for a request id, if registered.
+    pub fn pending_request_kind(&self, id: RequestId) -> Option<&RequestKind> {
+        self.pending_requests.get(&id)
     }
 
     /// The single state-mutation entry point. Returns the side effects the
     /// main loop must execute; commands are never executed here.
     pub fn update(&mut self, event: AppEvent) -> Vec<AppCommand> {
+        if matches!(&event, AppEvent::Rendered) {
+            self.dirty = false;
+            return Vec::new();
+        }
+        self.dirty = true;
         match event {
             AppEvent::Bootstrap => self.bootstrap(),
             AppEvent::SubmitTurn { session_id, text } => self.submit_turn(&session_id, text),
@@ -266,12 +405,20 @@ impl App {
             AppEvent::OpenSession { session_id } => self.open_session(&session_id),
             AppEvent::CancelTurn { session_id } => self.cancel_turn(&session_id),
             AppEvent::Rpc(event) => self.on_rpc_event(event),
+            AppEvent::RpcChannelEnded => self.on_rpc_channel_ended(),
             AppEvent::RpcSendFailed { id, error } => self.on_send_failed(id, error),
+            AppEvent::ShutdownRequested => self.request_shutdown(),
             AppEvent::Tick => {
                 self.frame_count = self.frame_count.wrapping_add(1);
+                if self.ctrl_c_at.is_some_and(|pressed| {
+                    self.instant_now().saturating_duration_since(pressed) >= DOUBLE_CTRL_C_WINDOW
+                }) {
+                    self.ctrl_c_at = None;
+                }
                 self.expire_notices();
                 Vec::new()
             }
+            AppEvent::Rendered => unreachable!("handled before the match"),
             AppEvent::SetTheme(kind) => {
                 self.theme = kind;
                 Vec::new()
@@ -833,13 +980,13 @@ impl App {
         use Action::*;
         match action {
             None => Vec::new(),
-            Quit => vec![AppCommand::Quit],
+            Quit => self.request_shutdown(),
             FirstCtrlC => self.ctrl_c(),
             CtrlD => {
                 if self.composer.is_empty()
                     && self.active_view().is_none_or(|view| view.live.is_none())
                 {
-                    vec![AppCommand::Quit]
+                    self.request_shutdown()
                 } else {
                     Vec::new()
                 }
@@ -981,13 +1128,12 @@ impl App {
             self.composer.clear();
             self.ctrl_c_at = None;
             Vec::new()
-        } else if self
-            .ctrl_c_at
-            .is_some_and(|pressed| pressed.elapsed() < DOUBLE_CTRL_C_WINDOW)
-        {
-            vec![AppCommand::Quit]
+        } else if self.ctrl_c_at.is_some_and(|pressed| {
+            self.instant_now().saturating_duration_since(pressed) < DOUBLE_CTRL_C_WINDOW
+        }) {
+            self.request_shutdown()
         } else {
-            self.ctrl_c_at = Some(Instant::now());
+            self.ctrl_c_at = Some(self.instant_now());
             self.notice(NoticeLevel::Info, "Press Ctrl+C again to quit");
             Vec::new()
         }
@@ -1223,7 +1369,7 @@ impl App {
             LocalCommand::Clear => self.clear_transcript(),
             LocalCommand::Help => self.open_dock(Dock::Help),
             LocalCommand::Logs => self.open_dock(Dock::Logs),
-            LocalCommand::Quit => vec![AppCommand::Quit],
+            LocalCommand::Quit => self.request_shutdown(),
         }
     }
 
@@ -1405,7 +1551,7 @@ impl App {
     /// sticky notices and the insertion order; a newer transient never
     /// shields an older one (spec 33.2).
     fn expire_notices(&mut self) {
-        let now = Instant::now();
+        let now = self.instant_now();
         let ttl = self.notice_ttl;
         self.notices.retain(|notice| {
             notice.sticky || now.saturating_duration_since(notice.created_at) < ttl
@@ -1438,11 +1584,11 @@ impl App {
     }
 
     fn notice(&mut self, level: NoticeLevel, text: impl Into<String>) {
-        self.push_notice(Notice::new(level, text.into(), false));
+        self.push_notice(Notice::at(level, text.into(), false, self.instant_now()));
     }
 
     fn sticky_notice(&mut self, level: NoticeLevel, text: impl Into<String>) {
-        self.push_notice(Notice::new(level, text.into(), true));
+        self.push_notice(Notice::at(level, text.into(), true, self.instant_now()));
     }
 
     fn push_notice(&mut self, notice: Notice) {
@@ -1485,6 +1631,12 @@ impl App {
             self.connection = ConnectionState::Ready;
             self.catalogs.loaded = true;
             self.blocked_notice = false;
+            // Explicit --workspace with no active session: open the
+            // pre-filled new-session form, never auto-create (spec 6.1).
+            if self.open_new_session_on_ready && self.sessions.active.is_none() {
+                self.draft = None;
+                self.dock = Dock::NewSession(self.make_new_session_draft());
+            }
         }
     }
 
@@ -1504,14 +1656,53 @@ impl App {
         false
     }
 
+    /// User exit or OS signal. A live connection (`Starting` or `Ready`)
+    /// enters `ShuttingDown` and issues `agent.shutdown` exactly once; the
+    /// response is routed by `RequestKind::Shutdown` and the child exit
+    /// finishes the run. A failed or already-gone connection exits at once.
+    fn request_shutdown(&mut self) -> Vec<AppCommand> {
+        match self.connection {
+            ConnectionState::Failed(_) => vec![AppCommand::Exit],
+            ConnectionState::ShuttingDown => Vec::new(),
+            ConnectionState::Starting | ConnectionState::Ready => {
+                if self.shutdown_sent {
+                    return Vec::new();
+                }
+                self.shutdown_sent = true;
+                let started_at = self.instant_now();
+                self.shutdown_started_at = Some(started_at);
+                self.shutdown_deadline = Some(
+                    started_at
+                        .checked_add(SHUTDOWN_TIMEOUT)
+                        .expect("shutdown deadline is representable"),
+                );
+                self.connection = ConnectionState::ShuttingDown;
+                self.ctrl_c_at = None;
+                vec![self.request(RequestKind::Shutdown, OutgoingRequest::shutdown)]
+            }
+        }
+    }
+
+    /// Followups (wait, transcript chain, state fetch) are only issued on a
+    /// live connection; under shutdown nothing new is sent (spec 8).
+    fn can_send_requests(&self) -> bool {
+        self.connection == ConnectionState::Ready
+    }
+
     /// Catalog/list failures are fatal per spec: the TUI cannot choose a
     /// profile or session, and there is no auto-retry.
     fn bootstrap_failure(&mut self, method: &str, error: RpcResponseError) -> Vec<AppCommand> {
-        self.connection = ConnectionState::Failed(format!("bootstrap failed at {method}: {error}"));
-        self.sticky_notice(
-            NoticeLevel::Error,
-            "Bootstrap failed. No further requests will be sent.",
-        );
+        if !matches!(
+            self.connection,
+            ConnectionState::Failed(_) | ConnectionState::ShuttingDown
+        ) {
+            self.connection =
+                ConnectionState::Failed(format!("bootstrap failed at {method}: {error}"));
+            self.sticky_notice(
+                NoticeLevel::Error,
+                "Bootstrap failed. No further requests will be sent.",
+            );
+        }
         Vec::new()
     }
 
@@ -1561,6 +1752,10 @@ impl App {
             }
         }
         self.sessions.active = Some(session_id.clone());
+        // Shutting down wins: state was already applied, no followups.
+        if !self.can_send_requests() {
+            return Ok(Vec::new());
+        }
         let mut commands = vec![
             self.request(RequestKind::SessionState(session_id.clone()), |id| {
                 OutgoingRequest::session_state(id, &session_id)
@@ -1733,6 +1928,11 @@ impl App {
         gap_revision: Option<u64>,
         page: &TranscriptPageWire,
     ) -> Vec<AppCommand> {
+        // Under shutdown the page is not merged and no further pages are
+        // fetched; exiting takes priority over the durable tail.
+        if !self.can_send_requests() {
+            return Vec::new();
+        }
         let next = {
             let Some(view) = self.sessions.known.get_mut(session_id) else {
                 return Vec::new();
@@ -1967,6 +2167,10 @@ impl App {
             // The wait is registered in this same update, before any event
             // can race ahead of it; TurnFinished events are never awaited.
             Plan::Wait { turn, cancel } => {
+                // Shutdown wins over a running turn: no further followups.
+                if !self.can_send_requests() {
+                    return Vec::new();
+                }
                 let mut commands = vec![self.request(RequestKind::WaitTurn(turn.clone()), |id| {
                     OutgoingRequest::wait_turn(id, &turn)
                 })];
@@ -2056,6 +2260,9 @@ impl App {
     /// the last durable sequence; the live turn ends when that chain
     /// completes (spec 13.4).
     fn reconcile_after_wait(&mut self, turn: &TurnRef) -> Vec<AppCommand> {
+        if !self.can_send_requests() {
+            return Vec::new();
+        }
         let mut commands = vec![
             self.request(RequestKind::SessionState(turn.session_id.clone()), |id| {
                 OutgoingRequest::session_state(id, &turn.session_id)
@@ -2110,6 +2317,7 @@ impl App {
                 return Vec::new();
             }
         };
+        let mut commands = Vec::new();
         match kind {
             RequestKind::SendTurn {
                 session_id,
@@ -2166,6 +2374,12 @@ impl App {
                     );
                 }
             }
+            // Sending agent.shutdown failed: the writer is gone, so kill and
+            // leave; the child is reaped by the waiter.
+            RequestKind::Shutdown => {
+                commands.push(AppCommand::KillChild);
+                commands.push(AppCommand::Exit);
+            }
             _ => {
                 self.notice(
                     NoticeLevel::Error,
@@ -2173,7 +2387,7 @@ impl App {
                 );
             }
         }
-        Vec::new()
+        commands
     }
 
     // ---- incoming events ----------------------------------------------
@@ -2190,12 +2404,36 @@ impl App {
                 self.connection_terminated(&format!("RPC protocol error: {error}"))
             }
             RpcEvent::Exited(status) => {
-                let reason = match status {
-                    Some(status) => format!("agent exited: {status}"),
-                    None => "agent exited".to_owned(),
-                };
-                self.connection_terminated(&reason)
+                let status_text = format_exit_status(status.as_ref());
+                self.child_exit_status = Some(status_text.clone());
+                match self.connection {
+                    // The normal shutdown conclusion: the child is gone.
+                    ConnectionState::ShuttingDown => {
+                        self.shutdown_child_exited = true;
+                        vec![AppCommand::Exit]
+                    }
+                    ConnectionState::Failed(_) => Vec::new(),
+                    _ => {
+                        let reason = format!("agent exited: {status_text}");
+                        self.connection_terminated(&reason)
+                    }
+                }
             }
+        }
+    }
+
+    fn on_rpc_channel_ended(&mut self) -> Vec<AppCommand> {
+        match self.connection {
+            // Once the channel has drained, the child is no longer usable;
+            // normal shutdown can leave without waiting for another event.
+            ConnectionState::ShuttingDown => {
+                self.shutdown_child_exited = true;
+                vec![AppCommand::Exit]
+            }
+            // A fatal overlay remains interactive after EOF; `q` still
+            // produces the explicit Exit command through App::update.
+            ConnectionState::Failed(_) => Vec::new(),
+            _ => self.connection_terminated("RPC channel ended"),
         }
     }
 
@@ -2204,6 +2442,8 @@ impl App {
     /// cause (see `crate::event`).
     fn connection_terminated(&mut self, reason: &str) -> Vec<AppCommand> {
         match self.connection {
+            // EOF/protocol failure during ShuttingDown is the expected
+            // conclusion of agent.shutdown, never a fatal error.
             ConnectionState::Failed(_) | ConnectionState::ShuttingDown => Vec::new(),
             _ => {
                 self.connection = ConnectionState::Failed(reason.to_owned());
@@ -2293,6 +2533,19 @@ impl App {
             } => self.on_send_response(&session_id, local_submission, &response),
             RequestKind::WaitTurn(turn) => self.on_wait_response(turn, &response),
             RequestKind::CancelTurn(_) => self.on_cancel_response(&response),
+            // The agent's final frame. The child's exit (a later Exited or
+            // ConnectionClosed, either order) ends the run; an error means
+            // the agent refused, so force-kill it.
+            RequestKind::Shutdown => match response.parse_shutdown() {
+                Ok(_) => Vec::new(),
+                Err(error) => {
+                    self.notice(
+                        NoticeLevel::Error,
+                        format!("agent.shutdown failed: {error}"),
+                    );
+                    vec![AppCommand::KillChild]
+                }
+            },
         }
     }
 
@@ -2567,6 +2820,19 @@ fn tool_outcome_status(outcome: ToolOutcomeWire) -> ToolStatus {
     }
 }
 
+/// Converts an OS status to a safe, stable display string. This deliberately
+/// uses only the portable exit code/success shape and never formats a raw
+/// frame, command line, or platform-specific diagnostic.
+fn format_exit_status(status: Option<&std::process::ExitStatus>) -> String {
+    match status {
+        None => "unavailable".to_owned(),
+        Some(status) => match status.code() {
+            Some(code) => format!("exit code {code}"),
+            None => "terminated without an exit code".to_owned(),
+        },
+    }
+}
+
 fn tool_outcome_label(outcome: &ToolOutcomeWire) -> &'static str {
     match outcome {
         ToolOutcomeWire::Success => "success",
@@ -2740,6 +3006,8 @@ fn merge_entries(view: &mut SessionView, entries: &[ConversationEntryWire]) {
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
+    use std::process::Command;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
     use crate::protocol::{
@@ -2748,6 +3016,31 @@ mod tests {
 
     fn test_app() -> App {
         App::new(PathBuf::from("/workspace"))
+    }
+
+    fn nonzero_exit_status() -> std::process::ExitStatus {
+        #[cfg(unix)]
+        {
+            Command::new("sh")
+                .args(["-c", "exit 7"])
+                .status()
+                .expect("spawn a portable nonzero test process")
+        }
+        #[cfg(windows)]
+        {
+            Command::new("cmd")
+                .args(["/C", "exit 7"])
+                .status()
+                .expect("spawn a portable nonzero test process")
+        }
+    }
+
+    /// The shutdown request the app issues when asked to quit while the
+    /// connection is alive.
+    fn shutdown_request(commands: &[OutgoingRequest]) -> Option<&OutgoingRequest> {
+        commands
+            .iter()
+            .find(|request| request.method == crate::protocol::METHOD_SHUTDOWN)
     }
 
     fn take_requests(commands: Vec<AppCommand>) -> Vec<OutgoingRequest> {
@@ -4013,6 +4306,110 @@ mod tests {
             &second.connection,
             ConnectionState::Failed(reason) if reason.contains("agent exited")
         ));
+    }
+
+    #[test]
+    fn exited_status_is_recorded_after_every_fatal_cause_without_replacing_it() {
+        let mut eof_first = test_app();
+        eof_first.update(AppEvent::Rpc(RpcEvent::ConnectionClosed));
+        let first_reason = match &eof_first.connection {
+            ConnectionState::Failed(reason) => reason.clone(),
+            other => panic!("expected failed connection, got {other:?}"),
+        };
+        eof_first.update(AppEvent::Rpc(RpcEvent::Exited(Some(nonzero_exit_status()))));
+        assert_eq!(eof_first.child_exit_status.as_deref(), Some("exit code 7"));
+        assert!(matches!(
+            &eof_first.connection,
+            ConnectionState::Failed(reason) if reason == &first_reason
+        ));
+
+        let mut protocol_first = test_app();
+        protocol_first.update(AppEvent::Rpc(RpcEvent::ProtocolError(FrameError::new(
+            FrameErrorKind::InvalidJson,
+            "bad frame",
+        ))));
+        protocol_first.update(AppEvent::Rpc(RpcEvent::Exited(Some(nonzero_exit_status()))));
+        assert!(matches!(
+            &protocol_first.connection,
+            ConnectionState::Failed(reason) if reason.contains("RPC protocol error")
+        ));
+        assert_eq!(
+            protocol_first.child_exit_status.as_deref(),
+            Some("exit code 7")
+        );
+
+        let mut exit_first = test_app();
+        exit_first.update(AppEvent::Rpc(RpcEvent::Exited(Some(nonzero_exit_status()))));
+        assert!(matches!(
+            &exit_first.connection,
+            ConnectionState::Failed(reason) if reason.contains("agent exited")
+        ));
+        assert_eq!(exit_first.child_exit_status.as_deref(), Some("exit code 7"));
+    }
+
+    #[test]
+    fn rpc_channel_end_preserves_fatal_interaction_and_exits_shutdown() {
+        let mut failed = test_app();
+        failed.update(AppEvent::Rpc(RpcEvent::ProtocolError(FrameError::new(
+            FrameErrorKind::Io,
+            "pipe",
+        ))));
+        failed.update(AppEvent::Rendered);
+        assert!(failed.update(AppEvent::RpcChannelEnded).is_empty());
+        assert!(failed.dirty, "channel closure still schedules a redraw");
+        let quit = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('q'),
+            crossterm::event::KeyModifiers::empty(),
+        );
+        assert!(matches!(
+            failed
+                .update(AppEvent::Terminal(crossterm::event::Event::Key(quit)))
+                .as_slice(),
+            [AppCommand::Exit]
+        ));
+
+        let mut shutting_down = test_app();
+        let commands = shutting_down.update(AppEvent::ShutdownRequested);
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(
+            shutting_down.update(AppEvent::RpcChannelEnded).as_slice(),
+            [AppCommand::Exit]
+        ));
+    }
+
+    #[test]
+    fn shutdown_deadline_is_latched_across_busy_updates_and_shutdown_races() {
+        let base = Instant::now();
+        let elapsed = std::sync::Arc::new(AtomicU64::new(0));
+        let clock_elapsed = std::sync::Arc::clone(&elapsed);
+        let mut app = App::with_monotonic_clock(PathBuf::from("/workspace"), move || {
+            base.checked_add(Duration::from_millis(clock_elapsed.load(Ordering::Relaxed)))
+                .expect("test clock remains representable")
+        });
+        let shutdown = take_requests(app.update(AppEvent::ShutdownRequested));
+        assert_eq!(shutdown.len(), 1);
+        assert_eq!(app.shutdown_remaining(), Some(SHUTDOWN_TIMEOUT));
+        let first_deadline = app.shutdown_deadline;
+
+        for millis in [1, 500, 1_000, 2_500, 4_999] {
+            elapsed.store(millis, Ordering::Relaxed);
+            app.update(AppEvent::Tick);
+            app.update(AppEvent::Rpc(RpcEvent::AgentLogLine("rpc".to_owned())));
+            app.update(AppEvent::ShutdownRequested);
+            assert_eq!(app.shutdown_deadline, first_deadline);
+            assert!(
+                app.shutdown_remaining()
+                    .is_some_and(|remaining| !remaining.is_zero())
+            );
+        }
+        // Both a successful response and the expected EOF are harmless and
+        // must not recreate the five-second window.
+        let shutdown_request = &shutdown[0];
+        take_requests(respond(&mut app, shutdown_request, json!({"ok": true})));
+        app.update(AppEvent::Rpc(RpcEvent::ConnectionClosed));
+        assert_eq!(app.shutdown_deadline, first_deadline);
+        elapsed.store(5_000, Ordering::Relaxed);
+        assert_eq!(app.shutdown_remaining(), Some(Duration::ZERO));
     }
 
     #[test]
@@ -5773,14 +6170,19 @@ mod tests {
         assert!(matches!(app.dock, Dock::Composer));
         assert!(app.notices.iter().any(|n| n.text.contains("again")));
         let commands = app.update(ctrl('c'));
-        assert!(matches!(commands.as_slice(), [AppCommand::Quit]));
+        let requests = take_requests(commands);
+        assert!(
+            shutdown_request(&requests).is_some(),
+            "a second Ctrl+C requests agent.shutdown"
+        );
+        assert_eq!(app.connection, ConnectionState::ShuttingDown);
     }
 
     #[test]
     fn ctrl_d_quits_only_when_empty_and_idle() {
         let mut app = test_app();
-        let commands = app.update(ctrl('d'));
-        assert!(matches!(commands.as_slice(), [AppCommand::Quit]));
+        let requests = take_requests(app.update(ctrl('d')));
+        assert!(shutdown_request(&requests).is_some());
         app.update(ch('x'));
         assert!(take_requests(app.update(ctrl('d'))).is_empty());
     }
@@ -5792,7 +6194,8 @@ mod tests {
         assert_eq!(app.composer.content(), "q");
         app.update(press(KC::F(1), KM::empty()));
         assert!(matches!(app.dock, Dock::Help));
-        assert!(matches!(app.update(ch('q')).as_slice(), [AppCommand::Quit]));
+        let requests = take_requests(app.update(ch('q')));
+        assert!(shutdown_request(&requests).is_some(), "q in help quits");
     }
 
     #[test]
@@ -5870,8 +6273,8 @@ mod tests {
         for c in "/quit".chars() {
             app.update(ch(c));
         }
-        let commands = app.update(enter());
-        assert!(matches!(commands.as_slice(), [AppCommand::Quit]));
+        let requests = take_requests(app.update(enter()));
+        assert!(shutdown_request(&requests).is_some(), "/quit shuts down");
     }
 
     #[test]
@@ -6057,6 +6460,37 @@ mod tests {
                 .text
                 .contains("does not support")
         );
+    }
+
+    #[test]
+    fn next_tick_keeps_an_expired_notice_timer_armed_at_zero() {
+        let mut app = test_app();
+        app.notice_ttl = Duration::ZERO;
+        app.push_notice(Notice::new(NoticeLevel::Info, "expired".to_owned(), false));
+        assert_eq!(app.next_tick(), Some(Duration::ZERO));
+        app.update(AppEvent::Tick);
+        assert!(app.notices.is_empty());
+    }
+
+    #[test]
+    fn next_tick_keeps_an_expired_ctrl_c_timer_armed_at_zero() {
+        let base = Instant::now();
+        let elapsed = std::sync::Arc::new(AtomicU64::new(0));
+        let clock_elapsed = std::sync::Arc::clone(&elapsed);
+        let mut app = App::with_monotonic_clock(PathBuf::from("/workspace"), move || {
+            base.checked_add(Duration::from_millis(clock_elapsed.load(Ordering::Relaxed)))
+                .expect("test clock remains representable")
+        });
+        app.update(AppEvent::Terminal(crossterm::event::Event::Key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('c'),
+                crossterm::event::KeyModifiers::CONTROL,
+            ),
+        )));
+        elapsed.store(1_000, Ordering::Relaxed);
+        assert_eq!(app.next_tick(), Some(Duration::ZERO));
+        app.update(AppEvent::Tick);
+        assert!(app.ctrl_c_at.is_none());
     }
 
     #[test]

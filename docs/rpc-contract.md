@@ -3,7 +3,9 @@
 This document pins the stdio JSON-RPC contract that minicore-tui implements.
 It is derived from the fixed minicore-agent baseline below; wire DTOs in this
 repository follow this document exactly and must be re-verified together with
-the pin when it changes.
+the pin when it changes. Desensitized example frames of every DTO live in
+`tests/fixtures/protocol/*.json` and are checked by `tests/protocol.rs` against
+the production DTOs.
 
 ## Baseline Pin
 

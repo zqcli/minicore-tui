@@ -6,7 +6,7 @@ use ratatui::backend::TestBackend;
 use ratatui::style::Modifier;
 
 use crate::app::App;
-use crate::event::AppEvent;
+use crate::event::{AppEvent, RpcEvent};
 use crate::state::transcript::ToolBlock;
 use crate::theme::{Theme, ThemeKind};
 use crate::ui::testapp;
@@ -275,9 +275,15 @@ fn fatal_connection_renders_the_overlay() {
     let requests = testapp::take_requests(app.update(AppEvent::Bootstrap));
     let models = requests.iter().find(|r| r.method == "model.list").unwrap();
     testapp::respond_error(&mut app, models, "x", "no models");
+    app.update(AppEvent::Rpc(RpcEvent::AgentLogLine(
+        "latest agent stderr".to_owned(),
+    )));
+    app.update(AppEvent::Rpc(RpcEvent::Exited(None)));
     let terminal = draw(&app, 80, 24);
     let content = text(&terminal);
     assert!(content.contains("Fatal error"));
+    assert!(content.contains("Exit status: unavailable"));
+    assert!(content.contains("latest agent stderr"));
     assert!(content.contains("Press q to quit"));
 }
 

@@ -15,9 +15,22 @@ tui-textarea = { version = "=0.7.0", default-features = false, features = ["cros
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "process"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "process", "signal"] }
 pulldown-cmark = { version = "=0.12.2", default-features = false }
 unicode-width = "=0.2.0"
 
+[dev-dependencies]
+toml = "=0.8.23"
+url = "=2.5.4"
+
 [lints.rust]
 unsafe_code = "forbid"
+
+# A scripted minicore-agent stand-in used only by the fake-agent harness in
+# `src/rpc.rs` (never a `[[bin]]`, so nothing installable ships it). Bare runs
+# (as part of `cargo test`) are a no-op main.
+[[test]]
+name = "agent_process"
+path = "tests/agent_process.rs"
+harness = false

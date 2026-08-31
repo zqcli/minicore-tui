@@ -17,8 +17,8 @@ pub enum AppCommand {
     Rpc(OutgoingRequest),
     /// Kill the agent child (the shutdown fallback path).
     KillChild,
-    /// Leave the TUI.
-    Quit,
+    /// The agent process is fully gone (or never existed); leave the TUI.
+    Exit,
 }
 
 /// A locally-interpreted `/` command (spec 23.2). These never turn into

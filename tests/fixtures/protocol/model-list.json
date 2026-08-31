@@ -1,0 +1,1 @@
+{"jsonrpc": "2.0", "id": 1, "result": {"models": [{"id": "gpt-4o", "model_ref": "openai/gpt-4o", "context_window": 128000, "supports_tools": true, "supported_reasoning": ["auto", "disabled", "low", "medium", "high"], "vendor": "OpenAI"}, {"id": "fast", "model_ref": "acme/fast", "context_window": 32000, "supports_tools": true, "supported_reasoning": ["disabled"]}]}}

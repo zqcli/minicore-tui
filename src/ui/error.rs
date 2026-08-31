@@ -34,6 +34,7 @@ pub fn render_fatal(
     area: Rect,
     theme: &Theme,
     reason: &str,
+    exit_status: Option<&str>,
     logs: &VecDeque<String>,
 ) {
     let text_style = Style::new().fg(theme.error);
@@ -42,7 +43,12 @@ pub fn render_fatal(
             "Fatal error",
             Style::new().fg(theme.error).add_modifier(Modifier::BOLD),
         ),
+        Line::styled("First failure:", Style::new().fg(theme.muted)),
         Line::styled(reason.to_owned(), text_style),
+        Line::styled(
+            format!("Exit status: {}", exit_status.unwrap_or("unavailable")),
+            text_style,
+        ),
         Line::default(),
         Line::styled("Recent agent output:", Style::new().fg(theme.muted)),
     ];

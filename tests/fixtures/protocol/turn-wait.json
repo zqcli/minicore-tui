@@ -1,0 +1,1 @@
+{"jsonrpc": "2.0", "id": 7, "result": {"turn_id": "trn_77aa", "terminal": "completed", "usage": {"input_tokens": 220, "output_tokens": 70, "reasoning_tokens": 10, "cache_read_tokens": 0, "cache_write_tokens": 0, "provider_total_tokens": 290}}}

@@ -32,14 +32,18 @@ const REQUESTS_CHANNEL_CAPACITY: usize = 64;
 const EVENTS_CHANNEL_CAPACITY: usize = 128;
 const READ_CHUNK_BYTES: usize = 8192;
 const KILL_CHANNEL_CAPACITY: usize = 1;
+/// Bounded wait after a kill request for the waiter task to reap the child.
+pub const TERMINATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Owns the agent child and its stdio tasks.
 ///
 /// The child is owned by a dedicated waiter task. `send` enforces the
 /// outbound request-line bound and hands the serialized line to the single
 /// writer task; `recv` yields events from the reader tasks. Dropping the
-/// process closes the channels and aborts the tasks, dropping the child
-/// (`kill_on_drop`), so no agent process is left behind. Must be created
+/// process aborts the background tasks and lets Tokio's `kill_on_drop` child
+/// fallback terminate the agent. Drop cannot synchronously reap an
+/// asynchronous child; normal success and error paths must call
+/// [`RpcProcess::terminate`] before terminal restoration. Must be created
 /// inside a Tokio runtime.
 ///
 /// Request ids are chosen by the caller (the app state in `App::update`);
@@ -50,6 +54,9 @@ pub struct RpcProcess {
     events: mpsc::Receiver<RpcEvent>,
     kill: mpsc::Sender<()>,
     tasks: Vec<JoinHandle<()>>,
+    /// Latched when an `Exited` event was consumed; the waiter task reaped
+    /// the child by then, so `terminate` has nothing left to wait for.
+    seen_exit: bool,
 }
 
 impl RpcProcess {
@@ -60,6 +67,18 @@ impl RpcProcess {
         if !agent_config.is_file() {
             return Err(RpcError::ConfigMissing(agent_config.to_path_buf()));
         }
+        let child = Self::spawn_command(agent_bin, agent_config)
+            .spawn()
+            .map_err(RpcError::Spawn)?;
+        Self::from_child(child)
+    }
+
+    /// The exact production launch shape (spec 10.5): the agent is always
+    /// started as `agent --config <path> --stdio` with piped stdio. Test
+    /// harnesses never route through this — they drive
+    /// [`RpcProcess::from_child`] directly so production assembly stays
+    /// untouched.
+    fn spawn_command(agent_bin: &Path, agent_config: &Path) -> Command {
         let mut command = Command::new(agent_bin);
         command
             .arg("--config")
@@ -69,7 +88,14 @@ impl RpcProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let mut child = command.spawn().map_err(RpcError::Spawn)?;
+        command
+    }
+
+    /// Wires the four background tasks around an already-spawned child.
+    /// All fallible steps run before any task is started. Unit tests drive
+    /// the full production stdin/stdout/stderr/waiter pipeline through this
+    /// with a fake-agent child (see the `tests` module).
+    fn from_child(mut child: Child) -> Result<Self, RpcError> {
         let stdin = child.stdin.take().expect("agent stdin is piped");
         let stdout = child.stdout.take().expect("agent stdout is piped");
         let stderr = child.stderr.take().expect("agent stderr is piped");
@@ -90,6 +116,7 @@ impl RpcProcess {
             events: events_rx,
             kill: kill_tx,
             tasks,
+            seen_exit: false,
         })
     }
 
@@ -125,7 +152,29 @@ impl RpcProcess {
     /// is promised across `Frame`, `ConnectionClosed`, `Exited`, and
     /// `ProtocolError` (see `crate::event`).
     pub async fn recv(&mut self) -> Option<RpcEvent> {
-        self.events.recv().await
+        let event = self.events.recv().await;
+        if matches!(&event, Some(RpcEvent::Exited(_))) {
+            self.seen_exit = true;
+        }
+        event
+    }
+
+    /// Yields an event only if one is already buffered; `Ok(None)` means the
+    /// channel is still open but empty, while `Err(Closed)` means every
+    /// producer has ended. The distinction lets the main loop disable its RPC
+    /// select arm instead of busy-looping after channel closure.
+    pub fn try_recv(&mut self) -> Result<Option<RpcEvent>, RpcError> {
+        let event = match self.events.try_recv() {
+            Ok(event) => Some(event),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => None,
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                return Err(RpcError::Closed);
+            }
+        };
+        if matches!(&event, Some(RpcEvent::Exited(_))) {
+            self.seen_exit = true;
+        }
+        Ok(event)
     }
 
     /// Requests the waiter task to kill the agent child; the
@@ -135,6 +184,33 @@ impl RpcProcess {
     /// the deadline passes.
     pub fn kill_child(&self) {
         let _ = self.kill.try_send(());
+    }
+
+    /// Requests the waiter to kill the child and waits (bounded) for the
+    /// `Exited` event, so the child is reaped before this returns. Idempotent:
+    /// after a natural exit the waiter has already ended and the kill channel
+    /// is closed, so this returns almost immediately. Safe to call on every
+    /// shutdown path, including a clean one.
+    pub async fn terminate(&mut self) {
+        // The waiter already reaped the child (a clean exit, or a caller
+        // consumed `Exited`); do not wait out the full timeout.
+        if self.seen_exit {
+            return;
+        }
+        self.kill_child();
+        let _ = tokio::time::timeout(TERMINATE_TIMEOUT, async {
+            while let Some(event) = self.recv().await {
+                if matches!(event, RpcEvent::Exited(_)) {
+                    break;
+                }
+            }
+        })
+        .await;
+    }
+
+    /// Whether an `Exited` event was consumed; the child was reaped.
+    pub fn child_reaped(&self) -> bool {
+        self.seen_exit
     }
 }
 
@@ -300,7 +376,6 @@ async fn child_waiter(
     events: mpsc::Sender<RpcEvent>,
 ) {
     let wait = tokio::select! {
-        biased;
         status = child.wait() => Some(status),
         _ = kill.recv() => None,
     };
@@ -364,6 +439,7 @@ mod tests {
     use super::*;
     use crate::protocol::{IncomingFrame, RequestId, RpcNotification};
     use serde_json::{Value, json};
+    use std::time::Instant;
     use tokio::io::{DuplexStream, duplex};
     use tokio::time::{Duration, timeout};
 
@@ -405,6 +481,7 @@ mod tests {
             events: events_rx,
             kill: kill_tx,
             tasks: vec![tokio::spawn(stdin_writer(client, requests_rx, events_tx))],
+            seen_exit: false,
         };
         (process, server)
     }
@@ -739,6 +816,7 @@ mod tests {
             events: events_rx,
             kill: kill_tx,
             tasks: vec![writer],
+            seen_exit: false,
         };
         drop(requests_tx);
         assert!(
@@ -748,6 +826,34 @@ mod tests {
                 .is_none()
         );
         drop(process);
+    }
+
+    #[tokio::test]
+    async fn try_recv_drains_all_buffered_events_before_reporting_closed() {
+        let (events_tx, events_rx) = mpsc::channel(EVENTS_CHANNEL_CAPACITY);
+        for index in 0..EVENTS_CHANNEL_CAPACITY {
+            events_tx
+                .send(RpcEvent::AgentLogLine(format!("event-{index}")))
+                .await
+                .unwrap();
+        }
+        drop(events_tx);
+        let (requests_tx, _requests_rx) = mpsc::channel(1);
+        let (kill_tx, _kill_rx) = mpsc::channel(1);
+        let mut process = RpcProcess {
+            requests: requests_tx,
+            events: events_rx,
+            kill: kill_tx,
+            tasks: Vec::new(),
+            seen_exit: false,
+        };
+
+        let mut received = 0;
+        while let Ok(Some(RpcEvent::AgentLogLine(_))) = process.try_recv() {
+            received += 1;
+        }
+        assert_eq!(received, EVENTS_CHANNEL_CAPACITY);
+        assert!(matches!(process.try_recv(), Err(RpcError::Closed)));
     }
 
     #[tokio::test]
@@ -878,5 +984,470 @@ mod tests {
             RpcProcess::spawn(Path::new("/nonexistent/minicore-agent-bin"), &config).unwrap_err();
         assert!(matches!(error, RpcError::Spawn(_)));
         assert!(error.to_string().contains("failed to spawn"));
+    }
+    // ---- fake-agent harness ------------------------------------------
+    //
+    // The full OS pipe/lifecycle pipeline is exercised through the PRODUCTION
+    // `RpcProcess::spawn` against a scripted agent built as a non-installable
+    // `harness = false` test target (`tests/agent_process.rs`, so it never ships
+    // as a `[[bin]]`). Production exclusively assembles `agent --config
+    // <path> --stdio`; the config file content selects the fake's behavior.
+    // The same piped stdin/stdout/stderr/waiter pipeline is used as with a
+    // real agent; libtest output is never on the child's stdout because the
+    // fake is a plain `main`, not a `#[test]`.
+
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// RAII scratch config file for the fake agent; removed on drop,
+    /// including panic unwinds. Kept beside its process for the test's
+    /// lifetime so the child can read the mode file at startup.
+    struct TempConfigFile {
+        path: PathBuf,
+    }
+
+    impl TempConfigFile {
+        fn new(mode: &str) -> Self {
+            static SEQ: AtomicU64 = AtomicU64::new(0);
+            let dir = std::env::temp_dir().join(format!("mct-rpc-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("create temp dir");
+            let path = dir.join(format!(
+                "agent-{}.toml",
+                SEQ.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::write(&path, mode).expect("write fake config");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempConfigFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
+            let _ = std::fs::remove_dir(self.path.parent().expect("temp dir path"));
+        }
+    }
+
+    /// Locates the harness=false `agent_process` test target binary. Cargo may
+    /// expose it through `CARGO_BIN_EXE_agent_process` or place a hashed
+    /// executable beside this test binary; both paths are supported on Unix
+    /// and Windows.
+    fn agent_process_bin() -> PathBuf {
+        if let Some(path) = std::env::var_os("CARGO_BIN_EXE_agent_process").map(PathBuf::from) {
+            if is_regular_executable(&path) {
+                return path;
+            }
+        }
+        // `current_exe` may be relative; canonicalize so the deps directory
+        // is always an absolute path.
+        let executable = std::env::current_exe()
+            .expect("test executable")
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::current_exe().expect("test executable"));
+        let dir = executable.parent().expect("deps directory").to_path_buf();
+        let candidates = std::fs::read_dir(&dir)
+            .expect("read the deps directory")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| agent_process_name_candidate(name, cfg!(windows)))
+                    && is_regular_executable(path)
+            })
+            .collect::<Vec<_>>();
+        candidates
+            .into_iter()
+            .min()
+            .expect("the agent_process test target must be built (cargo test --all-targets)")
+    }
+
+    /// Pure name filter used by the filesystem scan. Dep-info, pdb, rmeta,
+    /// and other companion files are rejected by their actual executable
+    /// metadata in `agent_process_bin`; this function only recognizes Cargo's
+    /// base/hashed target name with the Windows `.exe` suffix allowed.
+    fn agent_process_name_candidate(name: &str, windows: bool) -> bool {
+        let name = if windows {
+            let Some((stem, extension)) = name.rsplit_once('.') else {
+                return false;
+            };
+            if !extension.eq_ignore_ascii_case("exe") {
+                return false;
+            }
+            stem
+        } else {
+            if name.contains('.') {
+                return false;
+            }
+            name
+        };
+        name == "agent_process"
+            || name.strip_prefix("agent_process-").is_some_and(|suffix| {
+                !suffix.is_empty()
+                    && suffix
+                        .chars()
+                        .all(|character| character.is_ascii_hexdigit())
+            })
+    }
+
+    fn is_regular_executable(path: &Path) -> bool {
+        let Ok(metadata) = std::fs::metadata(path) else {
+            return false;
+        };
+        if !metadata.is_file() {
+            return false;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            metadata.permissions().mode() & 0o111 != 0
+        }
+        #[cfg(windows)]
+        {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            true
+        }
+    }
+
+    #[test]
+    fn agent_process_name_selection_accepts_windows_executables_only() {
+        assert!(agent_process_name_candidate("agent_process-abc", false));
+        assert!(agent_process_name_candidate("agent_process-abc.exe", true));
+        assert!(agent_process_name_candidate("agent_process.exe", true));
+        assert!(!agent_process_name_candidate(
+            "agent_process-abc.exe.d",
+            true
+        ));
+        assert!(!agent_process_name_candidate("agent_process-abc.pdb", true));
+        assert!(!agent_process_name_candidate(
+            "agent_process-abc.rmeta",
+            true
+        ));
+        assert!(!agent_process_name_candidate(
+            "agent_process-abc.d.exe",
+            true
+        ));
+        assert!(!agent_process_name_candidate(
+            "agent_process-not-a-hash.exe",
+            true
+        ));
+        assert!(!agent_process_name_candidate("agent_process-abc", true));
+        assert!(!agent_process_name_candidate(
+            "agent_process-abc.exe",
+            false
+        ));
+        assert!(!agent_process_name_candidate(
+            "not_agent_process-abc.exe",
+            true
+        ));
+    }
+
+    #[test]
+    fn agent_process_bare_run_is_quiet_and_successful() {
+        let output = std::process::Command::new(agent_process_bin())
+            .output()
+            .expect("spawn the bare harness target");
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty(), "bare harness wrote RPC stdout");
+        assert!(output.stderr.is_empty(), "bare harness wrote stderr");
+    }
+
+    /// A live fake agent plus its scratch config, kept alive for the test's
+    /// lifetime; derefs to the `RpcProcess`.
+    struct FakeAgent {
+        process: RpcProcess,
+        _config: TempConfigFile,
+    }
+
+    impl std::ops::Deref for FakeAgent {
+        type Target = RpcProcess;
+        fn deref(&self) -> &RpcProcess {
+            &self.process
+        }
+    }
+
+    impl std::ops::DerefMut for FakeAgent {
+        fn deref_mut(&mut self) -> &mut RpcProcess {
+            &mut self.process
+        }
+    }
+
+    fn spawn_fake(mode: &str) -> FakeAgent {
+        let config = TempConfigFile::new(mode);
+        let binary = agent_process_bin();
+        let process = RpcProcess::spawn(&binary, &config.path)
+            .unwrap_or_else(|error| panic!("spawn agent_process ({mode}): {error}"));
+        FakeAgent {
+            process,
+            _config: config,
+        }
+    }
+
+    /// The fake-agent tests read events from a whole `RpcProcess` (unlike
+    /// the duplex unit helpers, which read a bare channel).
+    async fn next_process_event(process: &mut RpcProcess) -> RpcEvent {
+        timeout(TEST_TIMEOUT, process.recv())
+            .await
+            .expect("timed out waiting for an RPC event")
+            .expect("RPC event channel closed")
+    }
+
+    #[tokio::test]
+    async fn fake_ping_then_clean_shutdown_reaps_the_child() {
+        let mut process = spawn_fake("serve");
+        process
+            .send(OutgoingRequest::ping(RequestId(1)))
+            .await
+            .expect("ping sends");
+        match next_process_event(&mut process).await {
+            RpcEvent::Frame(IncomingFrame::Response(response)) => {
+                assert_eq!(response.id, RequestId(1));
+            }
+            other => panic!("expected a ping response, got {other:?}"),
+        }
+
+        process
+            .send(OutgoingRequest::shutdown(RequestId(2)))
+            .await
+            .expect("shutdown sends");
+        loop {
+            match next_process_event(&mut process).await {
+                RpcEvent::Frame(IncomingFrame::Response(response)) => {
+                    assert_eq!(response.id, RequestId(2));
+                    assert!(response.parse_shutdown().expect("ok").ok);
+                }
+                RpcEvent::ConnectionClosed => {}
+                RpcEvent::Exited(Some(status)) => {
+                    assert!(status.success(), "a clean shutdown exits 0");
+                    break;
+                }
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        assert!(process.child_reaped(), "the exit was consumed and reaped");
+        let start = Instant::now();
+        process.terminate().await;
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "terminate is a fast no-op after a clean exit"
+        );
+    }
+
+    #[tokio::test]
+    async fn fake_responses_are_out_of_order_but_ids_never_reorder() {
+        let mut process = spawn_fake("out_of_order");
+        process
+            .send(OutgoingRequest::ping(RequestId(7)))
+            .await
+            .expect("ping sends");
+        process
+            .send(OutgoingRequest::list_models(RequestId(8)))
+            .await
+            .expect("model.list sends");
+
+        let first = match next_process_event(&mut process).await {
+            RpcEvent::Frame(IncomingFrame::Response(response)) => response.id,
+            other => panic!("expected a response, got {other:?}"),
+        };
+        let second = match next_process_event(&mut process).await {
+            RpcEvent::Frame(IncomingFrame::Response(response)) => response.id,
+            other => panic!("expected a response, got {other:?}"),
+        };
+        assert_eq!(
+            first,
+            RequestId(8),
+            "model.list answered first in reverse mode"
+        );
+        assert_eq!(second, RequestId(7), "ping answered second");
+    }
+
+    #[tokio::test]
+    async fn fake_events_arrive_before_the_send_response() {
+        let mut process = spawn_fake("events_first");
+        process
+            .send(OutgoingRequest::send_turn(RequestId(3), "ses_1", "hello"))
+            .await
+            .expect("turn.send sends");
+        let first = next_process_event(&mut process).await;
+        assert!(
+            matches!(
+                first,
+                RpcEvent::Frame(IncomingFrame::Notification(RpcNotification::AgentEvent(_)))
+            ),
+            "the first frame must be an agent event, got {first:?}"
+        );
+        let second = next_process_event(&mut process).await;
+        assert!(matches!(
+            second,
+            RpcEvent::Frame(IncomingFrame::Notification(RpcNotification::AgentEvent(_)))
+        ));
+        match next_process_event(&mut process).await {
+            RpcEvent::Frame(IncomingFrame::Response(response)) => {
+                assert_eq!(response.id, RequestId(3));
+            }
+            other => panic!("expected the send response, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fake_serve_mode_speaks_the_full_contract() {
+        let mut process = spawn_fake("serve");
+        for (id, method) in [
+            (RequestId(1), "agent.ping"),
+            (RequestId(2), "model.list"),
+            (RequestId(3), "profile.list"),
+            (RequestId(4), "session.list"),
+        ] {
+            let request = OutgoingRequest::new(id, method, json!({}));
+            process.send(request).await.expect("request sends");
+            match next_process_event(&mut process).await {
+                RpcEvent::Frame(IncomingFrame::Response(response)) => {
+                    assert_eq!(response.id, id, "{method} answered with its id");
+                }
+                other => panic!("{method} expected a response, got {other:?}"),
+            }
+        }
+
+        process
+            .send(OutgoingRequest::session_create(
+                RequestId(5),
+                "/ws/fake",
+                None,
+                None,
+                None,
+                None,
+            ))
+            .await
+            .expect("session.create sends");
+        match next_process_event(&mut process).await {
+            RpcEvent::Frame(IncomingFrame::Response(response)) => {
+                assert_eq!(response.id, RequestId(5));
+            }
+            other => panic!("expected session.create, got {other:?}"),
+        }
+
+        process
+            .send(OutgoingRequest::send_turn(RequestId(6), "ses_fake_1", "hi"))
+            .await
+            .expect("turn.send sends");
+        match next_process_event(&mut process).await {
+            RpcEvent::Frame(IncomingFrame::Response(response)) => {
+                assert_eq!(response.id, RequestId(6));
+            }
+            other => panic!("expected turn.send, got {other:?}"),
+        }
+        for _ in 0..2 {
+            let event = next_process_event(&mut process).await;
+            assert!(matches!(
+                event,
+                RpcEvent::Frame(IncomingFrame::Notification(RpcNotification::AgentEvent(_)))
+            ));
+        }
+
+        process
+            .send(OutgoingRequest::shutdown(RequestId(9)))
+            .await
+            .expect("shutdown sends");
+        loop {
+            match next_process_event(&mut process).await {
+                RpcEvent::Frame(IncomingFrame::Response(response)) => {
+                    assert_eq!(response.id, RequestId(9));
+                }
+                RpcEvent::ConnectionClosed => {}
+                RpcEvent::Exited(Some(status)) => {
+                    assert!(status.success());
+                    break;
+                }
+                other => panic!("unexpected trailing event: {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn fake_unknown_method_reports_a_top_level_jsonrpc_error() {
+        let mut process = spawn_fake("serve");
+        process
+            .send(OutgoingRequest::new(
+                RequestId(9),
+                "no.such.method",
+                json!({}),
+            ))
+            .await
+            .expect("unknown method sends");
+        match next_process_event(&mut process).await {
+            RpcEvent::Frame(IncomingFrame::Response(response)) => {
+                assert_eq!(response.id, RequestId(9));
+                let error = response
+                    .error
+                    .as_ref()
+                    .expect("the error sits at the top level, never inside result");
+                assert_eq!(error.code, -32601);
+                assert!(response.result.is_none());
+            }
+            other => panic!("expected a top-level error response, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fake_crashing_agent_reports_termination_and_a_failed_exit() {
+        let mut process = spawn_fake("crash");
+        process
+            .send(OutgoingRequest::ping(RequestId(1)))
+            .await
+            .expect("ping sends");
+        let mut saw_closed = false;
+        let mut saw_exit = false;
+        while !(saw_closed && saw_exit) {
+            match next_process_event(&mut process).await {
+                RpcEvent::ConnectionClosed => saw_closed = true,
+                RpcEvent::Exited(Some(status)) => {
+                    assert!(!status.success(), "the crashed child must not succeed");
+                    saw_exit = true;
+                }
+                other => panic!("unexpected event after crash: {other:?}"),
+            }
+        }
+        // stdout EOF and the waiter exit are emitted by independent tasks;
+        // their relative order is intentionally not part of the contract.
+        assert!(saw_closed && saw_exit);
+    }
+
+    #[tokio::test]
+    async fn fake_terminate_kills_and_reaps_a_hanging_agent() {
+        let mut process = spawn_fake("hang");
+        process
+            .send(OutgoingRequest::ping(RequestId(1)))
+            .await
+            .expect("ping sends");
+        match next_process_event(&mut process).await {
+            RpcEvent::Frame(IncomingFrame::Response(response)) => {
+                assert_eq!(response.id, RequestId(1));
+            }
+            other => panic!("expected a ping response, got {other:?}"),
+        }
+        let start = Instant::now();
+        process.terminate().await;
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "terminate must force-kill a child that ignores shutdown"
+        );
+        assert!(process.child_reaped(), "the killed child must be reaped");
+        let start = Instant::now();
+        process.terminate().await;
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn fake_oversized_request_lines_are_rejected_without_writing() {
+        let process = spawn_fake("serve");
+        let params = json!({ "x": "a".repeat(1024 * 1024) });
+        let error = process
+            .send(OutgoingRequest::new(RequestId(1), "agent.ping", params))
+            .await
+            .expect_err("oversized lines never reach the agent");
+        assert!(matches!(error, RpcError::RequestTooLarge { .. }));
     }
 }

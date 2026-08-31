@@ -1,0 +1,1 @@
+{"jsonrpc": "2.0", "method": "agent.event", "params": {"type": "output_delta", "data": {"turn": {"session_id": "ses_6f3c1a", "instance_id": "ins_9fe2", "turn_id": "trn_77aa"}, "channel": "text", "delta": "Reading the parser\u2026", "meta": {"session_id": "ses_6f3c1a", "instance_id": "ins_9fe2", "dropped_before": 0}}}}
