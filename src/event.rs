@@ -15,6 +15,7 @@ use std::process::ExitStatus;
 
 use crate::protocol::{FrameError, IncomingFrame, Reasoning, RequestId};
 use crate::rpc::RpcError;
+use crate::theme::ThemeKind;
 
 /// A transport event from the agent process or its pipes. Events from
 /// different tasks arrive without a promised total order; see the module
@@ -66,4 +67,19 @@ pub enum AppEvent {
     /// Executing an `AppCommand::Rpc` failed before any frame was written.
     /// The corresponding pending request is removed inside `update`.
     RpcSendFailed { id: RequestId, error: RpcError },
+    /// Advance the visual frame counter (spinner animation, spec 15.6).
+    Tick,
+    /// Select the color palette (spec 16.4).
+    SetTheme(ThemeKind),
+    /// Show or hide every reasoning run (spec 30.2).
+    ToggleReasoning,
+    /// Expand or collapse the result preview of every durable tool card in a
+    /// session (spec 29.4).
+    ToggleTools { session_id: String },
+    /// Expand or collapse one durable tool card.
+    ToggleTool {
+        session_id: String,
+        turn_id: String,
+        tool_call_id: String,
+    },
 }

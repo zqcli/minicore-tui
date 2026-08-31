@@ -1,0 +1,10 @@
+
+
+
+      Terminal too small — minimum size 60x16
+  Enlarge the window, or press q / Ctrl+C to quit
+
+
+
+
+

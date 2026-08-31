@@ -19,6 +19,7 @@ use crate::protocol::{
 };
 use crate::rpc::RpcError;
 use crate::state::catalog::CatalogState;
+use crate::state::composer::Composer;
 use crate::state::session::{SessionId, SessionView, SessionsState};
 use crate::state::tool::{LiveTool, ToolStatus};
 use crate::state::transcript::{
@@ -26,6 +27,7 @@ use crate::state::transcript::{
     UserBlock,
 };
 use crate::state::turn::{LiveTurn, LocalSubmissionId};
+use crate::theme::ThemeKind;
 
 /// The agent's stderr ring size, App side (spec 10.8).
 pub const MAX_AGENT_LOG_LINES: usize = 200;
@@ -113,6 +115,12 @@ pub struct App {
     /// Text of the last failed turn submission, to restore into the
     /// composer (Phase 5) when the send itself failed.
     pub recovered_input: Option<String>,
+    /// Visual state (spec 16, 30): palette, reasoning visibility, the frame
+    /// counter for the spinner, and the minimal Phase 3 composer.
+    pub theme: ThemeKind,
+    pub reasoning_visible: bool,
+    pub frame_count: u64,
+    pub composer: Composer,
     pub pending_requests: HashMap<RequestId, RequestKind>,
     next_request_id: RequestId,
     next_submission: u64,
@@ -179,6 +187,10 @@ impl App {
             notices: VecDeque::new(),
             agent_logs: VecDeque::new(),
             recovered_input: None,
+            theme: ThemeKind::Dark,
+            reasoning_visible: true,
+            frame_count: 0,
+            composer: Composer::default(),
             pending_requests: HashMap::new(),
             next_request_id: RequestId(0),
             next_submission: 0,
@@ -210,7 +222,49 @@ impl App {
             AppEvent::CancelTurn { session_id } => self.cancel_turn(&session_id),
             AppEvent::Rpc(event) => self.on_rpc_event(event),
             AppEvent::RpcSendFailed { id, error } => self.on_send_failed(id, error),
+            AppEvent::Tick => {
+                self.frame_count = self.frame_count.wrapping_add(1);
+                Vec::new()
+            }
+            AppEvent::SetTheme(kind) => {
+                self.theme = kind;
+                Vec::new()
+            }
+            AppEvent::ToggleReasoning => {
+                self.reasoning_visible = !self.reasoning_visible;
+                Vec::new()
+            }
+            AppEvent::ToggleTools { session_id } => {
+                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    view.tools_expanded = !view.tools_expanded;
+                }
+                Vec::new()
+            }
+            AppEvent::ToggleTool {
+                session_id,
+                turn_id,
+                tool_call_id,
+            } => {
+                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    for block in &mut view.transcript.blocks {
+                        if let TranscriptBlock::Tool(tool) = block {
+                            if tool.turn_id == turn_id && tool.tool_call_id == tool_call_id {
+                                tool.expanded = !tool.expanded;
+                            }
+                        }
+                    }
+                }
+                Vec::new()
+            }
         }
+    }
+
+    /// The active session's view, for read-only render access.
+    pub fn active_view(&self) -> Option<&SessionView> {
+        self.sessions
+            .active
+            .as_deref()
+            .and_then(|session_id| self.sessions.known.get(session_id))
     }
 
     fn next_request_id(&mut self) -> RequestId {

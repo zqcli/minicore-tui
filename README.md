@@ -31,9 +31,20 @@ outbound side effects for the future main loop. It covers bootstrap
 create/open with paged `session.transcript` loading, live turns with
 `turn.send`/`turn.wait`/`turn.cancel`, and durable reconciliation: after a
 wait, the transcript is re-fetched and the live turn is replaced by durable
-blocks. The interactive app loop is not wired to the RPC layer yet; that is
-Phase 3+. Running `minicore-tui` still shows a blank fullscreen; press `q`
-or `Ctrl+C` to quit.
+blocks. 
+
+Phase 3 renders that state as the Pi-style fullscreen conversation
+layout: `src/ui/` (transcript scroll view, user/assistant/reasoning/tool
+cards, dock with busy status/composer/footer, startup header, fatal
+overlay) and `src/markdown.rs` (a small `pulldown-cmark` wrapper; see the
+module docs for why `tui-markdown` was not a fit). New visual state moves only
+through `AppEvent`s (`Tick`, `SetTheme`, `ToggleReasoning`, `ToggleTools`,
+`ToggleTool`). Rendering is a pure read-only view: each frame is derived
+tight from state, and the per-block line caches from spec 19 are deferred
+to a later phase (they must be populated in `App::update`, never in
+`render`). Selectors, full composer editing, and slash commands are not
+implemented yet; the Phase 3 main loop constructs the app but does not
+start an agent (`q`/`Ctrl+C` still quit).
 
 ## Requirements
 

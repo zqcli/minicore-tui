@@ -3,6 +3,8 @@
 
 use ratatui::style::Color;
 
+use crate::protocol::Reasoning;
+
 /// Selects one of the built-in color palettes.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ThemeKind {
@@ -29,14 +31,19 @@ pub struct Theme {
     pub error: Color,
     pub selected_bg: Color,
     pub user_message_bg: Color,
+    /// Card surfaces for summaries, notices, and neutral tool cards.
+    pub card_bg: Color,
     pub tool_pending_bg: Color,
     pub tool_success_bg: Color,
     pub tool_error_bg: Color,
     pub md_heading: Color,
     pub md_link: Color,
+    pub md_link_url: Color,
     pub md_code: Color,
     pub md_code_block: Color,
+    pub md_code_border: Color,
     pub md_quote: Color,
+    pub md_list_bullet: Color,
     pub thinking_disabled: Color,
     pub thinking_auto: Color,
     pub thinking_low: Color,
@@ -70,14 +77,18 @@ impl Theme {
             error: rgb(0xcc, 0x66, 0x66),
             selected_bg: rgb(0x3a, 0x3a, 0x4a),
             user_message_bg: rgb(0x34, 0x35, 0x41),
+            card_bg: rgb(0x1e, 0x1e, 0x24),
             tool_pending_bg: rgb(0x28, 0x28, 0x32),
             tool_success_bg: rgb(0x28, 0x32, 0x28),
             tool_error_bg: rgb(0x3c, 0x28, 0x28),
             md_heading: rgb(0xf0, 0xc6, 0x74),
             md_link: rgb(0x81, 0xa2, 0xbe),
+            md_link_url: rgb(0x66, 0x66, 0x66),
             md_code: rgb(0x8a, 0xbe, 0xb7),
             md_code_block: rgb(0xb5, 0xbd, 0x68),
+            md_code_border: rgb(0x80, 0x80, 0x80),
             md_quote: rgb(0x80, 0x80, 0x80),
+            md_list_bullet: rgb(0x8a, 0xbe, 0xb7),
             thinking_disabled: rgb(0x50, 0x50, 0x50),
             thinking_auto: rgb(0x8a, 0xbe, 0xb7),
             thinking_low: rgb(0x5f, 0x87, 0xaf),
@@ -104,19 +115,37 @@ impl Theme {
             error: rgb(0xaa, 0x55, 0x55),
             selected_bg: rgb(0xd0, 0xd0, 0xe0),
             user_message_bg: rgb(0xe8, 0xe8, 0xe8),
+            // card and markdown-surface colors are documented derivations of
+            // the defined light colors (spec 16.3): white card surface,
+            // dim for link URLs, borderMuted for code borders, accent for
+            // list bullets.
+            card_bg: rgb(0xff, 0xff, 0xff),
             tool_pending_bg: rgb(0xe8, 0xe8, 0xf0),
             tool_success_bg: rgb(0xe8, 0xf0, 0xe8),
             tool_error_bg: rgb(0xf0, 0xe8, 0xe8),
             md_heading: rgb(0x9a, 0x73, 0x26),
             md_link: rgb(0x54, 0x7d, 0xa7),
+            md_link_url: rgb(0x76, 0x76, 0x76),
             md_code: rgb(0x3a, 0x66, 0x66),
             md_code_block: rgb(0x58, 0x84, 0x58),
+            md_code_border: rgb(0xb0, 0xb0, 0xb0),
             md_quote: rgb(0x6c, 0x6c, 0x6c),
+            md_list_bullet: rgb(0x5a, 0x80, 0x80),
             thinking_disabled: rgb(0x76, 0x76, 0x76),
             thinking_auto: rgb(0x5a, 0x80, 0x80),
             thinking_low: rgb(0x4a, 0x74, 0x9c),
             thinking_medium: rgb(0x5f, 0x80, 0x99),
             thinking_high: rgb(0x8a, 0x6d, 0xa8),
+        }
+    }
+    /// The dot-composed thinking color for a reasoning level (spec 15.7).
+    pub fn reasoning_color(&self, reasoning: Reasoning) -> Color {
+        match reasoning {
+            Reasoning::Disabled => self.thinking_disabled,
+            Reasoning::Auto => self.thinking_auto,
+            Reasoning::Low => self.thinking_low,
+            Reasoning::Medium => self.thinking_medium,
+            Reasoning::High => self.thinking_high,
         }
     }
 }
@@ -152,14 +181,18 @@ mod tests {
         assert_eq!(theme.error, rgb(0xcc, 0x66, 0x66));
         assert_eq!(theme.selected_bg, rgb(0x3a, 0x3a, 0x4a));
         assert_eq!(theme.user_message_bg, rgb(0x34, 0x35, 0x41));
+        assert_eq!(theme.card_bg, rgb(0x1e, 0x1e, 0x24));
         assert_eq!(theme.tool_pending_bg, rgb(0x28, 0x28, 0x32));
         assert_eq!(theme.tool_success_bg, rgb(0x28, 0x32, 0x28));
         assert_eq!(theme.tool_error_bg, rgb(0x3c, 0x28, 0x28));
         assert_eq!(theme.md_heading, rgb(0xf0, 0xc6, 0x74));
         assert_eq!(theme.md_link, rgb(0x81, 0xa2, 0xbe));
+        assert_eq!(theme.md_link_url, rgb(0x66, 0x66, 0x66));
         assert_eq!(theme.md_code, rgb(0x8a, 0xbe, 0xb7));
         assert_eq!(theme.md_code_block, rgb(0xb5, 0xbd, 0x68));
+        assert_eq!(theme.md_code_border, rgb(0x80, 0x80, 0x80));
         assert_eq!(theme.md_quote, rgb(0x80, 0x80, 0x80));
+        assert_eq!(theme.md_list_bullet, rgb(0x8a, 0xbe, 0xb7));
         assert_eq!(theme.thinking_disabled, rgb(0x50, 0x50, 0x50));
         assert_eq!(theme.thinking_auto, rgb(0x8a, 0xbe, 0xb7));
         assert_eq!(theme.thinking_low, rgb(0x5f, 0x87, 0xaf));
@@ -182,8 +215,34 @@ mod tests {
         assert_eq!(theme.warning, rgb(0x9a, 0x73, 0x26));
         assert_eq!(theme.selected_bg, rgb(0xd0, 0xd0, 0xe0));
         assert_eq!(theme.user_message_bg, rgb(0xe8, 0xe8, 0xe8));
+        assert_eq!(theme.card_bg, rgb(0xff, 0xff, 0xff));
         assert_eq!(theme.tool_pending_bg, rgb(0xe8, 0xe8, 0xf0));
         assert_eq!(theme.tool_success_bg, rgb(0xe8, 0xf0, 0xe8));
         assert_eq!(theme.tool_error_bg, rgb(0xf0, 0xe8, 0xe8));
+        assert_eq!(theme.md_link_url, rgb(0x76, 0x76, 0x76));
+        assert_eq!(theme.md_code_border, rgb(0xb0, 0xb0, 0xb0));
+        assert_eq!(theme.md_list_bullet, rgb(0x5a, 0x80, 0x80));
+    }
+
+    #[test]
+    fn reasoning_color_maps_to_the_level_palette() {
+        let theme = Theme::dark();
+        assert_eq!(
+            theme.reasoning_color(Reasoning::Disabled),
+            rgb(0x50, 0x50, 0x50)
+        );
+        assert_eq!(
+            theme.reasoning_color(Reasoning::Auto),
+            rgb(0x8a, 0xbe, 0xb7)
+        );
+        assert_eq!(theme.reasoning_color(Reasoning::Low), rgb(0x5f, 0x87, 0xaf));
+        assert_eq!(
+            theme.reasoning_color(Reasoning::Medium),
+            rgb(0x81, 0xa2, 0xbe)
+        );
+        assert_eq!(
+            theme.reasoning_color(Reasoning::High),
+            rgb(0xb2, 0x94, 0xbb)
+        );
     }
 }

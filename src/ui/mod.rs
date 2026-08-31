@@ -1,6 +1,24 @@
-//! Rendering. Phase 0 renders an empty fullscreen page and a safety hint on
-//! undersized terminals; the header, messages, dock, and selectors arrive in
-//! later phases.
+//! Rendering: the Pi-style fullscreen conversation layout (development spec
+//! 14-20, 29-31). `ui::render` is a pure read-only view: it never mutates
+//! `App`, never writes caches (per-frame derived layout; per-block line
+//! caches are formally a Phase 7 concern), and never takes interior
+//! mutability shortcuts.
+//!
+//! Phase 3 covers the transcript + fixed dock (status/composer/footer), the
+//! durable/live blocks, and markdown; selectors and full input are later
+//! phases.
+
+pub mod assistant;
+pub mod composer;
+pub mod error;
+pub mod footer;
+pub mod header;
+pub mod layout;
+pub mod reasoning;
+pub mod status;
+pub mod tool;
+pub mod transcript;
+pub mod user;
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
@@ -8,25 +26,64 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 
+use crate::app::{App, ConnectionState};
 use crate::theme::Theme;
 
-/// Minimum terminal size before real content is drawn (development spec 14.2).
-const MIN_WIDTH: u16 = 60;
-const MIN_HEIGHT: u16 = 16;
+#[cfg(test)]
+mod component_tests;
+#[cfg(test)]
+mod snapshots;
+#[cfg(test)]
+pub(crate) mod testapp;
 
-/// Renders the fullscreen page for the current frame: the page background,
-/// plus a centered hint instead of content when the terminal is smaller than
-/// the supported minimum. `q` and `Ctrl+C` still quit from the hint state.
-pub fn render(frame: &mut Frame, theme: &Theme) {
+/// Renders the fullscreen page: the page background, the transcript above a
+/// fixed dock, or the safety hint / fatal overlay when they apply.
+pub fn render(frame: &mut Frame, app: &App) {
+    let theme = Theme::for_kind(app.theme);
     let area = frame.area();
     frame.render_widget(Block::default().style(Style::new().bg(theme.page_bg)), area);
-    if is_too_small(area) {
-        render_small_terminal_hint(frame, area, theme);
+    if layout::is_too_small(area) {
+        render_small_terminal_hint(frame, area, &theme);
+        return;
     }
-}
+    if let ConnectionState::Failed(reason) = &app.connection {
+        error::render_fatal(frame, area, &theme, reason, &app.agent_logs);
+        return;
+    }
+    let short = area.height < 24;
+    let busy = layout::busy(app);
+    let composer_h = layout::composer_height(short);
+    let footer_h = layout::footer_height(area.width, area.height);
+    let notice_h = u16::from(!app.notices.is_empty());
+    let status_h = u16::from(busy);
+    let dock_h = status_h + notice_h + composer_h + footer_h;
 
-fn is_too_small(area: Rect) -> bool {
-    area.width < MIN_WIDTH || area.height < MIN_HEIGHT
+    let [transcript_area, dock_area] =
+        Layout::vertical([Constraint::Min(1), Constraint::Length(dock_h)]).areas(area);
+    transcript::render(frame, transcript_area, app, &theme);
+
+    let mut rows: Vec<Constraint> = Vec::new();
+    if busy {
+        rows.push(Constraint::Length(status_h));
+    }
+    if notice_h == 1 {
+        rows.push(Constraint::Length(1));
+    }
+    rows.push(Constraint::Length(composer_h));
+    rows.push(Constraint::Length(footer_h));
+    let chunks = Layout::vertical(rows).split(dock_area);
+    let mut index = 0;
+    if busy {
+        status::render(frame, chunks[index], app, &theme);
+        index += 1;
+    }
+    if notice_h == 1 {
+        error::render_notice(frame, chunks[index], &theme, app.notices.back().unwrap());
+        index += 1;
+    }
+    composer::render(frame, chunks[index], app, &theme);
+    index += 1;
+    footer::render(frame, chunks[index], app, &theme);
 }
 
 fn render_small_terminal_hint(frame: &mut Frame, area: Rect, theme: &Theme) {
@@ -43,7 +100,7 @@ fn render_small_terminal_hint(frame: &mut Frame, area: Rect, theme: &Theme) {
                 Style::new().fg(theme.warning),
             ),
             Span::styled(
-                format!("{MIN_WIDTH}x{MIN_HEIGHT}"),
+                format!("{}x{}", layout::MIN_WIDTH, layout::MIN_HEIGHT),
                 Style::new().fg(theme.warning).add_modifier(Modifier::BOLD),
             ),
         ]),
@@ -59,32 +116,21 @@ fn render_small_terminal_hint(frame: &mut Frame, area: Rect, theme: &Theme) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::ThemeKind;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    #[test]
-    fn size_thresholds_match_the_minimum_terminal_spec() {
-        assert!(is_too_small(Rect::new(0, 0, 59, 16)));
-        assert!(is_too_small(Rect::new(0, 0, 60, 15)));
-        assert!(!is_too_small(Rect::new(0, 0, 60, 16)));
-        assert!(!is_too_small(Rect::new(0, 0, 120, 40)));
-    }
-
-    #[test]
-    fn empty_fullscreen_fills_the_page_background() {
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        let theme = Theme::dark();
-        terminal.draw(|frame| render(frame, &theme)).unwrap();
-        for cell in terminal.backend().buffer().content() {
-            assert_eq!(cell.bg, theme.page_bg);
-        }
+    fn tiny_app() -> App {
+        let mut app = App::new(std::path::PathBuf::from("/project"));
+        app.update(crate::event::AppEvent::SetTheme(ThemeKind::Dark));
+        app
     }
 
     #[test]
     fn small_terminal_renders_the_centered_hint() {
         let mut terminal = Terminal::new(TestBackend::new(50, 10)).unwrap();
-        let theme = Theme::dark();
-        terminal.draw(|frame| render(frame, &theme)).unwrap();
+        let app = tiny_app();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
         let text: String = terminal
             .backend()
             .buffer()
@@ -95,5 +141,30 @@ mod tests {
         assert!(text.contains("Terminal too small"));
         assert!(text.contains("60x16"));
         assert!(text.contains("q / Ctrl+C"));
+    }
+
+    #[test]
+    fn fullscreen_background_is_page_color_and_draw_never_panics() {
+        for size in [(60, 16), (80, 24), (120, 40)] {
+            let app = tiny_app();
+            let mut terminal = Terminal::new(TestBackend::new(size.0, size.1)).unwrap();
+            terminal.draw(|frame| render(frame, &app)).unwrap();
+            let bg = terminal.backend().buffer().cell((0, 0)).unwrap().bg;
+            assert_eq!(bg, Theme::dark().page_bg, "page bg at {:?}", size);
+        }
+    }
+
+    #[test]
+    fn dock_is_below_the_transcript_with_a_composer_border() {
+        let app = crate::ui::testapp::fresh(ThemeKind::Dark);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let has_rounded_corner = buffer.content().iter().any(|cell| cell.symbol() == "╭");
+        assert!(has_rounded_corner, "rounded composer border must be drawn");
+        // The empty transcript still shows the startup header.
+        let text: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+        assert!(text.contains("MINICORE"));
+        assert!(text.contains("Coding agent TUI"));
     }
 }

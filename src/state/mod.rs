@@ -3,12 +3,14 @@
 //! which is the single entry point for state changes.
 
 pub mod catalog;
+pub mod composer;
 pub mod session;
 pub mod tool;
 pub mod transcript;
 pub mod turn;
 
 pub use catalog::CatalogState;
+pub use composer::Composer;
 pub use session::{ScrollState, SessionId, SessionView, SessionsState};
 pub use tool::{LiveTool, ToolStatus};
 pub use transcript::{

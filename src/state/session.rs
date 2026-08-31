@@ -43,6 +43,9 @@ pub struct SessionView {
     /// they were issued under so a stale completion never clears a newer
     /// gap (spec 13.7).
     pub gap_revision: u64,
+    /// Phase 3 toggle-all tools preview state (spec 29.4); individual
+    /// `ToolBlock::expanded` flags override this per block.
+    pub tools_expanded: bool,
 }
 
 impl SessionView {
@@ -57,15 +60,26 @@ impl SessionView {
             event_gap: false,
             reconcile_inflight: false,
             gap_revision: 0,
+            tools_expanded: false,
         }
     }
 }
 
 /// Scroll bookkeeping for the transcript renderer (spec 32.1); the render
-/// phase owns the offset math.
-#[derive(Debug, Default)]
+/// phase owns the offset math. New sessions follow the tail by default.
+#[derive(Debug)]
 pub struct ScrollState {
     pub offset: usize,
     pub follow_tail: bool,
     pub new_content: bool,
+}
+
+impl Default for ScrollState {
+    fn default() -> Self {
+        Self {
+            offset: 0,
+            follow_tail: true,
+            new_content: false,
+        }
+    }
 }

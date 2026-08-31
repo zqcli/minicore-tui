@@ -1,0 +1,24 @@
+  line 30 of a long file
+  line 31 of a long file
+  line 32 of a long file
+  line 33 of a long file
+  line 34 of a long file
+  line 35 of a long file
+  line 36 of a long file
+  line 37 of a long file
+  line 38 of a long file
+  line 39 of a long file
+  … 20 more lines
+
+ bash                                                                    denied
+  not allowed
+
+ edit                                                                    failed
+  edit rejected
+╭──────────────────────────────────────────────────────────────────────────────╮
+│Type a message…                                                               │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+/project                                                                    Task
+Idle                                                                 deep • high

@@ -1,11 +1,14 @@
 use std::io;
+use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use minicore_tui::app::App;
 use minicore_tui::args;
+use minicore_tui::event::AppEvent;
 use minicore_tui::terminal::{PanicHookGuard, TerminalGuard};
-use minicore_tui::theme::{Theme, ThemeKind};
 use minicore_tui::ui;
 
 fn main() -> ExitCode {
@@ -49,24 +52,28 @@ fn main() -> ExitCode {
     }
 }
 
-/// Draws the empty fullscreen once and repaints on resize until `q` or
-/// `Ctrl+C` quits. Phase 0 has no app state yet, so the render is stateless.
-fn run_fullscreen(guard: &mut TerminalGuard, theme_kind: ThemeKind) -> io::Result<()> {
-    let theme = Theme::for_kind(theme_kind);
+/// Phase 3 loop: paints the fullscreen conversation (constructed, not yet
+/// connected to an agent) and repaints on resize or a ~10 Hz tick. Only
+/// `q` / `Ctrl+C` quit; input handling arrives in Phase 5.
+fn run_fullscreen(
+    guard: &mut TerminalGuard,
+    theme_kind: minicore_tui::theme::ThemeKind,
+) -> io::Result<()> {
     let terminal = guard.terminal_mut();
-    terminal.draw(|frame| ui::render(frame, &theme))?;
+    let workspace = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut app = App::new(workspace);
+    app.update(AppEvent::SetTheme(theme_kind));
+
     loop {
-        match event::read()? {
-            Event::Key(key) => {
-                if is_quit(&key) {
-                    return Ok(());
-                }
+        terminal.draw(|frame| ui::render(frame, &app))?;
+        if event::poll(Duration::from_millis(100))? {
+            match event::read()? {
+                Event::Key(key) if is_quit(&key) => return Ok(()),
+                Event::Resize(..) | Event::Key(_) => {}
+                _ => {}
             }
-            Event::Resize(..) => {
-                terminal.draw(|frame| ui::render(frame, &theme))?;
-            }
-            _ => {}
         }
+        app.update(AppEvent::Tick);
     }
 }
 
