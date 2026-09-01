@@ -1,170 +1,139 @@
-# RPC Contract Baseline
+# RPC Contract
 
-This document pins the stdio JSON-RPC contract that minicore-tui implements.
-It is derived from the fixed minicore-agent baseline below; wire DTOs in this
-repository follow this document exactly and must be re-verified together with
-the pin when it changes. Desensitized example frames of every DTO live in
-`tests/fixtures/protocol/*.json` and are checked by `tests/protocol.rs` against
-the production DTOs.
+`minicore-tui` implements a narrow, pinned adapter for one
+[`minicore-agent`] child. The TUI never links the Agent or runtime crates and
+never calls a provider directly. Any protocol change requires re-reading the
+pinned Agent contract and updating the local DTOs and fixtures together.
 
-## Baseline Pin
+## Pin
 
 | Item | Value |
 |---|---|
-| Agent repository | `https://github.com/zqcli/minicore-agent` (branch `dev`) |
-| Fixed commit | `6d5e963031159c458212a92c690e515a2ac3761b` |
-| Contract doc | `docs/rpc.md` at blob `b8f4d57c6931cad8b99b39fdda0647a2539824a6` |
-| RPC version | `0.2.0` (`agent.ping` returns `{"version":"0.2.0"}`) |
+| Agent repository | `https://github.com/zqcli/minicore-agent` (`dev`) |
+| Agent commit | `6d5e963031159c458212a92c690e515a2ac3761b` |
+| RPC version | `0.2.0` |
+| `docs/rpc.md` blob | `b8f4d57c6931cad8b99b39fdda0647a2539824a6` |
+| Reviewed protocol blob | `d2a4b56e925e1b18e68ec2eca16b62730dd9f638` |
+| Reviewed event blob | `c35a6ce2bda32ff9cb55b9088b1daa0ff60551d7` |
+| Reviewed Agent blob | `2cf5d98556f9b939735ce1f000aeb4ade7a0eed2` |
 
-Baseline files reviewed at the fixed commit:
+These values are the compatibility baseline, not a claim that an arbitrary
+Agent build is compatible.
 
-| File | Blob |
-|---|---|
-| `README.md` | `60ee4447f3fcadfabb7c7cd0c4ea5255b6c41054` |
-| `docs/rpc.md` | `b8f4d57c6931cad8b99b39fdda0647a2539824a6` |
-| `src/rpc/protocol.rs` | `d2a4b56e925e1b18e68ec2eca16b62730dd9f638` |
-| `src/event.rs` | `c35a6ce2bda32ff9cb55b9088b1daa0ff60551d7` |
-| `src/agent.rs` | `2cf5d98556f9b939735ce1f000aeb4ade7a0eed2` |
+## Transport
 
-## Transport And Framing
+The child is started as:
 
-- NDJSON over stdin/stdout: one UTF-8 JSON-RPC request per stdin line, one
-  complete JSON object per stdout line. Stdout is reserved for RPC; logs go to
-  stderr only.
-- Request shape: `{"jsonrpc":"2.0","id":1,"method":"...","params":{}}`. `id`
-  is required and may be an integer or string; it is returned unchanged.
-  `params` may be omitted or must be an object; empty methods accept omitted
-  `params` or `{}`.
-- Request frames must fit 1 MiB including the newline. The TUI enforces an
-  8 MiB inbound frame bound and treats malformed JSON as a fatal protocol
-  error rather than resynchronizing.
-- Responses carry exactly one of `result` or `error`. Errors use the JSON-RPC
-  shape with `data: {"kind": ..., "retryable": ...}` and never include raw
-  diagnostics, credentials, prompts, or tool content.
+```text
+minicore-agent --config <agent-config> --stdio
+```
+
+Communication is NDJSON over the child's stdin/stdout:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"model.list","params":{}}
+```
+
+There is one TUI stdin writer task and one stdout reader task. A complete
+request or response occupies one UTF-8 line. Agent stderr is a separate,
+bounded log stream; it is never forwarded to the TUI's RPC stdout or directly
+to the terminal.
+
+The Agent request line bound is 1 MiB including the newline. The TUI rejects
+larger outbound request lines before writing them. Inbound frames are bounded
+to 8 MiB; malformed JSON or an oversized frame is a fatal protocol error, and
+the reader does not scan ahead for a later line. Agent log lines are capped at
+4096 bytes on a UTF-8 boundary and the App retains the newest 200 lines.
 
 ## Methods
 
-| Method | Params | Result |
+| Method | Parameters | Result used by the TUI |
 |---|---|---|
 | `agent.ping` | empty | `{"version":"0.2.0"}` |
-| `agent.shutdown` | empty | `{"ok":true}` (final frame on success) |
-| `profile.list` | empty | `{"profiles":[ProfileInfo]}` sorted by id |
-| `model.list` | empty | `{"models":[ModelInfo]}` sorted by id |
-| `session.list` | empty | `{"sessions":[SessionInfo]}` in stable id order |
-| `session.create` | workspace required; profile/model/reasoning/title optional | `{"session":SessionInfo}` |
-| `session.open` | `{"session_id":...}` | `{"session":SessionInfo}` |
-| `session.close` | `{"session_id":...}` | `{"ok":true}` |
-| `session.delete` | `{"session_id":...}` (closed session) | `{"ok":true}` |
-| `session.state` | `{"session_id":...}` (loaded) | SessionState object |
-| `session.transcript` | `{"session_id":...,"after":?, "limit":?}` (limit 1..=100, default 100) | `{"entries":[],"next_after":...,"observed_head":...,"complete":...}` |
-| `turn.send` | `{"session_id":...,"text":...}` | `{"turn":TurnRef}` |
-| `turn.cancel` | TurnRef | `{"cancelled":bool}` |
-| `turn.wait` | TurnRef | TurnOutcome |
-| `interaction.answer` | compatibility surface only; TUI does not implement approval UI | |
+| `model.list` | empty | model catalog |
+| `profile.list` | empty | profile catalog |
+| `session.list` | empty | session catalog |
+| `session.create` | workspace required; profile/model/reasoning/title optional | created `SessionInfo` |
+| `session.open` | `session_id` | opened `SessionInfo` |
+| `session.state` | `session_id` | current state and active turn |
+| `session.transcript` | `session_id`, optional `after`, page limit | durable transcript page |
+| `turn.send` | `session_id`, `text` | `TurnRef` |
+| `turn.wait` | exact `TurnRef` | `TurnOutcome` |
+| `turn.cancel` | exact `TurnRef` | cancellation result |
+| `agent.shutdown` | empty | `{"ok":true}` |
 
-`model` and `reasoning` are frozen when a session is created; there is no way
-to change them on an existing session.
+The TUI also understands Agent event notifications for session state/open/
+close, turn start/finish, text/reasoning deltas, and tool lifecycle. The
+compatibility-only interaction notifications become an unsupported-interaction
+notice; there is no approval UI.
 
-## Shared Wire Schemas
+## Correlation And Ordering
 
-- `ProfileInfo`: `id`, `model`, `reasoning`, `tools`, `approval` (retained for
-  wire compatibility; TUI does not use it).
-- `ModelInfo`: `id`, `model_ref`, `context_window`, `supports_tools`,
-  `supported_reasoning`.
-- `SessionInfo`: `session_id`, `title` (nullable), `profile`, `workspace`,
-  `model`, `reasoning`, `loaded`, `instance_id` (nullable), `created_at`,
-  `updated_at`.
-- `TurnRef`: `session_id`, `instance_id`, `turn_id` — all always present; the
-  exact identity accepted by `turn.cancel` and `turn.wait`.
-- `EventMeta`: `session_id`, `instance_id`, `dropped_before` — all always
-  present in every event `data` object.
-- `SessionState`: `session_id`, `instance_id`, `status` (`idle`, `running`,
-  `waiting_for_input`, `closing`), `health` (`healthy` or `degraded`),
-  `active_turn` (nullable), `pending_interaction` (nullable), `conversation_seq`,
-  `last_terminal` (nullable).
-- `TurnOutcome`: `turn_id`, `terminal`, `usage`. Terminal is `completed`,
-  `cancelled_by_user`, `cancelled_by_shutdown`, `cancelled_by_restart`,
-  `budget_exceeded`, or `{"failed":{"diagnostic":...}}`.
-- `Diagnostic`: required `code`, `category`, `retryable`; never carries
-  message text.
-- `Usage`: always-present object with optional `u64` members
-  (`input_tokens`, `output_tokens`, `reasoning_tokens`, `cache_read_tokens`,
-  `cache_write_tokens`, `provider_total_tokens`).
+Every request has a monotonically increasing local numeric ID. The App inserts
+`RequestKind` into `pending_requests` before `AppCommand::Rpc` leaves
+`App::update`. Responses are matched by ID, not arrival order. Responses and
+notifications may be interleaved. In particular:
 
-## Agent Events
+- `turn_started` may precede the `turn.send` response;
+- `turn_finished` may precede or follow `turn.wait`;
+- the final output delta or tool event may be late or missing;
+- a wait response can be delayed behind other responses.
 
-Notifications without an id:
+After a successful `turn.send`, the TUI registers `turn.wait` immediately in
+the same update. A wait response starts a `session.state` refresh and an
+incremental `session.transcript` chain. Durable sequence numbers deduplicate
+pages; tool results patch the matching tool call. Live event order is not used
+to fabricate durable history.
 
-```json
-{"jsonrpc":"2.0","method":"agent.event","params":{"type":"...","data":{...}}}
-```
+Every event carries session/instance metadata and `dropped_before`. A positive
+value marks an event gap. The TUI displays the gap and heals it through a
+durable transcript fetch; it does not add event ACK, replay, or reconnect
+protocols. `turn.wait`, `session.state`, and `session.transcript` are the
+authority.
 
-Every `data` object contains the full `EventMeta`.
+## Wire Projection
 
-| `type` | `data` fields |
-|---|---|
-| `session_opened` | `session`, `meta` |
-| `session_closed` | `session_id`, `meta` |
-| `session_state` | `state`, `meta` |
-| `turn_started` | `turn`, `meta` |
-| `output_delta` | `turn`, `channel` (`text`/`reasoning`), `delta`, `meta` |
-| `tool_started` | `turn`, `tool_call_id`, `tool_name`, `meta` |
-| `tool_progress` | `turn`, `tool_call_id`, `progress`, `meta` |
-| `tool_finished` | `turn`, `tool_call_id`, `result`, `meta` |
-| `interaction_requested` | `session_id`, `interaction`, `meta` |
-| `interaction_resolved` | `session_id`, `interaction_id`, `meta` |
-| `turn_finished` | `turn`, `outcome`, `meta` |
+The local DTOs intentionally cover only fields needed by the TUI:
 
-`tool_finished` result carries only `outcome` and `content_bytes`; durable
-content comes from the transcript. `ToolProgress` has nullable `message`,
-`completed`, `total`.
+- models: ID, model reference, context window, tool support, reasoning levels;
+- profiles: ID, model, reasoning, tools, with approval retained only for wire
+  compatibility;
+- sessions: identity, title, workspace, profile, model, reasoning, loaded and
+  instance metadata;
+- transcript entries: user, assistant, tool result, summary, and turn terminal;
+- outcomes: terminal state and safe usage/diagnostic fields.
 
-## Ordering And Reliability
+Unknown fields are tolerated so additive Agent fields do not break the
+frontend. Error display uses the safe message/kind/retryable projection and
+never prints raw frames, credentials, prompts, or tool content.
 
-All output passes through one bounded channel and one writer task, so stdout
-lines are complete and never byte-interleaved. The following orderings are
-**not** guaranteed:
+## Fixtures And Tests
 
-- a `turn.send` response before the corresponding `turn_started` event;
-- a `turn_finished` event before the corresponding `turn.wait` response;
-- the final `output_delta` or Tool event before `turn_finished`;
-- a deferred `turn.wait` response before responses to later requests.
+Desensitized frames live under
+[`tests/fixtures/protocol/`](../tests/fixtures/protocol/): model list,
+profile list, session create/list/state, transcript page, output delta, tool
+started/finished, turn wait, and RPC error. `tests/protocol.rs` parses them
+through production `parse_frame` and DTO code. `tests/rpc_io.rs` exercises the
+public `RpcProcess`; `tests/agent_process.rs` is a non-installable fake Agent
+used by the production process tests.
 
-Events are best effort and may be dropped (`dropped_before` counts the gap
-before an event; loss does not replay). The authoritative sources are
-`turn.wait`, `session.state`, and `session.transcript`. The TUI registers
-`turn.wait` immediately after a successful `turn.send` and reconciles the
-transcript after completion; it never treats events as durable history.
+The wire ordering rules are exercised by `tests/app_flow.rs` and the ignored
+real-Agent loopback test in `tests/agent_e2e.rs`. The E2E uses an isolated
+configuration and workspace and rejects non-loopback provider endpoints; it
+never requires a real provider credential.
 
-`session.transcript` entries are tagged `user_message`, `assistant_message`,
-`tool_result`, `summary`, or `turn_terminal`. Assistant tool calls expose only
-`tool_call_id`, `name`, and `call_index` — arguments do not exist in the wire
-view. `next_after` drives pagination.
+## Shutdown
 
-## Errors
+`agent.shutdown` is the only normal quit request. The App enters
+`ShuttingDown`, blocks ordinary follow-ups, tolerates shutdown response/EOF/
+child-exit races, and waits for the child. The main loop force-kills after five
+seconds if the child does not exit. A failed connection exits without trying
+to send another request.
 
-| Code | Kind |
-|---|---:|
-| `-32700` | `parse_error` |
-| `-32600` | `invalid_request` |
-| `-32601` | `method_not_found` |
-| `-32602` | `invalid_params` |
-| `-32603` | `internal_error` |
-| `-32001` | `session_not_found` |
-| `-32002` | `session_not_loaded` |
-| `-32003` | `session_busy` (retryable) |
-| `-32004` | `session_closed` |
-| `-32005` | `invalid_state` |
-| `-32006` | `interaction_not_found` |
-| `-32007` | `turn_not_found` |
-| `-32008` | `profile_not_found` |
-| `-32009` | `model_not_found` |
-| `-32010` | `workspace_error` |
-| `-32011` | `store_error` |
-| `-32012` | `provider_error` |
-| `-32013` | `core_error` (retryability from safe diagnostic) |
-| `-32014` | `invalid_session_settings` |
+## No Hidden Transport
 
-The TUI shows `message`, `data.kind`, and `data.retryable`, never full JSON
-debug output, and does not auto-retry `session.create`, `session.open`, or
-`turn.send`.
+There is no HTTP, WebSocket, multi-Agent process pool, second RPC client,
+store-file parser, shell executor, approval transport, event replay, or
+automatic reconnect in this frontend.
+
+[`minicore-agent`]: https://github.com/zqcli/minicore-agent

@@ -1,199 +1,165 @@
 # minicore-tui
 
-A coding agent TUI for [minicore-agent], implemented in Rust. It is the
-terminal frontend of the MiniCore stack: the TUI talks to the agent
-**exclusively** through the stdio JSON-RPC contract in
-[docs/rpc-contract.md](docs/rpc-contract.md) and never links the
-`minicore-agent` or `minicore-runtime` crates.
+`minicore-tui` is an independent Rust terminal frontend for
+[`minicore-agent`]. It owns the fullscreen terminal UI and communicates with
+one Agent child process exclusively through stdio NDJSON JSON-RPC. It does not
+link the `minicore-agent` or `minicore-runtime` Rust crates.
 
-The visual hierarchy and interaction style follow the Pi coding agent TUI
-fullscreen mode. This project is **not** a fork of Pi, does not copy Pi source,
-and does not use Pi logos or branding.
+The visual hierarchy and interaction style are inspired by Pi's fullscreen
+coding-agent TUI: a scrollable transcript, a fixed dock, compact status,
+composer, selectors, and overlays. This is not a Pi fork. It contains no Pi
+source code, logo, or brand assets.
 
-## Status
+## Install And Build
 
-Phase 0 scaffold: package layout, MSRV tooling, `TerminalGuard`
-(alternate-screen lifecycle), dark/light `Theme`, and an empty fullscreen
-renderer with a small-terminal safety hint.
+Requirements:
 
-Phase 1 adds the stdio RPC layer for the pinned agent contract:
-`src/protocol.rs` (wire DTOs, NDJSON frame parser, request builder) and
-`src/rpc.rs` (agent child lifecycle: one stdin writer fed only with requests
-verified against the agent's 1 MiB line bound, one stdout reader under an
-8 MiB frame bound, one stderr reader with UTF-8-safe 4096-byte lines, and a
-bounded event channel).
+- Rust 1.85.0 or newer;
+- a supported terminal on Linux, macOS, or Windows;
+- a compatible `minicore-agent` executable and Agent configuration.
 
-Phase 2 adds the app state machine: `src/app.rs` owns all state via the
-single `App::update(AppEvent)` entry point, `src/state/` holds the pure-data
-session/transcript/turn/catalog structures, and `src/command.rs` describes
-outbound side effects for the future main loop. It covers bootstrap
-(ping + catalogs + sessions, Ready only after all four succeed), session
-create/open with paged `session.transcript` loading, live turns with
-`turn.send`/`turn.wait`/`turn.cancel`, and durable reconciliation: after a
-wait, the transcript is re-fetched and the live turn is replaced by durable
-blocks. 
-
-Phase 3 renders that state as the Pi-style fullscreen conversation
-layout: `src/ui/` (transcript scroll view, user/assistant/reasoning/tool
-cards, dock with busy status/composer/footer, startup header, fatal
-overlay) and `src/markdown.rs` (a small `pulldown-cmark` wrapper; see the
-module docs for why `tui-markdown` was not a fit). New visual state moves only
-through `AppEvent`s (`Tick`, `SetTheme`, `ToggleReasoning`, `ToggleTools`,
-`ToggleTool`). Rendering is a pure read-only view: each frame is derived
-tight from state, and the per-block line caches from spec 19 are deferred
-to a later phase (they must be populated in `App::update`, never in
-`render`). Full composer editing and slash commands are not implemented
-yet; the Phase 3 main loop constructs the app but does not start an agent
-(`q`/`Ctrl+C` still quit).
-
-Phase 4 adds the dock selectors (development spec 24-28): the new-session
-form and the session/model/reasoning/profile selectors replace the
-composer inside the dock while the transcript stays visible. All selection
-state moves through semantic `AppEvent`s (`OpenNewSession`,
-`Open*Selector`, `SetSelectorQuery`, `MoveSelector`, `PageSelector`,
-`ConfirmDock`, `CancelDock`, `DockFieldStep`, `NewSessionSetField`,
-`SubmitNewSession`); key mapping arrives in Phase 5. Selecting a model or
-reasoning opens (or keeps) a new-session draft and **creates a new session**
-when confirmed — the active session is never modified, and `session.create`
-is the only bridge to a real session. The session selector sorts
-`session.list` by `updated_at` descending (real RFC3339 instants, with
-deterministic fallbacks for unparsable timestamps), filters
-case-insensitively over title/workspace/session_id/model/profile, and
-opens via `session.open` (keep-on-error, one in-flight open at a time).
-The new-session draft seeds workspace/profile/model/reasoning from the
-catalog defaults; workspace stays a plain string the agent validates.
-Tool cards, live-turn deltas, and the durable transcript behaviour from
-Phases 2-3 are unchanged.
-
-Phase 5 adds input and local commands (development spec 22-23, 43): the
-main loop feeds raw `crossterm` terminal events into `AppEvent::Terminal`,
-the fixed `src/keymap.rs` maps keys to `Action`s (no dynamic key
-configuration), and only `App::update` mutates state. The composer is now
-a real `tui-textarea` wrapper with in-process history (100 entries),
-undo/redo, multi-line editing, and send-failure recovery. Slash commands
-(`/new`, `/resume`, `/sessions`, `/model`, `/reasoning`, `/theme dark|light`,
-`/clear`, `/help`, `/logs`, `/quit`) are parsed locally in `src/command.rs`;
-unknown commands only show a notice and never touch the wire. Help and
-Logs panels dock below the transcript (max 60%), and the transcript scrolls
-(`PageUp/PageDown/Home/End`, mouse wheel, follow-the-tail with a
-`↓ new output` marker) using geometry measured by the main loop and fed
-back via `AppEvent::Viewport`. The full key and command reference lives in
-docs/keybindings.md. Phase 5 still does not spawn the agent: RPC is
-impossible while the connection is `Starting`, and any RPC command reaching
-the main loop is reported as a send failure rather than silently dropped.
-
-Phase 6 completes the wiring: the TUI owns `minicore-agent --stdio` for
-real. The flat CLI takes `--agent-bin` / `--agent-config` / `--workspace`
-plus per-session model/reasoning/profile defaults; the agent is spawned and
-validated **before** the alternate screen so failures are ordinary stderr
-errors. An async main loop (`tokio::select!`) multiplexes the RPC event
-channel and Crossterm's asynchronous `EventStream` (the application does not
-create a blocking terminal-reader thread), the 10 Hz tick, OS signals, and
-the 5-second shutdown kill-deadline, and
-applies every source through the single `App::update`. Rendering is
-throttled to 30 FPS by a `dirty` flag cleared by an explicit `Rendered`
-event. `agent.shutdown` is the only quit path for a live connection:
-`shutting down → agent.shutdown → (response, EOF, exit in any order) →
-Exit`, with a 5 s force-kill fallback; abnormal exits surface the fatal
-overlay, not an auto-restart. Protocol fixtures and integration tests
-(`tests/protocol.rs`, `tests/rpc_io.rs`, `tests/app_flow.rs`,
-`tests/render_snapshots.rs`, `tests/terminal_restore.rs`) are fully offline
-except the ignored real-agent E2E (`tests/agent_e2e.rs`).
-
-## Requirements
-
-- Rust 1.85.0 or newer (edition 2024)
-- `unsafe_code` is forbidden in this crate (`[lints]` in `Cargo.toml`)
-
-Pinned TUI dependencies (a single crossterm 0.28.x instance only):
-
-```text
-ratatui      = "=0.29.0"    default-features off, feature crossterm
-crossterm    = "=0.28.1"    feature event-stream
-tui-textarea = "=0.7.0"     default-features off, feature crossterm
-```
-
-## Keybindings and commands
-
-The full key table and slash-command reference live in
-[docs/keybindings.md](docs/keybindings.md). In short: `Ctrl+C` clears or
-(double press) quits, `F1` opens Help, `Ctrl+R` opens the session
-selector, `Ctrl+L` / `Shift+Tab` open the model/reasoning selectors, and
-`/new`, `/resume`, `/model`, `/reasoning`, `/theme dark|light`, `/clear`,
-`/help`, `/logs`, `/quit` are implemented locally.
-
-## Build and test
+Build the locked release locally:
 
 ```bash
-cargo fmt --all -- --check
-cargo test --locked --all-targets
-cargo clippy --locked --all-targets -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps
-cargo tree -p crossterm        # must list a single crossterm version
+cargo build --locked --release
 ```
+
+The resulting binary is `target/release/minicore-tui` (or the platform
+executable equivalent). The package is one Cargo package, uses Edition 2024,
+and forbids unsafe code.
 
 ## Usage
 
+A run requires `--agent-config`; `--help` and `--version` work without it.
+The TUI starts the child before entering the alternate screen, so missing
+configuration or spawn failures remain ordinary terminal errors.
+
 ```bash
-cargo run -- --agent-config /path/to/agent.toml
-cargo run -- --agent-config agent.toml --workspace . --profile coding --reasoning high
+minicore-tui \
+  --agent-bin minicore-agent \
+  --agent-config ./agent.toml \
+  --workspace .
 ```
 
-| Option | Description |
+For a release checkout without installing the binary:
+
+```bash
+cargo run --locked -- \
+  --agent-config ./agent.toml \
+  --workspace ./project \
+  --profile coding \
+  --model deep \
+  --reasoning high \
+  --theme dark
+```
+
+### CLI
+
+| Option | Meaning |
 |---|---|
-| `--agent-bin <PATH>` | minicore-agent binary (default `minicore-agent` on PATH) |
-| `--agent-config <PATH>` | agent config file (required; must exist) |
-| `--workspace <PATH>` | workspace for a new session (default: cwd; explicit values open a pre-filled new-session form) |
-| `--profile <ID>` | default profile for new sessions |
-| `--model <ID>` | default model for new sessions |
-| `--reasoning <auto\|disabled\|low\|medium\|high>` | default reasoning for new sessions |
-| `--theme <dark\|light>` | Color theme (default: `dark`) |
-| `--debug` | log RPC method/id/bytes/timing to a temp file (never content) |
-| `--version` | Print version |
-| `--help` | Print usage |
+| `--agent-bin <PATH>` | Agent executable; defaults to `minicore-agent` on `PATH`. |
+| `--agent-config <PATH>` | Agent TOML configuration; required in run mode. |
+| `--workspace <PATH>` | Workspace string used by a new session; defaults to the current directory. |
+| `--profile <ID>` | Default profile for a new session. |
+| `--model <ID>` | Default model for a new session. |
+| `--reasoning <LEVEL>` | `auto`, `disabled`, `low`, `medium`, or `high`; default is Agent/profile selection. |
+| `--theme <dark\|light>` | Built-in palette; default is `dark`. |
+| `--debug` | Append request metadata (method, id, byte count, duration) to a local temporary log; never message or tool content. |
+| `--help`, `-h` | Print usage and exit. |
+| `--version`, `-V` | Print the TUI version and exit. |
 
-The agent config must point at whatever model backend you use. This
-terminal frontend never calls a provider directly; the agent owns all model
-and data access.
+The TUI passes the Agent config path to `minicore-agent --config <path>
+--stdio`. The Agent configuration owns provider URLs, credentials, profiles,
+models, tools, and `data_dir`; the TUI never reads those files or calls a
+provider directly. Keep one Agent process per `data_dir`; the Agent store does
+not provide a cross-process lock.
 
-## Agent E2E (optional, offline by default)
+## Sessions And Turns
 
-`tests/agent_e2e.rs` drives a real agent over stdio with the production
-RPC client and app state machine:
+Startup discovers the Agent, models, profiles, and sessions. `/new` opens a
+new-session form; `/resume` and `/sessions` open the existing-session
+selector. Workspace, profile, model, and reasoning are sent to
+`session.create` as appropriate.
 
-```bash
-MINICORE_AGENT_BIN=/path/to/minicore-agent \
-MINICORE_AGENT_CONFIG=/path/to/loopback-mock-agent.toml \
-cargo test --test agent_e2e -- --ignored
-```
+A session's model and reasoning are immutable after creation. Selecting a
+model or reasoning level edits a new-session draft and creates a new session;
+it never hot-swaps the active session. A turn sends `turn.send` and registers
+`turn.wait` immediately. Agent events are best-effort live display data and
+may be dropped. `turn.wait`, `session.state`, and `session.transcript` are the
+authoritative sources; completed turns reconcile the live view with durable
+transcript entries.
 
-The config must target a loopback mock (local model endpoint); the test
-refuses configs containing real provider keys/endpoints and never touches
-your real config or data dir.
+Tools run automatically under the Agent. Bash is not sandboxed. The TUI does
+not add approval, steering, compaction, live Bash output, MCP, plugins,
+skills, subagents, session branching, or reconnect/restart behavior.
 
-## Backend contract baseline
+## Keys And Commands
 
-- Agent repository: `https://github.com/zqcli/minicore-agent` (branch `dev`)
-- Fixed commit: `6d5e963031159c458212a92c690e515a2ac3761b`
-- RPC version: `0.2.0`
-- Contract doc blob: `b8f4d57c6931cad8b99b39fdda0647a2539824a6`
+The complete current keymap and slash-command semantics are in
+[docs/keybindings.md](docs/keybindings.md). The short list is:
 
-## Scope honesty
+- `F1` opens Help;
+- `Ctrl+R` opens Sessions, `Ctrl+L` opens Model, and `Shift+Tab` opens Reasoning;
+- `Ctrl+T` toggles reasoning and `Ctrl+O` toggles tool previews;
+- `PageUp`/`PageDown`, `Ctrl+Home`/`Ctrl+End`, and mouse wheel scroll the transcript;
+- `Esc` closes a dock or cancels the exact running turn;
+- `Ctrl+C` clears non-empty input, then double-presses to quit; `/quit` performs normal shutdown.
 
-- Selecting a model or reasoning always drives a new-session draft; it is
-  never a hot-swap of the current session. The current session only changes
-  when a create/open response activates it.
-- Model and reasoning are frozen when a session is created; changing them
-  creates a new session.
-- Agent events are best effort and may be dropped; `turn.wait`,
-  `session.state`, and the durable transcript are authoritative.
-- Tools run automatically; bash is not sandboxed.
-- No approval UI, no steering, no compaction, no live bash output in v0.1.
-- One agent process per `data_dir`; the store has no cross-process lock.
+Implemented local commands are `/new`, `/resume`, `/sessions`, `/model`,
+`/reasoning`, `/theme dark`, `/theme light`, `/clear`, `/help`, `/logs`, and
+`/quit`. Unknown commands never reach the Agent.
+
+## Backend Contract And Scope
+
+The wire contract is pinned in [docs/rpc-contract.md](docs/rpc-contract.md):
+
+- Agent commit `6d5e963031159c458212a92c690e515a2ac3761b`;
+- RPC version `0.2.0`;
+- contract document blob `b8f4d57c6931cad8b99b39fdda0647a2539824a6`;
+- NDJSON over stdio, with one TUI writer, one stdout reader, one stderr reader,
+  bounded frames, request IDs, response/event interleaving, and no event replay.
+
+The TUI deliberately does not implement Agent capabilities that are absent
+from this interface: approval UI, steering or follow-up queue, compaction
+controls, live Bash/PTY output, MCP, plugins, skills, subagents, remote
+agents, image input, or session tree operations. External editor and OSC52
+copy are optional follow-up work and are not part of v0.1.
+
+## Platform And Troubleshooting
+
+The intended platform matrix is Linux, macOS, and Windows with Rust 1.85+.
+The terminal uses Crossterm alternate-screen/raw mode, bracketed paste, mouse
+capture, and a real hardware cursor. A small terminal shows a safe-size hint.
+Terminal restoration is attempted on normal, error, child-exit, shutdown-timeout,
+and panic paths.
+
+Common errors:
+
+- **`--agent-config` is required**: supply the Agent TOML path; help/version do not need it.
+- **Agent executable not found**: set `--agent-bin` or put `minicore-agent` on `PATH`.
+- **Bootstrap failed**: inspect the Agent config/profile/model and the Help/Logs panel; the TUI does not auto-retry.
+- **Session waiting for unsupported interaction**: use an Agent profile with automatic tool behavior; this TUI has no approval UI.
+- **`Disconnected` or a fatal overlay**: the child or RPC stream ended; press `q` after reviewing the safe status/log tail.
+- **Terminal too small**: enlarge it to at least 60×16.
+- **Another Agent already uses the data directory**: stop the other Agent process before retrying.
+
+## Testing
+
+The default suite is offline and uses protocol fixtures, a production-driven
+fake Agent harness, app-flow tests, TestBackend snapshots, and terminal
+lifecycle tests. See [docs/testing.md](docs/testing.md) for the remote Rust
+1.85 commands, snapshot inventory, ignored tests, Windows checks, and E2E
+procedure. See [docs/acceptance.md](docs/acceptance.md) for the honest
+MT-001–MT-144 status matrix and [docs/verification.md](docs/verification.md)
+for the final delivery evidence.
+
+A real-Agent E2E is ignored by default and must use a loopback mock endpoint;
+it does not require or permit access to a real provider. Do not put secrets or
+real user data in fixtures, logs, E2E config, or snapshots.
 
 ## License
 
-Licensed under either of Apache License, Version 2.0 or the MIT license, at
+Licensed under either the Apache License, Version 2.0 or the MIT license, at
 your option.
 
-[minicore-agent]: https://github.com/zqcli/minicore-agent
+[`minicore-agent`]: https://github.com/zqcli/minicore-agent

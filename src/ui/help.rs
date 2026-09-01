@@ -36,7 +36,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         ("Shift+Tab", "reasoning selector (creates a new session)"),
         ("Ctrl+O", "expand/collapse all tool cards"),
         ("Ctrl+T", "show/hide reasoning"),
-        ("PageUp/PageDown", "scroll the transcript"),
+        ("PageUp/PageDown", "scroll; page selectors when focused"),
         ("Home / End", "transcript top / tail"),
         ("Esc", "close a panel; cancel the running turn"),
     ] {

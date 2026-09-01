@@ -1,110 +1,103 @@
-# Keybindings and commands
+# Keys And Slash Commands
 
-minicore-tui follows the Pi fullscreen interaction style. The key map is a
-fixed table compiled into `src/keymap.rs` (development spec 22.4); there is
-no user key configuration. All of this is implemented in Phase 5; the
-agent connection itself arrives in Phase 6.
+The keymap is fixed in `src/keymap.rs`. It is pure and compiled into the
+binary; v0.1 has no user keybinding configuration. All key actions become
+`AppEvent`s and are applied by `App::update`.
 
-## Global
+## Global Keys
 
 | Key | Behavior |
 |---|---|
-| `Ctrl+C` | composer has text: clear it; empty: first press shows a hint, a second press within 1s quits |
-| `Ctrl+D` | quit when the composer is empty and the session is idle |
-| `F1` | open Help (Esc or F1 closes it) |
-| `Ctrl+R` | session selector |
-| `Ctrl+L` | model selector (target: a new session) |
-| `Shift+Tab` | reasoning selector from the composer; previous field in the new-session form; closes the reasoning selector |
-| `Ctrl+O` | expand/collapse all tool cards |
-| `Ctrl+T` | show/hide reasoning runs |
-| `PageUp` / `PageDown` | scroll the transcript (or page a selector / Help / Logs) |
-| `Up` / `Down` (Help/Logs) | scroll those panels by one row |
-| `Ctrl+Home` / `Ctrl+End` | transcript top / tail |
-| `Esc` | close the open panel; otherwise cancel the running turn |
-| `q` | quits only in the Help panel and on the fatal overlay; everywhere else it is an ordinary character |
-| mouse wheel | scroll the transcript by 3 rows, or move a selector's selection |
+| `Ctrl+C` | If the composer has text, clear it. If empty, show a hint; press again within 1 second to request shutdown. |
+| `Ctrl+D` | Request shutdown only when the composer is empty and the active session is idle. |
+| `F1` | Open Help; press `F1` or `Esc` to close it. |
+| `Ctrl+R` | Open the session selector. |
+| `Ctrl+L` | Open the model selector for a new-session draft. |
+| `Shift+Tab` | Open the reasoning selector from the composer; move to the previous form field in a new-session form; close the reasoning selector. |
+| `Ctrl+O` | Toggle all durable tool result previews for the active session. |
+| `Ctrl+T` | Show or hide durable reasoning runs. |
+| `PageUp` / `PageDown` | Scroll the transcript, or page the focused selector/Help/Logs panel. |
+| `Ctrl+Home` / `Ctrl+End` | Jump the transcript to the top or tail. |
+| `Home` / `End` | Move to the composer line start/end; outside the composer, jump the transcript to the top/tail. |
+| `Esc` | Close an open dock; otherwise cancel the active turn from the composer. |
+| `q` | Quit only from Help or the fatal overlay. In the composer it is an ordinary character. |
+| Mouse wheel | Scroll the transcript by three rows, or move a selector by one item. |
 
-`Home` moves to the transcript top when no editor is focused; inside the
-composer it moves to the line start. `End` moves to the line end inside the
-composer and to the transcript tail elsewhere (use `Ctrl+Home`/`Ctrl+End`
-to jump the transcript while typing).
+A release event is ignored. Repeated text and cursor events are accepted;
+one-shot global shortcuts require a key press.
 
 ## Composer
 
 | Key | Behavior |
 |---|---|
-| Enter | send (or run a `/` command) |
-| `Shift+Enter` / `Ctrl+J` | newline |
-| `Ctrl+A` / `Ctrl+E` | line start / line end |
-| `Ctrl+W` | delete the previous word |
-| `Ctrl+Z` / `Ctrl+Y` | undo / redo |
-| `Up` (first row) / `Down` (last row) | previous / next history message |
-| `Alt+Up` / `Alt+Down` | history navigation (same as the row-edge arrows) |
-| Backspace / Delete / arrows / Home / End | standard editing |
-| CJK / emoji / combining marks | inserted as characters; the cursor column always uses display cells |
+| `Enter` | Submit non-empty input, or execute a slash command locally. |
+| `Shift+Enter` | Insert a newline when the terminal reports Shift. |
+| `Ctrl+J` | Insert a newline; reliable fallback for terminals that do not report Shift+Enter. |
+| `Ctrl+A` / `Ctrl+E` | Move to the current line start/end. |
+| `Ctrl+W` | Delete the previous word. |
+| `Ctrl+Z` / `Ctrl+Y` | Undo / redo. |
+| `Up` / `Down` | Move within multiline input; at the first/last row, navigate input history. |
+| `Alt+Up` / `Alt+Down` | Previous/next history entry. |
+| `Backspace` / `Delete` / arrows | Standard editing. |
+| Bracketed paste | Insert the complete paste as one edit, normalize CRLF/CR to LF, and never submit automatically. |
 
-History keeps the last 100 non-empty submitted messages per process and
-is not persisted. While a turn is running the composer is frozen: typing,
-editing and submitting are disabled and `Esc` cancels the exact turn.
-Paste (`bracketed paste`) inserts the whole buffer in one edit, normalizes
-`CRLF`/`CR` to `LF`, and never submits by itself.
+The process keeps the last 100 non-empty submitted messages in memory. Input
+editing and submission are disabled while the active session has a live turn;
+`Esc` remains the cancellation action.
 
 ## Selectors
 
 | Key | Behavior |
 |---|---|
-| `Up` / `Down` | move the selection (the filter window follows) |
-| Enter | confirm |
-| `Esc` | cancel back to the form (or composer) |
-| printable characters | type into the search query |
-| Backspace | remove the last query character |
-| `Ctrl+U` | clear the query |
-| `PageUp` / `PageDown` | page the selection |
-| mouse wheel | move the selection |
+| `Up` / `Down` | Move the highlighted item. |
+| `Enter` | Confirm the item or form field. |
+| `Esc` | Return to the parent form/composer. |
+| Printable characters | Append to the case-insensitive search query. |
+| `Backspace` | Remove the last query character. |
+| `Ctrl+U` | Clear the query or current editable form field. |
+| `PageUp` / `PageDown` | Move by a fixed selector page. |
 
-The session selector keeps its query and selection when an open fails,
-and re-enables itself after the response.
+Session-open failure keeps the selector query and selection. New-session
+creation failure keeps all form fields and re-enables the form.
 
-## New-session form
+## New-Session Form
 
-| Key | Behavior |
-|---|---|
-| `Tab` / `Shift+Tab` | next / previous field |
-| Enter | confirm the field: profile/model/reasoning open their selector; Create submits |
-| typing | edits the workspace/title field at a char cursor (arrow keys move it) |
-| `Ctrl+U` | clear the current editable field |
-| `Esc` | close the form |
+The form fields are workspace, profile, model, reasoning, title, and Create.
+`Tab` advances; `Shift+Tab` goes back. `Enter` opens a selector for profile,
+model, or reasoning, and submits on Create. Workspace and title accept ordinary
+text editing. A create request freezes the form until its response arrives.
 
-While a create is in flight the form is frozen: selectors, field edits and
-re-submission are blocked until the response.
+Model and reasoning selections apply to the draft only. A session's model and
+reasoning are fixed at creation; changing either creates a new session rather
+than modifying the active one.
 
-## Slash commands
+## Slash Commands
 
-Only lines whose first non-whitespace character is `/` are parsed
-(`src/command.rs`). Unknown commands and bad arguments show a local notice
-and never produce an RPC command.
+Only input whose first non-whitespace character is `/` is parsed locally.
+Unknown commands and invalid arguments produce a local notice and no RPC.
 
 | Command | Behavior |
 |---|---|
-| `/new` | open the new-session form |
-| `/resume` / `/sessions` | open the session selector |
-| `/model` | open the model selector (target: a new session) |
-| `/reasoning` | open the reasoning selector (target: a new session) |
-| `/theme dark` / `/theme light` | switch the palette |
-| `/clear` | wipe only the local transcript view and reload the active session (never deletes the agent session; refused while a turn runs) |
-| `/help` | open the Help panel |
-| `/logs` | open the agent-log panel |
-| `/quit` | normal shutdown |
+| `/new` | Open a new-session form. |
+| `/resume` / `/sessions` | Open the session selector. |
+| `/model` | Open the model selector for a new session. |
+| `/reasoning` | Open the reasoning selector for a new session. |
+| `/theme dark` / `/theme light` | Change the local palette; no Agent request. |
+| `/clear` | Clear only the local active transcript view and reload it from the Agent; refused while a turn runs. |
+| `/help` | Open Help. |
+| `/logs` | Open the bounded Agent stderr log panel. |
+| `/quit` | Request normal Agent shutdown. |
 
-Not implemented (spec 23.4): `!command`, `@file`, `/fork`, `/branch`,
-`/compact`, `/steer`, `/queue`, `/settings`, `/login`, `/plugin`, `/mcp`.
+The following are deliberately not implemented: `!command`, `@file`,
+`/fork`, `/branch`, `/compact`, `/steer`, `/queue`, `/settings`, `/login`,
+`/plugin`, and `/mcp`.
 
-## Honest scope
+## Status And Limits
 
-- Tools run automatically; bash is not sandboxed.
-- No approval UI, no steering, no compaction, no live bash output in v0.1.
-- A model/reasoning selection creates a new session; the active session is
-  never hot-swapped.
-- Phase 5 does not spawn the agent yet, so `session.create`/`session.open`/
-  `session.transcript` requests are gated by the `Starting` connection and
-  surface as a local notice.
+`Ctrl+C` twice, `/quit`, idle `Ctrl+D`, or `q` in Help/fatal state enters the
+same shutdown state machine. A live turn is cancelled only with its exact
+`TurnRef`; the TUI then waits for an outcome and reconciles durable history.
+
+Tools run automatically under the Agent. Bash is not sandboxed. There is no
+approval UI, steering queue, compaction control, live Bash/PTY output,
+External Editor, or OSC52 copy in v0.1.

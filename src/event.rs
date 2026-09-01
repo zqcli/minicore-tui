@@ -17,6 +17,7 @@ use crossterm::event::Event as CrosstermEvent;
 
 use crate::protocol::{FrameError, IncomingFrame, Reasoning, RequestId};
 use crate::rpc::RpcError;
+use crate::state::transcript::PreparedTranscriptCache;
 use crate::theme::ThemeKind;
 
 /// A transport event from the agent process or its pipes. Events from
@@ -163,4 +164,7 @@ pub enum AppEvent {
         total_lines: usize,
         visible_rows: usize,
     },
+    /// A pure render preparation result. `App::update` installs it only when
+    /// the active session and all cache-key inputs still match.
+    TranscriptCachePrepared(PreparedTranscriptCache),
 }

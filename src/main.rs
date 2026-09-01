@@ -161,6 +161,7 @@ async fn run_fullscreen(
         // Measured geometry flows back through `AppEvent::Viewport`; the
         // renderer never writes scroll state (spec 3, 7).
         let size = terminal.size()?;
+        prepare_transcript_cache(&mut app, size.width);
         let width = size.width as usize;
         let total = ui::transcript::total_lines(&app, size.width);
         let dock_rows = ui::layout::dock_rows(&app, size.width, size.height) as usize;
@@ -183,11 +184,7 @@ async fn run_fullscreen(
         }
         let shutdown_deadline = app.shutdown_remaining();
         let tick_deadline = app.next_tick().unwrap_or(IDLE_POLL);
-        let render_deadline = if app.dirty {
-            Some(RENDER_INTERVAL.saturating_sub(last_render.elapsed()))
-        } else {
-            None
-        };
+        let render_deadline = render_deadline(app.dirty, last_render.elapsed());
         let rpc_cooldown =
             rpc_cooldown_until.map(|deadline| deadline.saturating_duration_since(Instant::now()));
 
@@ -263,6 +260,7 @@ async fn run_fullscreen(
                 app.update(AppEvent::Tick);
             }
             Selected::Render => {
+                prepare_transcript_cache(&mut app, terminal.size()?.width);
                 terminal.draw(|frame| ui::render(frame, &app))?;
                 last_render = Instant::now();
                 app.update(AppEvent::Rendered);
@@ -275,10 +273,17 @@ async fn run_fullscreen(
         // Render when state changed and the 30 FPS budget allows it; the
         // Rendered event clears the dirty flag so idle frames never draw.
         if app.dirty && last_render.elapsed() >= RENDER_INTERVAL {
+            prepare_transcript_cache(&mut app, terminal.size()?.width);
             terminal.draw(|frame| ui::render(frame, &app))?;
             last_render = Instant::now();
             app.update(AppEvent::Rendered);
         }
+    }
+}
+
+fn prepare_transcript_cache(app: &mut App, width: u16) {
+    if let Some(prepared) = ui::transcript::prepare_cache(app, width) {
+        app.update(AppEvent::TranscriptCachePrepared(prepared));
     }
 }
 
@@ -342,6 +347,10 @@ async fn run_rpc_batch(
 
 fn rpc_batch_should_yield(processed: usize, elapsed: Duration) -> bool {
     processed >= RPC_BATCH_LIMIT || elapsed >= RPC_BATCH_BUDGET
+}
+
+fn render_deadline(dirty: bool, elapsed: Duration) -> Option<Duration> {
+    dirty.then(|| RENDER_INTERVAL.saturating_sub(elapsed))
 }
 
 /// Marks the channel closed exactly once and routes the lifecycle consequence
@@ -482,6 +491,17 @@ mod tests {
         let second =
             tokio::time::timeout(Duration::from_millis(20), shutdown_signal(&mut listener)).await;
         assert!(second.is_err(), "the same listener stays reusable");
+    }
+
+    #[test]
+    fn idle_has_no_render_deadline_and_busy_clamps_at_30_fps() {
+        assert_eq!(render_deadline(false, Duration::ZERO), None);
+        assert_eq!(render_deadline(true, Duration::ZERO), Some(RENDER_INTERVAL));
+        assert_eq!(render_deadline(true, RENDER_INTERVAL), Some(Duration::ZERO));
+        assert_eq!(
+            render_deadline(true, RENDER_INTERVAL + Duration::from_secs(1)),
+            Some(Duration::ZERO)
+        );
     }
 
     #[test]

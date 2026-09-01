@@ -1,13 +1,15 @@
 //! Rendering: the Pi-style fullscreen conversation layout (development spec
 //! 14-20, 29-31). `ui::render` is a pure read-only view: it never mutates
-//! `App`, never writes caches (per-frame derived layout; per-block line
-//! caches are formally a Phase 7 concern), and never takes interior
-//! mutability shortcuts.
+//! `App` or writes caches. Durable transcript lines are prepared by the
+//! read-only `transcript::prepare_cache` function and installed only through
+//! `App::update`; header, notices, layout and live streaming remain per-frame
+//! derivations without interior mutability.
 //!
 //! Phase 3 covers the transcript + fixed dock (status/composer/footer), the
 //! durable/live blocks, and markdown. Phase 4 replaces the composer in the
 //! dock with the new-session form and the session/model/reasoning/profile
-//! selectors; full input arrives in Phase 5.
+//! selectors; Phase 5 adds full input and scrolling; Phase 7 adds the
+//! update-installed durable line cache.
 
 pub mod assistant;
 pub mod composer;

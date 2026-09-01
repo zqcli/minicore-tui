@@ -18,7 +18,8 @@ pub use selection::{
 pub use session::{ScrollState, SessionId, SessionView, SessionsState};
 pub use tool::{LiveTool, ToolStatus};
 pub use transcript::{
-    AssistantBlock, AssistantPart, SummaryBlock, TerminalBlock, ToolBlock, TranscriptBlock,
-    TranscriptRenderCache, TranscriptState, UserBlock,
+    AssistantBlock, AssistantPart, PreparedTranscriptCache, SummaryBlock, TerminalBlock, ToolBlock,
+    ToolExpansion, TranscriptBlock, TranscriptCacheKey, TranscriptRenderCache, TranscriptState,
+    UserBlock,
 };
 pub use turn::{LiveTurn, LocalSubmissionId};

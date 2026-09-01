@@ -1,8 +1,8 @@
 //! Lightweight Markdown rendering on top of `pulldown-cmark` (development
-//! spec 20). Full durable messages are parsed per frame into pre-wrapped,
-//! styled lines; live streaming uses `wrap_plain` instead so a delta never
-//! triggers a full reparse (spec 20.4). No other UI module depends on
-//! pulldown-cmark.
+//! spec 20). Durable messages are parsed during update-owned cache
+//! preparation into pre-wrapped, styled lines; live streaming uses
+//! `wrap_plain` so a delta never triggers a full durable reparse (spec 20.4).
+//! No other UI module depends on pulldown-cmark.
 //!
 //! `tui-markdown` was evaluated first: its bundled `Theme` cannot express
 //! the spec palette exactly (card backgrounds, per-reasoning colors, code
@@ -16,6 +16,14 @@ use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::theme::Theme;
+
+#[cfg(test)]
+use std::cell::Cell;
+
+#[cfg(test)]
+thread_local! {
+    static MARKDOWN_PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
+}
 
 /// One styled inline run.
 #[derive(Clone)]
@@ -220,6 +228,8 @@ impl<'a> MarkdownRenderer<'a> {
 
     /// Parses `text` into blocks.
     fn parse(&self, text: &str) -> Vec<Block> {
+        #[cfg(test)]
+        MARKDOWN_PARSE_COUNT.with(|count| count.set(count.get() + 1));
         let options = Options::empty();
         let parser = Parser::new_ext(text, options);
         let mut b = Builder {
@@ -455,7 +465,7 @@ fn wrap_segments(segs: &[Seg], width: usize, base: Style) -> Vec<Line<'static>> 
                 lines.push(Line::from(std::mem::take(&mut current)));
                 current_w = 0;
             }
-            current.push(Span::styled(ch.to_string(), style));
+            push_span_char(&mut current, ch, style);
             current_w += cw;
         }
     }
@@ -466,6 +476,19 @@ fn wrap_segments(segs: &[Seg], width: usize, base: Style) -> Vec<Line<'static>> 
         lines.push(Line::default());
     }
     lines
+}
+
+/// Appends one character to the preceding span when its effective style is
+/// unchanged. This keeps Unicode width decisions character-based while
+/// emitting one allocation per contiguous styled run instead of one per char.
+fn push_span_char(spans: &mut Vec<Span<'static>>, ch: char, style: Style) {
+    if let Some(last) = spans.last_mut() {
+        if last.style == style {
+            last.content.to_mut().push(ch);
+            return;
+        }
+    }
+    spans.push(Span::styled(ch.to_string(), style));
 }
 
 /// Wraps plain text (streaming assistant/reasoning/composer, spec 20.4)
@@ -511,6 +534,16 @@ pub fn line_width(line: &Line) -> usize {
         .iter()
         .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
         .sum()
+}
+
+#[cfg(test)]
+pub(crate) fn reset_parse_count() {
+    MARKDOWN_PARSE_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn parse_count() -> usize {
+    MARKDOWN_PARSE_COUNT.with(Cell::get)
 }
 
 #[cfg(test)]
@@ -621,6 +654,37 @@ mod tests {
         assert_eq!(lines.len(), 3, "blank line separates the two paragraphs");
         assert_eq!(text_of(&lines[0]), "one two");
         assert_eq!(text_of(&lines[2]), "three");
+    }
+
+    #[test]
+    fn adjacent_same_style_text_is_one_span_and_style_boundaries_remain() {
+        let theme = dark_theme();
+        let renderer = MarkdownRenderer::new(&theme);
+        let lines = renderer.render("plain **bold** plain", 80, Style::new());
+        assert_eq!(lines.len(), 1);
+        let contents: Vec<&str> = lines[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(contents, vec!["plain ", "bold", " plain"]);
+        assert!(
+            lines[0].spans[1]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+        assert!(
+            !lines[0].spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+
+        let cjk = renderer.render("你你a\u{0301}a", 80, Style::new());
+        assert_eq!(cjk[0].spans.len(), 1, "combining marks stay in one run");
+        assert_eq!(cjk[0].spans[0].content.as_ref(), "你你a\u{0301}a");
+        assert_eq!(line_width(&cjk[0]), 6);
     }
 
     #[test]

@@ -30,8 +30,8 @@ use crate::state::selection::{
 use crate::state::session::{SessionId, SessionView, SessionsState};
 use crate::state::tool::{LiveTool, ToolStatus};
 use crate::state::transcript::{
-    AssistantBlock, AssistantPart, SummaryBlock, TerminalBlock, ToolBlock, TranscriptBlock,
-    UserBlock,
+    AssistantBlock, AssistantPart, PreparedTranscriptCache, SummaryBlock, TerminalBlock, ToolBlock,
+    TranscriptBlock, TranscriptCacheKey, UserBlock,
 };
 use crate::state::turn::{LiveTurn, LocalSubmissionId};
 use crate::theme::ThemeKind;
@@ -430,6 +430,7 @@ impl App {
             AppEvent::ToggleTools { session_id } => {
                 if let Some(view) = self.sessions.known.get_mut(&session_id) {
                     view.tools_expanded = !view.tools_expanded;
+                    view.transcript.render_cache.clear();
                 }
                 Vec::new()
             }
@@ -439,12 +440,17 @@ impl App {
                 tool_call_id,
             } => {
                 if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    let mut changed = false;
                     for block in &mut view.transcript.blocks {
                         if let TranscriptBlock::Tool(tool) = block {
                             if tool.turn_id == turn_id && tool.tool_call_id == tool_call_id {
                                 tool.expanded = !tool.expanded;
+                                changed = true;
                             }
                         }
+                    }
+                    if changed {
+                        view.transcript.invalidate();
                     }
                 }
                 Vec::new()
@@ -490,6 +496,10 @@ impl App {
                 self.clamp_transcript_scroll();
                 Vec::new()
             }
+            AppEvent::TranscriptCachePrepared(prepared) => {
+                self.install_transcript_cache(prepared);
+                Vec::new()
+            }
         }
     }
 
@@ -499,6 +509,23 @@ impl App {
             .active
             .as_deref()
             .and_then(|session_id| self.sessions.known.get(session_id))
+    }
+
+    /// The current durable transcript cache key for the active session.
+    /// Render preparation uses the same read-only key builder before sending
+    /// a `TranscriptCachePrepared` event back through `update`.
+    pub fn transcript_cache_key(&self, width: u16) -> Option<(String, TranscriptCacheKey)> {
+        let session_id = self.sessions.active.as_ref()?.clone();
+        let view = self.sessions.known.get(&session_id)?;
+        Some((
+            session_id,
+            view.transcript.cache_key(
+                width,
+                self.theme,
+                self.reasoning_visible,
+                view.tools_expanded,
+            ),
+        ))
     }
 
     /// The current new-session draft, whether the form or a selector is
@@ -1280,6 +1307,30 @@ impl App {
         }
     }
 
+    fn install_transcript_cache(&mut self, prepared: PreparedTranscriptCache) {
+        let Some(active) = self.sessions.active.as_ref() else {
+            return;
+        };
+        if active != &prepared.session_id {
+            return;
+        }
+        let Some(view) = self.sessions.known.get(active) else {
+            return;
+        };
+        let expected = view.transcript.cache_key(
+            prepared.key.width,
+            self.theme,
+            self.reasoning_visible,
+            view.tools_expanded,
+        );
+        if expected != prepared.key {
+            return;
+        }
+        if let Some(view) = self.sessions.known.get_mut(active) {
+            view.transcript.render_cache.install(prepared);
+        }
+    }
+
     fn active_session_mut(&mut self) -> Option<&mut SessionView> {
         let active = self.sessions.active.clone()?;
         self.sessions.known.get_mut(&active)
@@ -1397,7 +1448,7 @@ impl App {
             return Vec::new();
         }
         if let Some(view) = self.sessions.known.get_mut(&active) {
-            view.transcript.blocks.clear();
+            view.transcript.clear_blocks();
             view.transcript.last_seq = None;
             view.transcript.next_after = None;
             view.transcript.complete = false;
@@ -2074,6 +2125,7 @@ impl App {
                     text: trimmed.to_owned(),
                     pending: true,
                 }));
+            view.transcript.invalidate();
         }
         vec![self.request(
             RequestKind::SendTurn {
@@ -2148,6 +2200,7 @@ impl App {
                             });
                     if let Some(card) = pending_user {
                         card.turn_id = Some(result.turn.turn_id.clone());
+                        view.transcript.invalidate();
                     }
                     Plan::Wait {
                         turn: result.turn,
@@ -2159,6 +2212,7 @@ impl App {
                     view.transcript.blocks.retain(
                         |block| !matches!(block, TranscriptBlock::User(card) if card.pending),
                     );
+                    view.transcript.invalidate();
                     Plan::Failed { recovered, error }
                 }
             }
@@ -2340,6 +2394,7 @@ impl App {
                     view.transcript.blocks.retain(
                         |block| !matches!(block, TranscriptBlock::User(card) if card.pending),
                     );
+                    view.transcript.invalidate();
                     recovered
                 };
                 if let Some(text) = recovered {
@@ -2689,12 +2744,17 @@ impl App {
                 }
             }
             live.reference = Some(turn.clone());
+            let mut changed = false;
             for block in &mut view.transcript.blocks {
                 if let TranscriptBlock::User(card) = block {
                     if card.pending {
                         card.turn_id = Some(turn.turn_id.clone());
+                        changed = true;
                     }
                 }
+            }
+            if changed {
+                view.transcript.invalidate();
             }
         }
     }
@@ -2883,6 +2943,7 @@ fn merge_entries(view: &mut SessionView, entries: &[ConversationEntryWire]) {
                     card.seq = Some(user.seq);
                     card.text = user.text.clone();
                     card.pending = false;
+                    view.transcript.invalidate();
                 } else if !has_seq(&view.transcript.blocks, user.seq) {
                     view.transcript
                         .blocks
@@ -2892,6 +2953,7 @@ fn merge_entries(view: &mut SessionView, entries: &[ConversationEntryWire]) {
                             text: user.text.clone(),
                             pending: false,
                         }));
+                    view.transcript.invalidate();
                 }
             }
             ConversationEntryWire::AssistantMessage(assistant) => {
@@ -2935,6 +2997,7 @@ fn merge_entries(view: &mut SessionView, entries: &[ConversationEntryWire]) {
                             expanded: false,
                         }));
                 }
+                view.transcript.invalidate();
             }
             ConversationEntryWire::ToolResult(result) => {
                 if has_seq(&view.transcript.blocks, result.seq) {
@@ -2973,6 +3036,7 @@ fn merge_entries(view: &mut SessionView, entries: &[ConversationEntryWire]) {
                             expanded: false,
                         }));
                 }
+                view.transcript.invalidate();
             }
             ConversationEntryWire::Summary(summary) => {
                 if has_seq(&view.transcript.blocks, summary.seq) {
@@ -2985,6 +3049,7 @@ fn merge_entries(view: &mut SessionView, entries: &[ConversationEntryWire]) {
                         through: summary.through,
                         summary: summary.summary.clone(),
                     }));
+                view.transcript.invalidate();
             }
             ConversationEntryWire::TurnTerminal(terminal) => {
                 if has_seq(&view.transcript.blocks, terminal.seq) {
@@ -2998,6 +3063,7 @@ fn merge_entries(view: &mut SessionView, entries: &[ConversationEntryWire]) {
                         terminal: terminal.terminal.clone(),
                         usage: terminal.usage,
                     }));
+                view.transcript.invalidate();
             }
         }
     }

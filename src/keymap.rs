@@ -124,8 +124,32 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
                     _ => Action::CloseDock,
                 };
             }
-            KeyCode::PageUp => return Action::ScrollWindow(-1),
-            KeyCode::PageDown => return Action::ScrollWindow(1),
+            KeyCode::PageUp => {
+                return if matches!(
+                    app.dock,
+                    Dock::SessionSelector(_)
+                        | Dock::ModelSelector(_)
+                        | Dock::ReasoningSelector(_)
+                        | Dock::ProfileSelector(_)
+                ) {
+                    Action::SelectorPage(-1)
+                } else {
+                    Action::ScrollWindow(-1)
+                };
+            }
+            KeyCode::PageDown => {
+                return if matches!(
+                    app.dock,
+                    Dock::SessionSelector(_)
+                        | Dock::ModelSelector(_)
+                        | Dock::ReasoningSelector(_)
+                        | Dock::ProfileSelector(_)
+                ) {
+                    Action::SelectorPage(1)
+                } else {
+                    Action::ScrollWindow(1)
+                };
+            }
             KeyCode::Home => {
                 if ctrl(&key) {
                     return Action::ScrollTop;
@@ -305,6 +329,10 @@ mod tests {
         assert_eq!(map(&a, ctrl('o')), Action::ToggleTools);
         assert_eq!(map(&a, ctrl('t')), Action::ToggleReasoning);
         assert_eq!(
+            map(&a, press(KeyCode::PageUp, KeyModifiers::empty())),
+            Action::ScrollWindow(-1)
+        );
+        assert_eq!(
             map(&a, press(KeyCode::F(1), KeyModifiers::empty())),
             Action::OpenHelp
         );
@@ -368,6 +396,22 @@ mod tests {
         let a = app();
         assert_eq!(map(&a, ctrl('c')), Action::FirstCtrlC);
         assert_eq!(map(&a, ctrl('d')), Action::CtrlD);
+    }
+
+    #[test]
+    fn selector_pages_are_selection_pages_not_transcript_scroll() {
+        let mut a = app();
+        a.dock = Dock::ModelSelector(crate::state::selection::SelectorState::new(
+            crate::state::selection::SelectorKind::Model,
+        ));
+        assert_eq!(
+            map(&a, press(KeyCode::PageUp, KeyModifiers::empty())),
+            Action::SelectorPage(-1)
+        );
+        assert_eq!(
+            map(&a, press(KeyCode::PageDown, KeyModifiers::empty())),
+            Action::SelectorPage(1)
+        );
     }
 
     #[test]
