@@ -6,7 +6,7 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::text::{Line, Span};
+use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
 use crate::app::App;
@@ -35,6 +35,23 @@ pub fn prepare_cache(app: &App, width: u16) -> Option<PreparedTranscriptCache> {
     })
 }
 
+const NEW_OUTPUT_MARKER: &str = "↓ new output";
+
+fn new_output_marker_visible(app: &App, total_lines: usize, height: usize) -> bool {
+    app.active_view().is_some_and(|view| {
+        !view.scroll.follow_tail && view.scroll.offset < total_lines.saturating_sub(height)
+    })
+}
+
+/// Returns the transcript content rows available in `height`. A scrolled
+/// transcript reserves its final row for the new-output marker, so the main
+/// loop and renderer use the same viewport geometry.
+pub fn visible_rows(app: &App, total_lines: usize, height: u16) -> usize {
+    let height = height as usize;
+    let marker_rows = usize::from(new_output_marker_visible(app, total_lines, height));
+    height.saturating_sub(marker_rows)
+}
+
 pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let width = area.width as usize;
     let durable = durable_lines_for_render(app, theme, width);
@@ -43,26 +60,29 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let view = app.active_view();
     let follow = view.is_none_or(|view| view.scroll.follow_tail);
     let offset = view.map_or(0, |view| view.scroll.offset);
-    let height = area.height as usize;
+    let marker = new_output_marker_visible(app, total, area.height as usize);
+    let content_height = visible_rows(app, total, area.height);
     // Follow the tail by construction; otherwise clamp the stored offset and
     // flag whether content remains below the visible window (spec 32).
     let start = if follow {
-        total.saturating_sub(height)
+        total.saturating_sub(content_height)
     } else {
-        offset.min(total.saturating_sub(height))
+        offset.min(total.saturating_sub(content_height))
     };
-    let end = (start + height).min(total);
+    let end = (start + content_height).min(total);
     let visible: Vec<Line<'static>> = lines[start..end].to_vec();
-    frame.render_widget(Paragraph::new(visible), area);
+    let content_area = Rect::new(area.x, area.y, area.width, content_height as u16);
+    frame.render_widget(Paragraph::new(visible), content_area);
 
-    if !follow && total > end {
-        let hint = Paragraph::new(Line::from(Span::styled(
-            "↓ new output",
-            Style::new().fg(theme.dim),
-        )));
+    if marker {
+        let hint = Paragraph::new(layout::filled(
+            NEW_OUTPUT_MARKER,
+            width,
+            Style::new().fg(theme.dim).bg(theme.page_bg),
+        ));
         frame.render_widget(
             hint,
-            Rect::new(area.x, area.y + area.height.saturating_sub(1), 12, 1),
+            Rect::new(area.x, area.y + content_height as u16, area.width, 1),
         );
     }
 }
@@ -108,19 +128,16 @@ fn build_durable_lines(
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for block in &view.transcript.blocks {
-        match block {
-            TranscriptBlock::User(user) => lines.extend(user::lines(theme, user, width)),
+        let section = match block {
+            TranscriptBlock::User(user) => user::lines(theme, user, width),
             TranscriptBlock::Assistant(assistant) => {
-                lines.extend(assistant::lines(theme, assistant, width, reasoning_visible))
+                assistant::lines(theme, assistant, width, reasoning_visible)
             }
-            TranscriptBlock::Tool(tool) => {
-                lines.extend(tool::durable(theme, tool, width, view.tools_expanded))
-            }
-            TranscriptBlock::Summary(_) => lines.extend(summary_lines(theme, width)),
-            TranscriptBlock::Terminal(terminal) => {
-                lines.extend(terminal_lines(theme, terminal, width))
-            }
-        }
+            TranscriptBlock::Tool(tool) => tool::durable(theme, tool, width, view.tools_expanded),
+            TranscriptBlock::Summary(_) => summary_lines(theme, width),
+            TranscriptBlock::Terminal(terminal) => terminal_lines(theme, terminal, width),
+        };
+        layout::append_section(&mut lines, section);
     }
     lines
 }
@@ -134,7 +151,7 @@ fn all_lines_with_durable(
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.extend(header::lines(theme, app));
     if let Some(view) = app.active_view() {
-        lines.extend_from_slice(durable);
+        layout::append_section_ref(&mut lines, durable);
         if let Some(live) = &view.live {
             live_section(theme, live, width, app.reasoning_visible, &mut lines);
         }
@@ -152,21 +169,23 @@ fn live_section(
     reasoning_visible: bool,
     out: &mut Vec<Line<'static>>,
 ) {
-    out.extend(reasoning::live_lines(
-        theme,
-        &live.reasoning,
-        width,
-        reasoning_visible,
-    ));
+    let mut sections = Vec::new();
+    layout::append_section(
+        &mut sections,
+        reasoning::live_lines(theme, &live.reasoning, width, reasoning_visible),
+    );
     if !live.text.is_empty() {
         let base = Style::new().fg(theme.text);
-        for line in wrap_plain(&live.text, width.saturating_sub(1).max(1), base) {
-            out.push(layout::left_pad(line, 1));
-        }
+        let lines = wrap_plain(&live.text, width.saturating_sub(1).max(1), base)
+            .into_iter()
+            .map(|line| layout::left_pad(line, 1))
+            .collect();
+        layout::append_section(&mut sections, layout::vertical_section(lines));
     }
     for live_tool in &live.tools {
-        out.extend(tool::live(theme, live_tool, width));
+        layout::append_section(&mut sections, tool::live(theme, live_tool, width));
     }
+    layout::append_section(out, sections);
 }
 
 fn summary_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {

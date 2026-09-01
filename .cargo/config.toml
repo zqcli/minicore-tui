@@ -1,0 +1,8 @@
+# Darwin-only linker settings needed for ad-hoc code-signing headroom.
+[target.x86_64-apple-darwin]
+rustflags = [
+    "-C",
+    "link-arg=-Wl,-headerpad,0x4000",
+    "-C",
+    "link-arg=-mmacosx-version-min=11.0",
+]

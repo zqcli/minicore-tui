@@ -25,6 +25,21 @@ metadata, and dependency-tree checks, and 900 seconds for test, clippy, and
 doc checks. The command itself is more important than the builder location;
 credentials and private workspace paths are never recorded in test artifacts.
 
+## Reproducible macOS Artifact
+
+From the repository root, `scripts/build-macos-x86_64.sh` checks for
+`cargo-zigbuild` and `zig`, fixes `MACOSX_DEPLOYMENT_TARGET=11.0`, clears
+external Rust flag/target-directory overrides, and runs the locked Rust 1.85
+Darwin release build. The target-specific `.cargo/config.toml` reserves
+`0x4000` bytes of Mach-O header padding without affecting Linux or Windows
+targets; the script checks and prints the relative and absolute artifact path.
+On macOS, `scripts/verify-macos-binary.sh [binary]` locates the
+`__TEXT,__text` section, checks load-command bounds and `minos 11.0`, runs
+`file`, `nm`, `size`, and `dwarfdump --uuid`, and fail-closes on malformed
+`LC_CODE_SIGNATURE` ranges before strict codesign verification. Its
+`scripts/verify-macos-binary.sh --self-test` mode runs the same metadata parser
+against portable fixtures, so it also runs on Linux without macOS tools.
+
 ## Counting Targets And Tests
 
 `cargo metadata --no-deps --format-version 1` is the source of truth for Cargo

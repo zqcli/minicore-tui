@@ -32,6 +32,7 @@ pub fn durable(
             None => out.push(layout::filled("  (no result)", width, base)),
         }
     }
+    out.push(Line::default());
     out
 }
 
@@ -50,6 +51,7 @@ pub fn live(theme: &Theme, tool: &LiveTool, width: usize) -> Vec<Line<'static>> 
     if let Some(progress) = &tool.progress {
         out.push(layout::filled(&format!("  {progress}"), width, base));
     }
+    out.push(Line::default());
     out
 }
 

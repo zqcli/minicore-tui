@@ -9,6 +9,9 @@ use crate::state::transcript::UserBlock;
 use crate::theme::Theme;
 
 pub fn lines(theme: &Theme, block: &UserBlock, width: usize) -> Vec<Line<'static>> {
+    if block.text.trim().is_empty() {
+        return Vec::new();
+    }
     let mut out = vec![Line::default()];
     let base = Style::new().fg(theme.text).bg(theme.user_message_bg);
     let inner = width.saturating_sub(2).max(1);

@@ -1,14 +1,14 @@
+ a user turn
+
  A substantial assistant reply for block 20 with enough text to wrap over severa
  l rows.
 
  a user turn
 
-
  A substantial assistant reply for block 21 with enough text to wrap over severa
  l rows.
 
  a user turn
-
 
  A substantial assistant reply for block 22 with enough text to wrap over severa
  l rows.

@@ -7,10 +7,13 @@ use ratatui::style::Modifier;
 
 use crate::app::App;
 use crate::event::{AppEvent, RpcEvent};
-use crate::state::transcript::ToolBlock;
+use crate::state::tool::{LiveTool, ToolStatus};
+use crate::state::transcript::{
+    AssistantBlock, AssistantPart, ToolBlock, TranscriptBlock, UserBlock,
+};
 use crate::theme::{Theme, ThemeKind};
 use crate::ui::testapp;
-use crate::ui::{footer, render, tool};
+use crate::ui::{assistant, footer, layout, reasoning, render, tool, transcript, user};
 
 fn draw(app: &App, width: u16, height: u16) -> Terminal<TestBackend> {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -28,11 +31,361 @@ fn text(terminal: &Terminal<TestBackend>) -> String {
         .collect()
 }
 
+fn buffer_lines(terminal: &Terminal<TestBackend>) -> Vec<String> {
+    let width = terminal.backend().buffer().area.width as usize;
+    terminal
+        .backend()
+        .buffer()
+        .content()
+        .chunks(width)
+        .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+        .collect()
+}
+
 fn any_cell_matching(
     terminal: &Terminal<TestBackend>,
     predicate: impl Fn(&ratatui::buffer::Cell) -> bool,
 ) -> bool {
     terminal.backend().buffer().content().iter().any(predicate)
+}
+
+fn line_text(line: &ratatui::text::Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+fn is_blank(line: &ratatui::text::Line<'_>) -> bool {
+    line_text(line).trim().is_empty()
+}
+
+fn assert_section_is_vertically_padded(lines: &[ratatui::text::Line<'_>], label: &str) {
+    assert!(
+        lines.len() >= 3,
+        "{label} needs top, content, and bottom rows"
+    );
+    assert!(is_blank(&lines[0]), "{label} needs one blank row above");
+    assert!(
+        !is_blank(&lines[1]),
+        "{label} must start content immediately after the top row"
+    );
+    assert!(
+        !is_blank(&lines[lines.len() - 2]),
+        "{label} must end content immediately before the bottom row"
+    );
+    assert!(
+        is_blank(&lines[lines.len() - 1]),
+        "{label} needs one blank row below"
+    );
+}
+
+fn assert_no_adjacent_blank_rows(lines: &[ratatui::text::Line<'_>], label: &str) {
+    for pair in lines.windows(2) {
+        assert!(
+            !(is_blank(&pair[0]) && is_blank(&pair[1])),
+            "{label} has duplicate boundary blank rows"
+        );
+    }
+}
+
+#[test]
+fn message_and_tool_sections_have_symmetric_vertical_padding() {
+    let theme = Theme::dark();
+
+    let user_lines = user::lines(
+        &theme,
+        &UserBlock {
+            seq: Some(1),
+            turn_id: Some("turn".to_owned()),
+            text: "user text".to_owned(),
+            pending: false,
+        },
+        40,
+    );
+    assert_section_is_vertically_padded(&user_lines, "user message");
+
+    let assistant_lines = assistant::lines(
+        &theme,
+        &AssistantBlock {
+            seq: 2,
+            turn_id: "turn".to_owned(),
+            model: "model".to_owned(),
+            parts: vec![AssistantPart::Text("assistant text".to_owned())],
+            terminal_error: None,
+        },
+        40,
+        true,
+    );
+    assert_section_is_vertically_padded(&assistant_lines, "assistant message");
+
+    let visible_thinking = reasoning::visible_lines(&theme, "thinking text", 40);
+    let hidden_thinking = reasoning::thinking_line(&theme);
+    let live_thinking = reasoning::live_lines(&theme, "live thinking", 40, true);
+    for (label, lines) in [
+        ("visible thinking", visible_thinking),
+        ("hidden thinking", hidden_thinking),
+        ("live thinking", live_thinking),
+    ] {
+        assert_section_is_vertically_padded(&lines, label);
+        assert!(
+            line_text(&lines[1]).starts_with(' '),
+            "{label} content must use the same one-column left padding"
+        );
+    }
+
+    let tool_lines = tool::durable(
+        &theme,
+        &ToolBlock {
+            tool_call_id: "call".to_owned(),
+            turn_id: "turn".to_owned(),
+            name: "bash".to_owned(),
+            arguments: None,
+            result: Some("command result".to_owned()),
+            outcome: Some("success".to_owned()),
+            live_status: None,
+            progress: None,
+            expanded: true,
+        },
+        40,
+        false,
+    );
+    assert_section_is_vertically_padded(&tool_lines, "durable tool call");
+
+    let live_tool_lines = tool::live(
+        &theme,
+        &LiveTool {
+            tool_call_id: "call".to_owned(),
+            name: "bash".to_owned(),
+            status: ToolStatus::Running,
+            progress: Some("running command".to_owned()),
+        },
+        40,
+    );
+    assert_section_is_vertically_padded(&live_tool_lines, "live tool call");
+}
+
+#[test]
+fn assistant_parts_keep_order_and_share_boundary_padding() {
+    let lines = assistant::lines(
+        &Theme::dark(),
+        &AssistantBlock {
+            seq: 2,
+            turn_id: "turn".to_owned(),
+            model: "model".to_owned(),
+            parts: vec![
+                AssistantPart::Text("first".to_owned()),
+                AssistantPart::Reasoning("thinking".to_owned()),
+                AssistantPart::Text("second".to_owned()),
+            ],
+            terminal_error: None,
+        },
+        40,
+        true,
+    );
+    let text: Vec<String> = lines.iter().map(line_text).collect();
+    assert_eq!(text, vec!["", " first", "", " thinking", "", " second", ""]);
+    assert_no_adjacent_blank_rows(&lines, "assistant text/reasoning/text");
+}
+
+#[test]
+fn adjacent_assistant_sections_share_one_boundary_row() {
+    let theme = Theme::dark();
+    let make = |text: &str, seq| AssistantBlock {
+        seq,
+        turn_id: "turn".to_owned(),
+        model: "model".to_owned(),
+        parts: vec![AssistantPart::Text(text.to_owned())],
+        terminal_error: None,
+    };
+    let mut lines = Vec::new();
+    layout::append_section(
+        &mut lines,
+        assistant::lines(&theme, &make("first", 2), 40, true),
+    );
+    layout::append_section(
+        &mut lines,
+        assistant::lines(&theme, &make("second", 3), 40, true),
+    );
+    assert_eq!(
+        lines.iter().map(line_text).collect::<Vec<_>>(),
+        vec!["", " first", "", " second", ""]
+    );
+    assert_no_adjacent_blank_rows(&lines, "adjacent assistant sections");
+}
+
+#[test]
+fn empty_reasoning_renders_nothing_and_does_not_hide_the_next_run() {
+    let theme = Theme::dark();
+    assert!(reasoning::reasoning_lines(&theme, "", 40, false, false).is_empty());
+    assert!(reasoning::live_lines(&theme, "", 40, false).is_empty());
+
+    let lines = assistant::lines(
+        &theme,
+        &AssistantBlock {
+            seq: 2,
+            turn_id: "turn".to_owned(),
+            model: "model".to_owned(),
+            parts: vec![
+                AssistantPart::Text("answer".to_owned()),
+                AssistantPart::Reasoning(String::new()),
+                AssistantPart::Reasoning("hidden".to_owned()),
+            ],
+            terminal_error: None,
+        },
+        40,
+        false,
+    );
+    let text: Vec<String> = lines.iter().map(line_text).collect();
+    assert_eq!(text, vec!["", " answer", "", " Thinking...", ""]);
+    assert_no_adjacent_blank_rows(&lines, "empty reasoning followed by hidden reasoning");
+}
+
+#[test]
+fn explicit_markdown_blank_lines_survive_section_padding() {
+    let lines = assistant::lines(
+        &Theme::dark(),
+        &AssistantBlock {
+            seq: 2,
+            turn_id: "turn".to_owned(),
+            model: "model".to_owned(),
+            parts: vec![AssistantPart::Text("one\n\nthree".to_owned())],
+            terminal_error: None,
+        },
+        40,
+        true,
+    );
+    let text: Vec<String> = lines.iter().map(line_text).collect();
+    assert_eq!(text, vec!["", " one", " ", " three", ""]);
+}
+
+#[test]
+fn user_assistant_and_tool_boundaries_share_one_blank_row() {
+    let theme = Theme::dark();
+    let user_lines = user::lines(
+        &theme,
+        &UserBlock {
+            seq: Some(1),
+            turn_id: Some("turn".to_owned()),
+            text: "user".to_owned(),
+            pending: false,
+        },
+        40,
+    );
+    let assistant_lines = assistant::lines(
+        &theme,
+        &AssistantBlock {
+            seq: 2,
+            turn_id: "turn".to_owned(),
+            model: "model".to_owned(),
+            parts: vec![AssistantPart::Text("assistant".to_owned())],
+            terminal_error: None,
+        },
+        40,
+        true,
+    );
+    let tool_lines = tool::live(
+        &theme,
+        &LiveTool {
+            tool_call_id: "call".to_owned(),
+            name: "bash".to_owned(),
+            status: ToolStatus::Running,
+            progress: None,
+        },
+        40,
+    );
+    let mut lines = Vec::new();
+    layout::append_section(&mut lines, user_lines);
+    layout::append_section(&mut lines, assistant_lines);
+    layout::append_section(&mut lines, tool_lines);
+    assert_no_adjacent_blank_rows(&lines, "user/assistant/tool");
+    assert_eq!(
+        lines.iter().filter(|line| !is_blank(line)).count(),
+        3,
+        "each section contributes one content row"
+    );
+}
+
+#[test]
+fn cached_and_fallback_transcripts_have_identical_section_spacing() {
+    let theme = Theme::dark();
+    let mut app = testapp::open_empty(ThemeKind::Dark, "ses_1", None, "high");
+    app.sessions
+        .known
+        .get_mut("ses_1")
+        .unwrap()
+        .transcript
+        .blocks = vec![
+        TranscriptBlock::User(UserBlock {
+            seq: Some(1),
+            turn_id: Some("turn".to_owned()),
+            text: "user".to_owned(),
+            pending: false,
+        }),
+        TranscriptBlock::Assistant(AssistantBlock {
+            seq: 2,
+            turn_id: "turn".to_owned(),
+            model: "model".to_owned(),
+            parts: vec![
+                AssistantPart::Text("first".to_owned()),
+                AssistantPart::Reasoning("thinking".to_owned()),
+                AssistantPart::Text("second".to_owned()),
+            ],
+            terminal_error: None,
+        }),
+        TranscriptBlock::Tool(ToolBlock {
+            tool_call_id: "call".to_owned(),
+            turn_id: "turn".to_owned(),
+            name: "bash".to_owned(),
+            arguments: None,
+            result: None,
+            outcome: None,
+            live_status: None,
+            progress: None,
+            expanded: false,
+        }),
+    ];
+
+    let fallback = transcript::all_lines(&theme, &app, 80);
+    let prepared = transcript::prepare_cache(&app, 80).expect("durable cache preparation");
+    app.update(AppEvent::TranscriptCachePrepared(prepared));
+    let cached = transcript::all_lines(&theme, &app, 80);
+    assert_eq!(cached, fallback);
+    assert_no_adjacent_blank_rows(&cached, "cached transcript");
+}
+
+#[test]
+fn durable_and_live_tool_sections_have_the_same_padding_shape() {
+    let theme = Theme::dark();
+    let durable = tool::durable(
+        &theme,
+        &ToolBlock {
+            tool_call_id: "call".to_owned(),
+            turn_id: "turn".to_owned(),
+            name: "bash".to_owned(),
+            arguments: None,
+            result: None,
+            outcome: None,
+            live_status: None,
+            progress: None,
+            expanded: false,
+        },
+        40,
+        false,
+    );
+    let live = tool::live(
+        &theme,
+        &LiveTool {
+            tool_call_id: "call".to_owned(),
+            name: "bash".to_owned(),
+            status: ToolStatus::Running,
+            progress: None,
+        },
+        40,
+    );
+    assert_eq!(durable.len(), live.len());
+    assert_section_is_vertically_padded(&durable, "durable collapsed tool");
+    assert_section_is_vertically_padded(&live, "live tool");
 }
 
 #[test]
@@ -520,4 +873,99 @@ fn new_output_marker_renders_when_scrolled_away() {
     let app = testapp::new_output_marker(ThemeKind::Dark);
     let terminal = draw(&app, 80, 24);
     assert!(text(&terminal).contains("↓ new output"));
+}
+
+#[test]
+fn new_output_marker_gets_its_own_row_without_overwriting_transcript() {
+    let mut app = testapp::scrolled(ThemeKind::Dark);
+    let all = transcript::all_lines(&Theme::dark(), &app, 80);
+    let total = all.len();
+    app.update(AppEvent::Viewport {
+        total_lines: total,
+        visible_rows: 16,
+    });
+    let terminal = draw(&app, 80, 24);
+    let rows = buffer_lines(&terminal);
+    let marker_row = rows
+        .iter()
+        .position(|row| row.starts_with("↓ new output"))
+        .expect("scrolled transcript shows the new-output marker");
+    assert_eq!(rows[marker_row].trim_end(), "↓ new output");
+    assert!(!rows[marker_row].contains("wisdom"));
+
+    assert_eq!(transcript::total_lines(&app, 80), total);
+    assert_eq!(
+        transcript::visible_rows(&app, total, 17),
+        16,
+        "the marker consumes one transcript row"
+    );
+    assert!(
+        all.iter()
+            .any(|line| line_text(line).contains("quoted wisdom")),
+        "the covered transcript body remains available to scrolling"
+    );
+    let marker_cells =
+        &terminal.backend().buffer().content()[marker_row * 80..(marker_row + 1) * 80];
+    assert!(
+        marker_cells
+            .iter()
+            .all(|cell| cell.bg == Theme::dark().page_bg),
+        "the marker row clears the transcript background"
+    );
+
+    app.update(AppEvent::Terminal(crossterm::event::Event::Mouse(
+        crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        },
+    )));
+    assert!(
+        buffer_lines(&draw(&app, 80, 24))
+            .iter()
+            .any(|row| row.contains("wisdom")),
+        "scrolling down exposes the transcript row below the marker window"
+    );
+}
+
+#[test]
+fn end_resumes_follow_after_marker_reservation() {
+    let mut app = testapp::scrolled(ThemeKind::Dark);
+    let total = transcript::total_lines(&app, 80);
+    app.update(AppEvent::Viewport {
+        total_lines: total,
+        visible_rows: 16,
+    });
+    assert!(!app.active_view().unwrap().scroll.follow_tail);
+
+    app.update(AppEvent::Terminal(crossterm::event::Event::Key(
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::End,
+            crossterm::event::KeyModifiers::CONTROL,
+        ),
+    )));
+    assert!(app.active_view().unwrap().scroll.follow_tail);
+    assert_eq!(transcript::visible_rows(&app, total, 17), 17);
+    assert!(!text(&draw(&app, 80, 24)).contains("↓ new output"));
+}
+
+#[test]
+fn empty_user_sections_do_not_add_spacer_rows() {
+    let theme = Theme::dark();
+    let make = |text: &str| UserBlock {
+        seq: None,
+        turn_id: None,
+        text: text.to_owned(),
+        pending: true,
+    };
+    for body in ["", " \n\t"] {
+        assert!(
+            user::lines(&theme, &make(body), 40).is_empty(),
+            "empty user body {body:?} is an empty section"
+        );
+    }
+
+    let normal = user::lines(&theme, &make("pending message"), 40);
+    assert_section_is_vertically_padded(&normal, "non-empty pending user");
 }

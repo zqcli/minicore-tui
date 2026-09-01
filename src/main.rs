@@ -152,6 +152,7 @@ async fn run_fullscreen(
 
     let mut last_size = (0, 0);
     let mut last_total = 0usize;
+    let mut last_visible = 0usize;
     let mut last_dock_rows = 0usize;
     let mut last_render = Instant::now();
     let mut rpc_open = true;
@@ -165,13 +166,16 @@ async fn run_fullscreen(
         let width = size.width as usize;
         let total = ui::transcript::total_lines(&app, size.width);
         let dock_rows = ui::layout::dock_rows(&app, size.width, size.height) as usize;
-        let visible = (size.height as usize).saturating_sub(dock_rows);
+        let transcript_height = size.height.saturating_sub(dock_rows as u16);
+        let visible = ui::transcript::visible_rows(&app, total, transcript_height);
         if (width, size.height as usize) != last_size
             || total != last_total
+            || visible != last_visible
             || dock_rows != last_dock_rows
         {
             last_size = (width, size.height as usize);
             last_total = total;
+            last_visible = visible;
             last_dock_rows = dock_rows;
             app.update(AppEvent::Viewport {
                 total_lines: total,

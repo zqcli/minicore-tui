@@ -5,11 +5,11 @@ q / Ctrl+C to quit
 
 Open a session — /new, Ctrl+R, or F1 for help
 
-
  你 好 ， 世 界  👋  请 解 释 一 下
 
-
  这 是  中 文  测 试 ： 你 好 。 宽 度 计 算 对  CJK 每 字 占  2 列 ， emoji 😀  也 占  2 列 。
+
+
 
 
 

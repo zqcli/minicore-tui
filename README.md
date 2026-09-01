@@ -28,6 +28,15 @@ The resulting binary is `target/release/minicore-tui` (or the platform
 executable equivalent). The package is one Cargo package, uses Edition 2024,
 and forbids unsafe code.
 
+For a reproducible macOS x86_64 cross-build with the tracked Darwin linker
+settings, run `scripts/build-macos-x86_64.sh` (requires `cargo-zigbuild` and
+`zig`). The script fixes `MACOSX_DEPLOYMENT_TARGET=11.0`, clears external
+Cargo/Rust flag and target-directory overrides, and prints the unsigned
+artifact path `target/x86_64-apple-darwin/release/minicore-tui`. Verify it
+before and after signing with `scripts/verify-macos-binary.sh`; run
+`scripts/verify-macos-binary.sh --self-test` on any platform for parser
+regression checks.
+
 ## Usage
 
 A run requires `--agent-config`; `--help` and `--version` work without it.

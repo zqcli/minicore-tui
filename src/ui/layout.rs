@@ -100,6 +100,53 @@ pub fn left_pad(line: Line<'static>, width: usize) -> Line<'static> {
     Line::from(spans)
 }
 
+/// Wraps non-empty section content with one blank row above and below.
+pub fn vertical_section(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    let mut section = Vec::with_capacity(lines.len() + 2);
+    section.push(Line::default());
+    section.extend(lines);
+    section.push(Line::default());
+    section
+}
+
+/// Appends one vertically padded section while sharing an adjacent blank
+/// boundary with the previous section. Each content run still has one blank
+/// row above and below, without accumulating duplicate spacer rows.
+pub fn append_section(out: &mut Vec<Line<'static>>, mut section: Vec<Line<'static>>) {
+    if section.is_empty() {
+        return;
+    }
+    if shares_blank_boundary(out, &section) {
+        section.remove(0);
+    }
+    out.extend(section);
+}
+
+/// Appends a borrowed section without copying its line data before the
+/// boundary check. This is used for the durable line cache.
+pub(crate) fn append_section_ref(out: &mut Vec<Line<'static>>, section: &[Line<'static>]) {
+    if section.is_empty() {
+        return;
+    }
+    let start = if shares_blank_boundary(out, section) {
+        1
+    } else {
+        0
+    };
+    out.extend_from_slice(&section[start..]);
+}
+
+fn shares_blank_boundary(out: &[Line<'static>], section: &[Line<'static>]) -> bool {
+    out.last().is_some_and(line_is_blank) && section.first().is_some_and(line_is_blank)
+}
+
+fn line_is_blank(line: &Line<'_>) -> bool {
+    line.spans.iter().all(|span| span.content.trim().is_empty())
+}
+
 /// Appends background cells so the line is exactly `width` cells wide.
 pub fn fill_line(line: Line<'static>, width: usize, style: Style) -> Line<'static> {
     let fill = width.saturating_sub(line_width(&line));

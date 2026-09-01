@@ -5,9 +5,7 @@ q / Ctrl+C to quit
 
 Open a session — /new, Ctrl+R, or F1 for help
 
-
  Hello world with code.
-
 
  Heading
 
@@ -27,6 +25,8 @@ Open a session — /new, Ctrl+R, or F1 for help
  link (https://example.com) at the end.
 
  ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
 
 
 

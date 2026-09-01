@@ -19,6 +19,9 @@ pub fn reasoning_lines(
     visible: bool,
     already_hidden_run: bool,
 ) -> Vec<Line<'static>> {
+    if text.is_empty() {
+        return Vec::new();
+    }
     if visible {
         visible_lines(theme, text, width)
     } else if already_hidden_run {
@@ -33,22 +36,22 @@ pub fn visible_lines(theme: &Theme, text: &str, width: usize) -> Vec<Line<'stati
     if text.is_empty() {
         return Vec::new();
     }
-    let mut out = vec![Line::default()];
     let style = Style::new().fg(theme.muted).add_modifier(Modifier::ITALIC);
-    for line in wrap_plain(text, width.saturating_sub(1).max(1), style) {
-        out.push(layout::left_pad(line, 1));
-    }
-    out
+    let lines = wrap_plain(text, width.saturating_sub(1).max(1), style)
+        .into_iter()
+        .map(|line| layout::left_pad(line, 1))
+        .collect();
+    layout::vertical_section(lines)
 }
 
 /// A single hidden-run label.
 pub fn thinking_line(theme: &Theme) -> Vec<Line<'static>> {
     let style = Style::new().fg(theme.muted).add_modifier(Modifier::ITALIC);
-    vec![Line::styled(" Thinking...", style)]
+    layout::vertical_section(vec![Line::styled(" Thinking...", style)])
 }
 
-/// Live reasoning: same gray italic plain text (no leading blank; it sits
-/// after the live pending user card).
+/// Live reasoning uses the same vertically padded gray italic section as a
+/// durable reasoning run, so streaming and reconciled layouts stay aligned.
 pub fn live_lines(theme: &Theme, text: &str, width: usize, visible: bool) -> Vec<Line<'static>> {
     if text.is_empty() {
         return Vec::new();
@@ -57,8 +60,9 @@ pub fn live_lines(theme: &Theme, text: &str, width: usize, visible: bool) -> Vec
         return thinking_line(theme);
     }
     let style = Style::new().fg(theme.muted).add_modifier(Modifier::ITALIC);
-    wrap_plain(text, width.saturating_sub(1).max(1), style)
+    let lines = wrap_plain(text, width.saturating_sub(1).max(1), style)
         .into_iter()
         .map(|line| layout::left_pad(line, 1))
-        .collect()
+        .collect();
+    layout::vertical_section(lines)
 }

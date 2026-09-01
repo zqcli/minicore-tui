@@ -5,10 +5,10 @@ q / Ctrl+C to quit
 
 Open a session — /new, Ctrl+R, or F1 for help
 
-
  stream me
 
  thinking hard
+
  Streaming contentmore
 
  read                                                                   running

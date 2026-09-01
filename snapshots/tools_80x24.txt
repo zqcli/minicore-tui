@@ -1,4 +1,3 @@
-  line 30 of a long file
   line 31 of a long file
   line 32 of a long file
   line 33 of a long file
@@ -15,6 +14,7 @@
 
  edit                                                                    failed
   edit rejected
+
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │Type a message…                                                               │
 │                                                                              │
