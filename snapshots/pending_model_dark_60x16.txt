@@ -1,0 +1,16 @@
+
+ stream me
+
+ thinking hard
+
+ Streaming contentmore
+
+ read                                               running
+  reading…
+
+⠋ Running read…
+Saved · applies at next model request (rev 2)
+╭──────────────────────────────────────────────────────────╮
+│Steer current turn…                                       │
+╰──────────────────────────────────────────────────────────╯
+request 0 · deep · high · rev 0      next: claude-3-7-sonnet

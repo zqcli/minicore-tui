@@ -13,13 +13,33 @@ use ratatui::widgets::{Block, BorderType, Paragraph};
 
 use crate::app::App;
 use crate::markdown::{char_width, wrap_plain};
+use crate::state::composer::MAX_COMPOSER_BYTES;
 use crate::theme::Theme;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let view = app.active_view();
-    let running = view.is_some_and(|view| view.live.is_some());
+    let waiting = view.is_some_and(|view| {
+        view.live.as_ref().is_some_and(|live| live.waiting)
+            || view.state.as_ref().is_some_and(|state| {
+                state.status == crate::protocol::SessionStatusWire::WaitingForInput
+            })
+    });
+    let finishing = view.is_some_and(|view| {
+        view.state
+            .as_ref()
+            .is_some_and(|state| state.status == crate::protocol::SessionStatusWire::Finishing)
+    });
+    let running = view.is_some_and(|view| view.is_running());
     let border_color = match view {
-        Some(view) => theme.reasoning_color(view.info.reasoning),
+        Some(view) => {
+            let reasoning = view
+                .live
+                .as_ref()
+                .and_then(|l| l.requests.last().map(|r| r.reasoning))
+                .or_else(|| view.last_request.as_ref().map(|r| r.reasoning))
+                .unwrap_or(view.info.reasoning);
+            theme.reasoning_color(reasoning)
+        }
         None => theme.thinking_disabled,
     };
     let block = Block::bordered()
@@ -29,7 +49,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
 
     let inner = area.inner(Margin::new(1, 1));
     let width = inner.width as usize;
-    let contents = compose_lines(app, theme, width, running);
+    let contents = compose_lines(app, theme, width, running, waiting, finishing);
     let (cursor_row, cursor_col) = cursor_cell(app, width);
 
     // Keep the cursor row visible when the buffer overflows the panel.
@@ -70,11 +90,29 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
 
 /// The wrapped composer rows, styled as plain text (the buffer may be
 /// empty, in which case a placeholder row is returned by `compose_lines`).
-fn compose_lines(app: &App, theme: &Theme, width: usize, running: bool) -> Vec<Line<'static>> {
+fn compose_lines(
+    app: &App,
+    theme: &Theme,
+    width: usize,
+    running: bool,
+    waiting: bool,
+    finishing: bool,
+) -> Vec<Line<'static>> {
     let style = Style::new().fg(theme.text);
     if app.composer.is_empty() {
-        let placeholder = if running {
-            "Agent is working — Esc to cancel"
+        let blocked = app.active_view().is_some_and(|view| {
+            view.state
+                .as_ref()
+                .is_some_and(|state| state.status == crate::protocol::SessionStatusWire::Blocked)
+        });
+        let placeholder = if blocked {
+            "Session blocked"
+        } else if running {
+            "Steer current turn…"
+        } else if waiting {
+            "Unsupported interaction — Esc to cancel"
+        } else if finishing {
+            "Saving turn…"
         } else if app.active_view().is_none() {
             "Create or open a session"
         } else {
@@ -85,6 +123,16 @@ fn compose_lines(app: &App, theme: &Theme, width: usize, running: bool) -> Vec<L
     let mut rows = Vec::new();
     for raw in app.composer.lines() {
         rows.extend(wrap_plain(raw, width, style));
+    }
+    if app.composer.content().len() >= MAX_COMPOSER_BYTES * 9 / 10 {
+        rows.push(Line::styled(
+            format!(
+                "{}/{} bytes",
+                app.composer.content().len(),
+                MAX_COMPOSER_BYTES
+            ),
+            Style::new().fg(theme.muted),
+        ));
     }
     rows
 }

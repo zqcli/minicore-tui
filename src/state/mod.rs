@@ -1,4 +1,4 @@
-//! Pure app state (development spec 12). These modules hold data and tiny
+//! Pure app state (development spec r2). These modules hold data and tiny
 //! helpers only: every mutation happens inside `App::update` (`src/app.rs`),
 //! which is the single entry point for state changes.
 
@@ -15,11 +15,14 @@ pub use composer::Composer;
 pub use selection::{
     Dock, NewSessionField, NewSessionState, SELECTOR_PAGE, SelectorKind, SelectorState,
 };
-pub use session::{ScrollState, SessionId, SessionView, SessionsState};
+pub use session::{
+    ConfigUpdateState, PendingConfigUpdate, ScrollState, SessionId, SessionView, SessionsState,
+};
 pub use tool::{LiveTool, ToolStatus};
 pub use transcript::{
-    AssistantBlock, AssistantPart, PreparedTranscriptCache, SummaryBlock, TerminalBlock, ToolBlock,
-    ToolExpansion, TranscriptBlock, TranscriptCacheKey, TranscriptRenderCache, TranscriptState,
-    UserBlock,
+    AssistantBlock, AssistantPart, PreparedTranscriptCache, SummaryBlock, ToolBlock, ToolExpansion,
+    TranscriptBlock, TranscriptCacheKey, TranscriptRenderCache, TranscriptState, UserBlock,
 };
-pub use turn::{LiveTurn, LocalSubmissionId};
+pub use turn::{
+    LiveLoop, LiveRequest, LocalSubmissionId, PendingSteer, PendingSteerState, UnsavedLoop,
+};

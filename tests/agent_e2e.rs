@@ -1,705 +1,1435 @@
-//! End-to-end test driving a REAL `minicore-agent` through the production
-//! `RpcProcess` + `App` (not a bespoke protocol client). Offline by default:
+//! Spec 61 Real-Agent E2E test suite.
 //!
-//! ```text
-//! MINICORE_AGENT_BIN=~/minicore-agent-e2e/target/release/minicore-agent \
-//! MINICORE_AGENT_CONFIG=/tmp/mct-e2e/agent.toml \
-//! cargo test --test agent_e2e -- --ignored
-//! ```
+//! All tests are self-contained and run against a loopback mock HTTP server
+//! simulating the OpenAI Responses API. They use isolated temporary directories
+//! and require no external network, real API credentials, or parent-directory traversal.
 //!
-//! The config must point at a loopback mock provider (localhost / 127.0.0.1)
-//! and must not embed real credentials; this test refuses anything else and
-//! never touches the user's real config or data directory — it uses its own
-//! RAII temp workspace (removed on drop, including panic unwinds).
+//! To run these tests:
+//!   MINICORE_AGENT_BIN=/path/to/minicore-agent cargo test --test agent_e2e -- --ignored
 
-use std::net::IpAddr;
+use std::collections::VecDeque;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant, SystemTime};
 
 use minicore_tui::app::{App, ConnectionState, RequestKind};
 use minicore_tui::command::AppCommand;
 use minicore_tui::event::{AppEvent, RpcEvent};
-use minicore_tui::protocol::{IncomingFrame, RequestId};
+use minicore_tui::protocol::{
+    CancelReasonWire, HistoryItemWire, IncomingFrame, LoopOutcomeWire, TurnPersistenceWire,
+    TurnResultViewWire, UserMessageKindWire,
+};
 use minicore_tui::rpc::RpcProcess;
-use minicore_tui::state::TranscriptBlock;
+use minicore_tui::state::session::ConfigUpdateState;
+use minicore_tui::state::turn::PendingSteerState;
 use minicore_tui::theme::ThemeKind;
-use url::Url;
+use serde_json::json;
 
-const E2E_TIMEOUT: Duration = Duration::from_secs(120);
+const TIMEOUT: Duration = Duration::from_secs(30);
+const MOCK_API_KEY_ENV: &str = "MINICORE_E2E_MOCK_API_KEY";
+const MOCK_API_KEY_VAL: &str = "mock-key-spec61-round7-e2e";
+const MAX_HTTP_HEADER_SIZE: usize = 64 * 1024;
+const MAX_HTTP_BODY_SIZE: usize = 1024 * 1024;
 
-/// Unique per-run temp workspace with RAII cleanup; never the user's real
-/// directories. `Drop` removes it even when a test panics.
-struct E2eWorkspace {
-    path: PathBuf,
+fn require_agent_bin() -> String {
+    std::env::var("MINICORE_AGENT_BIN")
+        .expect("MINICORE_AGENT_BIN must be set to run agent_e2e tests; cannot silently pass")
 }
 
-impl E2eWorkspace {
-    fn new() -> Self {
-        static SEQ: AtomicU64 = AtomicU64::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "minicore-tui-e2e-{}-{}",
-            std::process::id(),
-            SEQ.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&path).expect("create the E2E temp workspace");
-        Self { path }
+// ============================================================================
+// Loopback Mock Server for OpenAI Responses Provider
+// ============================================================================
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct RecordedRequest {
+    method: String,
+    path: String,
+    headers: Vec<(String, String)>,
+    body: String,
+    json: serde_json::Value,
+    model: Option<String>,
+}
+
+struct MockResponse {
+    body: String,
+    gate: Option<Arc<AtomicBool>>,
+    expected_model: Option<String>,
+}
+
+struct MockHttpServer {
+    port: u16,
+    running: Arc<AtomicBool>,
+    server_thread: Option<JoinHandle<()>>,
+    responses: Arc<Mutex<VecDeque<MockResponse>>>,
+    recorded_requests: Arc<Mutex<Vec<RecordedRequest>>>,
+}
+
+impl MockHttpServer {
+    fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback mock server");
+        let port = listener.local_addr().expect("local addr").port();
+        listener
+            .set_nonblocking(true)
+            .expect("set nonblocking listener");
+
+        let running = Arc::new(AtomicBool::new(true));
+        let responses = Arc::new(Mutex::new(VecDeque::new()));
+        let recorded_requests = Arc::new(Mutex::new(Vec::new()));
+
+        let running_clone = running.clone();
+        let responses_clone = responses.clone();
+        let recorded_clone = recorded_requests.clone();
+
+        let server_thread = thread::spawn(move || {
+            while running_clone.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        handle_connection(
+                            &mut stream,
+                            &responses_clone,
+                            &recorded_clone,
+                            &running_clone,
+                        );
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Self {
+            port,
+            running,
+            server_thread: Some(server_thread),
+            responses,
+            recorded_requests,
+        }
     }
 
-    fn data_dir(&self) -> PathBuf {
-        self.path.join("data")
+    fn url(&self) -> String {
+        format!("http://127.0.0.1:{}/v1", self.port)
     }
 
-    fn workspace_dir(&self) -> PathBuf {
-        self.path.join("workspace")
+    fn enqueue_sse(&self, sse_body: String) {
+        self.responses.lock().unwrap().push_back(MockResponse {
+            body: sse_body,
+            gate: None,
+            expected_model: None,
+        });
     }
 
-    fn derived_config_path(&self) -> PathBuf {
-        self.path.join("agent.toml")
+    fn enqueue_sse_with_model(&self, sse_body: String, expected_model: &str) {
+        self.responses.lock().unwrap().push_back(MockResponse {
+            body: sse_body,
+            gate: None,
+            expected_model: Some(expected_model.to_string()),
+        });
+    }
+
+    fn enqueue_gated(&self, sse_body: String, gate: Arc<AtomicBool>, expected_model: Option<&str>) {
+        self.responses.lock().unwrap().push_back(MockResponse {
+            body: sse_body,
+            gate: Some(gate),
+            expected_model: expected_model.map(|s| s.to_string()),
+        });
+    }
+
+    fn recorded_requests(&self) -> Vec<RecordedRequest> {
+        self.recorded_requests.lock().unwrap().clone()
     }
 }
 
-impl Drop for E2eWorkspace {
+impl Drop for MockHttpServer {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+        self.running.store(false, Ordering::Relaxed);
+        // Poke listener to unblock accept if pending
+        let _ = TcpStream::connect(format!("127.0.0.1:{}", self.port));
+        if let Some(thread) = self.server_thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
-fn assistant_count(app: &App, session_id: &str) -> usize {
-    app.sessions
-        .known
-        .get(session_id)
-        .map(|view| {
-            view.transcript
-                .blocks
-                .iter()
-                .filter(|block| matches!(block, TranscriptBlock::Assistant(_)))
-                .count()
-        })
-        .unwrap_or(0)
-}
+type RawHttpRequest = (String, String, Vec<(String, String)>, Vec<u8>);
 
-/// The last durable assistant text, if any (a known loopback response can be
-/// asserted against this; user-provided input text must never be relied on).
-fn last_assistant_text(app: &App, session_id: &str) -> Option<String> {
-    let view = app.sessions.known.get(session_id)?;
-    view.transcript
-        .blocks
-        .iter()
-        .rev()
-        .find_map(|block| match block {
-            TranscriptBlock::Assistant(card) => Some(
-                card.parts
-                    .iter()
-                    .filter_map(|part| match part {
-                        minicore_tui::state::AssistantPart::Text(text) => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            ),
-            _ => None,
-        })
-}
+fn read_http_request(stream: &mut TcpStream) -> Result<RawHttpRequest, String> {
+    let mut buf = [0u8; 4096];
+    let mut total_read = Vec::new();
 
-/// Count only durable user entries: a local optimistic card has neither a
-/// sequence nor a cleared `pending` flag.
-fn durable_user_count(app: &App, session_id: &str) -> usize {
-    app.sessions
-        .known
-        .get(session_id)
-        .map(|view| {
-            view.transcript
-                .blocks
-                .iter()
-                .filter(|block| {
-                    matches!(
-                        block,
-                        TranscriptBlock::User(card)
-                            if !card.pending && card.seq.is_some()
-                    )
-                })
-                .count()
-        })
-        .unwrap_or(0)
-}
-
-fn durable_user_exists(app: &App, session_id: &str, input: &str, turn_id: &str) -> bool {
-    app.sessions.known.get(session_id).is_some_and(|view| {
-        view.transcript.blocks.iter().any(|block| {
-            matches!(
-                block,
-                TranscriptBlock::User(card)
-                    if !card.pending
-                        && card.seq.is_some()
-                        && card.text == input
-                        && card.turn_id.as_deref() == Some(turn_id)
-            )
-        })
-    })
-}
-
-fn last_assistant_turn_id(app: &App, session_id: &str) -> Option<String> {
-    app.sessions
-        .known
-        .get(session_id)?
-        .transcript
-        .blocks
-        .iter()
-        .rev()
-        .find_map(|block| match block {
-            TranscriptBlock::Assistant(card) => Some(card.turn_id.clone()),
-            _ => None,
-        })
-}
-
-fn validate_model_credentials(value: &toml::Value, path: &str) -> Result<(), String> {
-    match value {
-        toml::Value::Table(table) => {
-            for (key, value) in table {
-                let lower = key.to_ascii_lowercase();
-                let normalized = lower.replace('-', "_");
-                let forbidden = matches!(
-                    normalized.as_str(),
-                    "api_key"
-                        | "apikey"
-                        | "api_key_value"
-                        | "token"
-                        | "password"
-                        | "secret"
-                        | "authorization"
-                        | "bearer"
-                        | "credential"
-                        | "credentials"
-                ) || normalized.ends_with("_token")
-                    || normalized.contains("credential");
-                if forbidden && normalized != "api_key_env" {
-                    return Err(format!(
-                        "model field `{path}.{key}` may not contain credentials"
-                    ));
-                }
-                if normalized == "api_key_env"
-                    && value.as_str().is_none_or(|name| !is_environment_name(name))
-                {
-                    return Err(format!(
-                        "model field `{path}.{key}` must name an environment variable"
-                    ));
-                }
-                validate_model_credentials(value, &format!("{path}.{key}"))?;
-            }
+    let header_end = loop {
+        let n = stream.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            return Err("early EOF before headers ended".into());
         }
-        toml::Value::Array(values) => {
-            for (index, value) in values.iter().enumerate() {
-                validate_model_credentials(value, &format!("{path}[{index}]"))?;
-            }
+        total_read.extend_from_slice(&buf[..n]);
+        if total_read.len() > MAX_HTTP_HEADER_SIZE {
+            return Err("HTTP header exceeds maximum allowed size".into());
         }
-        _ => {}
+        if let Some(pos) = total_read.windows(4).position(|w| w == b"\r\n\r\n") {
+            break pos;
+        }
+    };
+
+    let head_str = String::from_utf8_lossy(&total_read[..header_end]);
+    let mut lines = head_str.lines();
+    let request_line = lines.next().ok_or("missing request line")?;
+    let mut req_parts = request_line.split_whitespace();
+    let method = req_parts.next().unwrap_or("").to_string();
+    let path = req_parts.next().unwrap_or("").to_string();
+
+    let mut headers = Vec::new();
+    let mut content_length: usize = 0;
+    for line in lines {
+        if let Some((k, v)) = line.split_once(':') {
+            let key = k.trim().to_string();
+            let val = v.trim().to_string();
+            if key.eq_ignore_ascii_case("content-length") {
+                content_length = val.parse().unwrap_or(0);
+            }
+            headers.push((key, val));
+        }
+    }
+
+    if content_length > MAX_HTTP_BODY_SIZE {
+        return Err("HTTP content-length exceeds maximum allowed size".into());
+    }
+
+    let body_start = header_end + 4;
+    let mut body = total_read[body_start..].to_vec();
+    if body.len() < content_length {
+        let remaining = content_length - body.len();
+        let mut rem_buf = vec![0u8; remaining];
+        stream.read_exact(&mut rem_buf).map_err(|e| e.to_string())?;
+        body.extend_from_slice(&rem_buf);
+    }
+
+    Ok((method, path, headers, body))
+}
+
+fn handle_connection(
+    stream: &mut TcpStream,
+    responses: &Arc<Mutex<VecDeque<MockResponse>>>,
+    recorded_requests: &Arc<Mutex<Vec<RecordedRequest>>>,
+    running: &Arc<AtomicBool>,
+) {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+
+    let (method, path, headers, body_bytes) = match read_http_request(stream) {
+        Ok(res) => res,
+        Err(_) => return,
+    };
+
+    let body_str = String::from_utf8_lossy(&body_bytes).into_owned();
+    let body_json: serde_json::Value =
+        serde_json::from_str(&body_str).unwrap_or(serde_json::Value::Null);
+    let model = body_json
+        .get("model")
+        .and_then(|m| m.as_str())
+        .map(|s| s.to_string());
+
+    let recorded = RecordedRequest {
+        method,
+        path,
+        headers,
+        body: body_str,
+        json: body_json,
+        model,
+    };
+
+    recorded_requests.lock().unwrap().push(recorded.clone());
+
+    let next_resp = {
+        let mut queue = responses.lock().unwrap();
+        queue.pop_front()
+    };
+
+    let resp = match next_resp {
+        Some(r) => r,
+        None => {
+            // Strict mock server: reject unexpected extra requests
+            let err_body = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: 31\r\n\r\nUnexpected extra HTTP request.";
+            let _ = stream.write_all(err_body.as_bytes());
+            let _ = stream.flush();
+            return;
+        }
+    };
+
+    if let Some(expected) = &resp.expected_model {
+        if recorded.model.as_deref() != Some(expected.as_str()) {
+            let err_body = format!(
+                "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nExpected model {} but got {:?}",
+                expected, recorded.model
+            );
+            let _ = stream.write_all(err_body.as_bytes());
+            let _ = stream.flush();
+            return;
+        }
+    }
+
+    if let Some(gate) = &resp.gate {
+        let wait_start = Instant::now();
+        let gate_timeout = Duration::from_secs(10);
+        while !gate.load(Ordering::Relaxed) && running.load(Ordering::Relaxed) {
+            if wait_start.elapsed() > gate_timeout {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+        resp.body.len(),
+        resp.body
+    );
+
+    let _ = stream.write_all(http_response.as_bytes());
+    let _ = stream.flush();
+}
+
+fn sse_text_response(text: &str) -> String {
+    format!(
+        "data: {}\n\ndata: {}\n\n",
+        json!({"type": "response.output_text.delta", "delta": text}),
+        json!({"type": "response.completed", "response": {
+            "status": "completed",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 10,
+                "total_tokens": 20,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0}
+            }
+        }})
+    )
+}
+
+fn sse_tool_call_response(call_id: &str, tool_name: &str, arguments: &str) -> String {
+    format!(
+        "data: {}\n\ndata: {}\n\n",
+        json!({
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "call_id": call_id,
+                "name": tool_name,
+                "arguments": arguments
+            }
+        }),
+        json!({"type": "response.completed", "response": {
+            "status": "completed",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 10,
+                "total_tokens": 20,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0}
+            }
+        }})
+    )
+}
+
+// ============================================================================
+// Test Environment & Process Management
+// ============================================================================
+
+struct E2eEnvironment {
+    temp_dir: PathBuf,
+    config_path: PathBuf,
+    workspace_path: PathBuf,
+    _server: MockHttpServer,
+}
+
+impl E2eEnvironment {
+    fn setup() -> (Self, String) {
+        let server = MockHttpServer::start();
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("minicore_tui_e2e_{}_{}", std::process::id(), nanos));
+        let workspace_path = temp_dir.join("workspace");
+        let data_dir = temp_dir.join("agent_data");
+        std::fs::create_dir_all(&workspace_path).expect("create workspace");
+        std::fs::create_dir_all(&data_dir).expect("create agent_data");
+
+        let config_path = temp_dir.join("agent.toml");
+        let server_url = server.url();
+        let config_toml = format!(
+            r#"data_dir = {:?}
+event_capacity = 64
+default_profile = "coding"
+
+[profiles.coding]
+model = "deep"
+reasoning = "high"
+system_prompt = "You are a test assistant."
+tools = ["read", "write"]
+max_tool_rounds = 4
+approval = "auto"
+
+[profiles.fast]
+model = "fast"
+reasoning = "low"
+system_prompt = "You are a fast test assistant."
+tools = ["read", "write"]
+max_tool_rounds = 4
+approval = "auto"
+
+[models.deep]
+provider = "open_ai_responses"
+model = "deep-model"
+base_url = "{server_url}"
+api_key_env = "{MOCK_API_KEY_ENV}"
+physical_context_window = 32000
+output_budget_tokens = 2048
+safety_margin_tokens = 1000
+supported_reasoning = ["auto", "low", "medium", "high"]
+supports_tools = true
+request_timeout_seconds = 30
+
+[models.fast]
+provider = "open_ai_responses"
+model = "fast-model"
+base_url = "{server_url}"
+api_key_env = "{MOCK_API_KEY_ENV}"
+physical_context_window = 16000
+output_budget_tokens = 1024
+safety_margin_tokens = 1000
+supported_reasoning = ["auto", "low", "high"]
+supports_tools = true
+request_timeout_seconds = 30
+"#,
+            data_dir
+        );
+        std::fs::write(&config_path, config_toml).expect("write agent.toml");
+
+        let env = Self {
+            temp_dir,
+            config_path,
+            workspace_path,
+            _server: server,
+        };
+        (env, server_url)
+    }
+
+    fn spawn_agent(&self, agent_bin: &str) -> RpcProcess {
+        RpcProcess::spawn_with_env(
+            Path::new(agent_bin),
+            &self.config_path,
+            &[(MOCK_API_KEY_ENV, MOCK_API_KEY_VAL)],
+        )
+        .expect("spawn Agent with mock env")
+    }
+}
+
+impl Drop for E2eEnvironment {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.temp_dir);
+    }
+}
+
+// ============================================================================
+// Driver & Dispatch Helpers
+// ============================================================================
+
+async fn pump_step(process: &mut RpcProcess, app: &mut App) -> Result<(), String> {
+    let event = tokio::time::timeout(Duration::from_secs(10), process.recv())
+        .await
+        .map_err(|_| "recv timed out")?
+        .ok_or("agent process stream ended")?;
+
+    let commands = app.update(AppEvent::Rpc(event));
+    for command in commands {
+        match command {
+            AppCommand::Rpc(req) => {
+                process.send(req).await.map_err(|e| e.to_string())?;
+            }
+            AppCommand::KillChild => process.kill_child(),
+            AppCommand::Exit => return Ok(()),
+        }
     }
     Ok(())
 }
 
-fn is_environment_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    (first == '_' || first.is_ascii_alphabetic())
-        && chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
-}
-
-fn validate_loopback_config(content: &str) -> Result<toml::Value, String> {
-    let value: toml::Value =
-        toml::from_str(content).map_err(|error| format!("invalid TOML: {error}"))?;
-    let models = value
-        .get("models")
-        .and_then(toml::Value::as_table)
-        .ok_or_else(|| "E2E config must contain a [models] table".to_owned())?;
-    if models.is_empty() {
-        return Err("E2E config must contain at least one model".to_owned());
-    }
-    for (model_id, model) in models {
-        let model = model
-            .as_table()
-            .ok_or_else(|| format!("models.{model_id} must be a TOML table"))?;
-        let base_url = model
-            .get("base_url")
-            .and_then(toml::Value::as_str)
-            .ok_or_else(|| format!("models.{model_id}.base_url is required"))?;
-        let url = Url::parse(base_url)
-            .map_err(|error| format!("models.{model_id}.base_url is invalid: {error}"))?;
-        if !matches!(url.scheme(), "http" | "https") {
-            return Err(format!("models.{model_id}.base_url must use http or https"));
-        }
-        let authority = base_url
-            .split_once("://")
-            .and_then(|(_, rest)| rest.split(['/', '?', '#']).next())
-            .unwrap_or_default();
-        if authority.contains('@') || !url.username().is_empty() || url.password().is_some() {
-            return Err(format!(
-                "models.{model_id}.base_url may not contain userinfo"
-            ));
-        }
-        let host = url
-            .host_str()
-            .ok_or_else(|| format!("models.{model_id}.base_url must contain a host"))?;
-        let ip_host = host
-            .strip_prefix('[')
-            .and_then(|host| host.strip_suffix(']'))
-            .unwrap_or(host);
-        let loopback = host.eq_ignore_ascii_case("localhost")
-            || ip_host
-                .parse::<IpAddr>()
-                .map(|address| address.is_loopback())
-                .unwrap_or(false);
-        if !loopback {
-            return Err(format!(
-                "models.{model_id}.base_url must target localhost or a loopback IP"
-            ));
-        }
-        if !model.contains_key("api_key_env") {
-            return Err(format!(
-                "models.{model_id}.api_key_env is required; credentials must come from the environment"
-            ));
-        }
-        validate_model_credentials(
-            &toml::Value::Table(model.clone()),
-            &format!("models.{model_id}"),
-        )?;
-    }
-    Ok(value)
-}
-
-#[cfg(test)]
-mod config_tests {
-    use super::*;
-
-    fn model_config(urls: &[(&str, &str)]) -> String {
-        let models = urls
-            .iter()
-            .map(|(id, url)| {
-                format!("[models.{id}]\nbase_url = \"{url}\"\napi_key_env = \"MCT_MOCK_KEY\"\n")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        format!(
-            "data_dir = \"/user/store\"\n\n{models}\n[profiles.mock]\nmodel = \"{}\"\nreasoning = \"low\"\n",
-            urls[0].0
-        )
-    }
-
-    #[test]
-    fn config_validation_uses_parsed_urls_not_comments_or_substrings() {
-        let commented_remote = r#"
-# localhost is only a comment
-[models.remote]
-base_url = "https://example.com/v1" # localhost
-api_key_env = "MCT_MOCK_KEY"
-"#;
-        assert!(validate_loopback_config(commented_remote).is_err());
-
-        let mixed = model_config(&[
-            ("local", "http://127.0.0.1:8100/v1"),
-            ("remote", "https://example.com/v1"),
-        ]);
-        assert!(validate_loopback_config(&mixed).is_err());
-
-        let hardcoded = r#"
-[models.local]
-base_url = "http://localhost:8100/v1"
-api_key_env = "MCT_MOCK_KEY"
-api_key = "not-allowed"
-"#;
-        assert!(validate_loopback_config(hardcoded).is_err());
-    }
-
-    #[test]
-    fn config_validation_accepts_localhost_ipv4_and_ipv6_only() {
-        for url in [
-            "http://localhost:8100/v1",
-            "https://LOCALHOST/v1",
-            "http://127.0.0.1:8100/v1",
-            "http://[::1]:8100/v1",
-        ] {
-            let config = model_config(&[("local", url)]);
-            assert!(
-                validate_loopback_config(&config).is_ok(),
-                "expected loopback URL to pass: {url}"
-            );
-        }
-        let userinfo = model_config(&[("local", "http://user:pass@localhost/v1")]);
-        assert!(validate_loopback_config(&userinfo).is_err());
-        let unsupported = model_config(&[("local", "ftp://localhost/v1")]);
-        assert!(validate_loopback_config(&unsupported).is_err());
-        let missing_host = model_config(&[("local", "http:///v1")]);
-        assert!(validate_loopback_config(&missing_host).is_err());
-    }
-
-    #[test]
-    fn derived_config_is_isolated_and_does_not_modify_the_original() {
-        let workspace = E2eWorkspace::new();
-        let original_path = workspace.path.join("original.toml");
-        let original = model_config(&[("local", "http://127.0.0.1:8100/v1")]);
-        std::fs::write(&original_path, &original).expect("write original config");
-        let derived = derive_e2e_config(
-            original_path.to_str().expect("utf8 original path"),
-            &workspace,
-        )
-        .expect("derive isolated config");
-        let derived_value: toml::Value =
-            toml::from_str(&std::fs::read_to_string(&derived).expect("read derived config"))
-                .expect("derived TOML parses");
-        let original_value = validate_loopback_config(&original).expect("original parses");
-        let expected_data_dir = workspace.data_dir().to_string_lossy().into_owned();
-        assert_eq!(
-            derived_value.get("data_dir").and_then(toml::Value::as_str),
-            Some(expected_data_dir.as_str())
-        );
-        assert_eq!(derived_value.get("models"), original_value.get("models"));
-        assert_eq!(
-            derived_value.get("profiles"),
-            original_value.get("profiles")
-        );
-        assert_eq!(
-            std::fs::read_to_string(&original_path).expect("original remains readable"),
-            original
-        );
-        assert!(derived.starts_with(&workspace.path));
-        assert!(workspace.data_dir().starts_with(&workspace.path));
-        assert!(workspace.workspace_dir().starts_with(&workspace.path));
-    }
-}
-
-fn derive_e2e_config(original_path: &str, workspace: &E2eWorkspace) -> Result<PathBuf, String> {
-    let original = std::fs::read_to_string(original_path)
-        .map_err(|error| format!("read E2E config: {error}"))?;
-    let mut value = validate_loopback_config(&original)?;
-    std::fs::create_dir_all(workspace.data_dir())
-        .map_err(|error| format!("create E2E data dir: {error}"))?;
-    std::fs::create_dir_all(workspace.workspace_dir())
-        .map_err(|error| format!("create E2E workspace: {error}"))?;
-    value
-        .as_table_mut()
-        .expect("validated TOML root is a table")
-        .insert(
-            "data_dir".to_owned(),
-            toml::Value::String(workspace.data_dir().to_string_lossy().into_owned()),
-        );
-    let derived_path = workspace.derived_config_path();
-    let rendered =
-        toml::to_string(&value).map_err(|error| format!("serialize E2E config: {error}"))?;
-    std::fs::write(&derived_path, rendered)
-        .map_err(|error| format!("write derived E2E config: {error}"))?;
-    Ok(derived_path)
-}
-
-/// Sends the RPC side effects of one update — the same
-/// `App::update` → executor → `RpcProcess::send` wire flow as the real
-/// main loop, minus the terminal. Returns whether the app wants to exit.
-async fn send_commands(
+async fn wait_for_request0_and_wait_turn(
+    env: &E2eEnvironment,
     process: &mut RpcProcess,
-    commands: Vec<AppCommand>,
-) -> Result<bool, String> {
-    let mut exit = false;
-    for command in commands {
-        match command {
-            AppCommand::Rpc(request) => process
-                .send(request)
-                .await
-                .map_err(|error| format!("agent.send failed: {error}"))?,
-            AppCommand::KillChild => process.kill_child(),
-            AppCommand::Exit => exit = true,
-        }
-    }
-    Ok(exit)
-}
-
-/// Pumps events until `predicate` holds, feeding every update's follow-up
-/// requests back into the process. On the way it pins the same-update wait
-/// contract: a `turn.send` response must produce exactly one `turn.wait` in
-/// the same `App::update`, and that id must already be registered in the
-/// pending map before the request is written — so a race can never beat the
-/// registration (spec 13.3).
-async fn pump_until<F>(
     app: &mut App,
-    process: &mut RpcProcess,
-    checks: &mut TurnChecks,
-    predicate: F,
-) -> Result<(), String>
-where
-    F: Fn(&App) -> bool,
-{
-    let deadline = Instant::now() + E2E_TIMEOUT;
-    loop {
-        if predicate(app) {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err(format!(
-                "e2e timed out; connection={:?} active={:?}",
-                app.connection, app.sessions.active
-            ));
-        }
-        let event = tokio::time::timeout(Duration::from_secs(20), process.recv())
-            .await
-            .map_err(|_| "timed out waiting for an agent event".to_owned())?
-            .ok_or_else(|| "the agent channel closed before the flow finished".to_owned())?;
-        if let RpcEvent::Exited(_) = &event {
-            return Err(format!("the agent exited early: {event:?}"));
-        }
-
-        // Which pending kind (if any) the response is resolving, captured
-        // before the update consumes it.
-        let resolved = match &event {
-            RpcEvent::Frame(IncomingFrame::Response(response)) => {
-                app.pending_request_kind(response.id).cloned()
-            }
-            _ => None,
-        };
-        let commands = app.update(AppEvent::Rpc(event));
-        let wait_ids: Vec<RequestId> = commands
-            .iter()
-            .filter_map(|command| match command {
-                AppCommand::Rpc(request) if request.method == "turn.wait" => Some(request.id),
-                _ => None,
-            })
-            .collect();
-        let send_resolved = matches!(&resolved, Some(RequestKind::SendTurn { .. }));
-        if send_resolved {
-            assert_eq!(
-                wait_ids.len(),
-                1,
-                "a turn.send response must issue exactly one turn.wait in the same update"
-            );
-        }
-        for wait_id in wait_ids {
-            assert!(
-                app.request_is_pending(wait_id),
-                "the turn.wait id {} must be registered before it is sent",
-                wait_id.0,
-            );
-            checks.waits_registered += 1;
-            if send_resolved {
-                checks.waits_after_send += 1;
-            }
-        }
-        if send_commands(process, commands).await? {
-            return Err("the app asked to exit before the flow finished".to_owned());
-        }
-    }
-}
-
-#[derive(Default)]
-struct TurnChecks {
-    /// turn.wait commands issued in the same update that resolved a send.
-    waits_after_send: usize,
-    /// turn.wait ids already registered in the pending map when they left
-    /// update.
-    waits_registered: usize,
-}
-
-#[test]
-#[ignore = "offline by default: requires a real loopback-mocked minicore-agent; run with `cargo test --test agent_e2e -- --ignored`"]
-fn real_agent_multi_turn_flow() {
-    let agent_bin = std::env::var("MINICORE_AGENT_BIN").unwrap_or_else(|_| {
-        panic!("agent_e2e needs MINICORE_AGENT_BIN (see tests/agent_e2e.rs for the run command)")
-    });
-    let agent_config = std::env::var("MINICORE_AGENT_CONFIG").unwrap_or_else(|_| {
-        panic!(
-            "agent_e2e needs MINICORE_AGENT_CONFIG pointing at a loopback mock (never a real OpenAI key)"
-        )
-    });
-    let workspace = E2eWorkspace::new();
-    let derived_config = derive_e2e_config(&agent_config, &workspace)
-        .unwrap_or_else(|error| panic!("agent_e2e config rejected: {error}"));
-
-    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-    runtime
-        .block_on(run_e2e(&agent_bin, &derived_config, &workspace))
-        .expect("agent e2e failed");
-}
-
-async fn run_e2e(
-    agent_bin: &str,
-    agent_config: &Path,
-    workspace: &E2eWorkspace,
+    session_id: &str,
 ) -> Result<(), String> {
-    let mut process = RpcProcess::spawn(std::path::Path::new(agent_bin), agent_config)
-        .map_err(|error| format!("spawn: {error}"))?;
-
-    let result = run_e2e_flow(&mut process, workspace).await;
-    process.terminate().await;
-    result
-}
-
-async fn run_e2e_flow(process: &mut RpcProcess, workspace: &E2eWorkspace) -> Result<(), String> {
-    let mut app = App::new(workspace.workspace_dir());
-    app.update(AppEvent::SetTheme(ThemeKind::Dark));
-    let mut checks = TurnChecks::default();
-
-    // Discovery: the four responses may arrive in any order; Ready only
-    // after all of them (the pending map correlates by id).
-    send_commands(process, app.update(AppEvent::Bootstrap)).await?;
-    pump_until(&mut app, process, &mut checks, |app| {
-        app.connection == ConnectionState::Ready
-    })
-    .await?;
-    assert!(!app.catalogs.models.is_empty(), "model.list populated");
-    assert!(!app.catalogs.profiles.is_empty(), "profile.list populated");
-
-    // Create a session in the RAII temp workspace.
-    send_commands(
-        process,
-        app.update(AppEvent::CreateSession {
-            workspace: workspace.workspace_dir().to_string_lossy().into_owned(),
-            profile: None,
-            model: None,
-            reasoning: None,
-            title: Some("e2e session".to_owned()),
-        }),
-    )
-    .await?;
-    pump_until(&mut app, process, &mut checks, |app| {
-        app.sessions.active.is_some()
-    })
-    .await?;
-    let session_id = app.sessions.active.clone().expect("active session");
-
-    // Two full turns. Each waits for a NEW durable assistant block and a
-    // cleared live turn — never for the user text alone, which a durable
-    // UserBlock would satisfy spuriously.
-    for marker in ["e2e-first-marker", "e2e-second-marker"] {
-        let assistant_before = assistant_count(&app, &session_id);
-        let user_before = durable_user_count(&app, &session_id);
-        send_commands(
-            process,
-            app.update(AppEvent::SubmitTurn {
-                session_id: session_id.clone(),
-                text: marker.to_owned(),
-            }),
-        )
-        .await?;
-        pump_until(&mut app, process, &mut checks, |app| {
-            assistant_count(app, &session_id) > assistant_before
-                && app
-                    .sessions
-                    .known
-                    .get(&session_id)
-                    .is_none_or(|view| view.live.is_none())
-        })
-        .await?;
-
-        // The turn is durably reconciled: one new assistant block, the
-        // durable user entry for this input, a complete transcript, and no
-        // live turn left behind.
-        let view = app.sessions.known.get(&session_id).expect("session view");
-        assert_eq!(
-            assistant_count(&app, &session_id),
-            assistant_before + 1,
-            "turn `{marker}` adds exactly one durable assistant block"
-        );
-        assert_eq!(
-            durable_user_count(&app, &session_id),
-            user_before + 1,
-            "turn `{marker}` adds exactly one durable user entry"
-        );
-        let turn_id = last_assistant_turn_id(&app, &session_id)
-            .expect("the new assistant block has a turn id");
-        assert!(
-            durable_user_exists(&app, &session_id, marker, &turn_id),
-            "the durable user message for `{marker}` has a sequence, is not pending, and matches the assistant turn"
-        );
-        assert!(
-            view.transcript.complete,
-            "the transcript is durable and complete after the turn"
-        );
-        assert!(view.live.is_none(), "the live turn cleared after reconcile");
-        let assistant_text =
-            last_assistant_text(&app, &session_id).expect("the new assistant block has text");
-        assert!(
-            !assistant_text.trim().is_empty(),
-            "the new assistant block carries non-empty text"
-        );
-        assert!(
-            assistant_text.contains("e2e mock answered"),
-            "the loopback mock's known answer reached the durable transcript: {assistant_text:?}"
-        );
-    }
-
-    // Every send response issued its wait in the same update and every wait
-    // id was registered before it was written.
-    assert_eq!(
-        checks.waits_after_send, 2,
-        "both turns resolved their send with a same-update turn.wait"
-    );
-    assert_eq!(
-        checks.waits_registered, 2,
-        "both turn.wait ids were registered in the pending map before being sent"
-    );
-
-    // Orderly shutdown: agent.shutdown response, stdout close and child
-    // exit may race; the app exits and the waiter reaps the child.
-    let shutdown = app
-        .update(AppEvent::ShutdownRequested)
-        .into_iter()
-        .find_map(|command| match command {
-            AppCommand::Rpc(request)
-                if request.method == minicore_tui::protocol::METHOD_SHUTDOWN =>
-            {
-                Some(request)
-            }
-            _ => None,
-        })
-        .ok_or_else(|| "the app did not issue agent.shutdown".to_owned())?;
-    let shutdown_id = shutdown.id;
-    send_commands(process, vec![AppCommand::Rpc(shutdown)]).await?;
-    let mut saw_shutdown_response = false;
-    let mut saw_exit_success = false;
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         if Instant::now() >= deadline {
-            return Err("agent.shutdown did not finish in time".to_owned());
+            return Err("Timed out waiting for Request 0 and wait_turn registration".into());
         }
-        let event = match tokio::time::timeout(Duration::from_secs(10), process.recv()).await {
-            Err(_) => return Err("timed out waiting for the agent shutdown".to_owned()),
-            Ok(None) => break,
-            Ok(Some(event)) => event,
-        };
-        if let RpcEvent::Frame(IncomingFrame::Response(response)) = &event {
-            if response.id == shutdown_id {
-                assert_eq!(
-                    app.pending_request_kind(response.id),
-                    Some(&RequestKind::Shutdown),
-                    "the shutdown response must resolve the registered shutdown request"
-                );
-                let result = response
-                    .parse_shutdown()
-                    .map_err(|error| format!("agent.shutdown response failed: {error}"))?;
-                assert!(result.ok, "agent.shutdown must return ok=true");
-                saw_shutdown_response = true;
+
+        let has_req = !env._server.recorded_requests().is_empty();
+        let has_wait = app
+            .sessions
+            .known
+            .get(session_id)
+            .is_some_and(|v| v.live.as_ref().is_some_and(|l| l.reference.is_some()))
+            && app
+                .pending_requests
+                .values()
+                .any(|k| matches!(k, RequestKind::WaitTurn(_)));
+
+        if has_req && has_wait {
+            return Ok(());
+        }
+
+        match tokio::time::timeout(Duration::from_millis(20), process.recv()).await {
+            Ok(Some(event)) => {
+                let commands = app.update(AppEvent::Rpc(event));
+                for command in commands {
+                    match command {
+                        AppCommand::Rpc(req) => {
+                            process.send(req).await.map_err(|e| e.to_string())?;
+                        }
+                        AppCommand::KillChild => process.kill_child(),
+                        AppCommand::Exit => return Ok(()),
+                    }
+                }
+            }
+            Ok(None) => return Err("Agent process stdout EOF".into()),
+            Err(_) => {
+                // Short timeout elapsed, check conditions again
             }
         }
-        let exited_success = match &event {
-            RpcEvent::Exited(Some(status)) => Some(status.success()),
-            _ => None,
-        };
-        let commands = app.update(AppEvent::Rpc(event));
-        if let Some(success) = exited_success {
-            assert!(
-                success,
-                "the agent must exit successfully after agent.shutdown"
-            );
-            saw_exit_success = true;
+    }
+}
+
+async fn pump_until(
+    process: &mut RpcProcess,
+    app: &mut App,
+    predicate: impl Fn(&App) -> bool,
+) -> Result<(), String> {
+    let deadline = Instant::now() + TIMEOUT;
+    while !predicate(app) {
+        if Instant::now() >= deadline {
+            return Err(format!("e2e pump timed out: {:?}", app.connection));
         }
-        if send_commands(process, commands).await? {
+        pump_step(process, app).await?;
+    }
+    Ok(())
+}
+
+async fn dispatch(process: &mut RpcProcess, app: &mut App, event: AppEvent) -> Result<(), String> {
+    let commands = app.update(event);
+    for command in commands {
+        match command {
+            AppCommand::Rpc(req) => {
+                process.send(req).await.map_err(|e| e.to_string())?;
+            }
+            AppCommand::KillChild => process.kill_child(),
+            AppCommand::Exit => return Ok(()),
+        }
+    }
+    Ok(())
+}
+
+struct StrictShutdownReport {
+    shutdown_ok: bool,
+    cancelled_waits: Vec<TurnResultViewWire>,
+    seen_eof: bool,
+    seen_exit: bool,
+}
+
+async fn drain_shutdown_strict(
+    process: &mut RpcProcess,
+    app: &mut App,
+) -> Result<StrictShutdownReport, String> {
+    dispatch(process, app, AppEvent::ShutdownRequested).await?;
+
+    let deadline = Instant::now() + Duration::from_secs(6);
+    let mut shutdown_ok = false;
+    let mut cancelled_waits = Vec::new();
+    let mut seen_eof = false;
+    let mut seen_exit = false;
+
+    while Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match tokio::time::timeout(remaining, process.recv()).await {
+            Ok(Some(event)) => {
+                match &event {
+                    RpcEvent::Frame(IncomingFrame::Response(resp)) => {
+                        // Check if this is shutdown response
+                        if let Some(res) = &resp.result {
+                            if res.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+                                shutdown_ok = true;
+                            }
+                            if let Ok(turn_res) =
+                                serde_json::from_value::<TurnResultViewWire>(res.clone())
+                            {
+                                cancelled_waits.push(turn_res);
+                            }
+                        }
+                    }
+                    RpcEvent::ConnectionClosed => {
+                        seen_eof = true;
+                    }
+                    RpcEvent::Exited(_) => {
+                        seen_exit = true;
+                    }
+                    _ => {}
+                }
+
+                dispatch(process, app, AppEvent::Rpc(event)).await?;
+            }
+            Ok(None) => {
+                seen_eof = true;
+                break;
+            }
+            Err(_) => {
+                return Err("Strict shutdown timed out waiting for process events".into());
+            }
+        }
+
+        if shutdown_ok && seen_eof && seen_exit {
             break;
         }
     }
-    assert_eq!(app.connection, ConnectionState::ShuttingDown);
-    assert!(
-        saw_shutdown_response,
-        "the registered agent.shutdown response was observed"
+
+    if !shutdown_ok {
+        return Err("Strict shutdown failed: shutdown response never confirmed ok".into());
+    }
+    if !seen_eof {
+        return Err("Strict shutdown failed: agent stdout never reached EOF".into());
+    }
+    if !seen_exit {
+        return Err("Strict shutdown failed: agent child process never reported exit".into());
+    }
+
+    Ok(StrictShutdownReport {
+        shutdown_ok,
+        cancelled_waits,
+        seen_eof,
+        seen_exit,
+    })
+}
+
+// ============================================================================
+// Spec 61 Scenarios A - F
+// ============================================================================
+
+/// Spec 61.2 E2E-A: Discovery
+/// Tests agent.ping (0.3.x gate), model.list, profile.list, session.list discovery.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_scenario_a_discovery() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+        app.update(AppEvent::SetTheme(ThemeKind::Dark));
+
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(app.connection, ConnectionState::Ready);
+        assert!(!app.catalogs.models.is_empty());
+        assert!(!app.catalogs.profiles.is_empty());
+
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok);
+        assert!(rep.seen_eof);
+        assert!(rep.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// Spec 61.2 E2E-B: Basic Turn Flow
+/// Tests session.create, turn.send, turn.wait, and session.history reconciliation.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_scenario_b_basic_turn() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    env._server
+        .enqueue_sse(sse_text_response("Hello from mock Agent loopback!"));
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CreateSession {
+                workspace: env.workspace_path.to_string_lossy().into_owned(),
+                profile: Some("coding".to_owned()),
+                model: None,
+                reasoning: None,
+                title: Some("E2E Basic".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| a.sessions.active.is_some())
+            .await
+            .unwrap();
+        let session_id = app.sessions.active.clone().unwrap();
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "Say hello".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .known
+                .get(&session_id)
+                .is_some_and(|v| v.live.is_none() && v.transcript.complete)
+        })
+        .await
+        .unwrap();
+
+        let reqs = env._server.recorded_requests();
+        assert_eq!(reqs.len(), 1, "Expected exactly 1 HTTP request");
+
+        let view = &app.sessions.known[&session_id];
+        assert!(!view.transcript.items.is_empty());
+
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok);
+        assert!(rep.seen_eof);
+        assert!(rep.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// Spec 61.2 E2E-C: Tool Execution Flow
+/// Tests model tool call `read`, Agent tool execution, 2nd request, and turn persistence.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_scenario_c_tool_execution() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+
+    let test_file = env.workspace_path.join("data.txt");
+    std::fs::write(&test_file, "contents of data.txt").expect("write test file");
+
+    env._server.enqueue_sse(sse_tool_call_response(
+        "call_1",
+        "read",
+        "{\"path\": \"data.txt\"}",
+    ));
+    env._server.enqueue_sse(sse_text_response(
+        "File contents received: contents of data.txt",
+    ));
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CreateSession {
+                workspace: env.workspace_path.to_string_lossy().into_owned(),
+                profile: Some("coding".to_owned()),
+                model: None,
+                reasoning: None,
+                title: Some("E2E Tool".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| a.sessions.active.is_some())
+            .await
+            .unwrap();
+        let session_id = app.sessions.active.clone().unwrap();
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "Read data.txt".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .known
+                .get(&session_id)
+                .is_some_and(|v| v.live.is_none() && v.transcript.complete)
+        })
+        .await
+        .unwrap();
+
+        let reqs = env._server.recorded_requests();
+        assert_eq!(reqs.len(), 2, "Expected exactly 2 HTTP requests");
+
+        let view = &app.sessions.known[&session_id];
+        assert!(
+            view.transcript
+                .items
+                .iter()
+                .any(|i| matches!(i.item, HistoryItemWire::ToolResult(_)))
+        );
+
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok);
+        assert!(rep.seen_eof);
+        assert!(rep.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// Spec 61.2 E2E-D: Steering Flow
+/// Tests gating Request 0 until turn.send confirms registered wait, sending steer,
+/// awaiting steer acceptance, releasing gate, and verifying kind="steering" in History.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_scenario_d_steer_turn() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+
+    let test_file = env.workspace_path.join("data.txt");
+    std::fs::write(&test_file, "contents").unwrap();
+
+    let req0_gate = Arc::new(AtomicBool::new(false));
+    // Request 0 is gated at arrival
+    env._server.enqueue_gated(
+        sse_tool_call_response("call_1", "read", "{\"path\": \"data.txt\"}"),
+        req0_gate.clone(),
+        Some("deep-model"),
     );
-    assert!(saw_exit_success, "the agent exited successfully");
-    assert_eq!(app.child_exit_status.as_deref(), Some("exit code 0"));
-    Ok(())
+    // Request 1 responds with final text
+    env._server
+        .enqueue_sse(sse_text_response("Steered successfully."));
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CreateSession {
+                workspace: env.workspace_path.to_string_lossy().into_owned(),
+                profile: Some("coding".to_owned()),
+                model: None,
+                reasoning: None,
+                title: Some("E2E Steer".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| a.sessions.active.is_some())
+            .await
+            .unwrap();
+        let session_id = app.sessions.active.clone().unwrap();
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "Initial command".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+
+        // 1. Wait until Request 0 reaches mock server and App has registered wait_turn
+        wait_for_request0_and_wait_turn(&env, &mut process, &mut app, &session_id)
+            .await
+            .unwrap();
+
+        // 2. Dispatch steer
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SteerTurn {
+                session_id: session_id.clone(),
+                text: "Steer instruction".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+
+        // 3. Wait until steer is confirmed accepted/queued by the agent
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.known.get(&session_id).is_some_and(|v| {
+                v.live.as_ref().is_some_and(|l| {
+                    l.pending_steers
+                        .iter()
+                        .any(|s| s.state == PendingSteerState::Queued)
+                })
+            })
+        })
+        .await
+        .unwrap();
+
+        // 4. Release request 0 gate
+        req0_gate.store(true, Ordering::Relaxed);
+
+        // 5. Wait until turn completes
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .known
+                .get(&session_id)
+                .is_some_and(|v| v.live.is_none() && v.transcript.complete)
+        })
+        .await
+        .unwrap();
+
+        let reqs = env._server.recorded_requests();
+        assert_eq!(
+            reqs.len(),
+            2,
+            "Expected exactly 2 HTTP requests for steered turn"
+        );
+
+        let view = &app.sessions.known[&session_id];
+        assert!(view.transcript.items.iter().any(|i| match &i.item {
+            HistoryItemWire::User(u) => u.kind == UserMessageKindWire::Steering,
+            _ => false,
+        }));
+
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok);
+        assert!(rep.seen_eof);
+        assert!(rep.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// Spec 61.2 E2E-E: Same-Loop Dynamic Update (Spec 12 & 33 & 61 Deterministic)
+/// 1. Gated Model A request 0 HTTP arrival; parses request JSON to verify model == "deep-model".
+/// 2. Dispatches update to Model B via UI selector while request 0 is held.
+/// 3. Awaits update response containing active_revision.
+/// 4. Releases request 0 gate -> returns read ToolCall -> read executes.
+/// 5. Subsequent request 1 uses Model B ("fast-model") in the same loop.
+/// 6. Verifies:
+///    - Requests: exactly 2 (A then B, 1 each; no extraneous requests or default fallbacks).
+///    - Turn statistics: requests == 2, tool_rounds == 1, final_config_revision == active_revision.
+///    - Identical session_id and loop_id.
+///    - History sequence: Prompt, Assistant (request 0, deep), ToolResult, Assistant (request 1, fast).
+///    - Old request labels are not rewritten to B; no cancel+send occurred.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_scenario_e_same_loop_update() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+
+    let test_file = env.workspace_path.join("data.txt");
+    std::fs::write(&test_file, "contents").unwrap();
+
+    let req0_gate = Arc::new(AtomicBool::new(false));
+
+    // Request 0 must be deep-model and returns read tool call
+    env._server.enqueue_gated(
+        sse_tool_call_response("call_1", "read", "{\"path\": \"data.txt\"}"),
+        req0_gate.clone(),
+        Some("deep-model"),
+    );
+
+    // Request 1 must be fast-model and returns final answer
+    env._server.enqueue_sse_with_model(
+        sse_text_response("Response produced by model fast."),
+        "fast-model",
+    );
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CreateSession {
+                workspace: env.workspace_path.to_string_lossy().into_owned(),
+                profile: Some("coding".to_owned()),
+                model: Some("deep".to_owned()),
+                reasoning: None,
+                title: Some("E2E Update Same Loop".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| a.sessions.active.is_some())
+            .await
+            .unwrap();
+        let session_id = app.sessions.active.clone().unwrap();
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "Read data.txt with model switch".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+
+        // 1. Wait until Request 0 reaches mock server and App has registered wait_turn
+        wait_for_request0_and_wait_turn(&env, &mut process, &mut app, &session_id)
+            .await
+            .unwrap();
+
+        let initial_reqs = env._server.recorded_requests();
+        assert_eq!(
+            initial_reqs.len(),
+            1,
+            "Request 0 must arrive at mock server"
+        );
+        assert_eq!(
+            initial_reqs[0].model.as_deref(),
+            Some("deep-model"),
+            "Request 0 must use Model A (deep-model)"
+        );
+
+        let initial_loop_id = app.sessions.known[&session_id]
+            .live
+            .as_ref()
+            .unwrap()
+            .reference
+            .as_ref()
+            .unwrap()
+            .loop_id
+            .clone();
+
+        // Trigger dynamic model update to 'fast' via UI selector
+        dispatch(&mut process, &mut app, AppEvent::OpenModelSelector)
+            .await
+            .unwrap();
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SetSelectorQuery {
+                query: "fast".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        dispatch(&mut process, &mut app, AppEvent::ConfirmDock)
+            .await
+            .unwrap();
+
+        // Wait until App receives update response with active revision and marks WaitingBoundary
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.known.get(&session_id).is_some_and(|v| {
+                v.config_update.as_ref().is_some_and(|u| {
+                    u.state == ConfigUpdateState::WaitingBoundary && u.revision.is_some()
+                })
+            })
+        })
+        .await
+        .unwrap();
+
+        let assigned_revision = app.sessions.known[&session_id]
+            .config_update
+            .as_ref()
+            .unwrap()
+            .revision
+            .unwrap();
+        assert!(assigned_revision >= 1);
+
+        // Now release Request 0 gate -> Agent reads tool call, executes read tool, and reaches boundary
+        req0_gate.store(true, Ordering::Relaxed);
+
+        // Wait until turn completes
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .known
+                .get(&session_id)
+                .is_some_and(|v| v.live.is_none() && v.transcript.complete)
+        })
+        .await
+        .unwrap();
+
+        // 1. Verify exact HTTP requests and their JSON models
+        let all_reqs = env._server.recorded_requests();
+        assert_eq!(
+            all_reqs.len(),
+            2,
+            "Expected exactly 2 HTTP requests (one for A, one for B)"
+        );
+        assert_eq!(all_reqs[0].model.as_deref(), Some("deep-model"));
+        assert_eq!(all_reqs[1].model.as_deref(), Some("fast-model"));
+
+        // 2. Verify turn outcome and loop statistics
+        let view = &app.sessions.known[&session_id];
+        let last_result = view
+            .last_result
+            .as_ref()
+            .expect("last_result must be recorded after completion");
+        assert_eq!(last_result.turn.session_id, session_id);
+        assert_eq!(
+            last_result.turn.loop_id, initial_loop_id,
+            "Loop ID must remain identical throughout dynamic update (no cancel+send)"
+        );
+        assert_eq!(
+            last_result.requests, 2,
+            "Must execute exactly 2 requests in this turn"
+        );
+        assert_eq!(
+            last_result.tool_rounds, 1,
+            "Must execute exactly 1 tool round"
+        );
+        assert_eq!(
+            last_result.final_config_revision, assigned_revision,
+            "final_config_revision must match the updated revision"
+        );
+
+        // 3. Verify history sequence and labels
+        let items = &view.transcript.items;
+        assert_eq!(items.len(), 4, "Transcript must contain 4 items");
+
+        assert!(matches!(&items[0].item, HistoryItemWire::User(_)));
+
+        // Request 0: must retain original model label 'deep'
+        match &items[1].item {
+            HistoryItemWire::Assistant(a) => {
+                assert_eq!(a.request_index, 0);
+                assert_eq!(a.model, "deep");
+                assert_eq!(a.tool_calls.len(), 1);
+            }
+            other => panic!("Expected Assistant for item 1, got {:?}", other),
+        }
+
+        assert!(matches!(&items[2].item, HistoryItemWire::ToolResult(_)));
+
+        // Request 1: must show updated model label 'fast'
+        match &items[3].item {
+            HistoryItemWire::Assistant(a) => {
+                assert_eq!(a.request_index, 1);
+                assert_eq!(a.model, "fast");
+            }
+            other => panic!("Expected Assistant for item 3, got {:?}", other),
+        }
+
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok);
+        assert!(rep.seen_eof);
+        assert!(rep.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// Spec 61.2 E2E-E2: Dynamic Update Not Extending Single-Request Turn
+/// Verifies updating config during a single-request turn does not synthesize extra requests,
+/// and the next turn cleanly picks up the new model.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_scenario_e2_update_single_request_then_next_turn() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+
+    let req0_gate = Arc::new(AtomicBool::new(false));
+
+    // Turn 1 Request 0: deep-model, gated, returns direct final text without tool call
+    env._server.enqueue_gated(
+        sse_text_response("Turn 1 direct answer with model deep."),
+        req0_gate.clone(),
+        Some("deep-model"),
+    );
+
+    // Turn 2 Request 0: fast-model, returns final text
+    env._server.enqueue_sse_with_model(
+        sse_text_response("Turn 2 direct answer with model fast."),
+        "fast-model",
+    );
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CreateSession {
+                workspace: env.workspace_path.to_string_lossy().into_owned(),
+                profile: Some("coding".to_owned()),
+                model: Some("deep".to_owned()),
+                reasoning: None,
+                title: Some("E2E Single Request Update".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| a.sessions.active.is_some())
+            .await
+            .unwrap();
+        let session_id = app.sessions.active.clone().unwrap();
+
+        // Submit Turn 1
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "Turn 1 prompt".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+
+        // Wait until Request 0 is held by gate and wait_turn is in flight
+        wait_for_request0_and_wait_turn(&env, &mut process, &mut app, &session_id)
+            .await
+            .unwrap();
+
+        // Update model to fast via selector
+        dispatch(&mut process, &mut app, AppEvent::OpenModelSelector)
+            .await
+            .unwrap();
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SetSelectorQuery {
+                query: "fast".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        dispatch(&mut process, &mut app, AppEvent::ConfirmDock)
+            .await
+            .unwrap();
+
+        // Wait for update response confirmation
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.known.get(&session_id).is_some_and(|v| {
+                v.config_update
+                    .as_ref()
+                    .is_some_and(|u| u.revision.is_some())
+            })
+        })
+        .await
+        .unwrap();
+
+        // Release Turn 1 Request 0 gate
+        req0_gate.store(true, Ordering::Relaxed);
+
+        // Turn 1 must finish immediately with 1 request (no tool round extension)
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .known
+                .get(&session_id)
+                .is_some_and(|v| v.live.is_none() && v.transcript.complete)
+        })
+        .await
+        .unwrap();
+
+        let t1_res = app.sessions.known[&session_id]
+            .last_result
+            .as_ref()
+            .unwrap();
+        assert_eq!(t1_res.requests, 1, "Turn 1 must not be extended");
+        assert_eq!(t1_res.tool_rounds, 0);
+
+        // Submit Turn 2
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "Turn 2 prompt".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+
+        // Wait for Turn 2 completion
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .known
+                .get(&session_id)
+                .is_some_and(|v| v.live.is_none() && v.transcript.complete)
+        })
+        .await
+        .unwrap();
+
+        let reqs = env._server.recorded_requests();
+        assert_eq!(
+            reqs.len(),
+            2,
+            "Expected exactly 2 total requests across turns"
+        );
+        assert_eq!(reqs[0].model.as_deref(), Some("deep-model"));
+        assert_eq!(reqs[1].model.as_deref(), Some("fast-model"));
+
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok);
+        assert!(rep.seen_eof);
+        assert!(rep.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// Spec 61.2 E2E-F: Shutdown Cancels In-Flight Turn.Wait
+/// Tests shutting down while turn.wait is pending: verifies turn.wait receives cancelled outcome
+/// with reason=user and persistence record, shutdown receives ok response, and process exits with EOF.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_scenario_f_shutdown_cancels_active_wait() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+
+    let held_gate = Arc::new(AtomicBool::new(false));
+    // Request 0 is held indefinitely until shutdown arrives
+    env._server.enqueue_gated(
+        sse_text_response("Should not be delivered before shutdown."),
+        held_gate.clone(),
+        Some("deep-model"),
+    );
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CreateSession {
+                workspace: env.workspace_path.to_string_lossy().into_owned(),
+                profile: Some("coding".to_owned()),
+                model: None,
+                reasoning: None,
+                title: Some("E2E Shutdown Cancel".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| a.sessions.active.is_some())
+            .await
+            .unwrap();
+        let session_id = app.sessions.active.clone().unwrap();
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "Long running prompt to be cancelled by shutdown".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+
+        // 1. Wait until Request 0 reaches mock server and App has registered wait_turn
+        wait_for_request0_and_wait_turn(&env, &mut process, &mut app, &session_id)
+            .await
+            .unwrap();
+
+        // Now initiate strict shutdown while wait_turn is pending
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok, "Shutdown response must be confirmed ok");
+        assert!(rep.seen_eof, "Process stdout must reach EOF");
+        assert!(rep.seen_exit, "Process child must report exit");
+
+        // Verify cancelled wait outcome
+        assert!(
+            !rep.cancelled_waits.is_empty(),
+            "Expected at least 1 turn.wait result received during shutdown"
+        );
+        let wait_res = &rep.cancelled_waits[0];
+        assert_eq!(
+            wait_res.outcome,
+            LoopOutcomeWire::Cancelled {
+                reason: CancelReasonWire::User
+            },
+            "Outcome must be cancelled with reason user"
+        );
+        assert_eq!(
+            wait_res.persistence,
+            TurnPersistenceWire::Persisted,
+            "Cancelled turn must report persistence record"
+        );
+
+        held_gate.store(true, Ordering::Relaxed);
+        process.terminate().await;
+    });
 }

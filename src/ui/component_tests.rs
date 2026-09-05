@@ -96,8 +96,9 @@ fn message_and_tool_sections_have_symmetric_vertical_padding() {
     let user_lines = user::lines(
         &theme,
         &UserBlock {
-            seq: Some(1),
-            turn_id: Some("turn".to_owned()),
+            index: Some(1),
+            loop_id: Some("turn".to_owned()),
+            kind: crate::protocol::UserMessageKindWire::Prompt,
             text: "user text".to_owned(),
             pending: false,
         },
@@ -108,10 +109,15 @@ fn message_and_tool_sections_have_symmetric_vertical_padding() {
     let assistant_lines = assistant::lines(
         &theme,
         &AssistantBlock {
-            seq: 2,
-            turn_id: "turn".to_owned(),
+            index: 2,
+            loop_id: "turn".to_owned(),
+            request_index: 0,
             model: "model".to_owned(),
+            reasoning_level: crate::protocol::Reasoning::Auto,
             parts: vec![AssistantPart::Text("assistant text".to_owned())],
+            tool_calls: vec![],
+            usage: Default::default(),
+            finish_reason: "stop".to_owned(),
             terminal_error: None,
         },
         40,
@@ -137,12 +143,13 @@ fn message_and_tool_sections_have_symmetric_vertical_padding() {
     let tool_lines = tool::durable(
         &theme,
         &ToolBlock {
+            index: None,
+            loop_id: "turn".to_owned(),
+            request_index: 0,
             tool_call_id: "call".to_owned(),
-            turn_id: "turn".to_owned(),
             name: "bash".to_owned(),
-            arguments: None,
             result: Some("command result".to_owned()),
-            outcome: Some("success".to_owned()),
+            outcome: Some(crate::protocol::ToolOutcomeWire::Success),
             live_status: None,
             progress: None,
             expanded: true,
@@ -170,14 +177,19 @@ fn assistant_parts_keep_order_and_share_boundary_padding() {
     let lines = assistant::lines(
         &Theme::dark(),
         &AssistantBlock {
-            seq: 2,
-            turn_id: "turn".to_owned(),
+            index: 2,
+            loop_id: "turn".to_owned(),
+            request_index: 0,
             model: "model".to_owned(),
+            reasoning_level: crate::protocol::Reasoning::Auto,
             parts: vec![
                 AssistantPart::Text("first".to_owned()),
                 AssistantPart::Reasoning("thinking".to_owned()),
                 AssistantPart::Text("second".to_owned()),
             ],
+            tool_calls: vec![],
+            usage: Default::default(),
+            finish_reason: "stop".to_owned(),
             terminal_error: None,
         },
         40,
@@ -191,11 +203,16 @@ fn assistant_parts_keep_order_and_share_boundary_padding() {
 #[test]
 fn adjacent_assistant_sections_share_one_boundary_row() {
     let theme = Theme::dark();
-    let make = |text: &str, seq| AssistantBlock {
-        seq,
-        turn_id: "turn".to_owned(),
+    let make = |text: &str, index| AssistantBlock {
+        index,
+        loop_id: "turn".to_owned(),
+        request_index: 0,
         model: "model".to_owned(),
+        reasoning_level: crate::protocol::Reasoning::Auto,
         parts: vec![AssistantPart::Text(text.to_owned())],
+        tool_calls: vec![],
+        usage: Default::default(),
+        finish_reason: "stop".to_owned(),
         terminal_error: None,
     };
     let mut lines = Vec::new();
@@ -223,14 +240,19 @@ fn empty_reasoning_renders_nothing_and_does_not_hide_the_next_run() {
     let lines = assistant::lines(
         &theme,
         &AssistantBlock {
-            seq: 2,
-            turn_id: "turn".to_owned(),
+            index: 2,
+            loop_id: "turn".to_owned(),
+            request_index: 0,
             model: "model".to_owned(),
+            reasoning_level: crate::protocol::Reasoning::Auto,
             parts: vec![
                 AssistantPart::Text("answer".to_owned()),
                 AssistantPart::Reasoning(String::new()),
                 AssistantPart::Reasoning("hidden".to_owned()),
             ],
+            tool_calls: vec![],
+            usage: Default::default(),
+            finish_reason: "stop".to_owned(),
             terminal_error: None,
         },
         40,
@@ -246,10 +268,15 @@ fn explicit_markdown_blank_lines_survive_section_padding() {
     let lines = assistant::lines(
         &Theme::dark(),
         &AssistantBlock {
-            seq: 2,
-            turn_id: "turn".to_owned(),
+            index: 2,
+            loop_id: "turn".to_owned(),
+            request_index: 0,
             model: "model".to_owned(),
+            reasoning_level: crate::protocol::Reasoning::Auto,
             parts: vec![AssistantPart::Text("one\n\nthree".to_owned())],
+            tool_calls: vec![],
+            usage: Default::default(),
+            finish_reason: "stop".to_owned(),
             terminal_error: None,
         },
         40,
@@ -265,8 +292,9 @@ fn user_assistant_and_tool_boundaries_share_one_blank_row() {
     let user_lines = user::lines(
         &theme,
         &UserBlock {
-            seq: Some(1),
-            turn_id: Some("turn".to_owned()),
+            index: Some(1),
+            loop_id: Some("turn".to_owned()),
+            kind: crate::protocol::UserMessageKindWire::Prompt,
             text: "user".to_owned(),
             pending: false,
         },
@@ -275,10 +303,15 @@ fn user_assistant_and_tool_boundaries_share_one_blank_row() {
     let assistant_lines = assistant::lines(
         &theme,
         &AssistantBlock {
-            seq: 2,
-            turn_id: "turn".to_owned(),
+            index: 2,
+            loop_id: "turn".to_owned(),
+            request_index: 0,
             model: "model".to_owned(),
+            reasoning_level: crate::protocol::Reasoning::Auto,
             parts: vec![AssistantPart::Text("assistant".to_owned())],
+            tool_calls: vec![],
+            usage: Default::default(),
+            finish_reason: "stop".to_owned(),
             terminal_error: None,
         },
         40,
@@ -317,27 +350,34 @@ fn cached_and_fallback_transcripts_have_identical_section_spacing() {
         .transcript
         .blocks = vec![
         TranscriptBlock::User(UserBlock {
-            seq: Some(1),
-            turn_id: Some("turn".to_owned()),
+            index: Some(1),
+            loop_id: Some("turn".to_owned()),
+            kind: crate::protocol::UserMessageKindWire::Prompt,
             text: "user".to_owned(),
             pending: false,
         }),
         TranscriptBlock::Assistant(AssistantBlock {
-            seq: 2,
-            turn_id: "turn".to_owned(),
+            index: 2,
+            loop_id: "turn".to_owned(),
+            request_index: 0,
             model: "model".to_owned(),
+            reasoning_level: crate::protocol::Reasoning::Auto,
             parts: vec![
                 AssistantPart::Text("first".to_owned()),
                 AssistantPart::Reasoning("thinking".to_owned()),
                 AssistantPart::Text("second".to_owned()),
             ],
+            tool_calls: vec![],
+            usage: Default::default(),
+            finish_reason: "stop".to_owned(),
             terminal_error: None,
         }),
         TranscriptBlock::Tool(ToolBlock {
+            index: None,
+            loop_id: "turn".to_owned(),
+            request_index: 0,
             tool_call_id: "call".to_owned(),
-            turn_id: "turn".to_owned(),
             name: "bash".to_owned(),
-            arguments: None,
             result: None,
             outcome: None,
             live_status: None,
@@ -360,10 +400,11 @@ fn durable_and_live_tool_sections_have_the_same_padding_shape() {
     let durable = tool::durable(
         &theme,
         &ToolBlock {
+            index: None,
+            loop_id: "turn".to_owned(),
+            request_index: 0,
             tool_call_id: "call".to_owned(),
-            turn_id: "turn".to_owned(),
             name: "bash".to_owned(),
-            arguments: None,
             result: None,
             outcome: None,
             live_status: None,
@@ -461,13 +502,14 @@ fn composer_border_follows_the_reasoning_level() {
 #[test]
 fn tool_cards_use_state_backgrounds_and_expanded_preview_bounds() {
     let theme = Theme::dark();
-    let make = |outcome: Option<&str>| ToolBlock {
+    let make = |outcome: Option<crate::protocol::ToolOutcomeWire>| ToolBlock {
+        index: None,
+        loop_id: "t".into(),
+        request_index: 0,
         tool_call_id: "c".into(),
-        turn_id: "t".into(),
         name: "read".into(),
-        arguments: None,
         result: Some("data".into()),
-        outcome: outcome.map(str::to_owned),
+        outcome,
         live_status: None,
         progress: None,
         expanded: true,
@@ -475,9 +517,18 @@ fn tool_cards_use_state_backgrounds_and_expanded_preview_bounds() {
     // Exact card backgrounds per state, asserted at the line level so the
     // viewport cannot hide them.
     for (outcome, expected) in [
-        (Some("success"), theme.tool_success_bg),
-        (Some("denied"), theme.tool_error_bg),
-        (Some("failed"), theme.tool_error_bg),
+        (
+            Some(crate::protocol::ToolOutcomeWire::Success),
+            theme.tool_success_bg,
+        ),
+        (
+            Some(crate::protocol::ToolOutcomeWire::Denied),
+            theme.tool_error_bg,
+        ),
+        (
+            Some(crate::protocol::ToolOutcomeWire::Failed),
+            theme.tool_error_bg,
+        ),
         (None, theme.tool_pending_bg),
     ] {
         let lines = tool::durable(&theme, &make(outcome), 40, false);
@@ -505,12 +556,13 @@ fn tool_cards_use_state_backgrounds_and_expanded_preview_bounds() {
 fn tool_preview_caps_chars_at_32k_and_lines_at_40() {
     let theme = Theme::dark();
     let make = |result: &str| ToolBlock {
+        index: None,
+        loop_id: "t".into(),
+        request_index: 0,
         tool_call_id: "c".into(),
-        turn_id: "t".into(),
         name: "bash".into(),
-        arguments: None,
         result: Some(result.to_owned()),
-        outcome: Some("success".into()),
+        outcome: Some(crate::protocol::ToolOutcomeWire::Success),
         live_status: None,
         progress: None,
         expanded: true,
@@ -623,11 +675,135 @@ fn running_live_turn_shows_gap_footer_and_status_spinner() {
 }
 
 #[test]
+fn last_result_renders_outcome_and_persistence_in_status_and_transcript() {
+    let mut app = testapp::open_empty(ThemeKind::Dark, "ses_1", Some("Task"), "high");
+    let turn = |loop_id: &str| crate::protocol::TurnRef {
+        session_id: "ses_1".to_owned(),
+        loop_id: loop_id.to_owned(),
+    };
+
+    if let Some(view) = app.sessions.known.get_mut("ses_1") {
+        view.last_result = Some(crate::protocol::TurnResultViewWire {
+            turn: turn("loop_done"),
+            outcome: crate::protocol::LoopOutcomeWire::Completed,
+            persistence: crate::protocol::TurnPersistenceWire::Persisted,
+            usage: Default::default(),
+            requests: 1,
+            tool_rounds: 0,
+            final_config_revision: 0,
+        });
+    }
+    let content = text(&draw(&app, 120, 40));
+    assert!(content.contains("completed · persisted"));
+    assert!(content.contains("Turn completed"));
+
+    if let Some(view) = app.sessions.known.get_mut("ses_1") {
+        view.last_result = Some(crate::protocol::TurnResultViewWire {
+            turn: turn("loop_cancelled"),
+            outcome: crate::protocol::LoopOutcomeWire::Cancelled {
+                reason: crate::protocol::CancelReasonWire::Unknown("sandbox_evicted".to_owned()),
+            },
+            persistence: crate::protocol::TurnPersistenceWire::Persisted,
+            usage: Default::default(),
+            requests: 1,
+            tool_rounds: 0,
+            final_config_revision: 0,
+        });
+    }
+    let content = text(&draw(&app, 80, 24));
+    assert!(content.contains("cancelled (sandbox_evicted)"));
+    assert!(content.contains("persisted"));
+
+    if let Some(view) = app.sessions.known.get_mut("ses_1") {
+        view.last_result = Some(crate::protocol::TurnResultViewWire {
+            turn: turn("loop_shutdown"),
+            outcome: crate::protocol::LoopOutcomeWire::Cancelled {
+                reason: crate::protocol::CancelReasonWire::Shutdown,
+            },
+            persistence: crate::protocol::TurnPersistenceWire::Persisted,
+            usage: Default::default(),
+            requests: 1,
+            tool_rounds: 0,
+            final_config_revision: 0,
+        });
+    }
+    let content = text(&draw(&app, 80, 24));
+    assert!(content.contains("cancelled (shutdown) · persisted"));
+
+    if let Some(view) = app.sessions.known.get_mut("ses_1") {
+        view.last_result = Some(crate::protocol::TurnResultViewWire {
+            turn: turn("loop_failed"),
+            outcome: crate::protocol::LoopOutcomeWire::Failed {
+                kind: "model_error".to_owned(),
+                model_error: Some(crate::protocol::ModelErrorWire {
+                    kind: "rate_limit".to_owned(),
+                    delivery: "upstream".to_owned(),
+                    retryable: true,
+                    retry_after_millis: None,
+                }),
+            },
+            persistence: crate::protocol::TurnPersistenceWire::Failed,
+            usage: Default::default(),
+            requests: 1,
+            tool_rounds: 0,
+            final_config_revision: 0,
+        });
+        view.state.as_mut().unwrap().status = crate::protocol::SessionStatusWire::Blocked;
+        view.state.as_mut().unwrap().block_reason =
+            Some(crate::protocol::SessionBlockReasonWire::Persistence);
+    }
+    let content = text(&draw(&app, 120, 40));
+    assert!(content.contains("failed: model_error: rate_limit"));
+    assert!(content.contains("persistence failed"));
+    assert!(content.contains("Blocked · persistence"));
+}
+
+#[test]
+fn live_request_without_model_is_explicitly_unknown() {
+    let mut app = testapp::live_turn(ThemeKind::Dark);
+    app.sessions
+        .known
+        .get_mut("ses_1")
+        .unwrap()
+        .live
+        .as_mut()
+        .unwrap()
+        .requests[0]
+        .model
+        .clear();
+    let content = text(&draw(&app, 120, 40));
+    assert!(content.contains("Request #0 · config unknown"));
+    assert!(content.contains("request 0 · config unknown"));
+}
+
+#[test]
+fn footer_waiting_boundary_shows_next_config_with_current_request_preserved() {
+    let mut app = testapp::live_turn(ThemeKind::Dark);
+    // live_turn has request 0 with model "deep", reasoning High, rev 0
+    if let Some(view) = app.sessions.known.get_mut("ses_1") {
+        view.config_update = Some(crate::state::session::PendingConfigUpdate {
+            loop_id: Some("loop_live".to_string()),
+            model: Some("fast".to_string()),
+            reasoning: Some(crate::protocol::Reasoning::Low),
+            revision: Some(2),
+            state: crate::state::session::ConfigUpdateState::WaitingBoundary,
+        });
+    }
+    let terminal = draw(&app, 120, 40);
+    let content = text(&terminal);
+    // Preserves current request config:
+    assert!(content.contains("request 0 · deep · high · rev 0"));
+    // Displays next config without guessing or overwriting current:
+    assert!(content.contains("next: fast • low · rev 2"));
+}
+
+#[test]
 fn fatal_connection_renders_the_overlay() {
-    let mut app = testapp::fresh(ThemeKind::Dark);
-    let requests = testapp::take_requests(app.update(AppEvent::Bootstrap));
-    let models = requests.iter().find(|r| r.method == "model.list").unwrap();
-    testapp::respond_error(&mut app, models, "x", "no models");
+    let mut app = testapp::open_empty(ThemeKind::Dark, "ses_1", Some("Task"), "high");
+    app.update(AppEvent::SubmitTurn {
+        session_id: "ses_1".into(),
+        text: "unfinished".into(),
+    });
     app.update(AppEvent::Rpc(RpcEvent::AgentLogLine(
         "latest agent stderr".to_owned(),
     )));
@@ -636,8 +812,20 @@ fn fatal_connection_renders_the_overlay() {
     let content = text(&terminal);
     assert!(content.contains("Fatal error"));
     assert!(content.contains("Exit status: unavailable"));
+    assert!(content.contains("result/save status unconfirmed"));
+    assert!(content.contains("Tool side effects may already exist"));
     assert!(content.contains("latest agent stderr"));
     assert!(content.contains("Press q to quit"));
+}
+
+#[test]
+fn fatal_overlay_retains_a_known_result_summary() {
+    let mut app = testapp::shutdown_cancel_result(ThemeKind::Dark);
+    app.update(AppEvent::Rpc(RpcEvent::Exited(None)));
+    let terminal = draw(&app, 80, 24);
+    let content = text(&terminal);
+    assert!(content.contains("Known turn result:"));
+    assert!(content.contains("cancelled (shutdown) · persisted"));
 }
 
 #[test]
@@ -681,7 +869,7 @@ fn selector_panel_replaces_the_composer_and_keeps_the_transcript_visible() {
     // The transcript stays visible above the dock (spec 24.1).
     assert!(content.contains("MINICORE"));
     assert!(content.contains("Select model"));
-    assert!(content.contains("Changing model creates a new session."));
+    assert!(content.contains("Model applies at the next model request."));
     assert!(content.contains("128k context"));
     assert!(content.contains("✓ tools"));
     assert!(content.contains("— tools"));
@@ -828,6 +1016,8 @@ fn help_panel_lists_keys_and_safety_notes() {
     let terminal = draw(&app, 80, 24);
     let content = text(&terminal);
     assert!(content.contains("Slash commands"));
+    assert!(content.contains("/cancel"));
+    assert!(content.contains("/refresh"));
     assert!(content.contains("Tools run automatically."));
     assert!(content.contains("Bash is not sandboxed."));
     assert!(content.contains("No approval UI"));
@@ -954,8 +1144,9 @@ fn end_resumes_follow_after_marker_reservation() {
 fn empty_user_sections_do_not_add_spacer_rows() {
     let theme = Theme::dark();
     let make = |text: &str| UserBlock {
-        seq: None,
-        turn_id: None,
+        index: None,
+        loop_id: None,
+        kind: crate::protocol::UserMessageKindWire::Prompt,
         text: text.to_owned(),
         pending: true,
     };

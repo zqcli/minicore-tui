@@ -55,6 +55,12 @@ pub fn render(frame: &mut Frame, app: &App) {
         return;
     }
     if let ConnectionState::Failed(reason) = &app.connection {
+        let known_result = app.active_view().and_then(|view| {
+            view.can_show_last_result()
+                .then_some(view.last_result.as_ref())
+                .flatten()
+                .map(status::result_summary)
+        });
         error::render_fatal(
             frame,
             area,
@@ -62,6 +68,12 @@ pub fn render(frame: &mut Frame, app: &App) {
             reason,
             app.child_exit_status.as_deref(),
             &app.agent_logs,
+            error::FatalResultState {
+                known_result: known_result.as_deref(),
+                unconfirmed: app
+                    .active_view()
+                    .is_some_and(|view| view.result_unconfirmed),
+            },
         );
         return;
     }

@@ -14,7 +14,7 @@ use ratatui::widgets::{Block, Paragraph};
 
 use crate::app::App;
 use crate::markdown::{column_width, line_width};
-use crate::protocol::{ModelInfo, ProfileInfo, Reasoning, SessionInfo, SessionStatusWire};
+use crate::protocol::{ModelInfo, ProfileInfo, Reasoning, SessionInfo};
 use crate::state::selection::{
     filtered_models, filtered_profiles, filtered_sessions, parse_rfc3339, reasoning_description,
     reasoning_label, supported_reasoning,
@@ -50,13 +50,20 @@ pub fn render_model(
     state: &crate::state::selection::SelectorState,
 ) {
     let items = filtered_models(&app.catalogs.models, &state.query);
-    // ✓ current marks the ACTIVE session's model; the selection feeds a new
-    // session and never claims the current one moved (spec 26.3).
+    // ✓ current marks the ACTIVE session's model. An active-session
+    // selection is applied through session.update at a request boundary.
     let current = app.active_view().map(|view| view.info.model.clone());
-    let header = vec![Line::from(Span::styled(
-        "Changing model creates a new session.",
-        Style::new().fg(theme.muted),
-    ))];
+    let header = if app.sessions.active.is_some() && app.new_session().is_none() {
+        vec![Line::from(Span::styled(
+            "Model applies at the next model request.",
+            Style::new().fg(theme.muted),
+        ))]
+    } else {
+        vec![Line::from(Span::styled(
+            "Changing model creates a new session.",
+            Style::new().fg(theme.muted),
+        ))]
+    };
     let width = inner_width(area);
     let lines: Vec<Vec<Line<'static>>> = items
         .iter()
@@ -64,7 +71,9 @@ pub fn render_model(
             vec![model_line(
                 theme,
                 model,
-                current.as_deref() == Some(model.id.as_str()),
+                current.as_deref().is_some_and(|current| {
+                    current == model.id.as_str() || current == model.model_ref.as_str()
+                }),
                 width,
             )]
         })
@@ -95,6 +104,8 @@ pub fn render_reasoning(
     let model = app
         .new_session()
         .map(|draft| draft.model.clone())
+        .or_else(|| state.model_context.clone())
+        .or_else(|| app.active_view().map(|view| view.info.model.clone()))
         .unwrap_or_default();
     let levels = supported_reasoning(&app.catalogs.models, &model);
     // Never let the user believe the current session changed (spec 27.3).
@@ -317,22 +328,24 @@ fn session_lines(
     vec![line1, line2]
 }
 
-/// ● loaded, ◉ running, ○ known-but-unloaded, space unknown (spec 28.5).
+/// ● loaded, ◉ running, ◌ finishing, ! blocked, ○ known-but-unloaded,
+/// space unknown (spec 28.5).
 fn session_marker(app: &App, info: &SessionInfo) -> &'static str {
     let Some(view) = app.sessions.known.get(&info.session_id) else {
         return " ";
     };
-    let running = view.live.is_some()
-        || view
-            .state
-            .as_ref()
-            .is_some_and(|state| state.status == SessionStatusWire::Running);
-    if running {
-        "◉"
-    } else if view.info.loaded || view.transcript.complete {
-        "●"
-    } else {
-        "○"
+    match view.state.as_ref().map(|state| state.status) {
+        Some(crate::protocol::SessionStatusWire::Running)
+        | Some(crate::protocol::SessionStatusWire::WaitingForInput) => "◉",
+        Some(crate::protocol::SessionStatusWire::Finishing) => "◌",
+        Some(crate::protocol::SessionStatusWire::Blocked) => "!",
+        Some(crate::protocol::SessionStatusWire::Idle) | None => {
+            if view.info.loaded || view.transcript.complete {
+                "●"
+            } else {
+                "○"
+            }
+        }
     }
 }
 

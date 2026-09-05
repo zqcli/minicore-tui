@@ -1,0 +1,10 @@
+   Compiling minicore-tui v0.2.0 (/root/minicore-tui-r2-01a06ec1/tui)
+    Finished `release` profile [optimized] target(s) in 10.03s
+     Running unittests src/lib.rs (target/release/deps/minicore_tui-d65c9b64052ed26f)
+
+running 2 tests
+test protocol::tests::version_gate_prerelease_policy ... ok
+test protocol::tests::version_gate_is_exactly_0_3_major_minor ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 195 filtered out; finished in 0.00s
+

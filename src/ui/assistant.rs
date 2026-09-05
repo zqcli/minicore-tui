@@ -17,6 +17,19 @@ pub fn lines(
     reasoning_visible: bool,
 ) -> Vec<Line<'static>> {
     let mut out = Vec::new();
+    if block.request_index > 0 {
+        let heading = format!(
+            "Request #{} · {} · {:?}",
+            block.request_index, block.model, block.reasoning_level
+        );
+        out.push(layout::left_pad(
+            Line::from(vec![ratatui::text::Span::styled(
+                heading,
+                Style::new().fg(theme.dim),
+            )]),
+            1,
+        ));
+    }
     let renderer = MarkdownRenderer::new(theme);
     let base = Style::new().fg(theme.text);
     let mut in_hidden_run = false;

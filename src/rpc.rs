@@ -18,7 +18,7 @@ use crate::protocol::{FrameError, FrameErrorKind, OutgoingRequest, parse_frame};
 /// Upper bound for one incoming RPC frame, excluding the trailing newline
 /// (spec 10.7). The reader enforces the bound before any byte is appended, so
 /// a malicious or corrupted line can never grow unbounded in memory.
-pub const MAX_RPC_FRAME_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_RPC_FRAME_BYTES: usize = 32 * 1024 * 1024;
 /// Upper bound for one captured agent stderr line (spec 10.8).
 pub const MAX_AGENT_LOG_LINE_BYTES: usize = 4096;
 /// The agent contract bounds one request line at 1 MiB including the
@@ -64,12 +64,23 @@ impl RpcProcess {
     /// background tasks. All fallible steps run before any task is started,
     /// so a spawn failure leaves nothing behind to clean up.
     pub fn spawn(agent_bin: &Path, agent_config: &Path) -> Result<Self, RpcError> {
+        Self::spawn_with_env(agent_bin, agent_config, &[])
+    }
+
+    /// Spawns the agent process with optional additional environment variables.
+    pub fn spawn_with_env(
+        agent_bin: &Path,
+        agent_config: &Path,
+        envs: &[(&str, &str)],
+    ) -> Result<Self, RpcError> {
         if !agent_config.is_file() {
             return Err(RpcError::ConfigMissing(agent_config.to_path_buf()));
         }
-        let child = Self::spawn_command(agent_bin, agent_config)
-            .spawn()
-            .map_err(RpcError::Spawn)?;
+        let mut command = Self::spawn_command(agent_bin, agent_config);
+        for &(key, val) in envs {
+            command.env(key, val);
+        }
+        let child = command.spawn().map_err(RpcError::Spawn)?;
         Self::from_child(child)
     }
 
@@ -154,7 +165,7 @@ impl RpcProcess {
     pub async fn recv(&mut self) -> Option<RpcEvent> {
         let event = self.events.recv().await;
         if matches!(&event, Some(RpcEvent::Exited(_))) {
-            self.seen_exit = true;
+            self.mark_exit_seen();
         }
         event
     }
@@ -172,9 +183,22 @@ impl RpcProcess {
             }
         };
         if matches!(&event, Some(RpcEvent::Exited(_))) {
-            self.seen_exit = true;
+            self.mark_exit_seen();
         }
         Ok(event)
+    }
+
+    /// Stops the stdin writer after the child has exited. Without this, the
+    /// writer would wait forever on its still-owned request sender and the
+    /// event channel could never become fully closed.
+    fn mark_exit_seen(&mut self) {
+        if self.seen_exit {
+            return;
+        }
+        self.seen_exit = true;
+        let (closed, receiver) = mpsc::channel::<Vec<u8>>(1);
+        drop(receiver);
+        self.requests = closed;
     }
 
     /// Requests the waiter task to kill the agent child; the
@@ -206,6 +230,91 @@ impl RpcProcess {
             }
         })
         .await;
+    }
+
+    /// Kills the child, observes the exit, and then drains the independent
+    /// stdout/stderr readers until the event channel closes or a bounded
+    /// deadline expires. Unlike [`RpcProcess::terminate`], this deliberately
+    /// continues after `Exited`, so final stderr lines and buffered frames are
+    /// not discarded. The observer must not issue new RPCs from the returned
+    /// app commands.
+    pub async fn terminate_with_observer<F>(&mut self, mut observe: F)
+    where
+        F: FnMut(RpcEvent),
+    {
+        if !self.seen_exit {
+            self.kill_child();
+        }
+        self.terminate_observing(&mut observe).await;
+        if self.drain_events(&mut observe).await {
+            self.join_tasks().await;
+        } else {
+            // A broken reader must not make shutdown unbounded. Preserve the
+            // events already queued, then abort only tasks that failed to
+            // finish inside the explicit drain deadline.
+            while let Ok(Some(event)) = self.try_recv() {
+                observe(event);
+            }
+            for task in &self.tasks {
+                task.abort();
+            }
+            self.join_tasks().await;
+        }
+    }
+
+    /// The observer version of the ordinary terminate wait. It retains the
+    /// existing bounded wait and exit condition while ensuring events consumed
+    /// on the way to `Exited` are delivered to the caller.
+    async fn terminate_observing<F>(&mut self, observe: &mut F)
+    where
+        F: FnMut(RpcEvent),
+    {
+        // The waiter already reaped the child (a clean exit, or a caller
+        // consumed `Exited`); do not wait out the full timeout.
+        if self.seen_exit {
+            return;
+        }
+        self.kill_child();
+        let _ = tokio::time::timeout(TERMINATE_TIMEOUT, async {
+            while let Some(event) = self.recv().await {
+                let exited = matches!(event, RpcEvent::Exited(_));
+                observe(event);
+                if exited {
+                    break;
+                }
+            }
+        })
+        .await;
+    }
+
+    /// Drains all events after the child exit, including final stderr output.
+    /// `None` proves every event producer has ended; the timeout keeps a
+    /// malfunctioning reader from blocking terminal restoration forever.
+    async fn drain_events<F>(&mut self, observe: &mut F) -> bool
+    where
+        F: FnMut(RpcEvent),
+    {
+        let deadline = tokio::time::Instant::now() + TERMINATE_TIMEOUT;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            match tokio::time::timeout(remaining, self.recv()).await {
+                Ok(Some(event)) => observe(event),
+                Ok(None) => return true,
+                Err(_) => return false,
+            }
+        }
+    }
+
+    /// All senders have been dropped when the event channel closes, so the
+    /// task handles are already complete. Joining them makes that fact
+    /// explicit without extending the bounded drain.
+    async fn join_tasks(&mut self) {
+        while let Some(task) = self.tasks.pop() {
+            let _ = task.await;
+        }
     }
 
     /// Whether an `Exited` event was consumed; the child was reaped.
@@ -545,9 +654,9 @@ mod tests {
         let (events_tx, mut events_rx) = mpsc::channel(16);
         tokio::spawn(stdout_reader(server, events_tx));
 
-        let event = r#"{"jsonrpc":"2.0","method":"agent.event","params":{"type":"output_delta","data":{"turn":{"session_id":"ses_1","instance_id":"ins_1","turn_id":"trn_1"},"channel":"text","delta":"hi","meta":{"session_id":"ses_1","instance_id":"ins_1","dropped_before":0}}}}"#;
+        let event = r#"{"jsonrpc":"2.0","method":"agent.event","params":{"type":"output_delta","data":{"turn":{"session_id":"ses_1","loop_id":"loop_1"},"request_index":0,"channel":"text","delta":"hi","meta":{"session_id":"ses_1","dropped_before":0}}}}"#;
         let response =
-            |id: u64| format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{{"version":"0.2.0"}}}}"#);
+            |id: u64| format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{{"version":"0.3.0"}}}}"#);
         // Interleaved frames, with response ids arriving out of order. The
         // transport never reorders or correlates: each frame is emitted as
         // its bytes arrive and ids are preserved for the app to correlate
@@ -1056,7 +1165,11 @@ mod tests {
             .collect::<Vec<_>>();
         candidates
             .into_iter()
-            .min()
+            .max_by_key(|path| {
+                std::fs::metadata(path)
+                    .and_then(|meta| meta.modified())
+                    .ok()
+            })
             .expect("the agent_process test target must be built (cargo test --all-targets)")
     }
 
@@ -1271,19 +1384,16 @@ mod tests {
             .send(OutgoingRequest::send_turn(RequestId(3), "ses_1", "hello"))
             .await
             .expect("turn.send sends");
-        let first = next_process_event(&mut process).await;
-        assert!(
-            matches!(
-                first,
-                RpcEvent::Frame(IncomingFrame::Notification(RpcNotification::AgentEvent(_)))
-            ),
-            "the first frame must be an agent event, got {first:?}"
-        );
-        let second = next_process_event(&mut process).await;
-        assert!(matches!(
-            second,
-            RpcEvent::Frame(IncomingFrame::Notification(RpcNotification::AgentEvent(_)))
-        ));
+        for _ in 0..4 {
+            let event = next_process_event(&mut process).await;
+            assert!(
+                matches!(
+                    event,
+                    RpcEvent::Frame(IncomingFrame::Notification(RpcNotification::AgentEvent(_)))
+                ),
+                "expected an agent event, got {event:?}"
+            );
+        }
         match next_process_event(&mut process).await {
             RpcEvent::Frame(IncomingFrame::Response(response)) => {
                 assert_eq!(response.id, RequestId(3));
@@ -1339,7 +1449,7 @@ mod tests {
             }
             other => panic!("expected turn.send, got {other:?}"),
         }
-        for _ in 0..2 {
+        for _ in 0..4 {
             let event = next_process_event(&mut process).await;
             assert!(matches!(
                 event,
@@ -1438,6 +1548,33 @@ mod tests {
         let start = Instant::now();
         process.terminate().await;
         assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn fake_hanging_agent_stderr_survives_until_kill_and_reap() {
+        let mut process = spawn_fake("hang_stderr");
+        process
+            .send(OutgoingRequest::ping(RequestId(1)))
+            .await
+            .expect("ping sends");
+        let mut saw_log = false;
+        let mut saw_ping = false;
+        while !(saw_log && saw_ping) {
+            match next_process_event(&mut process).await {
+                RpcEvent::AgentLogLine(line) => {
+                    assert_eq!(line, "fake agent stderr before forced termination");
+                    saw_log = true;
+                }
+                RpcEvent::Frame(IncomingFrame::Response(response)) => {
+                    assert_eq!(response.id, RequestId(1));
+                    saw_ping = true;
+                }
+                other => panic!("unexpected event before forced termination: {other:?}"),
+            }
+        }
+        process.kill_child();
+        process.terminate().await;
+        assert!(process.child_reaped(), "the forced child must be reaped");
     }
 
     #[tokio::test]

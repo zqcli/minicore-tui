@@ -1,104 +1,137 @@
 # Delivery Verification
 
-Verification date: 2026-09-01 (UTC+08:00)
+## Current Delivery: 0.2.1
 
-This is the Phase 7 delivery record for the commit whose message is
-`docs: document minicore-tui usage and backend limits`. Rust validation was
-run on an isolated Linux builder with Rust `1.85.0`; no Cargo, rustc, fmt,
-clippy, doc, or tree command was run on the developer machine.
+The current TUI package is **0.2.1**, with the same Agent `0.3.x` protocol and
+unchanged backend pins. Its reasoning Markdown/order fixes, remote verification
+(**277 passed, 0 failed, 8 ignored** on both MSRV and stable), and macOS artifact
+evidence are recorded in [release-0.2.1.md](release-0.2.1.md).
 
-## Pins
+## Migration Baseline: 0.2.0
 
-- Project baseline before this delivery: `0a8e048`.
-- Agent repository: `https://github.com/zqcli/minicore-agent`, branch `dev`.
-- Agent commit: `6d5e963031159c458212a92c690e515a2ac3761b`.
-- RPC version: `0.2.0`.
-- Contract document blob: `b8f4d57c6931cad8b99b39fdda0647a2539824a6`.
-- Rust: `1.85.0`.
-- Package: one `minicore-tui` Cargo package, Edition 2024.
+The remainder records the historical final6 verification of the r2 migration. The
+implementer did not run local Cargo/Rust commands; all Rust compilation,
+formatting, linting, documentation, tests, and PTY validation were executed on
+the remote builder `192.168.20.199` in
+`/root/minicore-tui-r2-01a06ec1/tui`.
 
-## Commands And Results
+## Source & Binary Pins
 
-All commands below passed on the isolated Linux builder. The delivery
-wrapper used a 20-second SSH connection timeout; fmt/metadata/tree commands
-were limited to 120 seconds; test/clippy/doc commands were limited to 900
-seconds; the E2E wrapper was limited to 300 seconds.
+- TUI source baseline: `3ecb509e353a666711b11bfdee7f50bdc92fe674`
+  (worktree intentionally uncommitted).
+- Agent source: `b2e23938d073ab21c2775faa623561ba929a5ed1`, built as
+  `/root/minicore-tui-r2-01a06ec1/agent/target/debug/minicore-agent`.
+- Runtime source: `87f3cf92b9b5980b0f468174a319cf53427d858e`, pinned by the
+  Agent dependency lock.
+- Migration baseline package: `0.2.0`; supported wire range: Agent `0.3.x` only.
 
-```text
-cargo +1.85.0 fmt --all -- --check                         PASS
-cargo +1.85.0 test --locked --all-targets                    PASS
-cargo +1.85.0 clippy --locked --all-targets -- -D warnings  PASS
-RUSTDOCFLAGS=-D warnings cargo +1.85.0 doc --locked --no-deps PASS
-cargo +1.85.0 tree -p crossterm                              PASS
-cargo +1.85.0 metadata --locked --no-deps --format-version 1  PASS
-cargo +1.85.0 clippy --target x86_64-pc-windows-gnu \
-  --all-targets -- -D warnings                              PASS
-cargo +1.85.0 test --target x86_64-pc-windows-gnu \
-  --locked --all-targets --no-run                           PASS
-```
+## Final6 & Post-review Results
 
-The final default all-targets run reported `308` passed, zero failed, and
-`2` ignored. The ignored entries are the real-Agent E2E and
-real-PTY terminal test. The harness-free `agent_process` target is not a libtest target and is
-excluded from this arithmetic; no compile target is counted as a test.
+| Check | Evidence | Result |
+|---|---|---|
+| MSRV all-target suite | `cargo +1.85.0 test --locked --all-targets` | **273 passed, 0 failed, 8 ignored** |
+| Stable all-target suite | `cargo +stable test --locked --all-targets` | **273 passed, 0 failed, 8 ignored** |
+| Release version gate | `cargo +stable test --release --lib version_gate` | **2 passed, 0 failed** |
+| Stable/MSRV rustfmt | `cargo +stable fmt --all -- --check`; `cargo +1.85.0 fmt --all -- --check` | **passed** |
+| Stable clippy | `cargo +stable clippy --locked --all-targets -- -D warnings` | **passed, no warnings** |
+| Rustdoc | `RUSTDOCFLAGS="-D warnings" cargo +stable doc --locked --no-deps` | **passed** |
+| Snapshots | `MCT_UPDATE_SNAPSHOTS=1 cargo +stable test --lib ui::snapshots` | **47 passed, 0 failed** |
+| Real PTY restore | `script -q -e -c 'cargo +1.85.0 test --locked --test terminal_restore -- --ignored --nocapture'` | **1 passed, 0 failed** |
+| Real Agent loopback E2E | `MINICORE_AGENT_BIN=../agent/target/debug/minicore-agent cargo +1.85.0 test --locked --test agent_e2e -- --ignored` | **7 passed, 0 failed** |
+| Dependency tree | `cargo +stable tree -d`; `cargo +stable tree -p crossterm` | **passed; ratatui 0.29.0, crossterm 0.28.1** |
+| Windows cross-check | Parent final6: `cargo +stable check --locked --offline --all-targets --target x86_64-pc-windows-gnu` | **passed; not native execution or CI** |
+| macOS cross-check | Parent final6: `cargo +stable check --locked --offline --all-targets --target x86_64-apple-darwin` | **passed; not native execution or CI** |
+| Backend dependency absence | Parent: Linux-filtered `cargo +1.85.0 metadata --locked --offline --format-version 1` | **passed; neither minicore-agent nor minicore-runtime is linked** |
+| Source/provenance audit | Parent checked all three actual HEADs, Agent archive SHA, Runtime lock revision, and unchanged backend tracked trees | **passed; see backend.md** |
 
-The exact libtest arithmetic was:
+The all-target count includes 197 library tests, 8 main tests, 49 app-flow
+tests, 8 protocol tests, 4 render-snapshot tests, 2 RPC I/O tests, 5
+terminal-restore tests, and 8 ignored tests (7 Agent E2E tests plus 1 ignored
+real-PTY test). The real Agent run explicitly exercised discovery, a basic
+turn, tool execution, steering, same-loop update, next-turn update, and
+shutdown cancellation.
 
-```text
-lib 266 + main 6 + agent_e2e 3 + app_flow 10 + protocol 12
-+ render_snapshots 4 + rpc_io 2 + terminal_restore 5 = 308 passed
-agent_e2e ignored 1 + terminal_restore ignored 1 = 2 ignored
-```
+Final6 added slash command entry and restricted-state Composer regressions to the prior reviewer evidence:
 
-The metadata target set was:
+- `late_completed_loop_events_cannot_bind_a_new_prompt`: a completed L1's late
+  request, delta, and state events cannot bind the pending L2 prompt.
+- `reopen_invalidates_old_wait_persisted_response`,
+  `reopen_invalidates_old_wait_failed_response`,
+  `loaded_running_session_reopen_reuses_view_after_state_failure`, and
+  `failed_close_reopen_keeps_retired_loop_fenced`: loaded sessions reuse their
+  existing view, while close→reopen fences old requests/events and preserves
+  the fence after an open failure.
+- `close_verification_internal_or_malformed_retains_loaded_state`: only
+  `SESSION_NOT_LOADED` proves unload; internal and malformed checks remain
+  unknown.
+- `agent_exit_marks_live_result_unconfirmed_without_overwriting_known_result`
+  and the fatal overlay tests: unknown live results and known results remain
+  distinguishable after connection loss.
+- `late_steer_ack_after_complete_history_marks_missing_steer_not_recorded`,
+  `late_steer_ack_respects_recorded_and_uncertain_history`, and
+  `steering_ack_only_clears_the_same_editor_revision`: late steering acks use
+  the submission editor revision; retyping the same text does not clear it,
+  unchanged text does, and direct `AppEvent::SteerTurn` cannot clear it.
+  Complete persisted
+  History can move a missing steer to `NotRecorded`, while recorded and
+  failed/uncertain History keep their conservative state and new composer text
+  survives the late acknowledgement.
+- `late_session_events_cannot_overwrite_info_or_clear_a_new_loop` and
+  `session_opened_event_initializes_unknown_view_and_reads_running_state`:
+  `session_opened` does not overwrite initialized SessionInfo, no-loop idle
+  cannot regress a current loop, and first-open RunningLoop placeholders accept
+  normal subsequent events.
+- `slash_cancel_sends_exact_turn_cancel_and_wait_reconciles` verifies the
+  actual Composer key path, exact `turn.cancel` fields, preservation of the
+  original `turn.wait`, and cancelled/persisted History reconciliation.
+- `slash_refresh_and_restricted_commands_remain_usable` verifies one-shot
+  retained-TurnRef refresh, duplicate-wait suppression, blocked/finishing/no-
+  session command access, `/close confirm`, and rejection of ordinary
+  prompt/steer/update operations.
+- `forced_shutdown_message_combines_unknown_known_failure_and_stderr`,
+  `forced_shutdown_timeout_report_keeps_unknown_and_known_failure_facts`, and
+  `forced_shutdown_drains_gated_stderr_before_reporting`: forced shutdown
+  evidence combines unknown/known result facts with captured stderr; the gated
+  fake agent leaves both a late failed `turn.wait` result and stderr unread
+  before kill, and the child is killed and reaped. The ordinary
+  `fake_hanging_agent_stderr_survives_until_kill_and_reap` test remains coverage
+  for the unchanged `terminate()` behavior.
 
-```text
-agent_e2e, agent_process, app_flow, minicore-tui, minicore_tui,
-protocol, render_snapshots, rpc_io, terminal_restore
-```
+## Deliberate Non-Execution
 
-`cargo tree -p crossterm` reported one `crossterm v0.28.1`. The committed
-snapshot set contains 27 text snapshots; the in-crate snapshot comparison and
-four representative integration snapshot tests passed with no drift.
+- GitHub Actions Linux, macOS, and Windows jobs were not run; no CI jobs were
+  triggered. No native macOS/Windows remote runner was available, and local Rust
+  builds were prohibited. Linux tests and cross-checks are not native platform CI.
+- External LLM provider execution was intentionally replaced by the isolated
+  loopback mock. Production Store append-failure/worker-panic injection was not
+  added to the binary; TUI fixtures and the unchanged Agent's targeted tests
+  cover those contracts without a debug RPC. No power-loss durability is claimed.
+- Unfiltered offline Cargo metadata failed on uncached Redox-only
+  `redox_syscall 0.5.18`; Linux-filtered metadata then passed. No Redox build is
+  claimed and no network download was performed to satisfy that unused target.
+- Unsupported capabilities remain intentionally out of scope: Approval,
+  Compaction, Plugin, MCP, Subagent, reconnect, automatic restart, and local
+  Store migration.
 
-## Cache And Markdown Evidence
+## Artifacts
 
-The cache evidence is in `src/ui/transcript.rs`:
+The parent independently reran the final source after the last review. Local
+copies of `delivery-msrv.log`, `delivery-stable.log`, `delivery-e2e.log`,
+`delivery-fmt.log`, `delivery-clippy.log`, `delivery-doc.log`,
+`delivery-release.log`, `delivery-windows.log`, `delivery-macos.log`, and
+`delivery-pty.log` are under `docs/verification/`. They confirm the 273-test
+suites, seven E2E scenarios, quality gates, two release checks, both cross-target
+checks, and the real PTY round trip without relying on subagent summaries.
 
-- one initial durable preparation parses one pending Markdown user card;
-- repeated `total_lines` and render calls do not increase the thread-local
-  `cfg(test)` parse counter;
-- width, theme, reasoning visibility, all-tools expansion, individual tool
-  expansion, and durable block mutations invalidate or change the key;
-- live output deltas leave the durable revision unchanged;
-- stale prepared results are rejected;
-- separate sessions retain separate prepared caches.
+Raw final2 through final6 post-review logs are preserved on the remote
+builder under `/root/minicore-tui-r2-01a06ec1/logs/final[23456]-*`, including
+`final3-pty.log`, `final3-agent-e2e.log`, `final3-postreview.log`,
+`final3-snapshots.log`, `final3-dependencies.log`, `final3-docs.log`, and the
+corresponding `final4-*`, `final5-*`, and `final6-*` logs. The acceptance matrix is generated by
+`tools/generate_acceptance.py`; its statuses are conservative and distinguish
+executable evidence, source/provenance evidence, and unrun platform CI.
 
-`src/markdown.rs` verifies that adjacent equal-style characters coalesce into
-one Span while bold/style boundaries, CJK width, emoji, combining marks, and
-line text remain unchanged.
-
-## Real-Agent E2E
-
-The ignored `real_agent_multi_turn_flow` test passed against the pinned Agent
-and a loopback mock. It verified isolated configuration/workspace handling,
-bootstrap, two turns, durable user/assistant reconciliation, pending wait
-registration, transcript completion, shutdown response, and successful child
-exit. The trap reported `E2E_CLEANUP_OK`; a follow-up remote audit found no
-mock/Agent process and no E2E temporary directory.
-
-No provider endpoint, API key, password, IP address, or private workspace path
-is recorded in this document.
-
-## CI And Platform Honesty
-
-The GitHub Actions workflow is present at `.github/workflows/ci.yml` and still
-defines Ubuntu quality, locked Linux/macOS/Windows tests, MSRV 1.85 tests, and
-the single-Crossterm check. GitHub Actions was not run for this delivery and
-there is no remote macOS runner evidence. Windows evidence is the GNU
-cross-target clippy and no-run compile check above, not a claim that Windows
-executed the suite.
-
-The full non-PASS and NOT-RUN accounting is maintained in
-[acceptance.md](acceptance.md); known runtime limitations are in
-[known-limitations.md](known-limitations.md).
+The final parent audit accepts MIG-001/002/006/007/141/160 by their applicable
+source/provenance/documentation checks. Final status: **157 PASS, 3 NOT RUN**
+(MIG-138/139/140). No incomplete runtime behavior is hidden in a source-audit
+label. Both independent review roles finished with no remaining findings.

@@ -33,10 +33,7 @@ mod tests {
 
     #[test]
     fn reports_operation_and_source() {
-        let error = TerminalError::new(
-            "enter alternate screen",
-            io::Error::new(io::ErrorKind::Other, "boom"),
-        );
+        let error = TerminalError::new("enter alternate screen", io::Error::other("boom"));
         let message = error.to_string();
         assert!(message.contains("enter alternate screen"));
         assert!(message.contains("boom"));

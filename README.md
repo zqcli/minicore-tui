@@ -90,17 +90,18 @@ new-session form; `/resume` and `/sessions` open the existing-session
 selector. Workspace, profile, model, and reasoning are sent to
 `session.create` as appropriate.
 
-A session's model and reasoning are immutable after creation. Selecting a
-model or reasoning level edits a new-session draft and creates a new session;
-it never hot-swaps the active session. A turn sends `turn.send` and registers
-`turn.wait` immediately. Agent events are best-effort live display data and
-may be dropped. `turn.wait`, `session.state`, and `session.transcript` are the
-authoritative sources; completed turns reconcile the live view with durable
-transcript entries.
+A session's model and reasoning can be updated with `session.update`; an
+active loop observes the new setting only at a later request boundary. Model A,
+tool work, and model B therefore remain separate request views. A turn sends
+`turn.send` and registers `turn.wait` immediately. If submitted while a loop
+is running, the composer routes the text to `turn.steer`. Agent events are
+best-effort live display data and may be dropped. `turn.wait`, `session.state`,
+and `session.history` are the authoritative sources; completed turns
+reconcile the live view with durable history items.
 
-Tools run automatically under the Agent. Bash is not sandboxed. The TUI does
-not add approval, steering, compaction, live Bash output, MCP, plugins,
-skills, subagents, session branching, or reconnect/restart behavior.
+Tools run automatically under the Agent. Bash is not sandboxed. The TUI supports
+mid-turn steering via `turn.steer`. It does not add approval, live Bash PTY output,
+MCP, plugins, skills, subagents, session branching, or reconnect/restart behavior.
 
 ## Keys And Commands
 
@@ -112,27 +113,32 @@ The complete current keymap and slash-command semantics are in
 - `Ctrl+T` toggles reasoning and `Ctrl+O` toggles tool previews;
 - `PageUp`/`PageDown`, `Ctrl+Home`/`Ctrl+End`, and mouse wheel scroll the transcript;
 - `Esc` closes a dock or cancels the exact running turn;
-- `Ctrl+C` clears non-empty input, then double-presses to quit; `/quit` performs normal shutdown.
+- `Ctrl+C` clears non-empty input, then double-presses to quit; `/cancel` cancels the exact active loop, `/refresh` re-reads its retained result once, and `/quit` performs normal shutdown.
 
 Implemented local commands are `/new`, `/resume`, `/sessions`, `/model`,
-`/reasoning`, `/theme dark`, `/theme light`, `/clear`, `/help`, `/logs`, and
-`/quit`. Unknown commands never reach the Agent.
+`/reasoning`, `/cancel`, `/refresh`, `/theme dark`, `/theme light`, `/clear`,
+`/help`, `/logs`, `/quit`, `/close`, and `/delete`. Unknown commands never
+reach the Agent. `/refresh` is idempotent while the same `turn.wait` is in
+flight; `/cancel` never replaces that wait with shutdown.
 
 ## Backend Contract And Scope
 
-The wire contract is pinned in [docs/rpc-contract.md](docs/rpc-contract.md):
+The wire contract is pinned in [docs/rpc-contract.md](docs/rpc-contract.md),
+with source provenance in [docs/backend.md](docs/backend.md). In r2, `persisted` means the Agent appended the current process's durable items;
+it does not promise transaction/fsync/crash durability. A failed append blocks
+the session while preserving the in-process completion view.
 
-- Agent commit `6d5e963031159c458212a92c690e515a2ac3761b`;
-- RPC version `0.2.0`;
-- contract document blob `b8f4d57c6931cad8b99b39fdda0647a2539824a6`;
+- Agent commit `b2e23938d073ab21c2775faa623561ba929a5ed1`;
+- Runtime commit `87f3cf92b9b5980b0f468174a319cf53427d858e`;
+- RPC version `0.3.x`;
 - NDJSON over stdio, with one TUI writer, one stdout reader, one stderr reader,
-  bounded frames, request IDs, response/event interleaving, and no event replay.
+  bounded frames (up to 32 MiB), request IDs, response/event interleaving, and no event replay.
 
 The TUI deliberately does not implement Agent capabilities that are absent
-from this interface: approval UI, steering or follow-up queue, compaction
-controls, live Bash/PTY output, MCP, plugins, skills, subagents, remote
-agents, image input, or session tree operations. External editor and OSC52
-copy are optional follow-up work and are not part of v0.1.
+from this interface: approval UI, compaction controls, live Bash/PTY output,
+MCP, plugins, skills, subagents, remote agents, image input, or session tree
+operations. External editor and OSC52 copy are optional follow-up work. Approval,
+Compaction, Plugin, MCP, and Subagent UI remain intentionally out of scope.
 
 ## Platform And Troubleshooting
 
@@ -159,8 +165,9 @@ fake Agent harness, app-flow tests, TestBackend snapshots, and terminal
 lifecycle tests. See [docs/testing.md](docs/testing.md) for the remote Rust
 1.85 commands, snapshot inventory, ignored tests, Windows checks, and E2E
 procedure. See [docs/acceptance.md](docs/acceptance.md) for the honest
-MT-001–MT-144 status matrix and [docs/verification.md](docs/verification.md)
-for the final delivery evidence.
+MIG-001..160 status note and [docs/verification.md](docs/verification.md)
+for the final delivery evidence. The concise implementation and verification
+summary is in [docs/final-report.md](docs/final-report.md).
 
 A real-Agent E2E is ignored by default and must use a loopback mock endpoint;
 it does not require or permit access to a real provider. Do not put secrets or

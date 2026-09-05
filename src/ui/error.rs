@@ -29,6 +29,11 @@ pub fn render_notice(frame: &mut Frame, area: Rect, theme: &Theme, notice: &Noti
     frame.render_widget(Paragraph::new(line), area);
 }
 
+pub struct FatalResultState<'a> {
+    pub known_result: Option<&'a str>,
+    pub unconfirmed: bool,
+}
+
 pub fn render_fatal(
     frame: &mut Frame,
     area: Rect,
@@ -36,6 +41,7 @@ pub fn render_fatal(
     reason: &str,
     exit_status: Option<&str>,
     logs: &VecDeque<String>,
+    result: FatalResultState<'_>,
 ) {
     let text_style = Style::new().fg(theme.error);
     let mut lines = vec![
@@ -49,9 +55,35 @@ pub fn render_fatal(
             format!("Exit status: {}", exit_status.unwrap_or("unavailable")),
             text_style,
         ),
+    ];
+    if let Some(known_result) = result.known_result {
+        lines.extend([
+            Line::default(),
+            Line::styled("Known turn result:", Style::new().fg(theme.muted)),
+            Line::styled(known_result.to_owned(), Style::new().fg(theme.success)),
+        ]);
+    }
+    if result.unconfirmed {
+        lines.extend([
+            Line::default(),
+            Line::styled(
+                "Last turn result/save status unconfirmed;",
+                Style::new().fg(theme.warning),
+            ),
+            Line::styled(
+                "reopening uses the Store history.",
+                Style::new().fg(theme.warning),
+            ),
+            Line::styled(
+                "Tool side effects may already exist.",
+                Style::new().fg(theme.warning),
+            ),
+        ]);
+    }
+    lines.extend([
         Line::default(),
         Line::styled("Recent agent output:", Style::new().fg(theme.muted)),
-    ];
+    ]);
     let width = area.width as usize;
     let start = logs.len().saturating_sub(20);
     for line in logs.iter().skip(start) {

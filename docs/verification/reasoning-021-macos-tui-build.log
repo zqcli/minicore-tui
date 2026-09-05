@@ -1,0 +1,61 @@
+build_start_utc=2026-09-05T13:31:52Z
+   Compiling log v0.4.34
+   Compiling cfg-if v1.0.4
+   Compiling smallvec v1.15.2
+   Compiling bitflags v2.13.1
+   Compiling scopeguard v1.2.0
+   Compiling allocator-api2 v0.2.21
+   Compiling either v1.18.0
+   Compiling equivalent v1.0.2
+   Compiling itoa v1.0.18
+   Compiling foldhash v0.1.5
+   Compiling futures-core v0.3.34
+   Compiling ryu v1.0.23
+   Compiling unicode-width v0.1.14
+   Compiling libc v0.2.189
+   Compiling static_assertions v1.1.0
+   Compiling unicode-segmentation v1.13.3
+   Compiling castaway v0.2.4
+   Compiling serde_core v1.0.229
+   Compiling memchr v2.8.3
+   Compiling strum v0.26.3
+   Compiling cassowary v0.3.0
+   Compiling pin-project-lite v0.2.17
+   Compiling unicode-width v0.2.0
+   Compiling zmij v1.0.23
+   Compiling unicase v2.9.0
+   Compiling lock_api v0.4.14
+   Compiling bytes v1.12.1
+   Compiling slab v0.4.12
+   Compiling futures-task v0.3.34
+   Compiling thiserror v2.0.20
+   Compiling compact_str v0.8.2
+   Compiling futures-util v0.3.34
+   Compiling itertools v0.13.0
+   Compiling hashbrown v0.15.5
+   Compiling pulldown-cmark v0.12.2
+   Compiling lru v0.12.5
+   Compiling errno v0.3.14
+   Compiling mio v1.2.2
+   Compiling parking_lot_core v0.9.12
+   Compiling signal-hook-registry v1.4.8
+   Compiling rustix v0.38.44
+   Compiling parking_lot v0.12.5
+   Compiling signal-hook v0.3.18
+   Compiling signal-hook-mio v0.2.5
+   Compiling tokio v1.53.1
+   Compiling unicode-truncate v1.1.0
+   Compiling crossterm v0.28.1
+   Compiling serde_json v1.0.151
+   Compiling serde v1.0.229
+   Compiling ratatui v0.29.0
+   Compiling tui-textarea v0.7.0
+   Compiling minicore-tui v0.2.1 (/root/minicore-tui-r2-01a06ec1/tui)
+    Finished `release` profile [optimized] target(s) in 16.03s
+artifact=target/x86_64-apple-darwin/release/minicore-tui
+artifact_absolute=/root/minicore-tui-r2-01a06ec1/tui/target/x86_64-apple-darwin/release/minicore-tui
+build_end_utc=2026-09-05T13:32:08Z
+artifact_metadata:
+/root/minicore-tui-r2-01a06ec1/tui/target/x86_64-apple-darwin/release/minicore-tui: Mach-O 64-bit x86_64 executable, flags:<NOUNDEFS|DYLDLINK|TWOLEVEL|NO_REEXPORTED_DYLIBS|PIE|HAS_TLV_DESCRIPTORS>
+bf32021c4ac036365cd2d9f69c964c797133cd43a6ff67eb219825829d991ec3  /root/minicore-tui-r2-01a06ec1/tui/target/x86_64-apple-darwin/release/minicore-tui
+size=3498196 mode=755 path=/root/minicore-tui-r2-01a06ec1/tui/target/x86_64-apple-darwin/release/minicore-tui

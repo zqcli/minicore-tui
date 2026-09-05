@@ -6,14 +6,14 @@ use ratatui::style::Color;
 use crate::protocol::Reasoning;
 
 /// Selects one of the built-in color palettes.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum ThemeKind {
     #[default]
     Dark,
     Light,
 }
 
-/// The complete color set used by the TUI renderers, per the v0.1 spec:
+/// The complete color set used by the TUI renderers, per the v0.2 spec:
 /// base palette, borders, message and tool cards, markdown, and the
 /// per-reasoning-level thinking colors.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,6 +49,12 @@ pub struct Theme {
     pub thinking_low: Color,
     pub thinking_medium: Color,
     pub thinking_high: Color,
+}
+
+impl ThemeKind {
+    pub fn theme(self) -> Theme {
+        Theme::for_kind(self)
+    }
 }
 
 impl Theme {

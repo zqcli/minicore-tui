@@ -1,0 +1,151 @@
+=== RUN 1 ===
+   Compiling minicore-tui v0.2.0 (/root/minicore-tui-r2-01a06ec1/tui)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.23s
+     Running tests/agent_e2e.rs (target/debug/deps/agent_e2e-87e08c9de5e815ea)
+
+running 7 tests
+test e2e_scenario_a_discovery ... ok
+test e2e_scenario_b_basic_turn ... ok
+test e2e_scenario_c_tool_execution ... ok
+test e2e_scenario_d_steer_turn ... ok
+test e2e_scenario_e2_update_single_request_then_next_turn ... ok
+test e2e_scenario_f_shutdown_cancels_active_wait ... ok
+test e2e_scenario_e_same_loop_update ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+=== RUN 2 ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/agent_e2e.rs (target/debug/deps/agent_e2e-87e08c9de5e815ea)
+
+running 7 tests
+test e2e_scenario_a_discovery ... ok
+test e2e_scenario_b_basic_turn ... ok
+test e2e_scenario_c_tool_execution ... ok
+test e2e_scenario_e2_update_single_request_then_next_turn ... ok
+test e2e_scenario_d_steer_turn ... ok
+test e2e_scenario_f_shutdown_cancels_active_wait ... ok
+test e2e_scenario_e_same_loop_update ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+=== RUN 3 ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/agent_e2e.rs (target/debug/deps/agent_e2e-87e08c9de5e815ea)
+
+running 7 tests
+test e2e_scenario_a_discovery ... ok
+test e2e_scenario_b_basic_turn ... ok
+test e2e_scenario_c_tool_execution ... ok
+test e2e_scenario_e_same_loop_update ... ok
+test e2e_scenario_d_steer_turn ... ok
+test e2e_scenario_f_shutdown_cancels_active_wait ... ok
+test e2e_scenario_e2_update_single_request_then_next_turn ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+=== RUN 4 ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/agent_e2e.rs (target/debug/deps/agent_e2e-87e08c9de5e815ea)
+
+running 7 tests
+test e2e_scenario_a_discovery ... ok
+test e2e_scenario_c_tool_execution ... ok
+test e2e_scenario_b_basic_turn ... ok
+test e2e_scenario_f_shutdown_cancels_active_wait ... ok
+test e2e_scenario_d_steer_turn ... ok
+test e2e_scenario_e_same_loop_update ... ok
+test e2e_scenario_e2_update_single_request_then_next_turn ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+=== RUN 5 ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/agent_e2e.rs (target/debug/deps/agent_e2e-87e08c9de5e815ea)
+
+running 7 tests
+test e2e_scenario_a_discovery ... ok
+test e2e_scenario_c_tool_execution ... ok
+test e2e_scenario_f_shutdown_cancels_active_wait ... ok
+test e2e_scenario_b_basic_turn ... ok
+test e2e_scenario_e2_update_single_request_then_next_turn ... ok
+test e2e_scenario_d_steer_turn ... ok
+test e2e_scenario_e_same_loop_update ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+=== RUN 6 ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/agent_e2e.rs (target/debug/deps/agent_e2e-87e08c9de5e815ea)
+
+running 7 tests
+test e2e_scenario_a_discovery ... ok
+test e2e_scenario_f_shutdown_cancels_active_wait ... ok
+test e2e_scenario_b_basic_turn ... ok
+test e2e_scenario_d_steer_turn ... ok
+test e2e_scenario_e_same_loop_update ... ok
+test e2e_scenario_c_tool_execution ... ok
+test e2e_scenario_e2_update_single_request_then_next_turn ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+=== RUN 7 ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/agent_e2e.rs (target/debug/deps/agent_e2e-87e08c9de5e815ea)
+
+running 7 tests
+test e2e_scenario_a_discovery ... ok
+test e2e_scenario_b_basic_turn ... ok
+test e2e_scenario_e2_update_single_request_then_next_turn ... ok
+test e2e_scenario_d_steer_turn ... ok
+test e2e_scenario_e_same_loop_update ... ok
+test e2e_scenario_c_tool_execution ... ok
+test e2e_scenario_f_shutdown_cancels_active_wait ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+=== RUN 8 ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/agent_e2e.rs (target/debug/deps/agent_e2e-87e08c9de5e815ea)
+
+running 7 tests
+test e2e_scenario_a_discovery ... ok
+test e2e_scenario_c_tool_execution ... ok
+test e2e_scenario_b_basic_turn ... ok
+test e2e_scenario_e2_update_single_request_then_next_turn ... ok
+test e2e_scenario_f_shutdown_cancels_active_wait ... ok
+test e2e_scenario_d_steer_turn ... ok
+test e2e_scenario_e_same_loop_update ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+=== RUN 9 ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/agent_e2e.rs (target/debug/deps/agent_e2e-87e08c9de5e815ea)
+
+running 7 tests
+test e2e_scenario_a_discovery ... ok
+test e2e_scenario_b_basic_turn ... ok
+test e2e_scenario_c_tool_execution ... ok
+test e2e_scenario_e_same_loop_update ... ok
+test e2e_scenario_d_steer_turn ... ok
+test e2e_scenario_f_shutdown_cancels_active_wait ... ok
+test e2e_scenario_e2_update_single_request_then_next_turn ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+=== RUN 10 ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/agent_e2e.rs (target/debug/deps/agent_e2e-87e08c9de5e815ea)
+
+running 7 tests
+test e2e_scenario_c_tool_execution ... ok
+test e2e_scenario_e2_update_single_request_then_next_turn ... ok
+test e2e_scenario_a_discovery ... ok
+test e2e_scenario_b_basic_turn ... ok
+test e2e_scenario_f_shutdown_cancels_active_wait ... ok
+test e2e_scenario_e_same_loop_update ... ok
+test e2e_scenario_d_steer_turn ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+

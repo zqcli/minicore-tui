@@ -15,14 +15,16 @@ use crate::command::{AppCommand, CommandIssue, LocalCommand, is_slash_command, p
 use crate::event::{AppEvent, RpcEvent};
 use crate::keymap::{self, Action, EditorCursor};
 use crate::protocol::{
-    AgentEventWire, ConversationEntryWire, IncomingFrame, METHOD_LIST_MODELS, METHOD_LIST_PROFILES,
-    METHOD_LIST_SESSIONS, METHOD_PING, OutgoingRequest, OutputChannelWire, Reasoning, RequestId,
-    RpcNotification, RpcResponse, RpcResponseError, SessionStateWire, SessionStatusWire,
-    ToolOutcomeWire, ToolProgressWire, TranscriptPageWire, TurnRef,
+    AgentEventWire, DEFAULT_HISTORY_LIMIT, EventMetaWire, HistoryItemWire, HistoryPageWire,
+    IncomingFrame, IndexedHistoryItemWire, METHOD_LIST_MODELS, METHOD_LIST_PROFILES,
+    METHOD_LIST_SESSIONS, OutgoingRequest, OutputChannelWire, Reasoning, RequestId,
+    RpcNotification, RpcResponse, RpcResponseError, SessionInfo, SessionStateWire,
+    SessionStatusWire, ToolOutcomeWire, ToolProgressWire, TurnPersistenceWire, TurnRef,
+    UserMessageKindWire, is_supported_agent_version,
 };
 use crate::rpc::RpcError;
 use crate::state::catalog::CatalogState;
-use crate::state::composer::Composer;
+use crate::state::composer::{Composer, MAX_COMPOSER_BYTES};
 use crate::state::selection::{
     Dock, NewSessionField, NewSessionState, SELECTOR_PAGE, SelectorKind, SelectorState,
     filtered_models, filtered_profiles, filtered_sessions, supported_reasoning,
@@ -30,10 +32,12 @@ use crate::state::selection::{
 use crate::state::session::{SessionId, SessionView, SessionsState};
 use crate::state::tool::{LiveTool, ToolStatus};
 use crate::state::transcript::{
-    AssistantBlock, AssistantPart, PreparedTranscriptCache, SummaryBlock, TerminalBlock, ToolBlock,
+    AssistantBlock, AssistantPart, PreparedTranscriptCache, SummaryBlock, ToolBlock,
     TranscriptBlock, TranscriptCacheKey, UserBlock,
 };
-use crate::state::turn::{LiveTurn, LocalSubmissionId};
+use crate::state::turn::{
+    LiveLoop, LocalSubmissionId, PendingSteer, PendingSteerState, UnsavedLoop,
+};
 use crate::theme::ThemeKind;
 
 /// The agent's stderr ring size, App side (spec 10.8).
@@ -54,6 +58,7 @@ const DOUBLE_CTRL_C_WINDOW: Duration = Duration::from_secs(1);
 /// Fixed text for interactions this TUI cannot answer (spec 11.7, 37.4).
 pub const UNSUPPORTED_INTERACTION_NOTICE: &str =
     "This session is waiting for an interaction that this TUI version does not support.";
+pub const UNCONFIRMED_RESULT_NOTICE: &str = "Last turn result/save status unconfirmed; reopening uses the Store history. Tool side effects may already exist.";
 
 /// The connection lifecycle (spec 12.2). There is no reconnecting: a failed
 /// bootstrap or a connection termination latches `Failed` forever.
@@ -83,11 +88,6 @@ pub struct Notice {
 }
 
 impl Notice {
-    #[cfg(test)]
-    fn new(level: NoticeLevel, text: String, sticky: bool) -> Self {
-        Self::at(level, text, sticky, Instant::now())
-    }
-
     fn at(level: NoticeLevel, text: String, sticky: bool, created_at: Instant) -> Self {
         Self {
             level,
@@ -107,20 +107,20 @@ pub enum RequestKind {
     ListProfiles,
     ListSessions,
     CreateSession {
-        /// The `NewSessionState::draft_id` this create was issued for, to
-        /// route the response back to the matching draft (spec 25.5).
-        /// Programmatic creates use a sentinel that never matches a real
-        /// draft.
         draft: u64,
     },
-    OpenSession(SessionId),
-    SessionState(SessionId),
-    Transcript {
+    OpenSession {
         session_id: SessionId,
-        after: Option<u64>,
-        /// The session's `gap_revision` when this chain was issued to heal
-        /// an event gap; a completion only clears the gap when no newer gap
-        /// arrived while the chain was in flight (spec 13.7).
+        previous_retired_loop: Option<TurnRef>,
+    },
+    SessionState {
+        session_id: SessionId,
+        query: u64,
+    },
+    History {
+        session_id: SessionId,
+        offset: usize,
+        limit: usize,
         gap_revision: Option<u64>,
     },
     SendTurn {
@@ -128,7 +128,29 @@ pub enum RequestKind {
         local_submission: LocalSubmissionId,
     },
     WaitTurn(TurnRef),
+    SteerTurn {
+        session_id: SessionId,
+        loop_id: String,
+        steer_id: u64,
+        text: String,
+        editor_revision: Option<u64>,
+    },
     CancelTurn(TurnRef),
+    UpdateSession {
+        session_id: SessionId,
+        loop_id: Option<String>,
+        model: Option<String>,
+        reasoning: Option<Reasoning>,
+    },
+    CloseSession {
+        session_id: SessionId,
+    },
+    CloseVerifyState {
+        session_id: SessionId,
+    },
+    DeleteSession {
+        session_id: SessionId,
+    },
     Shutdown,
 }
 
@@ -186,9 +208,8 @@ pub struct App {
     /// `agent.shutdown` was issued; the response routes to
     /// `RequestKind::Shutdown` and the child exit ends the run.
     shutdown_sent: bool,
-    /// Monotonic shutdown start/deadline, latched on the first shutdown
-    /// request and never extended by repeated quit or signal events.
-    shutdown_started_at: Option<Instant>,
+    /// Monotonic shutdown deadline, latched on the first shutdown request and
+    /// never extended by repeated quit or signal events.
     shutdown_deadline: Option<Instant>,
     /// The agent child ended while `ShuttingDown` (a `RpcEvent::Exited`).
     shutdown_child_exited: bool,
@@ -203,8 +224,10 @@ pub struct App {
     monotonic_now: Arc<dyn Fn() -> Instant + Send + Sync>,
     pub pending_requests: HashMap<RequestId, RequestKind>,
     next_request_id: RequestId,
+    next_state_query: u64,
     next_submission: u64,
     next_draft_id: u64,
+    next_steer_id: u64,
     bootstrap: BootstrapProgress,
     /// Guards the single "not ready" notice so a Failed/Starting connection
     /// cannot flood the user; reset when the app becomes Ready again.
@@ -233,25 +256,20 @@ enum BootstrapPart {
     Sessions,
 }
 
-/// What a completed transcript chain should do next.
+/// What a completed history chain should do next.
 enum NextChain {
     Page {
-        after: u64,
+        offset: usize,
     },
     Reconcile {
-        after: Option<u64>,
+        offset: usize,
         gap_revision: Option<u64>,
     },
-    /// `complete=false` without a cursor: the agent could not confirm
-    /// durability. Stop the chain and let a later open/reconcile retry from
-    /// the last merged sequence.
-    Stopped,
+    LoopNotContained(String),
     Done,
 }
 
 impl App {
-    /// A fresh app in `Starting` state. `default_workspace` is the working
-    /// directory the TUI was started in.
     pub fn new(default_workspace: PathBuf) -> Self {
         Self {
             connection: ConnectionState::Starting,
@@ -281,15 +299,16 @@ impl App {
             notice_ttl: NOTICE_TTL,
             draft: None,
             shutdown_sent: false,
-            shutdown_started_at: None,
             shutdown_deadline: None,
             shutdown_child_exited: false,
             open_new_session_on_ready: false,
             now: SystemTime::now,
             pending_requests: HashMap::new(),
             next_request_id: RequestId(0),
+            next_state_query: 0,
             next_submission: 0,
             next_draft_id: 0,
+            next_steer_id: 0,
             bootstrap: BootstrapProgress::default(),
             blocked_notice: false,
             monotonic_now: Arc::new(Instant::now),
@@ -328,7 +347,13 @@ impl App {
     pub fn next_tick(&self) -> Option<Duration> {
         let now = self.instant_now();
         let mut earliest: Option<Duration> = None;
-        if self.sessions.known.values().any(|view| view.live.is_some()) {
+        if self.sessions.known.values().any(|view| {
+            view.live.is_some()
+                || view
+                    .state
+                    .as_ref()
+                    .is_some_and(|state| state.status != SessionStatusWire::Idle)
+        }) {
             earliest = Some(Duration::from_millis(100));
         }
         for notice in &self.notices {
@@ -356,6 +381,42 @@ impl App {
         self.connection == ConnectionState::ShuttingDown && !self.shutdown_child_exited
     }
 
+    /// The user-facing result/persistence facts that remain after a forced
+    /// shutdown. This is deliberately conservative: a live turn without a
+    /// direct wait result is unknown, not failed or absent.
+    pub fn shutdown_force_message(&self) -> String {
+        let known_failure = self.sessions.known.values().any(|view| {
+            view.unsaved_loop.is_some()
+                || view
+                    .last_result
+                    .as_ref()
+                    .is_some_and(|result| result.persistence == TurnPersistenceWire::Failed)
+        });
+        let unconfirmed = self.sessions.known.values().any(|view| {
+            view.result_unconfirmed
+                || view.live.as_ref().is_some_and(|live| {
+                    !live
+                        .last_result
+                        .as_ref()
+                        .is_some_and(|result| live.reference.as_ref() == Some(&result.turn))
+                })
+        });
+        let mut message = "shutdown timed out; Agent force-terminated".to_owned();
+        if unconfirmed {
+            message.push_str(
+                "; last turn result/save status unconfirmed; reopening uses the Store history. Tool side effects may already exist",
+            );
+        }
+        if known_failure {
+            message.push_str("; known persistence failure retained");
+        }
+        if let Some(stderr) = self.agent_logs.back() {
+            message.push_str("; last Agent stderr: ");
+            message.push_str(stderr);
+        }
+        message
+    }
+
     /// Remaining time in the latched shutdown window. An expired deadline is
     /// deliberately returned as `Some(Duration::ZERO)` so a timer cannot be
     /// accidentally disarmed at the exact cutoff.
@@ -378,6 +439,10 @@ impl App {
         self.pending_requests.get(&id)
     }
 
+    pub fn notices(&self) -> &VecDeque<Notice> {
+        &self.notices
+    }
+
     /// The single state-mutation entry point. Returns the side effects the
     /// main loop must execute; commands are never executed here.
     pub fn update(&mut self, event: AppEvent) -> Vec<AppCommand> {
@@ -388,7 +453,8 @@ impl App {
         self.dirty = true;
         match event {
             AppEvent::Bootstrap => self.bootstrap(),
-            AppEvent::SubmitTurn { session_id, text } => self.submit_turn(&session_id, text),
+            AppEvent::SubmitTurn { session_id, text } => self.submit_turn(session_id, text),
+            AppEvent::SteerTurn { session_id, text } => self.steer_turn(&session_id, text),
             AppEvent::CreateSession {
                 workspace,
                 profile,
@@ -403,7 +469,16 @@ impl App {
                 title.as_deref(),
             ),
             AppEvent::OpenSession { session_id } => self.open_session(&session_id),
+            AppEvent::CloseSession {
+                session_id,
+                confirm,
+            } => self.close_session(&session_id, confirm),
+            AppEvent::DeleteSession {
+                session_id,
+                confirm,
+            } => self.delete_session(&session_id, confirm),
             AppEvent::CancelTurn { session_id } => self.cancel_turn(&session_id),
+            AppEvent::RefreshTurn { session_id } => self.refresh_turn(&session_id),
             AppEvent::Rpc(event) => self.on_rpc_event(event),
             AppEvent::RpcChannelEnded => self.on_rpc_channel_ended(),
             AppEvent::RpcSendFailed { id, error } => self.on_send_failed(id, error),
@@ -436,14 +511,14 @@ impl App {
             }
             AppEvent::ToggleTool {
                 session_id,
-                turn_id,
+                loop_id,
                 tool_call_id,
             } => {
                 if let Some(view) = self.sessions.known.get_mut(&session_id) {
                     let mut changed = false;
                     for block in &mut view.transcript.blocks {
                         if let TranscriptBlock::Tool(tool) = block {
-                            if tool.turn_id == turn_id && tool.tool_call_id == tool_call_id {
+                            if tool.loop_id == loop_id && tool.tool_call_id == tool_call_id {
                                 tool.expanded = !tool.expanded;
                                 changed = true;
                             }
@@ -461,6 +536,9 @@ impl App {
             AppEvent::OpenReasoningSelector => self.open_selector(SelectorKind::Reasoning),
             AppEvent::OpenProfileSelector => self.open_selector(SelectorKind::Profile),
             AppEvent::SetSelectorQuery { query } => {
+                if self.selector_state().is_some_and(|state| state.submitting) {
+                    return Vec::new();
+                }
                 if let Some(state) = self.selector_state_mut() {
                     state.query = query;
                     state.cursor = 0;
@@ -535,6 +613,22 @@ impl App {
             Dock::NewSession(draft) => Some(draft),
             _ => None,
         })
+    }
+
+    fn upsert_session_list(&mut self, session: SessionInfo) {
+        if let Some(existing) = self
+            .sessions
+            .list
+            .iter_mut()
+            .find(|existing| existing.session_id == session.session_id)
+        {
+            *existing = session;
+        } else {
+            self.sessions.list.push(session);
+        }
+        self.sessions
+            .list
+            .sort_by(|left, right| left.session_id.cmp(&right.session_id));
     }
 
     // ---- dock & selectors (spec 24-28) -------------------------------
@@ -618,6 +712,13 @@ impl App {
         }
     }
 
+    fn set_selector_submitting(&mut self) {
+        if let Some(state) = self.selector_state_mut() {
+            state.submitting = true;
+            state.error = None;
+        }
+    }
+
     fn selector_state_mut(&mut self) -> Option<&mut SelectorState> {
         match &mut self.dock {
             Dock::SessionSelector(state)
@@ -635,6 +736,9 @@ impl App {
         if !self.guard_ready() {
             return Vec::new();
         }
+        if self.selector_state().is_some_and(|state| state.submitting) {
+            return Vec::new();
+        }
         // While a create is in flight the draft is frozen: opening a
         // model/reasoning/profile selector, or confirming one from a field,
         // must not leave the form or mutate the drafting session (spec
@@ -643,18 +747,42 @@ impl App {
         {
             return Vec::new();
         }
+        if matches!(kind, SelectorKind::Model | SelectorKind::Reasoning) {
+            let active = self.sessions.active.as_ref();
+            if active.is_some_and(|session_id| {
+                self.pending_requests.values().any(|request| {
+                    matches!(
+                        request,
+                        RequestKind::UpdateSession {
+                            session_id: pending_session,
+                            ..
+                        } if pending_session == session_id
+                    )
+                })
+            }) {
+                return Vec::new();
+            }
+        }
         let mut state = SelectorState::new(kind);
         if kind != SelectorKind::Session {
-            self.ensure_new_session_draft();
+            // A model/reasoning selector edits a draft when the form is open;
+            // otherwise it updates the active Session through session.update.
+            if self.sessions.active.is_none() || kind == SelectorKind::Profile {
+                self.ensure_new_session_draft();
+            }
             let model = self
                 .new_session()
                 .map(|draft| draft.model.clone())
+                .or_else(|| self.active_view().map(|view| view.info.model.clone()))
                 .unwrap_or_default();
             let profile = self
                 .new_session()
                 .map(|draft| draft.profile.clone())
                 .unwrap_or_default();
-            let reasoning = self.new_session().map(|draft| draft.reasoning);
+            let reasoning = self
+                .new_session()
+                .map(|draft| draft.reasoning)
+                .or_else(|| self.active_view().map(|view| view.info.reasoning));
             state.cursor = match kind {
                 SelectorKind::Model => filtered_models(&self.catalogs.models, "")
                     .iter()
@@ -692,13 +820,21 @@ impl App {
     }
 
     fn move_selector(&mut self, delta: i32) -> Vec<AppCommand> {
-        let (kind, query, cursor) = {
+        let (kind, query, cursor, model_context) = {
             let Some(state) = self.selector_state() else {
                 return Vec::new();
             };
-            (state.kind, state.query.clone(), state.cursor)
+            if state.submitting {
+                return Vec::new();
+            }
+            (
+                state.kind,
+                state.query.clone(),
+                state.cursor,
+                state.model_context.clone(),
+            )
         };
-        let count = self.selector_count(kind, &query);
+        let count = self.selector_count(kind, &query, model_context.as_deref());
         if count == 0 {
             return Vec::new();
         }
@@ -712,18 +848,24 @@ impl App {
         self.move_selector(delta * SELECTOR_PAGE as i32)
     }
 
-    fn selector_count(&self, kind: SelectorKind, query: &str) -> usize {
+    fn selector_count(
+        &self,
+        kind: SelectorKind,
+        query: &str,
+        model_context: Option<&str>,
+    ) -> usize {
         match kind {
             SelectorKind::Model => filtered_models(&self.catalogs.models, query).len(),
             SelectorKind::Profile => filtered_profiles(&self.catalogs.profiles, query).len(),
-            SelectorKind::Reasoning => supported_reasoning(
-                &self.catalogs.models,
-                &self
+            SelectorKind::Reasoning => {
+                let model = self
                     .new_session()
                     .map(|draft| draft.model.clone())
-                    .unwrap_or_default(),
-            )
-            .len(),
+                    .or_else(|| model_context.map(str::to_owned))
+                    .or_else(|| self.active_view().map(|view| view.info.model.clone()))
+                    .unwrap_or_default();
+                supported_reasoning(&self.catalogs.models, &model).len()
+            }
             SelectorKind::Session => filtered_sessions(&self.sessions.list, query).len(),
         }
     }
@@ -763,6 +905,9 @@ impl App {
     }
 
     fn cancel_dock(&mut self) -> Vec<AppCommand> {
+        if self.selector_state().is_some_and(|state| state.submitting) {
+            return Vec::new();
+        }
         enum Target {
             Composer,
             SessionSelector,
@@ -786,7 +931,13 @@ impl App {
                 self.draft = None;
                 self.dock = Dock::Composer;
             }
-            Target::Form => self.close_selector_to_form(),
+            Target::Form => {
+                if self.draft.is_some() {
+                    self.close_selector_to_form();
+                } else {
+                    self.dock = Dock::Composer;
+                }
+            }
             Target::Panel => self.dock = Dock::Composer,
         }
         Vec::new()
@@ -808,6 +959,9 @@ impl App {
             NewSessionField::Create,
         ];
         if let Dock::NewSession(draft) = &mut self.dock {
+            if draft.submitting {
+                return Vec::new();
+            }
             let current = FIELDS
                 .iter()
                 .position(|field| *field == draft.field)
@@ -840,15 +994,24 @@ impl App {
         else {
             return Vec::new();
         };
+        if self.pending_open_or_history(&selected)
+            || self
+                .sessions
+                .known
+                .get(&selected)
+                .is_some_and(|view| view.closing)
+        {
+            return Vec::new();
+        }
+        if self.can_activate_existing_session(&selected) {
+            self.dock = Dock::Composer;
+            return self.activate_existing_session(&selected);
+        }
         if let Some(state) = self.selector_state_mut() {
             state.submitting = true;
             state.error = None;
         }
-        vec![
-            self.request(RequestKind::OpenSession(selected.clone()), |id| {
-                OutgoingRequest::session_open(id, &selected)
-            }),
-        ]
+        self.open_session(&selected)
     }
 
     fn confirm_model_item(&mut self) -> Vec<AppCommand> {
@@ -857,6 +1020,9 @@ impl App {
                 return Vec::new();
             };
             if state.kind != SelectorKind::Model {
+                return Vec::new();
+            }
+            if state.submitting {
                 return Vec::new();
             }
             let Some(model) = filtered_models(&self.catalogs.models, &state.query)
@@ -868,41 +1034,144 @@ impl App {
             };
             model
         };
-        // The chosen reasoning is never downgraded; the reasoning selector
-        // (opened below) forces an explicit choice when unsupported (spec
-        // 26.4).
-        let incompatible = self
-            .new_session()
-            .is_some_and(|draft| !selected.supported_reasoning.contains(&draft.reasoning));
-        if let Some(draft) = self.draft_mut() {
-            draft.model = selected.id.clone();
+        if self.draft.is_some() {
+            let incompatible = {
+                let draft = self.draft.as_mut().expect("draft exists");
+                let incompatible = !selected.supported_reasoning.contains(&draft.reasoning);
+                draft.model = selected.id.clone();
+                incompatible
+            };
+            if incompatible {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!(
+                        "{} does not support the current reasoning level; choose a supported one.",
+                        selected.id
+                    ),
+                );
+            }
+            return self.open_selector(SelectorKind::Reasoning);
         }
-        if incompatible {
+
+        let Some(session_id) = self.sessions.active.clone() else {
+            return Vec::new();
+        };
+        if self.active_view().is_some_and(SessionView::is_blocked) {
+            self.notice(
+                NoticeLevel::Error,
+                "session is blocked; cannot update configuration",
+            );
+            return Vec::new();
+        }
+        if self.active_view().is_some_and(|view| {
+            view.live.as_ref().is_some_and(|live| live.waiting)
+                || view.state.as_ref().is_some_and(|state| {
+                    matches!(
+                        state.status,
+                        SessionStatusWire::WaitingForInput | SessionStatusWire::Finishing
+                    )
+                })
+        }) {
+            self.notice(
+                NoticeLevel::Warning,
+                "session is not accepting configuration right now",
+            );
+            return Vec::new();
+        }
+        if self.active_view().is_some_and(|view| view.closing) {
+            self.notice(
+                NoticeLevel::Warning,
+                "session is closing; cannot update configuration",
+            );
+            return Vec::new();
+        }
+        if self.active_view().is_some_and(|view| view.is_blocked()) {
+            self.notice(
+                NoticeLevel::Warning,
+                "session is blocked; cannot update configuration",
+            );
+            return Vec::new();
+        }
+        if self.pending_requests.values().any(|kind| {
+            matches!(
+                kind,
+                RequestKind::UpdateSession {
+                    session_id: pending_session,
+                    ..
+                } if pending_session == &session_id
+            )
+        }) {
+            return Vec::new();
+        }
+        if self
+            .active_view()
+            .is_some_and(|view| !selected.supported_reasoning.contains(&view.info.reasoning))
+        {
             self.notice(
                 NoticeLevel::Warning,
                 format!(
-                    "{} may not support the current reasoning level; choose a supported one.",
+                    "{} does not support the current reasoning level; choose reasoning first.",
                     selected.id
                 ),
             );
+            let current_reasoning = self.active_view().map(|view| view.info.reasoning);
+            let commands = self.open_selector(SelectorKind::Reasoning);
+            if let Dock::ReasoningSelector(state) = &mut self.dock {
+                state.model_context = Some(selected.id.clone());
+                state.cursor = supported_reasoning(&self.catalogs.models, &selected.id)
+                    .iter()
+                    .position(|level| Some(*level) == current_reasoning)
+                    .unwrap_or(0);
+            }
+            return commands;
         }
-        // Even when compatible the user explicitly confirms the level.
-        self.open_selector(SelectorKind::Reasoning)
+        self.set_selector_submitting();
+        let target_loop_id = self.active_view().and_then(|v| {
+            v.live
+                .as_ref()
+                .and_then(|l| l.reference.as_ref().map(|r| r.loop_id.clone()))
+        });
+        let model = Some(selected.id.clone());
+        if let Some(view) = self.sessions.known.get_mut(&session_id) {
+            view.config_update = Some(crate::state::session::PendingConfigUpdate {
+                loop_id: target_loop_id.clone(),
+                model: model.clone(),
+                reasoning: None,
+                revision: None,
+                state: crate::state::session::ConfigUpdateState::WaitingBoundary,
+            });
+        }
+        vec![self.request(
+            RequestKind::UpdateSession {
+                session_id: session_id.clone(),
+                loop_id: target_loop_id,
+                model: model.clone(),
+                reasoning: None,
+            },
+            |id| OutgoingRequest::session_update(id, &session_id, model, None),
+        )]
     }
 
     fn confirm_reasoning_item(&mut self) -> Vec<AppCommand> {
-        let (cursor, kind) = {
+        let (cursor, kind, submitting, model_context) = {
             let Some(state) = self.selector_state() else {
                 return Vec::new();
             };
-            (state.cursor, state.kind)
+            (
+                state.cursor,
+                state.kind,
+                state.submitting,
+                state.model_context.clone(),
+            )
         };
-        if kind != SelectorKind::Reasoning {
+        if kind != SelectorKind::Reasoning || submitting {
             return Vec::new();
         }
         let model = self
             .new_session()
             .map(|draft| draft.model.clone())
+            .or_else(|| model_context.clone())
+            .or_else(|| self.active_view().map(|view| view.info.model.clone()))
             .unwrap_or_default();
         let Some(selected) = supported_reasoning(&self.catalogs.models, &model)
             .get(cursor)
@@ -911,11 +1180,87 @@ impl App {
             // No supported values (unknown model): nothing to confirm.
             return Vec::new();
         };
-        if let Some(draft) = self.draft_mut() {
-            draft.reasoning = selected;
+        if self.draft.is_some() {
+            self.draft.as_mut().expect("draft exists").reasoning = selected;
+            self.close_selector_to_form();
+            return Vec::new();
         }
-        self.close_selector_to_form();
-        Vec::new()
+        let Some(session_id) = self.sessions.active.clone() else {
+            return Vec::new();
+        };
+        if self.active_view().is_some_and(SessionView::is_blocked) {
+            self.notice(
+                NoticeLevel::Error,
+                "session is blocked; cannot update configuration",
+            );
+            return Vec::new();
+        }
+        if self.active_view().is_some_and(|view| {
+            view.live.as_ref().is_some_and(|live| live.waiting)
+                || view.state.as_ref().is_some_and(|state| {
+                    matches!(
+                        state.status,
+                        SessionStatusWire::WaitingForInput | SessionStatusWire::Finishing
+                    )
+                })
+        }) {
+            self.notice(
+                NoticeLevel::Warning,
+                "session is not accepting configuration right now",
+            );
+            return Vec::new();
+        }
+        if self.active_view().is_some_and(|view| view.closing) {
+            self.notice(
+                NoticeLevel::Warning,
+                "session is closing; cannot update configuration",
+            );
+            return Vec::new();
+        }
+        if self.active_view().is_some_and(|view| view.is_blocked()) {
+            self.notice(
+                NoticeLevel::Warning,
+                "session is blocked; cannot update configuration",
+            );
+            return Vec::new();
+        }
+        if self.pending_requests.values().any(|kind| {
+            matches!(
+                kind,
+                RequestKind::UpdateSession {
+                    session_id: pending_session,
+                    ..
+                } if pending_session == &session_id
+            )
+        }) {
+            return Vec::new();
+        }
+        self.set_selector_submitting();
+        let target_loop_id = self.active_view().and_then(|v| {
+            v.live
+                .as_ref()
+                .and_then(|l| l.reference.as_ref().map(|r| r.loop_id.clone()))
+        });
+        let reasoning = Some(selected);
+        let requested_model = model_context;
+        if let Some(view) = self.sessions.known.get_mut(&session_id) {
+            view.config_update = Some(crate::state::session::PendingConfigUpdate {
+                loop_id: target_loop_id.clone(),
+                model: requested_model.clone(),
+                reasoning,
+                revision: None,
+                state: crate::state::session::ConfigUpdateState::WaitingBoundary,
+            });
+        }
+        vec![self.request(
+            RequestKind::UpdateSession {
+                session_id: session_id.clone(),
+                loop_id: target_loop_id,
+                model: requested_model.clone(),
+                reasoning,
+            },
+            |id| OutgoingRequest::session_update(id, &session_id, requested_model, reasoning),
+        )]
     }
 
     fn confirm_profile_item(&mut self) -> Vec<AppCommand> {
@@ -924,6 +1269,9 @@ impl App {
                 return Vec::new();
             };
             if state.kind != SelectorKind::Profile {
+                return Vec::new();
+            }
+            if state.submitting {
                 return Vec::new();
             }
             let Some(profile) = filtered_profiles(&self.catalogs.profiles, &state.query)
@@ -938,12 +1286,14 @@ impl App {
         // Choosing a profile adopts its model/reasoning defaults; the user
         // can still override both afterwards. The active session is never
         // touched (spec 7-required, 25.2).
-        if let Some(draft) = self.draft_mut() {
-            draft.profile = selected.id.clone();
-            draft.model = selected.model.clone();
-            draft.reasoning = selected.reasoning;
+        if self.draft.is_some() {
+            if let Some(draft) = self.draft.as_mut() {
+                draft.profile = selected.id.clone();
+                draft.model = selected.model.clone();
+                draft.reasoning = selected.reasoning;
+            }
+            self.close_selector_to_form();
         }
-        self.close_selector_to_form();
         Vec::new()
     }
 
@@ -1011,7 +1361,13 @@ impl App {
             FirstCtrlC => self.ctrl_c(),
             CtrlD => {
                 if self.composer.is_empty()
-                    && self.active_view().is_none_or(|view| view.live.is_none())
+                    && self.active_view().is_none_or(|view| {
+                        view.live.is_none()
+                            && view
+                                .state
+                                .as_ref()
+                                .is_none_or(|state| state.status == SessionStatusWire::Idle)
+                    })
                 {
                     self.request_shutdown()
                 } else {
@@ -1019,11 +1375,21 @@ impl App {
                 }
             }
             TypeChar(c) => {
-                self.composer.type_char(c);
+                if !self.composer.type_char(c) {
+                    self.notice(
+                        NoticeLevel::Warning,
+                        format!("composer limit is {MAX_COMPOSER_BYTES} UTF-8 bytes"),
+                    );
+                }
                 Vec::new()
             }
             Newline => {
-                self.composer.newline();
+                if !self.composer.newline() {
+                    self.notice(
+                        NoticeLevel::Warning,
+                        format!("composer limit is {MAX_COMPOSER_BYTES} UTF-8 bytes"),
+                    );
+                }
                 Vec::new()
             }
             Backspace => {
@@ -1073,6 +1439,7 @@ impl App {
                 if let Some(session_id) = self.sessions.active.as_ref().cloned() {
                     if let Some(view) = self.sessions.known.get_mut(&session_id) {
                         view.tools_expanded = !view.tools_expanded;
+                        view.transcript.render_cache.clear();
                     }
                 }
                 Vec::new()
@@ -1087,6 +1454,9 @@ impl App {
             SelectorPage(delta) => self.page_selector(delta),
             SelectorConfirm => self.confirm_dock(),
             SelectorChar(c) => {
+                if self.selector_state().is_some_and(|state| state.submitting) {
+                    return Vec::new();
+                }
                 if let Some(state) = self.selector_state_mut() {
                     state.query.push(c);
                     state.cursor = 0;
@@ -1094,6 +1464,9 @@ impl App {
                 Vec::new()
             }
             SelectorBackspace => {
+                if self.selector_state().is_some_and(|state| state.submitting) {
+                    return Vec::new();
+                }
                 if let Some(state) = self.selector_state_mut() {
                     state.query.pop();
                     state.cursor = 0;
@@ -1101,6 +1474,9 @@ impl App {
                 Vec::new()
             }
             SelectorClear => {
+                if self.selector_state().is_some_and(|state| state.submitting) {
+                    return Vec::new();
+                }
                 if let Some(state) = self.selector_state_mut() {
                     state.query.clear();
                     state.cursor = 0;
@@ -1173,8 +1549,11 @@ impl App {
         let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
         match &self.dock {
             Dock::Composer => {
-                if self.active_view().is_none_or(|view| view.live.is_none()) {
-                    self.composer.type_text(&normalized);
+                if !self.composer.type_text(&normalized) {
+                    self.notice(
+                        NoticeLevel::Warning,
+                        format!("composer limit is {MAX_COMPOSER_BYTES} UTF-8 bytes"),
+                    );
                 }
             }
             Dock::NewSession(_) => {
@@ -1186,6 +1565,9 @@ impl App {
             | Dock::ModelSelector(_)
             | Dock::ReasoningSelector(_)
             | Dock::ProfileSelector(_) => {
+                if self.selector_state().is_some_and(|state| state.submitting) {
+                    return Vec::new();
+                }
                 if let Some(state) = self.selector_state_mut() {
                     state.query.push_str(&normalized.replace('\n', ""));
                     state.cursor = 0;
@@ -1314,16 +1696,19 @@ impl App {
         if active != &prepared.session_id {
             return;
         }
+        let Some(key) = prepared.key else {
+            return;
+        };
         let Some(view) = self.sessions.known.get(active) else {
             return;
         };
         let expected = view.transcript.cache_key(
-            prepared.key.width,
+            key.width,
             self.theme,
             self.reasoning_visible,
             view.tools_expanded,
         );
-        if expected != prepared.key {
+        if expected != key {
             return;
         }
         if let Some(view) = self.sessions.known.get_mut(active) {
@@ -1338,6 +1723,7 @@ impl App {
 
     fn cancel_active_turn(&mut self) -> Vec<AppCommand> {
         let Some(active) = self.sessions.active.clone() else {
+            self.notice(NoticeLevel::Warning, "no active turn to cancel");
             return Vec::new();
         };
         self.cancel_turn(&active)
@@ -1355,21 +1741,22 @@ impl App {
     /// Submitting the composer: slash lines are parsed locally; plain text
     /// goes to the active session and clears the composer. Nothing is ever
     /// silently swallowed; a missing agent or session gets a notice.
-    fn submit_composer(&mut self) -> Vec<AppCommand> {
-        if self.composer.is_empty() {
+    pub fn submit_composer(&mut self) -> Vec<AppCommand> {
+        let text = self.composer.content().trim().to_owned();
+        if text.is_empty() {
             return Vec::new();
         }
-        let content = self.composer.content();
-        if is_slash_command(&content) {
-            let commands = self.run_command(&content);
+        if text.len() > MAX_COMPOSER_BYTES {
+            self.notice(
+                NoticeLevel::Warning,
+                format!("composer limit is {MAX_COMPOSER_BYTES} UTF-8 bytes"),
+            );
+            return Vec::new();
+        }
+        if is_slash_command(&text) {
+            let commands = self.run_command(&text);
             self.composer.clear();
             return commands;
-        }
-        if !self.guard_ready() {
-            return Vec::new();
-        }
-        if self.active_view().is_some_and(|view| view.live.is_some()) {
-            return Vec::new();
         }
         let Some(active) = self.sessions.active.clone() else {
             self.notice(
@@ -1378,12 +1765,155 @@ impl App {
             );
             return Vec::new();
         };
-        if content.trim().is_empty() {
+        let is_running = self
+            .sessions
+            .known
+            .get(&active)
+            .map(|v| v.is_running())
+            .unwrap_or(false);
+        let status = self
+            .sessions
+            .known
+            .get(&active)
+            .and_then(|view| view.state.as_ref().map(|state| state.status));
+        let is_blocked = status == Some(SessionStatusWire::Blocked);
+        let is_waiting = status == Some(SessionStatusWire::WaitingForInput)
+            || self
+                .sessions
+                .known
+                .get(&active)
+                .and_then(|view| view.live.as_ref())
+                .is_some_and(|live| live.waiting);
+
+        if is_blocked {
+            self.notice(
+                NoticeLevel::Error,
+                "session is blocked; resolve or reset before submitting",
+            );
             return Vec::new();
         }
-        self.composer.submit_pushed(&content);
-        self.composer.clear();
-        self.submit_turn(&active, content)
+
+        if is_running {
+            let editor_revision = self.composer.editor_revision();
+            self.steer_turn_with_revision(&active, text, Some(editor_revision))
+        } else if is_waiting || status == Some(SessionStatusWire::Finishing) {
+            self.notice(
+                NoticeLevel::Warning,
+                "session is not accepting input right now",
+            );
+            Vec::new()
+        } else {
+            let submitted_text = text.clone();
+            let commands = self.submit_turn(active, text);
+            if !commands.is_empty() {
+                self.composer.submit_pushed(&submitted_text);
+                self.composer.clear();
+            }
+            commands
+        }
+    }
+
+    pub fn steer_turn(&mut self, session_id: &SessionId, text: String) -> Vec<AppCommand> {
+        self.steer_turn_with_revision(session_id, text, None)
+    }
+
+    fn steer_turn_with_revision(
+        &mut self,
+        session_id: &SessionId,
+        text: String,
+        editor_revision: Option<u64>,
+    ) -> Vec<AppCommand> {
+        if !self.can_send_requests() {
+            return Vec::new();
+        }
+        let text = text.trim().to_owned();
+        if text.is_empty() {
+            return Vec::new();
+        }
+        if text.len() > MAX_COMPOSER_BYTES {
+            self.notice(
+                NoticeLevel::Warning,
+                format!("composer limit is {MAX_COMPOSER_BYTES} UTF-8 bytes"),
+            );
+            return Vec::new();
+        }
+        let Some(view) = self.sessions.known.get(session_id) else {
+            return Vec::new();
+        };
+        if view.closing {
+            self.notice(NoticeLevel::Warning, "session is closing; cannot steer");
+            return Vec::new();
+        }
+        if view.is_blocked() {
+            self.notice(NoticeLevel::Warning, "session is blocked; cannot steer");
+            return Vec::new();
+        }
+        if view.live.as_ref().is_some_and(|live| {
+            live.pending_steers
+                .iter()
+                .any(|steer| steer.state == PendingSteerState::Sending)
+        }) {
+            return Vec::new();
+        }
+        if !view.is_running() {
+            self.notice(NoticeLevel::Warning, "session is not running; cannot steer");
+            return Vec::new();
+        }
+        let loop_id = if let Some(live) = &view.live {
+            live.reference.as_ref().map(|r| r.loop_id.clone())
+        } else if let Some(state) = &view.state {
+            state
+                .active_loop
+                .as_ref()
+                .map(|loop_state| loop_state.loop_id.clone())
+        } else {
+            None
+        };
+        let Some(loop_id) = loop_id else {
+            self.notice(NoticeLevel::Warning, "cannot steer: active loop id unknown");
+            return Vec::new();
+        };
+
+        self.next_steer_id = self
+            .next_steer_id
+            .checked_add(1)
+            .expect("steering ids exhausted");
+        let steer_id = self.next_steer_id;
+
+        if let Some(live) = self
+            .sessions
+            .known
+            .get_mut(session_id)
+            .and_then(|view| view.live.as_mut())
+        {
+            live.pending_steers.push(PendingSteer {
+                local_id: steer_id,
+                text: text.clone(),
+                state: PendingSteerState::Sending,
+            });
+        }
+
+        let req_loop_id = loop_id.clone();
+        let req_text = text.clone();
+        vec![self.request(
+            RequestKind::SteerTurn {
+                session_id: session_id.clone(),
+                loop_id,
+                steer_id,
+                text,
+                editor_revision,
+            },
+            |id| {
+                OutgoingRequest::steer_turn(
+                    id,
+                    &TurnRef {
+                        session_id: session_id.clone(),
+                        loop_id: req_loop_id.clone(),
+                    },
+                    &req_text,
+                )
+            },
+        )]
     }
 
     fn run_command(&mut self, content: &str) -> Vec<AppCommand> {
@@ -1417,9 +1947,34 @@ impl App {
                 self.notice(NoticeLevel::Info, format!("theme: {kind:?}"));
                 Vec::new()
             }
+            LocalCommand::Close { confirm } => {
+                if let Some(session_id) = self.sessions.active.clone() {
+                    self.close_session(&session_id, confirm)
+                } else {
+                    self.notice(NoticeLevel::Warning, "no active session to close");
+                    Vec::new()
+                }
+            }
+            LocalCommand::Delete { confirm } => {
+                if let Some(session_id) = self.sessions.active.clone() {
+                    self.delete_session(&session_id, confirm)
+                } else {
+                    self.notice(NoticeLevel::Warning, "no active session to delete");
+                    Vec::new()
+                }
+            }
             LocalCommand::Clear => self.clear_transcript(),
             LocalCommand::Help => self.open_dock(Dock::Help),
             LocalCommand::Logs => self.open_dock(Dock::Logs),
+            LocalCommand::Cancel => self.cancel_active_turn(),
+            LocalCommand::Refresh => {
+                if let Some(session_id) = self.sessions.active.clone() {
+                    self.refresh_turn(&session_id)
+                } else {
+                    self.notice(NoticeLevel::Warning, "no active session to refresh");
+                    Vec::new()
+                }
+            }
             LocalCommand::Quit => self.request_shutdown(),
         }
     }
@@ -1447,26 +2002,32 @@ impl App {
             );
             return Vec::new();
         }
+        if self.pending_history(&active) {
+            self.notice(
+                NoticeLevel::Info,
+                "Transcript is still loading; clear it after history finishes.",
+            );
+            return Vec::new();
+        }
         if let Some(view) = self.sessions.known.get_mut(&active) {
             view.transcript.clear_blocks();
-            view.transcript.last_seq = None;
-            view.transcript.next_after = None;
-            view.transcript.complete = false;
             view.scroll = crate::state::session::ScrollState::default();
+            view.event_gap = false;
+            view.reconcile_inflight = false;
             view.loading = true;
         }
+        let offset = 0;
         vec![self.request(
-            RequestKind::Transcript {
+            RequestKind::History {
                 session_id: active.clone(),
-                after: None,
+                offset,
+                limit: DEFAULT_HISTORY_LIMIT,
                 gap_revision: None,
             },
-            |id| OutgoingRequest::transcript(id, &active, None),
+            |id| OutgoingRequest::get_history(id, &active, offset, DEFAULT_HISTORY_LIMIT),
         )]
     }
 
-    /// Manual char insertion into the workspace/title field at the char
-    /// cursor (UTF-8 safe; never a byte offset).
     fn field_char(&mut self, c: char) -> Vec<AppCommand> {
         if self.new_session().is_some_and(|draft| draft.submitting) {
             return Vec::new();
@@ -1619,6 +2180,217 @@ impl App {
         self.next_request_id
     }
 
+    fn request_session_state(&mut self, session_id: &SessionId) -> AppCommand {
+        let query = self.next_state_query;
+        self.next_state_query = self
+            .next_state_query
+            .checked_add(1)
+            .expect("session state query space exhausted");
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            view.latest_state_query = Some(query);
+        }
+        self.request(
+            RequestKind::SessionState {
+                session_id: session_id.clone(),
+                query,
+            },
+            |id| OutgoingRequest::session_state(id, session_id),
+        )
+    }
+
+    fn pending_history(&self, session_id: &SessionId) -> bool {
+        self.pending_requests.values().any(|kind| {
+            matches!(kind, RequestKind::History { session_id: pending, .. } if pending == session_id)
+        })
+    }
+
+    fn has_initialized_session_view(view: &SessionView) -> bool {
+        view.info.loaded
+            || view.state.is_some()
+            || view.transcript.complete
+            || view.live.is_some()
+            || view.unsaved_loop.is_some()
+    }
+
+    fn activate_existing_session(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
+        self.sessions.active = Some(session_id.clone());
+        let state_pending = self
+            .sessions
+            .known
+            .get(session_id)
+            .is_some_and(|view| view.latest_state_query.is_some());
+        let mut commands = if state_pending {
+            Vec::new()
+        } else {
+            vec![self.request_session_state(session_id)]
+        };
+        let (fetch, gap_revision) = {
+            let Some(view) = self.sessions.known.get(session_id) else {
+                return commands;
+            };
+            if view.loading || self.pending_history(session_id) {
+                (false, None)
+            } else if view.event_gap {
+                (true, Some(view.gap_revision))
+            } else if !view.transcript.complete {
+                (true, None)
+            } else {
+                (false, None)
+            }
+        };
+        if fetch {
+            let offset = self
+                .sessions
+                .known
+                .get(session_id)
+                .map(|view| view.transcript.loaded_count)
+                .unwrap_or(0);
+            if let Some(view) = self.sessions.known.get_mut(session_id) {
+                view.loading = true;
+            }
+            commands.push(self.request(
+                RequestKind::History {
+                    session_id: session_id.clone(),
+                    offset,
+                    limit: DEFAULT_HISTORY_LIMIT,
+                    gap_revision,
+                },
+                |id| {
+                    OutgoingRequest::session_history(
+                        id,
+                        session_id,
+                        Some(offset),
+                        Some(DEFAULT_HISTORY_LIMIT),
+                    )
+                },
+            ));
+        }
+        commands
+    }
+
+    fn can_activate_existing_session(&self, session_id: &SessionId) -> bool {
+        self.sessions.known.get(session_id).is_some_and(|view| {
+            view.info.loaded && !view.closing && Self::has_initialized_session_view(view)
+        })
+    }
+
+    fn pending_open_or_history(&self, session_id: &SessionId) -> bool {
+        self.pending_requests.values().any(|kind| {
+            matches!(
+                kind,
+                RequestKind::OpenSession { session_id: pending, .. } if pending == session_id
+            ) || matches!(
+                kind,
+                RequestKind::History { session_id: pending, .. } if pending == session_id
+            )
+        })
+    }
+
+    fn request_session_id(kind: &RequestKind) -> Option<&str> {
+        match kind {
+            RequestKind::OpenSession { session_id, .. }
+            | RequestKind::CloseSession { session_id }
+            | RequestKind::CloseVerifyState { session_id }
+            | RequestKind::DeleteSession { session_id }
+            | RequestKind::SendTurn { session_id, .. }
+            | RequestKind::SteerTurn { session_id, .. }
+            | RequestKind::UpdateSession { session_id, .. }
+            | RequestKind::History { session_id, .. }
+            | RequestKind::SessionState { session_id, .. } => Some(session_id),
+            RequestKind::WaitTurn(turn) | RequestKind::CancelTurn(turn) => Some(&turn.session_id),
+            RequestKind::Ping
+            | RequestKind::ListModels
+            | RequestKind::ListProfiles
+            | RequestKind::ListSessions
+            | RequestKind::CreateSession { .. }
+            | RequestKind::Shutdown => None,
+        }
+    }
+
+    /// Retires the current loop for event routing without discarding a wait
+    /// that may still complete before the new session.open response.
+    fn retire_reopened_session(&mut self, session_id: &SessionId) {
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            let retired = view
+                .live
+                .as_ref()
+                .and_then(|live| live.reference.clone())
+                .or_else(|| view.unsaved_loop.as_ref().map(|loop_| loop_.turn.clone()))
+                .or_else(|| view.last_result.as_ref().map(|result| result.turn.clone()));
+            if retired.is_some() {
+                view.retired_loop = retired;
+            }
+            view.latest_state_query = None;
+        }
+    }
+
+    /// Invalidates only requests belonging to an explicitly reopened session
+    /// after the new open response has been accepted. The single retired loop
+    /// fence blocks already-buffered old events without retaining an unbounded
+    /// registry.
+    fn invalidate_reopened_session(&mut self, session_id: &SessionId) {
+        self.pending_requests
+            .retain(|_, kind| Self::request_session_id(kind) != Some(session_id.as_str()));
+        self.retire_reopened_session(session_id);
+    }
+
+    fn is_prior_loop(view: &SessionView, loop_id: &str) -> bool {
+        view.retired_loop
+            .as_ref()
+            .is_some_and(|turn| turn.loop_id == loop_id)
+            || view
+                .last_result
+                .as_ref()
+                .is_some_and(|result| result.turn.loop_id == loop_id)
+            || view
+                .unsaved_loop
+                .as_ref()
+                .is_some_and(|unsaved| unsaved.turn.loop_id == loop_id)
+            || view
+                .transcript
+                .items
+                .iter()
+                .any(|item| item.item.loop_id() == Some(loop_id))
+    }
+
+    fn history_proves_steer_not_recorded(
+        view: &SessionView,
+        loop_id: &str,
+        steer_text: &str,
+    ) -> bool {
+        view.transcript.complete
+            && (view.last_result.as_ref().is_some_and(|result| {
+                result.turn.loop_id == loop_id
+                    && result.persistence == TurnPersistenceWire::Persisted
+            }) || view.live.as_ref().is_some_and(|live| {
+                live.last_result.as_ref().is_some_and(|result| {
+                    result.turn.loop_id == loop_id
+                        && result.persistence == TurnPersistenceWire::Persisted
+                })
+            }))
+            && view
+                .transcript
+                .items
+                .iter()
+                .any(|item| item.item.loop_id() == Some(loop_id))
+            && !view.transcript.items.iter().any(|item| {
+                matches!(
+                    &item.item,
+                    HistoryItemWire::User(user)
+                        if user.loop_id == loop_id
+                            && user.kind == UserMessageKindWire::Steering
+                            && user.text == steer_text
+                )
+            })
+    }
+
+    fn mark_history_unconfirmed(view: &mut SessionView) {
+        view.loading = false;
+        view.reconcile_inflight = false;
+        view.transcript.complete = false;
+        Self::mark_pending_steers_unconfirmed(view);
+    }
+
     /// Allocates an id, registers the pending kind, and builds the request
     /// via `build`. The pending entry exists before the command can leave
     /// `update`; the builder runs inside so the id cannot escape before
@@ -1634,7 +2406,7 @@ impl App {
         AppCommand::Rpc(request)
     }
 
-    fn notice(&mut self, level: NoticeLevel, text: impl Into<String>) {
+    pub(crate) fn notice(&mut self, level: NoticeLevel, text: impl Into<String>) {
         self.push_notice(Notice::at(level, text.into(), false, self.instant_now()));
     }
 
@@ -1659,15 +2431,14 @@ impl App {
     // ---- bootstrap -----------------------------------------------------
 
     fn bootstrap(&mut self) -> Vec<AppCommand> {
-        if self.connection != ConnectionState::Starting {
+        if self.connection != ConnectionState::Starting || !self.pending_requests.is_empty() {
             return Vec::new();
         }
-        vec![
-            self.request(RequestKind::Ping, OutgoingRequest::ping),
-            self.request(RequestKind::ListModels, OutgoingRequest::list_models),
-            self.request(RequestKind::ListProfiles, OutgoingRequest::list_profiles),
-            self.request(RequestKind::ListSessions, OutgoingRequest::list_sessions),
-        ]
+        let ping = self.request(RequestKind::Ping, OutgoingRequest::ping);
+        let models = self.request(RequestKind::ListModels, OutgoingRequest::list_models);
+        let profiles = self.request(RequestKind::ListProfiles, OutgoingRequest::list_profiles);
+        let sessions = self.request(RequestKind::ListSessions, OutgoingRequest::list_sessions);
+        vec![ping, models, profiles, sessions]
     }
 
     fn bootstrap_progress(&mut self, part: BootstrapPart) {
@@ -1677,87 +2448,60 @@ impl App {
             BootstrapPart::Profiles => self.bootstrap.profiles = true,
             BootstrapPart::Sessions => self.bootstrap.sessions = true,
         }
-        // Ready only after all four succeeded; a latched failure stays.
-        if self.connection == ConnectionState::Starting && self.bootstrap.done() {
-            self.connection = ConnectionState::Ready;
+        if self.bootstrap.done() && self.connection == ConnectionState::Starting {
             self.catalogs.loaded = true;
+            self.connection = ConnectionState::Ready;
             self.blocked_notice = false;
-            // Explicit --workspace with no active session: open the
-            // pre-filled new-session form, never auto-create (spec 6.1).
+            self.catalogs.seed_seats(&self.sessions.known);
             if self.open_new_session_on_ready && self.sessions.active.is_none() {
-                self.draft = None;
-                self.dock = Dock::NewSession(self.make_new_session_draft());
+                self.open_new_session_on_ready = false;
+                self.open_new_session();
             }
         }
     }
 
-    /// User actions (submit/create/open/cancel) need a live connection;
-    /// anything else is a no-op with a single notice per connection state.
     fn guard_ready(&mut self) -> bool {
         if self.connection == ConnectionState::Ready {
-            return true;
-        }
-        if !self.blocked_notice {
-            self.blocked_notice = true;
-            self.notice(
-                NoticeLevel::Info,
-                "That action is unavailable until the agent is connected.",
-            );
-        }
-        false
-    }
-
-    /// User exit or OS signal. A live connection (`Starting` or `Ready`)
-    /// enters `ShuttingDown` and issues `agent.shutdown` exactly once; the
-    /// response is routed by `RequestKind::Shutdown` and the child exit
-    /// finishes the run. A failed or already-gone connection exits at once.
-    fn request_shutdown(&mut self) -> Vec<AppCommand> {
-        match self.connection {
-            ConnectionState::Failed(_) => vec![AppCommand::Exit],
-            ConnectionState::ShuttingDown => Vec::new(),
-            ConnectionState::Starting | ConnectionState::Ready => {
-                if self.shutdown_sent {
-                    return Vec::new();
-                }
-                self.shutdown_sent = true;
-                let started_at = self.instant_now();
-                self.shutdown_started_at = Some(started_at);
-                self.shutdown_deadline = Some(
-                    started_at
-                        .checked_add(SHUTDOWN_TIMEOUT)
-                        .expect("shutdown deadline is representable"),
+            true
+        } else {
+            if !self.blocked_notice {
+                self.notice(
+                    NoticeLevel::Info,
+                    "That action is unavailable until the agent is connected.",
                 );
-                self.connection = ConnectionState::ShuttingDown;
-                self.ctrl_c_at = None;
-                vec![self.request(RequestKind::Shutdown, OutgoingRequest::shutdown)]
+                self.blocked_notice = true;
             }
+            false
         }
     }
 
-    /// Followups (wait, transcript chain, state fetch) are only issued on a
-    /// live connection; under shutdown nothing new is sent (spec 8).
+    pub fn request_shutdown(&mut self) -> Vec<AppCommand> {
+        if matches!(self.connection, ConnectionState::Failed(_)) {
+            return vec![AppCommand::Exit];
+        }
+        if self.connection == ConnectionState::ShuttingDown {
+            return Vec::new();
+        }
+        let now = self.instant_now();
+        self.shutdown_deadline = Some(now + SHUTDOWN_TIMEOUT);
+        self.connection = ConnectionState::ShuttingDown;
+        if self.shutdown_sent {
+            return Vec::new();
+        }
+        self.shutdown_sent = true;
+        vec![self.request(RequestKind::Shutdown, OutgoingRequest::shutdown)]
+    }
+
     fn can_send_requests(&self) -> bool {
-        self.connection == ConnectionState::Ready
-    }
-
-    /// Catalog/list failures are fatal per spec: the TUI cannot choose a
-    /// profile or session, and there is no auto-retry.
-    fn bootstrap_failure(&mut self, method: &str, error: RpcResponseError) -> Vec<AppCommand> {
-        if !matches!(
-            self.connection,
-            ConnectionState::Failed(_) | ConnectionState::ShuttingDown
-        ) {
-            self.connection =
-                ConnectionState::Failed(format!("bootstrap failed at {method}: {error}"));
-            self.sticky_notice(
-                NoticeLevel::Error,
-                "Bootstrap failed. No further requests will be sent.",
-            );
+        match self.connection {
+            ConnectionState::Starting | ConnectionState::Ready => true,
+            ConnectionState::ShuttingDown | ConnectionState::Failed(_) => false,
         }
-        Vec::new()
     }
 
-    // ---- sessions ------------------------------------------------------
+    fn bootstrap_failure(&mut self, method: &str, error: RpcResponseError) -> Vec<AppCommand> {
+        self.connection_terminated(&format!("bootstrap request {method} failed: {error}"))
+    }
 
     fn create_session(
         &mut self,
@@ -1781,162 +2525,535 @@ impl App {
         if !self.guard_ready() {
             return Vec::new();
         }
-        vec![
-            self.request(RequestKind::OpenSession(session_id.clone()), |id| {
-                OutgoingRequest::session_open(id, session_id)
-            }),
-        ]
-    }
-
-    fn on_session_response(
-        &mut self,
-        response: &RpcResponse,
-    ) -> Result<Vec<AppCommand>, RpcResponseError> {
-        let session = response.parse_session()?.session;
-        let session_id = session.session_id.clone();
-        match self.sessions.known.get_mut(&session_id) {
-            Some(view) => view.info = session,
-            None => {
-                self.sessions
-                    .known
-                    .insert(session_id.clone(), SessionView::new(session));
-            }
+        if self.pending_open_or_history(session_id)
+            || self
+                .sessions
+                .known
+                .get(session_id)
+                .is_some_and(|view| view.closing)
+        {
+            return Vec::new();
         }
-        self.sessions.active = Some(session_id.clone());
-        // Shutting down wins: state was already applied, no followups.
-        if !self.can_send_requests() {
-            return Ok(Vec::new());
+        if self.can_activate_existing_session(session_id) {
+            return self.activate_existing_session(session_id);
         }
-        let mut commands = vec![
-            self.request(RequestKind::SessionState(session_id.clone()), |id| {
-                OutgoingRequest::session_state(id, &session_id)
-            }),
-        ];
-        // Re-opening (or switching back to) a session heals an event gap
-        // even over a complete transcript, and continues an unfinished
-        // transcript, always from the last merged sequence (spec 13.7).
-        let (fetch, after, gap_revision) = {
-            let Some(view) = self.sessions.known.get(&session_id) else {
-                return Ok(commands);
-            };
-            if view.loading {
-                (false, None, None)
-            } else if view.event_gap {
-                (true, view.transcript.last_seq, Some(view.gap_revision))
-            } else if !view.transcript.complete {
-                (true, view.transcript.last_seq, None)
-            } else {
-                (false, None, None)
-            }
-        };
-        if fetch {
-            if let Some(view) = self.sessions.known.get_mut(&session_id) {
-                view.loading = true;
-            }
-            commands.push(self.request(
-                RequestKind::Transcript {
-                    session_id: session_id.clone(),
-                    after,
-                    gap_revision,
-                },
-                |id| OutgoingRequest::transcript(id, &session_id, after),
-            ));
-        }
-        Ok(commands)
-    }
-
-    /// Create response: success closes the matching form and keeps the
-    /// activated session; failure keeps every draft field, unblocks
-    /// submitting, and reports the agent message on the form (spec 25.5).
-    fn on_create_response(&mut self, draft_id: u64, response: &RpcResponse) -> Vec<AppCommand> {
-        match self.on_session_response(response) {
-            Ok(commands) => {
-                // Success closes the new-session flow whenever the matching
-                // draft is around, including the defensive case of the app
-                // sitting on a selector while the create was in flight; a
-                // stale response (different id) never closes a newer draft.
-                let matches = self
-                    .draft
-                    .as_ref()
-                    .is_some_and(|draft| draft.draft_id == draft_id)
-                    || matches!(&self.dock, Dock::NewSession(draft) if draft.draft_id == draft_id);
-                if matches {
-                    self.draft = None;
-                    self.dock = Dock::Composer;
-                }
-                commands
-            }
-            Err(error) => match self.draft_matching(draft_id) {
-                Some(draft) => {
-                    draft.submitting = false;
-                    draft.error = Some(format!("{error}"));
-                    Vec::new()
-                }
-                None => {
-                    self.notice(
-                        NoticeLevel::Error,
-                        format!("session.create failed: {error}"),
-                    );
-                    Vec::new()
-                }
+        // Establish the lifecycle fence before the new request leaves the
+        // reducer. Old notifications can arrive before session.open responds.
+        let retired_loop_on_failure = self
+            .sessions
+            .known
+            .get(session_id)
+            .and_then(|view| view.retired_loop.clone());
+        self.retire_reopened_session(session_id);
+        vec![self.request(
+            RequestKind::OpenSession {
+                session_id: session_id.clone(),
+                previous_retired_loop: retired_loop_on_failure,
             },
-        }
+            |id| OutgoingRequest::session_open(id, session_id),
+        )]
     }
 
-    /// Open response: success activates the session and closes the
-    /// selector; failure keeps the selector, its query and selection, and
-    /// shows the error on the panel (spec 28.6). Programmatic opens (no
-    /// submitting selector) fall back to a notice.
-    fn on_open_response(&mut self, response: &RpcResponse) -> Vec<AppCommand> {
-        match self.on_session_response(response) {
-            Ok(commands) => {
-                let close = matches!(&self.dock, Dock::SessionSelector(state) if state.submitting);
-                if close {
-                    self.dock = Dock::Composer;
-                }
-                commands
-            }
-            Err(error) => {
-                let from_selector = matches!(&self.dock, Dock::SessionSelector(_));
-                if from_selector {
-                    if let Dock::SessionSelector(state) = &mut self.dock {
-                        state.submitting = false;
-                        state.error = Some(format!("{error}"));
-                    }
-                } else {
-                    self.notice(NoticeLevel::Error, format!("session.open failed: {error}"));
-                }
-                Vec::new()
+    fn close_session(&mut self, session_id: &SessionId, confirm: bool) -> Vec<AppCommand> {
+        if !self.guard_ready() {
+            return Vec::new();
+        }
+        let (is_blocked, has_unsaved, is_running) = match self.sessions.known.get(session_id) {
+            Some(view) => (
+                view.is_blocked(),
+                view.unsaved_loop.is_some(),
+                view.is_running(),
+            ),
+            None => (false, false, false),
+        };
+        if (is_blocked || has_unsaved || is_running) && !confirm {
+            self.notice(
+                NoticeLevel::Warning,
+                format!(
+                    "Session {session_id} has active or unsaved/blocked state. Type '/close confirm' to proceed."
+                ),
+            );
+            return Vec::new();
+        }
+        let mut commands = Vec::new();
+        let reference = if let Some(view) = self.sessions.known.get_mut(session_id) {
+            view.closing = true;
+            view.live.as_ref().and_then(|l| l.reference.clone())
+        } else {
+            None
+        };
+        if let Some(reference) = reference {
+            let has_wait = self
+                .pending_requests
+                .values()
+                .any(|req| matches!(req, RequestKind::WaitTurn(t) if t == &reference));
+            if !has_wait {
+                commands.push(
+                    self.request(RequestKind::WaitTurn(reference.clone()), |id| {
+                        OutgoingRequest::wait_turn(id, &reference)
+                    }),
+                );
             }
         }
+        commands.push(self.request(
+            RequestKind::CloseSession {
+                session_id: session_id.clone(),
+            },
+            |id| OutgoingRequest::session_close(id, session_id),
+        ));
+        commands
     }
 
-    fn on_session_state_response(
+    fn on_close_session_response(
         &mut self,
         session_id: &SessionId,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
-        match response.parse_session_state() {
-            Ok(state) => self.apply_session_state(&state),
+        match response.parse_close() {
+            Ok(_) => {
+                if let Some(view) = self.sessions.known.get_mut(session_id) {
+                    view.closing = false;
+                    view.info.loaded = false;
+                }
+                self.retire_reopened_session(session_id);
+                if self.sessions.active.as_deref() == Some(session_id.as_str()) {
+                    self.sessions.active = None;
+                }
+                self.notice(NoticeLevel::Info, format!("Session {session_id} closed."));
+                Vec::new()
+            }
+            Err(RpcResponseError::Agent(_error)) => {
+                // MIG-146: close returns error, perform a single read check of session state.
+                // Do not retry indefinitely.
+                vec![self.request(
+                    RequestKind::CloseVerifyState {
+                        session_id: session_id.clone(),
+                    },
+                    |id| OutgoingRequest::session_state(id, session_id),
+                )]
+            }
             Err(error) => {
+                if let Some(view) = self.sessions.known.get_mut(session_id) {
+                    view.closing = false;
+                }
                 self.notice(
                     NoticeLevel::Error,
-                    format!("malformed session state for {session_id}: {error}"),
+                    format!("Failed to close session {session_id}: {error}"),
                 );
                 Vec::new()
             }
         }
     }
 
-    fn apply_session_state(&mut self, state: &SessionStateWire) -> Vec<AppCommand> {
+    fn on_close_verify_state_response(
+        &mut self,
+        session_id: &SessionId,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            view.closing = false;
+        }
+        match response.parse_session_state() {
+            Ok(state) => {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!(
+                        "Session {session_id} close verification: status is {:?}; unload not confirmed",
+                        state.status
+                    ),
+                );
+            }
+            Err(RpcResponseError::Agent(error))
+                if error.code == crate::protocol::SESSION_NOT_LOADED =>
+            {
+                if let Some(view) = self.sessions.known.get_mut(session_id) {
+                    view.info.loaded = false;
+                    view.closing = false;
+                }
+                if self.sessions.active.as_deref() == Some(session_id.as_str()) {
+                    self.sessions.active = None;
+                }
+                self.notice(
+                    NoticeLevel::Info,
+                    format!("Session {session_id} verified unmounted/closed."),
+                );
+            }
+            Err(error) => {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!(
+                        "Session {session_id} close verification is unknown; result/state retained: {error}"
+                    ),
+                );
+            }
+        }
+        Vec::new()
+    }
+
+    fn delete_session(&mut self, session_id: &SessionId, confirm: bool) -> Vec<AppCommand> {
+        if !self.guard_ready() {
+            return Vec::new();
+        }
+        if !confirm {
+            self.notice(
+                NoticeLevel::Warning,
+                format!(
+                    "Deleting session {session_id} is permanent. Type '/delete confirm' to proceed."
+                ),
+            );
+            return Vec::new();
+        }
+        vec![self.request(
+            RequestKind::DeleteSession {
+                session_id: session_id.clone(),
+            },
+            |id| OutgoingRequest::session_delete(id, session_id),
+        )]
+    }
+
+    fn on_delete_session_response(
+        &mut self,
+        session_id: &SessionId,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
+        match response.parse_delete() {
+            Ok(_) => {
+                self.sessions.known.remove(session_id);
+                self.sessions.list.retain(|s| &s.session_id != session_id);
+                if self.sessions.active.as_deref() == Some(session_id.as_str()) {
+                    self.sessions.active = None;
+                }
+                self.notice(NoticeLevel::Info, format!("Session {session_id} deleted."));
+                Vec::new()
+            }
+            Err(error) => {
+                self.notice(
+                    NoticeLevel::Error,
+                    format!("Failed to delete session {session_id}: {error}"),
+                );
+                Vec::new()
+            }
+        }
+    }
+
+    fn on_session_response(
+        &mut self,
+        session_id: SessionId,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
+        if !self.can_send_requests() {
+            return Vec::new();
+        }
+        let session = match response.parse_session() {
+            Ok(result) => result.session,
+            Err(error) => {
+                self.notice(
+                    NoticeLevel::Error,
+                    format!("failed to parse session {session_id}: {error}"),
+                );
+                return Vec::new();
+            }
+        };
+        if session.session_id != session_id {
+            self.notice(
+                NoticeLevel::Error,
+                format!("session response does not match requested session {session_id}"),
+            );
+            return Vec::new();
+        }
+        let mut commands = Vec::new();
+        match self.sessions.known.get_mut(&session_id) {
+            Some(view) => {
+                view.info = session;
+                view.completed_steers.clear();
+            }
+            None => {
+                self.sessions
+                    .known
+                    .insert(session_id.clone(), SessionView::new(session));
+            }
+        }
+        let listed_info = self
+            .sessions
+            .known
+            .get(&session_id)
+            .map(|view| view.info.clone());
+        if let Some(info) = listed_info {
+            self.upsert_session_list(info);
+        }
+        self.sessions.active = Some(session_id.clone());
+
+        commands.push(self.request_session_state(&session_id));
+
+        let (fetch, gap_revision) = {
+            let Some(view) = self.sessions.known.get(&session_id) else {
+                return commands;
+            };
+            if view.loading {
+                (false, None)
+            } else if view.event_gap {
+                (true, Some(view.gap_revision))
+            } else if !view.transcript.complete {
+                (true, None)
+            } else {
+                (false, None)
+            }
+        };
+        if fetch {
+            let offset = self
+                .sessions
+                .known
+                .get(&session_id)
+                .map(|v| v.transcript.loaded_count)
+                .unwrap_or(0);
+            if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                view.loading = true;
+            }
+            commands.push(self.request(
+                RequestKind::History {
+                    session_id: session_id.clone(),
+                    offset,
+                    limit: 20,
+                    gap_revision,
+                },
+                |id| OutgoingRequest::session_history(id, &session_id, Some(offset), Some(20)),
+            ));
+        }
+        commands
+    }
+
+    fn on_create_response(&mut self, draft_id: u64, response: &RpcResponse) -> Vec<AppCommand> {
+        let session = match response.parse_session() {
+            Ok(result) => result.session,
+            Err(error) => {
+                if let Some(draft) = self.draft_matching(draft_id) {
+                    draft.submitting = false;
+                    draft.error = Some(format!("{error}"));
+                } else {
+                    self.notice(
+                        NoticeLevel::Error,
+                        format!("failed to create session: {error}"),
+                    );
+                }
+                return Vec::new();
+            }
+        };
+        let session_id = session.session_id.clone();
+        if self
+            .draft
+            .as_ref()
+            .is_some_and(|draft| draft.draft_id == draft_id)
+        {
+            self.draft = None;
+        }
+        if matches!(&self.dock, Dock::NewSession(draft) if draft.draft_id == draft_id) {
+            self.dock = Dock::Composer;
+        }
+        self.on_session_response(session_id, response)
+    }
+
+    fn on_open_response(
+        &mut self,
+        session_id: SessionId,
+        previous_retired_loop: Option<TurnRef>,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
+        let parsed = response.parse_session();
+        if let Err(error) = &parsed {
+            if let Some(retired_loop) = previous_retired_loop.clone() {
+                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    view.retired_loop = Some(retired_loop);
+                }
+            }
+            let message = match error {
+                RpcResponseError::Agent(error) if error.code == crate::protocol::STORE_ERROR => {
+                    "Unable to open this session. Its data may be unavailable, invalid, or from an unsupported format.".to_owned()
+                }
+                _ => format!("session.open failed: {error}"),
+            };
+            if let Dock::SessionSelector(state) = &mut self.dock {
+                state.submitting = false;
+                state.error = Some(message);
+            } else {
+                self.notice(NoticeLevel::Error, message);
+            }
+            return Vec::new();
+        }
+        if parsed
+            .as_ref()
+            .is_ok_and(|result| result.session.session_id != session_id)
+        {
+            if let Some(retired_loop) = previous_retired_loop {
+                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    view.retired_loop = Some(retired_loop);
+                }
+            }
+            let message =
+                format!("session.open response does not match requested session {session_id}");
+            if let Dock::SessionSelector(state) = &mut self.dock {
+                state.submitting = false;
+                state.error = Some(message);
+            } else {
+                self.notice(NoticeLevel::Error, message);
+            }
+            return Vec::new();
+        }
+        // Reopen is a lifecycle boundary. Retire old request ids before
+        // rebuilding the view so late responses cannot mutate the new load.
+        self.invalidate_reopened_session(&session_id);
+        if let Some(view) = self.sessions.known.get_mut(&session_id) {
+            // Rebuild from history offset 0; never compare the new total with
+            // the old local projection.
+            view.transcript.clear_blocks();
+            view.loading = false;
+            view.event_gap = false;
+            view.reconcile_inflight = false;
+            view.needs_post_wait_history = false;
+            view.closing = false;
+            view.live = None;
+            view.unsaved_loop = None;
+            view.last_result = None;
+            view.last_request = None;
+            view.config_update = None;
+            view.completed_steers.clear();
+            view.result_unconfirmed = false;
+        }
+        let commands = self.on_session_response(session_id, response);
+        if matches!(&self.dock, Dock::SessionSelector(state) if state.submitting) {
+            self.dock = Dock::Composer;
+        }
+        commands
+    }
+
+    fn on_session_state_response(
+        &mut self,
+        session_id: &SessionId,
+        query: u64,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
+        let Some(view) = self.sessions.known.get(session_id) else {
+            return Vec::new();
+        };
+        if view.latest_state_query != Some(query) {
+            return Vec::new();
+        }
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            view.latest_state_query = None;
+        }
+        match response.parse_session_state() {
+            Ok(state) if state.session_id.as_str() == session_id.as_str() => {
+                self.apply_session_state(&state, None, false)
+            }
+            Ok(_) => {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("state response does not match requested session {session_id}"),
+                );
+                Vec::new()
+            }
+            Err(error) => {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("failed to fetch state for {session_id}: {error}"),
+                );
+                Vec::new()
+            }
+        }
+    }
+
+    fn apply_session_state(
+        &mut self,
+        state: &SessionStateWire,
+        event_loop_id: Option<&String>,
+        from_event: bool,
+    ) -> Vec<AppCommand> {
         let show_unsupported = {
             let Some(view) = self.sessions.known.get_mut(&state.session_id) else {
                 return Vec::new();
             };
+            if event_loop_id.is_some_and(|event_loop_id| {
+                view.retired_loop
+                    .as_ref()
+                    .is_some_and(|retired| retired.loop_id == event_loop_id.as_str())
+            }) {
+                return Vec::new();
+            }
+            if event_loop_id.is_some_and(|event_loop_id| {
+                view.live
+                    .as_ref()
+                    .is_none_or(|live| live.reference.is_none())
+                    && Self::is_prior_loop(view, event_loop_id)
+            }) {
+                return Vec::new();
+            }
+            if event_loop_id.is_some_and(|event_loop_id| {
+                view.live
+                    .as_ref()
+                    .and_then(|live| live.reference.as_ref())
+                    .is_some_and(|reference| reference.loop_id.as_str() != event_loop_id.as_str())
+            }) {
+                return Vec::new();
+            }
+            if from_event
+                && event_loop_id.is_none()
+                && state.status == SessionStatusWire::Idle
+                && view
+                    .live
+                    .as_ref()
+                    .is_some_and(|live| live.reference.is_some())
+            {
+                return Vec::new();
+            }
+            if let Some(reference) = view.live.as_ref().and_then(|live| live.reference.as_ref()) {
+                if state.active_loop.as_ref().is_some_and(|loop_state| {
+                    loop_state.loop_id.as_str() != reference.loop_id.as_str()
+                }) || (state.status != SessionStatusWire::Idle
+                    && state.status != SessionStatusWire::Blocked
+                    && state.active_loop.is_none())
+                {
+                    return Vec::new();
+                }
+            }
+            if view.live.is_none()
+                && state.status != SessionStatusWire::Idle
+                && event_loop_id.is_some_and(|event_loop_id| {
+                    view.last_result.as_ref().is_some_and(|result| {
+                        result.turn.loop_id.as_str() == event_loop_id.as_str()
+                    })
+                })
+            {
+                return Vec::new();
+            }
             let was_waiting = view
                 .state
                 .as_ref()
-                .is_some_and(|current| current.status == SessionStatusWire::WaitingForInput);
+                .is_some_and(|old| old.status == SessionStatusWire::WaitingForInput);
+            let mut state = state.clone();
+            if view.unsaved_loop.is_some() && state.status != SessionStatusWire::Blocked {
+                state.status = SessionStatusWire::Blocked;
+                state.block_reason = Some(crate::protocol::SessionBlockReasonWire::Persistence);
+            }
+            if view.live.is_none() && state.status != SessionStatusWire::Idle {
+                if let Some(loop_state) = state.active_loop.as_ref() {
+                    let mut live = LiveLoop::new(LocalSubmissionId(u64::MAX), String::new());
+                    live.reference = Some(TurnRef {
+                        session_id: state.session_id.clone(),
+                        loop_id: loop_state.loop_id.clone(),
+                    });
+                    live.event_gap = true;
+                    view.live = Some(live);
+                    view.event_gap = true;
+                }
+            }
+            if state.status == SessionStatusWire::Idle
+                && view.unsaved_loop.is_none()
+                && view
+                    .live
+                    .as_ref()
+                    .is_some_and(|live| live.local_submission == LocalSubmissionId(u64::MAX))
+            {
+                view.live = None;
+            }
             view.state = Some(state.clone());
             !was_waiting && state.status == SessionStatusWire::WaitingForInput
         };
@@ -1946,136 +3063,364 @@ impl App {
         Vec::new()
     }
 
-    fn on_transcript_response(
+    fn on_history_response(
         &mut self,
         session_id: &SessionId,
+        requested_offset: usize,
         gap_revision: Option<u64>,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
-        let page = match response.parse_transcript() {
+        let page = match response.parse_history() {
             Ok(page) => page,
             Err(error) => {
                 self.notice(
                     NoticeLevel::Error,
-                    format!("malformed transcript for {session_id}: {error}"),
+                    format!("malformed history for {session_id}: {error}"),
                 );
                 if let Some(view) = self.sessions.known.get_mut(session_id) {
-                    view.loading = false;
-                    view.reconcile_inflight = false;
+                    Self::mark_history_unconfirmed(view);
                 }
                 return Vec::new();
             }
         };
-        self.continue_transcript_chain(session_id, gap_revision, &page)
+        self.continue_history_chain(session_id, requested_offset, gap_revision, &page)
     }
 
-    /// Merges one page and decides whether the chain continues. Pages are
-    /// merged immediately; completion also finishes any pending
-    /// reconciliation (spec 13.6) and heals event gaps observed before the
-    /// chain was issued (spec 13.7).
-    fn continue_transcript_chain(
+    fn continue_history_chain(
         &mut self,
         session_id: &SessionId,
+        requested_offset: usize,
         gap_revision: Option<u64>,
-        page: &TranscriptPageWire,
+        page: &HistoryPageWire,
     ) -> Vec<AppCommand> {
-        // Under shutdown the page is not merged and no further pages are
-        // fetched; exiting takes priority over the durable tail.
         if !self.can_send_requests() {
             return Vec::new();
         }
+
+        // 1. Conflict detection & idempotent repetition filtering:
+        // Any incoming item with index existing locally must exactly match known item; otherwise conflict!
+        let has_conflict = self.sessions.known.get(session_id).is_some_and(|view| {
+            page.items.iter().any(|incoming| {
+                view.transcript
+                    .items
+                    .iter()
+                    .any(|known| known.index == incoming.index && known.item != incoming.item)
+            })
+        });
+
+        if has_conflict {
+            if let Some(view) = self.sessions.known.get_mut(session_id) {
+                Self::mark_history_unconfirmed(view);
+            }
+            self.notice(
+                NoticeLevel::Error,
+                format!("history for {session_id} changed at an existing item index"),
+            );
+            return Vec::new();
+        }
+
+        let loaded_count = self
+            .sessions
+            .known
+            .get(session_id)
+            .map(|view| view.transcript.loaded_count)
+            .unwrap_or(0);
+
+        // 2. Page contiguity: the first new item must begin at the requested
+        // offset, and items within a page must advance without gaps.
+        let page_contiguous = page
+            .items
+            .first()
+            .is_none_or(|first| first.index == requested_offset)
+            && page
+                .items
+                .windows(2)
+                .all(|w| w[0].index.checked_add(1) == Some(w[1].index));
+
+        if !page_contiguous {
+            if let Some(view) = self.sessions.known.get_mut(session_id) {
+                Self::mark_history_unconfirmed(view);
+            }
+            self.notice(
+                NoticeLevel::Warning,
+                format!("history for {session_id} is not contiguous at offset {requested_offset}"),
+            );
+            return Vec::new();
+        }
+
+        // Filter truly new items that advance our local loaded_count
+        let new_items: Vec<_> = page
+            .items
+            .iter()
+            .filter(|item| item.index >= loaded_count)
+            .cloned()
+            .collect();
+
+        // Check if new_items contiguously advance from loaded_count
+        let local_advances_contiguously = new_items
+            .iter()
+            .enumerate()
+            .all(|(pos, item)| loaded_count.checked_add(pos) == Some(item.index));
+
+        if !new_items.is_empty() && !local_advances_contiguously {
+            if let Some(view) = self.sessions.known.get_mut(session_id) {
+                Self::mark_history_unconfirmed(view);
+            }
+            self.notice(
+                NoticeLevel::Warning,
+                format!("history for {session_id} is not contiguous at offset {loaded_count}"),
+            );
+            return Vec::new();
+        }
+
+        let Some(new_loaded_count) = loaded_count.checked_add(new_items.len()) else {
+            if let Some(view) = self.sessions.known.get_mut(session_id) {
+                Self::mark_history_unconfirmed(view);
+            }
+            self.notice(
+                NoticeLevel::Warning,
+                format!(
+                    "history for {session_id} did not advance its offset from {requested_offset}"
+                ),
+            );
+            return Vec::new();
+        };
+        let next_valid = match page.next_offset {
+            Some(next) => next > requested_offset && next == new_loaded_count && next <= page.total,
+            None => new_loaded_count == page.total,
+        };
+
+        if !next_valid {
+            let reason = format!(
+                "history for {session_id} did not advance its offset from {requested_offset}"
+            );
+            if let Some(view) = self.sessions.known.get_mut(session_id) {
+                Self::mark_history_unconfirmed(view);
+            }
+            self.notice(NoticeLevel::Warning, reason);
+            return Vec::new();
+        }
+
         let next = {
             let Some(view) = self.sessions.known.get_mut(session_id) else {
                 return Vec::new();
             };
-            merge_entries(view, &page.entries);
-            // last_seq is the highest durable entry seq actually merged into
-            // blocks — never the wire's observed_head, which can sit above
-            // the last merged entry on compaction/summary projections or on
-            // pages that stop without a cursor. The next incremental fetch
-            // must start from the real durable tail so nothing is skipped.
-            if let Some(merged) = page.entries.iter().map(entry_seq).max() {
-                view.transcript.last_seq = Some(
-                    view.transcript
-                        .last_seq
-                        .map_or(merged, |last| last.max(merged)),
-                );
-            }
-            if page.complete {
-                view.transcript.next_after = None;
+            merge_history_items(view, &new_items);
+            view.transcript.total = page.total;
+            view.transcript.loaded_count += new_items.len();
+            view.transcript.next_offset = page.next_offset;
+
+            if let Some(next_offset) = page.next_offset {
+                NextChain::Page {
+                    offset: next_offset,
+                }
+            } else {
                 view.transcript.complete = true;
                 view.loading = false;
-                // Only heal a gap that existed when this chain was issued; a
-                // gap that arrived mid-chain needs a fresh chain (there is no
-                // event replay anywhere in the app).
-                if view.event_gap
-                    && gap_revision.is_some_and(|revision| revision == view.gap_revision)
+
+                let live_loop_id = view
+                    .live
+                    .as_ref()
+                    .and_then(|live| live.reference.as_ref())
+                    .map(|r| r.loop_id.clone());
+
+                let raw_items_contain_loop = match &live_loop_id {
+                    Some(id) => view
+                        .transcript
+                        .items
+                        .iter()
+                        .any(|item| item.item.loop_id() == Some(id.as_str())),
+                    None => false,
+                };
+
+                let loop_contained_in_history = match &live_loop_id {
+                    Some(id) => view.transcript.blocks.iter().any(|b| match b {
+                        TranscriptBlock::User(u) => !u.pending && u.loop_id.as_deref() == Some(id),
+                        TranscriptBlock::Assistant(a) => a.loop_id.as_str() == id.as_str(),
+                        TranscriptBlock::Tool(t) => t.loop_id.as_str() == id.as_str(),
+                        _ => false,
+                    }),
+                    None => false,
+                };
+
+                // Clear event_gap ONLY IF:
+                // - all pages complete (we are in the else branch)
+                // - no unsaved loop
+                // - gap revision matches or fully loaded
+                // - for live turn: valid same-turn persisted AND raw items contain loop
+                // - for no live turn: view.live.is_none()
+                let same_turn_persisted = match &live_loop_id {
+                    Some(id) => {
+                        view.last_result.as_ref().is_some_and(|r| {
+                            r.persistence == TurnPersistenceWire::Persisted && r.turn.loop_id == *id
+                        }) || view
+                            .live
+                            .as_ref()
+                            .and_then(|l| l.last_result.as_ref())
+                            .is_some_and(|r| {
+                                r.persistence == TurnPersistenceWire::Persisted
+                                    && r.turn.loop_id == *id
+                            })
+                    }
+                    None => true,
+                };
+
+                let turn_satisfied = if live_loop_id.is_some() {
+                    same_turn_persisted && raw_items_contain_loop
+                } else {
+                    view.live.is_none()
+                };
+
+                let gap_rev_matches = gap_revision
+                    .is_some_and(|revision| revision == view.gap_revision)
+                    || (gap_revision.is_none()
+                        && view.transcript.loaded_count == view.transcript.total);
+
+                if view.unsaved_loop.is_none()
+                    && view.event_gap
+                    && turn_satisfied
+                    && gap_rev_matches
                 {
                     view.event_gap = false;
                 }
-                let reconciling = view.reconcile_inflight;
+
+                let _reconciling = view.reconcile_inflight;
                 view.reconcile_inflight = false;
-                if reconciling {
-                    // The reconcile chain finished; the durable blocks are
-                    // now the final truth for the turn.
-                    view.live = None;
-                    NextChain::Done
-                } else if view.live.as_ref().is_some_and(|live| live.waiting) {
-                    // A turn finished while another chain was running; fetch
-                    // the durable tail once before reconciling.
-                    view.reconcile_inflight = true;
-                    let after = view.transcript.last_seq;
-                    NextChain::Reconcile {
-                        after,
-                        gap_revision: Some(view.gap_revision),
+
+                // Mark steer states based on history
+                let loop_id = live_loop_id.as_deref();
+                let mut persisted_steers: Vec<String> = view
+                    .transcript
+                    .blocks
+                    .iter()
+                    .filter_map(|block| match block {
+                        TranscriptBlock::User(user)
+                            if user.kind == UserMessageKindWire::Steering
+                                && loop_id.is_some_and(|loop_id| {
+                                    user.loop_id.as_deref() == Some(loop_id)
+                                }) =>
+                        {
+                            Some(user.text.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let blocked = view.is_blocked();
+                let persistence_unconfirmed = view.unsaved_loop.is_some();
+                if let Some(live) = view.live.as_mut() {
+                    for steer in &mut live.pending_steers {
+                        if matches!(
+                            steer.state,
+                            PendingSteerState::Sending
+                                | PendingSteerState::Queued
+                                | PendingSteerState::Unconfirmed
+                        ) {
+                            if let Some(position) =
+                                persisted_steers.iter().position(|text| text == &steer.text)
+                            {
+                                persisted_steers.remove(position);
+                                steer.state = if persistence_unconfirmed {
+                                    PendingSteerState::Unconfirmed
+                                } else {
+                                    PendingSteerState::Persisted
+                                };
+                            } else if steer.state == PendingSteerState::Queued {
+                                steer.state = if blocked {
+                                    PendingSteerState::Unconfirmed
+                                } else {
+                                    PendingSteerState::NotRecorded
+                                };
+                            } else if steer.state == PendingSteerState::Sending {
+                                steer.state = PendingSteerState::Unconfirmed;
+                            }
+                        }
                     }
+                }
+
+                // If live turn has finished and is contained in history, take it
+                if view.unsaved_loop.is_none()
+                    && !view.is_blocked()
+                    && loop_contained_in_history
+                    && view
+                        .live
+                        .as_ref()
+                        .is_some_and(|live| live.last_result.is_some())
+                {
+                    if let Some(live) = view.live.take() {
+                        let current_loop = live
+                            .reference
+                            .as_ref()
+                            .map(|r| r.loop_id.clone())
+                            .unwrap_or_default();
+                        for steer in live.pending_steers {
+                            view.completed_steers.push(
+                                crate::state::session::CompletedSteerNotice {
+                                    session_id: session_id.clone(),
+                                    loop_id: current_loop.clone(),
+                                    local_id: steer.local_id,
+                                    text: steer.text,
+                                    state: steer.state,
+                                },
+                            );
+                        }
+                    }
+                }
+
+                if view.needs_post_wait_history {
+                    // Scenario B: We had an in-flight history when turn.wait completed.
+                    // Now that history has completed, if the loop is not yet contained in history,
+                    // we perform exactly ONE post-wait history fetch.
+                    view.needs_post_wait_history = false;
+                    if !loop_contained_in_history && view.live.is_some() {
+                        view.loading = true;
+                        view.reconcile_inflight = true;
+                        NextChain::Reconcile {
+                            offset: view.transcript.loaded_count,
+                            gap_revision: Some(view.gap_revision),
+                        }
+                    } else {
+                        NextChain::Done
+                    }
+                } else if !loop_contained_in_history
+                    && view.live.as_ref().is_some_and(|l| l.last_result.is_some())
+                {
+                    // If a post-wait fetch already happened and the loop is still not in history,
+                    // do NOT retry infinitely. Emit a warning and retain live/gap.
+                    NextChain::LoopNotContained(live_loop_id.unwrap_or_default())
                 } else {
                     NextChain::Done
                 }
-            } else {
-                view.transcript.next_after = page.next_after;
-                match page.next_after {
-                    Some(after) => NextChain::Page { after },
-                    None => {
-                        // `complete=false` with no cursor is reachable while
-                        // the agent cannot confirm durability: keep the
-                        // merged entries, stop this chain, and leave the
-                        // transcript incomplete so a later open/wait
-                        // reconcile retries from last_seq. Nothing is
-                        // fabricated, no live turn or gap is touched.
-                        view.loading = false;
-                        view.reconcile_inflight = false;
-                        view.transcript.complete = false;
-                        NextChain::Stopped
-                    }
-                }
             }
         };
+
         match next {
-            NextChain::Page { after } => vec![self.request(
-                RequestKind::Transcript {
+            NextChain::Page { offset } => vec![self.request(
+                RequestKind::History {
                     session_id: session_id.clone(),
-                    after: Some(after),
+                    offset,
+                    limit: 20,
                     gap_revision,
                 },
-                |id| OutgoingRequest::transcript(id, session_id, Some(after)),
+                |id| OutgoingRequest::session_history(id, session_id, Some(offset), Some(20)),
             )],
             NextChain::Reconcile {
-                after,
+                offset,
                 gap_revision,
             } => vec![self.request(
-                RequestKind::Transcript {
+                RequestKind::History {
                     session_id: session_id.clone(),
-                    after,
+                    offset,
+                    limit: 20,
                     gap_revision,
                 },
-                |id| OutgoingRequest::transcript(id, session_id, after),
+                |id| OutgoingRequest::session_history(id, session_id, Some(offset), Some(20)),
             )],
-            NextChain::Stopped => {
+            NextChain::LoopNotContained(loop_id) => {
                 self.notice(
                     NoticeLevel::Warning,
-                    "The agent could not confirm the transcript is durable yet; it can be \
-                     retried when the session is stable.",
+                    format!(
+                        "history sync warning: loop {loop_id} not contained in history response"
+                    ),
                 );
                 Vec::new()
             }
@@ -2083,14 +3428,54 @@ impl App {
         }
     }
 
-    // ---- turns ---------------------------------------------------------
-
-    fn submit_turn(&mut self, session_id: &SessionId, text: String) -> Vec<AppCommand> {
+    fn submit_turn(&mut self, session_id: SessionId, text: String) -> Vec<AppCommand> {
         if !self.guard_ready() {
             return Vec::new();
         }
         let trimmed = text.trim();
         if trimmed.is_empty() {
+            return Vec::new();
+        }
+        if trimmed.len() > MAX_COMPOSER_BYTES {
+            self.notice(
+                NoticeLevel::Warning,
+                format!("composer limit is {MAX_COMPOSER_BYTES} UTF-8 bytes"),
+            );
+            return Vec::new();
+        }
+        if self
+            .sessions
+            .known
+            .get(&session_id)
+            .is_some_and(|view| view.closing)
+        {
+            self.notice(
+                NoticeLevel::Warning,
+                "session is closing; cannot submit a new turn",
+            );
+            return Vec::new();
+        }
+        if self
+            .sessions
+            .known
+            .get(&session_id)
+            .is_some_and(|view| view.is_blocked())
+        {
+            self.notice(
+                NoticeLevel::Error,
+                "session is blocked; resolve or reset before submitting",
+            );
+            return Vec::new();
+        }
+        if self.sessions.known.get(&session_id).is_some_and(|view| {
+            view.state
+                .as_ref()
+                .is_some_and(|state| state.status != SessionStatusWire::Idle)
+        }) {
+            self.notice(
+                NoticeLevel::Warning,
+                "session is not idle; cannot submit a new turn",
+            );
             return Vec::new();
         }
         let submission = LocalSubmissionId(self.next_submission);
@@ -2099,29 +3484,40 @@ impl App {
             .checked_add(1)
             .expect("submission ids exhausted");
         {
-            let Some(view) = self.sessions.known.get_mut(session_id) else {
+            let Some(view) = self.sessions.known.get_mut(&session_id) else {
                 return Vec::new();
             };
-            // At most one live turn per session; a second submit is ignored.
             if view.live.is_some() {
                 return Vec::new();
             }
-            view.live = Some(LiveTurn {
+            // Keep the previous last_result as a bounded fence until this
+            // new submission receives its own loop reference. The UI hides a
+            // result that does not belong to the live loop.
+            view.last_request = None;
+            view.completed_steers.clear();
+            view.result_unconfirmed = false;
+            if view.config_update.as_ref().is_some_and(|u| {
+                u.loop_id.is_some() || u.state == crate::state::session::ConfigUpdateState::Applied
+            }) {
+                view.config_update = None;
+            }
+            view.live = Some(LiveLoop {
                 reference: None,
                 local_submission: submission,
                 user_text: trimmed.to_owned(),
-                text: String::new(),
-                reasoning: String::new(),
-                tools: Vec::new(),
+                requests: Vec::new(),
+                pending_steers: Vec::new(),
                 waiting: false,
                 cancel_requested: false,
                 event_gap: false,
+                last_result: None,
             });
             view.transcript
                 .blocks
                 .push(TranscriptBlock::User(UserBlock {
-                    seq: None,
-                    turn_id: None,
+                    index: None,
+                    loop_id: None,
+                    kind: UserMessageKindWire::Prompt,
                     text: trimmed.to_owned(),
                     pending: true,
                 }));
@@ -2132,7 +3528,7 @@ impl App {
                 session_id: session_id.clone(),
                 local_submission: submission,
             },
-            |id| OutgoingRequest::send_turn(id, session_id, trimmed),
+            |id| OutgoingRequest::send_turn(id, &session_id, trimmed),
         )]
     }
 
@@ -2144,20 +3540,65 @@ impl App {
             let Some(view) = self.sessions.known.get_mut(session_id) else {
                 return Vec::new();
             };
-            let Some(live) = view.live.as_mut() else {
+            if view.state.as_ref().is_some_and(|state| {
+                matches!(
+                    state.status,
+                    SessionStatusWire::Finishing | SessionStatusWire::Blocked
+                )
+            }) {
                 return Vec::new();
-            };
-            live.cancel_requested = true;
-            live.reference.clone()
+            }
+            if view.live.as_ref().is_some_and(|live| live.waiting) {
+                return Vec::new();
+            }
+            if let Some(live) = view.live.as_mut() {
+                live.cancel_requested = true;
+                live.reference.clone()
+            } else {
+                view.state.as_ref().and_then(|state| {
+                    state.active_loop.as_ref().map(|loop_state| TurnRef {
+                        session_id: session_id.clone(),
+                        loop_id: loop_state.loop_id.clone(),
+                    })
+                })
+            }
         };
         match reference {
-            // Cancellation always carries the exact TurnRef; unknown yet, so
-            // the send response issues the cancel instead (spec 13.3).
             Some(turn) => vec![self.request(RequestKind::CancelTurn(turn.clone()), |id| {
                 OutgoingRequest::cancel_turn(id, &turn)
             })],
             None => Vec::new(),
         }
+    }
+
+    /// Explicitly reads a retained completion once. A repeated request for
+    /// the same turn is ignored while one wait is already registered; the
+    /// response reducer also ignores an identical completion, so this cannot
+    /// duplicate history or live cards.
+    fn refresh_turn(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
+        if !self.can_send_requests() {
+            return Vec::new();
+        }
+        let turn = self.sessions.known.get(session_id).and_then(|view| {
+            view.unsaved_loop
+                .as_ref()
+                .map(|unsaved| unsaved.turn.clone())
+                .or_else(|| view.live.as_ref().and_then(|live| live.reference.clone()))
+                .or_else(|| view.last_result.as_ref().map(|result| result.turn.clone()))
+        });
+        let Some(turn) = turn else {
+            return Vec::new();
+        };
+        if self
+            .pending_requests
+            .values()
+            .any(|kind| matches!(kind, RequestKind::WaitTurn(pending) if pending == &turn))
+        {
+            return Vec::new();
+        }
+        vec![self.request(RequestKind::WaitTurn(turn.clone()), |id| {
+            OutgoingRequest::wait_turn(id, &turn)
+        })]
     }
 
     fn on_send_response(
@@ -2175,40 +3616,81 @@ impl App {
                 recovered: Option<String>,
                 error: RpcResponseError,
             },
+            Mismatch,
         }
         let plan = {
             let Some(view) = self.sessions.known.get_mut(session_id) else {
                 return Vec::new();
             };
-            let Some(live) = view
-                .live
-                .as_mut()
-                .filter(|live| live.local_submission == local_submission)
-            else {
+            let pending_user_text = view.transcript.blocks.iter().find_map(|block| match block {
+                TranscriptBlock::User(card) if card.pending => Some(card.text.clone()),
+                _ => None,
+            });
+            let Some(live) = view.live.as_mut() else {
                 return Vec::new();
             };
-            match response.parse_turn() {
+            let parsed = response.parse_turn_send();
+            if live.local_submission == LocalSubmissionId(u64::MAX)
+                && parsed.as_ref().is_ok_and(|result| {
+                    result.turn.session_id.as_str() == session_id.as_str()
+                        && live
+                            .reference
+                            .as_ref()
+                            .is_some_and(|reference| reference == &result.turn)
+                })
+            {
+                live.local_submission = local_submission;
+                if live.user_text.is_empty() {
+                    live.user_text = pending_user_text.unwrap_or_default();
+                }
+            }
+            if live.local_submission != local_submission {
+                return Vec::new();
+            }
+            match parsed {
                 Ok(result) => {
-                    live.reference = Some(result.turn.clone());
-                    let pending_user =
-                        view.transcript
-                            .blocks
-                            .iter_mut()
-                            .find_map(|block| match block {
-                                TranscriptBlock::User(card) if card.pending => Some(card),
-                                _ => None,
-                            });
-                    if let Some(card) = pending_user {
-                        card.turn_id = Some(result.turn.turn_id.clone());
-                        view.transcript.invalidate();
-                    }
-                    Plan::Wait {
-                        turn: result.turn,
-                        cancel: live.cancel_requested,
+                    if result.turn.session_id.as_str() != session_id.as_str()
+                        || live
+                            .reference
+                            .as_ref()
+                            .is_some_and(|reference| reference != &result.turn)
+                    {
+                        Plan::Mismatch
+                    } else {
+                        if view
+                            .last_result
+                            .as_ref()
+                            .is_some_and(|previous| previous.turn != result.turn)
+                        {
+                            view.last_result = None;
+                        }
+                        view.result_unconfirmed = false;
+                        live.reference = Some(result.turn.clone());
+                        let pending_user =
+                            view.transcript
+                                .blocks
+                                .iter_mut()
+                                .find_map(|block| match block {
+                                    TranscriptBlock::User(card) if card.pending => Some(card),
+                                    _ => None,
+                                });
+                        if let Some(card) = pending_user {
+                            card.loop_id = Some(result.turn.loop_id.clone());
+                            view.transcript.invalidate();
+                        }
+                        Plan::Wait {
+                            turn: result.turn,
+                            cancel: live.cancel_requested,
+                        }
                     }
                 }
                 Err(error) => {
-                    let recovered = view.live.take().map(|live| live.user_text);
+                    let is_blocked_err = matches!(&error, crate::protocol::RpcResponseError::Agent(err) if err.code == -32004);
+                    let recovered = if view.is_blocked() || is_blocked_err {
+                        view.live.as_ref().map(|live| live.user_text.clone())
+                    } else {
+                        view.live.take().map(|live| live.user_text)
+                    };
                     view.transcript.blocks.retain(
                         |block| !matches!(block, TranscriptBlock::User(card) if card.pending),
                     );
@@ -2218,11 +3700,10 @@ impl App {
             }
         };
         match plan {
-            // The wait is registered in this same update, before any event
-            // can race ahead of it; TurnFinished events are never awaited.
             Plan::Wait { turn, cancel } => {
-                // Shutdown wins over a running turn: no further followups.
-                if !self.can_send_requests() {
+                if !self.can_send_requests()
+                    && !matches!(self.connection, ConnectionState::ShuttingDown)
+                {
                     return Vec::new();
                 }
                 let mut commands = vec![self.request(RequestKind::WaitTurn(turn.clone()), |id| {
@@ -2236,126 +3717,438 @@ impl App {
                 commands
             }
             Plan::Failed { recovered, error } => {
-                if let Some(text) = recovered {
-                    self.composer.set_text(&text);
+                if self.sessions.active.as_ref() == Some(session_id) {
+                    if let Some(text) = recovered {
+                        if self.composer.content().trim().is_empty() {
+                            self.composer.set_text(&text);
+                        }
+                    }
                 }
-                self.notice(NoticeLevel::Error, format!("turn send failed: {error}"));
+                self.notice(NoticeLevel::Warning, format!("turn send failed: {error}"));
+                Vec::new()
+            }
+            Plan::Mismatch => {
+                self.connection_terminated("turn.send response does not match the live loop");
                 Vec::new()
             }
         }
     }
 
     fn on_wait_response(&mut self, turn: TurnRef, response: &RpcResponse) -> Vec<AppCommand> {
-        enum Plan {
-            Reconcile,
-        }
-        let (plan, notice_text) = {
+        let parsed = response.parse_turn_wait();
+        let mismatched_turn = parsed.as_ref().is_ok_and(|result| result.turn != turn);
+        let (persistence_failed, result, duplicate) = {
             let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
                 return Vec::new();
             };
-            let Some(live) = view
+            if view
                 .live
-                .as_mut()
-                .filter(|live| live.reference.as_ref() == Some(&turn))
-            else {
+                .as_ref()
+                .is_some_and(|live| live.reference.as_ref() != Some(&turn))
+            {
                 return Vec::new();
-            };
-            match response.parse_turn_wait() {
-                Ok(_outcome) => {
-                    live.waiting = true;
-                    (Plan::Reconcile, None)
+            }
+            let old_result = view.last_result.clone();
+            let live_matches = view
+                .live
+                .as_ref()
+                .is_some_and(|live| live.reference.as_ref() == Some(&turn));
+            match &parsed {
+                Ok(_) if mismatched_turn => {
+                    if live_matches {
+                        let live = view.live.as_mut().expect("matching live turn exists");
+                        live.waiting = true;
+                    }
+                    (false, None, false)
                 }
-                // turn_not_found and friends: the durable transcript and the
-                // session state are authoritative, so the same reconciliation
-                // restores the truth (spec 13.6).
-                Err(RpcResponseError::Agent(error)) => {
-                    live.waiting = true;
-                    (
-                        Plan::Reconcile,
-                        Some(format!(
-                            "turn wait failed ({error}); recovering from the durable transcript"
-                        )),
-                    )
+                Ok(result) => {
+                    let failed = result.persistence == TurnPersistenceWire::Failed;
+                    let duplicate = old_result.as_ref() == Some(result);
+                    if live_matches {
+                        let live = view.live.as_mut().expect("matching live turn exists");
+                        if !duplicate {
+                            live.waiting = true;
+                            live.last_result = Some(result.clone());
+                        }
+                    }
+                    (failed, Some(result.clone()), duplicate)
                 }
-                Err(RpcResponseError::Parse(error)) => {
-                    live.waiting = true;
-                    (
-                        Plan::Reconcile,
-                        Some(format!(
-                            "malformed turn.wait result ({error}); recovering from the durable \
-                             transcript"
-                        )),
-                    )
-                }
-                Err(RpcResponseError::Malformed) => {
-                    live.waiting = true;
-                    (
-                        Plan::Reconcile,
-                        Some(
-                            "turn.wait response has no payload; recovering from the durable \
-                             transcript"
-                                .to_owned(),
-                        ),
-                    )
+                Err(_) => {
+                    if live_matches {
+                        let live = view.live.as_mut().expect("matching live turn exists");
+                        live.waiting = true;
+                    }
+                    (false, None, false)
                 }
             }
         };
-        match plan {
-            Plan::Reconcile => {
-                if let Some(text) = notice_text {
-                    self.notice(NoticeLevel::Warning, text);
-                }
-                self.reconcile_after_wait(&turn)
+        if let Some(result) = result.as_ref() {
+            if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
+                view.last_result = Some(result.clone());
             }
         }
+
+        if result.is_none() {
+            let message = if mismatched_turn {
+                "malformed turn.wait result (turn reference does not match request); result/save unconfirmed".to_owned()
+            } else {
+                match parsed {
+                    Err(RpcResponseError::Agent(error)) => {
+                        format!("turn wait failed ({error}); result/save unconfirmed")
+                    }
+                    Err(RpcResponseError::Parse(error)) => {
+                        format!("malformed turn.wait result ({error}); result/save unconfirmed")
+                    }
+                    Err(RpcResponseError::Malformed) => {
+                        "turn.wait response has no payload; result/save unconfirmed".to_owned()
+                    }
+                    Ok(_) => unreachable!(),
+                }
+            };
+            self.notice(NoticeLevel::Warning, message);
+            return Vec::new();
+        }
+
+        if persistence_failed {
+            if !duplicate {
+                self.notice(
+                    NoticeLevel::Error,
+                    "Turn completed but persistence failed; session is blocked.",
+                );
+                if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
+                    if let Some(state) = view.state.as_mut() {
+                        state.status = SessionStatusWire::Blocked;
+                        state.active_loop = None;
+                        state.block_reason =
+                            Some(crate::protocol::SessionBlockReasonWire::Persistence);
+                    } else {
+                        view.state = Some(SessionStateWire {
+                            session_id: turn.session_id.clone(),
+                            status: SessionStatusWire::Blocked,
+                            active_loop: None,
+                            block_reason: Some(
+                                crate::protocol::SessionBlockReasonWire::Persistence,
+                            ),
+                        });
+                    }
+                    if let Some(live) = view.live.as_ref() {
+                        let user_text = live.user_text.clone();
+                        let requests = live.requests.clone();
+                        let event_gap = live.event_gap;
+                        view.unsaved_loop = Some(UnsavedLoop {
+                            turn: turn.clone(),
+                            user_text,
+                            requests,
+                            result: result.clone(),
+                            event_gap,
+                        });
+                    }
+                    Self::mark_pending_steers_unconfirmed(view);
+                }
+            }
+            return Vec::new();
+        }
+
+        if duplicate {
+            return Vec::new();
+        }
+        self.reconcile_after_wait(&turn)
     }
 
-    /// After a wait response: fetch the session state plus everything after
-    /// the last durable sequence; the live turn ends when that chain
-    /// completes (spec 13.4).
     fn reconcile_after_wait(&mut self, turn: &TurnRef) -> Vec<AppCommand> {
         if !self.can_send_requests() {
             return Vec::new();
         }
-        let mut commands = vec![
-            self.request(RequestKind::SessionState(turn.session_id.clone()), |id| {
-                OutgoingRequest::session_state(id, &turn.session_id)
-            }),
-        ];
-        let fetch = self
-            .sessions
-            .known
-            .get(&turn.session_id)
-            .is_some_and(|view| !view.loading);
-        if fetch {
-            let after = self
-                .sessions
-                .known
-                .get(&turn.session_id)
-                .and_then(|view| view.transcript.last_seq);
-            let gap_revision = self
-                .sessions
-                .known
-                .get(&turn.session_id)
-                .map(|view| view.gap_revision);
-            if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
-                view.reconcile_inflight = true;
+        // Closed or not-loaded session view must not issue session.state or session.history.
+        // Wait itself has already recorded the result and kept live temporarily visible.
+        if let Some(view) = self.sessions.known.get(&turn.session_id) {
+            if !view.info.loaded || view.closing {
+                return Vec::new();
             }
+        } else {
+            return Vec::new();
+        }
+        let mut commands = vec![self.request_session_state(&turn.session_id)];
+        let pending_history = self.pending_history(&turn.session_id);
+        let (fetch, gap_revision) = {
+            let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
+                return commands;
+            };
+            if view.loading || pending_history {
+                // If a history fetch is already in flight, flag that a post-wait
+                // reconcile is required once the in-flight fetch completes (spec scenario B).
+                view.needs_post_wait_history = true;
+                (false, None)
+            } else {
+                view.loading = true;
+                view.reconcile_inflight = true;
+                (true, Some(view.gap_revision))
+            }
+        };
+        if fetch {
+            let offset = self
+                .sessions
+                .known
+                .get(&turn.session_id)
+                .map(|view| view.transcript.loaded_count)
+                .unwrap_or(0);
             commands.push(self.request(
-                RequestKind::Transcript {
+                RequestKind::History {
                     session_id: turn.session_id.clone(),
-                    after,
+                    offset,
+                    limit: 20,
                     gap_revision,
                 },
-                |id| OutgoingRequest::transcript(id, &turn.session_id, after),
+                |id| OutgoingRequest::session_history(id, &turn.session_id, Some(offset), Some(20)),
             ));
         }
         commands
     }
 
+    fn on_steer_response(
+        &mut self,
+        session_id: &SessionId,
+        loop_id: &str,
+        steer_id: u64,
+        steer_text: &str,
+        editor_revision: Option<u64>,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
+        let composer_text = self.composer.content().trim().to_owned();
+        let composer_session = self.sessions.active.as_ref() == Some(session_id);
+        let composer_revision_matches =
+            editor_revision.is_some_and(|revision| revision == self.composer.editor_revision());
+
+        let parsed = response.parse_steer();
+        let is_ok = parsed.as_ref().is_ok_and(|res| res.ok);
+
+        if is_ok {
+            if composer_session && composer_revision_matches && composer_text == steer_text {
+                self.composer.submit_pushed(&composer_text);
+                self.composer.clear();
+            }
+            if let Some(view) = self.sessions.known.get_mut(session_id) {
+                let history_proves_not_recorded =
+                    Self::history_proves_steer_not_recorded(view, loop_id, steer_text);
+                let is_live_matching = view
+                    .live
+                    .as_ref()
+                    .and_then(|l| l.reference.as_ref())
+                    .is_some_and(|r| r.loop_id.as_str() == loop_id);
+
+                if is_live_matching {
+                    if let Some(live) = view.live.as_mut() {
+                        if let Some(steer) = live
+                            .pending_steers
+                            .iter_mut()
+                            .find(|s| s.local_id == steer_id)
+                        {
+                            if steer.state == PendingSteerState::Sending {
+                                steer.state = PendingSteerState::Queued;
+                            } else if steer.state == PendingSteerState::Unconfirmed
+                                && history_proves_not_recorded
+                            {
+                                steer.state = PendingSteerState::NotRecorded;
+                            }
+                        }
+                    }
+                } else if let Some(steer) = view
+                    .completed_steers
+                    .iter_mut()
+                    .find(|s| s.loop_id == loop_id && s.local_id == steer_id)
+                {
+                    if steer.state == PendingSteerState::Sending {
+                        steer.state = PendingSteerState::Queued;
+                    } else if steer.state == PendingSteerState::Unconfirmed
+                        && history_proves_not_recorded
+                    {
+                        // A complete persisted History with no matching item
+                        // is authoritative: a late ok only confirms the
+                        // request was accepted, not that it was recorded.
+                        steer.state = PendingSteerState::NotRecorded;
+                    }
+                }
+            }
+            return Vec::new();
+        }
+
+        // Steer rejected or failed:
+        // Do NOT clear composer; remove from pending / completed so it cannot preempt history!
+        let (queue_full, message) = match parsed {
+            Ok(_) => (false, "agent rejected the steering request".to_owned()),
+            Err(RpcResponseError::Agent(err)) => {
+                let queue_full = err.code == crate::protocol::STEER_QUEUE_FULL;
+                (queue_full, err.to_string())
+            }
+            Err(err) => (false, err.to_string()),
+        };
+
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            let is_live_matching = view
+                .live
+                .as_ref()
+                .and_then(|l| l.reference.as_ref())
+                .is_some_and(|r| r.loop_id.as_str() == loop_id);
+
+            if is_live_matching {
+                if let Some(live) = view.live.as_mut() {
+                    live.pending_steers.retain(|s| s.local_id != steer_id);
+                }
+            } else {
+                view.completed_steers
+                    .retain(|s| !(s.loop_id == loop_id && s.local_id == steer_id));
+            }
+        }
+
+        if queue_full {
+            self.notice(
+                NoticeLevel::Warning,
+                "Steering queue is full; cannot queue more steers.",
+            );
+        } else {
+            self.notice(
+                NoticeLevel::Warning,
+                format!("turn.steer failed: {message}"),
+            );
+        }
+        Vec::new()
+    }
+
     fn on_cancel_response(&mut self, response: &RpcResponse) -> Vec<AppCommand> {
         if let Err(error) = response.parse_cancel() {
-            self.notice(NoticeLevel::Warning, format!("cancel failed: {error}"));
+            self.notice(NoticeLevel::Warning, format!("turn cancel failed: {error}"));
+        }
+        Vec::new()
+    }
+
+    fn on_update_session_response(
+        &mut self,
+        session_id: SessionId,
+        target_loop_id: Option<String>,
+        model: Option<String>,
+        reasoning: Option<Reasoning>,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
+        match response.parse_session_update() {
+            Ok(result) => {
+                let active_revision = result.active_revision;
+                let session = result.session;
+                if session.session_id != session_id {
+                    self.notice(
+                        NoticeLevel::Warning,
+                        format!(
+                            "session.update response does not match requested session {session_id}"
+                        ),
+                    );
+                    return Vec::new();
+                }
+                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    // Session.update successful SessionInfo is always the durable authority for the session
+                    // (at most one update in-flight per session) and must not be discarded because a loop finished.
+                    view.info = session.clone();
+
+                    let current_live_loop = view
+                        .live
+                        .as_ref()
+                        .and_then(|l| l.reference.as_ref().map(|r| &r.loop_id));
+                    let is_different_new_loop = match (&target_loop_id, current_live_loop) {
+                        (Some(t_loop), Some(c_loop)) => t_loop != c_loop,
+                        _ => false,
+                    };
+
+                    // Only actual-request applied evidence requires the same loop.
+                    // When the loop has already finished, it becomes SavedNextTurn or reflects already observed evidence.
+                    // Old responses across loops must not retag new requests.
+                    if !is_different_new_loop {
+                        let applied = active_revision.is_some_and(|revision| {
+                            view.last_request.as_ref().is_some_and(|request| {
+                                request.revision == revision
+                                    && target_loop_id
+                                        .as_ref()
+                                        .is_none_or(|tl| request.loop_id.as_ref() == Some(tl))
+                                    && request.model == session.model
+                                    && request.reasoning == session.reasoning
+                            })
+                        });
+
+                        view.config_update = Some(crate::state::session::PendingConfigUpdate {
+                            loop_id: target_loop_id,
+                            model,
+                            reasoning,
+                            revision: active_revision,
+                            state: if applied {
+                                crate::state::session::ConfigUpdateState::Applied
+                            } else if view.live.is_none() {
+                                crate::state::session::ConfigUpdateState::SavedNextTurn
+                            } else if active_revision.is_some() {
+                                crate::state::session::ConfigUpdateState::WaitingBoundary
+                            } else {
+                                crate::state::session::ConfigUpdateState::SavedNextTurn
+                            },
+                        });
+                    }
+                }
+                self.upsert_session_list(session);
+                if self.sessions.active.as_ref() == Some(&session_id)
+                    && matches!(
+                        &self.dock,
+                        Dock::ModelSelector(_) | Dock::ReasoningSelector(_)
+                    )
+                {
+                    self.dock = Dock::Composer;
+                }
+                if let Some(revision) = active_revision {
+                    self.notice(
+                        NoticeLevel::Info,
+                        format!("Saved · applies at next model request (rev {revision})"),
+                    );
+                } else if self.sessions.known.get(&session_id).is_some_and(|view| {
+                    view.state
+                        .as_ref()
+                        .is_some_and(|state| state.status != SessionStatusWire::Idle)
+                }) {
+                    self.notice(
+                        NoticeLevel::Info,
+                        "Saved for next turn; no active revision was returned.",
+                    );
+                } else {
+                    self.notice(NoticeLevel::Info, "Updated for next turn");
+                }
+            }
+            Err(error) => {
+                let message = error.to_string();
+                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    let current_loop_id = view
+                        .live
+                        .as_ref()
+                        .and_then(|l| l.reference.as_ref().map(|r| r.loop_id.clone()));
+                    view.config_update = Some(crate::state::session::PendingConfigUpdate {
+                        loop_id: current_loop_id,
+                        model: model.clone(),
+                        reasoning,
+                        revision: None,
+                        state: crate::state::session::ConfigUpdateState::Failed(message.clone()),
+                    });
+                }
+                let matches_active = self.sessions.active.as_ref() == Some(&session_id);
+                let selector_state = if matches_active {
+                    match &mut self.dock {
+                        Dock::ModelSelector(state) | Dock::ReasoningSelector(state) => Some(state),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                if let Some(state) = selector_state {
+                    state.submitting = false;
+                    state.error = Some(message);
+                } else {
+                    self.notice(
+                        NoticeLevel::Warning,
+                        format!("failed to update session {session_id}: {error}"),
+                    );
+                }
+            }
         }
         Vec::new()
     }
@@ -2382,70 +4175,193 @@ impl App {
                         return Vec::new();
                     };
                     let mut recovered = None;
+                    let current_submission = view
+                        .live
+                        .as_ref()
+                        .is_some_and(|live| live.local_submission == local_submission);
+                    if current_submission {
+                        if !view.is_blocked() {
+                            if let Some(live) = view.live.take() {
+                                recovered = Some(live.user_text);
+                            }
+                        } else if let Some(live) = view.live.as_ref() {
+                            recovered = Some(live.user_text.clone());
+                        }
+                        view.transcript.blocks.retain(
+                            |block| !matches!(block, TranscriptBlock::User(card) if card.pending),
+                        );
+                        view.transcript.invalidate();
+                    }
+                    recovered
+                };
+                if self.sessions.active.as_ref() == Some(&session_id) {
+                    if let Some(text) = recovered {
+                        if self.composer.content().trim().is_empty() {
+                            self.composer.set_text(&text);
+                        }
+                    }
+                }
+                self.notice(NoticeLevel::Warning, format!("turn send failed: {error}"));
+            }
+            RequestKind::WaitTurn(turn) => {
+                if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
                     if view
                         .live
                         .as_ref()
-                        .is_some_and(|live| live.local_submission == local_submission)
+                        .and_then(|live| live.reference.as_ref())
+                        .is_some_and(|reference| reference == &turn)
                     {
-                        if let Some(live) = view.live.take() {
-                            recovered = Some(live.user_text);
+                        if let Some(live) = view.live.as_mut() {
+                            live.waiting = true;
                         }
+                        Self::mark_pending_steers_unconfirmed(view);
                     }
-                    view.transcript.blocks.retain(
-                        |block| !matches!(block, TranscriptBlock::User(card) if card.pending),
-                    );
-                    view.transcript.invalidate();
-                    recovered
-                };
-                if let Some(text) = recovered {
-                    self.composer.set_text(&text);
                 }
                 self.notice(
-                    NoticeLevel::Error,
-                    format!("failed to send the turn: {error}"),
+                    NoticeLevel::Warning,
+                    format!("turn wait send failed: {error}; result/save unconfirmed"),
                 );
             }
-            RequestKind::CreateSession { draft } => match self.draft_matching(draft) {
-                Some(draft) => {
-                    draft.submitting = false;
-                    draft.error = Some(format!("failed to send session.create: {error}"));
-                }
-                None => self.notice(
-                    NoticeLevel::Error,
-                    format!("failed to send session.create: {error}"),
-                ),
-            },
-            RequestKind::OpenSession(_) => {
-                let from_selector = matches!(&self.dock, Dock::SessionSelector(_));
-                if from_selector {
-                    if let Dock::SessionSelector(state) = &mut self.dock {
-                        state.submitting = false;
-                        state.error = Some(format!("failed to send session.open: {error}"));
+            RequestKind::SteerTurn {
+                session_id,
+                steer_id,
+                ..
+            } => {
+                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    if let Some(live) = view.live.as_mut() {
+                        live.pending_steers.retain(|s| s.local_id != steer_id);
                     }
+                }
+                self.notice(NoticeLevel::Warning, format!("turn.steer failed: {error}"));
+            }
+            RequestKind::CancelTurn(_) => {
+                self.notice(NoticeLevel::Warning, format!("turn cancel failed: {error}"));
+            }
+            RequestKind::CloseSession { session_id } => {
+                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    view.closing = false;
+                }
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("session.close failed to send for {session_id}: {error}"),
+                );
+            }
+            RequestKind::CloseVerifyState { session_id } => {
+                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    view.closing = false;
+                }
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("close verification failed to send for {session_id}: {error}"),
+                );
+            }
+            RequestKind::DeleteSession { session_id } => {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("session.delete failed to send for {session_id}: {error}"),
+                );
+            }
+            RequestKind::UpdateSession {
+                session_id,
+                loop_id,
+                model,
+                reasoning,
+            } => {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("session.update failed for {session_id}: {error}"),
+                );
+                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    view.config_update = Some(crate::state::session::PendingConfigUpdate {
+                        loop_id,
+                        model,
+                        reasoning,
+                        revision: None,
+                        state: crate::state::session::ConfigUpdateState::Failed(error.to_string()),
+                    });
+                }
+                if let Dock::ModelSelector(state) | Dock::ReasoningSelector(state) = &mut self.dock
+                {
+                    state.submitting = false;
+                    state.error = Some(error.to_string());
+                }
+            }
+            RequestKind::History { session_id, .. } => {
+                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    Self::mark_history_unconfirmed(view);
+                }
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("history request failed: {error}"),
+                );
+            }
+            RequestKind::Ping
+            | RequestKind::ListModels
+            | RequestKind::ListProfiles
+            | RequestKind::ListSessions => {
+                if self.connection == ConnectionState::ShuttingDown {
+                    self.notice(
+                        NoticeLevel::Warning,
+                        format!("bootstrap request failed during shutdown: {error}"),
+                    );
+                } else {
+                    commands.extend(
+                        self.connection_terminated(&format!("bootstrap request failed: {error}")),
+                    );
+                }
+            }
+            RequestKind::CreateSession { draft } => {
+                if let Some(draft_state) = self.draft_matching(draft) {
+                    draft_state.submitting = false;
+                    draft_state.error = Some(format!("failed to send session.create: {error}"));
                 } else {
                     self.notice(
-                        NoticeLevel::Error,
-                        format!("failed to send session.open: {error}"),
+                        NoticeLevel::Warning,
+                        format!("create session failed: {error}"),
                     );
                 }
             }
-            // Sending agent.shutdown failed: the writer is gone, so kill and
-            // leave; the child is reaped by the waiter.
-            RequestKind::Shutdown => {
-                commands.push(AppCommand::KillChild);
-                commands.push(AppCommand::Exit);
-            }
-            _ => {
+            RequestKind::OpenSession {
+                session_id,
+                previous_retired_loop,
+            } => {
+                if let Some(retired_loop) = previous_retired_loop {
+                    if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                        view.retired_loop = Some(retired_loop);
+                    }
+                }
                 self.notice(
-                    NoticeLevel::Error,
-                    format!("failed to send a request: {error}"),
+                    NoticeLevel::Warning,
+                    format!("open session failed for {session_id}: {error}"),
                 );
+            }
+            RequestKind::SessionState { session_id, query } => {
+                let current = self
+                    .sessions
+                    .known
+                    .get(&session_id)
+                    .and_then(|view| view.latest_state_query)
+                    == Some(query);
+                if current {
+                    if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                        view.latest_state_query = None;
+                    }
+                    self.notice(
+                        NoticeLevel::Warning,
+                        format!("state fetch failed for {session_id}: {error}"),
+                    );
+                }
+            }
+            RequestKind::Shutdown => {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("shutdown request failed: {error}"),
+                );
+                commands.push(AppCommand::KillChild);
             }
         }
         commands
     }
-
-    // ---- incoming events ----------------------------------------------
 
     fn on_rpc_event(&mut self, event: RpcEvent) -> Vec<AppCommand> {
         match event {
@@ -2454,57 +4370,80 @@ impl App {
                 self.push_log(line);
                 Vec::new()
             }
-            RpcEvent::ConnectionClosed => self.connection_terminated("agent stdout closed"),
+            RpcEvent::ConnectionClosed => {
+                if self.connection == ConnectionState::ShuttingDown {
+                    Vec::new()
+                } else {
+                    self.connection_terminated("agent stdout closed unexpectedly")
+                }
+            }
             RpcEvent::ProtocolError(error) => {
-                self.connection_terminated(&format!("RPC protocol error: {error}"))
+                if self.connection == ConnectionState::ShuttingDown {
+                    self.notice(
+                        NoticeLevel::Warning,
+                        format!("RPC protocol error during shutdown: {error}"),
+                    );
+                    vec![AppCommand::KillChild]
+                } else {
+                    self.connection_terminated(&format!("RPC protocol error: {error}"))
+                }
             }
             RpcEvent::Exited(status) => {
-                let status_text = format_exit_status(status.as_ref());
-                self.child_exit_status = Some(status_text.clone());
-                match self.connection {
-                    // The normal shutdown conclusion: the child is gone.
-                    ConnectionState::ShuttingDown => {
-                        self.shutdown_child_exited = true;
-                        vec![AppCommand::Exit]
-                    }
-                    ConnectionState::Failed(_) => Vec::new(),
-                    _ => {
-                        let reason = format!("agent exited: {status_text}");
-                        self.connection_terminated(&reason)
-                    }
+                let text = match &status {
+                    Some(status) => status.code().map_or_else(
+                        || "terminated without an exit code".to_owned(),
+                        |code| format!("exit code {code}"),
+                    ),
+                    None => "unavailable".to_owned(),
+                };
+                self.child_exit_status = Some(text.clone());
+                if self.connection == ConnectionState::ShuttingDown {
+                    // Child exit does not prove that stdout's already-buffered
+                    // shutdown/wait responses have been delivered. Keep
+                    // draining until the RPC producers close the channel.
+                    self.shutdown_child_exited = true;
+                    Vec::new()
+                } else if matches!(self.connection, ConnectionState::Failed(_)) {
+                    Vec::new()
+                } else {
+                    self.connection_terminated(&format!("agent exited: {text}"))
                 }
             }
         }
     }
 
     fn on_rpc_channel_ended(&mut self) -> Vec<AppCommand> {
-        match self.connection {
-            // Once the channel has drained, the child is no longer usable;
-            // normal shutdown can leave without waiting for another event.
-            ConnectionState::ShuttingDown => {
-                self.shutdown_child_exited = true;
-                vec![AppCommand::Exit]
-            }
-            // A fatal overlay remains interactive after EOF; `q` still
-            // produces the explicit Exit command through App::update.
-            ConnectionState::Failed(_) => Vec::new(),
-            _ => self.connection_terminated("RPC channel ended"),
+        if self.connection == ConnectionState::ShuttingDown {
+            self.shutdown_child_exited = true;
+            return vec![AppCommand::Exit];
         }
+        self.connection_terminated("agent RPC channel closed unexpectedly")
     }
 
-    /// The first connection-terminating event latches `Failed`; later
-    /// termination events are idempotent and never overwrite the first
-    /// cause (see `crate::event`).
     fn connection_terminated(&mut self, reason: &str) -> Vec<AppCommand> {
-        match self.connection {
-            // EOF/protocol failure during ShuttingDown is the expected
-            // conclusion of agent.shutdown, never a fatal error.
-            ConnectionState::Failed(_) | ConnectionState::ShuttingDown => Vec::new(),
-            _ => {
-                self.connection = ConnectionState::Failed(reason.to_owned());
-                Vec::new()
+        if matches!(self.connection, ConnectionState::Failed(_)) {
+            return Vec::new();
+        }
+        let mut unconfirmed = false;
+        self.pending_requests.clear();
+        for view in self.sessions.known.values_mut() {
+            Self::mark_pending_steers_unconfirmed(view);
+            if view.unsaved_loop.is_none() {
+                if let Some(live) = view.live.as_mut() {
+                    if live.last_result.is_none() {
+                        live.waiting = true;
+                        view.result_unconfirmed = true;
+                        unconfirmed = true;
+                    }
+                }
             }
         }
+        self.connection = ConnectionState::Failed(reason.to_owned());
+        self.notice(NoticeLevel::Error, reason.to_owned());
+        if unconfirmed {
+            self.sticky_notice(NoticeLevel::Warning, UNCONFIRMED_RESULT_NOTICE);
+        }
+        Vec::new()
     }
 
     fn on_frame(&mut self, frame: IncomingFrame) -> Vec<AppCommand> {
@@ -2515,21 +4454,48 @@ impl App {
     }
 
     fn on_response(&mut self, response: RpcResponse) -> Vec<AppCommand> {
-        let Some(kind) = self.pending_requests.remove(&response.id) else {
-            self.notice(
-                NoticeLevel::Warning,
-                format!("ignored response for unknown request id {}", response.id.0),
-            );
-            return Vec::new();
+        let kind = match self.pending_requests.remove(&response.id) {
+            Some(kind) => kind,
+            None => {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("response for unknown request id {}", response.id.0),
+                );
+                return Vec::new();
+            }
         };
+        if self.connection == ConnectionState::ShuttingDown
+            && !matches!(
+                kind,
+                RequestKind::Shutdown | RequestKind::WaitTurn(_) | RequestKind::SendTurn { .. }
+            )
+        {
+            return Vec::new();
+        }
         match kind {
-            RequestKind::Ping => match response.parse_ping() {
-                Ok(_) => {
-                    self.bootstrap_progress(BootstrapPart::Ping);
-                    Vec::new()
+            RequestKind::Ping => {
+                match response.parse_ping() {
+                    Ok(pong) => {
+                        if !is_supported_agent_version(&pong.version) {
+                            let msg = format!(
+                                "unsupported agent version '{}': minicore-tui requires agent 0.3.x",
+                                pong.version
+                            );
+                            self.notice(NoticeLevel::Error, &msg);
+                            self.connection = ConnectionState::Failed(msg);
+                            return Vec::new();
+                        }
+                    }
+                    Err(err) => {
+                        let msg = format!("agent.ping failed: {err}");
+                        self.notice(NoticeLevel::Error, &msg);
+                        self.connection = ConnectionState::Failed(msg);
+                        return Vec::new();
+                    }
                 }
-                Err(error) => self.bootstrap_failure(METHOD_PING, error),
-            },
+                self.bootstrap_progress(BootstrapPart::Ping);
+                Vec::new()
+            }
             RequestKind::ListModels => match response.parse_models() {
                 Ok(result) => {
                     self.catalogs.models = result.models;
@@ -2541,13 +4507,6 @@ impl App {
             RequestKind::ListProfiles => match response.parse_profiles() {
                 Ok(result) => {
                     self.catalogs.profiles = result.profiles;
-                    if self.catalogs.next_profile.is_none() {
-                        if let Some(first) = self.catalogs.profiles.first() {
-                            self.catalogs.next_profile = Some(first.id.clone());
-                            self.catalogs.next_model = Some(first.model.clone());
-                            self.catalogs.next_reasoning = Some(first.reasoning);
-                        }
-                    }
                     self.bootstrap_progress(BootstrapPart::Profiles);
                     Vec::new()
                 }
@@ -2555,17 +4514,13 @@ impl App {
             },
             RequestKind::ListSessions => match response.parse_sessions() {
                 Ok(result) => {
-                    self.sessions.list = result.sessions;
-                    for info in &self.sessions.list {
-                        match self.sessions.known.get_mut(&info.session_id) {
-                            Some(view) => view.info = info.clone(),
-                            None => {
-                                self.sessions.known.insert(
-                                    info.session_id.clone(),
-                                    SessionView::new(info.clone()),
-                                );
-                            }
-                        }
+                    self.sessions.list = result.sessions.clone();
+                    for session in result.sessions {
+                        let session_id = session.session_id.clone();
+                        self.sessions
+                            .known
+                            .entry(session_id)
+                            .or_insert_with(|| SessionView::new(session));
                     }
                     self.bootstrap_progress(BootstrapPart::Sessions);
                     Vec::new()
@@ -2573,24 +4528,54 @@ impl App {
                 Err(error) => self.bootstrap_failure(METHOD_LIST_SESSIONS, error),
             },
             RequestKind::CreateSession { draft } => self.on_create_response(draft, &response),
-            RequestKind::OpenSession(_) => self.on_open_response(&response),
-            RequestKind::SessionState(session_id) => {
-                self.on_session_state_response(&session_id, &response)
-            }
-            RequestKind::Transcript {
+            RequestKind::OpenSession {
                 session_id,
+                previous_retired_loop,
+            } => self.on_open_response(session_id, previous_retired_loop, &response),
+            RequestKind::SessionState { session_id, query } => {
+                self.on_session_state_response(&session_id, query, &response)
+            }
+            RequestKind::History {
+                session_id,
+                offset,
                 gap_revision,
                 ..
-            } => self.on_transcript_response(&session_id, gap_revision, &response),
+            } => self.on_history_response(&session_id, offset, gap_revision, &response),
             RequestKind::SendTurn {
                 session_id,
                 local_submission,
             } => self.on_send_response(&session_id, local_submission, &response),
             RequestKind::WaitTurn(turn) => self.on_wait_response(turn, &response),
+            RequestKind::SteerTurn {
+                session_id,
+                loop_id,
+                steer_id,
+                text,
+                editor_revision,
+            } => self.on_steer_response(
+                &session_id,
+                &loop_id,
+                steer_id,
+                &text,
+                editor_revision,
+                &response,
+            ),
             RequestKind::CancelTurn(_) => self.on_cancel_response(&response),
-            // The agent's final frame. The child's exit (a later Exited or
-            // ConnectionClosed, either order) ends the run; an error means
-            // the agent refused, so force-kill it.
+            RequestKind::UpdateSession {
+                session_id,
+                loop_id,
+                model,
+                reasoning,
+            } => self.on_update_session_response(session_id, loop_id, model, reasoning, &response),
+            RequestKind::CloseSession { session_id } => {
+                self.on_close_session_response(&session_id, &response)
+            }
+            RequestKind::CloseVerifyState { session_id } => {
+                self.on_close_verify_state_response(&session_id, &response)
+            }
+            RequestKind::DeleteSession { session_id } => {
+                self.on_delete_session_response(&session_id, &response)
+            }
             RequestKind::Shutdown => match response.parse_shutdown() {
                 Ok(_) => Vec::new(),
                 Err(error) => {
@@ -2611,201 +4596,405 @@ impl App {
         }
     }
 
-    /// Routes agent events to the session they belong to; background
-    /// sessions keep updating. Events whose instance does not match the
-    /// session's current state are stale and ignored (spec 13.6).
     fn on_agent_event(&mut self, event: AgentEventWire) -> Vec<AppCommand> {
+        let gap_session = match &event {
+            AgentEventWire::SessionOpened { data } => {
+                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
+            }
+            AgentEventWire::SessionClosed { data } => {
+                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
+            }
+            AgentEventWire::SessionState { data } => {
+                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
+            }
+            AgentEventWire::TurnStarted { data } => {
+                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
+            }
+            AgentEventWire::RequestStarted { data } => {
+                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
+            }
+            AgentEventWire::OutputDelta { data } => {
+                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
+            }
+            AgentEventWire::ToolStarted { data } => {
+                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
+            }
+            AgentEventWire::ToolProgress { data } => {
+                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
+            }
+            AgentEventWire::ToolFinished { data } => {
+                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
+            }
+            AgentEventWire::InteractionRequested { data } => {
+                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
+            }
+            AgentEventWire::InteractionResolved { data } => {
+                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
+            }
+            AgentEventWire::TurnFinished { data } => {
+                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
+            }
+            AgentEventWire::Unknown => None,
+        };
+        let mut commands = Vec::new();
         match event {
             AgentEventWire::SessionOpened { data } => {
-                self.mark_gap(&data.meta.session_id, data.meta.dropped_before);
                 let session_id = data.session.session_id.clone();
-                match self.sessions.known.get_mut(&session_id) {
-                    Some(view) => view.info = data.session,
+                let open_pending = self.pending_requests.values().any(|kind| {
+                    matches!(kind, RequestKind::OpenSession { session_id: pending, .. } if pending == &session_id)
+                });
+                let (needs_state, info_changed) = match self.sessions.known.get_mut(&session_id) {
+                    Some(view) => {
+                        // Existing SessionInfo came from list/open/update and
+                        // is authoritative over this best-effort event. The
+                        // event may only request missing state information.
+                        (view.state.is_none() && !open_pending, false)
+                    }
                     None => {
                         self.sessions
                             .known
-                            .insert(session_id, SessionView::new(data.session));
+                            .insert(session_id.clone(), SessionView::new(data.session.clone()));
+                        (!open_pending, true)
+                    }
+                };
+                if info_changed {
+                    let listed_info = self
+                        .sessions
+                        .known
+                        .get(&session_id)
+                        .map(|view| view.info.clone());
+                    if let Some(info) = listed_info {
+                        self.upsert_session_list(info);
                     }
                 }
+                if needs_state
+                    && self.can_send_requests()
+                    && self
+                        .sessions
+                        .known
+                        .get(&session_id)
+                        .is_none_or(|view| view.latest_state_query.is_none())
+                {
+                    commands.push(self.request_session_state(&session_id));
+                }
+                self.mark_gap(&data.meta);
             }
             AgentEventWire::SessionClosed { data } => {
-                self.mark_gap(&data.session_id, data.meta.dropped_before);
-                let stale = self
-                    .sessions
-                    .known
-                    .get(&data.session_id)
-                    .and_then(|view| view.state.as_ref())
-                    .is_some_and(|state| state.instance_id != data.meta.instance_id);
-                if !stale {
-                    if let Some(view) = self.sessions.known.get_mut(&data.session_id) {
-                        view.live = None;
-                    }
-                }
+                // This best-effort event is not a completion or persistence
+                // proof; retain live/result state until the lifecycle owner
+                // explicitly reopens the session.
+                self.mark_gap(&data.meta);
             }
             AgentEventWire::SessionState { data } => {
-                self.mark_gap(&data.meta.session_id, data.meta.dropped_before);
-                let stale = self
-                    .sessions
-                    .known
-                    .get(&data.state.session_id)
-                    .and_then(|view| view.state.as_ref())
-                    .is_some_and(|current| current.instance_id != data.state.instance_id);
-                if !stale {
-                    self.apply_session_state(&data.state);
-                }
+                self.mark_gap(&data.meta);
+                self.apply_session_state(&data.state, data.meta.loop_id.as_ref(), true);
             }
             AgentEventWire::TurnStarted { data } => {
-                self.mark_gap(&data.meta.session_id, data.meta.dropped_before);
+                self.mark_gap(&data.meta);
                 self.adopt_turn_started(&data.turn);
             }
+            AgentEventWire::RequestStarted { data } => {
+                self.mark_gap(&data.meta);
+                self.on_request_started(
+                    &data.turn,
+                    data.request_index,
+                    data.config_revision,
+                    &data.model,
+                    data.reasoning,
+                );
+            }
             AgentEventWire::OutputDelta { data } => {
-                self.mark_gap(&data.meta.session_id, data.meta.dropped_before);
-                self.append_delta(&data.turn, &data.channel, &data.delta);
+                self.mark_gap(&data.meta);
+                self.append_delta(&data.turn, data.request_index, &data.channel, &data.delta);
             }
             AgentEventWire::ToolStarted { data } => {
-                self.mark_gap(&data.meta.session_id, data.meta.dropped_before);
-                self.on_tool_started(&data.turn, &data.tool_call_id, &data.tool_name);
+                self.mark_gap(&data.meta);
+                self.on_tool_started(
+                    &data.turn,
+                    data.request_index,
+                    &data.tool_call_id,
+                    &data.tool_name,
+                );
             }
             AgentEventWire::ToolProgress { data } => {
-                self.mark_gap(&data.meta.session_id, data.meta.dropped_before);
-                self.on_tool_progress(&data.turn, &data.tool_call_id, &data.progress);
+                self.mark_gap(&data.meta);
+                self.on_tool_progress(
+                    &data.turn,
+                    data.request_index,
+                    &data.tool_call_id,
+                    &data.progress,
+                );
             }
             AgentEventWire::ToolFinished { data } => {
-                self.mark_gap(&data.meta.session_id, data.meta.dropped_before);
-                self.on_tool_finished(&data.turn, &data.tool_call_id, data.result.outcome);
+                self.mark_gap(&data.meta);
+                self.on_tool_finished(
+                    &data.turn,
+                    data.request_index,
+                    &data.tool_call_id,
+                    data.result.outcome,
+                );
             }
             AgentEventWire::InteractionRequested { data } => {
-                self.mark_gap(&data.meta.session_id, data.meta.dropped_before);
-                let show = match self.sessions.known.get(&data.session_id) {
-                    None => false,
-                    Some(view) => view
-                        .state
-                        .as_ref()
-                        .is_none_or(|state| state.status != SessionStatusWire::WaitingForInput),
-                };
-                if show {
-                    self.sticky_notice(NoticeLevel::Warning, UNSUPPORTED_INTERACTION_NOTICE);
-                }
+                self.mark_gap(&data.meta);
+                self.sticky_notice(NoticeLevel::Warning, UNSUPPORTED_INTERACTION_NOTICE);
             }
             AgentEventWire::InteractionResolved { data } => {
-                self.mark_gap(&data.meta.session_id, data.meta.dropped_before);
+                self.mark_gap(&data.meta);
             }
             AgentEventWire::TurnFinished { data } => {
-                self.mark_gap(&data.meta.session_id, data.meta.dropped_before);
-                // Not authoritative: the wait response plus the durable
-                // transcript drive completion even if this event is lost,
-                // early, or late (spec 13.6).
+                self.mark_gap(&data.meta);
             }
             AgentEventWire::Unknown => {}
         }
-        Vec::new()
-    }
-
-    fn mark_gap(&mut self, session_id: &SessionId, dropped_before: u64) {
-        if dropped_before == 0 {
-            return;
+        if let Some(session_id) = gap_session {
+            commands.extend(self.start_gap_reconcile(&session_id));
         }
-        if let Some(view) = self.sessions.known.get_mut(session_id) {
-            view.event_gap = true;
-            // Every new dropped event invalidates heal chains already in
-            // flight: their completion must not clear this newer gap.
-            view.gap_revision += 1;
-            if let Some(live) = view.live.as_mut() {
-                live.event_gap = true;
-            }
+        commands
+    }
+
+    fn start_gap_reconcile(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
+        if !self.can_send_requests() {
+            return Vec::new();
         }
-    }
-
-    /// TurnStarted may beat the send response; it fills the reference and
-    /// links the pending user card. A mismatched reference is stale or
-    /// foreign and leaves the live turn alone.
-    fn adopt_turn_started(&mut self, turn: &TurnRef) {
-        // The session's known instance is read before the mutable live
-        // borrow, so the strictness check cannot fight the borrow checker.
-        let known = {
-            let Some(view) = self.sessions.known.get(&turn.session_id) else {
-                return;
-            };
-            Self::known_instance(view).map(str::to_owned)
+        let Some(view) = self.sessions.known.get(session_id) else {
+            return Vec::new();
         };
-        let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
-            return;
-        };
-        let Some(live) = view.live.as_mut() else {
-            return;
-        };
-        if live.reference.is_none() {
-            // Before the send response, the only identity available is the
-            // session's instance; a stale instance's start event must never
-            // be adopted (spec 13.6).
-            if let Some(expected) = &known {
-                if expected != &turn.instance_id {
-                    return;
-                }
-            }
-            live.reference = Some(turn.clone());
-            let mut changed = false;
-            for block in &mut view.transcript.blocks {
-                if let TranscriptBlock::User(card) = block {
-                    if card.pending {
-                        card.turn_id = Some(turn.turn_id.clone());
-                        changed = true;
-                    }
-                }
-            }
-            if changed {
-                view.transcript.invalidate();
-            }
-        }
-    }
-
-    /// The session's current instance: the freshest known state wins, then
-    /// the info snapshot.
-    fn known_instance(view: &SessionView) -> Option<&str> {
-        view.state
-            .as_ref()
-            .map(|state| state.instance_id.as_str())
-            .or(view.info.instance_id.as_deref())
-    }
-
-    /// Live text/reasoning deltas; appended only when the event's turn
-    /// matches the live reference exactly (session + instance + turn).
-    fn append_delta(&mut self, turn: &TurnRef, channel: &OutputChannelWire, delta: &str) {
-        let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
-            return;
-        };
-        let Some(live) = view
-            .live
-            .as_mut()
-            .filter(|live| live.reference.as_ref() == Some(turn))
-        else {
-            return;
-        };
-        match channel {
-            OutputChannelWire::Text => live.text.push_str(delta),
-            OutputChannelWire::Reasoning => live.reasoning.push_str(delta),
-        }
-    }
-
-    fn on_tool_started(&mut self, turn: &TurnRef, tool_call_id: &str, tool_name: &str) {
-        let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
-            return;
-        };
-        let Some(live) = view
-            .live
-            .as_mut()
-            .filter(|live| live.reference.as_ref() == Some(turn))
-        else {
-            return;
-        };
-        // Idempotent per tool_call_id: duplicate started events never create
-        // a second LiveTool.
-        if !live
-            .tools
-            .iter()
-            .any(|tool| tool.tool_call_id == tool_call_id)
+        if view.loading
+            || view.reconcile_inflight
+            || view.live.is_some()
+            || view.unsaved_loop.is_some()
         {
-            live.tools.push(LiveTool {
+            return Vec::new();
+        }
+        let offset = view.transcript.loaded_count;
+        let gap_revision = view.gap_revision;
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            view.loading = true;
+            view.reconcile_inflight = true;
+        }
+        vec![self.request(
+            RequestKind::History {
+                session_id: session_id.clone(),
+                offset,
+                limit: DEFAULT_HISTORY_LIMIT,
+                gap_revision: Some(gap_revision),
+            },
+            |id| {
+                OutgoingRequest::session_history(
+                    id,
+                    session_id,
+                    Some(offset),
+                    Some(DEFAULT_HISTORY_LIMIT),
+                )
+            },
+        )]
+    }
+
+    fn mark_gap(&mut self, meta: &EventMetaWire) {
+        if meta.dropped_before == 0 {
+            return;
+        }
+        if let Some(view) = self.sessions.known.get_mut(&meta.session_id) {
+            view.event_gap = true;
+            view.gap_revision = view.gap_revision.wrapping_add(1);
+            if view.live.as_ref().is_some_and(|live| {
+                meta.loop_id.as_ref().is_none_or(|loop_id| {
+                    live.reference
+                        .as_ref()
+                        .is_none_or(|reference| reference.loop_id == *loop_id)
+                })
+            }) {
+                if let Some(live) = view.live.as_mut() {
+                    live.event_gap = true;
+                }
+            }
+        }
+    }
+
+    fn mark_pending_steers_unconfirmed(view: &mut SessionView) {
+        if let Some(live) = view.live.as_mut() {
+            for steer in &mut live.pending_steers {
+                if matches!(
+                    steer.state,
+                    PendingSteerState::Sending | PendingSteerState::Queued
+                ) {
+                    steer.state = PendingSteerState::Unconfirmed;
+                }
+            }
+        }
+    }
+
+    fn adopt_turn_started(&mut self, turn: &TurnRef) {
+        let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
+            return;
+        };
+        Self::bind_live_turn(view, turn);
+    }
+
+    /// Binds the first loop-scoped event to the local pending start. Agent
+    /// events may precede the `turn.send` response, so RequestStarted and
+    /// OutputDelta must be able to establish the same TurnRef as well.
+    fn bind_live_turn(view: &mut SessionView, turn: &TurnRef) -> bool {
+        let event_gap = view.event_gap;
+        // Check the lifecycle fence before an existing live reference. During
+        // close→reopen, the old LiveLoop is intentionally retained until the
+        // new open response so the old wait can still be handled, but late
+        // old notifications must not mutate that retired view.
+        if Self::is_prior_loop(view, &turn.loop_id) && view.retired_loop.is_some() {
+            return false;
+        }
+        if let Some(reference) = view.live.as_ref().and_then(|live| live.reference.as_ref()) {
+            return reference == turn;
+        }
+        if view.live.is_some() && Self::is_prior_loop(view, &turn.loop_id) {
+            return false;
+        }
+        let Some(live) = view.live.as_mut() else {
+            return false;
+        };
+        live.event_gap |= event_gap;
+        live.reference = Some(turn.clone());
+        let mut changed = false;
+        for block in &mut view.transcript.blocks {
+            if let TranscriptBlock::User(card) = block {
+                if card.pending {
+                    card.loop_id = Some(turn.loop_id.clone());
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            view.transcript.invalidate();
+        }
+        true
+    }
+
+    fn on_request_started(
+        &mut self,
+        turn: &TurnRef,
+        request_index: u32,
+        config_revision: u64,
+        model: &str,
+        reasoning: Reasoning,
+    ) {
+        let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
+            return;
+        };
+        if !Self::bind_live_turn(view, turn) {
+            return;
+        }
+        let live = view.live.as_mut().expect("live turn was bound");
+        let current_loop_id = live.reference.as_ref().map(|r| r.loop_id.clone());
+        let evidence = {
+            let request = live.ensure_request_mut(
+                request_index,
+                config_revision,
+                model.to_owned(),
+                reasoning,
+            );
+            request.config_revision = config_revision;
+            request.model = model.to_owned();
+            request.reasoning = reasoning;
+            crate::state::session::RequestConfigEvidence {
+                loop_id: current_loop_id.clone(),
+                request_index,
+                revision: config_revision,
+                model: request.model.clone(),
+                reasoning,
+            }
+        };
+        if view
+            .last_request
+            .as_ref()
+            .is_none_or(|last| request_index >= last.request_index)
+        {
+            view.last_request = Some(evidence.clone());
+        }
+        if let Some(update) = view.config_update.as_mut() {
+            let loop_matches = match (&update.loop_id, &current_loop_id) {
+                (Some(u_loop), Some(c_loop)) => u_loop == c_loop,
+                (None, _) => true,
+                _ => false,
+            };
+            if loop_matches
+                && update.revision == Some(config_revision)
+                && update
+                    .model
+                    .as_deref()
+                    .is_none_or(|model| model == evidence.model)
+                && update
+                    .reasoning
+                    .is_none_or(|level| level == evidence.reasoning)
+            {
+                update.state = crate::state::session::ConfigUpdateState::Applied;
+            }
+        }
+    }
+
+    fn append_delta(
+        &mut self,
+        turn: &TurnRef,
+        request_index: u32,
+        channel: &OutputChannelWire,
+        delta: &str,
+    ) {
+        let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
+            return;
+        };
+        if !Self::bind_live_turn(view, turn) {
+            return;
+        }
+        let request_missing = view.live.as_ref().is_some_and(|live| {
+            !live
+                .requests
+                .iter()
+                .any(|request| request.request_index == request_index)
+        });
+        if request_missing {
+            view.event_gap = true;
+        }
+        let live = view.live.as_mut().expect("live turn was bound");
+        live.event_gap |= request_missing;
+        let request = live.ensure_request_mut(request_index, 0, String::new(), Reasoning::Auto);
+        match channel {
+            OutputChannelWire::Text => request.text.push_str(delta),
+            OutputChannelWire::Reasoning => request.reasoning_text.push_str(delta),
+        }
+    }
+
+    fn on_tool_started(
+        &mut self,
+        turn: &TurnRef,
+        request_index: u32,
+        tool_call_id: &str,
+        tool_name: &str,
+    ) {
+        let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
+            return;
+        };
+        if !Self::bind_live_turn(view, turn) {
+            return;
+        }
+        let request_missing = view.live.as_ref().is_some_and(|live| {
+            !live
+                .requests
+                .iter()
+                .any(|request| request.request_index == request_index)
+        });
+        if request_missing {
+            view.event_gap = true;
+        }
+        let live = view.live.as_mut().expect("live turn was bound");
+        live.event_gap |= request_missing;
+        let request = live.ensure_request_mut(request_index, 0, String::new(), Reasoning::Auto);
+        if let Some(tool) = request
+            .tools
+            .iter_mut()
+            .find(|tool| tool.tool_call_id == tool_call_id)
+        {
+            tool.name = tool_name.to_owned();
+        } else {
+            request.tools.push(LiveTool {
                 tool_call_id: tool_call_id.to_owned(),
                 name: tool_name.to_owned(),
                 status: ToolStatus::Pending,
@@ -2817,54 +5006,115 @@ impl App {
     fn on_tool_progress(
         &mut self,
         turn: &TurnRef,
+        request_index: u32,
         tool_call_id: &str,
         progress: &ToolProgressWire,
     ) {
         let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
             return;
         };
-        let Some(live) = view
-            .live
-            .as_mut()
-            .filter(|live| live.reference.as_ref() == Some(turn))
-        else {
+        if !Self::bind_live_turn(view, turn) {
             return;
-        };
-        let Some(tool) = live
+        }
+        let request_missing = view.live.as_ref().is_some_and(|live| {
+            !live
+                .requests
+                .iter()
+                .any(|request| request.request_index == request_index)
+        });
+        if request_missing {
+            view.event_gap = true;
+        }
+        let tool_missing = view.live.as_ref().is_some_and(|live| {
+            live.requests
+                .iter()
+                .find(|request| request.request_index == request_index)
+                .is_none_or(|request| {
+                    !request
+                        .tools
+                        .iter()
+                        .any(|tool| tool.tool_call_id == tool_call_id)
+                })
+        });
+        if tool_missing {
+            view.event_gap = true;
+        }
+        let live = view.live.as_mut().expect("live turn was bound");
+        live.event_gap |= request_missing || tool_missing;
+        let request = live.ensure_request_mut(request_index, 0, String::new(), Reasoning::Auto);
+        let tool = request
             .tools
             .iter_mut()
-            .find(|tool| tool.tool_call_id == tool_call_id)
-        else {
-            return;
-        };
-        // Progress only advances a Pending/Running tool; a terminal status
-        // (Succeeded/Failed/Denied/Cancelled) is never downgraded, and its
-        // recorded progress text is left untouched.
-        if matches!(tool.status, ToolStatus::Pending | ToolStatus::Running) {
-            tool.status = ToolStatus::Running;
-            if let Some(message) = &progress.message {
-                tool.progress = Some(message.clone());
+            .find(|tool| tool.tool_call_id == tool_call_id);
+        if let Some(tool) = tool {
+            if matches!(tool.status, ToolStatus::Pending | ToolStatus::Running) {
+                tool.status = ToolStatus::Running;
+                if let Some(message) = &progress.message {
+                    tool.progress = Some(message.clone());
+                }
             }
+        } else {
+            request.tools.push(LiveTool {
+                tool_call_id: tool_call_id.to_owned(),
+                name: "(unknown tool)".to_owned(),
+                status: ToolStatus::Running,
+                progress: progress.message.clone(),
+            });
         }
     }
 
-    fn on_tool_finished(&mut self, turn: &TurnRef, tool_call_id: &str, outcome: ToolOutcomeWire) {
+    fn on_tool_finished(
+        &mut self,
+        turn: &TurnRef,
+        request_index: u32,
+        tool_call_id: &str,
+        outcome: ToolOutcomeWire,
+    ) {
         let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
             return;
         };
-        let Some(live) = view
-            .live
-            .as_mut()
-            .filter(|live| live.reference.as_ref() == Some(turn))
-        else {
+        if !Self::bind_live_turn(view, turn) {
             return;
-        };
-        if let Some(tool) = live
+        }
+        let request_missing = view.live.as_ref().is_some_and(|live| {
+            !live
+                .requests
+                .iter()
+                .any(|request| request.request_index == request_index)
+        });
+        if request_missing {
+            view.event_gap = true;
+        }
+        let tool_missing = view.live.as_ref().is_some_and(|live| {
+            live.requests
+                .iter()
+                .find(|request| request.request_index == request_index)
+                .is_none_or(|request| {
+                    !request
+                        .tools
+                        .iter()
+                        .any(|tool| tool.tool_call_id == tool_call_id)
+                })
+        });
+        if tool_missing {
+            view.event_gap = true;
+        }
+        let live = view.live.as_mut().expect("live turn was bound");
+        live.event_gap |= request_missing || tool_missing;
+        let request = live.ensure_request_mut(request_index, 0, String::new(), Reasoning::Auto);
+        if let Some(tool) = request
             .tools
             .iter_mut()
             .find(|tool| tool.tool_call_id == tool_call_id)
         {
             tool.status = tool_outcome_status(outcome);
+        } else {
+            request.tools.push(LiveTool {
+                tool_call_id: tool_call_id.to_owned(),
+                name: "(unknown tool)".to_owned(),
+                status: tool_outcome_status(outcome),
+                progress: None,
+            });
         }
     }
 }
@@ -2872,59 +5122,31 @@ impl App {
 fn tool_outcome_status(outcome: ToolOutcomeWire) -> ToolStatus {
     match outcome {
         ToolOutcomeWire::Success => ToolStatus::Succeeded,
-        // input_provided means the agent is waiting for user input; this
-        // TUI answers no interactions, so it ends the tool without success.
-        ToolOutcomeWire::Failed | ToolOutcomeWire::InputProvided => ToolStatus::Failed,
+        ToolOutcomeWire::Failed => ToolStatus::Failed,
+        ToolOutcomeWire::InputProvided => ToolStatus::Succeeded,
         ToolOutcomeWire::Denied => ToolStatus::Denied,
         ToolOutcomeWire::Cancelled => ToolStatus::Cancelled,
+        ToolOutcomeWire::Unknown => ToolStatus::Failed,
     }
 }
 
-/// Converts an OS status to a safe, stable display string. This deliberately
-/// uses only the portable exit code/success shape and never formats a raw
-/// frame, command line, or platform-specific diagnostic.
-fn format_exit_status(status: Option<&std::process::ExitStatus>) -> String {
-    match status {
-        None => "unavailable".to_owned(),
-        Some(status) => match status.code() {
-            Some(code) => format!("exit code {code}"),
-            None => "terminated without an exit code".to_owned(),
-        },
-    }
+fn has_item_index(blocks: &[TranscriptBlock], index: usize) -> bool {
+    blocks.iter().any(|block| block.index() == Some(index))
 }
 
-fn tool_outcome_label(outcome: &ToolOutcomeWire) -> &'static str {
-    match outcome {
-        ToolOutcomeWire::Success => "success",
-        ToolOutcomeWire::Failed => "failed",
-        ToolOutcomeWire::Denied => "denied",
-        ToolOutcomeWire::Cancelled => "cancelled",
-        ToolOutcomeWire::InputProvided => "input_provided",
-    }
-}
-
-fn has_seq(blocks: &[TranscriptBlock], seq: u64) -> bool {
-    blocks.iter().any(|block| block.seq() == Some(seq))
-}
-
-/// Every durable entry carries a sequence number (spec 12.8).
-fn entry_seq(entry: &ConversationEntryWire) -> u64 {
-    match entry {
-        ConversationEntryWire::UserMessage(user) => user.seq,
-        ConversationEntryWire::AssistantMessage(assistant) => assistant.seq,
-        ConversationEntryWire::ToolResult(result) => result.seq,
-        ConversationEntryWire::Summary(summary) => summary.seq,
-        ConversationEntryWire::TurnTerminal(terminal) => terminal.seq,
-    }
-}
-
-/// Merges durable entries into the view's blocks: dedupe by sequence
-/// number, replace the pending live user card with its durable entry, and
-/// patch tool blocks with their results by id (spec 18).
-fn merge_entries(view: &mut SessionView, entries: &[ConversationEntryWire]) {
-    for entry in entries {
-        match entry {
-            ConversationEntryWire::UserMessage(user) => {
+fn merge_history_items(view: &mut SessionView, items: &[IndexedHistoryItemWire]) {
+    for indexed in items {
+        if !view
+            .transcript
+            .items
+            .iter()
+            .any(|item| item.index == indexed.index)
+        {
+            view.transcript.items.push(indexed.clone());
+        }
+        let index = indexed.index;
+        match &indexed.item {
+            HistoryItemWire::User(user) => {
                 let replaced =
                     view.transcript
                         .blocks
@@ -2933,63 +5155,67 @@ fn merge_entries(view: &mut SessionView, entries: &[ConversationEntryWire]) {
                         .find_map(|block| match block {
                             TranscriptBlock::User(card)
                                 if card.pending
-                                    && card.turn_id.as_deref() == Some(user.turn_id.as_str()) =>
+                                    && (card.loop_id.as_deref() == Some(&user.loop_id)
+                                        || card.text == user.text) =>
                             {
                                 Some(card)
                             }
                             _ => None,
                         });
                 if let Some(card) = replaced {
-                    card.seq = Some(user.seq);
+                    card.index = Some(index);
+                    card.loop_id = Some(user.loop_id.clone());
+                    card.kind = user.kind;
                     card.text = user.text.clone();
                     card.pending = false;
                     view.transcript.invalidate();
-                } else if !has_seq(&view.transcript.blocks, user.seq) {
+                } else if !has_item_index(&view.transcript.blocks, index) {
                     view.transcript
                         .blocks
                         .push(TranscriptBlock::User(UserBlock {
-                            seq: Some(user.seq),
-                            turn_id: Some(user.turn_id.clone()),
+                            index: Some(index),
+                            loop_id: Some(user.loop_id.clone()),
+                            kind: user.kind,
                             text: user.text.clone(),
                             pending: false,
                         }));
                     view.transcript.invalidate();
                 }
             }
-            ConversationEntryWire::AssistantMessage(assistant) => {
-                if has_seq(&view.transcript.blocks, assistant.seq) {
+            HistoryItemWire::Assistant(assistant) => {
+                if has_item_index(&view.transcript.blocks, index) {
                     continue;
                 }
                 let mut parts = Vec::new();
-                if let Some(text) = assistant.text.as_deref().filter(|text| !text.is_empty()) {
-                    parts.push(AssistantPart::Text(text.to_owned()));
+                if !assistant.reasoning.is_empty() {
+                    parts.push(AssistantPart::Reasoning(assistant.reasoning.clone()));
                 }
-                if let Some(reasoning) = assistant
-                    .reasoning
-                    .as_deref()
-                    .filter(|reasoning| !reasoning.is_empty())
-                {
-                    parts.push(AssistantPart::Reasoning(reasoning.to_owned()));
+                if !assistant.text.is_empty() {
+                    parts.push(AssistantPart::Text(assistant.text.clone()));
                 }
                 view.transcript
                     .blocks
                     .push(TranscriptBlock::Assistant(AssistantBlock {
-                        seq: assistant.seq,
-                        turn_id: assistant.turn_id.clone(),
+                        index,
+                        loop_id: assistant.loop_id.clone(),
+                        request_index: assistant.request_index,
                         model: assistant.model.clone(),
+                        reasoning_level: assistant.reasoning_level,
                         parts,
+                        tool_calls: assistant.tool_calls.clone(),
+                        usage: assistant.usage,
+                        finish_reason: assistant.finish_reason.clone(),
                         terminal_error: None,
                     }));
-                // Tool calls become separate blocks; the results patch them
-                // by id. Arguments never leave the agent on the wire.
                 for call in &assistant.tool_calls {
                     view.transcript
                         .blocks
                         .push(TranscriptBlock::Tool(ToolBlock {
+                            index: None,
+                            loop_id: assistant.loop_id.clone(),
+                            request_index: assistant.request_index,
                             tool_call_id: call.tool_call_id.clone(),
-                            turn_id: assistant.turn_id.clone(),
                             name: call.name.clone(),
-                            arguments: None,
                             result: None,
                             outcome: None,
                             live_status: None,
@@ -2999,11 +5225,10 @@ fn merge_entries(view: &mut SessionView, entries: &[ConversationEntryWire]) {
                 }
                 view.transcript.invalidate();
             }
-            ConversationEntryWire::ToolResult(result) => {
-                if has_seq(&view.transcript.blocks, result.seq) {
+            HistoryItemWire::ToolResult(result) => {
+                if has_item_index(&view.transcript.blocks, index) {
                     continue;
                 }
-                let outcome = tool_outcome_label(&result.outcome).to_owned();
                 let patched =
                     view.transcript
                         .blocks
@@ -3012,25 +5237,28 @@ fn merge_entries(view: &mut SessionView, entries: &[ConversationEntryWire]) {
                         .find_map(|block| match block {
                             TranscriptBlock::Tool(tool)
                                 if tool.tool_call_id == result.tool_call_id
-                                    && tool.turn_id == result.turn_id =>
+                                    && tool.loop_id == result.loop_id
+                                    && tool.request_index == result.request_index =>
                             {
                                 Some(tool)
                             }
                             _ => None,
                         });
                 if let Some(tool) = patched {
+                    tool.index = Some(index);
                     tool.result = Some(result.content.clone());
-                    tool.outcome = Some(outcome);
+                    tool.outcome = Some(result.outcome);
                 } else {
                     view.transcript
                         .blocks
                         .push(TranscriptBlock::Tool(ToolBlock {
+                            index: Some(index),
+                            loop_id: result.loop_id.clone(),
+                            request_index: result.request_index,
                             tool_call_id: result.tool_call_id.clone(),
-                            turn_id: result.turn_id.clone(),
                             name: result.tool_name.clone(),
-                            arguments: None,
                             result: Some(result.content.clone()),
-                            outcome: Some(outcome),
+                            outcome: Some(result.outcome),
                             live_status: None,
                             progress: None,
                             expanded: false,
@@ -3038,30 +5266,15 @@ fn merge_entries(view: &mut SessionView, entries: &[ConversationEntryWire]) {
                 }
                 view.transcript.invalidate();
             }
-            ConversationEntryWire::Summary(summary) => {
-                if has_seq(&view.transcript.blocks, summary.seq) {
+            HistoryItemWire::Summary(summary) => {
+                if has_item_index(&view.transcript.blocks, index) {
                     continue;
                 }
                 view.transcript
                     .blocks
                     .push(TranscriptBlock::Summary(SummaryBlock {
-                        seq: summary.seq,
-                        through: summary.through,
-                        summary: summary.summary.clone(),
-                    }));
-                view.transcript.invalidate();
-            }
-            ConversationEntryWire::TurnTerminal(terminal) => {
-                if has_seq(&view.transcript.blocks, terminal.seq) {
-                    continue;
-                }
-                view.transcript
-                    .blocks
-                    .push(TranscriptBlock::Terminal(TerminalBlock {
-                        seq: terminal.seq,
-                        turn_id: terminal.turn_id.clone(),
-                        terminal: terminal.terminal.clone(),
-                        usage: terminal.usage,
+                        index,
+                        content: summary.content.clone(),
                     }));
                 view.transcript.invalidate();
             }
@@ -3072,51 +5285,159 @@ fn merge_entries(view: &mut SessionView, entries: &[ConversationEntryWire]) {
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
-    use std::process::Command;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
-    use crate::protocol::{
-        FrameError, FrameErrorKind, RpcError as WireError, RpcErrorData, SessionInfo,
-    };
+    use crate::command::AppCommand;
+    use crate::event::{AppEvent, RpcEvent};
+    use crate::protocol::{AgentEventWire, IncomingFrame, RpcResponse, TurnRef};
 
     fn test_app() -> App {
-        App::new(PathBuf::from("/workspace"))
+        App::new(PathBuf::from("/project"))
     }
 
-    fn nonzero_exit_status() -> std::process::ExitStatus {
-        #[cfg(unix)]
-        {
-            Command::new("sh")
-                .args(["-c", "exit 7"])
-                .status()
-                .expect("spawn a portable nonzero test process")
+    fn wire_event(raw: Value) -> AgentEventWire {
+        serde_json::from_value(raw).expect("wire event fixture parses")
+    }
+
+    fn event(inner: AgentEventWire) -> AppEvent {
+        AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Notification(
+            RpcNotification::AgentEvent(inner),
+        )))
+    }
+
+    fn make_turn(session: &str, loop_id: &str) -> TurnRef {
+        TurnRef {
+            session_id: session.to_owned(),
+            loop_id: loop_id.to_owned(),
         }
-        #[cfg(windows)]
-        {
-            Command::new("cmd")
-                .args(["/C", "exit 7"])
-                .status()
-                .expect("spawn a portable nonzero test process")
+    }
+
+    fn turn_ref_json(session: &str, loop_id: &str) -> Value {
+        json!({"session_id": session, "loop_id": loop_id})
+    }
+
+    fn meta_json(session: &str, dropped: u64) -> Value {
+        json!({"session_id": session, "dropped_before": dropped})
+    }
+
+    fn session_info(session_id: &str) -> Value {
+        json!({
+            "session_id": session_id,
+            "title": null,
+            "profile": "coding",
+            "workspace": "/project",
+            "model": "deep",
+            "reasoning": "high",
+            "loaded": true,
+            "created_at": "2026-01-02T03:04:05.006Z",
+            "updated_at": "2026-01-02T03:04:05.006Z"
+        })
+    }
+
+    fn state_json(session_id: &str, status: &str) -> Value {
+        json!({
+            "session_id": session_id,
+            "status": status,
+            "active_loop": null,
+            "block_reason": null
+        })
+    }
+
+    fn history_page_json(items: Vec<Value>, next_offset: Option<usize>, total: usize) -> Value {
+        json!({
+            "items": items,
+            "next_offset": next_offset,
+            "total": total
+        })
+    }
+
+    fn user_item(index: usize, loop_id: &str, text: &str) -> Value {
+        json!({
+            "index": index,
+            "item": {
+                "type": "user",
+                "data": {
+                    "loop_id": loop_id,
+                    "kind": "prompt",
+                    "text": text
+                }
+            }
+        })
+    }
+
+    #[allow(dead_code)]
+    fn steer_item(index: usize, loop_id: &str, text: &str) -> Value {
+        json!({
+            "index": index,
+            "item": {
+                "type": "user",
+                "data": {
+                    "loop_id": loop_id,
+                    "kind": "steering",
+                    "text": text
+                }
+            }
+        })
+    }
+
+    fn assistant_item(index: usize, loop_id: &str, text: &str) -> Value {
+        json!({
+            "index": index,
+            "item": {
+                "type": "assistant",
+                "data": {
+                    "loop_id": loop_id,
+                    "request_index": 0,
+                    "model": "deep",
+                    "reasoning_level": "high",
+                    "text": text,
+                    "reasoning": "",
+                    "tool_calls": [],
+                    "usage": {},
+                    "finish_reason": "stop"
+                }
+            }
+        })
+    }
+
+    fn tool_result_item(
+        index: usize,
+        loop_id: &str,
+        call_id: &str,
+        name: &str,
+        outcome: &str,
+        content: &str,
+    ) -> Value {
+        json!({
+            "index": index,
+            "item": {
+                "type": "tool_result",
+                "data": {
+                    "loop_id": loop_id,
+                    "request_index": 0,
+                    "tool_call_id": call_id,
+                    "tool_name": name,
+                    "outcome": outcome,
+                    "content": content
+                }
+            }
+        })
+    }
+
+    fn ready(app: &mut App) {
+        let requests = take_requests(app.update(AppEvent::Bootstrap));
+        assert_eq!(requests.len(), 4);
+        for request in &requests {
+            let result = match request.method {
+                "agent.ping" => json!({"version": "0.3.0"}),
+                "model.list" => json!({"models": []}),
+                "profile.list" => json!({"profiles": []}),
+                "session.list" => json!({"sessions": []}),
+                other => panic!("unexpected bootstrap request: {other}"),
+            };
+            take_requests(respond(app, request, result));
         }
-    }
-
-    /// The shutdown request the app issues when asked to quit while the
-    /// connection is alive.
-    fn shutdown_request(commands: &[OutgoingRequest]) -> Option<&OutgoingRequest> {
-        commands
-            .iter()
-            .find(|request| request.method == crate::protocol::METHOD_SHUTDOWN)
-    }
-
-    fn take_requests(commands: Vec<AppCommand>) -> Vec<OutgoingRequest> {
-        commands
-            .into_iter()
-            .filter_map(|command| match command {
-                AppCommand::Rpc(request) => Some(request),
-                _ => None,
-            })
-            .collect()
+        assert_eq!(app.connection, ConnectionState::Ready);
     }
 
     fn respond(app: &mut App, request: &OutgoingRequest, result: Value) -> Vec<AppCommand> {
@@ -3132,259 +5453,58 @@ mod tests {
     fn respond_error(
         app: &mut App,
         request: &OutgoingRequest,
-        kind: &str,
+        code: i64,
         message: &str,
     ) -> Vec<AppCommand> {
         app.update(AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Response(
             RpcResponse {
                 id: request.id,
                 result: None,
-                error: Some(WireError {
-                    code: -32000,
+                error: Some(crate::protocol::RpcError {
+                    code,
                     message: message.to_owned(),
-                    data: Some(RpcErrorData {
-                        kind: kind.to_owned(),
-                        retryable: false,
-                    }),
+                    data: None,
                 }),
             },
         ))))
     }
 
-    fn event(event: AgentEventWire) -> AppEvent {
-        AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Notification(
-            RpcNotification::AgentEvent(event),
-        )))
+    fn take_requests(commands: Vec<AppCommand>) -> Vec<OutgoingRequest> {
+        commands
+            .into_iter()
+            .filter_map(|cmd| match cmd {
+                AppCommand::Rpc(req) => Some(req),
+                _ => None,
+            })
+            .collect()
     }
 
-    fn wire_event(raw: Value) -> AgentEventWire {
-        serde_json::from_value(raw).expect("wire event fixture parses")
-    }
-
-    fn make_turn(session: &str, instance: &str, turn_id: &str) -> TurnRef {
-        TurnRef {
-            session_id: session.to_owned(),
-            instance_id: instance.to_owned(),
-            turn_id: turn_id.to_owned(),
-        }
-    }
-
-    fn turn_ref_json(session: &str, instance: &str, turn_id: &str) -> Value {
-        json!({"session_id": session, "instance_id": instance, "turn_id": turn_id})
-    }
-
-    fn meta_json(session: &str, instance: &str, dropped: u64) -> Value {
-        json!({"session_id": session, "instance_id": instance, "dropped_before": dropped})
-    }
-
-    fn session_info(session_id: &str, instance: Option<&str>) -> Value {
-        json!({
-            "session_id": session_id,
-            "title": null,
-            "profile": "coding",
-            "workspace": "/project",
-            "model": "deep",
-            "reasoning": "high",
-            "loaded": true,
-            "instance_id": instance,
-            "created_at": "2026-01-02T03:04:05.006Z",
-            "updated_at": "2026-01-02T03:04:05.006Z"
-        })
-    }
-
-    fn state_json(session_id: &str, instance: &str, status: &str) -> Value {
-        json!({
-            "session_id": session_id,
-            "instance_id": instance,
-            "status": status,
-            "health": "healthy",
-            "active_turn": null,
-            "pending_interaction": null,
-            "conversation_seq": 0,
-            "last_terminal": null
-        })
-    }
-
-    fn page_json(
-        entries: Vec<Value>,
-        next_after: Option<u64>,
-        observed_head: u64,
-        complete: bool,
-    ) -> Value {
-        json!({
-            "entries": entries,
-            "next_after": next_after,
-            "observed_head": observed_head,
-            "complete": complete
-        })
-    }
-
-    fn user_entry(seq: u64, turn_id: &str, text: &str) -> Value {
-        json!({"user_message": {
-            "seq": seq,
-            "turn_id": turn_id,
-            "text": text,
-            "execution": {"model": "deep", "reasoning": "high", "max_tool_rounds": 8},
-            "created_at": "2026-01-02T03:04:05.006Z"
-        }})
-    }
-
-    fn assistant_entry(seq: u64, turn_id: &str, text: &str) -> Value {
-        json!({"assistant_message": {
-            "seq": seq,
-            "turn_id": turn_id,
-            "model": "deep",
-            "text": text,
-            "reasoning": null,
-            "tool_calls": [],
-            "usage": {},
-            "finish_reason": "stop",
-            "created_at": "2026-01-02T03:04:05.006Z"
-        }})
-    }
-
-    fn terminal_entry(seq: u64, turn_id: &str) -> Value {
-        json!({"turn_terminal": {
-            "seq": seq,
-            "turn_id": turn_id,
-            "terminal": "completed",
-            "usage": {"input_tokens": 3, "output_tokens": 2},
-            "created_at": "2026-01-02T03:04:05.006Z"
-        }})
-    }
-
-    fn outcome_json(turn_id: &str, terminal: &str) -> Value {
-        json!({
-            "turn_id": turn_id,
-            "terminal": terminal,
-            "usage": {"input_tokens": 3, "output_tokens": 2}
-        })
-    }
-
-    /// Bootstraps to Ready by responding to the four requests in order.
-    fn ready(app: &mut App) {
-        let requests = take_requests(app.update(AppEvent::Bootstrap));
-        assert_eq!(requests.len(), 4);
-        for request in &requests {
-            let result = match request.method {
-                "agent.ping" => json!({"version": "0.2.0"}),
-                "model.list" => json!({"models": []}),
-                "profile.list" => json!({"profiles": []}),
-                "session.list" => json!({"sessions": []}),
-                other => panic!("unexpected bootstrap request: {other}"),
-            };
-            take_requests(respond(app, request, result));
-        }
-        assert_eq!(app.connection, ConnectionState::Ready);
-    }
-
-    /// Opens a session and completes its initial state + transcript chain.
-    fn open_session(app: &mut App, session_id: &str, instance: &str) {
-        let open = take_requests(app.update(AppEvent::OpenSession {
+    fn open_session(app: &mut App, session_id: &str) {
+        let requests = take_requests(app.update(AppEvent::OpenSession {
             session_id: session_id.into(),
         }));
-        assert_eq!(open.len(), 1);
+        assert_eq!(requests.len(), 1);
         let commands = respond(
             app,
-            &open[0],
-            json!({"session": session_info(session_id, Some(instance))}),
+            &requests[0],
+            json!({"session": session_info(session_id)}),
         );
         let requests = take_requests(commands);
         assert_eq!(requests.len(), 2);
-        let state_request = requests
+        let state_req = requests
             .iter()
             .find(|r| r.method == "session.state")
             .unwrap();
-        let transcript_request = requests
+        let history_req = requests
             .iter()
-            .find(|r| r.method == "session.transcript")
+            .find(|r| r.method == "session.history")
             .unwrap();
+        take_requests(respond(app, state_req, state_json(session_id, "idle")));
         take_requests(respond(
             app,
-            state_request,
-            state_json(session_id, instance, "idle"),
+            history_req,
+            history_page_json(vec![], None, 0),
         ));
-        let commands = respond(app, transcript_request, page_json(vec![], None, 0, true));
-        assert!(take_requests(commands).is_empty());
-        assert!(!app.sessions.known[session_id].loading);
-        assert!(app.sessions.known[session_id].transcript.complete);
-    }
-
-    fn submit(app: &mut App, session_id: &str, text: &str) -> OutgoingRequest {
-        let commands = app.update(AppEvent::SubmitTurn {
-            session_id: session_id.into(),
-            text: text.into(),
-        });
-        let requests = take_requests(commands);
-        assert_eq!(requests.len(), 1, "one send request expected");
-        requests.into_iter().next().expect("one request")
-    }
-
-    fn turn_started_event(turn_ref: &TurnRef) -> AppEvent {
-        event(wire_event(json!({
-            "type": "turn_started",
-            "data": {
-                "turn": turn_ref_json(&turn_ref.session_id, &turn_ref.instance_id, &turn_ref.turn_id),
-                "meta": meta_json(&turn_ref.session_id, &turn_ref.instance_id, 0)
-            }
-        })))
-    }
-
-    fn delta_event(turn_ref: &TurnRef, channel: &str, delta: &str) -> AppEvent {
-        delta_event_dropped(turn_ref, channel, delta, 0)
-    }
-
-    fn delta_event_dropped(
-        turn_ref: &TurnRef,
-        channel: &str,
-        delta: &str,
-        dropped: u64,
-    ) -> AppEvent {
-        event(wire_event(json!({
-            "type": "output_delta",
-            "data": {
-                "turn": turn_ref_json(&turn_ref.session_id, &turn_ref.instance_id, &turn_ref.turn_id),
-                "channel": channel,
-                "delta": delta,
-                "meta": meta_json(&turn_ref.session_id, &turn_ref.instance_id, dropped)
-            }
-        })))
-    }
-
-    fn tool_started_event(turn_ref: &TurnRef, id: &str, name: &str) -> AppEvent {
-        event(wire_event(json!({
-            "type": "tool_started",
-            "data": {
-                "turn": turn_ref_json(&turn_ref.session_id, &turn_ref.instance_id, &turn_ref.turn_id),
-                "tool_call_id": id,
-                "tool_name": name,
-                "meta": meta_json(&turn_ref.session_id, &turn_ref.instance_id, 0)
-            }
-        })))
-    }
-
-    fn tool_progress_event(turn_ref: &TurnRef, id: &str, message: &str) -> AppEvent {
-        event(wire_event(json!({
-            "type": "tool_progress",
-            "data": {
-                "turn": turn_ref_json(&turn_ref.session_id, &turn_ref.instance_id, &turn_ref.turn_id),
-                "tool_call_id": id,
-                "progress": {"message": message, "completed": 1, "total": 2},
-                "meta": meta_json(&turn_ref.session_id, &turn_ref.instance_id, 0)
-            }
-        })))
-    }
-
-    fn tool_finished_event(turn_ref: &TurnRef, id: &str, outcome: &str) -> AppEvent {
-        event(wire_event(json!({
-            "type": "tool_finished",
-            "data": {
-                "turn": turn_ref_json(&turn_ref.session_id, &turn_ref.instance_id, &turn_ref.turn_id),
-                "tool_call_id": id,
-                "result": {"outcome": outcome, "content_bytes": 8},
-                "meta": meta_json(&turn_ref.session_id, &turn_ref.instance_id, 0)
-            }
-        })))
     }
 
     #[test]
@@ -3410,113 +5530,59 @@ mod tests {
             );
         }
         assert_eq!(app.connection, ConnectionState::Starting);
-        let ids: Vec<u64> = requests.iter().map(|r| r.id.0).collect();
-        assert_eq!(ids, vec![1, 2, 3, 4]);
     }
 
     #[test]
-    fn bootstrap_reaches_ready_out_of_order_with_interleaved_events() {
+    fn bootstrap_reaches_ready_for_supported_version_0_3_0() {
         let mut app = test_app();
-        let requests = take_requests(app.update(AppEvent::Bootstrap));
-        let by_method = |method: &str| {
-            requests
-                .iter()
-                .find(|r| r.method == method)
-                .expect("bootstrap request")
-        };
-        // A notification in the middle must not disturb id correlation.
-        take_requests(app.update(event(wire_event(json!({
-            "type": "session_closed",
-            "data": {"session_id": "ses_x", "meta": meta_json("ses_x", "ins_x", 0)}
-        })))));
-        take_requests(respond(
-            &mut app,
-            by_method("session.list"),
-            json!({"sessions": []}),
-        ));
-        assert_ne!(app.connection, ConnectionState::Ready);
-        take_requests(respond(
-            &mut app,
-            by_method("profile.list"),
-            json!({"profiles": []}),
-        ));
-        assert_ne!(app.connection, ConnectionState::Ready);
-        take_requests(respond(
-            &mut app,
-            by_method("agent.ping"),
-            json!({"version": "0.2.0"}),
-        ));
-        assert_ne!(app.connection, ConnectionState::Ready);
-        take_requests(respond(
-            &mut app,
-            by_method("model.list"),
-            json!({"models": []}),
-        ));
+        ready(&mut app);
         assert_eq!(app.connection, ConnectionState::Ready);
-        assert!(app.catalogs.loaded);
-        assert!(app.pending_requests.is_empty());
     }
 
     #[test]
-    fn bootstrap_failure_is_fatal_and_latched() {
+    fn bootstrap_rejects_version_0_2_0_and_latches_failed() {
         let mut app = test_app();
         let requests = take_requests(app.update(AppEvent::Bootstrap));
-        let models = requests.iter().find(|r| r.method == "model.list").unwrap();
-        take_requests(respond_error(
-            &mut app,
-            models,
-            "models_unavailable",
-            "no models",
-        ));
-        assert!(matches!(
-            &app.connection,
-            ConnectionState::Failed(reason) if reason.contains("model.list")
-        ));
-        // Later successes never override the failure.
-        let ping = requests.iter().find(|r| r.method == "agent.ping").unwrap();
-        take_requests(respond(&mut app, ping, json!({"version": "0.2.0"})));
-        assert!(matches!(
-            &app.connection,
-            ConnectionState::Failed(reason) if reason.contains("model.list")
-        ));
-        assert!(
-            app.notices
-                .iter()
-                .any(|n| n.text.contains("Bootstrap failed"))
-        );
-    }
-
-    #[test]
-    fn malformed_bootstrap_result_is_fatal() {
-        let mut app = test_app();
-        let requests = take_requests(app.update(AppEvent::Bootstrap));
-        let ping = requests.iter().find(|r| r.method == "agent.ping").unwrap();
-        take_requests(respond(&mut app, ping, json!({"version": 1})));
-        assert!(matches!(
-            &app.connection,
-            ConnectionState::Failed(reason) if reason.contains("agent.ping")
-        ));
-    }
-
-    #[test]
-    fn unknown_response_id_emits_a_warning_notice() {
-        let mut app = test_app();
-        let commands = app.update(AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Response(
-            RpcResponse {
-                id: RequestId(99),
-                result: Some(json!({})),
-                error: None,
-            },
-        ))));
-        assert!(take_requests(commands).is_empty());
+        let ping_req = requests.iter().find(|r| r.method == "agent.ping").unwrap();
+        respond(&mut app, ping_req, json!({"version": "0.2.0"}));
+        assert!(matches!(app.connection, ConnectionState::Failed(_)));
         let notice = app.notices.back().unwrap();
-        assert_eq!(notice.level, NoticeLevel::Warning);
-        assert!(notice.text.contains("99"));
-        assert!(app.pending_requests.is_empty());
+        assert_eq!(notice.level, NoticeLevel::Error);
+        assert!(notice.text.contains("0.2.0"));
     }
 
     #[test]
-    fn create_session_activates_and_pages_the_transcript() {
+    fn bootstrap_rejects_version_0_4_0_and_latches_failed() {
+        let mut app = test_app();
+        let requests = take_requests(app.update(AppEvent::Bootstrap));
+        let ping_req = requests.iter().find(|r| r.method == "agent.ping").unwrap();
+        respond(&mut app, ping_req, json!({"version": "0.4.0"}));
+        assert!(matches!(app.connection, ConnectionState::Failed(_)));
+    }
+
+    #[test]
+    fn bootstrap_accepts_prerelease_0_3_1_rc_1() {
+        let mut app = test_app();
+        let requests = take_requests(app.update(AppEvent::Bootstrap));
+        for req in &requests {
+            let res = match req.method {
+                "agent.ping" => json!({"version": "0.3.1-rc.1"}),
+                "model.list" => json!({"models": []}),
+                "profile.list" => json!({"profiles": []}),
+                "session.list" => json!({"sessions": []}),
+                _ => unreachable!(),
+            };
+            take_requests(respond(&mut app, req, res));
+        }
+        if cfg!(debug_assertions) {
+            assert_eq!(app.connection, ConnectionState::Ready);
+        } else {
+            assert!(matches!(app.connection, ConnectionState::Failed(_)));
+        }
+    }
+
+    #[test]
+    fn create_session_activates_and_pages_history() {
         let mut app = test_app();
         ready(&mut app);
         let requests = take_requests(app.update(AppEvent::CreateSession {
@@ -3529,20 +5595,16 @@ mod tests {
         assert_eq!(requests.len(), 1);
         let create = &requests[0];
         assert_eq!(create.method, "session.create");
-        let commands = respond(
-            &mut app,
-            create,
-            json!({"session": session_info("ses_1", Some("ins_1"))}),
-        );
+        let commands = respond(&mut app, create, json!({"session": session_info("ses_1")}));
         let requests = take_requests(commands);
         assert_eq!(requests.len(), 2);
         let state_request = requests
             .iter()
             .find(|r| r.method == "session.state")
             .unwrap();
-        let transcript_request = requests
+        let history_request = requests
             .iter()
-            .find(|r| r.method == "session.transcript")
+            .find(|r| r.method == "session.history")
             .unwrap();
         assert_eq!(app.sessions.active.as_deref(), Some("ses_1"));
         assert!(app.sessions.known["ses_1"].loading);
@@ -3550,3030 +5612,376 @@ mod tests {
         take_requests(respond(
             &mut app,
             state_request,
-            state_json("ses_1", "ins_1", "idle"),
+            state_json("ses_1", "idle"),
         ));
-        assert_eq!(
-            app.sessions.known["ses_1"]
-                .state
-                .as_ref()
-                .unwrap()
-                .instance_id,
-            "ins_1"
-        );
 
-        // Page 1 is partial; the app pages on, one page at a time.
-        let page1 = page_json(
+        // Page 1 is partial
+        let page1 = history_page_json(
             vec![
-                user_entry(1, "trn_1", "hello"),
-                assistant_entry(2, "trn_1", "hi back"),
+                user_item(0, "loop_1", "hello"),
+                assistant_item(1, "loop_1", "hi back"),
             ],
             Some(2),
-            2,
-            false,
+            3,
         );
-        let commands = respond(&mut app, transcript_request, page1);
+        let commands = respond(&mut app, history_request, page1);
         let requests = take_requests(commands);
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].method, "session.transcript");
+        assert_eq!(requests[0].method, "session.history");
         assert_eq!(
             app.pending_requests.get(&requests[0].id),
-            Some(&RequestKind::Transcript {
+            Some(&RequestKind::History {
                 session_id: "ses_1".into(),
-                after: Some(2),
+                offset: 2,
+                limit: 20,
                 gap_revision: None,
             })
         );
         assert!(app.sessions.known["ses_1"].loading);
 
-        // Page 2 completes the chain.
+        // Page 2 completes chain
         let commands = respond(
             &mut app,
             &requests[0],
-            page_json(vec![terminal_entry(3, "trn_1")], None, 3, true),
+            history_page_json(vec![user_item(2, "loop_1", "follow up")], None, 3),
         );
         assert!(take_requests(commands).is_empty());
         let view = &app.sessions.known["ses_1"];
         assert!(!view.loading);
         assert!(view.transcript.complete);
         assert_eq!(view.transcript.blocks.len(), 3);
-        assert!(matches!(
-            view.transcript.blocks.last(),
-            Some(TranscriptBlock::Terminal(_))
-        ));
     }
 
     #[test]
     fn reopening_a_loaded_session_is_idempotent() {
         let mut app = test_app();
         ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        let open = take_requests(app.update(AppEvent::OpenSession {
+        open_session(&mut app, "ses_1");
+        let requests = take_requests(app.update(AppEvent::OpenSession {
             session_id: "ses_1".into(),
         }));
-        assert_eq!(open.len(), 1);
-        let commands = respond(
-            &mut app,
-            &open[0],
-            json!({"session": session_info("ses_1", Some("ins_1"))}),
-        );
-        let requests = take_requests(commands);
-        // No new transcript chain: only the state refresh.
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].method, "session.state");
-        assert_eq!(app.sessions.active.as_deref(), Some("ses_1"));
-    }
-
-    #[test]
-    fn submit_creates_a_live_turn_and_a_pending_user_card() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        let request = submit(&mut app, "ses_1", "  hello  ");
-        assert_eq!(request.method, "turn.send");
-        assert_eq!(request.params["text"], json!("hello"));
-        assert_eq!(
-            app.sessions.known["ses_1"].live.as_ref().unwrap().user_text,
-            "hello"
-        );
-        assert!(
-            app.sessions.known["ses_1"]
-                .live
-                .as_ref()
-                .unwrap()
-                .reference
-                .is_none()
-        );
-        assert!(
-            app.sessions.known["ses_1"]
-                .transcript
-                .blocks
-                .iter()
-                .any(|block| matches!(block, TranscriptBlock::User(card) if card.pending))
-        );
-        // Blank input never submits; a second submit while one turn is live
-        // is ignored (one live turn per session).
-        let commands = app.update(AppEvent::SubmitTurn {
-            session_id: "ses_1".into(),
-            text: "   ".into(),
-        });
-        assert!(take_requests(commands).is_empty());
-        let commands = app.update(AppEvent::SubmitTurn {
-            session_id: "ses_1".into(),
-            text: "second".into(),
-        });
-        assert!(take_requests(commands).is_empty());
-    }
-
-    #[test]
-    fn turn_started_before_the_send_response_fills_the_reference_and_wait_follows() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        let send_request = submit(&mut app, "ses_1", "hello");
-        let turn = make_turn("ses_1", "ins_1", "trn_1");
-
-        // The start event beats the send response.
-        take_requests(app.update(turn_started_event(&turn)));
-        assert_eq!(
-            app.sessions.known["ses_1"].live.as_ref().unwrap().reference,
-            Some(turn.clone())
-        );
-
-        // The send response registers the wait in the very same update.
-        let commands = respond(
-            &mut app,
-            &send_request,
-            json!({"turn": turn_ref_json("ses_1", "ins_1", "trn_1")}),
-        );
-        let requests = take_requests(commands);
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].method, "turn.wait");
-        assert_eq!(
-            app.pending_requests.get(&requests[0].id),
-            Some(&RequestKind::WaitTurn(turn.clone()))
-        );
-        // The pending card is now linked to the real turn.
-        let card = app.sessions.known["ses_1"]
-            .transcript
-            .blocks
-            .iter()
-            .find_map(|block| match block {
-                TranscriptBlock::User(card) if card.pending => Some(card),
-                _ => None,
-            })
-            .unwrap();
-        assert_eq!(card.turn_id.as_deref(), Some("trn_1"));
-    }
-
-    #[test]
-    fn send_failure_removes_the_live_turn_and_recovers_the_input() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        let send_request = submit(&mut app, "ses_1", "hello");
-        take_requests(respond_error(
-            &mut app,
-            &send_request,
-            "turn_rejected",
-            "session is closing",
-        ));
-        let view = &app.sessions.known["ses_1"];
-        assert!(view.live.is_none());
-        assert_eq!(app.composer.content(), "hello");
-        assert!(
-            !view
-                .transcript
-                .blocks
-                .iter()
-                .any(|block| matches!(block, TranscriptBlock::User(card) if card.pending))
-        );
-        assert!(!app.pending_requests.contains_key(&send_request.id));
-        assert!(
-            app.notices
-                .iter()
-                .any(|n| n.text.contains("turn send failed"))
-        );
-    }
-
-    #[test]
-    fn send_channel_failure_removes_the_pending_request_and_recovers_input() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        let send_request = submit(&mut app, "ses_1", "hello");
-        let commands = app.update(AppEvent::RpcSendFailed {
-            id: send_request.id,
-            error: RpcError::Closed,
-        });
-        assert!(take_requests(commands).is_empty());
-        assert!(app.sessions.known["ses_1"].live.is_none());
-        assert_eq!(app.composer.content(), "hello");
-        assert!(!app.pending_requests.contains_key(&send_request.id));
-    }
-
-    #[test]
-    fn deltas_append_text_and_reasoning_only_for_the_matching_turn() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        submit(&mut app, "ses_1", "hello");
-        let turn = make_turn("ses_1", "ins_1", "trn_1");
-        take_requests(app.update(turn_started_event(&turn)));
-        take_requests(app.update(delta_event(&turn, "text", "Hel")));
-        take_requests(app.update(delta_event(&turn, "reasoning", "think")));
-        let wrong = make_turn("ses_1", "ins_1", "OTHER");
-        take_requests(app.update(delta_event(&wrong, "text", "WRONG")));
-        take_requests(app.update(delta_event(&turn, "text", "lo")));
-        let live = app.sessions.known["ses_1"].live.as_ref().unwrap();
-        assert_eq!(live.text, "Hello");
-        assert_eq!(live.reasoning, "think");
-    }
-
-    #[test]
-    fn tool_events_are_idempotent_per_call_id() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        submit(&mut app, "ses_1", "use tools");
-        let turn = make_turn("ses_1", "ins_1", "trn_1");
-        take_requests(app.update(turn_started_event(&turn)));
-        take_requests(app.update(tool_started_event(&turn, "call-1", "read")));
-        take_requests(app.update(tool_started_event(&turn, "call-1", "read")));
-        take_requests(app.update(tool_started_event(&turn, "call-2", "write")));
-        take_requests(app.update(tool_progress_event(&turn, "call-1", "50%")));
-        take_requests(app.update(tool_finished_event(&turn, "call-1", "success")));
-        take_requests(app.update(tool_finished_event(&turn, "call-1", "success")));
-        let live = app.sessions.known["ses_1"].live.as_ref().unwrap();
-        assert_eq!(live.tools.len(), 2);
-        let first = live
-            .tools
-            .iter()
-            .find(|t| t.tool_call_id == "call-1")
-            .unwrap();
-        assert_eq!(first.status, ToolStatus::Succeeded);
-        assert_eq!(first.progress.as_deref(), Some("50%"));
-        let second = live
-            .tools
-            .iter()
-            .find(|t| t.tool_call_id == "call-2")
-            .unwrap();
-        assert_eq!(second.status, ToolStatus::Pending);
-    }
-
-    #[test]
-    fn wait_response_drives_reconciliation_and_durable_replaces_live() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        let send_request = submit(&mut app, "ses_1", "hello");
-        let turn = make_turn("ses_1", "ins_1", "trn_1");
-        take_requests(app.update(turn_started_event(&turn)));
-        take_requests(app.update(delta_event(&turn, "text", "live text")));
-        let wait_request = {
-            let commands = respond(
-                &mut app,
-                &send_request,
-                json!({"turn": turn_ref_json("ses_1", "ins_1", "trn_1")}),
-            );
-            let requests = take_requests(commands);
-            assert_eq!(requests.len(), 1);
-            requests.into_iter().next().unwrap()
-        };
-
-        // The wait response issues state + transcript fetches in one update.
-        let commands = respond(&mut app, &wait_request, outcome_json("trn_1", "completed"));
-        let requests = take_requests(commands);
-        assert_eq!(requests.len(), 2);
-        let state_request = requests
-            .iter()
-            .find(|r| r.method == "session.state")
-            .unwrap();
-        let transcript_request = requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .unwrap();
-        assert!(app.sessions.known["ses_1"].live.as_ref().unwrap().waiting);
-        assert!(app.sessions.known["ses_1"].reconcile_inflight);
-
-        // The durable text differs from the live text: durable wins.
-        let durable = page_json(
-            vec![
-                user_entry(1, "trn_1", "hello"),
-                assistant_entry(2, "trn_1", "durable text"),
-                terminal_entry(3, "trn_1"),
-            ],
-            None,
-            3,
-            true,
-        );
-        let commands = respond(&mut app, transcript_request, durable);
-        assert!(take_requests(commands).is_empty());
-        take_requests(respond(
-            &mut app,
-            state_request,
-            state_json("ses_1", "ins_1", "idle"),
-        ));
-
-        let view = &app.sessions.known["ses_1"];
-        assert!(view.live.is_none());
-        assert!(!view.reconcile_inflight);
-        assert!(
-            !view
-                .transcript
-                .blocks
-                .iter()
-                .any(|block| matches!(block, TranscriptBlock::User(card) if card.pending))
-        );
-        let assistant = view
-            .transcript
-            .blocks
-            .iter()
-            .find_map(|block| match block {
-                TranscriptBlock::Assistant(assistant) => Some(assistant),
-                _ => None,
-            })
-            .unwrap();
-        assert_eq!(
-            assistant.parts,
-            vec![AssistantPart::Text("durable text".into())]
-        );
-    }
-
-    #[test]
-    fn late_deltas_after_the_wait_response_are_tolerated() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        let send_request = submit(&mut app, "ses_1", "hello");
-        let turn = make_turn("ses_1", "ins_1", "trn_1");
-        take_requests(app.update(turn_started_event(&turn)));
-        let wait_request = {
-            let commands = respond(
-                &mut app,
-                &send_request,
-                json!({"turn": turn_ref_json("ses_1", "ins_1", "trn_1")}),
-            );
-            take_requests(commands).into_iter().next().unwrap()
-        };
-        let commands = respond(&mut app, &wait_request, outcome_json("trn_1", "completed"));
-        let requests = take_requests(commands);
-        let transcript_request = requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .unwrap();
-        // A delta arriving after the wait response is still shown live...
-        take_requests(app.update(delta_event(&turn, "text", "late delta")));
-        assert_eq!(
-            app.sessions.known["ses_1"].live.as_ref().unwrap().text,
-            "late delta"
-        );
-        // ...but the durable transcript is the final truth.
-        let durable = page_json(
-            vec![
-                user_entry(1, "trn_1", "hello"),
-                assistant_entry(2, "trn_1", "durable text"),
-            ],
-            None,
-            2,
-            true,
-        );
-        take_requests(respond(&mut app, transcript_request, durable));
-        let view = &app.sessions.known["ses_1"];
-        assert!(view.live.is_none());
-        let assistant = view
-            .transcript
-            .blocks
-            .iter()
-            .find_map(|block| match block {
-                TranscriptBlock::Assistant(assistant) => Some(assistant),
-                _ => None,
-            })
-            .unwrap();
-        assert_eq!(
-            assistant.parts,
-            vec![AssistantPart::Text("durable text".into())]
-        );
-    }
-
-    #[test]
-    fn turn_finished_events_are_never_authoritative() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        let send_request = submit(&mut app, "ses_1", "hello");
-        let turn = make_turn("ses_1", "ins_1", "trn_1");
-        take_requests(app.update(turn_started_event(&turn)));
-        let wait_request = {
-            let commands = respond(
-                &mut app,
-                &send_request,
-                json!({"turn": turn_ref_json("ses_1", "ins_1", "trn_1")}),
-            );
-            take_requests(commands).into_iter().next().unwrap()
-        };
-        // The finished event fires before the wait response with a different
-        // outcome: it must neither complete nor corrupt anything.
-        take_requests(app.update(event(wire_event(json!({
-            "type": "turn_finished",
-            "data": {
-                "turn": turn_ref_json("ses_1", "ins_1", "trn_1"),
-                "outcome": outcome_json("trn_1", "cancelled_by_user"),
-                "meta": meta_json("ses_1", "ins_1", 0)
-            }
-        })))));
-        assert!(app.sessions.known["ses_1"].live.is_some());
-        let commands = respond(&mut app, &wait_request, outcome_json("trn_1", "completed"));
-        let requests = take_requests(commands);
-        let transcript_request = requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .unwrap();
-        take_requests(respond(
-            &mut app,
-            transcript_request,
-            page_json(vec![terminal_entry(1, "trn_1")], None, 1, true),
-        ));
-        assert!(app.sessions.known["ses_1"].live.is_none());
-        assert!(matches!(
-            app.sessions.known["ses_1"].transcript.blocks.last(),
-            Some(TranscriptBlock::Terminal(_))
-        ));
-    }
-
-    #[test]
-    fn event_gap_is_marked_and_cleared_by_reconciliation() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        let send_request = submit(&mut app, "ses_1", "hello");
-        let turn = make_turn("ses_1", "ins_1", "trn_1");
-        take_requests(app.update(turn_started_event(&turn)));
-        take_requests(app.update(delta_event_dropped(&turn, "text", "abc", 3)));
-        let view = &app.sessions.known["ses_1"];
-        assert!(view.event_gap);
-        assert!(view.live.as_ref().unwrap().event_gap);
-
-        let wait_request = {
-            let commands = respond(
-                &mut app,
-                &send_request,
-                json!({"turn": turn_ref_json("ses_1", "ins_1", "trn_1")}),
-            );
-            take_requests(commands).into_iter().next().unwrap()
-        };
-        let commands = respond(&mut app, &wait_request, outcome_json("trn_1", "completed"));
-        let requests = take_requests(commands);
-        let transcript_request = requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .unwrap();
-        take_requests(respond(
-            &mut app,
-            transcript_request,
-            page_json(vec![user_entry(1, "trn_1", "hello")], None, 1, true),
-        ));
-        let view = &app.sessions.known["ses_1"];
-        assert!(view.live.is_none());
-        assert!(!view.event_gap);
-    }
-
-    #[test]
-    fn cancel_sends_the_exact_reference_and_keeps_the_wait_pending() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        let send_request = submit(&mut app, "ses_1", "hello");
-        let turn = make_turn("ses_1", "ins_1", "trn_1");
-        take_requests(app.update(turn_started_event(&turn)));
-        let commands = respond(
-            &mut app,
-            &send_request,
-            json!({"turn": turn_ref_json("ses_1", "ins_1", "trn_1")}),
-        );
-        let requests = take_requests(commands);
-        let wait_request = requests.into_iter().next().unwrap();
-
-        let commands = app.update(AppEvent::CancelTurn {
-            session_id: "ses_1".into(),
-        });
-        let requests = take_requests(commands);
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].method, "turn.cancel");
-        assert_eq!(
-            requests[0].params,
-            json!({"session_id": "ses_1", "instance_id": "ins_1", "turn_id": "trn_1"})
-        );
-        assert_eq!(
-            app.pending_requests.get(&requests[0].id),
-            Some(&RequestKind::CancelTurn(turn.clone()))
-        );
-        // The wait stays pending through the cancel.
-        assert!(
-            app.pending_requests
-                .values()
-                .any(|kind| matches!(kind, RequestKind::WaitTurn(t) if *t == turn))
-        );
-        assert!(
-            app.sessions.known["ses_1"]
-                .live
-                .as_ref()
-                .unwrap()
-                .cancel_requested
-        );
-        take_requests(respond(&mut app, &requests[0], json!({"cancelled": true})));
-        assert!(app.sessions.known["ses_1"].live.is_some());
-        assert!(app.pending_requests.contains_key(&wait_request.id));
-    }
-
-    #[test]
-    fn cancel_before_a_reference_is_deferred_to_the_send_response() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        let send_request = submit(&mut app, "ses_1", "hello");
-        let commands = app.update(AppEvent::CancelTurn {
-            session_id: "ses_1".into(),
-        });
-        assert!(take_requests(commands).is_empty());
-        assert!(
-            app.sessions.known["ses_1"]
-                .live
-                .as_ref()
-                .unwrap()
-                .cancel_requested
-        );
-
-        // The send response now issues both the wait and the deferred cancel.
-        let commands = respond(
-            &mut app,
-            &send_request,
-            json!({"turn": turn_ref_json("ses_1", "ins_1", "trn_1")}),
-        );
-        let requests = take_requests(commands);
-        assert_eq!(requests.len(), 2);
-        assert_eq!(requests[0].method, "turn.wait");
-        assert_eq!(requests[1].method, "turn.cancel");
-        assert_eq!(
-            requests[1].params,
-            json!({"session_id": "ses_1", "instance_id": "ins_1", "turn_id": "trn_1"})
-        );
-    }
-
-    #[test]
-    fn wait_turn_not_found_recovers_from_state_and_transcript() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        let send_request = submit(&mut app, "ses_1", "hello");
-        let turn = make_turn("ses_1", "ins_1", "trn_1");
-        take_requests(app.update(turn_started_event(&turn)));
-        let wait_request = {
-            let commands = respond(
-                &mut app,
-                &send_request,
-                json!({"turn": turn_ref_json("ses_1", "ins_1", "trn_1")}),
-            );
-            take_requests(commands).into_iter().next().unwrap()
-        };
-        let commands = respond_error(
-            &mut app,
-            &wait_request,
-            "turn_not_found",
-            "the turn is gone",
-        );
-        let requests = take_requests(commands);
-        assert_eq!(requests.len(), 2);
-        assert!(requests.iter().any(|r| r.method == "session.state"));
-        assert!(requests.iter().any(|r| r.method == "session.transcript"));
-        assert!(
-            app.notices
-                .iter()
-                .any(|n| n.text.contains("turn wait failed"))
-        );
-        // The live turn survives until the durable truth arrives.
-        assert!(app.sessions.known["ses_1"].live.is_some());
-        let transcript_request = requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .unwrap();
-        take_requests(respond(
-            &mut app,
-            transcript_request,
-            page_json(vec![user_entry(1, "trn_1", "hello")], None, 1, true),
-        ));
-        assert!(app.sessions.known["ses_1"].live.is_none());
-        assert!(!app.sessions.known["ses_1"].event_gap);
-    }
-
-    #[test]
-    fn stale_instance_events_never_pollute_the_current_instance() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        // A state event from an older instance is ignored.
-        take_requests(app.update(event(wire_event(json!({
-            "type": "session_state",
-            "data": {
-                "state": state_json("ses_1", "ins_0", "running"),
-                "meta": meta_json("ses_1", "ins_0", 0)
-            }
-        })))));
-        assert_eq!(
-            app.sessions.known["ses_1"]
-                .state
-                .as_ref()
-                .unwrap()
-                .instance_id,
-            "ins_1"
-        );
-
-        // A closing event from the old instance must not kill the live turn.
-        submit(&mut app, "ses_1", "hello");
-        let turn = make_turn("ses_1", "ins_1", "trn_1");
-        take_requests(app.update(turn_started_event(&turn)));
-        take_requests(app.update(event(wire_event(json!({
-            "type": "session_closed",
-            "data": {"session_id": "ses_1", "meta": meta_json("ses_1", "ins_0", 0)}
-        })))));
-        assert!(app.sessions.known["ses_1"].live.is_some());
-
-        // Turn deltas for the old instance never reach the live view.
-        let stale = make_turn("ses_1", "ins_0", "trn_1");
-        take_requests(app.update(delta_event(&stale, "text", "WRONG")));
-        assert_eq!(app.sessions.known["ses_1"].live.as_ref().unwrap().text, "");
-
-        // The current instance keeps working.
-        take_requests(app.update(delta_event(&turn, "text", "right")));
-        assert_eq!(
-            app.sessions.known["ses_1"].live.as_ref().unwrap().text,
-            "right"
-        );
-    }
-
-    #[test]
-    fn background_sessions_keep_their_turns_while_switching() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_a", "ins_a");
-        open_session(&mut app, "ses_b", "ins_b");
-        assert_eq!(app.sessions.active.as_deref(), Some("ses_b"));
-
-        let send_a = submit(&mut app, "ses_a", "a");
-        let turn_a = make_turn("ses_a", "ins_a", "trn_a");
-        take_requests(app.update(turn_started_event(&turn_a)));
-        let wait_a = {
-            let commands = respond(
-                &mut app,
-                &send_a,
-                json!({"turn": turn_ref_json("ses_a", "ins_a", "trn_a")}),
-            );
-            take_requests(commands).into_iter().next().unwrap()
-        };
-        let send_b = submit(&mut app, "ses_b", "b");
-        let turn_b = make_turn("ses_b", "ins_b", "trn_b");
-        take_requests(app.update(turn_started_event(&turn_b)));
-        let wait_b = {
-            let commands = respond(
-                &mut app,
-                &send_b,
-                json!({"turn": turn_ref_json("ses_b", "ins_b", "trn_b")}),
-            );
-            take_requests(commands).into_iter().next().unwrap()
-        };
-
-        // Interleaved deltas never cross sessions.
-        take_requests(app.update(delta_event(&turn_a, "text", "a1")));
-        take_requests(app.update(delta_event(&turn_b, "text", "b1")));
-        take_requests(app.update(delta_event(&turn_a, "text", "a2")));
-        assert_eq!(
-            app.sessions.known["ses_a"].live.as_ref().unwrap().text,
-            "a1a2"
-        );
-        assert_eq!(
-            app.sessions.known["ses_b"].live.as_ref().unwrap().text,
-            "b1"
-        );
-
-        // Switching back to A keeps B's background state intact.
-        let open_a = take_requests(app.update(AppEvent::OpenSession {
-            session_id: "ses_a".into(),
-        }));
-        take_requests(respond(
-            &mut app,
-            &open_a[0],
-            json!({"session": session_info("ses_a", Some("ins_a"))}),
-        ));
-        assert_eq!(app.sessions.active.as_deref(), Some("ses_a"));
-        assert_eq!(
-            app.sessions.known["ses_b"].live.as_ref().unwrap().text,
-            "b1"
-        );
-
-        // A's turn reconciles; B's wait is still pending and unaffected.
-        let commands = respond(&mut app, &wait_a, outcome_json("trn_a", "completed"));
-        let requests = take_requests(commands);
-        let transcript_a = requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .unwrap();
-        take_requests(respond(
-            &mut app,
-            transcript_a,
-            page_json(vec![user_entry(1, "trn_a", "a")], None, 1, true),
-        ));
-        assert!(app.sessions.known["ses_a"].live.is_none());
-        assert!(app.pending_requests.contains_key(&wait_b.id));
-        assert!(app.sessions.known["ses_b"].live.is_some());
-    }
-
-    #[test]
-    fn waiting_for_input_shows_the_fixed_notice_and_never_answers() {
-        let mut app = test_app();
-        ready(&mut app);
-        let open = take_requests(app.update(AppEvent::OpenSession {
-            session_id: "ses_1".into(),
-        }));
-        let commands = respond(
-            &mut app,
-            &open[0],
-            json!({"session": session_info("ses_1", Some("ins_1"))}),
-        );
-        let requests = take_requests(commands);
-        let state_request = requests
-            .iter()
-            .find(|r| r.method == "session.state")
-            .unwrap();
-        let transcript_request = requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .unwrap();
-        take_requests(respond(
-            &mut app,
-            transcript_request,
-            page_json(vec![], None, 0, true),
-        ));
-        let waiting = json!({
-            "session_id": "ses_1",
-            "instance_id": "ins_1",
-            "status": "waiting_for_input",
-            "health": "healthy",
-            "active_turn": "trn_1",
-            "pending_interaction": {
-                "interaction_id": "int_1",
-                "turn_id": "trn_1",
-                "tool_call_id": "call_1",
-                "tool_name": "ask",
-                "kind": {"type": "approval", "data": {}}
-            },
-            "conversation_seq": 1,
-            "last_terminal": null
-        });
-        let commands = respond(&mut app, state_request, waiting.clone());
-        // No interaction.answer or any other command is ever sent.
-        assert!(take_requests(commands).is_empty());
-        assert_eq!(app.notices.len(), 1);
-        assert_eq!(app.notices[0].text, UNSUPPORTED_INTERACTION_NOTICE);
-        assert!(app.notices[0].sticky);
-
-        // The event path shows the same notice once, then stays quiet.
-        take_requests(app.update(event(wire_event(json!({
-            "type": "session_state",
-            "data": {"state": waiting.clone(), "meta": meta_json("ses_1", "ins_1", 0)}
-        })))));
-        take_requests(app.update(event(wire_event(json!({
-            "type": "interaction_requested",
-            "data": {
-                "session_id": "ses_1",
-                "interaction": {
-                    "interaction_id": "int_2",
-                    "turn_id": "trn_1",
-                    "tool_call_id": "call_2",
-                    "tool_name": "ask",
-                    "kind": {"type": "approval"}
-                },
-                "meta": meta_json("ses_1", "ins_1", 0)
-            }
-        })))));
-        assert_eq!(
-            app.notices
-                .iter()
-                .filter(|n| n.text == UNSUPPORTED_INTERACTION_NOTICE)
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn connection_termination_is_idempotent_and_first_fatal_wins() {
-        let mut app = test_app();
-        app.update(AppEvent::Rpc(RpcEvent::ProtocolError(FrameError::new(
-            FrameErrorKind::InvalidEnvelope,
-            "bad frame",
-        ))));
-        assert!(matches!(
-            &app.connection,
-            ConnectionState::Failed(reason) if reason.contains("RPC protocol error")
-        ));
-        app.update(AppEvent::Rpc(RpcEvent::ConnectionClosed));
-        app.update(AppEvent::Rpc(RpcEvent::Exited(None)));
-        assert!(matches!(
-            &app.connection,
-            ConnectionState::Failed(reason) if reason.contains("RPC protocol error")
-        ));
-
-        let mut second = test_app();
-        second.update(AppEvent::Rpc(RpcEvent::Exited(None)));
-        second.update(AppEvent::Rpc(RpcEvent::ConnectionClosed));
-        second.update(AppEvent::Rpc(RpcEvent::ProtocolError(FrameError::new(
-            FrameErrorKind::Io,
-            "pipe",
-        ))));
-        assert!(matches!(
-            &second.connection,
-            ConnectionState::Failed(reason) if reason.contains("agent exited")
-        ));
-    }
-
-    #[test]
-    fn exited_status_is_recorded_after_every_fatal_cause_without_replacing_it() {
-        let mut eof_first = test_app();
-        eof_first.update(AppEvent::Rpc(RpcEvent::ConnectionClosed));
-        let first_reason = match &eof_first.connection {
-            ConnectionState::Failed(reason) => reason.clone(),
-            other => panic!("expected failed connection, got {other:?}"),
-        };
-        eof_first.update(AppEvent::Rpc(RpcEvent::Exited(Some(nonzero_exit_status()))));
-        assert_eq!(eof_first.child_exit_status.as_deref(), Some("exit code 7"));
-        assert!(matches!(
-            &eof_first.connection,
-            ConnectionState::Failed(reason) if reason == &first_reason
-        ));
-
-        let mut protocol_first = test_app();
-        protocol_first.update(AppEvent::Rpc(RpcEvent::ProtocolError(FrameError::new(
-            FrameErrorKind::InvalidJson,
-            "bad frame",
-        ))));
-        protocol_first.update(AppEvent::Rpc(RpcEvent::Exited(Some(nonzero_exit_status()))));
-        assert!(matches!(
-            &protocol_first.connection,
-            ConnectionState::Failed(reason) if reason.contains("RPC protocol error")
-        ));
-        assert_eq!(
-            protocol_first.child_exit_status.as_deref(),
-            Some("exit code 7")
-        );
-
-        let mut exit_first = test_app();
-        exit_first.update(AppEvent::Rpc(RpcEvent::Exited(Some(nonzero_exit_status()))));
-        assert!(matches!(
-            &exit_first.connection,
-            ConnectionState::Failed(reason) if reason.contains("agent exited")
-        ));
-        assert_eq!(exit_first.child_exit_status.as_deref(), Some("exit code 7"));
-    }
-
-    #[test]
-    fn rpc_channel_end_preserves_fatal_interaction_and_exits_shutdown() {
-        let mut failed = test_app();
-        failed.update(AppEvent::Rpc(RpcEvent::ProtocolError(FrameError::new(
-            FrameErrorKind::Io,
-            "pipe",
-        ))));
-        failed.update(AppEvent::Rendered);
-        assert!(failed.update(AppEvent::RpcChannelEnded).is_empty());
-        assert!(failed.dirty, "channel closure still schedules a redraw");
-        let quit = crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Char('q'),
-            crossterm::event::KeyModifiers::empty(),
-        );
-        assert!(matches!(
-            failed
-                .update(AppEvent::Terminal(crossterm::event::Event::Key(quit)))
-                .as_slice(),
-            [AppCommand::Exit]
-        ));
-
-        let mut shutting_down = test_app();
-        let commands = shutting_down.update(AppEvent::ShutdownRequested);
-        assert_eq!(commands.len(), 1);
-        assert!(matches!(
-            shutting_down.update(AppEvent::RpcChannelEnded).as_slice(),
-            [AppCommand::Exit]
-        ));
-    }
-
-    #[test]
-    fn shutdown_deadline_is_latched_across_busy_updates_and_shutdown_races() {
-        let base = Instant::now();
-        let elapsed = std::sync::Arc::new(AtomicU64::new(0));
-        let clock_elapsed = std::sync::Arc::clone(&elapsed);
-        let mut app = App::with_monotonic_clock(PathBuf::from("/workspace"), move || {
-            base.checked_add(Duration::from_millis(clock_elapsed.load(Ordering::Relaxed)))
-                .expect("test clock remains representable")
-        });
-        let shutdown = take_requests(app.update(AppEvent::ShutdownRequested));
-        assert_eq!(shutdown.len(), 1);
-        assert_eq!(app.shutdown_remaining(), Some(SHUTDOWN_TIMEOUT));
-        let first_deadline = app.shutdown_deadline;
-
-        for millis in [1, 500, 1_000, 2_500, 4_999] {
-            elapsed.store(millis, Ordering::Relaxed);
-            app.update(AppEvent::Tick);
-            app.update(AppEvent::Rpc(RpcEvent::AgentLogLine("rpc".to_owned())));
-            app.update(AppEvent::ShutdownRequested);
-            assert_eq!(app.shutdown_deadline, first_deadline);
-            assert!(
-                app.shutdown_remaining()
-                    .is_some_and(|remaining| !remaining.is_zero())
-            );
-        }
-        // Both a successful response and the expected EOF are harmless and
-        // must not recreate the five-second window.
-        let shutdown_request = &shutdown[0];
-        take_requests(respond(&mut app, shutdown_request, json!({"ok": true})));
-        app.update(AppEvent::Rpc(RpcEvent::ConnectionClosed));
-        assert_eq!(app.shutdown_deadline, first_deadline);
-        elapsed.store(5_000, Ordering::Relaxed);
-        assert_eq!(app.shutdown_remaining(), Some(Duration::ZERO));
-    }
-
-    #[test]
-    fn agent_log_ring_bounds_at_200_lines() {
-        let mut app = test_app();
-        for i in 0..250 {
-            app.update(AppEvent::Rpc(RpcEvent::AgentLogLine(format!("line {i}"))));
-        }
-        assert_eq!(app.agent_logs.len(), MAX_AGENT_LOG_LINES);
-        assert_eq!(app.agent_logs.front().map(String::as_str), Some("line 50"));
-        assert_eq!(app.agent_logs.back().map(String::as_str), Some("line 249"));
-    }
-
-    #[test]
-    fn malformed_transcript_result_notices_and_stops_pagination() {
-        let mut app = test_app();
-        ready(&mut app);
-        let open = take_requests(app.update(AppEvent::OpenSession {
-            session_id: "ses_1".into(),
-        }));
-        let commands = respond(
-            &mut app,
-            &open[0],
-            json!({"session": session_info("ses_1", Some("ins_1"))}),
-        );
-        let requests = take_requests(commands);
-        let transcript_request = requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .unwrap();
-        let commands = respond(
-            &mut app,
-            transcript_request,
-            json!({"entries": [{"user_message": {"seq": 1}}], "next_after": null,
-                   "observed_head": 1, "complete": true}),
-        );
-        assert!(take_requests(commands).is_empty());
-        assert!(
-            app.notices
-                .iter()
-                .any(|n| n.text.contains("malformed transcript"))
-        );
+        take_requests(respond(&mut app, &requests[0], state_json("ses_1", "idle")));
         let view = &app.sessions.known["ses_1"];
         assert!(!view.loading);
-        assert!(!view.reconcile_inflight);
+        assert!(view.transcript.complete);
     }
 
     #[test]
-    fn app_has_no_external_mutation_entry_points() {
-        // The only way to change state is `App::update`; everything else is
-        // read-only. This test pins the constructor shape so future phases
-        // cannot add a back door by accident (spec 9.1).
-        let app = test_app();
-        let _ = app.connection;
-        let _ = app.catalogs.loaded;
-        let _ = app.sessions.active.clone();
-        let _ = app.pending_requests.len();
-        let _ = app.notices.len();
-        let _ = app.agent_logs.len();
-        let _ = std::mem::size_of::<SessionInfo>();
-    }
+    fn composer_routes_to_steer_turn_when_session_is_running() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
 
-    fn gapped_turn_started(turn_ref: &TurnRef, dropped: u64) -> AppEvent {
-        event(wire_event(json!({
-            "type": "turn_started",
-            "data": {
-                "turn": turn_ref_json(&turn_ref.session_id, &turn_ref.instance_id, &turn_ref.turn_id),
-                "meta": meta_json(&turn_ref.session_id, &turn_ref.instance_id, dropped)
+        // Set session state to running with active loop
+        if let Some(view) = app.sessions.known.get_mut("ses_1") {
+            if let Some(state) = view.state.as_mut() {
+                state.status = SessionStatusWire::Running;
+                state.active_loop = Some(crate::protocol::LoopStateWire {
+                    loop_id: "loop_99".to_owned(),
+                    status: crate::protocol::LoopStatusWire::RunningModel,
+                    request_index: 0,
+                    config_revision: 0,
+                    model: Some("deep".to_owned()),
+                    pending_interaction: None,
+                });
             }
-        })))
+            view.live = Some(LiveLoop {
+                reference: Some(make_turn("ses_1", "loop_99")),
+                local_submission: LocalSubmissionId(1),
+                user_text: "initial prompt".into(),
+                requests: vec![],
+                pending_steers: vec![],
+                waiting: false,
+                cancel_requested: false,
+                event_gap: false,
+                last_result: None,
+            });
+        }
+
+        app.composer.set_text("Please correct this direction");
+        let commands = app.submit_composer();
+        let requests = take_requests(commands);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "turn.steer");
+        assert_eq!(requests[0].params["session_id"], "ses_1");
+        assert_eq!(requests[0].params["loop_id"], "loop_99");
+        assert_eq!(requests[0].params["text"], "Please correct this direction");
+
+        let view = &app.sessions.known["ses_1"];
+        let live = view.live.as_ref().unwrap();
+        assert_eq!(live.pending_steers.len(), 1);
+        assert_eq!(live.pending_steers[0].state, PendingSteerState::Sending);
     }
 
-    fn gapped_tool_started(turn_ref: &TurnRef, id: &str, name: &str, dropped: u64) -> AppEvent {
-        event(wire_event(json!({
+    #[test]
+    fn composer_clears_on_successful_steer_acknowledgment() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        if let Some(view) = app.sessions.known.get_mut("ses_1") {
+            if let Some(state) = view.state.as_mut() {
+                state.status = SessionStatusWire::Running;
+                state.active_loop = Some(crate::protocol::LoopStateWire {
+                    loop_id: "loop_99".to_owned(),
+                    status: crate::protocol::LoopStatusWire::RunningModel,
+                    request_index: 0,
+                    config_revision: 0,
+                    model: Some("deep".to_owned()),
+                    pending_interaction: None,
+                });
+            }
+            view.live = Some(LiveLoop {
+                reference: Some(make_turn("ses_1", "loop_99")),
+                local_submission: LocalSubmissionId(1),
+                user_text: "prompt".into(),
+                requests: vec![],
+                pending_steers: vec![],
+                waiting: false,
+                cancel_requested: false,
+                event_gap: false,
+                last_result: None,
+            });
+        }
+
+        app.composer.set_text("Steer text");
+        let reqs = take_requests(app.submit_composer());
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(app.composer.content(), "Steer text");
+
+        respond(&mut app, &reqs[0], json!({"ok": true}));
+        assert!(app.composer.content().is_empty());
+        let view = &app.sessions.known["ses_1"];
+        assert_eq!(
+            view.live.as_ref().unwrap().pending_steers[0].state,
+            PendingSteerState::Queued
+        );
+    }
+
+    #[test]
+    fn composer_retains_text_on_steer_failure_and_shows_warning() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        if let Some(view) = app.sessions.known.get_mut("ses_1") {
+            if let Some(state) = view.state.as_mut() {
+                state.status = SessionStatusWire::Running;
+                state.active_loop = Some(crate::protocol::LoopStateWire {
+                    loop_id: "loop_99".to_owned(),
+                    status: crate::protocol::LoopStatusWire::RunningModel,
+                    request_index: 0,
+                    config_revision: 0,
+                    model: Some("deep".to_owned()),
+                    pending_interaction: None,
+                });
+            }
+            view.live = Some(LiveLoop {
+                reference: Some(make_turn("ses_1", "loop_99")),
+                local_submission: LocalSubmissionId(1),
+                user_text: "prompt".into(),
+                requests: vec![],
+                pending_steers: vec![],
+                waiting: false,
+                cancel_requested: false,
+                event_gap: false,
+                last_result: None,
+            });
+        }
+
+        app.composer.set_text("Steer text");
+        let reqs = take_requests(app.submit_composer());
+        respond_error(&mut app, &reqs[0], -32016, "steer queue full");
+        assert_eq!(app.composer.content(), "Steer text");
+
+        let notice = app.notices.back().unwrap();
+        assert_eq!(notice.level, NoticeLevel::Warning);
+        assert!(notice.text.contains("queue is full"));
+    }
+
+    #[test]
+    fn composer_rejects_submit_when_session_is_blocked() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        if let Some(view) = app.sessions.known.get_mut("ses_1") {
+            if let Some(state) = view.state.as_mut() {
+                state.status = SessionStatusWire::Blocked;
+                state.block_reason = Some(crate::protocol::SessionBlockReasonWire::Persistence);
+            }
+        }
+
+        app.composer.set_text("Can I submit?");
+        let commands = app.submit_composer();
+        assert!(take_requests(commands).is_empty());
+        assert_eq!(app.composer.content(), "Can I submit?");
+
+        let notice = app.notices.back().unwrap();
+        assert_eq!(notice.level, NoticeLevel::Error);
+        assert!(notice.text.contains("session is blocked"));
+    }
+
+    #[test]
+    fn turn_wait_persistence_failure_latches_blocked_and_creates_unsaved_loop() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        let commands = app.submit_turn("ses_1".into(), "Do work".into());
+        let send_req = &take_requests(commands)[0];
+        let wait_commands = respond(
+            &mut app,
+            send_req,
+            json!({"turn": {"session_id": "ses_1", "loop_id": "loop_42"}}),
+        );
+        let wait_req = &take_requests(wait_commands)[0];
+        assert_eq!(wait_req.method, "turn.wait");
+
+        let reconcile_commands = respond(
+            &mut app,
+            wait_req,
+            json!({
+                "turn": {"session_id": "ses_1", "loop_id": "loop_42"},
+                "outcome": {"type": "completed"},
+                "usage": {},
+                "requests": 1,
+                "tool_rounds": 0,
+                "final_config_revision": 0,
+                "persistence": "failed"
+            }),
+        );
+        let reqs = take_requests(reconcile_commands);
+        assert!(
+            reqs.is_empty(),
+            "failed persistence must not dispatch reconcile requests"
+        );
+
+        let view = &app.sessions.known["ses_1"];
+        assert!(view.is_blocked());
+        assert!(view.unsaved_loop.is_some());
+        assert_eq!(view.unsaved_loop.as_ref().unwrap().turn.loop_id, "loop_42");
+    }
+
+    #[test]
+    fn live_loop_records_multi_request_deltas_and_tools() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        let turn = make_turn("ses_1", "loop_7");
+        if let Some(view) = app.sessions.known.get_mut("ses_1") {
+            view.live = Some(LiveLoop {
+                reference: Some(turn.clone()),
+                local_submission: LocalSubmissionId(1),
+                user_text: "multi request task".into(),
+                requests: vec![],
+                pending_steers: vec![],
+                waiting: false,
+                cancel_requested: false,
+                event_gap: false,
+                last_result: None,
+            });
+        }
+
+        // Request 0 starts
+        app.update(event(wire_event(json!({
+            "type": "request_started",
+            "data": {
+                "turn": turn_ref_json("ses_1", "loop_7"),
+                "request_index": 0,
+                "config_revision": 0,
+                "model": "deep",
+                "reasoning": "high",
+                "meta": meta_json("ses_1", 0)
+            }
+        }))));
+
+        // Request 0 delta
+        app.update(event(wire_event(json!({
+            "type": "output_delta",
+            "data": {
+                "turn": turn_ref_json("ses_1", "loop_7"),
+                "request_index": 0,
+                "channel": "text",
+                "delta": "Thinking...",
+                "meta": meta_json("ses_1", 0)
+            }
+        }))));
+
+        // Tool on request 0
+        app.update(event(wire_event(json!({
             "type": "tool_started",
             "data": {
-                "turn": turn_ref_json(&turn_ref.session_id, &turn_ref.instance_id, &turn_ref.turn_id),
-                "tool_call_id": id,
-                "tool_name": name,
-                "meta": meta_json(&turn_ref.session_id, &turn_ref.instance_id, dropped)
+                "turn": turn_ref_json("ses_1", "loop_7"),
+                "request_index": 0,
+                "tool_call_id": "call_1",
+                "tool_name": "read",
+                "meta": meta_json("ses_1", 0)
             }
-        })))
-    }
+        }))));
 
-    fn gapped_turn_finished(turn_ref: &TurnRef, dropped: u64) -> AppEvent {
-        event(wire_event(json!({
-            "type": "turn_finished",
+        // Request 1 starts
+        app.update(event(wire_event(json!({
+            "type": "request_started",
             "data": {
-                "turn": turn_ref_json(&turn_ref.session_id, &turn_ref.instance_id, &turn_ref.turn_id),
-                "outcome": outcome_json(&turn_ref.turn_id, "completed"),
-                "meta": meta_json(&turn_ref.session_id, &turn_ref.instance_id, dropped)
+                "turn": turn_ref_json("ses_1", "loop_7"),
+                "request_index": 1,
+                "config_revision": 0,
+                "model": "deep",
+                "reasoning": "high",
+                "meta": meta_json("ses_1", 0)
             }
-        })))
-    }
+        }))));
 
-    fn gapped_session_state(session_id: &str, instance: &str, dropped: u64) -> AppEvent {
-        event(wire_event(json!({
-            "type": "session_state",
+        // Request 1 delta
+        app.update(event(wire_event(json!({
+            "type": "output_delta",
             "data": {
-                "state": state_json(session_id, instance, "idle"),
-                "meta": meta_json(session_id, instance, dropped)
+                "turn": turn_ref_json("ses_1", "loop_7"),
+                "request_index": 1,
+                "channel": "text",
+                "delta": "Done with second iteration.",
+                "meta": meta_json("ses_1", 0)
             }
-        })))
-    }
-
-    /// Opens a session and returns the id of the first transcript page
-    /// request without answering it.
-    fn open_transcript_id(app: &mut App, session_id: &str) -> RequestId {
-        let open = take_requests(app.update(AppEvent::OpenSession {
-            session_id: session_id.into(),
-        }));
-        let commands = respond(
-            app,
-            &open[0],
-            json!({"session": session_info(session_id, Some("ins_1"))}),
-        );
-        let requests = take_requests(commands);
-        requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .expect("transcript request")
-            .id
-    }
-
-    fn respond_by_id(app: &mut App, id: RequestId, result: Value) -> Vec<AppCommand> {
-        app.update(AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Response(
-            RpcResponse {
-                id,
-                result: Some(result),
-                error: None,
-            },
-        ))))
-    }
-
-    #[test]
-    fn transcript_without_cursor_does_not_stick_or_fabricate_completion() {
-        let mut app = test_app();
-        ready(&mut app);
-        let transcript_id = open_transcript_id(&mut app, "ses_1");
-        // complete=false with no cursor and no entries; the head is ahead of
-        // anything merged (reachable until the agent confirms durability).
-        let commands = respond_by_id(&mut app, transcript_id, page_json(vec![], None, 5, false));
-        assert!(take_requests(commands).is_empty());
-        let view = &app.sessions.known["ses_1"];
-        assert!(!view.loading, "the chain must not stay stuck");
-        assert!(
-            !view.transcript.complete,
-            "completion must not be fabricated"
-        );
-        assert_eq!(
-            view.transcript.last_seq, None,
-            "an empty page must not advance last_seq (not even to observed_head)"
-        );
-        assert!(app.notices.iter().any(|n| n.text.contains("durable")));
-
-        // A later open starts from scratch: nothing durable was merged, so
-        // the fetch is a full one with no cursor.
-        let open = take_requests(app.update(AppEvent::OpenSession {
-            session_id: "ses_1".into(),
-        }));
-        let commands = respond(
-            &mut app,
-            &open[0],
-            json!({"session": session_info("ses_1", Some("ins_1"))}),
-        );
-        let requests = take_requests(commands);
-        let transcript_request = requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .expect("transcript");
-        assert_eq!(
-            app.pending_requests.get(&transcript_request.id),
-            Some(&RequestKind::Transcript {
-                session_id: "ses_1".into(),
-                after: None,
-                gap_revision: None,
-            })
-        );
-        // The resumed fetch merges normally and the chain completes.
-        let commands = respond_by_id(
-            &mut app,
-            transcript_request.id,
-            page_json(vec![user_entry(1, "trn_1", "hello")], None, 1, true),
-        );
-        assert!(take_requests(commands).is_empty());
-        let view = &app.sessions.known["ses_1"];
-        assert!(view.transcript.complete);
-        assert_eq!(view.transcript.last_seq, Some(1));
-    }
-
-    #[test]
-    fn transcript_without_cursor_keeps_the_merged_entries() {
-        let mut app = test_app();
-        ready(&mut app);
-        let transcript_id = open_transcript_id(&mut app, "ses_1");
-        let page = page_json(
-            vec![
-                user_entry(1, "trn_1", "hello"),
-                assistant_entry(2, "trn_1", "back"),
-            ],
-            None,
-            3,
-            false,
-        );
-        let commands = respond_by_id(&mut app, transcript_id, page);
-        assert!(take_requests(commands).is_empty());
-        let view = &app.sessions.known["ses_1"];
-        assert!(!view.loading);
-        assert!(!view.transcript.complete);
-        assert_eq!(view.transcript.blocks.len(), 2);
-        assert_eq!(
-            view.transcript.last_seq,
-            Some(2),
-            "last_seq is the highest merged entry, not the observed head"
-        );
-    }
-
-    #[test]
-    fn reopening_a_gapped_session_heals_with_an_incremental_fetch() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        assert!(app.sessions.known["ses_1"].transcript.complete);
-        // A gap over an already-complete transcript.
-        take_requests(app.update(gapped_turn_started(
-            &make_turn("ses_1", "ins_1", "ghost"),
-            3,
-        )));
-        assert!(app.sessions.known["ses_1"].event_gap);
-        assert_eq!(app.sessions.known["ses_1"].gap_revision, 1);
-
-        // Switching back to the session must issue an incremental fetch even
-        // though the transcript is complete (spec 13.7).
-        let open = take_requests(app.update(AppEvent::OpenSession {
-            session_id: "ses_1".into(),
-        }));
-        let commands = respond(
-            &mut app,
-            &open[0],
-            json!({"session": session_info("ses_1", Some("ins_1"))}),
-        );
-        let requests = take_requests(commands);
-        let transcript_request = requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .expect("transcript");
-        assert_eq!(
-            app.pending_requests.get(&transcript_request.id),
-            Some(&RequestKind::Transcript {
-                session_id: "ses_1".into(),
-                after: None,
-                gap_revision: Some(1),
-            })
-        );
-        // Once the heal chain completes, the gap is gone.
-        let commands = respond(
-            &mut app,
-            transcript_request,
-            page_json(vec![], None, 0, true),
-        );
-        assert!(take_requests(commands).is_empty());
-        assert!(!app.sessions.known["ses_1"].event_gap);
-    }
-
-    #[test]
-    fn a_stale_complete_response_never_clears_a_newer_gap() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        take_requests(app.update(gapped_turn_started(
-            &make_turn("ses_1", "ins_1", "ghost"),
-            3,
-        )));
-        assert_eq!(app.sessions.known["ses_1"].gap_revision, 1);
-
-        // Heal chain issued under revision 1.
-        let open = take_requests(app.update(AppEvent::OpenSession {
-            session_id: "ses_1".into(),
-        }));
-        let commands = respond(
-            &mut app,
-            &open[0],
-            json!({"session": session_info("ses_1", Some("ins_1"))}),
-        );
-        let requests = take_requests(commands);
-        let heal_request = requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .expect("transcript");
-
-        // A new drop lands while the chain is in flight.
-        take_requests(app.update(gapped_turn_started(
-            &make_turn("ses_1", "ins_1", "ghost2"),
-            2,
-        )));
-        assert_eq!(app.sessions.known["ses_1"].gap_revision, 2);
-
-        // The stale completion must NOT clear the newer gap.
-        let commands = respond(&mut app, heal_request, page_json(vec![], None, 0, true));
-        assert!(take_requests(commands).is_empty());
-        assert!(app.sessions.known["ses_1"].event_gap);
-
-        // A fresh heal chain issued under revision 2 finally clears it.
-        let open = take_requests(app.update(AppEvent::OpenSession {
-            session_id: "ses_1".into(),
-        }));
-        let commands = respond(
-            &mut app,
-            &open[0],
-            json!({"session": session_info("ses_1", Some("ins_1"))}),
-        );
-        let requests = take_requests(commands);
-        let heal_request = requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .expect("transcript");
-        assert_eq!(
-            app.pending_requests.get(&heal_request.id),
-            Some(&RequestKind::Transcript {
-                session_id: "ses_1".into(),
-                after: None,
-                gap_revision: Some(2),
-            })
-        );
-        let commands = respond(&mut app, heal_request, page_json(vec![], None, 0, true));
-        assert!(take_requests(commands).is_empty());
-        assert!(!app.sessions.known["ses_1"].event_gap);
-    }
-
-    #[test]
-    fn stale_instance_turn_started_is_rejected_before_the_send_response() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        submit(&mut app, "ses_1", "hello");
-        let stale = make_turn("ses_1", "ins_0", "trn_1");
-        let fresh = make_turn("ses_1", "ins_1", "trn_1");
-
-        take_requests(app.update(turn_started_event(&stale)));
-        assert!(
-            app.sessions.known["ses_1"]
-                .live
-                .as_ref()
-                .unwrap()
-                .reference
-                .is_none(),
-            "a stale instance must never be adopted"
-        );
-        take_requests(app.update(delta_event(&stale, "text", "WRONG")));
-        assert_eq!(app.sessions.known["ses_1"].live.as_ref().unwrap().text, "");
-
-        take_requests(app.update(turn_started_event(&fresh)));
-        assert_eq!(
-            app.sessions.known["ses_1"].live.as_ref().unwrap().reference,
-            Some(fresh.clone())
-        );
-        take_requests(app.update(delta_event(&fresh, "text", "right")));
-        assert_eq!(
-            app.sessions.known["ses_1"].live.as_ref().unwrap().text,
-            "right"
-        );
-    }
-
-    #[test]
-    fn tool_progress_never_downgrades_a_terminal_status() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        submit(&mut app, "ses_1", "use tools");
-        let turn = make_turn("ses_1", "ins_1", "trn_1");
-        take_requests(app.update(turn_started_event(&turn)));
-        take_requests(app.update(tool_started_event(&turn, "call-1", "read")));
-        take_requests(app.update(tool_progress_event(&turn, "call-1", "50%")));
-        take_requests(app.update(tool_finished_event(&turn, "call-1", "success")));
-        // Late progress must neither downgrade the status nor touch the text.
-        take_requests(app.update(tool_progress_event(&turn, "call-1", "90%")));
-        let first = app.sessions.known["ses_1"]
-            .live
-            .as_ref()
-            .unwrap()
-            .tools
-            .iter()
-            .find(|t| t.tool_call_id == "call-1")
-            .unwrap();
-        assert_eq!(first.status, ToolStatus::Succeeded);
-        assert_eq!(first.progress.as_deref(), Some("50%"));
-
-        take_requests(app.update(tool_started_event(&turn, "call-2", "write")));
-        take_requests(app.update(tool_finished_event(&turn, "call-2", "denied")));
-        take_requests(app.update(tool_progress_event(&turn, "call-2", "10%")));
-        let second = app.sessions.known["ses_1"]
-            .live
-            .as_ref()
-            .unwrap()
-            .tools
-            .iter()
-            .find(|t| t.tool_call_id == "call-2")
-            .unwrap();
-        assert_eq!(second.status, ToolStatus::Denied);
-        assert_eq!(second.progress, None);
-    }
-
-    #[test]
-    fn user_actions_are_noops_outside_ready() {
-        let mut app = test_app(); // Starting
-        for event in [
-            AppEvent::SubmitTurn {
-                session_id: "s".into(),
-                text: "hi".into(),
-            },
-            AppEvent::CreateSession {
-                workspace: "/".into(),
-                profile: None,
-                model: None,
-                reasoning: None,
-                title: None,
-            },
-            AppEvent::OpenSession {
-                session_id: "s".into(),
-            },
-            AppEvent::CancelTurn {
-                session_id: "s".into(),
-            },
-        ] {
-            assert!(
-                take_requests(app.update(event)).is_empty(),
-                "no command outside Ready"
-            );
-        }
-        assert!(app.pending_requests.is_empty());
-        assert_eq!(
-            app.notices
-                .iter()
-                .filter(|n| n.text.contains("unavailable"))
-                .count(),
-            1,
-            "one guarded notice, no flood"
-        );
-
-        // A failed connection stays fully gated.
-        let requests = take_requests(app.update(AppEvent::Bootstrap));
-        let models = requests.iter().find(|r| r.method == "model.list").unwrap();
-        take_requests(respond_error(
-            &mut app,
-            models,
-            "models_unavailable",
-            "boom",
-        ));
-        for request in requests.iter().filter(|r| r.method != "model.list") {
-            let result = match request.method {
-                "agent.ping" => json!({"version": "0.2.0"}),
-                "profile.list" => json!({"profiles": []}),
-                "session.list" => json!({"sessions": []}),
-                _ => unreachable!(),
-            };
-            take_requests(respond(&mut app, request, result));
-        }
-        assert!(matches!(app.connection, ConnectionState::Failed(_)));
-        assert!(
-            take_requests(app.update(AppEvent::SubmitTurn {
-                session_id: "s".into(),
-                text: "hi".into(),
-            }))
-            .is_empty()
-        );
-        assert!(
-            take_requests(app.update(AppEvent::CreateSession {
-                workspace: "/".into(),
-                profile: None,
-                model: None,
-                reasoning: None,
-                title: None,
-            }))
-            .is_empty()
-        );
-        assert!(
-            take_requests(app.update(AppEvent::OpenSession {
-                session_id: "s".into(),
-            }))
-            .is_empty()
-        );
-        assert!(
-            take_requests(app.update(AppEvent::CancelTurn {
-                session_id: "s".into(),
-            }))
-            .is_empty()
-        );
-        assert!(app.pending_requests.is_empty());
-        assert_eq!(
-            app.notices
-                .iter()
-                .filter(|n| n.text.contains("unavailable"))
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn wait_during_initial_pagination_defers_reconciliation_then_finishes() {
-        let mut app = test_app();
-        ready(&mut app);
-        let open = take_requests(app.update(AppEvent::OpenSession {
-            session_id: "ses_1".into(),
-        }));
-        let commands = respond(
-            &mut app,
-            &open[0],
-            json!({"session": session_info("ses_1", Some("ins_1"))}),
-        );
-        let requests = take_requests(commands);
-        let state_request = requests
-            .iter()
-            .find(|r| r.method == "session.state")
-            .unwrap();
-        let first_page = requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .unwrap();
-        take_requests(respond(
-            &mut app,
-            state_request,
-            state_json("ses_1", "ins_1", "idle"),
-        ));
-        // The initial chain is still paging.
-        let commands = respond(&mut app, first_page, page_json(vec![], Some(2), 2, false));
-        let requests = take_requests(commands);
-        assert_eq!(requests.len(), 1);
-        let second_page = &requests[0];
-
-        // A turn completes while the initial chain is in flight.
-        let send_request = submit(&mut app, "ses_1", "hello");
-        let turn = make_turn("ses_1", "ins_1", "trn_1");
-        take_requests(app.update(turn_started_event(&turn)));
-        let wait_request = {
-            let commands = respond(
-                &mut app,
-                &send_request,
-                json!({"turn": turn_ref_json("ses_1", "ins_1", "trn_1")}),
-            );
-            take_requests(commands).into_iter().next().unwrap()
-        };
-        let commands = respond(&mut app, &wait_request, outcome_json("trn_1", "completed"));
-        let requests = take_requests(commands);
-        // The chain is busy, so only the state refresh goes out now.
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].method, "session.state");
-
-        // The initial chain completes; the deferred reconcile starts.
-        let commands = respond(
-            &mut app,
-            second_page,
-            page_json(vec![terminal_entry(1, "trn_1")], None, 1, true),
-        );
-        let requests = take_requests(commands);
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].method, "session.transcript");
-        let reconcile_request = requests.into_iter().next().unwrap();
-        let commands = respond(
-            &mut app,
-            &reconcile_request,
-            page_json(vec![], None, 1, true),
-        );
-        assert!(take_requests(commands).is_empty());
-        let view = &app.sessions.known["ses_1"];
-        assert!(
-            view.live.is_none(),
-            "reconcile finished and dropped the live turn"
-        );
-        assert!(!view.loading);
-    }
-
-    #[test]
-    fn two_full_rounds_reconcile_into_one_durable_transcript() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-
-        // Round 1.
-        let send1 = submit(&mut app, "ses_1", "first");
-        let turn1 = make_turn("ses_1", "ins_1", "trn_1");
-        take_requests(app.update(turn_started_event(&turn1)));
-        let wait1 = {
-            let commands = respond(
-                &mut app,
-                &send1,
-                json!({"turn": turn_ref_json("ses_1", "ins_1", "trn_1")}),
-            );
-            take_requests(commands).into_iter().next().unwrap()
-        };
-        let commands = respond(&mut app, &wait1, outcome_json("trn_1", "completed"));
-        let requests = take_requests(commands);
-        let state1 = requests
-            .iter()
-            .find(|r| r.method == "session.state")
-            .unwrap();
-        let transcript1 = requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .unwrap();
-        take_requests(respond(
-            &mut app,
-            state1,
-            state_json("ses_1", "ins_1", "idle"),
-        ));
-        take_requests(respond(
-            &mut app,
-            transcript1,
-            page_json(
-                vec![
-                    user_entry(1, "trn_1", "first"),
-                    assistant_entry(2, "trn_1", "answer one"),
-                    terminal_entry(3, "trn_1"),
-                ],
-                None,
-                3,
-                true,
-            ),
-        ));
-        assert!(app.sessions.known["ses_1"].live.is_none());
-
-        // Round 2 over the same session.
-        let send2 = submit(&mut app, "ses_1", "second");
-        let turn2 = make_turn("ses_1", "ins_1", "trn_2");
-        take_requests(app.update(turn_started_event(&turn2)));
-        let wait2 = {
-            let commands = respond(
-                &mut app,
-                &send2,
-                json!({"turn": turn_ref_json("ses_1", "ins_1", "trn_2")}),
-            );
-            take_requests(commands).into_iter().next().unwrap()
-        };
-        let commands = respond(&mut app, &wait2, outcome_json("trn_2", "completed"));
-        let requests = take_requests(commands);
-        let state2 = requests
-            .iter()
-            .find(|r| r.method == "session.state")
-            .unwrap();
-        let transcript2 = requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .unwrap();
-        take_requests(respond(
-            &mut app,
-            state2,
-            state_json("ses_1", "ins_1", "idle"),
-        ));
-        take_requests(respond(
-            &mut app,
-            transcript2,
-            page_json(
-                vec![
-                    user_entry(4, "trn_2", "second"),
-                    assistant_entry(5, "trn_2", "answer two"),
-                    terminal_entry(6, "trn_2"),
-                ],
-                None,
-                6,
-                true,
-            ),
-        ));
+        }))));
 
         let view = &app.sessions.known["ses_1"];
-        assert!(view.live.is_none());
-        assert_eq!(view.transcript.blocks.len(), 6);
-        let users: Vec<&UserBlock> = view
-            .transcript
-            .blocks
-            .iter()
-            .filter_map(|block| match block {
-                TranscriptBlock::User(user) => Some(user),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(users.len(), 2);
-        assert_eq!(users[0].text, "first");
-        assert_eq!(users[1].text, "second");
+        let live = view.live.as_ref().unwrap();
+        assert_eq!(live.requests.len(), 2);
+        assert_eq!(live.requests[0].text, "Thinking...");
+        assert_eq!(live.requests[0].tools.len(), 1);
+        assert_eq!(live.requests[1].text, "Done with second iteration.");
     }
 
     #[test]
-    fn duplicate_response_ids_are_noticed_but_never_applied_twice() {
-        let mut app = test_app();
-        let requests = take_requests(app.update(AppEvent::Bootstrap));
-        let ping_id = requests
-            .iter()
-            .find(|r| r.method == "agent.ping")
-            .unwrap()
-            .id;
-        for request in &requests {
-            let result = match request.method {
-                "agent.ping" => json!({"version": "0.2.0"}),
-                "model.list" => json!({"models": []}),
-                "profile.list" => json!({"profiles": []}),
-                "session.list" => json!({"sessions": []}),
-                other => panic!("unexpected request: {other}"),
-            };
-            take_requests(respond(&mut app, request, result));
-        }
-        assert_eq!(app.connection, ConnectionState::Ready);
-
-        // Re-delivering an already-consumed id: notice only, state untouched.
-        let commands = app.update(AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Response(
-            RpcResponse {
-                id: ping_id,
-                result: Some(json!({"version": "0.2.0"})),
-                error: None,
-            },
-        ))));
-        assert!(take_requests(commands).is_empty());
-        assert!(
-            app.notices
-                .iter()
-                .any(|n| n.text.contains("unknown request id"))
-        );
-        assert_eq!(app.connection, ConnectionState::Ready);
-        assert!(app.pending_requests.is_empty());
-    }
-
-    #[test]
-    fn dropped_before_marks_gaps_across_all_event_kinds() {
+    fn history_merges_user_assistant_tool_summary_without_synthetic_terminals() {
         let mut app = test_app();
         ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        let turn = make_turn("ses_1", "ins_1", "trn_1");
+        open_session(&mut app, "ses_1");
 
-        take_requests(app.update(gapped_turn_started(&turn, 2)));
-        take_requests(app.update(gapped_tool_started(&turn, "c1", "read", 1)));
-        take_requests(app.update(gapped_turn_finished(&turn, 1)));
-        take_requests(app.update(gapped_session_state("ses_1", "ins_1", 1)));
+        let items = vec![
+            user_item(0, "loop_1", "start"),
+            assistant_item(1, "loop_1", "answer"),
+            tool_result_item(2, "loop_1", "call_1", "read", "success", "file content"),
+            json!({
+                "index": 3,
+                "item": {
+                    "type": "summary",
+                    "data": {
+                        "content": "compacted"
+                    }
+                }
+            }),
+        ];
 
-        let view = &app.sessions.known["ses_1"];
-        assert!(view.event_gap);
-        assert_eq!(
-            view.gap_revision, 4,
-            "each dropped event bumps the revision"
-        );
-        assert!(
-            view.transcript.blocks.is_empty(),
-            "gap marking has no other side effects"
-        );
-    }
-
-    #[test]
-    fn tool_result_without_its_call_becomes_a_durable_block() {
-        let mut app = test_app();
-        ready(&mut app);
-        let transcript_id = open_transcript_id(&mut app, "ses_1");
-        let page = page_json(
-            vec![json!({"tool_result": {
-                "seq": 1,
-                "turn_id": "trn_1",
-                "tool_call_id": "call-9",
-                "tool_name": "write",
-                "outcome": "success",
-                "content": "durable result",
-                "created_at": "2026-01-02T03:04:05.006Z"
-            }})],
-            None,
-            1,
-            true,
-        );
-        let commands = respond_by_id(&mut app, transcript_id, page);
-        assert!(take_requests(commands).is_empty());
-        let blocks = &app.sessions.known["ses_1"].transcript.blocks;
-        let tool = match &blocks[0] {
-            TranscriptBlock::Tool(tool) => tool,
-            other => panic!("expected a tool block, got: {other:?}"),
-        };
-        assert_eq!(tool.tool_call_id, "call-9");
-        assert_eq!(tool.result.as_deref(), Some("durable result"));
-        assert_eq!(tool.outcome.as_deref(), Some("success"));
-    }
-
-    #[test]
-    fn summary_entries_dedupe_by_seq_across_pages() {
-        let mut app = test_app();
-        ready(&mut app);
-        let transcript_id = open_transcript_id(&mut app, "ses_1");
-        let summary = |seq: u64| {
-            json!({"summary": {
-                "seq": seq,
-                "through": 3,
-                "summary": "durable summary",
-                "created_at": "2026-01-02T03:04:05.006Z"
-            }})
-        };
-        let commands = respond_by_id(
-            &mut app,
-            transcript_id,
-            page_json(vec![summary(4)], Some(4), 4, false),
-        );
-        let requests = take_requests(commands);
-        assert_eq!(requests.len(), 1);
-        let continuation_id = requests[0].id;
-        take_requests(respond_by_id(
-            &mut app,
-            continuation_id,
-            page_json(vec![summary(4), user_entry(5, "trn_1", "x")], None, 5, true),
-        ));
-        let view = &app.sessions.known["ses_1"];
-        let summaries = view
-            .transcript
-            .blocks
-            .iter()
-            .filter(|b| matches!(b, TranscriptBlock::Summary(_)))
-            .count();
-        assert_eq!(summaries, 1, "the summary from both pages is stored once");
-        assert_eq!(view.transcript.blocks.len(), 2);
-    }
-
-    #[test]
-    fn oversized_send_failure_recovers_input_through_the_executor_event() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        let big = "x".repeat(crate::rpc::MAX_REQUEST_LINE_BYTES + 1_000);
-        let send_request = submit(&mut app, "ses_1", &big);
-        let commands = app.update(AppEvent::RpcSendFailed {
-            id: send_request.id,
-            error: RpcError::RequestTooLarge {
-                actual_bytes: big.len(),
-                max_bytes: crate::rpc::MAX_REQUEST_LINE_BYTES,
-            },
-        });
-        assert!(take_requests(commands).is_empty());
-        assert!(app.sessions.known["ses_1"].live.is_none());
-        assert_eq!(app.composer.content(), big.as_str());
-        assert!(!app.pending_requests.contains_key(&send_request.id));
-    }
-
-    #[test]
-    fn stopped_page_with_summary_keeps_the_merged_tail_as_cursor() {
-        let mut app = test_app();
-        ready(&mut app);
-        let transcript_id = open_transcript_id(&mut app, "ses_1");
-        // A compaction projection: one summary entry whose seq sits below the
-        // observed head, delivered on a page that stops without a cursor.
-        let commands = respond_by_id(
-            &mut app,
-            transcript_id,
-            page_json(
-                vec![json!({"summary": {
-                    "seq": 3,
-                    "through": 10,
-                    "summary": "compact",
-                    "created_at": "2026-01-02T03:04:05.006Z"
-                }})],
-                None,
-                10,
-                false,
-            ),
-        );
-        assert!(take_requests(commands).is_empty());
-        let view = &app.sessions.known["ses_1"];
-        assert!(!view.loading);
-        assert!(!view.transcript.complete);
-        assert_eq!(
-            view.transcript.last_seq,
-            Some(3),
-            "the cursor is the last merged entry, not the observed head 10"
-        );
-
-        // Re-opening resumes from the actual durable tail: 3, never 10.
-        let open = take_requests(app.update(AppEvent::OpenSession {
-            session_id: "ses_1".into(),
-        }));
-        let commands = respond(
-            &mut app,
-            &open[0],
-            json!({"session": session_info("ses_1", Some("ins_1"))}),
-        );
-        let requests = take_requests(commands);
-        let transcript_request = requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .expect("transcript");
-        assert_eq!(
-            app.pending_requests.get(&transcript_request.id),
-            Some(&RequestKind::Transcript {
-                session_id: "ses_1".into(),
-                after: Some(3),
-                gap_revision: None,
-            })
-        );
-    }
-
-    #[test]
-    fn stopped_empty_page_preserves_the_prior_last_seq() {
-        let mut app = test_app();
-        ready(&mut app);
-        let transcript_id = open_transcript_id(&mut app, "ses_1");
-        // Page 1 merges one entry and returns a cursor.
-        let commands = respond_by_id(
-            &mut app,
-            transcript_id,
-            page_json(vec![user_entry(1, "trn_1", "hello")], Some(1), 1, false),
-        );
-        let requests = take_requests(commands);
-        assert_eq!(requests.len(), 1);
-        assert_eq!(app.sessions.known["ses_1"].transcript.last_seq, Some(1));
-        // Page 2 stops without a cursor and without entries; the head has
-        // moved ahead but nothing was merged.
-        let commands = respond_by_id(&mut app, requests[0].id, page_json(vec![], None, 5, false));
-        assert!(take_requests(commands).is_empty());
-        let view = &app.sessions.known["ses_1"];
-        assert!(!view.loading);
-        assert!(!view.transcript.complete);
-        assert_eq!(
-            view.transcript.last_seq,
-            Some(1),
-            "an empty stopped page must not advance last_seq to 5"
-        );
-        assert_eq!(view.transcript.blocks.len(), 1);
-
-        // Re-opening resumes after 1 so nothing is skipped.
-        let open = take_requests(app.update(AppEvent::OpenSession {
-            session_id: "ses_1".into(),
-        }));
-        let commands = respond(
-            &mut app,
-            &open[0],
-            json!({"session": session_info("ses_1", Some("ins_1"))}),
-        );
-        let requests = take_requests(commands);
-        let transcript_request = requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .expect("transcript");
-        assert_eq!(
-            app.pending_requests.get(&transcript_request.id),
-            Some(&RequestKind::Transcript {
-                session_id: "ses_1".into(),
-                after: Some(1),
-                gap_revision: None,
-            })
-        );
-        // Resuming with the missing entries heals the tail (2..5 never lost).
-        let commands = respond_by_id(
-            &mut app,
-            transcript_request.id,
-            page_json(
-                vec![
-                    user_entry(2, "trn_1", "resumed two"),
-                    user_entry(5, "trn_1", "resumed five"),
-                ],
-                None,
-                5,
-                true,
-            ),
-        );
-        assert!(take_requests(commands).is_empty());
-        let view = &app.sessions.known["ses_1"];
-        assert!(view.transcript.complete);
-        assert_eq!(view.transcript.last_seq, Some(5));
-        assert_eq!(view.transcript.blocks.len(), 3);
-    }
-
-    #[test]
-    fn stopped_reconcile_chain_keeps_live_and_gap_for_a_later_fetch() {
-        let mut app = test_app();
-        ready(&mut app);
-        open_session(&mut app, "ses_1", "ins_1");
-        let send_request = submit(&mut app, "ses_1", "hello");
-        let turn = make_turn("ses_1", "ins_1", "trn_1");
-        take_requests(app.update(turn_started_event(&turn)));
-        let wait_request = {
-            let commands = respond(
-                &mut app,
-                &send_request,
-                json!({"turn": turn_ref_json("ses_1", "ins_1", "trn_1")}),
-            );
-            take_requests(commands).into_iter().next().unwrap()
-        };
-        let commands = respond(&mut app, &wait_request, outcome_json("trn_1", "completed"));
-        let requests = take_requests(commands);
-        let transcript_request = requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .unwrap();
-        // A gap arrives around the reconcile.
-        take_requests(app.update(gapped_turn_started(&turn, 2)));
-        assert!(app.sessions.known["ses_1"].event_gap);
-
-        // The reconcile chain stops without a cursor: the live turn and the
-        // gap survive, and the flags reset so a later action can retry.
-        let commands = respond(
-            &mut app,
-            transcript_request,
-            page_json(vec![terminal_entry(1, "trn_1")], None, 1, false),
-        );
-        assert!(take_requests(commands).is_empty());
-        let view = &app.sessions.known["ses_1"];
-        assert!(
-            view.live.is_some(),
-            "a stopped reconcile must keep the live turn"
-        );
-        assert!(view.live.as_ref().unwrap().waiting);
-        assert!(view.event_gap, "a stopped reconcile must keep the gap");
-        assert!(!view.loading, "flags reset for a later retry");
-        assert!(!view.reconcile_inflight);
-        assert!(!view.transcript.complete, "completion is not fabricated");
-        assert_eq!(view.transcript.last_seq, Some(1));
-
-        // A later explicit open resumes and finishes the reconcile.
-        let open = take_requests(app.update(AppEvent::OpenSession {
-            session_id: "ses_1".into(),
-        }));
-        let commands = respond(
-            &mut app,
-            &open[0],
-            json!({"session": session_info("ses_1", Some("ins_1"))}),
-        );
-        let requests = take_requests(commands);
-        let first = requests
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .expect("transcript");
-        let commands = respond(&mut app, first, page_json(vec![], None, 1, true));
-        // The open chain completed; the deferred reconcile fires because the
-        // live turn is still waiting.
-        let requests = take_requests(commands);
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].method, "session.transcript");
-        let commands = respond(&mut app, &requests[0], page_json(vec![], None, 1, true));
-        assert!(take_requests(commands).is_empty());
+        let req = take_requests(app.clear_transcript());
+        respond(&mut app, &req[0], history_page_json(items, None, 4));
 
         let view = &app.sessions.known["ses_1"];
-        assert!(
-            view.live.is_none(),
-            "the durable reconcile finally removed the live turn"
-        );
-        assert!(view.transcript.complete);
-        assert!(!view.event_gap, "the healed chain cleared the gap");
-        assert_eq!(
-            view.transcript.last_seq,
-            Some(1),
-            "no empty page advances last_seq"
-        );
-    }
-
-    // ---- Phase 4: dock and selectors ----------------------------------
-
-    fn catalog_json() -> (Value, Value, Value) {
-        (
-            json!([
-                {"id": "deep", "model_ref": "minicore/deep:v1", "context_window": 128000,
-                 "supports_tools": true, "supported_reasoning": ["auto", "low", "medium", "high"]},
-                {"id": "fast", "model_ref": "minicore/fast:v1", "context_window": 32000,
-                 "supports_tools": false, "supported_reasoning": ["low", "medium"]},
-                {"id": "tiny", "model_ref": "minicore/tiny:v1", "context_window": 8000,
-                 "supports_tools": true, "supported_reasoning": ["disabled", "low"]}
-            ]),
-            json!([
-                {"id": "coding", "model": "deep", "reasoning": "high",
-                 "tools": ["read", "edit", "bash"]},
-                {"id": "review", "model": "fast", "reasoning": "medium", "tools": ["read"]}
-            ]),
-            json!([
-                {"session_id": "ses_a", "title": "Alpha", "profile": "coding",
-                 "workspace": "/a", "model": "deep", "reasoning": "high",
-                 "loaded": true, "instance_id": "i1",
-                 "created_at": "2027-01-15T08:00:00.000Z", "updated_at": "2027-01-15T08:00:00.000Z"},
-                {"session_id": "ses_b", "title": "Beta", "profile": "review",
-                 "workspace": "/b", "model": "fast", "reasoning": "medium",
-                 "loaded": false, "instance_id": null,
-                 "created_at": "2027-01-15T07:00:00.000Z", "updated_at": "2027-01-15T07:00:00.000Z"}
-            ]),
-        )
-    }
-
-    fn ready_with_catalogs(app: &mut App) {
-        let (models, profiles, sessions) = catalog_json();
-        let requests = take_requests(app.update(AppEvent::Bootstrap));
-        assert_eq!(requests.len(), 4);
-        for request in &requests {
-            let result = match request.method {
-                "agent.ping" => json!({"version": "0.2.0"}),
-                "model.list" => json!({"models": models.clone()}),
-                "profile.list" => json!({"profiles": profiles.clone()}),
-                "session.list" => json!({"sessions": sessions.clone()}),
-                other => panic!("unexpected bootstrap request: {other}"),
-            };
-            take_requests(respond(app, request, result));
-        }
-        assert_eq!(app.connection, ConnectionState::Ready);
-    }
-
-    fn draft(app: &App) -> NewSessionState {
-        app.new_session()
-            .expect("a new-session draft exists")
-            .clone()
-    }
-
-    #[test]
-    fn open_new_session_seeds_the_draft_from_catalog_defaults() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(AppEvent::OpenNewSession);
-        let state = draft(&app);
-        assert_eq!(state.workspace, "/workspace");
-        assert_eq!(state.profile, "coding", "first profile becomes the default");
-        assert_eq!(state.model, "deep", "profile default model");
-        assert_eq!(
-            state.reasoning,
-            Reasoning::High,
-            "profile default reasoning"
-        );
-        assert!(!state.submitting);
-        assert!(matches!(&app.dock, Dock::NewSession(_)));
-    }
-
-    #[test]
-    fn dock_actions_are_gated_until_ready() {
-        let mut app = test_app();
-        app.update(AppEvent::OpenNewSession);
-        assert_eq!(app.dock, Dock::Composer, "not Ready yet");
-        let models = take_requests(app.update(AppEvent::Bootstrap))
-            .into_iter()
-            .map(|r| r.method)
-            .collect::<Vec<_>>();
-        assert_eq!(models.len(), 4);
-    }
-
-    #[test]
-    fn open_model_selector_from_the_composer_creates_a_draft_and_preselects() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(AppEvent::OpenModelSelector);
-        assert!(matches!(app.dock, Dock::ModelSelector(_)));
-        // Keys off the draft model default.
-        let cursor = match &app.dock {
-            Dock::ModelSelector(state) => state.cursor,
-            _ => panic!("model selector"),
-        };
-        assert_eq!(cursor, 0, "deep is the first model and the draft default");
-    }
-
-    #[test]
-    fn selecting_a_model_never_touches_the_current_session() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        let open = take_requests(app.update(AppEvent::OpenSession {
-            session_id: "ses_a".into(),
-        }));
-        take_requests(respond(
-            &mut app,
-            &open[0],
-            json!({"session": session_info("ses_a", Some("i1"))}),
-        ));
-        assert_eq!(app.sessions.active.as_deref(), Some("ses_a"));
-        let original_info = app.sessions.known["ses_a"].info.clone();
-
-        app.update(AppEvent::OpenModelSelector);
-        app.update(AppEvent::MoveSelector { delta: 1 }); // fast
-        app.update(AppEvent::ConfirmDock); // -> draft.model=fast, opens reasoning
-        assert!(matches!(app.dock, Dock::ReasoningSelector(_)));
-        assert_eq!(draft(&app).model, "fast");
-        // The current session is untouched in every layer.
-        assert_eq!(app.sessions.known["ses_a"].info, original_info);
-        assert_eq!(
-            app.catalogs.next_model.as_deref(),
-            Some("deep"),
-            "catalog defaults untouched"
-        );
-    }
-
-    #[test]
-    fn incompatible_reasoning_is_kept_and_reasoning_selector_still_opens() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(AppEvent::OpenNewSession);
-        // Draft.reasoning is high; fast only supports low/medium.
-        app.update(AppEvent::OpenModelSelector);
-        app.update(AppEvent::MoveSelector { delta: 1 }); // fast
-        app.update(AppEvent::ConfirmDock);
-        assert!(matches!(app.dock, Dock::ReasoningSelector(_)));
-        assert_eq!(
-            draft(&app).reasoning,
-            Reasoning::High,
-            "kept, never downgraded"
-        );
-        assert!(
-            app.notices
-                .iter()
-                .any(|n| n.text.contains("may not support"))
-        );
-        // The reasoning selector only lists what fast supports.
-        let supported = supported_reasoning(&app.catalogs.models, "fast");
-        assert_eq!(supported, vec![Reasoning::Low, Reasoning::Medium]);
-    }
-
-    #[test]
-    fn reasoning_selector_confirms_only_supported_values_into_the_draft() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(AppEvent::OpenReasoningSelector);
-        // The cursor preselects the draft value (high, index 3); step back
-        // to medium (index 2) and confirm.
-        app.update(AppEvent::MoveSelector { delta: -1 });
-        app.update(AppEvent::ConfirmDock);
-        assert!(matches!(app.dock, Dock::NewSession(_)));
-        assert_eq!(draft(&app).reasoning, Reasoning::Medium);
-    }
-
-    #[test]
-    fn reasoning_selector_with_unknown_model_is_empty_and_unconfirmable() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(AppEvent::OpenNewSession);
-        if let Some(draft) = app.draft_mut() {
-            draft.model = "no-such-model".into();
-        }
-        app.update(AppEvent::OpenReasoningSelector);
-        assert!(matches!(app.dock, Dock::ReasoningSelector(_)));
-        app.update(AppEvent::ConfirmDock);
-        assert!(
-            matches!(app.dock, Dock::ReasoningSelector(_)),
-            "nothing to confirm for an unknown model"
-        );
-    }
-
-    #[test]
-    fn profile_selection_adopts_the_profile_defaults() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(AppEvent::OpenNewSession);
-        app.update(AppEvent::OpenProfileSelector);
-        app.update(AppEvent::MoveSelector { delta: 1 }); // review
-        app.update(AppEvent::ConfirmDock);
-        assert!(matches!(app.dock, Dock::NewSession(_)));
-        let state = draft(&app);
-        assert_eq!(state.profile, "review");
-        assert_eq!(state.model, "fast", "profile default model adopted");
-        assert_eq!(
-            state.reasoning,
-            Reasoning::Medium,
-            "profile default reasoning adopted"
-        );
-        let _ = app.sessions.active; // the active session is absent: untouched
-    }
-
-    #[test]
-    fn session_selector_sorts_and_filters_case_insensitively() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        let raw = filtered_sessions(&app.sessions.list, "");
-        let ids: Vec<&str> = raw.iter().map(|s| s.session_id.as_str()).collect();
-        assert_eq!(ids, vec!["ses_a", "ses_b"], "updated_at descending");
-        let matching = filtered_sessions(&app.sessions.list, "BETA");
-        assert_eq!(matching.len(), 1, "title match is case-insensitive");
-        assert_eq!(matching[0].session_id, "ses_b");
-        let workspace = filtered_sessions(&app.sessions.list, "/a");
-        assert_eq!(workspace.len(), 1);
-        assert_eq!(workspace[0].session_id, "ses_a");
-    }
-
-    #[test]
-    fn session_selector_confirm_opens_and_closes_on_success() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(AppEvent::OpenSessionSelector);
-        app.update(AppEvent::MoveSelector { delta: 1 }); // ses_b (fast)
-        let commands = take_requests(app.update(AppEvent::ConfirmDock));
-        assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].method, "session.open");
-        assert_eq!(commands[0].params["session_id"], json!("ses_b"));
-        assert!(matches!(&app.dock, Dock::SessionSelector(state) if state.submitting));
-        let commands = take_requests(respond(
-            &mut app,
-            &commands[0],
-            json!({"session": session_info("ses_b", Some("i9"))}),
-        ));
-        assert!(
-            matches!(app.dock, Dock::Composer),
-            "success closes the selector"
-        );
-        assert_eq!(app.sessions.active.as_deref(), Some("ses_b"));
-        // state + transcript chain follows the open.
-        assert_eq!(commands.len(), 2);
-    }
-
-    #[test]
-    fn session_open_failure_keeps_the_selector_query_and_selection() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(AppEvent::OpenSessionSelector);
-        app.update(AppEvent::SetSelectorQuery { query: "Al".into() });
-        let request = take_requests(app.update(AppEvent::ConfirmDock)).remove(0);
-        let commands = respond_error(&mut app, &request, "bad_session", "gone");
-        assert!(take_requests(commands).is_empty());
-        match &app.dock {
-            Dock::SessionSelector(state) => {
-                assert!(!state.submitting, "submit unblocks after failure");
-                assert_eq!(state.query, "Al", "query survives");
-                assert_eq!(state.cursor, 0, "selection survives");
-                assert!(state.error.as_deref().is_some_and(|e| e.contains("gone")));
-            }
-            other => panic!("selector must stay open, dock = {other:?}"),
-        }
-    }
-
-    #[test]
-    fn create_failure_keeps_every_draft_field_and_reports_the_error() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(AppEvent::OpenNewSession);
-        app.update(AppEvent::NewSessionSetField {
-            field: NewSessionField::Title,
-            value: "My task".into(),
-        });
-        app.update(AppEvent::DockFieldStep { delta: 5 }); // create
-        let request = take_requests(app.update(AppEvent::ConfirmDock)).remove(0);
-        assert_eq!(request.method, "session.create");
-        assert_eq!(request.params["title"], json!("My task"));
-        let commands = respond_error(&mut app, &request, "validation", "bad workspace");
-        assert!(take_requests(commands).is_empty());
-        let state = draft(&app);
-        assert!(!state.submitting);
-        assert_eq!(state.title, "My task", "fields are never cleared");
-        assert!(
-            state
-                .error
-                .as_deref()
-                .is_some_and(|e| e.contains("bad workspace"))
-        );
-        assert!(matches!(app.dock, Dock::NewSession(_)));
-    }
-
-    #[test]
-    fn submit_new_session_is_gated_while_in_flight() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(AppEvent::OpenNewSession);
-        let first = take_requests(app.update(AppEvent::SubmitNewSession)).remove(0);
-        let second = app.update(AppEvent::SubmitNewSession);
-        assert!(take_requests(second).is_empty(), "no duplicate create");
-        let command = take_requests(respond_error(&mut app, &first, "internal", "boom"));
-        assert!(command.is_empty());
-        // Now submitting is unblocked.
-        let retry = take_requests(app.update(AppEvent::SubmitNewSession));
-        assert_eq!(retry.len(), 1);
-    }
-
-    #[test]
-    fn create_success_activates_the_new_session_and_closes_the_form() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(AppEvent::OpenNewSession);
-        let request = take_requests(app.update(AppEvent::SubmitNewSession)).remove(0);
-        let commands = take_requests(respond(
-            &mut app,
-            &request,
-            json!({"session": session_info("ses_new", Some("n1"))}),
-        ));
-        assert!(matches!(app.dock, Dock::Composer));
-        assert_eq!(app.sessions.active.as_deref(), Some("ses_new"));
-        assert_eq!(commands.len(), 2, "state + transcript chain");
-    }
-
-    #[test]
-    fn cancel_returns_to_the_composer_or_the_form() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        // NewSession -> composer.
-        app.update(AppEvent::OpenNewSession);
-        app.update(AppEvent::CancelDock);
-        assert!(matches!(app.dock, Dock::Composer));
-        // Model selector -> the form (never the composer when a draft flows).
-        app.update(AppEvent::OpenModelSelector);
-        app.update(AppEvent::CancelDock);
-        assert!(matches!(app.dock, Dock::NewSession(_)));
-        // Reasoning selector -> the form.
-        app.update(AppEvent::OpenReasoningSelector);
-        app.update(AppEvent::CancelDock);
-        assert!(matches!(app.dock, Dock::NewSession(_)));
-        // Session selector -> the composer.
-        app.update(AppEvent::OpenSessionSelector);
-        app.update(AppEvent::CancelDock);
-        assert!(matches!(app.dock, Dock::Composer));
-        // The composer text survives the whole dance.
-        app.update(crate::event::AppEvent::SetTheme(ThemeKind::Dark));
-    }
-
-    #[test]
-    fn stale_create_response_does_not_touch_a_newer_dock() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(AppEvent::OpenNewSession);
-        let stale = take_requests(app.update(AppEvent::SubmitNewSession)).remove(0);
-        // Cancel the form while the create is in flight, then open a fresh
-        // one; the stale failure must not leak into the new draft.
-        app.update(AppEvent::CancelDock);
-        app.update(AppEvent::OpenNewSession);
-        let commands = respond_error(&mut app, &stale, "validation", "stale boom");
-        assert!(take_requests(commands).is_empty());
-        let state = draft(&app);
-        assert!(
-            state.error.is_none(),
-            "stale failure stayed off the new draft"
-        );
-        assert!(!state.submitting);
-    }
-
-    #[test]
-    fn selectors_fields_and_field_edits_freeze_while_creating() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(AppEvent::OpenNewSession);
-        let in_flight = take_requests(app.update(AppEvent::SubmitNewSession));
-        assert_eq!(in_flight.len(), 1);
-        let workspace_before = draft(&app).workspace.clone();
-
-        // All three new-session selectors are blocked while submitting.
-        app.update(AppEvent::OpenModelSelector);
-        assert!(
-            matches!(app.dock, Dock::NewSession(_)),
-            "model selector blocked"
-        );
-        app.update(AppEvent::OpenReasoningSelector);
-        assert!(
-            matches!(app.dock, Dock::NewSession(_)),
-            "reasoning selector blocked"
-        );
-        app.update(AppEvent::OpenProfileSelector);
-        assert!(
-            matches!(app.dock, Dock::NewSession(_)),
-            "profile selector blocked"
-        );
-
-        // Field confirm (Enter on a selector field) is blocked as well.
-        app.update(AppEvent::DockFieldStep { delta: 1 }); // profile
-        app.update(AppEvent::ConfirmDock);
-        assert!(
-            matches!(app.dock, Dock::NewSession(_)),
-            "field confirm blocked"
-        );
-
-        // Field edits do not mutate the frozen draft.
-        app.update(AppEvent::NewSessionSetField {
-            field: NewSessionField::Workspace,
-            value: "/changed".into(),
-        });
-        assert_eq!(draft(&app).workspace, workspace_before);
-        assert!(draft(&app).submitting);
-
-        // The failure response unblocks and keeps the untouched draft.
-        let commands = take_requests(respond_error(&mut app, &in_flight[0], "internal", "boom"));
-        assert!(commands.is_empty());
-        assert!(matches!(app.dock, Dock::NewSession(_)));
-        assert_eq!(draft(&app).workspace, workspace_before);
-        assert!(!draft(&app).submitting);
-    }
-
-    #[test]
-    fn unexpected_selector_does_not_survive_a_matching_create_response() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(AppEvent::OpenNewSession);
-        let request = take_requests(app.update(AppEvent::SubmitNewSession)).remove(0);
-        // Defensive: even if the app ends up on a selector while the create
-        // is in flight, a matching success must resolve the whole flow.
-        app.draft = Some(draft(&app));
-        app.dock = Dock::ModelSelector(SelectorState::new(SelectorKind::Model));
-        let commands = take_requests(respond(
-            &mut app,
-            &request,
-            json!({"session": session_info("ses_new", Some("n1"))}),
-        ));
-        assert!(
-            matches!(app.dock, Dock::Composer),
-            "matching success closes the flow"
-        );
-        assert!(app.draft.is_none());
-        assert_eq!(app.sessions.active.as_deref(), Some("ses_new"));
-        assert!(commands.iter().any(|r| r.method == "session.state"));
-    }
-
-    #[test]
-    fn stale_create_success_does_not_close_a_newer_draft() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(AppEvent::OpenNewSession);
-        let stale = take_requests(app.update(AppEvent::SubmitNewSession)).remove(0);
-        app.update(AppEvent::CancelDock);
-        app.update(AppEvent::OpenNewSession);
-        let model_before = draft(&app).model.clone();
-        let commands = take_requests(respond(
-            &mut app,
-            &stale,
-            json!({"session": session_info("ses_late", Some("n9"))}),
-        ));
-        assert!(
-            matches!(app.dock, Dock::NewSession(_)),
-            "an old create response never closes the newer draft"
-        );
-        assert_eq!(draft(&app).model, model_before);
-        assert!(commands.iter().any(|r| r.method == "session.state"));
-    }
-
-    #[test]
-    fn move_selector_wraps_and_pages() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(AppEvent::OpenModelSelector);
-        app.update(AppEvent::MoveSelector { delta: 5 });
-        match &app.dock {
-            Dock::ModelSelector(state) => assert_eq!(state.cursor, 5 % 3),
-            _ => panic!("model selector"),
-        }
-        app.update(AppEvent::MoveSelector { delta: -1 });
-        match &app.dock {
-            Dock::ModelSelector(state) => assert_eq!(state.cursor, 4 % 3),
-            _ => panic!("model selector"),
-        }
-        app.update(AppEvent::PageSelector { delta: 1 });
-        match &app.dock {
-            Dock::ModelSelector(state) => assert_eq!(state.cursor, (4 % 3 + 6) % 3),
-            _ => panic!("model selector"),
-        }
-    }
-
-    #[test]
-    fn rpc_send_failure_on_create_clears_submitting_and_reports() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(AppEvent::OpenNewSession);
-        let request = take_requests(app.update(AppEvent::SubmitNewSession)).remove(0);
-        app.update(AppEvent::RpcSendFailed {
-            id: request.id,
-            error: RpcError::Closed,
-        });
-        let state = draft(&app);
-        assert!(!state.submitting);
-        assert!(
-            state
-                .error
-                .as_deref()
-                .is_some_and(|e| e.contains("RPC process"))
-        );
-    }
-
-    // ---- Phase 5: input (spec 22-23, 32, 43.7-8) ------------------------
-    use crossterm::event::{
-        Event as KTEvent, KeyCode as KC, KeyEvent as KEv, KeyEventKind as KEK, KeyModifiers as KM,
-        MouseEvent as MEv, MouseEventKind as MEK,
-    };
-
-    fn term_key(key: KEv) -> AppEvent {
-        AppEvent::Terminal(KTEvent::Key(key))
-    }
-    fn cd(code: KC, mods: KM, kind: KEK) -> AppEvent {
-        term_key(KEv::new_with_kind(code, mods, kind))
-    }
-    fn press(code: KC, mods: KM) -> AppEvent {
-        cd(code, mods, KEK::Press)
-    }
-    fn ch(c: char) -> AppEvent {
-        press(KC::Char(c), KM::empty())
-    }
-    fn ctrl(c: char) -> AppEvent {
-        press(KC::Char(c), KM::CONTROL)
-    }
-    fn enter() -> AppEvent {
-        press(KC::Enter, KM::empty())
-    }
-    fn esc() -> AppEvent {
-        press(KC::Esc, KM::empty())
-    }
-    fn shift_enter() -> AppEvent {
-        press(KC::Enter, KM::SHIFT)
-    }
-    fn paste(text: &str) -> AppEvent {
-        AppEvent::Terminal(KTEvent::Paste(text.to_owned()))
-    }
-    fn scroll_up() -> AppEvent {
-        AppEvent::Terminal(KTEvent::Mouse(MEv {
-            kind: MEK::ScrollUp,
-            column: 0,
-            row: 0,
-            modifiers: KM::empty(),
-        }))
-    }
-    fn scroll_down() -> AppEvent {
-        AppEvent::Terminal(KTEvent::Mouse(MEv {
-            kind: MEK::ScrollDown,
-            column: 0,
-            row: 0,
-            modifiers: KM::empty(),
-        }))
-    }
-
-    #[test]
-    fn typing_cjk_and_emoji_uses_char_offsets_never_bytes() {
-        let mut app = test_app();
-        for c in ['你', '好', '😀'] {
-            app.update(ch(c));
-        }
-        let (row, col) = app.composer.cursor();
-        assert_eq!(app.composer.content(), "你好😀");
-        assert_eq!(col, 3, "cursor is a char offset, not a byte offset");
-        assert_eq!(row, 0);
-        app.update(press(KC::Backspace, KM::empty()));
-        assert_eq!(app.composer.content(), "你好");
-    }
-
-    #[test]
-    fn enter_submits_clears_the_composer_and_pushes_history() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        open_session(&mut app, "ses_a", "i1");
-        for c in "hello world".chars() {
-            app.update(ch(c));
-        }
-        let commands = take_requests(app.update(enter()));
-        assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].method, "turn.send");
-        assert_eq!(commands[0].params["text"], json!("hello world"));
-        assert!(app.composer.is_empty(), "the composer clears after submit");
-        assert_eq!(app.composer.history_len(), 1);
-    }
-
-    #[test]
-    fn ctrl_j_and_shift_enter_insert_newlines_not_submits() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        open_session(&mut app, "ses_a", "i1");
-        app.update(ch('a'));
-        app.update(shift_enter());
-        app.update(ch('b'));
-        let before = app.composer.lines().len();
-        let commands = app.update(ctrl('j'));
-        assert!(take_requests(commands).is_empty(), "Ctrl+J never submits");
-        assert_eq!(app.composer.lines().len(), before + 1);
-        assert_eq!(app.composer.content(), "a\nb\n");
-    }
-
-    #[test]
-    fn plain_enter_confirms_the_session_selector() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(press(KC::Char('r'), KM::CONTROL)); // open sessions
-        assert!(matches!(app.dock, Dock::SessionSelector(_)));
-        let commands = take_requests(app.update(enter()));
-        assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].method, "session.open");
-        assert!(matches!(app.dock, Dock::SessionSelector(_))); // still open until the response
-    }
-
-    #[test]
-    fn paste_crlf_and_cjk_inserts_once_without_submitting() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        open_session(&mut app, "ses_a", "i1");
-        let commands = take_requests(app.update(paste("hello\r\nworld\r你😀")));
-        assert!(commands.is_empty(), "paste never submits");
-        assert_eq!(app.composer.content(), "hello\nworld\n你😀");
-        assert_eq!(app.composer.history_len(), 0);
-    }
-
-    #[test]
-    fn history_up_recalls_messages_and_down_returns_to_the_draft() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        open_session(&mut app, "ses_a", "i1");
-        for (index, text) in ["first", "second"].iter().enumerate() {
-            for c in text.chars() {
-                app.update(ch(c));
-            }
-            let request = take_requests(app.update(enter())).remove(0);
-            complete_history_turn(&mut app, &request, &format!("trn_h{index}"));
-        }
-        for c in "fresh".chars() {
-            app.update(ch(c));
-        }
-        // Up on the first row recalls history.
-        app.update(press(KC::Up, KM::empty()));
-        assert_eq!(app.composer.content(), "second");
-        app.update(press(KC::Up, KM::empty()));
-        assert_eq!(app.composer.content(), "first");
-        for _ in 0..4 {
-            app.update(press(KC::Down, KM::empty()));
-        }
-        assert_eq!(
-            app.composer.content(),
-            "fresh",
-            "down walks back to the live draft"
-        );
-        assert_eq!(app.composer.history_len(), 2);
-    }
-
-    /// Drives one submitted turn to completion so the session is idle again
-    /// (send -> wait -> state -> transcript), like the Phase 2 tests.
-    fn complete_history_turn(app: &mut App, send_request: &OutgoingRequest, turn_id: &str) {
-        let wait_request = {
-            let commands = take_requests(respond(
-                app,
-                send_request,
-                json!({"turn": turn_ref_json("ses_a", "i1", turn_id)}),
-            ));
-            assert_eq!(commands.len(), 1, "send success registers exactly one wait");
-            commands.into_iter().next().unwrap()
-        };
-        let commands = take_requests(respond(
-            app,
-            &wait_request,
-            outcome_json(turn_id, "completed"),
-        ));
-        let state = commands
-            .iter()
-            .find(|r| r.method == "session.state")
-            .unwrap();
-        let transcript = commands
-            .iter()
-            .find(|r| r.method == "session.transcript")
-            .unwrap();
-        take_requests(respond(app, state, state_json("ses_a", "i1", "idle")));
-        let commands = take_requests(respond(
-            app,
-            transcript,
-            page_json(vec![terminal_entry(1, turn_id)], None, 1, true),
-        ));
-        assert!(commands.is_empty());
-        assert!(app.sessions.known["ses_a"].live.is_none());
-    }
-
-    #[test]
-    fn composer_is_frozen_while_a_turn_runs_and_esc_cancels() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        open_session(&mut app, "ses_a", "i1");
-        let send = submit(&mut app, "ses_a", "work on it");
-        let turn = make_turn("ses_a", "i1", "trn_1");
-        take_requests(app.update(turn_started_event(&turn)));
-        assert!(app.sessions.known["ses_a"].live.is_some());
-
-        app.update(ch('x'));
-        assert_eq!(
-            app.composer.content(),
-            "",
-            "editing is disabled while running"
-        );
-        let commands = take_requests(app.update(enter()));
-        assert!(commands.is_empty(), "submit is disabled while running");
-        let commands = take_requests(app.update(esc()));
-        assert_eq!(commands.len(), 1, "Esc cancels the exact turn");
-        assert_eq!(commands[0].method, "turn.cancel");
-        // The send response still arrives; the cancel rides along.
-        let _ = &send;
-    }
-
-    #[test]
-    fn ctrl_c_clears_then_warns_then_quits_within_the_window() {
-        let mut app = test_app();
-        app.update(ch('t'));
-        app.update(ctrl('c'));
-        assert!(app.composer.is_empty(), "Ctrl+C clears content");
-        app.update(ctrl('c'));
-        assert!(matches!(app.dock, Dock::Composer));
-        assert!(app.notices.iter().any(|n| n.text.contains("again")));
-        let commands = app.update(ctrl('c'));
-        let requests = take_requests(commands);
-        assert!(
-            shutdown_request(&requests).is_some(),
-            "a second Ctrl+C requests agent.shutdown"
-        );
-        assert_eq!(app.connection, ConnectionState::ShuttingDown);
-    }
-
-    #[test]
-    fn ctrl_d_quits_only_when_empty_and_idle() {
-        let mut app = test_app();
-        let requests = take_requests(app.update(ctrl('d')));
-        assert!(shutdown_request(&requests).is_some());
-        app.update(ch('x'));
-        assert!(take_requests(app.update(ctrl('d'))).is_empty());
-    }
-
-    #[test]
-    fn q_is_a_normal_character_everywhere_except_help() {
-        let mut app = test_app();
-        app.update(ch('q'));
-        assert_eq!(app.composer.content(), "q");
-        app.update(press(KC::F(1), KM::empty()));
-        assert!(matches!(app.dock, Dock::Help));
-        let requests = take_requests(app.update(ch('q')));
-        assert!(shutdown_request(&requests).is_some(), "q in help quits");
-    }
-
-    #[test]
-    fn slash_commands_execute_locally_and_never_spawn_rpc_on_unknown() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        open_session(&mut app, "ses_a", "i1");
-        for c in "/theme light".chars() {
-            app.update(ch(c));
-        }
-        let commands = take_requests(app.update(enter()));
-        assert!(commands.is_empty(), "the theme command is local");
-        assert_eq!(app.theme, ThemeKind::Light);
-        assert!(app.composer.is_empty());
-
-        for c in "/fork".chars() {
-            app.update(ch(c));
-        }
-        let commands = take_requests(app.update(enter()));
-        assert!(commands.is_empty());
-        assert!(
-            app.notices
-                .iter()
-                .any(|n| n.text.contains("unknown command"))
-        );
-
-        // `/new` opens the form.
-        for c in "/new".chars() {
-            app.update(ch(c));
-        }
-        app.update(enter());
-        assert!(matches!(app.dock, Dock::NewSession(_)));
-    }
-
-    #[test]
-    fn invalid_slash_arguments_show_usage() {
-        let mut app = test_app();
-        for c in "/theme blue".chars() {
-            app.update(ch(c));
-        }
-        take_requests(app.update(enter()));
-        assert!(app.notices.iter().any(|n| n.text.contains("usage: /theme")));
-    }
-
-    #[test]
-    fn clear_slash_wipes_the_local_transcript_and_reloads() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        open_session(&mut app, "ses_a", "i1");
-        assert_eq!(app.sessions.known["ses_a"].transcript.blocks.len(), 0);
-        for c in "/clear".chars() {
-            app.update(ch(c));
-        }
-        let commands = take_requests(app.update(enter()));
-        assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].method, "session.transcript");
-        assert_eq!(commands[0].params["after"], json!(null));
-    }
-
-    #[test]
-    fn quit_slash_and_help_logs_open_docks() {
-        let mut app = test_app();
-        for c in "/help".chars() {
-            app.update(ch(c));
-        }
-        take_requests(app.update(enter()));
-        assert!(matches!(app.dock, Dock::Help));
-        app.update(esc());
-        for c in "/logs".chars() {
-            app.update(ch(c));
-        }
-        take_requests(app.update(enter()));
-        assert!(matches!(app.dock, Dock::Logs));
-        app.update(esc());
-        for c in "/quit".chars() {
-            app.update(ch(c));
-        }
-        let requests = take_requests(app.update(enter()));
-        assert!(shutdown_request(&requests).is_some(), "/quit shuts down");
-    }
-
-    #[test]
-    fn selector_typing_backspace_and_clear_update_the_query() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(press(KC::Char('l'), KM::CONTROL));
-        app.update(ch('f'));
-        app.update(ch('a'));
-        match &app.dock {
-            Dock::ModelSelector(state) => assert_eq!(state.query, "fa"),
-            _ => panic!("model selector"),
-        }
-        app.update(press(KC::Backspace, KM::empty()));
-        match &app.dock {
-            Dock::ModelSelector(state) => assert_eq!(state.query, "f"),
-            _ => panic!("model selector"),
-        }
-        app.update(ctrl('u'));
-        match &app.dock {
-            Dock::ModelSelector(state) => assert!(state.query.is_empty()),
-            _ => panic!("model selector"),
-        }
-    }
-
-    #[test]
-    fn new_session_fields_edit_with_char_cursor_and_tabs_move() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(ch('/'));
-        app.update(ch('n'));
-        app.update(ch('e'));
-        app.update(ch('w'));
-        take_requests(app.update(enter()));
-        assert!(matches!(app.dock, Dock::NewSession(_)));
-
-        // workspace is the default field; type a CJK path.
-        for c in "你".chars() {
-            app.update(ch(c));
-        }
-        let state = app.new_session().cloned().unwrap();
-        assert_eq!(state.workspace, "/workspace你");
-        assert_eq!(
-            state.field_cursor, 11,
-            "the draft cursor sat at the end of the default workspace"
-        );
-        app.update(press(KC::Backspace, KM::empty()));
-        assert_eq!(app.new_session().unwrap().workspace, "/workspace");
-        assert_eq!(app.new_session().unwrap().field_cursor, 10);
-        // Tab to profile, which opens the profile selector on Enter.
-        app.update(press(KC::Tab, KM::empty()));
-        assert_eq!(app.new_session().unwrap().field, NewSessionField::Profile);
-        let commands = take_requests(app.update(enter()));
-        assert!(commands.is_empty());
-        assert!(matches!(app.dock, Dock::ProfileSelector(_)));
-    }
-
-    #[test]
-    fn paste_lands_in_selector_query_and_new_session_fields() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        app.update(press(KC::Char('r'), KM::CONTROL));
-        app.update(paste("web\r\napp"));
-        match &app.dock {
-            Dock::SessionSelector(state) => assert_eq!(state.query, "webapp"),
-            _ => panic!("session selector"),
-        }
-        app.update(esc());
-        app.update(paste("/neeaded")); // composer context
-        assert_eq!(app.composer.content(), "/neeaded");
-    }
-
-    #[test]
-    fn release_events_are_ignored() {
-        let mut app = test_app();
-        app.update(ch('a'));
-        let release = cd(KC::Char('b'), KM::empty(), KEK::Release);
-        app.update(release);
-        assert_eq!(app.composer.content(), "a");
-    }
-
-    #[test]
-    fn scrolling_leaves_the_tail_and_end_resumes_follow() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        open_session(&mut app, "ses_a", "i1");
-        app.update(AppEvent::Viewport {
-            total_lines: 20,
-            visible_rows: 5,
-        });
-        app.update(press(KC::PageUp, KM::empty()));
-        let view = &app.sessions.known["ses_a"];
-        assert!(!view.scroll.follow_tail);
-        assert_eq!(view.scroll.offset, 10, "one page up from the tail");
-        app.update(AppEvent::Viewport {
-            total_lines: 22,
-            visible_rows: 5,
-        });
-        let view = &app.sessions.known["ses_a"];
-        assert!(view.scroll.new_content, "marker set while scrolled up");
-        app.update(press(KC::End, KM::CONTROL));
-        let view = &app.sessions.known["ses_a"];
-        assert!(view.scroll.follow_tail);
-        assert!(!view.scroll.new_content, "End clears the marker");
-    }
-
-    #[test]
-    fn mouse_wheel_scrolls_in_three_row_steps_and_selectors_move() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        open_session(&mut app, "ses_a", "i1");
-        app.update(AppEvent::Viewport {
-            total_lines: 20,
-            visible_rows: 5,
-        });
-        app.update(scroll_up());
-        app.update(scroll_up());
-        let view = &app.sessions.known["ses_a"];
-        assert_eq!(view.scroll.offset, 9, "two wheel-up steps of three rows");
-        app.update(scroll_down());
-        app.update(scroll_down());
-        let view = &app.sessions.known["ses_a"];
-        assert!(view.scroll.follow_tail, "down to the tail restores follow");
-    }
-
-    #[test]
-    fn expired_transient_notices_are_removed_but_sticky_and_fresh_survive() {
-        let mut app = test_app();
-        app.notice_ttl = Duration::from_millis(5);
-        app.push_notice(Notice::new(
-            NoticeLevel::Info,
-            "old-transient".into(),
-            false,
-        ));
-        std::thread::sleep(Duration::from_millis(30));
-        app.push_notice(Notice::new(
-            NoticeLevel::Warning,
-            "keep-sticky".into(),
-            true,
-        ));
-        app.push_notice(Notice::new(
-            NoticeLevel::Info,
-            "fresh-transient".into(),
-            false,
-        ));
-        app.update(AppEvent::Tick);
-        let texts: Vec<String> = app.notices.iter().map(|n| n.text.clone()).collect();
-        assert_eq!(
-            texts,
-            vec!["keep-sticky".to_owned(), "fresh-transient".to_owned()],
-            "only sticky + unexpired survive, in order"
-        );
-    }
-
-    #[test]
-    fn notice_dock_row_disappears_when_every_transient_expires() {
-        let mut app = test_app();
-        app.notice_ttl = Duration::from_millis(5);
-        app.push_notice(Notice::new(NoticeLevel::Warning, "ephemeral".into(), false));
-        std::thread::sleep(Duration::from_millis(30));
-        app.update(AppEvent::Tick);
-        assert!(app.notices.is_empty());
-        let baseline = crate::ui::layout::dock_rows(&test_app(), 80, 24);
-        assert_eq!(
-            crate::ui::layout::dock_rows(&app, 80, 24),
-            baseline,
-            "no notice row after everything expired"
-        );
-    }
-
-    #[test]
-    fn sticky_unsupported_notice_survives_expiration() {
-        let mut app = test_app();
-        app.notice_ttl = Duration::ZERO;
-        app.sticky_notice(NoticeLevel::Warning, UNSUPPORTED_INTERACTION_NOTICE);
-        app.update(AppEvent::Tick);
-        assert_eq!(app.notices.len(), 1);
-        assert!(app.notices.back().unwrap().sticky);
-        assert!(
-            app.notices
-                .back()
-                .unwrap()
-                .text
-                .contains("does not support")
-        );
-    }
-
-    #[test]
-    fn next_tick_keeps_an_expired_notice_timer_armed_at_zero() {
-        let mut app = test_app();
-        app.notice_ttl = Duration::ZERO;
-        app.push_notice(Notice::new(NoticeLevel::Info, "expired".to_owned(), false));
-        assert_eq!(app.next_tick(), Some(Duration::ZERO));
-        app.update(AppEvent::Tick);
-        assert!(app.notices.is_empty());
-    }
-
-    #[test]
-    fn next_tick_keeps_an_expired_ctrl_c_timer_armed_at_zero() {
-        let base = Instant::now();
-        let elapsed = std::sync::Arc::new(AtomicU64::new(0));
-        let clock_elapsed = std::sync::Arc::clone(&elapsed);
-        let mut app = App::with_monotonic_clock(PathBuf::from("/workspace"), move || {
-            base.checked_add(Duration::from_millis(clock_elapsed.load(Ordering::Relaxed)))
-                .expect("test clock remains representable")
-        });
-        app.update(AppEvent::Terminal(crossterm::event::Event::Key(
-            crossterm::event::KeyEvent::new(
-                crossterm::event::KeyCode::Char('c'),
-                crossterm::event::KeyModifiers::CONTROL,
-            ),
-        )));
-        elapsed.store(1_000, Ordering::Relaxed);
-        assert_eq!(app.next_tick(), Some(Duration::ZERO));
-        app.update(AppEvent::Tick);
-        assert!(app.ctrl_c_at.is_none());
-    }
-
-    #[test]
-    fn resize_clamps_the_stored_offset() {
-        let mut app = test_app();
-        ready_with_catalogs(&mut app);
-        open_session(&mut app, "ses_a", "i1");
-        app.update(AppEvent::Viewport {
-            total_lines: 20,
-            visible_rows: 5,
-        });
-        app.update(press(KC::PageUp, KM::empty()));
-        app.update(AppEvent::Viewport {
-            total_lines: 8,
-            visible_rows: 5,
-        });
-        let view = &app.sessions.known["ses_a"];
-        assert_eq!(view.scroll.offset, 3, "clamped to a shrinking tail");
+        assert_eq!(view.transcript.blocks.len(), 4); // user, assistant, orphan tool_result, summary
+        assert!(view.transcript.blocks.iter().all(|b| b.index().is_some()));
     }
 }

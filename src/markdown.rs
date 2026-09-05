@@ -1,7 +1,8 @@
 //! Lightweight Markdown rendering on top of `pulldown-cmark` (development
 //! spec 20). Durable messages are parsed during update-owned cache
-//! preparation into pre-wrapped, styled lines; live streaming uses
-//! `wrap_plain` so a delta never triggers a full durable reparse (spec 20.4).
+//! preparation into pre-wrapped, styled lines. Live answer text uses
+//! `wrap_plain`; live reasoning parses its request-local buffer as Markdown.
+//! Neither path invalidates or reparses the durable cache on a delta.
 //! No other UI module depends on pulldown-cmark.
 //!
 //! `tui-markdown` was evaluated first: its bundled `Theme` cannot express
@@ -215,8 +216,7 @@ impl Builder<'_> {
     }
 }
 
-/// Renders a full durable markdown message (spec 20.2) and wraps plain text
-/// for live streaming.
+/// Renders durable Markdown messages and request-local live reasoning.
 pub struct MarkdownRenderer<'a> {
     theme: &'a Theme,
 }
@@ -491,7 +491,7 @@ fn push_span_char(spans: &mut Vec<Span<'static>>, ch: char, style: Style) {
     spans.push(Span::styled(ch.to_string(), style));
 }
 
-/// Wraps plain text (streaming assistant/reasoning/composer, spec 20.4)
+/// Wraps plain text for streaming answers and the composer (spec 20.4)
 /// with no markdown parsing. `\n` is a real line boundary: a newline ends
 /// the current line, so consecutive newlines yield the same number of blank
 /// lines and a leading/trailing newline yields a blank row — the rendered
@@ -537,11 +537,13 @@ pub fn line_width(line: &Line) -> usize {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn reset_parse_count() {
     MARKDOWN_PARSE_COUNT.with(|count| count.set(0));
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn parse_count() -> usize {
     MARKDOWN_PARSE_COUNT.with(Cell::get)
 }

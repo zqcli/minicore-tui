@@ -94,7 +94,22 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
     let press = key.kind == KeyEventKind::Press;
     let repeat = key.kind == KeyEventKind::Repeat;
     let typing = press || repeat;
-    let running = app.active_view().is_some_and(|view| view.live.is_some());
+    let cancellable = app.active_view().is_some_and(|view| {
+        view.live.as_ref().is_some_and(|live| {
+            (!live.waiting
+                || view.state.as_ref().is_some_and(|state| {
+                    state.status == crate::protocol::SessionStatusWire::WaitingForInput
+                }))
+                && view.state.as_ref().is_none_or(|state| {
+                    matches!(
+                        state.status,
+                        crate::protocol::SessionStatusWire::Idle
+                            | crate::protocol::SessionStatusWire::Running
+                            | crate::protocol::SessionStatusWire::WaitingForInput
+                    )
+                })
+        })
+    });
 
     if press {
         // `q` quits only from the help panel and the fatal overlay; it is
@@ -119,7 +134,7 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
             KeyCode::Char('t') if ctrl(&key) => return Action::ToggleReasoning,
             KeyCode::Esc => {
                 return match &app.dock {
-                    Dock::Composer if running => Action::CancelTurn,
+                    Dock::Composer if cancellable => Action::CancelTurn,
                     Dock::Composer => Action::None,
                     _ => Action::CloseDock,
                 };
@@ -185,7 +200,7 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
     }
 
     match &app.dock {
-        Dock::Composer => composer_keys(key, press, repeat, typing, running),
+        Dock::Composer => composer_keys(key, press, repeat, typing),
         Dock::NewSession(_) => new_session_keys(key, press, typing),
         Dock::SessionSelector(_)
         | Dock::ModelSelector(_)
@@ -195,12 +210,10 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
     }
 }
 
-fn composer_keys(key: KeyEvent, press: bool, repeat: bool, typing: bool, running: bool) -> Action {
-    // While a turn is running the editor is frozen: every editing key is
-    // ignored (Esc already handled globally as cancel).
-    if running {
-        return Action::None;
-    }
+fn composer_keys(key: KeyEvent, press: bool, repeat: bool, typing: bool) -> Action {
+    // The reducer rejects ordinary prompt/steer submissions in blocked or
+    // finishing states, but the editor remains usable for local slash
+    // commands such as `/refresh` and `/close confirm`.
     if !typing {
         return Action::None;
     }

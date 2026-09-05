@@ -1,0 +1,1 @@
+{"tui_version": "0.2.1", "platform": "native macOS x86_64", "session_loops": 6, "assistant_items": 11, "reasoning_runs": 10, "reasoning_before_answer_pairs": 6, "markdown_bold_italic": "PASS", "request_order": "PASS", "resume": "PASS", "terminal_restore": "PASS", "exit_code": 0, "original_store_unchanged": true, "external_provider_calls": 0}

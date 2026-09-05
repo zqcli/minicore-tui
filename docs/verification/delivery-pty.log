@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/terminal_restore.rs (target/debug/deps/terminal_restore-fac0df76860f6fde)
+
+running 1 test
+[?1049h[?2004h[?1000h[?1002h[?1003h[?1015h[?1006h[?25l[2J[?25h[?1006l[?1015l[?1003l[?1002l[?1000l[?2004l[?1049ltest real_pty_enter_and_restore_round_trip ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+

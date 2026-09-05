@@ -1,0 +1,16 @@
+
+ thinking hard
+
+ Streaming contentmore
+
+ read                                               running
+  reading…
+
+
+ ⠸ Steering (accepted awaiting history): Focus on memory saf
+
+⠋ Running read…
+╭──────────────────────────────────────────────────────────╮
+│Steer current turn…                                       │
+╰──────────────────────────────────────────────────────────╯
+⚠ live output incomplete     request 0 · deep · high · rev 0

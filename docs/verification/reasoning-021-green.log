@@ -1,0 +1,23 @@
+   Compiling minicore-tui v0.2.1 (/root/minicore-tui-r2-01a06ec1/tui)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.59s
+     Running tests/app_flow.rs (target/debug/deps/app_flow-05a4735f9768357f)
+
+running 4 tests
+test late_reasoning_delta_stays_before_same_request_text ... ok
+test reasoning_rendering_keeps_hidden_cache_fallback_themes_and_cjk_width ... ok
+test live_reasoning_renders_markdown_before_each_request_text ... ok
+test persisted_reasoning_preserves_markdown_and_request_order_after_reopen ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 49 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-00ea0959f69688a0)
+
+running 2 tests
+test ui::component_tests::reasoning_selector_lists_only_supported_levels_with_the_current_session_header ... ok
+test ui::component_tests::reasoning_is_gray_and_italic_and_can_be_hidden ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 195 filtered out; finished in 0.01s
+
+app_flow_reasoning_status=0
+component_reasoning_status=0

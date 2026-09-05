@@ -1,4 +1,4 @@
-MINICORE  v0.1.0
+MINICORE  v0.2.1
 
 Coding agent TUI
 q / Ctrl+C to quit
@@ -8,7 +8,7 @@ Open a session — /new, Ctrl+R, or F1 for help
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │Select model                                                                  │
-│Changing model creates a new session.                                         │
+│Model applies at the next model request.                                      │
 │> zzzz                                                                        │
 │No matching items                                                             │
 │(0/0)                                                                         │

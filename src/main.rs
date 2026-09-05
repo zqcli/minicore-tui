@@ -101,6 +101,7 @@ async fn main() -> ExitCode {
 }
 
 /// One iteration of the async loop picks one source at a time.
+#[allow(clippy::large_enum_variant)]
 enum Selected {
     Rpc(Option<RpcEvent>),
     RpcCooldown,
@@ -183,8 +184,7 @@ async fn run_fullscreen(
             });
         }
         if shutdown_timeout_command(&app).is_some() {
-            process.kill_child();
-            return Ok(());
+            return Err(force_kill_and_report(process, &mut app).await);
         }
         let shutdown_deadline = app.shutdown_remaining();
         let tick_deadline = app.next_tick().unwrap_or(IDLE_POLL);
@@ -217,8 +217,7 @@ async fn run_fullscreen(
                 // 5s without a clean exit: force-kill; main's terminate()
                 // reaps the child before the terminal is restored.
                 if shutdown_timeout_command(&app).is_some() {
-                    process.kill_child();
-                    return Ok(());
+                    return Err(force_kill_and_report(process, &mut app).await);
                 }
             }
             Selected::Rpc(Some(event)) => {
@@ -299,6 +298,18 @@ fn shutdown_timeout_command(app: &App) -> Option<AppCommand> {
         .flatten()
         .filter(Duration::is_zero)
         .map(|_| AppCommand::KillChild)
+}
+
+async fn force_kill_and_report(process: &mut RpcProcess, app: &mut App) -> io::Error {
+    process
+        .terminate_with_observer(|event| {
+            // Forced shutdown is reporting-only. App::update remains the
+            // sole state mutation entry point, but no commands from late
+            // events may be dispatched after the child was killed.
+            let _ = app.update(AppEvent::Rpc(event));
+        })
+        .await;
+    io::Error::other(app.shutdown_force_message())
 }
 
 struct RpcBatchResult {
@@ -605,5 +616,236 @@ mod tests {
             shutdown_timeout_command(&app),
             Some(AppCommand::KillChild)
         ));
+        assert_eq!(
+            app.shutdown_force_message(),
+            "shutdown timed out; Agent force-terminated; last Agent stderr: busy"
+        );
+    }
+
+    #[test]
+    fn forced_shutdown_timeout_report_keeps_unknown_and_known_failure_facts() {
+        use minicore_tui::protocol::{Reasoning, SessionInfo};
+        use minicore_tui::state::session::SessionView;
+        use minicore_tui::state::turn::{LiveLoop, LocalSubmissionId};
+        use serde_json::json;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let base = Instant::now();
+        let elapsed = std::sync::Arc::new(AtomicU64::new(0));
+        let clock_elapsed = std::sync::Arc::clone(&elapsed);
+        let mut app = App::with_monotonic_clock(PathBuf::from("/workspace"), move || {
+            base.checked_add(Duration::from_millis(clock_elapsed.load(Ordering::Relaxed)))
+                .expect("test clock remains representable")
+        });
+        let info = |session_id: &str| SessionInfo {
+            session_id: session_id.to_owned(),
+            title: None,
+            profile: "coding".to_owned(),
+            workspace: "/workspace".to_owned(),
+            model: "deep".to_owned(),
+            reasoning: Reasoning::High,
+            loaded: true,
+            created_at: "2026-01-02T03:04:05Z".to_owned(),
+            updated_at: "2026-01-02T03:04:05Z".to_owned(),
+        };
+
+        let mut unknown = SessionView::new(info("unknown"));
+        let mut unknown_live = LiveLoop::new(LocalSubmissionId(1), "unknown turn".to_owned());
+        unknown_live.reference = Some(minicore_tui::protocol::TurnRef {
+            session_id: "unknown".to_owned(),
+            loop_id: "loop_unknown".to_owned(),
+        });
+        unknown.live = Some(unknown_live);
+        unknown.result_unconfirmed = true;
+
+        let mut known_failed = SessionView::new(info("known-failed"));
+        known_failed.last_result = Some(
+            serde_json::from_value(json!({
+                "turn": {"session_id": "known-failed", "loop_id": "loop_failed"},
+                "outcome": {"type": "completed"},
+                "usage": {},
+                "requests": 1,
+                "tool_rounds": 0,
+                "final_config_revision": 0,
+                "persistence": "failed"
+            }))
+            .expect("known failed result fixture parses"),
+        );
+
+        app.sessions.known.insert("unknown".to_owned(), unknown);
+        app.sessions
+            .known
+            .insert("known-failed".to_owned(), known_failed);
+        app.update(AppEvent::Rpc(RpcEvent::AgentLogLine(
+            "stderr before forced kill".to_owned(),
+        )));
+        app.update(AppEvent::ShutdownRequested);
+        elapsed.store(5000, Ordering::Relaxed);
+
+        assert!(matches!(
+            shutdown_timeout_command(&app),
+            Some(AppCommand::KillChild)
+        ));
+        let message = app.shutdown_force_message();
+        assert!(message.contains("force-terminated"));
+        assert!(message.contains("result/save status unconfirmed"));
+        assert!(message.contains("known persistence failure retained"));
+        assert!(message.contains("stderr before forced kill"));
+    }
+
+    #[tokio::test]
+    async fn forced_shutdown_drains_gated_stderr_before_reporting() {
+        use minicore_tui::app::ConnectionState;
+        use minicore_tui::protocol::{Reasoning, SessionInfo, TurnRef};
+        use minicore_tui::state::session::SessionView;
+        use minicore_tui::state::turn::{LiveLoop, LocalSubmissionId};
+
+        let executable = std::env::current_exe()
+            .expect("main test executable")
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::current_exe().expect("main test executable"));
+        let binary = std::env::var_os("CARGO_BIN_EXE_agent_process")
+            .map(PathBuf::from)
+            .filter(|path| is_agent_process_executable(path))
+            .or_else(|| {
+                std::fs::read_dir(executable.parent().expect("test executable directory"))
+                    .ok()?
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .filter(|path| {
+                        path.file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| {
+                                name == "agent_process" || name.starts_with("agent_process-")
+                            })
+                    })
+                    .filter(|path| is_agent_process_executable(path))
+                    .max_by_key(|path| {
+                        std::fs::metadata(path)
+                            .and_then(|metadata| metadata.modified())
+                            .ok()
+                    })
+            })
+            .expect("agent_process test target must be built");
+        let suffix = format!(
+            "{}-{}",
+            std::process::id(),
+            Instant::now().elapsed().as_nanos()
+        );
+        let config = std::env::temp_dir().join(format!("mct-main-{suffix}.toml"));
+        let ready = std::env::temp_dir().join(format!("mct-main-{suffix}.ready"));
+        std::fs::write(&config, "hang_stderr_gate").expect("write fake agent config");
+        let ready_text = ready.to_str().expect("ready path is UTF-8");
+        let mut process =
+            RpcProcess::spawn_with_env(&binary, &config, &[("FAKE_AGENT_READY_FILE", ready_text)])
+                .expect("spawn gated fake agent");
+
+        let info = |session_id: &str| SessionInfo {
+            session_id: session_id.to_owned(),
+            title: None,
+            profile: "coding".to_owned(),
+            workspace: "/workspace".to_owned(),
+            model: "deep".to_owned(),
+            reasoning: Reasoning::High,
+            loaded: true,
+            created_at: "2026-01-02T03:04:05Z".to_owned(),
+            updated_at: "2026-01-02T03:04:05Z".to_owned(),
+        };
+        let mut app = App::new(PathBuf::from("/workspace"));
+        let mut unknown = SessionView::new(info("unknown"));
+        let mut unknown_live = LiveLoop::new(LocalSubmissionId(1), "unknown turn".to_owned());
+        unknown_live.reference = Some(TurnRef {
+            session_id: "unknown".to_owned(),
+            loop_id: "loop_unknown".to_owned(),
+        });
+        unknown.live = Some(unknown_live);
+        unknown.result_unconfirmed = true;
+        let mut known_failed = SessionView::new(info("known-failed"));
+        let mut known_live = LiveLoop::new(LocalSubmissionId(2), "known turn".to_owned());
+        known_live.reference = Some(TurnRef {
+            session_id: "known-failed".to_owned(),
+            loop_id: "loop_failed".to_owned(),
+        });
+        known_failed.live = Some(known_live);
+        app.sessions.known.insert("unknown".to_owned(), unknown);
+        app.sessions
+            .known
+            .insert("known-failed".to_owned(), known_failed);
+        app.sessions.active = Some("known-failed".to_owned());
+        app.connection = ConnectionState::Ready;
+
+        let wait_request = match app
+            .update(AppEvent::RefreshTurn {
+                session_id: "known-failed".to_owned(),
+            })
+            .as_slice()
+        {
+            [AppCommand::Rpc(request)] => request.clone(),
+            other => panic!("expected turn.wait request, got {other:?}"),
+        };
+        process.send(wait_request).await.expect("send wait request");
+
+        let commands = app.update(AppEvent::ShutdownRequested);
+        let request = match commands.as_slice() {
+            [AppCommand::Rpc(request)] => request.clone(),
+            other => panic!("expected shutdown request, got {other:?}"),
+        };
+        process.send(request).await.expect("send shutdown request");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !ready.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "fake agent did not reach stderr gate"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        // No process event was consumed before the force path. The ready file
+        // is written only after the fake agent flushed stderr, so this covers
+        // the reader/child-waiter ordering race directly.
+        let error = force_kill_and_report(&mut process, &mut app).await;
+        let report = error.to_string();
+        assert!(report.contains("fake agent stderr after forced termination"));
+        assert!(report.contains("result/save status unconfirmed"));
+        assert!(report.contains("known persistence failure retained"));
+        assert_eq!(
+            app.sessions.known["known-failed"]
+                .last_result
+                .as_ref()
+                .map(|result| result.persistence),
+            Some(minicore_tui::protocol::TurnPersistenceWire::Failed)
+        );
+        assert!(
+            process.child_reaped(),
+            "forced shutdown must reap the child"
+        );
+
+        let _ = std::fs::remove_file(config);
+        let _ = std::fs::remove_file(ready);
+    }
+
+    fn is_agent_process_executable(path: &std::path::Path) -> bool {
+        let Ok(metadata) = std::fs::metadata(path) else {
+            return false;
+        };
+        if !metadata.is_file() {
+            return false;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            metadata.permissions().mode() & 0o111 != 0
+        }
+        #[cfg(windows)]
+        {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            true
+        }
     }
 }

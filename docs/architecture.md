@@ -77,36 +77,42 @@ input/RPC/timer/signal
 ```
 
 `AppCommand::Rpc` carries a request whose ID was registered in the pending map
-inside the same update. `KillChild` and `Exit` are the only other commands in
-v0.1. There is no handler registry, effect trait, Redux/Elm layer, or plugin
-system.
+inside the same update. `KillChild` and `Exit` are the only other commands.
+There is no handler registry, effect trait, Redux/Elm layer, or plugin system.
 
 ## Turns And Ordering
 
 After `turn.send` succeeds, the app registers `turn.wait` immediately in the
 same update. A `turn_started` event may arrive before that response, and output
-or tool events may arrive before/after `turn.wait`; exact session, instance,
-and turn references route them to the right live view. A cancellation uses the
-same exact `TurnRef` and still waits for an outcome.
+or tool events may arrive before/after `turn.wait`; exact session and loop references
+route them to the right live view. A cancellation uses the same exact `TurnRef` and
+still waits for an outcome. If the user submits text while a session is running,
+the composer issues `turn.steer`.
 
 Agent events are a live, best-effort view. `dropped_before` marks an event gap,
 but the TUI does not add ACK, replay, or deduplication infrastructure. The
-wait response, `session.state`, and durable `session.transcript` are
-authoritative. After a wait, the app fetches the durable tail, merges pages by
-sequence, patches tool results by call ID, clears the gap when the issued gap
-revision is still current, and removes the provisional live turn. Background
-sessions retain their own `SessionView` and continue receiving events.
+wait response, `session.state`, and durable `session.history` are
+authoritative. After a wait, the app fetches the durable tail, merges items by
+monotonic item index, patches tool results by call ID, clears the gap when the issued gap
+revision is still current, and removes the provisional live turn (or transitions to
+an unsaved loop banner if persistence failed). Background sessions retain their own
+`SessionView` and continue receiving events.
 
 ## Live And Durable State
 
 `SessionView` separates:
 
-- `TranscriptState.blocks`: durable user, assistant, tool, summary, and
-  terminal blocks;
-- `LiveTurn`: provisional text/reasoning/tool progress for one active turn.
+- `TranscriptState.items`: the contiguous indexed history source of truth;
+- `TranscriptState.blocks`: the render presentation, which may expand one history item into several cards;
+- `LiveLoop`: provisional text/reasoning/tool progress across multiple requests for one active loop;
+- `UnsavedLoop`: unpersisted turn content preserved when persistence fails;
+- `SessionView.config_update`: a model/reasoning update waiting for request-boundary evidence.
 
-Live text and reasoning are rendered as plain wrapped text. They are never
-inserted into the durable Markdown cache. A pending local user card may enter
+Live answer text is rendered as plain wrapped text. Since 0.2.1, live reasoning
+uses the same Markdown renderer as durable reasoning, parsing each request's
+accumulated reasoning buffer at render time. Within each live request and durable
+Assistant block, reasoning precedes answer text; request/tool order is preserved.
+Neither live path inserts content into or invalidates the durable Markdown cache. A pending local user card may enter
 the durable block list for immediate feedback, but send failure/removal and
 transcript reconciliation invalidate it correctly.
 
@@ -122,7 +128,7 @@ width
 theme
 reasoning_visible
 tools_expanded
-(turn_id, tool_call_id, expanded) for every durable tool
+(item index, tool_call_id, expanded) for every durable tool
 ```
 
 `ui::transcript::prepare_cache(&App, width)` is read-only. It parses and wraps
@@ -135,15 +141,17 @@ mutability is used.
 `render` and `total_lines` consume the same cached durable lines. If a cache is
 missing or stale, both have a safe read-only fallback; the normal main loop
 prepares before geometry measurement and again before every draw. Header,
-notice, dock, and live-turn rows remain cheap per-frame derivations. Width,
+notice, dock, and live-turn rows remain per-frame derivations. Width,
 theme, reasoning visibility, tool-all expansion, individual tool expansion,
 and block mutations change the effective key or clear the cache. Live deltas
 do not invalidate durable lines.
 
 ## Markdown
 
-The private pulldown-cmark wrapper owns durable Markdown styling. Streaming
-content uses `wrap_plain`. `wrap_segments` still makes character-level width
+The private pulldown-cmark wrapper owns durable Markdown and live reasoning
+styling. Streaming answer text uses `wrap_plain`. Reasoning supplies an italic
+base and fills only unspecified foreground colors with the muted theme color,
+preserving explicit Markdown heading/list/code colors. `wrap_segments` still makes character-level width
 decisions for Unicode, CJK, emoji, combining marks, and line boundaries, but
 coalesces adjacent characters with the same effective style into one Span.
 This reduces allocations without adding a rope, syntax highlighter, or virtual
@@ -171,12 +179,11 @@ This frontend intentionally does not implement:
 
 - provider access, Agent loop logic, workspace/store parsing, or shell
   execution;
-- approval UI, steering, follow-up queues, compaction controls, or live Bash
+- approval UI, follow-up queues, compaction controls, or live Bash
   stdout/stderr/PTY display;
 - MCP, plugins, skills, subagents, remote Agents, session forks/branches, or
   automatic reconnect/restart;
-- current-session model/reasoning hot switching;
-- External Editor and OSC52 copy in v0.1.
+- External Editor and OSC52 copy in v0.2.
 
 Those omissions are backend and product-boundary decisions, not hidden
 fallbacks. The complete wire boundary is pinned in

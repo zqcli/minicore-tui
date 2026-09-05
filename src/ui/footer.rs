@@ -17,6 +17,7 @@ use crate::state::session::SessionView;
 use crate::state::tool::ToolStatus;
 use crate::theme::Theme;
 use crate::ui::layout;
+use crate::ui::status::{result_color, result_summary};
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let view = app.active_view();
@@ -25,15 +26,81 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
 
     let (status_word, status_color) = status_line(app, view, theme);
     let model = view.map(|view| {
-        format!(
-            "{} • {}",
-            view.info.model,
-            reasoning_label(view.info.reasoning)
-        )
+        if view.unsaved_loop.is_some() {
+            "unsaved turn".to_owned()
+        } else {
+            let current_desc =
+                if let Some(request) = view.live.as_ref().and_then(|live| live.requests.last()) {
+                    if request.model.is_empty() {
+                        format!("request {} · config unknown", request.request_index)
+                    } else {
+                        format!(
+                            "request {} · {} · {} · rev {}",
+                            request.request_index,
+                            request.model,
+                            reasoning_label(request.reasoning),
+                            request.config_revision,
+                        )
+                    }
+                } else if let Some(request) = view.last_request.as_ref() {
+                    format!(
+                        "request {} · {} · {} · rev {}",
+                        request.request_index,
+                        request.model,
+                        reasoning_label(request.reasoning),
+                        request.revision,
+                    )
+                } else if let Some(loop_state) = view
+                    .state
+                    .as_ref()
+                    .and_then(|state| state.active_loop.as_ref())
+                {
+                    format!("request {} · config unknown", loop_state.request_index)
+                } else {
+                    format!(
+                        "{} • {}",
+                        view.info.model,
+                        reasoning_label(view.info.reasoning)
+                    )
+                };
+
+            if let Some(update) = &view.config_update {
+                if update.state == crate::state::session::ConfigUpdateState::WaitingBoundary {
+                    let live_loop_matches = match (&update.loop_id, &view.live) {
+                        (Some(target), Some(live)) => live
+                            .reference
+                            .as_ref()
+                            .is_some_and(|r| &r.loop_id == target),
+                        (None, _) => true,
+                        _ => false,
+                    };
+                    if live_loop_matches {
+                        let next_config = match (&update.model, update.reasoning) {
+                            (Some(m), Some(r)) => format!("{} • {}", m, reasoning_label(r)),
+                            (Some(m), None) => m.clone(),
+                            (None, Some(r)) => reasoning_label(r).to_string(),
+                            (None, None) => String::new(),
+                        };
+                        if !next_config.is_empty() {
+                            let next_str = if let Some(rev) = update.revision {
+                                format!("next: {next_config} · rev {rev}")
+                            } else {
+                                format!("next: {next_config}")
+                            };
+                            return format!("{current_desc}      {next_str}");
+                        }
+                    }
+                }
+            }
+            current_desc
+        }
     });
 
     if two_rows {
-        let workspace = shorten_workspace(&app.catalogs.default_workspace, home_dir().as_deref());
+        let home = home_dir();
+        let workspace = view
+            .map(|view| shorten_workspace(Path::new(&view.info.workspace), home.as_deref()))
+            .unwrap_or_else(|| shorten_workspace(&app.catalogs.default_workspace, home.as_deref()));
         let right = view
             .map(title_or_short_id)
             .unwrap_or_else(|| "no session".to_owned());
@@ -82,15 +149,71 @@ fn status_line(
         ConnectionState::Ready => match view {
             None => ("Idle".to_owned(), theme.dim),
             Some(view) => {
+                if let Some(state) = view.state.as_ref() {
+                    match state.status {
+                        crate::protocol::SessionStatusWire::WaitingForInput => {
+                            return ("Waiting for input".to_owned(), theme.warning);
+                        }
+                        crate::protocol::SessionStatusWire::Finishing => {
+                            if view.can_show_last_result() {
+                                if let Some(result) = view.last_result.as_ref() {
+                                    return (result_summary(result), result_color(result, theme));
+                                }
+                            }
+                            return ("Saving".to_owned(), theme.dim);
+                        }
+                        crate::protocol::SessionStatusWire::Blocked => {
+                            let reason = match state.block_reason {
+                                Some(crate::protocol::SessionBlockReasonWire::Persistence) => {
+                                    "persistence"
+                                }
+                                Some(crate::protocol::SessionBlockReasonWire::Internal) => {
+                                    "internal"
+                                }
+                                None => "unknown",
+                            };
+                            let label = format!("Blocked · {reason}");
+                            return if view.can_show_last_result() {
+                                if let Some(result) = view.last_result.as_ref() {
+                                    (format!("{label} · {}", result_summary(result)), theme.error)
+                                } else {
+                                    (label, theme.error)
+                                }
+                            } else {
+                                (label, theme.error)
+                            };
+                        }
+                        crate::protocol::SessionStatusWire::Idle
+                        | crate::protocol::SessionStatusWire::Running => {}
+                    }
+                }
+                if view.can_show_last_result() {
+                    if let Some(result) = view.last_result.as_ref() {
+                        let summary = result_summary(result);
+                        return if view.event_gap {
+                            (format!("⚠ {summary}"), theme.warning)
+                        } else {
+                            (summary, result_color(result, theme))
+                        };
+                    }
+                }
                 if view.event_gap {
                     return ("⚠ live output incomplete".to_owned(), theme.warning);
+                }
+                if view.live.as_ref().is_some_and(|live| live.waiting) {
+                    return ("Result unconfirmed".to_owned(), theme.warning);
                 }
                 if let Some(live) = &view.live {
                     if live.cancel_requested {
                         ("Cancelling".to_owned(), theme.dim)
-                    } else if let Some(tool) = live.tools.iter().find(|tool| {
-                        matches!(tool.status, ToolStatus::Pending | ToolStatus::Running)
-                    }) {
+                    } else if let Some(tool) = live
+                        .requests
+                        .iter()
+                        .flat_map(|request| request.tools.iter())
+                        .find(|tool| {
+                            matches!(tool.status, ToolStatus::Pending | ToolStatus::Running)
+                        })
+                    {
                         (format!("Running {}", tool.name), theme.dim)
                     } else {
                         ("Streaming".to_owned(), theme.dim)

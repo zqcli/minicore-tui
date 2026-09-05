@@ -1,5 +1,7 @@
 # MiniCore TUI v0.1：Pi 风格完整 Rust TUI 开发实施规格
 
+> **SUPERSEDED / 已废弃**: 本规范为 v0.1 早期版本，已被 [`minicore-tui-v0.2-agent-v0.3-runtime-v0.4-migration-spec-r2.md`](minicore-tui-v0.2-agent-v0.3-runtime-v0.4-migration-spec-r2.md) 完整取代。请参考 r2 迁移规范。
+
 ## 0. 文档用途
 
 本文档用于指导代码 Agent 创建一个新的 Rust 项目：

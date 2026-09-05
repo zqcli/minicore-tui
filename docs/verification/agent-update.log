@@ -1,0 +1,44 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src/lib.rs (target/debug/deps/minicore_agent-fa43f10d6787f247)
+
+running 1 test
+test agent::tests::running_model_update_applies_to_next_request_in_same_loop ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 221 filtered out; finished in 0.04s
+
+     Running unittests src/main.rs (target/debug/deps/minicore_agent-ae86ce9a6ff553d2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/openai_rpc_process.rs (target/debug/deps/openai_rpc_process-2b660c13a1b5bb0a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/rpc_soak.rs (target/debug/deps/rpc_soak-5cbe652b6f647089)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/rpc_stdio.rs (target/debug/deps/rpc_stdio-c500b07aeba1549a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/skeleton.rs (target/debug/deps/skeleton-415b1afee4c51d47)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/tui_rpc_flow.rs (target/debug/deps/tui_rpc_flow-0d631d8816c61149)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+

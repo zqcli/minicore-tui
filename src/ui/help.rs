@@ -32,8 +32,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         ("Ctrl+D", "quit when the composer is empty and idle"),
         ("F1", "help; q closes it (q also quits on fatal errors)"),
         ("Ctrl+R", "session selector"),
-        ("Ctrl+L", "model selector (creates a new session)"),
-        ("Shift+Tab", "reasoning selector (creates a new session)"),
+        (
+            "Ctrl+L",
+            "model selector; updates active session at a request boundary",
+        ),
+        (
+            "Shift+Tab",
+            "reasoning selector; updates active session at a request boundary",
+        ),
         ("Ctrl+O", "expand/collapse all tool cards"),
         ("Ctrl+T", "show/hide reasoning"),
         ("PageUp/PageDown", "scroll; page selectors when focused"),
@@ -57,8 +63,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     lines.push(Line::default());
     lines.push(section(theme, "Slash commands", width));
     for command in [
-        "/new  /resume  /sessions  /model  /reasoning",
-        "/theme dark|light  /clear  /help  /logs  /quit",
+        "/new  /resume  /sessions  /model  /reasoning  /cancel  /refresh",
+        "/close [confirm]  /delete [confirm]  /theme dark|light  /clear  /help  /logs  /quit",
     ] {
         lines.push(Line::from(Span::styled(
             command,
@@ -70,9 +76,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     for note in [
         "Tools run automatically.",
         "Bash is not sandboxed.",
-        "No approval UI, no steering, no compaction in v0.1.",
-        "A model/reasoning change creates a new session; the active",
-        "session is never modified.",
+        "No approval UI; no compaction, plugin, MCP, or subagent UI.",
+        "Steering and session.update apply at request boundaries.",
+        "persisted means appended by this Agent process, not fsync-safe.",
     ] {
         lines.push(Line::from(Span::styled(
             layout::truncate(&format!("· {note}"), width),

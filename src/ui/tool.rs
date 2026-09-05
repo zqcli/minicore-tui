@@ -1,5 +1,5 @@
 //! Tool cards (development spec 15.5, 29). Live tools show name/status plus
-//! any progress; durable tools get a safe summary (the Agent transcript
+//! any progress; durable tools get a safe summary (the Agent history
 //! carries no arguments, so the name stands alone) and a collapsed result
 //! preview that is capped at 40 lines and 32 KiB (spec 29.2).
 
@@ -7,6 +7,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::markdown::column_width;
+use crate::protocol::ToolOutcomeWire;
 use crate::state::tool::{LiveTool, ToolStatus};
 use crate::state::transcript::ToolBlock;
 use crate::theme::Theme;
@@ -15,7 +16,7 @@ use crate::ui::layout;
 const MAX_PREVIEW_LINES: usize = 40;
 const MAX_PREVIEW_CHARS: usize = 32 * 1024;
 
-/// A durable tool card (background per terminal/outcome state).
+/// A durable tool card (background per outcome state).
 pub fn durable(
     theme: &Theme,
     block: &ToolBlock,
@@ -67,7 +68,7 @@ fn header(name: String, status: &str, width: usize, base: Style, out: &mut Vec<L
     out.push(layout::fill_line(Line::from(spans), width, base));
 }
 
-/// The safe call summary: the transcript carries no arguments, so the name
+/// The safe call summary: the history carries no arguments, so the name
 /// stands alone (spec 29.2/29.3).
 fn name_line(block: &ToolBlock) -> String {
     block.name.clone()
@@ -83,11 +84,13 @@ fn durable_status(theme: &Theme, block: &ToolBlock) -> (ratatui::style::Color, &
             ToolStatus::Cancelled => (theme.tool_error_bg, "cancelled"),
         }
     } else {
-        match block.outcome.as_deref() {
-            Some("success") => (theme.tool_success_bg, "success"),
-            Some("failed") | Some("input_provided") => (theme.tool_error_bg, "failed"),
-            Some("denied") => (theme.tool_error_bg, "denied"),
-            Some("cancelled") => (theme.tool_error_bg, "cancelled"),
+        match block.outcome {
+            Some(ToolOutcomeWire::Success) => (theme.tool_success_bg, "success"),
+            Some(ToolOutcomeWire::Failed) => (theme.tool_error_bg, "failed"),
+            Some(ToolOutcomeWire::InputProvided) => (theme.tool_success_bg, "input provided"),
+            Some(ToolOutcomeWire::Denied) => (theme.tool_error_bg, "denied"),
+            Some(ToolOutcomeWire::Cancelled) => (theme.tool_error_bg, "cancelled"),
+            Some(ToolOutcomeWire::Unknown) => (theme.tool_error_bg, "unknown"),
             _ => (theme.tool_pending_bg, "running"),
         }
     }

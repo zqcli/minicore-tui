@@ -1,0 +1,40 @@
+MINICORE  v0.2.1
+
+Coding agent TUI
+q / Ctrl+C to quit
+
+Open a session — /new, Ctrl+R, or F1 for help
+
+ stream me
+
+ thinking hard
+
+ Streaming contentmore
+
+ read                                                                                                           running
+  reading…
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+⠋ Saving
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Saving turn…                                                                                                          │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+/project                                                                                                            Task
+Saving                                                                                   request 0 · deep · high · rev 0

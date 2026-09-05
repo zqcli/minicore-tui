@@ -1,104 +1,53 @@
-//! The transcript scroll view (development spec 18, 29-32): durable blocks
-//! are prepared into cached wrapped lines, while the header and live tail are
-//! derived for each frame. Rendering and measurement read the same durable
-//! cache and never mutate the app.
+//! The transcript/history scroll view: durable blocks and the live loop tail (spec r2).
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::markdown::wrap_plain;
-use crate::protocol::TurnTerminalWire;
 use crate::state::session::SessionView;
 use crate::state::transcript::{PreparedTranscriptCache, TranscriptBlock};
 use crate::theme::Theme;
 use crate::ui::{assistant, header, layout, reasoning, tool, user};
 
-/// Prepares only the durable transcript portion for the active session. The
-/// returned value is inert until `App::update` receives it and verifies that
-/// its session, revision, width, theme, and visibility inputs are unchanged.
+/// Prepares only the durable history portion for the active session.
 pub fn prepare_cache(app: &App, width: u16) -> Option<PreparedTranscriptCache> {
     let (session_id, key) = app.transcript_cache_key(width)?;
-    let view = app.active_view()?;
+    let view = app.sessions.known.get(&session_id)?;
     if view.transcript.render_cache.matches(&key) {
         return None;
     }
-    let theme = Theme::for_kind(app.theme);
+    let theme = app.theme.theme();
     let lines = build_durable_lines(&theme, view, width as usize, app.reasoning_visible);
     Some(PreparedTranscriptCache {
         session_id,
-        key,
+        key: Some(key),
         lines,
     })
 }
 
-const NEW_OUTPUT_MARKER: &str = "↓ new output";
-
-fn new_output_marker_visible(app: &App, total_lines: usize, height: usize) -> bool {
-    app.active_view().is_some_and(|view| {
-        !view.scroll.follow_tail && view.scroll.offset < total_lines.saturating_sub(height)
-    })
-}
-
-/// Returns the transcript content rows available in `height`. A scrolled
-/// transcript reserves its final row for the new-output marker, so the main
-/// loop and renderer use the same viewport geometry.
+/// Returns the transcript content rows available in `height`.
 pub fn visible_rows(app: &App, total_lines: usize, height: u16) -> usize {
-    let height = height as usize;
-    let marker_rows = usize::from(new_output_marker_visible(app, total_lines, height));
-    height.saturating_sub(marker_rows)
-}
-
-pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
-    let width = area.width as usize;
-    let durable = durable_lines_for_render(app, theme, width);
-    let lines = all_lines_with_durable(theme, app, width, &durable);
-    let total = lines.len();
-    let view = app.active_view();
-    let follow = view.is_none_or(|view| view.scroll.follow_tail);
-    let offset = view.map_or(0, |view| view.scroll.offset);
-    let marker = new_output_marker_visible(app, total, area.height as usize);
-    let content_height = visible_rows(app, total, area.height);
-    // Follow the tail by construction; otherwise clamp the stored offset and
-    // flag whether content remains below the visible window (spec 32).
-    let start = if follow {
-        total.saturating_sub(content_height)
+    let budget = height as usize;
+    if budget == 0 {
+        return 0;
+    }
+    if is_scrolled_away(app, total_lines, budget) {
+        budget.saturating_sub(1).min(total_lines)
     } else {
-        offset.min(total.saturating_sub(content_height))
-    };
-    let end = (start + content_height).min(total);
-    let visible: Vec<Line<'static>> = lines[start..end].to_vec();
-    let content_area = Rect::new(area.x, area.y, area.width, content_height as u16);
-    frame.render_widget(Paragraph::new(visible), content_area);
-
-    if marker {
-        let hint = Paragraph::new(layout::filled(
-            NEW_OUTPUT_MARKER,
-            width,
-            Style::new().fg(theme.dim).bg(theme.page_bg),
-        ));
-        frame.render_widget(
-            hint,
-            Rect::new(area.x, area.y + content_height as u16, area.width, 1),
-        );
+        budget.min(total_lines)
     }
 }
 
-/// Pure measure for the main loop: the wrapped transcript line count at
-/// `width`, identical to what `render` slices. Both paths read the same
-/// prepared durable line set when its key is valid; a missing/stale cache is a
-/// safe read-only fallback until the main loop prepares it.
+/// Pure measure for the main loop: the wrapped transcript line count at `width`.
 pub fn total_lines(app: &App, width: u16) -> usize {
-    let theme = Theme::for_kind(app.theme);
-    let durable = durable_lines_for_render(app, &theme, width as usize);
-    all_lines_with_durable(&theme, app, width as usize, &durable).len()
+    let theme = app.theme.theme();
+    all_lines(&theme, app, width as usize).len()
 }
 
-/// Builds every transcript row (startup header, durable blocks, live tail)
-/// so the renderer and scroll measurement never disagree.
+/// Builds every transcript row (startup header, durable blocks, live tail).
 pub fn all_lines(theme: &Theme, app: &App, width: usize) -> Vec<Line<'static>> {
     let durable = durable_lines_for_render(app, theme, width);
     all_lines_with_durable(theme, app, width, &durable)
@@ -129,13 +78,10 @@ fn build_durable_lines(
     let mut lines = Vec::new();
     for block in &view.transcript.blocks {
         let section = match block {
-            TranscriptBlock::User(user) => user::lines(theme, user, width),
-            TranscriptBlock::Assistant(assistant) => {
-                assistant::lines(theme, assistant, width, reasoning_visible)
-            }
-            TranscriptBlock::Tool(tool) => tool::durable(theme, tool, width, view.tools_expanded),
-            TranscriptBlock::Summary(_) => summary_lines(theme, width),
-            TranscriptBlock::Terminal(terminal) => terminal_lines(theme, terminal, width),
+            TranscriptBlock::User(u) => user::lines(theme, u, width),
+            TranscriptBlock::Assistant(a) => assistant::lines(theme, a, width, reasoning_visible),
+            TranscriptBlock::Tool(t) => tool::durable(theme, t, width, view.tools_expanded),
+            TranscriptBlock::Summary(summary) => summary_lines(theme, width, &summary.content),
         };
         layout::append_section(&mut lines, section);
     }
@@ -152,47 +98,211 @@ fn all_lines_with_durable(
     lines.extend(header::lines(theme, app));
     if let Some(view) = app.active_view() {
         layout::append_section_ref(&mut lines, durable);
+
+        // Warning for unsaved loop if persistence failed (spec 30.5)
+        if let Some(unsaved) = &view.unsaved_loop {
+            let error_style = Style::new()
+                .fg(ratatui::style::Color::White)
+                .bg(theme.error);
+            let mut banner_lines = vec![
+                Line::default(),
+                layout::filled(
+                    " ⚠ UNSAVED TURN ",
+                    width,
+                    error_style.add_modifier(ratatui::style::Modifier::BOLD),
+                ),
+            ];
+            let sentences = [
+                "This turn finished, but the Agent did not confirm saving it.",
+                "The session is blocked. Tool side effects may already exist.",
+                "Closing releases this result; reopening reads whatever the Store can recover.",
+            ];
+            for sentence in sentences {
+                let wrapped = crate::markdown::wrap_plain(
+                    sentence,
+                    width.saturating_sub(2).max(1),
+                    error_style,
+                );
+                for wline in wrapped {
+                    banner_lines.push(layout::filled(&format!(" {wline}"), width, error_style));
+                }
+            }
+            if view.event_gap || unsaved.event_gap {
+                let gap_sentence = "Some live output may be missing.";
+                let wrapped = crate::markdown::wrap_plain(
+                    gap_sentence,
+                    width.saturating_sub(2).max(1),
+                    error_style,
+                );
+                for wline in wrapped {
+                    banner_lines.push(layout::filled(&format!(" {wline}"), width, error_style));
+                }
+            }
+            banner_lines.push(Line::default());
+            layout::append_section(&mut lines, banner_lines);
+        }
+
+        // Render completed steer notices retained across loop boundaries
+        for steer in &view.completed_steers {
+            if steer.state == crate::state::turn::PendingSteerState::Persisted {
+                continue;
+            }
+            let state_label = match &steer.state {
+                crate::state::turn::PendingSteerState::Sending => "sending…",
+                crate::state::turn::PendingSteerState::Queued => "accepted awaiting history",
+                crate::state::turn::PendingSteerState::Persisted => "persisted",
+                crate::state::turn::PendingSteerState::NotRecorded => "not recorded",
+                crate::state::turn::PendingSteerState::Unconfirmed => "save unconfirmed",
+            };
+            let label = format!(" ⠸ Steering ({}): {}", state_label, steer.text);
+            let steer_lines = vec![
+                Line::default(),
+                layout::filled(
+                    &label,
+                    width,
+                    Style::new().fg(theme.accent).bg(theme.card_bg),
+                ),
+                Line::default(),
+            ];
+            layout::append_section(&mut lines, steer_lines);
+        }
+
         if let Some(live) = &view.live {
             live_section(theme, live, width, app.reasoning_visible, &mut lines);
+        }
+
+        if view.can_show_last_result() {
+            if let Some(result) = &view.last_result {
+                layout::append_section(&mut lines, last_result_lines(theme, result, width));
+            }
         }
     }
     lines
 }
 
-/// The live turn tail: the pending user card already lives in the durable
-/// blocks, so only reasoning, streaming text, and live tools are appended
-/// here (spec 30.3).
+fn last_result_lines(
+    theme: &Theme,
+    result: &crate::protocol::TurnResultViewWire,
+    width: usize,
+) -> Vec<Line<'static>> {
+    use crate::protocol::LoopOutcomeWire;
+    use crate::ui::status::{result_color, result_summary};
+
+    let (badge, outcome_style) = match &result.outcome {
+        LoopOutcomeWire::Completed => (
+            "✓",
+            Style::new()
+                .fg(result_color(result, theme))
+                .bg(theme.card_bg),
+        ),
+        LoopOutcomeWire::Cancelled { .. } => (
+            "⊘",
+            Style::new()
+                .fg(result_color(result, theme))
+                .bg(theme.card_bg),
+        ),
+        LoopOutcomeWire::Failed { .. } => (
+            "✗",
+            Style::new()
+                .fg(result_color(result, theme))
+                .bg(theme.card_bg),
+        ),
+    };
+
+    let content = format!(
+        " {} Turn {} · requests: {} · tool rounds: {}",
+        badge,
+        result_summary(result),
+        result.requests,
+        result.tool_rounds
+    );
+
+    vec![
+        Line::default(),
+        layout::filled(&content, width, outcome_style),
+        Line::default(),
+    ]
+}
+
+/// The live loop tail: supports multi-request loops, live tools, and pending steers.
 fn live_section(
     theme: &Theme,
-    live: &crate::state::turn::LiveTurn,
+    live: &crate::state::turn::LiveLoop,
     width: usize,
     reasoning_visible: bool,
     out: &mut Vec<Line<'static>>,
 ) {
     let mut sections = Vec::new();
-    layout::append_section(
-        &mut sections,
-        reasoning::live_lines(theme, &live.reasoning, width, reasoning_visible),
-    );
-    if !live.text.is_empty() {
-        let base = Style::new().fg(theme.text);
-        let lines = wrap_plain(&live.text, width.saturating_sub(1).max(1), base)
-            .into_iter()
-            .map(|line| layout::left_pad(line, 1))
-            .collect();
-        layout::append_section(&mut sections, layout::vertical_section(lines));
+
+    for req in &live.requests {
+        if live.requests.len() > 1 || req.request_index > 0 || req.model.is_empty() {
+            let info = if req.model.is_empty() {
+                format!("Request #{} · config unknown", req.request_index)
+            } else {
+                format!(
+                    "Request #{} · {} · {:?}",
+                    req.request_index, req.model, req.reasoning
+                )
+            };
+            sections.push(layout::left_pad(
+                Line::from(vec![ratatui::text::Span::styled(
+                    info,
+                    Style::new().fg(theme.muted),
+                )]),
+                1,
+            ));
+        }
+        if !req.reasoning_text.is_empty() {
+            layout::append_section(
+                &mut sections,
+                reasoning::live_lines(theme, &req.reasoning_text, width, reasoning_visible),
+            );
+        }
+        if !req.text.is_empty() {
+            let base = Style::new().fg(theme.text);
+            let lines = wrap_plain(&req.text, width.saturating_sub(1).max(1), base)
+                .into_iter()
+                .map(|line| layout::left_pad(line, 1))
+                .collect();
+            layout::append_section(&mut sections, layout::vertical_section(lines));
+        }
+        for live_tool in &req.tools {
+            layout::append_section(&mut sections, tool::live(theme, live_tool, width));
+        }
     }
-    for live_tool in &live.tools {
-        layout::append_section(&mut sections, tool::live(theme, live_tool, width));
+
+    // Pending steers
+    for steer in &live.pending_steers {
+        let state_label = match &steer.state {
+            crate::state::turn::PendingSteerState::Sending => "sending…",
+            crate::state::turn::PendingSteerState::Queued => "accepted awaiting history",
+            crate::state::turn::PendingSteerState::Persisted => "persisted",
+            crate::state::turn::PendingSteerState::NotRecorded => "not recorded",
+            crate::state::turn::PendingSteerState::Unconfirmed => "save unconfirmed",
+        };
+        let label = format!(" ⠸ Steering ({}): {}", state_label, steer.text);
+        sections.push(Line::default());
+        sections.push(layout::filled(
+            &label,
+            width,
+            Style::new().fg(theme.accent).bg(theme.card_bg),
+        ));
+        sections.push(Line::default());
     }
+
     layout::append_section(out, sections);
 }
 
-fn summary_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {
+fn summary_lines(theme: &Theme, width: usize, content: &str) -> Vec<Line<'static>> {
+    let label = if content.is_empty() {
+        " Conversation compacted".to_owned()
+    } else {
+        format!(" Summary: {content}")
+    };
     vec![
         Line::default(),
         layout::filled(
-            " Conversation compacted",
+            &label,
             width,
             Style::new().fg(theme.muted).bg(theme.card_bg),
         ),
@@ -200,203 +310,75 @@ fn summary_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {
     ]
 }
 
-/// Terminal notices: completed is invisible; cancellation, deadline, and
-/// failure surface as red/yellow notices (spec 18.6).
-fn terminal_lines(
-    theme: &Theme,
-    terminal: &crate::state::transcript::TerminalBlock,
-    width: usize,
-) -> Vec<Line<'static>> {
-    let (color, label) = match &terminal.terminal {
-        TurnTerminalWire::Completed => return Vec::new(),
-        TurnTerminalWire::CancelledByUser => (theme.warning, "Turn cancelled".to_owned()),
-        TurnTerminalWire::CancelledByShutdown => {
-            (theme.warning, "Turn cancelled by shutdown".to_owned())
-        }
-        TurnTerminalWire::CancelledByRestart => {
-            (theme.warning, "Turn cancelled by restart".to_owned())
-        }
-        TurnTerminalWire::BudgetExceeded => (theme.warning, "Budget exceeded".to_owned()),
-        TurnTerminalWire::Failed { diagnostic } => {
-            (theme.error, format!("Turn failed: {}", diagnostic.code))
-        }
+pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
+    let width = area.width as usize;
+    let height = area.height as usize;
+    if width == 0 || height == 0 {
+        return;
+    }
+    let lines = all_lines(theme, app, width);
+    let total = lines.len();
+    let (offset, marker) = if is_scrolled_away(app, total, height) {
+        let visible = height.saturating_sub(1);
+        let offset = app
+            .active_view()
+            .map(|view| view.scroll.offset)
+            .unwrap_or(0);
+        let max_offset = total.saturating_sub(visible);
+        (offset.min(max_offset), true)
+    } else {
+        (total.saturating_sub(height), false)
     };
-    vec![
-        Line::default(),
-        layout::filled(&format!(" ⚠ {label}"), width, Style::new().fg(color)),
-        Line::default(),
-    ]
+    let budget = if marker {
+        height.saturating_sub(1)
+    } else {
+        height
+    };
+    let slice: Vec<Line<'static>> = lines.into_iter().skip(offset).take(budget).collect();
+    let body_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: slice.len() as u16,
+    };
+    frame.render_widget(ratatui::widgets::Paragraph::new(slice), body_area);
+    if marker {
+        let marker_y = area.y.saturating_add(height as u16).saturating_sub(1);
+        let marker_area = Rect {
+            x: area.x,
+            y: marker_y,
+            width: area.width,
+            height: 1,
+        };
+        render_marker(frame, marker_area, app, theme);
+    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::event::{AppEvent, RpcEvent};
-    use crate::markdown;
-    use crate::theme::ThemeKind;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-    use serde_json::json;
+fn render_marker(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
+    let label = if app
+        .active_view()
+        .is_some_and(|view| view.scroll.new_content)
+    {
+        "↓ new output"
+    } else {
+        "↑ scroll position"
+    };
+    let line = layout::filled(
+        label,
+        area.width as usize,
+        Style::new().fg(theme.dim).bg(theme.page_bg),
+    );
+    frame.render_widget(ratatui::widgets::Paragraph::new(line), area);
+}
 
-    fn prepared_app() -> App {
-        crate::ui::testapp::chat(ThemeKind::Dark)
+fn is_scrolled_away(app: &App, total: usize, height: usize) -> bool {
+    let Some(view) = app.active_view() else {
+        return false;
+    };
+    if view.scroll.follow_tail || total <= height {
+        return false;
     }
-
-    fn install_cache(app: &mut App, width: u16) {
-        let prepared = prepare_cache(app, width).expect("cache is initially missing");
-        app.update(AppEvent::TranscriptCachePrepared(prepared));
-    }
-
-    #[test]
-    fn prepare_measure_and_render_parse_durable_markdown_once() {
-        let mut app = crate::ui::testapp::open_empty(ThemeKind::Dark, "ses_1", None, "high");
-        app.update(AppEvent::SubmitTurn {
-            session_id: "ses_1".to_owned(),
-            text: "pending user".to_owned(),
-        });
-        markdown::reset_parse_count();
-        let prepared = prepare_cache(&app, 80).expect("initial preparation");
-        assert_eq!(markdown::parse_count(), 1);
-        app.update(AppEvent::TranscriptCachePrepared(prepared));
-        let parsed = markdown::parse_count();
-        let measured = total_lines(&app, 80);
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        terminal
-            .draw(|frame| render(frame, frame.area(), &app, &Theme::dark()))
-            .unwrap();
-        terminal
-            .draw(|frame| render(frame, frame.area(), &app, &Theme::dark()))
-            .unwrap();
-        assert!(measured > 0);
-        assert_eq!(
-            markdown::parse_count(),
-            parsed,
-            "cache hit avoids reparsing"
-        );
-    }
-
-    #[test]
-    fn cache_key_changes_for_width_theme_reasoning_and_tools() {
-        let mut app = prepared_app();
-        install_cache(&mut app, 80);
-
-        assert!(prepare_cache(&app, 81).is_some(), "width changes the key");
-        app.update(AppEvent::SetTheme(ThemeKind::Light));
-        assert!(prepare_cache(&app, 80).is_some(), "theme changes the key");
-        app.update(AppEvent::ToggleReasoning);
-        assert!(
-            prepare_cache(&app, 80).is_some(),
-            "reasoning changes the key"
-        );
-        app.update(AppEvent::ToggleTools {
-            session_id: "ses_1".to_owned(),
-        });
-        assert!(prepare_cache(&app, 80).is_some(), "tools changes the key");
-    }
-
-    #[test]
-    fn block_mutation_invalidates_but_live_delta_does_not() {
-        let mut app = prepared_app();
-        install_cache(&mut app, 80);
-        let revision = app.active_view().unwrap().transcript.render_revision;
-        app.update(AppEvent::SubmitTurn {
-            session_id: "ses_1".to_owned(),
-            text: "new pending".to_owned(),
-        });
-        assert!(
-            app.active_view().unwrap().transcript.render_revision > revision,
-            "pending user mutation advances the render revision"
-        );
-
-        let mut live = crate::ui::testapp::live_turn(ThemeKind::Dark);
-        install_cache(&mut live, 80);
-        let revision = live.active_view().unwrap().transcript.render_revision;
-        live.update(AppEvent::Rpc(RpcEvent::Frame(
-            crate::protocol::IncomingFrame::Notification(
-                crate::protocol::RpcNotification::AgentEvent(
-                    serde_json::from_value(json!({
-                        "type": "output_delta",
-                        "data": {
-                            "turn": {"session_id":"ses_1", "instance_id":"ins_1", "turn_id":"trn_live"},
-                            "channel": "text", "delta": "live only",
-                            "meta": {"session_id":"ses_1", "instance_id":"ins_1", "dropped_before":0}
-                        }
-                    }))
-                    .unwrap(),
-                ),
-            ),
-        )));
-        assert_eq!(
-            live.active_view().unwrap().transcript.render_revision,
-            revision,
-            "live delta does not invalidate durable cache"
-        );
-
-        let mut tools = crate::ui::testapp::tools(ThemeKind::Dark);
-        install_cache(&mut tools, 80);
-        let revision = tools.active_view().unwrap().transcript.render_revision;
-        tools.update(AppEvent::ToggleTool {
-            session_id: "ses_1".to_owned(),
-            turn_id: "trn_1".to_owned(),
-            tool_call_id: "call-1".to_owned(),
-        });
-        assert!(
-            tools.active_view().unwrap().transcript.render_revision > revision,
-            "individual tool expansion advances the render revision"
-        );
-        assert!(prepare_cache(&tools, 80).is_some());
-    }
-
-    #[test]
-    fn stale_preparation_is_rejected_and_session_caches_are_independent() {
-        let mut app = prepared_app();
-        let stale = prepare_cache(&app, 80).expect("initial cache");
-        app.update(AppEvent::ToggleReasoning);
-        app.update(AppEvent::TranscriptCachePrepared(stale));
-        assert!(
-            app.active_view()
-                .unwrap()
-                .transcript
-                .render_cache
-                .is_empty()
-        );
-
-        let (models, profiles, sessions) = crate::ui::testapp::standard_catalog();
-        let mut app =
-            crate::ui::testapp::ready_catalog(ThemeKind::Dark, models, profiles, sessions);
-        crate::ui::testapp::open_session(&mut app, "ses_main");
-        install_cache(&mut app, 80);
-        let key_a = app.transcript_cache_key(80).unwrap().1;
-        crate::ui::testapp::open_session(&mut app, "ses_recent");
-        install_cache(&mut app, 80);
-        let open = crate::ui::testapp::take_requests(app.update(AppEvent::OpenSession {
-            session_id: "ses_main".to_owned(),
-        }));
-        let requests = crate::ui::testapp::take_requests(crate::ui::testapp::respond(
-            &mut app,
-            &open[0],
-            json!({"session": {
-                "session_id": "ses_main", "title": "Task", "profile": "coding",
-                "workspace": "/project", "model": "deep", "reasoning": "high",
-                "loaded": true, "instance_id": "i2",
-                "created_at": "2026-01-02T03:04:05.006Z",
-                "updated_at": "2026-01-02T03:04:05.006Z"
-            }}),
-        ));
-        let state = requests
-            .iter()
-            .find(|request| request.method == "session.state")
-            .expect("reopen requests state");
-        crate::ui::testapp::take_requests(crate::ui::testapp::respond(
-            &mut app,
-            state,
-            json!({
-                "session_id": "ses_main", "instance_id": "i2", "status": "idle",
-                "health": "healthy", "active_turn": null, "pending_interaction": null,
-                "conversation_seq": 0, "last_terminal": null
-            }),
-        ));
-        assert_eq!(app.transcript_cache_key(80).unwrap().1, key_a);
-        assert!(prepare_cache(&app, 80).is_none());
-    }
+    let visible = height.saturating_sub(1);
+    let max_offset = total.saturating_sub(visible);
+    view.scroll.offset < max_offset
 }

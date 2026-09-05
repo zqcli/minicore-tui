@@ -20,19 +20,17 @@ fn fake_respond(out: &mut impl Write, id: &Value, result: Value) {
     fake_write_line(out, &json!({"jsonrpc": "2.0", "id": id, "result": result}));
 }
 
-fn fake_meta(session_id: &str, instance_id: &str) -> Value {
+fn fake_meta(session_id: &str) -> Value {
     json!({
         "session_id": session_id,
-        "instance_id": instance_id,
         "dropped_before": 0
     })
 }
 
-fn fake_turn_ref(session_id: &str, instance_id: &str, turn_id: &str) -> Value {
+fn fake_turn_ref(session_id: &str, loop_id: &str) -> Value {
     json!({
         "session_id": session_id,
-        "instance_id": instance_id,
-        "turn_id": turn_id
+        "loop_id": loop_id
     })
 }
 
@@ -45,17 +43,20 @@ fn fake_session_info(session_id: &str, workspace: &str) -> Value {
         "model": "gpt-4o",
         "reasoning": "auto",
         "loaded": true,
-        "instance_id": "ins_fake",
         "created_at": "2026-01-02T03:04:05.006Z",
         "updated_at": "2026-01-02T03:04:05.006Z"
     })
 }
 
-fn fake_outcome(turn_id: &str) -> Value {
+fn fake_outcome(session_id: &str, loop_id: &str) -> Value {
     json!({
-        "turn_id": turn_id,
-        "terminal": "completed",
-        "usage": {"input_tokens": 10, "output_tokens": 20}
+        "turn": {"session_id": session_id, "loop_id": loop_id},
+        "outcome": {"type": "completed"},
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+        "requests": 1,
+        "tool_rounds": 0,
+        "final_config_revision": 0,
+        "persistence": "persisted"
     })
 }
 
@@ -93,9 +94,20 @@ fn fake_profile_list() -> Value {
     })
 }
 
-/// One full turn: `output_delta` then `turn_finished`.
-fn fake_emit_events(out: &mut impl Write, session_id: &str, turn_id: &str) {
-    let turn = fake_turn_ref(session_id, "ins_fake", turn_id);
+/// One full turn: started/request-started, output, then finished.
+fn fake_emit_events(out: &mut impl Write, session_id: &str, loop_id: &str) {
+    let turn = fake_turn_ref(session_id, loop_id);
+    let started = json!({
+        "jsonrpc": "2.0", "method": "agent.event",
+        "params": {"type": "turn_started", "data": {"turn": turn.clone(), "meta": fake_meta(session_id)}}
+    });
+    let request_started = json!({
+        "jsonrpc": "2.0", "method": "agent.event",
+        "params": {"type": "request_started", "data": {
+            "turn": turn.clone(), "request_index": 0, "config_revision": 0,
+            "model": "gpt-4o", "reasoning": "auto", "meta": fake_meta(session_id)
+        }}
+    });
     let delta = json!({
         "jsonrpc": "2.0",
         "method": "agent.event",
@@ -103,9 +115,10 @@ fn fake_emit_events(out: &mut impl Write, session_id: &str, turn_id: &str) {
             "type": "output_delta",
             "data": {
                 "turn": turn.clone(),
+                "request_index": 0,
                 "channel": "text",
                 "delta": "hello from the fake agent",
-                "meta": fake_meta(session_id, "ins_fake")
+                "meta": fake_meta(session_id)
             }
         }
     });
@@ -116,11 +129,14 @@ fn fake_emit_events(out: &mut impl Write, session_id: &str, turn_id: &str) {
             "type": "turn_finished",
             "data": {
                 "turn": turn,
-                "outcome": fake_outcome(turn_id),
-                "meta": fake_meta(session_id, "ins_fake")
+                "outcome": {"type": "completed"},
+                "persistence": "persisted",
+                "meta": fake_meta(session_id)
             }
         }
     });
+    fake_write_line(out, &started);
+    fake_write_line(out, &request_started);
     fake_write_line(out, &delta);
     fake_write_line(out, &finished);
 }
@@ -148,6 +164,9 @@ fn main() -> ExitCode {
 }
 
 fn serve(mode: &str) -> ExitCode {
+    if mode == "hang_stderr" {
+        eprintln!("fake agent stderr before forced termination");
+    }
     let stdin = io::stdin();
     let mut out = io::stdout().lock();
     let mut input = stdin.lock();
@@ -178,7 +197,7 @@ fn serve(mode: &str) -> ExitCode {
                 if mode == "crash" {
                     return ExitCode::from(1);
                 }
-                let result = json!({"version": "0.2.0"});
+                let result = json!({"version": "0.3.0"});
                 if mode == "out_of_order" {
                     buffered.push((id, result));
                     if buffered.len() == 2 {
@@ -243,24 +262,26 @@ fn serve(mode: &str) -> ExitCode {
                     .unwrap_or("ses_fake_1");
                 let result = json!({
                     "session_id": session_id,
-                    "instance_id": "ins_fake",
                     "status": "idle",
-                    "health": "healthy",
-                    "active_turn": null,
-                    "pending_interaction": null,
-                    "conversation_seq": 0,
-                    "last_terminal": null
+                    "active_loop": null,
+                    "block_reason": null
                 });
                 fake_respond(&mut out, &id, result);
             }
-            "session.transcript" => {
-                let result = json!({
-                    "entries": [],
-                    "next_after": null,
-                    "observed_head": 0,
-                    "complete": true
-                });
+            "session.history" => {
+                let result = json!({"items": [], "next_offset": null, "total": 0});
                 fake_respond(&mut out, &id, result);
+            }
+            "session.update" => {
+                let session_id = params
+                    .get("session_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("ses_fake_1");
+                fake_respond(
+                    &mut out,
+                    &id,
+                    json!({"session": fake_session_info(session_id, "/ws/fake"), "active_revision": null}),
+                );
             }
             "turn.send" => {
                 turn_counter += 1;
@@ -268,34 +289,50 @@ fn serve(mode: &str) -> ExitCode {
                     .get("session_id")
                     .and_then(Value::as_str)
                     .unwrap_or("ses_fake_1");
-                let turn_id = format!("trn_fake_{turn_counter}");
-                let turn = fake_turn_ref(session_id, "ins_fake", &turn_id);
+                let loop_id = format!("loop_fake_{turn_counter}");
+                let turn = fake_turn_ref(session_id, &loop_id);
                 if mode == "events_first" {
-                    fake_emit_events(&mut out, session_id, &turn_id);
+                    fake_emit_events(&mut out, session_id, &loop_id);
                     fake_respond(&mut out, &id, json!({"turn": turn}));
                 } else {
                     fake_respond(&mut out, &id, json!({"turn": turn}));
-                    fake_emit_events(&mut out, session_id, &turn_id);
+                    fake_emit_events(&mut out, session_id, &loop_id);
                 }
             }
             "turn.wait" => {
-                let turn_id = params
-                    .get("turn_id")
+                let session_id = params
+                    .get("session_id")
                     .and_then(Value::as_str)
-                    .unwrap_or("trn_fake_1");
-                fake_respond(&mut out, &id, fake_outcome(turn_id));
+                    .unwrap_or("ses_fake_1");
+                let loop_id = params
+                    .get("loop_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("loop_fake_1");
+                let mut result = fake_outcome(session_id, loop_id);
+                if mode == "hang_stderr_gate" {
+                    result["persistence"] = json!("failed");
+                }
+                fake_respond(&mut out, &id, result);
             }
             "turn.cancel" => fake_respond(&mut out, &id, json!({"cancelled": true})),
             "agent.shutdown" => {
-                if mode == "hang" {
+                if mode == "hang_stderr_gate" {
+                    let mut stderr = io::stderr().lock();
+                    let _ = writeln!(stderr, "fake agent stderr after forced termination");
+                    let _ = stderr.flush();
+                    if let Some(path) = std::env::var_os("FAKE_AGENT_READY_FILE") {
+                        let _ = std::fs::write(path, b"stderr-written");
+                    }
+                    std::thread::sleep(Duration::from_secs(60));
+                    return ExitCode::from(1);
+                }
+                if mode == "hang" || mode == "hang_stderr" {
                     std::thread::sleep(Duration::from_secs(60));
                     return ExitCode::from(1);
                 }
                 fake_respond(&mut out, &id, json!({"ok": true}));
                 return ExitCode::SUCCESS;
             }
-            // Unknown methods answer a TOP-LEVEL JSON-RPC error (never an
-            // error smuggled inside `result`).
             _ => {
                 fake_write_line(
                     &mut out,
@@ -308,5 +345,6 @@ fn serve(mode: &str) -> ExitCode {
             }
         }
     }
+
     ExitCode::SUCCESS
 }

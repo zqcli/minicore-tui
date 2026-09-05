@@ -305,10 +305,7 @@ mod tests {
             fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
                 if !self.failed && bytes_contain(buf, self.fail_on.as_bytes()) {
                     self.failed = true;
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "injected write failure",
-                    ));
+                    return Err(io::Error::other("injected write failure"));
                 }
                 self.out.extend_from_slice(buf);
                 Ok(buf.len())

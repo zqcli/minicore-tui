@@ -1,0 +1,14 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running tests/agent_e2e.rs (target/debug/deps/agent_e2e-2b14b051b8f730f7)
+
+running 7 tests
+test e2e_scenario_b_basic_turn ... ok
+test e2e_scenario_a_discovery ... ok
+test e2e_scenario_c_tool_execution ... ok
+test e2e_scenario_e2_update_single_request_then_next_turn ... ok
+test e2e_scenario_d_steer_turn ... ok
+test e2e_scenario_f_shutdown_cancels_active_wait ... ok
+test e2e_scenario_e_same_loop_update ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+

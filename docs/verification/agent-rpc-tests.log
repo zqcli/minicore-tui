@@ -1,0 +1,14 @@
+   Compiling minicore-agent v0.3.0 (/root/minicore-tui-r2-01a06ec1/agent)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.02s
+     Running tests/tui_rpc_flow.rs (target/debug/deps/tui_rpc_flow-0d631d8816c61149)
+
+running 6 tests
+test tui_error_mappings_cover_new_wire_types ... ok
+test tui_streams_reasoning_and_text_channels ... ok
+test tui_tool_loop_shows_lifecycle_and_safe_history ... ok
+test tui_steer_update_cancel_while_wait_is_pending ... ok
+test tui_two_sessions_run_independently ... ok
+test tui_discovery_create_history_and_reopen_flow ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

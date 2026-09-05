@@ -1,11 +1,12 @@
 //! Reasoning rendering (development spec 15.4, 30): gray italic, padding 1,
 //! natural block order. Hidden runs collapse to a single "Thinking..." per
-//! continuous run; live reasoning stays plain wrapped text.
+//! continuous run; live reasoning uses the same bounded Markdown renderer as
+//! durable reasoning.
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 
-use crate::markdown::wrap_plain;
+use crate::markdown::MarkdownRenderer;
 use crate::theme::Theme;
 use crate::ui::layout;
 
@@ -31,17 +32,9 @@ pub fn reasoning_lines(
     }
 }
 
-/// A visible reasoning run: gray, italic, plain-wrapped (streaming-safe).
+/// A visible reasoning run: gray, italic, Markdown-rendered, and padded.
 pub fn visible_lines(theme: &Theme, text: &str, width: usize) -> Vec<Line<'static>> {
-    if text.is_empty() {
-        return Vec::new();
-    }
-    let style = Style::new().fg(theme.muted).add_modifier(Modifier::ITALIC);
-    let lines = wrap_plain(text, width.saturating_sub(1).max(1), style)
-        .into_iter()
-        .map(|line| layout::left_pad(line, 1))
-        .collect();
-    layout::vertical_section(lines)
+    markdown_section(theme, text, width)
 }
 
 /// A single hidden-run label.
@@ -51,7 +44,9 @@ pub fn thinking_line(theme: &Theme) -> Vec<Line<'static>> {
 }
 
 /// Live reasoning uses the same vertically padded gray italic section as a
-/// durable reasoning run, so streaming and reconciled layouts stay aligned.
+/// durable reasoning run. Each frame parses only this request's accumulated
+/// reasoning, so incomplete Markdown remains renderable without touching the
+/// durable transcript cache.
 pub fn live_lines(theme: &Theme, text: &str, width: usize, visible: bool) -> Vec<Line<'static>> {
     if text.is_empty() {
         return Vec::new();
@@ -59,8 +54,29 @@ pub fn live_lines(theme: &Theme, text: &str, width: usize, visible: bool) -> Vec
     if !visible {
         return thinking_line(theme);
     }
-    let style = Style::new().fg(theme.muted).add_modifier(Modifier::ITALIC);
-    let lines = wrap_plain(text, width.saturating_sub(1).max(1), style)
+    markdown_section(theme, text, width)
+}
+
+fn markdown_section(theme: &Theme, text: &str, width: usize) -> Vec<Line<'static>> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = MarkdownRenderer::new(theme).render(
+        text,
+        width.saturating_sub(1).max(1),
+        Style::new().add_modifier(Modifier::ITALIC),
+    );
+    // `Style::patch` lets the base foreground override a Markdown span's
+    // explicit color. Fill only uncolored spans here so code, list, heading,
+    // and fenced-code colors from MarkdownRenderer remain visible.
+    for line in &mut lines {
+        for span in &mut line.spans {
+            if span.style.fg.is_none() {
+                span.style = span.style.fg(theme.muted);
+            }
+        }
+    }
+    let lines = lines
         .into_iter()
         .map(|line| layout::left_pad(line, 1))
         .collect();

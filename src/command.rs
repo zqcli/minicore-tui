@@ -44,8 +44,16 @@ pub enum LocalCommand {
     Help,
     /// Open the agent-log panel.
     Logs,
+    /// Cancel the active loop through `turn.cancel`.
+    Cancel,
+    /// Re-read the currently retained turn result through `turn.wait`.
+    Refresh,
     /// Normal shutdown intent (`agent.shutdown` arrives in Phase 6).
     Quit,
+    /// Close the active session (spec 12, 52).
+    Close { confirm: bool },
+    /// Delete a session (spec 12).
+    Delete { confirm: bool },
 }
 
 /// Why a slash line was rejected locally.
@@ -108,7 +116,23 @@ pub fn parse_command(input: &str) -> Result<LocalCommand, CommandIssue> {
         "clear" => no_args(LocalCommand::Clear),
         "help" => no_args(LocalCommand::Help),
         "logs" => no_args(LocalCommand::Logs),
+        "cancel" => no_args(LocalCommand::Cancel),
+        "refresh" => no_args(LocalCommand::Refresh),
         "quit" => no_args(LocalCommand::Quit),
+        "close" => match args {
+            "" => Ok(LocalCommand::Close { confirm: false }),
+            "confirm" | "--force" | "force" => Ok(LocalCommand::Close { confirm: true }),
+            _ => Err(CommandIssue::InvalidArgs(
+                "usage: /close [confirm]".to_owned(),
+            )),
+        },
+        "delete" => match args {
+            "" => Ok(LocalCommand::Delete { confirm: false }),
+            "confirm" | "--force" | "force" => Ok(LocalCommand::Delete { confirm: true }),
+            _ => Err(CommandIssue::InvalidArgs(
+                "usage: /delete [confirm]".to_owned(),
+            )),
+        },
         other => Err(CommandIssue::Unknown(other.to_owned())),
     }
 }
@@ -141,7 +165,25 @@ mod tests {
         assert_eq!(parse_command("/clear"), Ok(LocalCommand::Clear));
         assert_eq!(parse_command("/help"), Ok(LocalCommand::Help));
         assert_eq!(parse_command("/logs"), Ok(LocalCommand::Logs));
+        assert_eq!(parse_command("/cancel"), Ok(LocalCommand::Cancel));
+        assert_eq!(parse_command("/refresh"), Ok(LocalCommand::Refresh));
         assert_eq!(parse_command("/quit"), Ok(LocalCommand::Quit));
+        assert_eq!(
+            parse_command("/close"),
+            Ok(LocalCommand::Close { confirm: false })
+        );
+        assert_eq!(
+            parse_command("/close confirm"),
+            Ok(LocalCommand::Close { confirm: true })
+        );
+        assert_eq!(
+            parse_command("/delete"),
+            Ok(LocalCommand::Delete { confirm: false })
+        );
+        assert_eq!(
+            parse_command("/delete confirm"),
+            Ok(LocalCommand::Delete { confirm: true })
+        );
     }
 
     #[test]

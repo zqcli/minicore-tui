@@ -1,0 +1,36 @@
+final_quality_start_utc=2026-09-05T13:37:00Z
+
+===== release-gate =====
+command=cargo +stable test --locked --offline --release --lib version_gate 
+    Finished `release` profile [optimized] target(s) in 0.10s
+     Running unittests src/lib.rs (target/release/deps/minicore_tui-4fe0b5abca5db800)
+
+running 2 tests
+test protocol::tests::version_gate_prerelease_policy ... ok
+test protocol::tests::version_gate_is_exactly_0_3_major_minor ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 195 filtered out; finished in 0.00s
+
+status=0
+
+===== fmt-msrv =====
+command=cargo +1.85.0 fmt --all -- --check 
+status=0
+
+===== fmt-stable =====
+command=cargo +stable fmt --all -- --check 
+status=0
+
+===== clippy =====
+command=cargo +stable clippy --locked --offline --all-targets -- -D warnings 
+    Checking minicore-tui v0.2.1 (/root/minicore-tui-r2-01a06ec1/tui)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.92s
+status=0
+
+===== rustdoc =====
+command=cargo +stable doc --locked --offline --no-deps 
+ Documenting minicore-tui v0.2.1 (/root/minicore-tui-r2-01a06ec1/tui)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.70s
+   Generated /root/minicore-tui-r2-01a06ec1/tui/target/doc/minicore_tui/index.html
+status=0
+final_quality_end_utc=2026-09-05T13:37:04Z

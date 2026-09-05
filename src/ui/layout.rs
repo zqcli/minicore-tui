@@ -16,10 +16,17 @@ pub fn is_too_small(area: Rect) -> bool {
     area.width < MIN_WIDTH || area.height < MIN_HEIGHT
 }
 
-/// True while the active session has a running live turn (spec 14.1: the
-/// busy status row only exists then).
+/// True while the active session needs a status row for live state or its
+/// retained last result (spec 14.1).
 pub fn busy(app: &App) -> bool {
-    app.active_view().is_some_and(|view| view.live.is_some())
+    app.active_view().is_some_and(|view| {
+        view.live.is_some()
+            || view.last_result.is_some()
+            || view
+                .state
+                .as_ref()
+                .is_some_and(|state| state.status != crate::protocol::SessionStatusWire::Idle)
+    })
 }
 
 /// Composer total height: 3 content lines plus 2 border lines, fixed to 3
@@ -35,11 +42,17 @@ pub fn composer_content_rows(app: &App, width: u16) -> usize {
     if app.composer.is_empty() {
         return 1;
     }
-    app.composer
+    let rows = app
+        .composer
         .lines()
         .iter()
         .map(|line| crate::markdown::wrap_plain(line, width, Style::new()).len())
-        .sum()
+        .sum::<usize>();
+    if app.composer.content().len() >= crate::state::composer::MAX_COMPOSER_BYTES * 9 / 10 {
+        rows + 1
+    } else {
+        rows
+    }
 }
 
 /// The dock height the composer occupies: it grows with the wrapped
@@ -49,7 +62,7 @@ pub fn composer_height_phase5(app: &App, width: u16, screen_height: u16, short: 
     if short {
         return 3;
     }
-    if app.active_view().is_some_and(|view| view.live.is_some()) {
+    if busy(app) {
         return 3 + 2;
     }
     let max_rows = (screen_height as usize * 2) / 5; // 40%

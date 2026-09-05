@@ -6,10 +6,9 @@
 //! were read on their own pipe, but `Frame`, `AgentLogLine`,
 //! `ConnectionClosed`, `Exited`, and `ProtocolError` are produced by four
 //! independent tasks, so no total order is promised between them. The app
-//! must latch the first connection-terminating event (`ProtocolError`,
-//! `ConnectionClosed`, or `Exited`) into a terminal state and then ignore
-//! later termination events idempotently (Phase 2 contract; see also
-//! `RpcProcess::recv`).
+//! must latch the first connection-terminating event during normal
+//! operation. The explicit shutdown path instead drains buffered frames until
+//! all producers close (see also `RpcProcess::recv`).
 
 use std::process::ExitStatus;
 
@@ -24,6 +23,7 @@ use crate::theme::ThemeKind;
 /// different tasks arrive without a promised total order; see the module
 /// docs for the termination semantics.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum RpcEvent {
     /// One complete response or notification frame.
     Frame(IncomingFrame),
@@ -54,6 +54,11 @@ pub enum AppEvent {
         session_id: String,
         text: String,
     },
+    /// Steer the active running turn of a session.
+    SteerTurn {
+        session_id: String,
+        text: String,
+    },
     /// Create and activate a session from catalog defaults (Phase 4 wires
     /// the new-session UI to this).
     CreateSession {
@@ -68,8 +73,23 @@ pub enum AppEvent {
     OpenSession {
         session_id: String,
     },
+    /// Close an open session (spec 12, 52).
+    CloseSession {
+        session_id: String,
+        confirm: bool,
+    },
+    /// Delete a session (spec 12).
+    DeleteSession {
+        session_id: String,
+        confirm: bool,
+    },
     /// Request cancellation of the active turn (Esc arrives in Phase 5).
     CancelTurn {
+        session_id: String,
+    },
+    /// Re-read the retained completion for a blocked turn. This is an
+    /// explicit one-shot operation; it never polls or retries automatically.
+    RefreshTurn {
         session_id: String,
     },
     /// A transport event from the RPC background tasks.
@@ -105,7 +125,7 @@ pub enum AppEvent {
     /// Expand or collapse one durable tool card.
     ToggleTool {
         session_id: String,
-        turn_id: String,
+        loop_id: String,
         tool_call_id: String,
     },
     // ---- Phase 4: selectors (spec 24-28) -----------------------------

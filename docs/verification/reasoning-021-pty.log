@@ -1,0 +1,12 @@
+Script started on 2026-09-05 21:29:38+08:00 [COMMAND="cargo +stable test --locked --offline --test terminal_restore -- --ignored" <not executed on terminal>]
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/terminal_restore.rs (target/debug/deps/terminal_restore-3df6d6fb57e15a48)
+
+running 1 test
+[?1049h[?2004h[?1000h[?1002h[?1003h[?1015h[?1006h[?25l[2J[?25h[?1006l[?1015l[?1003l[?1002l[?1000l[?2004l[?1049ltest real_pty_enter_and_restore_round_trip ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+
+Script done on 2026-09-05 21:29:38+08:00 [COMMAND_EXIT_CODE="0"]
+pty_status=0

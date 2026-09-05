@@ -1,0 +1,25 @@
+   Compiling minicore-tui v0.2.0 (/root/minicore-tui-r2-01a06ec1/tui)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.62s
+     Running tests/app_flow.rs (target/debug/deps/app_flow-6e628d8bd4c75f6e)
+
+running 2 tests
+
+thread 'live_reasoning_renders_markdown_before_each_request_text' panicked at tests/app_flow.rs:237:5:
+live request 0 reasoning leaked Markdown bold markers
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test live_reasoning_renders_markdown_before_each_request_text ... FAILED
+
+thread 'persisted_reasoning_preserves_markdown_and_request_order_after_reopen' panicked at tests/app_flow.rs:269:5:
+persisted history: request 0 reasoning must precede its text
+test persisted_reasoning_preserves_markdown_and_request_order_after_reopen ... FAILED
+
+failures:
+
+failures:
+    live_reasoning_renders_markdown_before_each_request_text
+    persisted_reasoning_preserves_markdown_and_request_order_after_reopen
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 49 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test app_flow`
+targeted_exit_status=101

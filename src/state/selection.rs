@@ -74,8 +74,11 @@ pub struct SelectorState {
     pub kind: SelectorKind,
     pub query: String,
     pub cursor: usize,
-    /// True while a `session.open` from this panel is in flight; further
-    /// confirms are ignored until the response lands.
+    /// Model being edited by a reasoning selector. This is set when a model
+    /// change requires an explicit compatible reasoning choice.
+    pub model_context: Option<String>,
+    /// True while the panel's open/update request is in flight; further
+    /// edits and confirms are ignored until the response lands.
     pub submitting: bool,
     /// A failed open, kept with the panel so the query and selection
     /// survive the error (spec 28.6).
@@ -88,6 +91,7 @@ impl SelectorState {
             kind,
             query: String::new(),
             cursor: 0,
+            model_context: None,
             submitting: false,
             error: None,
         }
@@ -168,7 +172,7 @@ fn session_matches(session: &SessionInfo, needle: &str) -> bool {
 pub fn supported_reasoning(models: &[ModelInfo], model_id: &str) -> Vec<Reasoning> {
     models
         .iter()
-        .find(|model| model.id == model_id)
+        .find(|model| model.id == model_id || model.model_ref == model_id)
         .map(|model| model.supported_reasoning.clone())
         .unwrap_or_default()
 }
@@ -262,7 +266,6 @@ mod tests {
             model: "m".to_owned(),
             reasoning: R::High,
             loaded: false,
-            instance_id: None,
             created_at: updated_at.to_owned(),
             updated_at: updated_at.to_owned(),
         }

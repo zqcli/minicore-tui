@@ -1,0 +1,16 @@
+ ⚠ UNSAVED TURN
+ This turn finished, but the Agent did not confirm saving i
+ t.
+ The session is blocked. Tool side effects may already exis
+ t.
+ Closing releases this result; reopening reads whatever the
+  Store can recover.
+ Some live output may be missing.
+
+ ✓ Turn completed · persistence failed · requests: 1 · tool
+
+⠋ Blocked · persistence · completed · persistence failed
+╭──────────────────────────────────────────────────────────╮
+│Session blocked                                           │
+╰──────────────────────────────────────────────────────────╯
+Blocked · persistence · completed · persistence unsaved turn

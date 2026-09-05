@@ -267,3 +267,181 @@ fn new_output_marker_dark_80x24() {
         24,
     );
 }
+
+#[test]
+fn unsaved_gap_dark_80x24() {
+    let app = testapp::unsaved_gap(ThemeKind::Dark);
+    let cap = capture(&app, 80, 24);
+    assert!(cap.contains("UNSAVED TURN"));
+    assert!(cap.contains("This turn finished, but the Agent did not confirm saving it."));
+    assert!(cap.contains("The session is blocked. Tool side effects may already exist."));
+    assert!(
+        cap.contains(
+            "Closing releases this result; reopening reads whatever the Store can recover."
+        )
+    );
+    assert!(cap.contains("Some live output may be missing."));
+    snapshot(&app, "unsaved_gap_dark_80x24", 80, 24);
+}
+
+#[test]
+fn unsaved_gap_light_120x40() {
+    let app = testapp::unsaved_gap(ThemeKind::Light);
+    let cap = capture(&app, 120, 40);
+    assert!(cap.contains("UNSAVED TURN"));
+    assert!(cap.contains("This turn finished, but the Agent did not confirm saving it."));
+    snapshot(&app, "unsaved_gap_light_120x40", 120, 40);
+}
+
+#[test]
+fn unsaved_gap_dark_60x16() {
+    let app = testapp::unsaved_gap(ThemeKind::Dark);
+    let cap = capture(&app, 60, 16);
+    assert!(cap.contains("UNSAVED TURN"));
+    assert!(cap.contains("This turn finished"));
+    snapshot(&app, "unsaved_gap_dark_60x16", 60, 16);
+}
+
+#[test]
+fn unsaved_gap_dark_160x50() {
+    let app = testapp::unsaved_gap(ThemeKind::Dark);
+    let cap = capture(&app, 160, 50);
+    assert!(cap.contains("UNSAVED TURN"));
+    assert!(cap.contains("This turn finished, but the Agent did not confirm saving it."));
+    snapshot(&app, "unsaved_gap_dark_160x50", 160, 50);
+}
+
+#[test]
+fn steering_dark_80x24() {
+    let app = testapp::steering(ThemeKind::Dark);
+    let cap = capture(&app, 80, 24);
+    assert!(cap.contains("Steering"));
+    assert!(cap.contains("Focus on memory safety instead"));
+    snapshot(&app, "steering_dark_80x24", 80, 24);
+}
+
+#[test]
+fn steering_light_120x40() {
+    let app = testapp::steering(ThemeKind::Light);
+    let cap = capture(&app, 120, 40);
+    assert!(cap.contains("Steering"));
+    snapshot(&app, "steering_light_120x40", 120, 40);
+}
+
+#[test]
+fn steering_dark_60x16() {
+    let app = testapp::steering(ThemeKind::Dark);
+    let cap = capture(&app, 60, 16);
+    assert!(cap.contains("Steering"));
+    snapshot(&app, "steering_dark_60x16", 60, 16);
+}
+
+#[test]
+fn steering_dark_160x50() {
+    let app = testapp::steering(ThemeKind::Dark);
+    let cap = capture(&app, 160, 50);
+    assert!(cap.contains("Steering"));
+    snapshot(&app, "steering_dark_160x50", 160, 50);
+}
+
+#[test]
+fn pending_model_dark_80x24() {
+    let app = testapp::pending_model(ThemeKind::Dark);
+    let cap = capture(&app, 80, 24);
+    assert!(cap.contains("claude-3-7-sonnet") || cap.contains("applies at next"));
+    snapshot(&app, "pending_model_dark_80x24", 80, 24);
+}
+
+#[test]
+fn pending_model_light_120x40() {
+    let app = testapp::pending_model(ThemeKind::Light);
+    let cap = capture(&app, 120, 40);
+    assert!(cap.contains("claude-3-7-sonnet") || cap.contains("applies at next"));
+    snapshot(&app, "pending_model_light_120x40", 120, 40);
+}
+
+#[test]
+fn pending_model_dark_60x16() {
+    let app = testapp::pending_model(ThemeKind::Dark);
+    let cap = capture(&app, 60, 16);
+    assert!(cap.contains("claude-3-7-sonnet") || cap.contains("applies at next"));
+    snapshot(&app, "pending_model_dark_60x16", 60, 16);
+}
+
+#[test]
+fn finishing_dark_80x24() {
+    let app = testapp::finishing(ThemeKind::Dark);
+    let cap = capture(&app, 80, 24);
+    assert!(cap.contains("Saving turn…") || cap.contains("finishing") || cap.contains("Finishing"));
+    snapshot(&app, "finishing_dark_80x24", 80, 24);
+}
+
+#[test]
+fn finishing_light_120x40() {
+    let app = testapp::finishing(ThemeKind::Light);
+    let cap = capture(&app, 120, 40);
+    assert!(cap.contains("Saving turn…") || cap.contains("finishing") || cap.contains("Finishing"));
+    snapshot(&app, "finishing_light_120x40", 120, 40);
+}
+
+#[test]
+fn close_user_dark_80x24() {
+    let app = testapp::close_user(ThemeKind::Dark);
+    let cap = capture(&app, 80, 24);
+    assert!(cap.contains("/close confirm"));
+    assert!(cap.contains("cancelled (user)"));
+    assert!(cap.contains("persisted"));
+    snapshot(&app, "close_user_dark_80x24", 80, 24);
+}
+
+#[test]
+fn close_user_light_120x40() {
+    let app = testapp::close_user(ThemeKind::Light);
+    let cap = capture(&app, 120, 40);
+    assert!(cap.contains("/close confirm"));
+    assert!(cap.contains("cancelled (user)"));
+    assert!(cap.contains("persisted"));
+    snapshot(&app, "close_user_light_120x40", 120, 40);
+}
+
+#[test]
+fn unknown_cancel_result_dark_80x24() {
+    let app = testapp::unknown_cancel_result(ThemeKind::Dark);
+    let cap = capture(&app, 80, 24);
+    assert!(cap.contains("cancelled (sandbox_evicted)"));
+    assert!(cap.contains("persisted"));
+    snapshot(&app, "unknown_cancel_result_dark_80x24", 80, 24);
+}
+
+#[test]
+fn shutdown_cancel_result_dark_80x24() {
+    let app = testapp::shutdown_cancel_result(ThemeKind::Dark);
+    let cap = capture(&app, 80, 24);
+    assert!(cap.contains("cancelled (shutdown)"));
+    assert!(cap.contains("persisted"));
+    snapshot(&app, "shutdown_cancel_result_dark_80x24", 80, 24);
+}
+
+#[test]
+fn store_error_dark_80x24() {
+    let app = testapp::store_error(ThemeKind::Dark);
+    let cap = capture(&app, 80, 24);
+    assert!(cap.contains("Unable to open this session") || cap.contains("unsupported format"));
+    snapshot(&app, "store_error_dark_80x24", 80, 24);
+}
+
+#[test]
+fn store_error_light_120x40() {
+    let app = testapp::store_error(ThemeKind::Light);
+    let cap = capture(&app, 120, 40);
+    assert!(cap.contains("Unable to open this session") || cap.contains("unsupported format"));
+    snapshot(&app, "store_error_light_120x40", 120, 40);
+}
+
+#[test]
+fn store_error_dark_60x16() {
+    let app = testapp::store_error(ThemeKind::Dark);
+    let cap = capture(&app, 60, 16);
+    assert!(cap.contains("Unable to open") || cap.contains("unsupported"));
+    snapshot(&app, "store_error_dark_60x16", 60, 16);
+}

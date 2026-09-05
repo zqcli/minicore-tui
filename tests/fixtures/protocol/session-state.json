@@ -1,1 +1,1 @@
-{"jsonrpc": "2.0", "id": 5, "result": {"session_id": "ses_6f3c1a", "instance_id": "ins_9fe2", "status": "running", "health": "healthy", "active_turn": "trn_77aa", "pending_interaction": null, "conversation_seq": 12, "last_terminal": null}}
+{"jsonrpc":"2.0","id":5,"result":{"session_id":"ses_6f3c1a","status":"running","active_loop":{"loop_id":"loop_77aa","status":"running_model","request_index":0,"config_revision":0,"model":"gpt-4o","pending_interaction":null},"block_reason":null}}

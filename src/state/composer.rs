@@ -14,6 +14,8 @@ use tui_textarea::{CursorMove, TextArea};
 
 /// Per-process cap on remembered submitted messages (spec 22.2/43.7).
 pub const MAX_HISTORY: usize = 100;
+/// Maximum UTF-8 bytes accepted by the prompt/steering composer.
+pub const MAX_COMPOSER_BYTES: usize = 256 * 1024;
 
 /// Whether navigating history touches the editor's live draft.
 pub struct Composer {
@@ -23,6 +25,8 @@ pub struct Composer {
     /// `None` means the editor holds the live draft.
     history_index: Option<usize>,
     draft: String,
+    /// Monotonic content-edit generation used to correlate delayed acks.
+    editor_revision: u64,
 }
 
 impl Default for Composer {
@@ -38,6 +42,7 @@ impl Composer {
             history: VecDeque::new(),
             history_index: None,
             draft: String::new(),
+            editor_revision: 0,
         }
     }
 
@@ -69,26 +74,47 @@ impl Composer {
 
     // ---- editing (App::update only) -----------------------------------
 
-    pub fn type_char(&mut self, c: char) {
+    pub fn type_char(&mut self, c: char) -> bool {
+        if !self.can_insert(&c.to_string()) {
+            return false;
+        }
         self.textarea.insert_char(c);
+        self.bump_revision();
+        true
     }
 
-    pub fn type_text(&mut self, text: &str) {
+    pub fn type_text(&mut self, text: &str) -> bool {
+        if !self.can_insert(text) {
+            return false;
+        }
         self.textarea.insert_str(text);
+        self.bump_revision();
+        true
     }
 
-    pub fn newline(&mut self) {
+    fn can_insert(&self, text: &str) -> bool {
+        self.content().len().saturating_add(text.len()) <= MAX_COMPOSER_BYTES
+    }
+
+    pub fn newline(&mut self) -> bool {
+        if !self.can_insert("\n") {
+            return false;
+        }
         self.textarea.insert_newline();
+        self.bump_revision();
+        true
     }
 
     /// Backspace; joins lines at word edges exactly as tui-textarea does.
     pub fn backspace(&mut self) {
         self.textarea.delete_char();
+        self.bump_revision();
     }
 
     /// Delete (forward).
     pub fn delete(&mut self) {
         self.textarea.delete_next_char();
+        self.bump_revision();
     }
 
     pub fn move_left(&mut self) {
@@ -127,14 +153,17 @@ impl Composer {
 
     pub fn word_delete(&mut self) {
         self.textarea.delete_word();
+        self.bump_revision();
     }
 
     pub fn undo(&mut self) {
         self.textarea.undo();
+        self.bump_revision();
     }
 
     pub fn redo(&mut self) {
         self.textarea.redo();
+        self.bump_revision();
     }
 
     /// Empties the buffer and drops any history navigation state.
@@ -148,6 +177,15 @@ impl Composer {
     pub fn set_text(&mut self, text: &str) {
         self.textarea = TextArea::new(vec![text.to_owned()]);
         self.textarea.move_cursor(CursorMove::End);
+        self.bump_revision();
+    }
+
+    pub fn editor_revision(&self) -> u64 {
+        self.editor_revision
+    }
+
+    fn bump_revision(&mut self) {
+        self.editor_revision = self.editor_revision.wrapping_add(1);
     }
 
     // ---- history (spec 22.2, 43.7) ------------------------------------
