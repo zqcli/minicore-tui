@@ -8,7 +8,12 @@ enter an alternate screen during normal CI tests.
 
 ## Current Patch Verification
 
-For **TUI 0.2.7 / Agent 0.3.2**, see
+The paired **TUI 0.2.8 / Agent 0.3.3** release is documented in
+[verification/0.2.8/README.md](verification/0.2.8/README.md). Its source behavior
+matches the preceding local builds; version-bearing snapshots were updated.
+No local compilation is used for this release.
+
+For the preceding **TUI 0.2.7 / Agent 0.3.2**, see
 [verification/0.2.7/README.md](verification/0.2.7/README.md). All compilation was
 performed remotely on Linux: stable and Rust 1.85 each passed 423 default tests
 with 17 ignored; 16 real-Agent loopback E2E tests passed separately. Native macOS

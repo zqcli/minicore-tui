@@ -1,0 +1,6 @@
+08ed8be4c0fe1ee7a63f586cba4837165d6e8644214fb78df3ecb8b285264dba  /Users/zzq/Develops/minicore-tui/target/debug/minicore-tui
+0ad2c2f23cf784757c8a1f78c31f4ea227daf6ac5f5fc8434e0276ef475e179a  /Users/zzq/Develops/minicore-tui/target/release/minicore-tui
+55fcae84f309448926212dd12d0f88af950045f1e0d97546543fda782d4fd638  /Users/zzq/Develops/minicore-tui/target/preserved-before-release-ew5WEt/minicore-tui-debug
+a3b23dac99a0e998f7406b108dd89aca90a93e7cd8560558406b4d142048fdd9  /Users/zzq/Develops/minicore-tui/target/preserved-before-release-ew5WEt/minicore-tui-release
+UUID: 4C4C44A1-5555-3144-A1D5-A5DEB430BAFE (x86_64) /Users/zzq/Develops/minicore-tui/target/debug/minicore-tui
+UUID: 4C4C44A1-5555-3144-A1D5-A5DEB430BAFE (x86_64) /Users/zzq/Develops/minicore-tui/target/debug/minicore-tui.dSYM/Contents/Resources/DWARF/minicore-tui

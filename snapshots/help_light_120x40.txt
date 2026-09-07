@@ -1,4 +1,4 @@
- MINICORE  v0.2.7
+ MINICORE  v0.2.8
 
  Coding agent TUI
  q / Ctrl+C to quit

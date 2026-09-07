@@ -32,7 +32,8 @@ Since 0.2.7, Debug builds use `opt-level=1` for this package and level 2 for
 dependencies. Debug information and assertions remain enabled, but optimization
 can affect stepping and local-variable visibility. Terminal output batches small
 ANSI writes through a 64 KiB buffer; render rates are unchanged. The Release
-profile is unchanged. See [release notes](docs/release-0.2.7.md).
+profile is unchanged. The current release is **0.2.8**, paired with Agent
+**0.3.3**; see [release notes](docs/release-0.2.8.md).
 
 For a macOS x86_64 cross-build, put LLVM's `clang` and `ld64.lld` on `PATH`,
 set `SDKROOT` to a macOS SDK, and run `scripts/build-macos-x86_64.sh`.

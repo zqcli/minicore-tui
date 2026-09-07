@@ -1,15 +1,18 @@
 # Final Report: Agent v0.3 / Runtime v0.4 Migration
 
-The current executable versions are **TUI 0.2.7 / Agent 0.3.2**. See
+The current release versions are **TUI 0.2.8 / Agent 0.3.3**. The
+[0.2.8 release](release-0.2.8.md) is a paired version update without additional
+TUI behavior changes. See
 [release-0.2.7.md](release-0.2.7.md) for buffered terminal output, level-1 Debug
 package optimization, preserved executables/cache cleanup, and remote-only builds.
-Current verification is in [verification/0.2.7](verification/0.2.7/README.md).
+Paired-release checks are in [verification/0.2.8](verification/0.2.8/README.md);
+performance evidence remains in [verification/0.2.7](verification/0.2.7/README.md).
 The [0.2.6 changes](release-0.2.6.md) retain dependency-level optimization, and the
 [0.2.5 changes](release-0.2.5.md) retain history-layout reuse, bounded visible-row
 painting and coalesced preparation.
 The [0.2.4 changes](release-0.2.4.md) retain true reasoning-part boundaries,
 paired Steer receipts and the gray FIFO queue above Working. Runtime remains untouched.
-No release tag or commit was created.
+Source updates are committed on `dev`; no release tag has been created.
 
 The [0.2.3 Footer fixes](release-0.2.3.md) remain, but its pending-Steer User-card
 UI is superseded by the 0.2.4 queue. The [0.2.2 fixes](release-0.2.2.md) cover
@@ -21,7 +24,7 @@ relabeled as new runs. Agent/Runtime protocol compatibility is unchanged.
 
 ## Rail Follow-Up Status
 
-The uncommitted worktree also contains the Rail Stage 0–7 follow-up described
+The source tree also contains the Rail Stage 0–7 follow-up described
 in [rail-ui-parity-stage0.md](rail-ui-parity-stage0.md) and summarized in
 [rail-ui-parity-report.md](rail-ui-parity-report.md). Its fixed source oracle is
 Rail `1d0dd1611a4d9546c64fe9f5b5c966253fb88eba` with Pi `0.84.4`;

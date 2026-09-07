@@ -1,0 +1,45 @@
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 56529)
+Traceback (most recent call last):
+  File "/usr/local/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/socketserver.py", line 766, in __init__
+    self.handle()
+    ~~~~~~~~~~~^^
+  File "/usr/local/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 500, in handle
+    self.handle_one_request()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/local/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/http/server.py", line 488, in handle_one_request
+    method()
+    ~~~~~~^^
+  File "/tmp/minicore-release-028-033.ew5WEt/native_driver.py", line 42, in do_POST
+    requests.append(record)
+    ^^^^^^^^^^^^^^^
+AttributeError: 'str' object has no attribute 'append'
+----------------------------------------
+{
+  "terminal": "iTerm2 3.6.11",
+  "window_id": 69090,
+  "evidence_dir": "/var/folders/zw/gcpf3t91243dhn6z3bb278s00000gn/T/minicore-release-028-033-iterm-68catdvm/evidence",
+  "tui_sha256": "08ed8be4c0fe1ee7a63f586cba4837165d6e8644214fb78df3ecb8b285264dba",
+  "agent_sha256": "8e136238e245d96ea8e1546338887880850cf46fbaabb7721398cfe65cc3214f",
+  "pixel_screenshots": "UNVERIFIED; protected iTerm windows, no screenshot attempt or replacement",
+  "agent_version": "0.3.3",
+  "status": "FAIL",
+  "error": "reasoning and real bash: timeout",
+  "checks": [],
+  "captures": [],
+  "requests": "{\"jsonrpc\": \"2.0\", \"id\": \"agent.ping\", \"method\": \"agent.ping\", \"params\": {}}\n{\"jsonrpc\": \"2.0\", \"id\": \"agent.shutdown\", \"method\": \"agent.shutdown\", \"params\": {}}\n",
+  "tui_version": "minicore-tui 0.2.8",
+  "note": "Native iTerm2 screen text and input + real Agent/loopback. No user config or Store; no external provider."
+}
+Traceback (most recent call last):
+  File "/tmp/minicore-release-028-033.ew5WEt/native_driver.py", line 171, in <module>
+    text = wait(lambda t: (WORK / 'tool-ran').exists() and 'Analyzing constraints' in t, 'reasoning and real bash')
+  File "/tmp/minicore-release-028-033.ew5WEt/native_driver.py", line 136, in wait
+    raise AssertionError(label + ': timeout')
+AssertionError: reasoning and real bash: timeout
