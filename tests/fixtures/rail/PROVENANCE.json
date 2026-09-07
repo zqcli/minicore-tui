@@ -1,0 +1,14 @@
+{
+  "schema": "minicore-rail-cell-v1",
+  "rail_repo": "zqcli/pi-rail-ui",
+  "rail_commit": "1d0dd1611a4d9546c64fe9f5b5c966253fb88eba",
+  "rail_commit_subject": "refactor: rename railfast command to rail-oai-fast",
+  "rail_ref_dir": "RAIL_REF_DIR (resolved at generation time)",
+  "pi": "0.84.4",
+  "theme": "pi dark (initTheme('dark'))",
+  "node": "v24.15.0",
+  "tz": "UTC",
+  "generator": "tools/reference_fixtures/generate.mts",
+  "generated_at": "2026-09-06T06:24:58.494Z",
+  "notes": "Cells are captured by invoking the fixed Rail/Pi renderer functions (RailEditor, native Editor paste, renderExecutionRail, renderSimpleFooter, SurfaceRailBlock, collapseHint, railScrollbarGeometry, native Markdown). JSON files hold normalized cell grids; terminal transparent background is represented by the absence of a bg value."
+}

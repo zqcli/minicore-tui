@@ -14,6 +14,10 @@ pub struct PendingSteer {
     pub local_id: u64,
     pub text: String,
     pub state: PendingSteerState,
+    pub accepted_at: Option<String>,
+    /// 1-based FIFO acceptance index from the Agent's steer ACK (absent on
+    /// older Agents); receipts compare `applied_count` against it.
+    pub steer_index: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +29,53 @@ pub enum PendingSteerState {
     Unconfirmed,
 }
 
+/// One locally admitted, not-yet-sent steering instruction in the per-session
+/// FIFO queue. It lives OUTSIDE `LiveLoop` so a finished loop never drops it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SteerQueueItem {
+    pub local_id: u64,
+    pub text: String,
+    pub state: SteerQueueState,
+    /// Composer revision at admission; the late-ACK guard compares it so new
+    /// editor content is never cleared by an old steer response.
+    pub editor_revision: Option<u64>,
+    /// True while this queued message is being re-submitted as a fresh turn
+    /// after its loop sealed (race fallback). The entry is kept until the
+    /// turn.send ACK so a send failure cannot drop the text.
+    pub handoff: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SteerQueueState {
+    /// Admitted locally; not yet handed to any RPC.
+    Unsent,
+    /// The request reached the Agent but its response could not be decoded
+    /// (outcome uncertain): never auto-resend; only deliberate withdrawal can
+    /// move it back to an editable state.
+    Unconfirmed,
+}
+
+/// A steering instruction proven applied because the Agent held it in a
+/// prepared prompt history (receipt); rendered as a provisional Steering User
+/// card until the durable history replaces it exactly once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedSteer {
+    pub local_id: u64,
+    pub text: String,
+    pub accepted_at: Option<String>,
+    pub request_index: u32,
+}
+
+/// Monotonic steering receipt observed for the CURRENT loop: the highest
+/// `applied_count` seen and the request at which it was first observed. Used
+/// to pair ACK `steer_index` values with real receipts (identity, never queue
+/// position), and to recover dropped receipts from `session.presentation`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SteerReceiptObserved {
+    pub request_index: u32,
+    pub applied_count: u64,
+}
+
 /// One model/tool iteration within a live loop.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LiveRequest {
@@ -34,7 +85,18 @@ pub struct LiveRequest {
     pub reasoning: Reasoning,
     pub text: String,
     pub reasoning_text: String,
+    /// Arrival order of visible model parts. The flattened fields above are
+    /// retained for compatibility and accounting, but rendering uses this
+    /// sequence whenever it is populated.
+    pub parts: Vec<LivePart>,
     pub tools: Vec<LiveTool>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LivePart {
+    Text(String),
+    Reasoning(String),
+    Tool { tool_call_id: String },
 }
 
 impl LiveRequest {
@@ -51,6 +113,7 @@ impl LiveRequest {
             reasoning,
             text: String::new(),
             reasoning_text: String::new(),
+            parts: Vec::new(),
             tools: Vec::new(),
         }
     }

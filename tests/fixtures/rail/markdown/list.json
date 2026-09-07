@@ -1,0 +1,62 @@
+{
+ "schema": "minicore-rail-cell-v1",
+ "case": "list",
+ "term": {
+  "cols": 60,
+  "rows": 24
+ },
+ "source": {
+  "rail_commit": "1d0dd1611a4d9546c64fe9f5b5c966253fb88eba",
+  "pi": "0.84.4",
+  "theme": "pi dark (initTheme('dark'))"
+ },
+ "rows": [
+  [
+   {
+    "c": "- ",
+    "fg": [
+     138,
+     190,
+     183
+    ]
+   },
+   "first                                                     "
+  ],
+  [
+   {
+    "c": "- ",
+    "fg": [
+     138,
+     190,
+     183
+    ]
+   },
+   "second                                                    "
+  ],
+  [
+   "    ",
+   {
+    "c": "1. ",
+    "fg": [
+     138,
+     190,
+     183
+    ]
+   },
+   "numbered                                             "
+  ],
+  [
+   "    ",
+   {
+    "c": "2. ",
+    "fg": [
+     138,
+     190,
+     183
+    ]
+   },
+   "two                                                  "
+  ]
+ ],
+ "kind": "cells"
+}

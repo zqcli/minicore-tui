@@ -91,7 +91,7 @@ fn page_json(items: Vec<Value>, complete: bool) -> Value {
     })
 }
 
-fn user_entry(index: usize, loop_id: &str, text: &str) -> Value {
+pub(crate) fn user_entry(index: usize, loop_id: &str, text: &str) -> Value {
     json!({
         "index": index,
         "item": {
@@ -164,7 +164,7 @@ pub fn fresh(theme: ThemeKind) -> App {
 
 /// Bootstraps to Ready and opens `session_id` with `items` delivered on
 /// the first history chain.
-fn open_with(
+pub(crate) fn open_with(
     theme: ThemeKind,
     session_id: &str,
     title: Option<&str>,
@@ -199,7 +199,16 @@ fn open_with(
         .iter()
         .find(|r| r.method == "session.history")
         .unwrap();
+    let presentation = requests
+        .iter()
+        .find(|r| r.method == "session.presentation")
+        .unwrap();
     take_requests(respond(&mut app, state, state_json(session_id, "idle")));
+    take_requests(respond(
+        &mut app,
+        presentation,
+        json!({"session_id": session_id, "context": {"kind": "unknown"}}),
+    ));
     let commands = respond(&mut app, history, page_json(items, true));
     assert!(take_requests(commands).is_empty());
     app
@@ -395,6 +404,76 @@ pub fn standard_catalog() -> (Vec<Value>, Vec<Value>, Vec<Value>) {
     (models, profiles, sessions)
 }
 
+/// A catalog whose active session uses a Luna-like model that advertises the
+/// full Agent reasoning ladder including `max` (0.2.2 max selection).
+pub fn luna_catalog() -> (Vec<Value>, Vec<Value>, Vec<Value>) {
+    let models = vec![
+        json!({"id": "luna", "model_ref": "minicore/luna:v1", "context_window": 372000, "supports_tools": true, "supported_reasoning": ["auto", "disabled", "low", "medium", "high", "xhigh", "max", "ultra"]}),
+        json!({"id": "deep", "model_ref": "minicore/deep:v1", "context_window": 128000, "supports_tools": true, "supported_reasoning": ["auto", "low", "medium", "high"]}),
+    ];
+    let profiles = vec![
+        json!({"id": "coding", "model": "luna", "reasoning": "high", "tools": ["read", "write", "edit", "apply_patch", "bash"]}),
+    ];
+    let sessions = vec![
+        json!({"session_id": "ses_main", "title": null, "profile": "coding", "workspace": "/work/cli", "model": "luna", "reasoning": "high", "loaded": true, "created_at": "2027-01-15T07:55:00Z", "updated_at": "2027-01-15T07:55:00Z"}),
+        json!({"session_id": "ses_old", "title": "Rust port", "profile": "coding", "workspace": "/work/rust", "model": "deep", "reasoning": "high", "loaded": false, "created_at": "2027-01-14T08:00:00Z", "updated_at": "2027-01-14T08:00:00Z"}),
+    ];
+    (models, profiles, sessions)
+}
+
+/// Opens a loaded Luna-model session through real session.open/state/
+/// presentation/history events, using the `luna_catalog` model set so the
+/// reasoning selector can offer `max` (0.2.2 max selection).
+pub fn luna_session(theme: ThemeKind) -> App {
+    let (models, _profiles, _sessions) = luna_catalog();
+    let mut app = fresh(theme);
+    let requests = take_requests(app.update(AppEvent::Bootstrap));
+    for request in &requests {
+        let result = match request.method {
+            "agent.ping" => json!({"version": "0.3.0"}),
+            "model.list" => json!({"models": models.clone()}),
+            "profile.list" => json!({"profiles": []}),
+            "session.list" => json!({"sessions": []}),
+            other => panic!("unexpected bootstrap request: {other}"),
+        };
+        take_requests(respond(&mut app, request, result));
+    }
+    let open = take_requests(app.update(AppEvent::OpenSession {
+        session_id: "ses_main".into(),
+    }));
+    let requests = take_requests(respond(
+        &mut app,
+        &open[0],
+        json!({
+            "session": {
+                "session_id": "ses_main", "title": null, "profile": "coding",
+                "workspace": "/work/cli", "model": "luna", "reasoning": "high",
+                "loaded": true, "created_at": "2027-01-15T07:55:00Z",
+                "updated_at": "2027-01-15T07:55:00Z"
+            }
+        }),
+    ));
+    let state = requests
+        .iter()
+        .find(|r| r.method == "session.state")
+        .unwrap();
+    let history = requests
+        .iter()
+        .find(|r| r.method == "session.history")
+        .unwrap();
+    if let Some(presentation) = requests.iter().find(|r| r.method == "session.presentation") {
+        take_requests(respond(
+            &mut app,
+            presentation,
+            json!({"session_id": "ses_main", "context": {"kind": "unknown"}}),
+        ));
+    }
+    take_requests(respond(&mut app, state, state_json("ses_main", "idle")));
+    let commands = respond(&mut app, history, page_json(Vec::new(), true));
+    assert!(take_requests(commands).is_empty());
+    app
+}
+
 pub fn open_session(app: &mut App, session_id: &str) {
     let open = take_requests(app.update(AppEvent::OpenSession {
         session_id: session_id.into(),
@@ -417,6 +496,13 @@ pub fn open_session(app: &mut App, session_id: &str) {
         .iter()
         .find(|r| r.method == "session.history")
         .unwrap();
+    if let Some(presentation) = requests.iter().find(|r| r.method == "session.presentation") {
+        take_requests(respond(
+            app,
+            presentation,
+            json!({"session_id": session_id, "context": {"kind": "unknown"}}),
+        ));
+    }
     take_requests(respond(app, state, state_json(session_id, "idle")));
     let commands = respond(app, history, page_json(Vec::new(), true));
     assert!(take_requests(commands).is_empty());
@@ -638,6 +724,7 @@ pub fn unsaved_gap(theme: ThemeKind) -> App {
             requests: 1,
             tool_rounds: 0,
             final_config_revision: 0,
+            accepted_at: None,
         };
         view.event_gap = true;
         view.last_result = Some(result.clone());
@@ -659,13 +746,14 @@ pub fn unsaved_gap(theme: ThemeKind) -> App {
 pub fn steering(theme: ThemeKind) -> App {
     let mut app = live_turn(theme);
     if let Some(view) = app.sessions.known.get_mut("ses_1") {
-        if let Some(live) = &mut view.live {
-            live.pending_steers.push(crate::state::turn::PendingSteer {
-                local_id: 1,
-                text: "Focus on memory safety instead".to_string(),
-                state: crate::state::turn::PendingSteerState::Queued,
-            });
-        }
+        // 0.2.4 surface: one receipt-proven applied steer renders as the real
+        // Steering user card (pending steers live in the gray dock queue).
+        view.applied_steers.push(crate::state::turn::AppliedSteer {
+            local_id: 1,
+            text: "Focus on memory safety instead".to_string(),
+            accepted_at: None,
+            request_index: 0,
+        });
     }
     app
 }
@@ -714,6 +802,7 @@ pub fn close_user(theme: ThemeKind) -> App {
             requests: 1,
             tool_rounds: 1,
             final_config_revision: 0,
+            accepted_at: None,
         });
     }
     app.update(AppEvent::CloseSession {
@@ -737,6 +826,7 @@ fn result_only(theme: ThemeKind, loop_id: &str, reason: crate::protocol::CancelR
             requests: 1,
             tool_rounds: 0,
             final_config_revision: 0,
+            accepted_at: None,
         });
     }
     app

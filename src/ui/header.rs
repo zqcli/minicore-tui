@@ -8,6 +8,9 @@ use crate::app::{App, ConnectionState};
 use crate::theme::Theme;
 
 pub fn lines(theme: &Theme, app: &App) -> Vec<Line<'static>> {
+    if app.sessions.active.is_some() {
+        return Vec::new();
+    }
     let mut out = vec![
         Line::from(vec![
             Span::styled(

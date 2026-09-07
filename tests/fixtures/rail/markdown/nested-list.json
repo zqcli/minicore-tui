@@ -1,0 +1,73 @@
+{
+ "schema": "minicore-rail-cell-v1",
+ "case": "nested-list",
+ "term": {
+  "cols": 60,
+  "rows": 24
+ },
+ "source": {
+  "rail_commit": "1d0dd1611a4d9546c64fe9f5b5c966253fb88eba",
+  "pi": "0.84.4",
+  "theme": "pi dark (initTheme('dark'))"
+ },
+ "rows": [
+  [
+   {
+    "c": "1. ",
+    "fg": [
+     138,
+     190,
+     183
+    ]
+   },
+   "one                                                      "
+  ],
+  [
+   {
+    "c": "2. ",
+    "fg": [
+     138,
+     190,
+     183
+    ]
+   },
+   "two                                                      "
+  ],
+  [
+   "    ",
+   {
+    "c": "- ",
+    "fg": [
+     138,
+     190,
+     183
+    ]
+   },
+   "sub a                                                 "
+  ],
+  [
+   "    ",
+   {
+    "c": "- ",
+    "fg": [
+     138,
+     190,
+     183
+    ]
+   },
+   "sub b                                                 "
+  ],
+  [
+   {
+    "c": "3. ",
+    "fg": [
+     138,
+     190,
+     183
+    ]
+   },
+   "three                                                    "
+  ]
+ ],
+ "kind": "cells"
+}

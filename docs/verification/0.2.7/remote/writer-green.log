@@ -1,0 +1,23 @@
+   Compiling minicore-tui v0.2.6 (/root/minicore-tui-027-RXdxEP/minicore-tui)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.49s
+     Running unittests src/lib.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-1e6baba6fdebb07a)
+
+running 10 tests
+test terminal::writer_tests::drop_does_not_emit_pending_frame_after_emergency_restore ... ok
+test terminal::writer_tests::failed_write_on_flush_is_reported_without_drop_retry ... ok
+test terminal::writer_tests::discard_prevents_ratatui_drop_from_flushing_a_stale_frame ... ok
+test terminal::writer_tests::underlying_flush_error_is_not_swallowed ... ok
+test terminal::writer_tests::small_writes_are_batched_until_explicit_flush ... ok
+
+thread 'terminal::writer_tests::writer_panic_does_not_retry_io_during_unwind' (1053935) panicked at src/terminal/writer_tests.rs:25:9:
+injected writer panic
+test terminal::writer_tests::interrupted_and_short_writes_preserve_every_byte ... note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+ok
+test terminal::writer_tests::writer_panic_does_not_retry_io_during_unwind ... ok
+test terminal::writer_tests::large_writes_are_not_truncated ... ok
+test terminal::writer_tests::full_buffers_flush_in_order ... ok
+ANSI bytes=6751, underlying writes=3801 -> 1
+test terminal::writer_tests::crossterm_bytes_match_with_far_fewer_underlying_writes ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 310 filtered out; finished in 0.00s
+

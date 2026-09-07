@@ -7,6 +7,7 @@ use std::cmp::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::protocol::{ModelInfo, ProfileInfo, Reasoning, SessionInfo};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 /// Fixed page step for `PageSelector`. The app has no terminal geometry, so
 /// paging uses a stable constant rather than a viewport-dependent height.
@@ -184,6 +185,9 @@ pub fn reasoning_label(reasoning: Reasoning) -> &'static str {
         Reasoning::Low => "low",
         Reasoning::Medium => "medium",
         Reasoning::High => "high",
+        Reasoning::XHigh => "xhigh",
+        Reasoning::Max => "max",
+        Reasoning::Ultra => "ultra",
     }
 }
 
@@ -194,62 +198,25 @@ pub fn reasoning_description(reasoning: Reasoning) -> &'static str {
         Reasoning::Low => "Light reasoning",
         Reasoning::Medium => "Moderate reasoning",
         Reasoning::High => "Deep reasoning",
+        Reasoning::XHigh => "Extra-deep reasoning",
+        Reasoning::Max => "Maximum reasoning",
+        Reasoning::Ultra => "Ultra reasoning",
     }
 }
 
-/// `2026-01-02T03:04:05.006Z` (also accepts `[+-]HH:MM` offsets; fraction
-/// precision beyond the second is ignored). The presentation helpers parse
-/// with the same function, so sorting and the rendered relative age always
-/// agree; unparsable text yields `None`.
+/// Parses the RFC3339 timestamps used by Agent session metadata. The
+/// presentation helpers parse with the same function, so sorting and the
+/// rendered relative age always agree; unparsable text yields `None`.
 pub fn parse_rfc3339(text: &str) -> Option<SystemTime> {
-    let (date, tail) = text.split_once('T')?;
-    let mut date_parts = date.split('-');
-    let year: i64 = date_parts.next()?.parse().ok()?;
-    let month: i64 = date_parts.next()?.parse().ok()?;
-    let day: i64 = date_parts.next()?.parse().ok()?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return None;
-    }
-
-    let (clock, offset) = if tail.ends_with('Z') || tail.ends_with('z') {
-        (&tail[..tail.len() - 1], 0i64)
+    let timestamp = OffsetDateTime::parse(text, &Rfc3339)
+        .ok()?
+        .unix_timestamp_nanos();
+    let nanos = timestamp.unsigned_abs().try_into().ok()?;
+    if timestamp >= 0 {
+        UNIX_EPOCH.checked_add(Duration::from_nanos(nanos))
     } else {
-        split_offset(tail)
-    };
-    let mut clock_parts = clock.split(':');
-    let hour: i64 = clock_parts.next()?.parse().ok()?;
-    let minute: i64 = clock_parts.next()?.parse().ok()?;
-    let second: i64 = clock_parts.next()?.split('.').next()?.parse().ok()?;
-    if !(0..24).contains(&hour) || !(0..60).contains(&minute) || !(0..60).contains(&second) {
-        return None;
+        UNIX_EPOCH.checked_sub(Duration::from_nanos(nanos))
     }
-
-    let days = days_from_civil(year, month, day);
-    let total = days * 86_400 + hour * 3_600 + minute * 60 + second - offset;
-    UNIX_EPOCH.checked_add(Duration::from_secs(total as u64))
-}
-
-fn split_offset(tail: &str) -> (&str, i64) {
-    let bytes = tail.as_bytes();
-    let len = bytes.len();
-    if len >= 6 && (bytes[len - 6] == b'+' || bytes[len - 6] == b'-') && bytes[len - 3] == b':' {
-        let hour: i64 = tail[len - 5..len - 3].parse().unwrap_or(0);
-        let minute: i64 = tail[len - 2..].parse().unwrap_or(0);
-        let sign = if bytes[len - 6] == b'-' { -1 } else { 1 };
-        return (&tail[..len - 6], sign * (hour * 3_600 + minute * 60));
-    }
-    (tail, 0)
-}
-
-/// Days since 1970-01-01 for a proleptic Gregorian date.
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let year_of_era = year - era * 400;
-    let month_prime = (month + 9) % 12;
-    let day_of_year = (153 * month_prime + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
 }
 
 #[cfg(test)]
@@ -286,6 +253,10 @@ mod tests {
         assert!(parse_rfc3339("not a timestamp").is_none());
         assert!(parse_rfc3339("2027-13-15T08:00:00.000Z").is_none());
         assert!(parse_rfc3339("2027-01-15T99:00:00.000Z").is_none());
+        assert_eq!(
+            parse_rfc3339("1969-12-31T23:59:59.000Z"),
+            UNIX_EPOCH.checked_sub(Duration::from_secs(1))
+        );
     }
 
     #[test]

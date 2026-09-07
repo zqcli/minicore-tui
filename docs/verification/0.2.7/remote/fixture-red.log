@@ -1,0 +1,21 @@
+   Compiling minicore-tui v0.2.7 (/root/minicore-tui-027-RXdxEP/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 7.38s
+     Running unittests src/lib.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-c0db238cdca620a1)
+
+running 1 test
+
+thread 'rpc::tests::fake_configs_have_independently_owned_directories' (1134116) panicked at src/rpc.rs:1142:9:
+assertion `left != right` failed
+  left: Some("/tmp/mct-rpc-1134115")
+ right: Some("/tmp/mct-rpc-1134115")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test rpc::tests::fake_configs_have_independently_owned_directories ... FAILED
+
+failures:
+
+failures:
+    rpc::tests::fake_configs_have_independently_owned_directories
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 320 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

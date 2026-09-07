@@ -315,8 +315,10 @@ fn unsaved_gap_dark_160x50() {
 fn steering_dark_80x24() {
     let app = testapp::steering(ThemeKind::Dark);
     let cap = capture(&app, 80, 24);
-    assert!(cap.contains("Steering"));
-    assert!(cap.contains("Focus on memory safety instead"));
+    // 0.2.4: a receipt-proven applied steer renders as the real Steering
+    // user card (pending steers live as a gray dock queue instead).
+    assert!(cap.contains("↪ Focus on memory safety instead"));
+    assert!(cap.contains("⠸ applied"));
     snapshot(&app, "steering_dark_80x24", 80, 24);
 }
 
@@ -324,7 +326,8 @@ fn steering_dark_80x24() {
 fn steering_light_120x40() {
     let app = testapp::steering(ThemeKind::Light);
     let cap = capture(&app, 120, 40);
-    assert!(cap.contains("Steering"));
+    assert!(cap.contains("↪ Focus on memory safety instead"));
+    assert!(cap.contains("⠸ applied"));
     snapshot(&app, "steering_light_120x40", 120, 40);
 }
 
@@ -332,7 +335,8 @@ fn steering_light_120x40() {
 fn steering_dark_60x16() {
     let app = testapp::steering(ThemeKind::Dark);
     let cap = capture(&app, 60, 16);
-    assert!(cap.contains("Steering"));
+    assert!(cap.contains("↪ Focus on memory safety instead"));
+    assert!(cap.contains("⠸ applied"));
     snapshot(&app, "steering_dark_60x16", 60, 16);
 }
 
@@ -340,7 +344,8 @@ fn steering_dark_60x16() {
 fn steering_dark_160x50() {
     let app = testapp::steering(ThemeKind::Dark);
     let cap = capture(&app, 160, 50);
-    assert!(cap.contains("Steering"));
+    assert!(cap.contains("↪ Focus on memory safety instead"));
+    assert!(cap.contains("⠸ applied"));
     snapshot(&app, "steering_dark_160x50", 160, 50);
 }
 

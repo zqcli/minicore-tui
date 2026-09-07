@@ -1,24 +1,24 @@
-MINICORE  v0.2.1
+ MINICORE  v0.2.7
 
-Coding agent TUI
-q / Ctrl+C to quit
+ Coding agent TUI
+ q / Ctrl+C to quit
 
-Starting agent…
+ Starting agent…
 
 
-┌──────────────────────────────────────────────────────────────────────────────┐
-│Agent logs                                                                    │
-│Captured stderr (newest first)                                                │
-│                                                                              │
-│agent 12:34:20  tool read: 128 lines                                          │
-│agent 12:34:13  session ses_1 opened                                          │
-│agent 12:34:12  loaded profile coding                                         │
-│                                                                              │
-│Esc closes this panel                                                         │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
-/project                                                              no session
-Starting
+
+ ┌─────────────────────────────────────────────────────────────────────────────┐
+ │Agent logs                                                                   │
+ │Captured stderr (newest first)                                               │
+ │                                                                             │
+ │agent 12:34:20  tool read: 128 lines                                         │
+ │agent 12:34:13  session ses_1 opened                                         │
+ │agent 12:34:12  loaded profile coding                                        │
+ │                                                                             │
+ │Esc closes this panel                                                        │
+ │                                                                             │
+ │                                                                             │
+ │                                                                             │
+ │                                                                             │
+ └─────────────────────────────────────────────────────────────────────────────┘
+ starting

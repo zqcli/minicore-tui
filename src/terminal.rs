@@ -19,6 +19,61 @@ use ratatui::backend::CrosstermBackend;
 
 use crate::error::TerminalError;
 
+/// Batches terminal writes; full buffers and explicit flushes reach the writer.
+/// Drop discards any remaining bytes.
+#[doc(hidden)]
+pub struct TerminalWriter<W: io::Write> {
+    inner: Option<io::BufWriter<W>>,
+}
+
+impl<W: io::Write> TerminalWriter<W> {
+    fn new(writer: W) -> Self {
+        Self {
+            inner: Some(io::BufWriter::with_capacity(64 * 1024, writer)),
+        }
+    }
+
+    fn discard_pending(&mut self) {
+        if let Some(buffer) = self.inner.take() {
+            let (writer, _) = buffer.into_parts();
+            // Teardown may still send Show; do not allocate another frame buffer.
+            self.inner = Some(io::BufWriter::with_capacity(0, writer));
+        }
+    }
+}
+
+impl<W: io::Write> io::Write for TerminalWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.inner
+            .as_mut()
+            .expect("writer exists until drop")
+            .write(bytes)
+    }
+
+    fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.inner
+            .as_mut()
+            .expect("writer exists until drop")
+            .write_all(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner
+            .as_mut()
+            .expect("writer exists until drop")
+            .flush()
+    }
+}
+
+impl<W: io::Write> Drop for TerminalWriter<W> {
+    fn drop(&mut self) {
+        // The panic hook may already have restored the shell before this drop.
+        if let Some(buffer) = self.inner.take() {
+            let _ = buffer.into_parts();
+        }
+    }
+}
+
 /// Owns the fullscreen terminal and restores it on drop.
 ///
 /// Entry enables raw mode, the alternate screen, bracketed paste and mouse
@@ -28,7 +83,7 @@ use crate::error::TerminalError;
 /// completed restore is a no-op on later calls. The main flow calls `restore`
 /// explicitly, and `Drop` performs a best-effort fallback that never panics.
 pub struct TerminalGuard {
-    terminal: Terminal<CrosstermBackend<Stdout>>,
+    terminal: Terminal<CrosstermBackend<TerminalWriter<Stdout>>>,
     restored: RestoreLatch,
 }
 
@@ -48,6 +103,7 @@ impl TerminalGuard {
             }
         };
         if let Err(err) = terminal.clear() {
+            terminal.backend_mut().writer_mut().discard_pending();
             screen.rollback(&mut io::stdout());
             let _ = disable_raw_mode();
             return Err(TerminalError::new("clear terminal", err));
@@ -58,7 +114,7 @@ impl TerminalGuard {
         })
     }
 
-    pub fn terminal_mut(&mut self) -> &mut Terminal<CrosstermBackend<Stdout>> {
+    pub fn terminal_mut(&mut self) -> &mut Terminal<CrosstermBackend<TerminalWriter<Stdout>>> {
         &mut self.terminal
     }
 
@@ -66,11 +122,14 @@ impl TerminalGuard {
     /// is attempted on every call; the first failure is reported and the
     /// guard stays retryable until a call fully succeeds.
     pub fn restore(&mut self) -> Result<(), TerminalError> {
+        // Ratatui's Terminal::drop may flush Show after our restore sequence.
+        self.terminal.backend_mut().writer_mut().discard_pending();
         self.restored.attempt(|| attempt_restore(&mut io::stdout()))
     }
 
-    fn create_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>, TerminalError> {
-        Terminal::new(CrosstermBackend::new(io::stdout()))
+    fn create_terminal() -> Result<Terminal<CrosstermBackend<TerminalWriter<Stdout>>>, TerminalError>
+    {
+        Terminal::new(CrosstermBackend::new(TerminalWriter::new(io::stdout())))
             .map_err(|err| TerminalError::new("create terminal", err))
     }
 }
@@ -261,6 +320,9 @@ impl ScreenState {
         }
     }
 }
+
+#[cfg(test)]
+mod writer_tests;
 
 #[cfg(test)]
 mod tests {

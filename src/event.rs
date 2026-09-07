@@ -16,7 +16,7 @@ use crossterm::event::Event as CrosstermEvent;
 
 use crate::protocol::{FrameError, IncomingFrame, Reasoning, RequestId};
 use crate::rpc::RpcError;
-use crate::state::transcript::PreparedTranscriptCache;
+use crate::state::view::PreparedConversation;
 use crate::theme::ThemeKind;
 
 /// A transport event from the agent process or its pipes. Events from
@@ -126,7 +126,16 @@ pub enum AppEvent {
     ToggleTool {
         session_id: String,
         loop_id: String,
+        request_index: u32,
         tool_call_id: String,
+    },
+    /// Toggle one stable thinking run without changing global reasoning
+    /// visibility.
+    ToggleReasoningSection {
+        session_id: String,
+        loop_id: String,
+        request_index: u32,
+        ordinal: u32,
     },
     // ---- Phase 4: selectors (spec 24-28) -----------------------------
     //
@@ -184,7 +193,20 @@ pub enum AppEvent {
         total_lines: usize,
         visible_rows: usize,
     },
-    /// A pure render preparation result. `App::update` installs it only when
-    /// the active session and all cache-key inputs still match.
-    TranscriptCachePrepared(PreparedTranscriptCache),
+    /// The main loop's latest terminal dimensions, used only for App-owned
+    /// screen hit geometry. Rendering still remains read-only.
+    TerminalSize {
+        width: u16,
+        height: u16,
+    },
+    /// Result of the single outbound clipboard adapter. Selection state is
+    /// retained on failure so the user can retry without dragging again.
+    ClipboardResult {
+        success: bool,
+        error: Option<String>,
+    },
+    /// A complete render preparation result. `App::update` installs it only
+    /// when the active session and content width still match. Rows, section
+    /// ranges, copy ranges, and total height are one immutable snapshot.
+    ConversationPrepared(PreparedConversation),
 }

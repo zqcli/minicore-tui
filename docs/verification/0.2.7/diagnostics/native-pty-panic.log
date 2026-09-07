@@ -1,0 +1,10 @@
+ALL_STDIO_TTY=yes
+
+running 1 test
+[?1049h[?2004h[?1000h[?1002h[?1003h[?1015h[?1006h[?25l[2J[?25l[?25h[?1006l[?1015l[?1003l[?1002l[?1000l[?2004l[?1049l
+thread 'child_test' (33132407) panicked at tests/terminal_restore.rs:111:5:
+panic hook unwind regression child
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+/bin/sh: line 1: 25430 Segmentation fault: 11  MINICORE_TUI_TERMINAL_RESTORE_CHILD=panic /tmp/minicore-027.RXdxEP/signed-artifacts/terminal-restore-0.2.7-macos child_test --exact --nocapture
+
+TTY_RESULT=139

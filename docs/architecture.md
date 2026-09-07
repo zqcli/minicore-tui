@@ -110,41 +110,46 @@ an unsaved loop banner if persistence failed). Background sessions retain their 
 
 Live answer text is rendered as plain wrapped text. Since 0.2.1, live reasoning
 uses the same Markdown renderer as durable reasoning, parsing each request's
-accumulated reasoning buffer at render time. Within each live request and durable
-Assistant block, reasoning precedes answer text; request/tool order is preserved.
+accumulated reasoning buffer when its conversation snapshot is rebuilt. Within
+each live request and durable Assistant block, the recorded part order is preserved.
 Neither live path inserts content into or invalidates the durable Markdown cache. A pending local user card may enter
 the durable block list for immediate feedback, but send failure/removal and
 transcript reconciliation invalidate it correctly.
 
 ## Durable Render Cache
 
-Each `TranscriptState` carries a monotonic `render_revision` and a concrete
-`TranscriptRenderCache`. The cache stores one prepared `Vec<Line<'static>>`
-for the durable block sequence of that session. Its key contains:
+Each `TranscriptState` owns at most one `Arc<PreparedDurable>` containing
+history lines, section ranges, copy text, and link geometry. Its key is
+`(render_revision, width, theme, reasoning_visible, tools_expanded)`. History,
+individual folds, acceptance timestamps and relevant durable tool display
+changes invalidate the revision. Live deltas do not invalidate this cache.
 
-```text
-render_revision
-width
-theme
-reasoning_visible
-tools_expanded
-(item index, tool_call_id, expanded) for every durable tool
-```
+`ui::transcript::prepare_conversation(&App, width)` remains read-only. It reuses
+valid history preparation and composes the current live tail into the shared
+`PreparedConversation`. `AppEvent::ConversationPrepared` installs both the
+snapshot and its history cache after checking session, revision and display key.
+No interior mutability is used. Live updates still copy history rows into the
+combined snapshot; this is not a fully incremental or virtualized transcript.
 
-`ui::transcript::prepare_cache(&App, width)` is read-only. It parses and wraps
-durable blocks only when the current key is absent. It returns a
-`PreparedTranscriptCache`; `main` sends it back through
-`AppEvent::TranscriptCachePrepared`, and `App::update` installs it only when
-active session and key still match. No `RefCell`, `Mutex`, or other interior
-mutability is used.
+The complete snapshot is retained for Tick, scrolling, selection and ordinary
+editor input. No-op mouse motion and identical Viewport feedback return without
+marking dirty. Content-bearing events conservatively discard the complete
+snapshot, while retaining unaffected history preparation. Theme, width and
+fold keys also reject stale snapshots.
 
-`render` and `total_lines` consume the same cached durable lines. If a cache is
-missing or stale, both have a safe read-only fallback; the normal main loop
-prepares before geometry measurement and again before every draw. Header,
-notice, dock, and live-turn rows remain per-frame derivations. Width,
-theme, reasoning visibility, tool-all expansion, individual tool expansion,
-and block mutations change the effective key or clear the cache. Live deltas
-do not invalidate durable lines.
+The main loop coalesces preparation and actual row measurement inside the draw
+budget, rather than doing expensive layout before every input/RPC wait. A mouse
+event that needs a missing snapshot installs it once before hit testing. Input
+helpers borrow that snapshot; painting clones only the visible rows. Selection,
+copying, measurement and link arbitration still share one geometry source.
+
+Prepared lines do not cache terminal Cells: Ratatui still segments/measures
+visible graphemes on each draw, even without Paragraph wrapping. Debug builds
+optimize dependencies at level 2 and, since 0.2.7, this package at level 1 to also
+optimize locally instantiated generic terminal/ANSI code. Debug information and
+assertions remain, with the usual optimized-code stepping/variable tradeoffs.
+There is no new Cell cache or change to the 30 FPS render budget and 100 ms busy
+tick. Large live snapshots still copy history rows.
 
 ## Markdown
 
@@ -166,6 +171,14 @@ skipped while a thread is unwinding because the standard library forbids
 `take_hook`/`set_hook` there; preserving the delegating wrapper is safer than
 causing a second panic. The main variable declaration order makes terminal
 cleanup happen before panic-hook cleanup during unwind.
+
+`TerminalWriter<Stdout>` batches small ANSI writes in a 64 KiB `BufWriter`.
+Explicit flush and full-buffer writes preserve order and propagate I/O errors;
+this is not whole-frame atomicity. Its Drop discards pending bytes without I/O.
+Before explicit restoration or clear-failure rollback, the guard also discards
+pending bytes and switches to zero-capacity forwarding: Ratatui's own terminal
+Drop can otherwise show the cursor and flush an unfinished frame after shell
+restoration. The underlying `Stdout` retains its normal locking behavior.
 
 The main loop multiplexes RPC events, Crossterm `EventStream`, ticks, signals,
 shutdown timing, and the render deadline without a biased select. RPC work is

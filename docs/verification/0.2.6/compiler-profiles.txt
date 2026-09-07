@@ -1,0 +1,8 @@
+unicode_segmentation: opt-level=2 debuginfo=2 debug-assertions=on
+unicode_width: opt-level=2 debuginfo=2 debug-assertions=on
+unicode_width: opt-level=2 debuginfo=2 debug-assertions=on
+ratatui: opt-level=2 debuginfo=2 debug-assertions=on
+minicore_tui: opt-level=0(default) debuginfo=2
+minicore_tui: opt-level=0(default) debuginfo=2
+minicore_tui: opt-level=0(default) debuginfo=2
+minicore_tui: opt-level=0(default) debuginfo=2

@@ -31,6 +31,9 @@ thread_local! {
 struct Seg {
     text: String,
     style: Style,
+    /// True when this segment belongs to a markdown link (visible text or the
+    /// surfaced URL). Used for real link geometry, not colors.
+    link: bool,
 }
 
 /// A block-level markdown element.
@@ -99,6 +102,7 @@ impl Builder<'_> {
         self.push_seg(Seg {
             text: text.to_owned(),
             style,
+            link: matches!(self.attrs.last(), Some(InlineAttr::Link)),
         });
     }
 
@@ -111,6 +115,7 @@ impl Builder<'_> {
         self.push_seg(Seg {
             text: text.to_owned(),
             style: Style::new().fg(self.theme.md_code),
+            link: matches!(self.attrs.last(), Some(InlineAttr::Link)),
         });
     }
 
@@ -166,6 +171,7 @@ impl Builder<'_> {
                 segs.push(Seg {
                     text: " ".to_owned(),
                     style: Style::new(),
+                    link: false,
                 });
             }
             segs.extend(para);
@@ -200,6 +206,7 @@ impl Builder<'_> {
             self.push_seg(Seg {
                 text: format!(" ({url})"),
                 style: Style::new().fg(self.theme.md_link_url),
+                link: true,
             });
         }
     }
@@ -219,11 +226,27 @@ impl Builder<'_> {
 /// Renders durable Markdown messages and request-local live reasoning.
 pub struct MarkdownRenderer<'a> {
     theme: &'a Theme,
+    /// Thinking sections preserve raw single newlines as visual line breaks
+    /// instead of the common-mark soft-break space (0.2.2 scoped to
+    /// reasoning only; default Assistant/User rendering is unchanged).
+    preserve_breaks: bool,
 }
 
 impl<'a> MarkdownRenderer<'a> {
     pub fn new(theme: &'a Theme) -> Self {
-        Self { theme }
+        Self {
+            theme,
+            preserve_breaks: false,
+        }
+    }
+
+    /// A reasoning-only renderer where a single newline renders as a hard
+    /// line break; blank paragraph separation is still markdown-normal.
+    pub(crate) fn preserving_breaks(theme: &'a Theme) -> Self {
+        Self {
+            theme,
+            preserve_breaks: true,
+        }
     }
 
     /// Parses `text` into blocks.
@@ -282,12 +305,18 @@ impl<'a> MarkdownRenderer<'a> {
                 Event::Text(text) => b.text(&text),
                 Event::Code(text) => b.text_code(&text),
                 Event::SoftBreak => b.push_seg(Seg {
-                    text: " ".to_owned(),
+                    text: if self.preserve_breaks {
+                        "\n".to_owned()
+                    } else {
+                        " ".to_owned()
+                    },
                     style: Style::new(),
+                    link: matches!(b.attrs.last(), Some(InlineAttr::Link)),
                 }),
                 Event::HardBreak => b.push_seg(Seg {
                     text: "\n".to_owned(),
                     style: Style::new(),
+                    link: matches!(b.attrs.last(), Some(InlineAttr::Link)),
                 }),
                 Event::Rule => b.blocks.push(Block::Rule),
                 _ => {}
@@ -311,6 +340,31 @@ impl<'a> MarkdownRenderer<'a> {
             self.block_lines(block, width, style, &mut lines);
         }
         lines
+    }
+
+    /// Renders markdown and returns, alongside each produced line, the cell
+    /// ranges (content coordinates) that belong to a link. Derived from the
+    /// same layout pass as the returned lines, so it can never disagree with
+    /// what is drawn (RAIL-14 pressedUrl geometry, not a color heuristic).
+    pub fn render_with_links(
+        &self,
+        text: &str,
+        width: usize,
+        style: Style,
+    ) -> (Vec<Line<'static>>, Vec<Vec<std::ops::Range<usize>>>) {
+        let blocks = self.parse(text);
+        let mut lines = Vec::new();
+        let mut link_cells = Vec::new();
+        let mut first = true;
+        for block in &blocks {
+            if !first {
+                lines.push(Line::default());
+                link_cells.push(Vec::new());
+            }
+            first = false;
+            self.block_lines_with_links(block, width, style, &mut lines, &mut link_cells);
+        }
+        (lines, link_cells)
     }
 
     fn block_lines(&self, block: &Block, width: usize, base: Style, out: &mut Vec<Line<'static>>) {
@@ -373,6 +427,25 @@ impl<'a> MarkdownRenderer<'a> {
                     "─".repeat(width),
                     Style::new().fg(self.theme.border),
                 )));
+            }
+        }
+    }
+
+    fn block_lines_with_links(
+        &self,
+        block: &Block,
+        width: usize,
+        base: Style,
+        out: &mut Vec<Line<'static>>,
+        link_cells: &mut Vec<Vec<std::ops::Range<usize>>>,
+    ) {
+        match block {
+            Block::Paragraph(segs) => wrap_segments_links(segs, width, base, out, link_cells),
+            _ => {
+                self.block_lines(block, width, base, out);
+                while link_cells.len() < out.len() {
+                    link_cells.push(Vec::new());
+                }
             }
         }
     }
@@ -451,7 +524,7 @@ fn wrap_segments(segs: &[Seg], width: usize, base: Style) -> Vec<Line<'static>> 
     let mut current: Vec<Span<'static>> = Vec::new();
     let mut current_w = 0usize;
     for seg in segs {
-        let style = seg.style.patch(base);
+        let style = base.patch(seg.style);
         for ch in seg.text.chars() {
             if ch == '\n' {
                 if !current.is_empty() {
@@ -476,6 +549,76 @@ fn wrap_segments(segs: &[Seg], width: usize, base: Style) -> Vec<Line<'static>> 
         lines.push(Line::default());
     }
     lines
+}
+
+/// Like [`wrap_segments`] but records, per emitted line, the content-cell
+/// ranges covered by link segments. Both outputs come from one walk so they
+/// can never describe different layouts.
+fn wrap_segments_links(
+    segs: &[Seg],
+    width: usize,
+    base: Style,
+    lines: &mut Vec<Line<'static>>,
+    link_cells: &mut Vec<Vec<std::ops::Range<usize>>>,
+) {
+    let width = width.max(1);
+    fn flush(
+        lines: &mut Vec<Line<'static>>,
+        link_cells: &mut Vec<Vec<std::ops::Range<usize>>>,
+        current: &mut Vec<Span<'static>>,
+        current_links: &mut Vec<std::ops::Range<usize>>,
+        current_w: &mut usize,
+    ) {
+        if !current.is_empty() {
+            lines.push(Line::from(std::mem::take(current)));
+            link_cells.push(std::mem::take(current_links));
+            *current_w = 0;
+        }
+    }
+    let mut current: Vec<Span<'static>> = Vec::new();
+    let mut current_links: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut current_w = 0usize;
+    for seg in segs {
+        let style = base.patch(seg.style);
+        for ch in seg.text.chars() {
+            if ch == '\n' {
+                flush(
+                    lines,
+                    link_cells,
+                    &mut current,
+                    &mut current_links,
+                    &mut current_w,
+                );
+                continue;
+            }
+            let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if current_w + cw > width && !current.is_empty() {
+                flush(
+                    lines,
+                    link_cells,
+                    &mut current,
+                    &mut current_links,
+                    &mut current_w,
+                );
+            }
+            if seg.link && cw > 0 {
+                current_links.push(current_w..current_w + cw);
+            }
+            push_span_char(&mut current, ch, style);
+            current_w += cw;
+        }
+    }
+    flush(
+        lines,
+        link_cells,
+        &mut current,
+        &mut current_links,
+        &mut current_w,
+    );
+    if lines.is_empty() {
+        lines.push(Line::default());
+        link_cells.push(Vec::new());
+    }
 }
 
 /// Appends one character to the preceding span when its effective style is
@@ -646,6 +789,59 @@ mod tests {
             .iter()
             .find(|s| s.style.fg == Some(dark_theme().md_link_url));
         assert!(url.is_some());
+    }
+
+    #[test]
+    fn render_with_links_reports_real_link_cells_not_colors() {
+        let theme = dark_theme();
+        let renderer = MarkdownRenderer::new(&theme);
+        // Visible text and the surfaced URL are both link cells.
+        let (lines, links) = renderer.render_with_links(
+            "see [docs](https://example.com/doc) please",
+            60,
+            Style::new(),
+        );
+        assert!(
+            links[0].iter().any(|range| {
+                lines[0]
+                    .spans
+                    .iter()
+                    .any(|span| span.content.as_ref().contains("docs"))
+                    && range.start < 60
+            }),
+            "visible link text must be a link cell"
+        );
+        let all_cells: Vec<usize> = links[0].iter().flat_map(|r| r.clone()).collect();
+        assert!(all_cells.iter().any(|&cell| {
+            // cells at the mdLinkUrl parenthetical are also links
+            lines[0]
+                .spans
+                .iter()
+                .scan(0usize, |cursor, span| {
+                    let start = *cursor;
+                    *cursor += unicode_width::UnicodeWidthStr::width(span.content.as_ref());
+                    Some((start, span))
+                })
+                .find(|(start, span)| {
+                    span.style.fg == Some(theme.md_link_url)
+                        && *start <= cell
+                        && cell
+                            < start + unicode_width::UnicodeWidthStr::width(span.content.as_ref())
+                })
+                .is_some()
+        }));
+        // Inline code inside a link is a link even though its fg is md_code,
+        // and plain inline code outside a link is not.
+        let (_, in_link) = renderer.render_with_links("[`x`](https://e.com)", 60, Style::new());
+        assert!(
+            in_link.iter().any(|row| !row.is_empty()),
+            "code in a link is a link"
+        );
+        let (_, plain) = renderer.render_with_links("run `cargo test` now", 60, Style::new());
+        assert!(
+            plain.iter().all(|row| row.is_empty()),
+            "bare inline code is not a link"
+        );
     }
 
     #[test]

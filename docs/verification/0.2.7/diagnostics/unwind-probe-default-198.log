@@ -1,0 +1,4 @@
+
+thread 'main' (33136617) panicked at src/main.rs:2:46:
+synthetic unwind probe
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

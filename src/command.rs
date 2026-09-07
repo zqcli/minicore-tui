@@ -17,8 +17,34 @@ pub enum AppCommand {
     Rpc(OutgoingRequest),
     /// Kill the agent child (the shutdown fallback path).
     KillChild,
+    /// Copy already-sanitized selected presentation text through the single
+    /// clipboard adapter. Its Debug output is length-only.
+    CopySelection(ClipboardText),
     /// The agent process is fully gone (or never existed); leave the TUI.
     Exit,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct ClipboardText(String);
+
+impl ClipboardText {
+    pub fn new(text: String) -> Self {
+        Self(text)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for ClipboardText {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ClipboardText")
+            .field("chars", &self.0.chars().count())
+            .field("bytes", &self.0.len())
+            .finish()
+    }
 }
 
 /// A locally-interpreted `/` command (spec 23.2). These never turn into
@@ -54,6 +80,89 @@ pub enum LocalCommand {
     Close { confirm: bool },
     /// Delete a session (spec 12).
     Delete { confirm: bool },
+}
+
+/// Commands exposed by the local parser and therefore eligible for editor
+/// completion. Keeping this list beside the parser prevents the popup from
+/// advertising a command that the reducer cannot execute.
+pub const SLASH_COMMAND_NAMES: &[&str] = &[
+    "new",
+    "resume",
+    "sessions",
+    "model",
+    "reasoning",
+    "theme",
+    "clear",
+    "help",
+    "logs",
+    "cancel",
+    "refresh",
+    "quit",
+    "close",
+    "delete",
+];
+
+pub fn slash_command_candidates(query: &str) -> Vec<String> {
+    let query = query.to_ascii_lowercase();
+    let mut matches = SLASH_COMMAND_NAMES
+        .iter()
+        .filter_map(|name| fuzzy_score(&query, name).map(|score| (score, *name)))
+        .collect::<Vec<_>>();
+    matches.sort_by(|left, right| left.0.total_cmp(&right.0));
+    matches
+        .into_iter()
+        .map(|(_, name)| format!("/{name}"))
+        .collect()
+}
+
+/// Pi's command list uses fuzzy subsequence matching rather than a strict
+/// prefix filter. Keep the same scoring shape so an exact command wins while
+/// preserving declaration order for equal scores.
+fn fuzzy_score(query: &str, text: &str) -> Option<f64> {
+    if query.is_empty() {
+        return Some(0.0);
+    }
+    if query.len() > text.len() {
+        return None;
+    }
+    let query = query.as_bytes();
+    let text = text.as_bytes();
+    let mut query_index = 0;
+    let mut score = 0.0;
+    let mut last_match = None;
+    let mut consecutive = 0;
+    for (index, character) in text.iter().enumerate() {
+        if query_index == query.len() {
+            break;
+        }
+        if *character != query[query_index] {
+            continue;
+        }
+        let boundary =
+            index == 0 || matches!(text[index - 1], b' ' | b'-' | b'_' | b'.' | b'/' | b':');
+        if last_match == index.checked_sub(1) {
+            consecutive += 1;
+            score -= f64::from(consecutive * 5);
+        } else {
+            consecutive = 0;
+            if let Some(last) = last_match {
+                score += (index.saturating_sub(last + 1) * 2) as f64;
+            }
+        }
+        if boundary {
+            score -= 10.0;
+        }
+        score += index as f64 * 0.1;
+        last_match = Some(index);
+        query_index += 1;
+    }
+    if query_index != query.len() {
+        return None;
+    }
+    if query == text {
+        score -= 100.0;
+    }
+    Some(score)
 }
 
 /// Why a slash line was rejected locally.

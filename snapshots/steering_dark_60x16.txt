@@ -1,16 +1,16 @@
+ ▎ read
 
- thinking hard
+  more
 
- Streaming contentmore
-
- read                                               running
-  reading…
-
-
- ⠸ Steering (accepted awaiting history): Focus on memory saf
-
-⠋ Running read…
-╭──────────────────────────────────────────────────────────╮
-│Steer current turn…                                       │
-╰──────────────────────────────────────────────────────────╯
-⚠ live output incomplete     request 0 · deep · high · rev 0
+ ▎
+ ▎ ↪ Focus on memory safety instead                        █
+ ▎ time pending                                            █
+ ▎                                                         █
+  ⠸ applied                                                █
+                                                           █
+ ⠋ Running read…
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ⚠ incomplete                ctx ?

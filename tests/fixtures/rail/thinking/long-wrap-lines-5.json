@@ -1,0 +1,84 @@
+{
+ "schema": "minicore-rail-cell-v1",
+ "case": "long-wrap-lines-5",
+ "term": {
+  "cols": 80,
+  "rows": 24
+ },
+ "source": {
+  "rail_commit": "1d0dd1611a4d9546c64fe9f5b5c966253fb88eba",
+  "pi": "0.84.4",
+  "theme": "pi dark (initTheme('dark'))"
+ },
+ "rows": [
+  [
+   {
+    "c": "▎",
+    "fg": [
+     203,
+     166,
+     247
+    ]
+   },
+   "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  ],
+  [
+   {
+    "c": "▎",
+    "fg": [
+     203,
+     166,
+     247
+    ]
+   },
+   "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  ],
+  [
+   {
+    "c": "▎",
+    "fg": [
+     203,
+     166,
+     247
+    ]
+   },
+   "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  ],
+  [
+   {
+    "c": "▎",
+    "fg": [
+     203,
+     166,
+     247
+    ]
+   },
+   {
+    "c": "... (2 earlier lines, ",
+    "fg": [
+     128,
+     128,
+     128
+    ]
+   },
+   {
+    "c": "ctrl+o",
+    "fg": [
+     102,
+     102,
+     102
+    ]
+   },
+   {
+    "c": " to expand",
+    "fg": [
+     128,
+     128,
+     128
+    ]
+   },
+   ")                                        "
+  ]
+ ],
+ "kind": "cells"
+}

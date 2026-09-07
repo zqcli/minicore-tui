@@ -1,0 +1,78 @@
+{
+  "terminal": "iTerm2 3.6.11",
+  "window_id": 66064,
+  "evidence_dir": "/private/tmp/minicore-023-iterm.0pgy7K/run-0ma6t557/evidence",
+  "screen_capture_access": true,
+  "tui_sha256_at_start": "a5d3daee4271f37b9aa96c0b78445edccd73e257e213cd22050370bce77e5927",
+  "agent_sha256_at_start": "d4a3b1a92b1250f99e0dafc385559977f9b30a1146d24f97b9586ae5bb8560af",
+  "status": "PASS",
+  "checks": [
+    "idle reasoning ack updates footer before any provider request",
+    "real bash executes under auto approval, request carries literal max",
+    "live reasoning ack updates footer while active request remains max",
+    "accepted steer is visible before original tool completes",
+    "next request uses high and contains steer; final User card appears exactly once",
+    "idle model and reasoning changes update footer with old history present, no turn sent",
+    "TUI exits zero and returns to native iTerm shell"
+  ],
+  "captures": [
+    {
+      "name": "01-idle-max",
+      "dimensions": "100, 32",
+      "bounds": "289, 103, 1114, 744",
+      "capture_exit": 0
+    },
+    {
+      "name": "02-thinking-bash-working",
+      "dimensions": "100, 32",
+      "bounds": "289, 103, 1114, 744",
+      "capture_exit": 0
+    },
+    {
+      "name": "03-accepted-steer-before-completion",
+      "dimensions": "100, 32",
+      "bounds": "289, 103, 1114, 744",
+      "capture_exit": 0
+    },
+    {
+      "name": "04-reconciled-loop",
+      "dimensions": "100, 32",
+      "bounds": "289, 103, 1114, 744",
+      "capture_exit": 0
+    },
+    {
+      "name": "05-idle-model-and-reasoning",
+      "dimensions": "100, 32",
+      "bounds": "289, 103, 1114, 744",
+      "capture_exit": 0
+    },
+    {
+      "name": "06-resize-80x24",
+      "dimensions": "80, 24",
+      "bounds": "289, 103, 954, 592",
+      "capture_exit": 0
+    },
+    {
+      "name": "06-resize-60x16",
+      "dimensions": "60, 16",
+      "bounds": "289, 103, 794, 440",
+      "capture_exit": 0
+    }
+  ],
+  "requests": [
+    {
+      "model": "iterm-a",
+      "effort": "max",
+      "steer_present": false
+    },
+    {
+      "model": "iterm-a",
+      "effort": "high",
+      "steer_present": true
+    }
+  ],
+  "tui_version": "minicore-tui 0.2.3",
+  "tui_sha256": "a5d3daee4271f37b9aa96c0b78445edccd73e257e213cd22050370bce77e5927",
+  "agent_sha256": "d4a3b1a92b1250f99e0dafc385559977f9b30a1146d24f97b9586ae5bb8560af",
+  "note": "Native iTerm screen text assertions. PNG visual confirmation is a separate parent check. Synthetic loopback only; no external provider request."
+}

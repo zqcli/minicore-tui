@@ -1,0 +1,11 @@
+{
+  "name": "minicore-stage7-xtermjs",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Test-only xterm.js terminal emulator + Playwright driver for the Stage 7 PTY screenshots. Not part of any Cargo build.",
+  "type": "module",
+  "dependencies": {
+    "@xterm/xterm": "5.5.0",
+    "playwright-core": "1.63.0"
+  }
+}

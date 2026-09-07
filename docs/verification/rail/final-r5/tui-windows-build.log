@@ -1,0 +1,36 @@
+   Compiling stable_deref_trait v1.2.1
+   Compiling writeable v0.6.4
+   Compiling litemap v0.8.3
+   Compiling icu_locale_data v2.1.2
+   Compiling libm v0.2.16
+   Compiling icu_segmenter_data v2.1.1
+   Compiling zerofrom v0.1.8
+   Compiling yoke v0.8.3
+   Compiling zerovec v0.11.8
+   Compiling zerotrie v0.2.5
+   Compiling core_maths v0.1.1
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling icu_collections v2.1.1
+   Compiling icu_locale_core v2.1.1
+   Compiling icu_provider v2.1.1
+   Compiling icu_normalizer v2.1.1
+   Compiling icu_properties v2.1.2
+   Compiling icu_locale v2.1.1
+   Compiling icu_segmenter v2.1.2
+   Compiling idna_adapter v1.2.1
+   Compiling idna v1.1.0
+   Compiling url v2.5.4
+   Compiling minicore-tui v0.2.1 (/root/minicore-rail-01a07210/r5/minicore-tui)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.58s
+  Executable unittests src/lib.rs (/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/minicore_tui-eb287aab915906ce.exe)
+  Executable unittests src/main.rs (/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/minicore_tui-afb4e1e2c2b3a379.exe)
+  Executable tests/agent_e2e.rs (/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/agent_e2e-c3ad7764a1064762.exe)
+  Executable tests/agent_process.rs (/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/agent_process-0931538aa256083a.exe)
+  Executable tests/app_flow.rs (/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/app_flow-537c9374d817312e.exe)
+  Executable tests/protocol.rs (/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/protocol-d96f9efaa93758cb.exe)
+  Executable tests/rail_fixtures.rs (/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/rail_fixtures-2873efdf148781bd.exe)
+  Executable tests/render_snapshots.rs (/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/render_snapshots-d609897b89f389b2.exe)
+  Executable tests/rpc_io.rs (/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/rpc_io-725208f29b2f269e.exe)
+  Executable tests/terminal_restore.rs (/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/terminal_restore-29ba55b1cb3488b2.exe)
+  Executable tests/word_oracle.rs (/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/word_oracle-d3b177fc77114b4d.exe)

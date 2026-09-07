@@ -20,7 +20,7 @@ Options:
   --workspace <PATH>         workspace for a new session [default: cwd]
   --profile <ID>             default profile for a new session
   --model <ID>               default model for a new session
-  --reasoning <LEVEL>        default reasoning (auto|disabled|low|medium|high)
+  --reasoning <LEVEL>        default reasoning (auto|disabled|low|medium|high|xhigh|max|ultra)
   --theme <dark|light>       color theme [default: dark]
   --debug                    log RPC method/id/bytes/timing to a temp file
   --version                  print version
@@ -67,7 +67,7 @@ impl fmt::Display for ArgsError {
             }
             Self::InvalidReasoning(value) => write!(
                 f,
-                "invalid reasoning `{value}` (expected `auto`, `disabled`, `low`, `medium`, or `high`)"
+                "invalid reasoning `{value}` (expected `auto`, `disabled`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`)"
             ),
         }
     }
@@ -157,6 +157,9 @@ fn parse_reasoning(value: &str) -> Result<Reasoning, ArgsError> {
         "low" => Ok(Reasoning::Low),
         "medium" => Ok(Reasoning::Medium),
         "high" => Ok(Reasoning::High),
+        "xhigh" => Ok(Reasoning::XHigh),
+        "max" => Ok(Reasoning::Max),
+        "ultra" => Ok(Reasoning::Ultra),
         other => Err(ArgsError::InvalidReasoning(other.to_owned())),
     }
 }
@@ -324,5 +327,26 @@ mod tests {
             parse_flags(&["--reasoning", "turbo", "--agent-config", "a.toml"]),
             Err(ArgsError::InvalidReasoning("turbo".to_owned()))
         );
+    }
+
+    #[test]
+    fn reasoning_cli_accepts_all_agent_levels_and_rejects_unknown() {
+        for (value, level) in [
+            ("auto", Reasoning::Auto),
+            ("disabled", Reasoning::Disabled),
+            ("low", Reasoning::Low),
+            ("medium", Reasoning::Medium),
+            ("high", Reasoning::High),
+            ("xhigh", Reasoning::XHigh),
+            ("max", Reasoning::Max),
+            ("ultra", Reasoning::Ultra),
+        ] {
+            let parsed = parse_flags(&["--reasoning", value, "--agent-config", "a.toml"]).unwrap();
+            assert_eq!(parsed.reasoning, Some(level), "--reasoning {value}");
+        }
+        assert!(matches!(
+            parse_flags(&["--reasoning", "turbo", "--agent-config", "a.toml"]),
+            Err(ArgsError::InvalidReasoning(_))
+        ));
     }
 }

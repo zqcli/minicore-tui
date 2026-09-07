@@ -1,0 +1,5 @@
+minicore-tui 0.2.3
+minicore-tui 0.2.3
+a5d3daee4271f37b9aa96c0b78445edccd73e257e213cd22050370bce77e5927  target/debug/minicore-tui
+7fe7d07ae58343ec992ffb39d7dd24d6afe1332b8b1fbae5a4ed5db8d2d0c08f  target/release/minicore-tui
+d4a3b1a92b1250f99e0dafc385559977f9b30a1146d24f97b9586ae5bb8560af  /Users/zzq/Develops/minicore-agent/target/debug/minicore-agent

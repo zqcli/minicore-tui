@@ -14,6 +14,7 @@
 
 pub mod app;
 pub mod args;
+pub mod clipboard;
 pub mod command;
 pub mod error;
 pub mod event;

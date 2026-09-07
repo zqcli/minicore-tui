@@ -3,13 +3,10 @@
 //! There are no synthetic terminal blocks: past history is rendered strictly
 //! from durable items.
 
-use ratatui::text::Line;
-
 use crate::protocol::{
     Reasoning, ToolCallViewWire, ToolOutcomeWire, UsageWire, UserMessageKindWire,
 };
 use crate::state::tool::ToolStatus;
-use crate::theme::ThemeKind;
 
 /// One displayed transcript/history entry. Tool call arguments are
 /// never stored: assistant entries carry no arguments on the wire.
@@ -62,6 +59,7 @@ pub struct AssistantBlock {
 pub enum AssistantPart {
     Text(String),
     Reasoning(String),
+    ToolCall(ToolCallViewWire),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -99,37 +97,21 @@ pub struct TranscriptState {
     pub total: usize,
     /// The last fetched page reported `complete` or loaded all items.
     pub complete: bool,
-    /// Monotonic generation of the durable blocks used by render preparation.
+    /// Durable content/display generation: history, folds and tool metadata
+    /// invalidate it; live deltas and viewport-only events do not.
     pub render_revision: u64,
-    /// Read-only durable line cache; only `App::update` installs or clears it.
-    pub render_cache: TranscriptRenderCache,
+    pub render_cache: Option<std::sync::Arc<crate::state::view::PreparedDurable>>,
 }
 
 impl TranscriptState {
-    /// Builds the complete identity of a durable render preparation.
-    pub fn cache_key(
-        &self,
-        width: u16,
-        theme: ThemeKind,
-        reasoning_visible: bool,
-        tools_expanded: bool,
-    ) -> TranscriptCacheKey {
-        TranscriptCacheKey {
-            revision: self.render_revision,
-            width,
-            theme,
-            reasoning_visible,
-            tools_expanded,
-        }
-    }
-
-    /// Increments the render generation, invalidating any prepared line cache.
+    /// Increments the render generation used by prepared conversation
+    /// snapshots.
     pub fn invalidate(&mut self) {
         self.render_revision = self.render_revision.wrapping_add(1);
-        self.render_cache.clear();
+        self.render_cache = None;
     }
 
-    /// Clears blocks and invalidates cache.
+    /// Clears blocks and invalidates prepared conversation metadata.
     pub fn clear_blocks(&mut self) {
         self.blocks.clear();
         self.items.clear();
@@ -138,57 +120,6 @@ impl TranscriptState {
         self.total = 0;
         self.complete = false;
         self.invalidate();
-    }
-}
-
-/// The identity of one prepared durable transcript line set.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct TranscriptCacheKey {
-    pub revision: u64,
-    pub width: u16,
-    pub theme: ThemeKind,
-    pub reasoning_visible: bool,
-    pub tools_expanded: bool,
-}
-
-/// A read-only result produced by `ui::transcript::prepare_cache`. It is
-/// installed exclusively by `App::update`.
-#[derive(Debug, Default)]
-pub struct PreparedTranscriptCache {
-    pub session_id: String,
-    pub key: Option<TranscriptCacheKey>,
-    pub lines: Vec<Line<'static>>,
-}
-
-/// The installed durable transcript render cache.
-#[derive(Debug, Default)]
-pub struct TranscriptRenderCache {
-    entry: Option<PreparedTranscriptCache>,
-}
-
-impl TranscriptRenderCache {
-    pub fn install(&mut self, prepared: PreparedTranscriptCache) {
-        self.entry = Some(prepared);
-    }
-
-    pub fn clear(&mut self) {
-        self.entry = None;
-    }
-
-    pub fn matches(&self, key: &TranscriptCacheKey) -> bool {
-        self.entry
-            .as_ref()
-            .and_then(|entry| entry.key.as_ref())
-            .map(|installed| installed == key)
-            .unwrap_or(false)
-    }
-
-    pub fn lines(&self, key: &TranscriptCacheKey) -> Option<&[Line<'static>]> {
-        if self.matches(key) {
-            self.entry.as_ref().map(|entry| entry.lines.as_slice())
-        } else {
-            None
-        }
     }
 }
 

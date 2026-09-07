@@ -1,24 +1,24 @@
-MINICORE  v0.2.1
+ ▎
+ ▎ hello
+ ▎ time unavailable
+ ▎
 
-Coding agent TUI
-q / Ctrl+C to quit
+ ▎ Thinking...
 
-Open a session — /new, Ctrl+R, or F1 for help
-
- hello
-
- Thinking...
-
- answer text
+  answer text
 
 
 
 
 
-╭──────────────────────────────────────────────────────────────────────────────╮
-│Type a message…                                                               │
-│                                                                              │
-│                                                                              │
-╰──────────────────────────────────────────────────────────────────────────────╯
-/project                                                                    Task
-Idle                                                                 deep • high
+
+
+
+
+
+
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ● ready                                         ctx ?

@@ -1,0 +1,20 @@
+{
+ "schema": "minicore-rail-cell-v1",
+ "case": "hint",
+ "kind": "text",
+ "term": {
+  "cols": 80,
+  "rows": 24
+ },
+ "source": {
+  "rail_commit": "1d0dd1611a4d9546c64fe9f5b5c966253fb88eba",
+  "pi": "0.84.4",
+  "theme": "pi dark (initTheme('dark'))"
+ },
+ "rows": [
+  "collapseHint(n=1)=\"\\u001b[38;2;128;128;128m... (1 earlier lines, \\u001b[38;2;102;102;102mctrl+o\\u001b[39m\\u001b[38;2;128;128;128m to expand\\u001b[39m)\"",
+  "collapseHint(n=3)=\"\\u001b[38;2;128;128;128m... (3 earlier lines, \\u001b[38;2;102;102;102mctrl+o\\u001b[39m\\u001b[38;2;128;128;128m to expand\\u001b[39m)\"",
+  "collapseHint(n=7)=\"\\u001b[38;2;128;128;128m... (7 earlier lines, \\u001b[38;2;102;102;102mctrl+o\\u001b[39m\\u001b[38;2;128;128;128m to expand\\u001b[39m)\"",
+  "collapseHint(n=0)=\"\\u001b[38;2;128;128;128m... (0 earlier lines, \\u001b[38;2;102;102;102mctrl+o\\u001b[39m\\u001b[38;2;128;128;128m to expand\\u001b[39m)\""
+ ]
+}

@@ -16,12 +16,160 @@ pub fn is_too_small(area: Rect) -> bool {
     area.width < MIN_WIDTH || area.height < MIN_HEIGHT
 }
 
-/// True while the active session needs a status row for live state or its
-/// retained last result (spec 14.1).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScreenLayout {
+    pub gutter: Rect,
+    pub content: Rect,
+    pub transcript: Rect,
+    pub dock: Rect,
+    pub status: Option<Rect>,
+    pub notice: Option<Rect>,
+    /// Gray `Steering: …` queue rows in the dock, ABOVE the status
+    /// row (participates in viewport/hit/editor/footer geometry).
+    pub queue: Option<Rect>,
+    pub panel: Rect,
+    pub footer: Rect,
+}
+
+/// Bound for the dock's steering queue display; more entries are summarized
+/// with an overflow line so 60x16 never consumes unbounded height.
+pub const MAX_DOCK_QUEUE_ROWS: u16 = 3;
+
+/// The number of pending steering queue entries for the active session (the
+/// single source of truth shared by the height reservation and the renderer):
+/// locally-unsent plus in-flight (accepted-but-not-applied) entries.
+pub fn steer_queue_count(app: &App) -> usize {
+    let Some(view) = app.active_view() else {
+        return 0;
+    };
+    let inflight = view
+        .live
+        .as_ref()
+        .map(|live| {
+            live.pending_steers
+                .iter()
+                .filter(|steer| {
+                    !matches!(
+                        steer.state,
+                        crate::state::turn::PendingSteerState::Persisted
+                            | crate::state::turn::PendingSteerState::NotRecorded
+                    )
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    view.steer_queue.len() + inflight
+}
+
+/// Rows the dock reserves for the pending steering queue: up to
+/// `MAX_DOCK_QUEUE_ROWS` content lines, one overflow line when there are more,
+/// one functional Alt+Up hint whenever a withdrawable unsent item exists
+/// (paused is only a prefix), and exactly one blank gap. 0 when empty or when a
+/// modal/selector owns the dock (the queue belongs to the composer surface and
+/// must not squeeze selectors at 60x16).
+pub fn steer_queue_rows(app: &App) -> u16 {
+    if !matches!(app.dock, Dock::Composer) {
+        return 0;
+    }
+    let count = steer_queue_count(app);
+    if count == 0 {
+        return 0;
+    }
+    let content = count.min(MAX_DOCK_QUEUE_ROWS as usize) as u16;
+    let overflow = u16::from(count > MAX_DOCK_QUEUE_ROWS as usize);
+    let hint = u16::from(crate::ui::steer_queue::hint_label(app).is_some());
+    content + overflow + hint
+}
+
+/// Computes the complete normal-screen geometry once. Rendering and the
+/// viewport/hit-test callers can use these same rectangles instead of
+/// independently re-deriving gutter, dock, and footer boundaries.
+pub fn screen_layout(app: &App, area: Rect) -> ScreenLayout {
+    let [gutter, content] = ratatui::layout::Layout::horizontal([
+        ratatui::layout::Constraint::Length(crate::ui::rail::APP_GUTTER_WIDTH),
+        ratatui::layout::Constraint::Min(1),
+    ])
+    .areas(area);
+    let short = content.height < 24;
+    let panel = match &app.dock {
+        Dock::Composer => composer_height_phase5(app, content.width, content.height, short)
+            .saturating_add(composer_completion_rows(app)),
+        Dock::Help | Dock::Logs => help_panel_height(content.height),
+        _ => panel_height(short),
+    };
+    let footer_height = footer_height(content.width, content.height);
+    let status_height = u16::from(busy(app));
+    let notice_height = u16::from(!app.notices.is_empty());
+    let queue_height = steer_queue_rows(app);
+    // One explicit blank row separates the queue from the Working status
+    // (the reference requires queue.bottom < status.y, so the gap is not part
+    // of the queue rect).
+    let queue_gap = u16::from(queue_height > 0);
+    let dock_height =
+        status_height + notice_height + queue_height + queue_gap + panel + footer_height;
+    let [transcript, dock] = ratatui::layout::Layout::vertical([
+        ratatui::layout::Constraint::Min(1),
+        ratatui::layout::Constraint::Length(dock_height),
+    ])
+    .areas(content);
+    let mut rows = Vec::new();
+    if queue_height > 0 {
+        // The gray queue sits ABOVE the Working status row (per the user's
+        // reference image), followed by exactly one blank gap row.
+        rows.push(ratatui::layout::Constraint::Length(queue_height));
+        rows.push(ratatui::layout::Constraint::Length(1));
+    }
+    if status_height == 1 {
+        rows.push(ratatui::layout::Constraint::Length(1));
+    }
+    if notice_height == 1 {
+        rows.push(ratatui::layout::Constraint::Length(1));
+    }
+    rows.push(ratatui::layout::Constraint::Length(panel));
+    rows.push(ratatui::layout::Constraint::Length(footer_height));
+    let chunks = ratatui::layout::Layout::vertical(rows).split(dock);
+    let mut index = 0;
+    let queue = (queue_height > 0).then(|| {
+        let rect = chunks[index];
+        index += 1;
+        rect
+    });
+    if queue_height > 0 {
+        // Skip the explicit blank gap row reserved between queue and status.
+        index += 1;
+    }
+    let status = (status_height == 1).then(|| {
+        let rect = chunks[index];
+        index += 1;
+        rect
+    });
+    let notice = (notice_height == 1).then(|| {
+        let rect = chunks[index];
+        index += 1;
+        rect
+    });
+    let panel_rect = chunks[index];
+    index += 1;
+    let footer = chunks[index];
+    ScreenLayout {
+        gutter,
+        content,
+        transcript,
+        dock,
+        status,
+        notice,
+        queue,
+        panel: panel_rect,
+        footer,
+    }
+}
+
+/// True while the active session needs a status row for live state. A normal
+/// completed result is retained for details/history but does not reserve a
+/// permanent conversation row.
 pub fn busy(app: &App) -> bool {
     app.active_view().is_some_and(|view| {
         view.live.is_some()
-            || view.last_result.is_some()
             || view
                 .state
                 .as_ref()
@@ -29,48 +177,39 @@ pub fn busy(app: &App) -> bool {
     })
 }
 
-/// Composer total height: 3 content lines plus 2 border lines, fixed to 3
-/// rows on short terminals (spec 14.3, 21.2).
-pub fn composer_height(short: bool) -> u16 {
-    if short { 3 } else { 5 }
+/// Minimum Rail editor surface height. The actual dock height is derived
+/// from the buffer and terminal height by `composer_height_phase5`.
+pub fn composer_height(_short: bool) -> u16 {
+    crate::ui::rail::EDITOR_MIN_ROWS
 }
 
 /// The wrapped content rows of the composer buffer (minimum 1 for the
 /// placeholder), using the same `wrap_plain` width math as the renderer.
 pub fn composer_content_rows(app: &App, width: u16) -> usize {
     let width = width.max(1) as usize;
-    if app.composer.is_empty() {
-        return 1;
-    }
-    let rows = app
-        .composer
-        .lines()
-        .iter()
-        .map(|line| crate::markdown::wrap_plain(line, width, Style::new()).len())
-        .sum::<usize>();
-    if app.composer.content().len() >= crate::state::composer::MAX_COMPOSER_BYTES * 9 / 10 {
-        rows + 1
-    } else {
-        rows
-    }
+    let display = app.composer.display_content();
+    let lines = display.split('\n').map(str::to_owned).collect::<Vec<_>>();
+    crate::ui::editor_layout::EditorLayout::row_count_with_atomic_ranges(
+        &lines,
+        width,
+        &app.composer.display_paste_markers(),
+    )
 }
 
-/// The dock height the composer occupies: it grows with the wrapped
-/// content up to 40% of the screen (spec 21.2) and stays a fixed 3-row
-/// bar on short screens or while a turn is running.
+/// The dock height the composer occupies. Rail has no border rows: the
+/// surface itself is 4–12 rows, capped at roughly 32% of the terminal and
+/// centered when the native editor body is shorter than the target.
 pub fn composer_height_phase5(app: &App, width: u16, screen_height: u16, short: bool) -> u16 {
-    if short {
-        return 3;
-    }
-    if busy(app) {
-        return 3 + 2;
-    }
-    let max_rows = (screen_height as usize * 2) / 5; // 40%
-    // The renderer wraps content inside the 1-cell borders, so the height
-    // estimate must use the inner width (never underestimate at the
-    // 79/80-column boundary, spec 21.2).
-    let rows = composer_content_rows(app, width.saturating_sub(2)).min(max_rows.max(3));
-    (rows.max(3) + 2).min(screen_height as usize) as u16
+    let _ = short;
+    let rows = composer_content_rows(app, width.saturating_sub(1));
+    crate::ui::rail::editor_target_rows(rows, screen_height)
+}
+
+pub fn composer_completion_rows(app: &App) -> u16 {
+    app.slash_completion.as_ref().map_or(0, |completion| {
+        let visible = completion.items.len().min(5);
+        (visible + usize::from(completion.items.len() > visible)) as u16
+    })
 }
 
 /// Help/Logs panels take at most 60% of the screen (spec 24.2).
@@ -88,22 +227,24 @@ pub fn panel_height(short: bool) -> u16 {
 /// both the renderer and the main loop's viewport measurement so they can
 /// never disagree.
 pub fn dock_rows(app: &App, width: u16, screen_height: u16) -> u16 {
-    let short = screen_height < 24;
-    let busy = busy(app);
-    let panel = match &app.dock {
-        Dock::Composer => composer_height_phase5(app, width, screen_height, short),
-        Dock::Help | Dock::Logs => help_panel_height(screen_height),
-        _ => panel_height(short),
-    };
-    let notice = u16::from(!app.notices.is_empty());
-    let status = u16::from(busy);
-    status + notice + panel + footer_height(width, screen_height)
+    screen_layout(
+        app,
+        Rect {
+            x: 0,
+            y: 0,
+            width,
+            height: screen_height,
+        },
+    )
+    .dock
+    .height
 }
 
-/// Footer row count: one row below 80 columns or below 24 rows, otherwise
-/// two (spec 14.3).
+/// Rail footer is always one row. Narrow terminals truncate the two aligned
+/// groups instead of switching to a second row.
 pub fn footer_height(width: u16, height: u16) -> u16 {
-    if width < 80 || height < 24 { 1 } else { 2 }
+    let _ = (width, height);
+    1
 }
 
 /// Prepends `width` blank cells to a line.
@@ -157,7 +298,15 @@ fn shares_blank_boundary(out: &[Line<'static>], section: &[Line<'static>]) -> bo
 }
 
 fn line_is_blank(line: &Line<'_>) -> bool {
-    line.spans.iter().all(|span| span.content.trim().is_empty())
+    // Styled spaces are filled surface rows and must not be consumed as an
+    // external spacer. Only an actually empty Line is shareable.
+    is_transparent_blank(line)
+}
+
+/// True when a line is a genuinely empty spacer (no styled or filled
+/// surface): the only row that can count as an external transparent gap.
+pub(crate) fn is_transparent_blank(line: &Line<'_>) -> bool {
+    line.spans.is_empty()
 }
 
 /// Appends background cells so the line is exactly `width` cells wide.
@@ -208,9 +357,7 @@ mod tests {
     }
 
     fn typed(app: &mut App, text: &str) {
-        app.update(AppEvent::Terminal(crossterm::event::Event::Paste(
-            text.to_owned(),
-        )));
+        app.composer.type_text(text);
     }
 
     #[test]
@@ -226,7 +373,7 @@ mod tests {
             2,
             "inner width wraps 79 cols"
         );
-        assert_eq!(composer_height_phase5(&app, 80, 24, false), 3 + 2);
+        assert_eq!(composer_height_phase5(&app, 80, 24, false), 4);
         let eighty = "y".repeat(80);
         app.composer.set_text(&eighty);
         assert_eq!(composer_content_rows(&app, 78), 2);
@@ -251,10 +398,10 @@ mod tests {
         );
         assert!(height >= 8);
         let short = composer_height_phase5(&app, 80, 24, true);
-        assert_eq!(short, 3, "short terminals keep the fixed 3-row bar");
-        // Running keeps the fixed 5-row composer regardless of content.
+        assert_eq!(short, 7, "short terminals use the responsive Rail maximum");
+        // Running still caps the composer at the responsive maximum.
         let running = crate::ui::testapp::live_turn(ThemeKind::Dark);
-        assert_eq!(composer_height_phase5(&running, 80, 24, false), 3 + 2);
+        assert_eq!(composer_height_phase5(&running, 80, 24, false), 4);
     }
 
     #[test]
@@ -262,13 +409,13 @@ mod tests {
         let a = app();
         assert_eq!(
             dock_rows(&a, 80, 24),
-            7,
-            "idle fresh app: composer 5 + footer 2"
+            5,
+            "idle fresh app: four-row composer plus one-row footer"
         );
         assert_eq!(
             dock_rows(&a, 60, 16),
-            4,
-            "short: 3-row composer + 1-row footer"
+            5,
+            "short: minimum composer plus one-row footer"
         );
     }
 }

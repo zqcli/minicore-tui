@@ -1,0 +1,109 @@
+{
+ "schema": "minicore-rail-cell-v1",
+ "case": "long-soft-wrap",
+ "term": {
+  "cols": 80,
+  "rows": 24
+ },
+ "source": {
+  "rail_commit": "1d0dd1611a4d9546c64fe9f5b5c966253fb88eba",
+  "pi": "0.84.4",
+  "theme": "pi dark (initTheme('dark'))"
+ },
+ "cursor": [
+  2,
+  75
+ ],
+ "rows": [
+  [
+   {
+    "c": "▎",
+    "fg": [
+     137,
+     180,
+     250
+    ]
+   },
+   {
+    "c": "the quick brown fox jumps over the lazy dog, the quick brown fox jumps over    ",
+    "bg": [
+     49,
+     50,
+     68
+    ]
+   }
+  ],
+  [
+   {
+    "c": "▎",
+    "fg": [
+     137,
+     180,
+     250
+    ]
+   },
+   {
+    "c": "the lazy dog, the quick brown fox jumps over the lazy dog, the quick brown     ",
+    "bg": [
+     49,
+     50,
+     68
+    ]
+   }
+  ],
+  [
+   {
+    "c": "▎",
+    "fg": [
+     137,
+     180,
+     250
+    ]
+   },
+   {
+    "c": "fox jumps over the lazy dog, the quick brown fox jumps over the lazy dog, ",
+    "bg": [
+     49,
+     50,
+     68
+    ]
+   },
+   {
+    "c": " ",
+    "bg": [
+     49,
+     50,
+     68
+    ],
+    "s": 32
+   },
+   {
+    "c": "    ",
+    "bg": [
+     49,
+     50,
+     68
+    ]
+   }
+  ],
+  [
+   {
+    "c": "▎",
+    "fg": [
+     137,
+     180,
+     250
+    ]
+   },
+   {
+    "c": "                                                                               ",
+    "bg": [
+     49,
+     50,
+     68
+    ]
+   }
+  ]
+ ],
+ "kind": "cells"
+}

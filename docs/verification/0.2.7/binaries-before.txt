@@ -1,0 +1,3 @@
+bf853fa383ab8be376d4261f803106b1faadc3b6cf97a275f04dc063c5d8c866  target/debug/minicore-tui
+c24bd8027577a9d3211a080cd4564333464380dabe7562731b0ad5d315079859  target/release/minicore-tui
+61836c0738f799533221bb07408122bf2964a7926b499b5c982b1f731d3cce3b  ../minicore-agent/target/debug/minicore-agent

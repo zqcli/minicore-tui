@@ -1,0 +1,38 @@
+{
+ "schema": "minicore-rail-cell-v1",
+ "case": "geometry",
+ "kind": "text",
+ "term": {
+  "cols": 120,
+  "rows": 40
+ },
+ "source": {
+  "rail_commit": "1d0dd1611a4d9546c64fe9f5b5c966253fb88eba",
+  "pi": "0.84.4",
+  "theme": "pi dark (initTheme('dark'))"
+ },
+ "rows": [
+  "surface = railEditorSurface (height min 4 max 12 ratio 0.32)",
+  "rows=16 cols=60 contentStartCol=1 contentWidth(60)=59 maxInputHeight=5",
+  "  body=1 targetInputHeight=4",
+  "  body=4 targetInputHeight=4",
+  "  body=8 targetInputHeight=5",
+  "  body=13 targetInputHeight=5",
+  "rows=24 cols=80 contentStartCol=1 contentWidth(80)=79 maxInputHeight=7",
+  "  body=1 targetInputHeight=4",
+  "  body=4 targetInputHeight=4",
+  "  body=8 targetInputHeight=7",
+  "  body=13 targetInputHeight=7",
+  "rows=40 cols=120 contentStartCol=1 contentWidth(120)=119 maxInputHeight=12",
+  "  body=1 targetInputHeight=4",
+  "  body=4 targetInputHeight=4",
+  "  body=8 targetInputHeight=8",
+  "  body=13 targetInputHeight=12",
+  "thinking bg styled=false rail=\"\\u001b[38;2;203;166;247m\"",
+  "user bg styled=true rail=\"\\u001b[38;2;137;180;250m\"",
+  "tool/pending bg=\"\\u001b[48;2;40;43;61m\" rail=\"\\u001b[38;2;137;180;250m\"",
+  "tool/success bg=\"\\u001b[48;2;41;49;46m\" rail=\"\\u001b[38;2;123;159;136m\"",
+  "tool/error bg=\"\\u001b[48;2;52;43;47m\" rail=\"\\u001b[38;2;188;120;136m\"",
+  "tool/cancelled bg=\"\\u001b[48;2;41;42;53m\" rail=\"\\u001b[38;2;127;132;156m\""
+ ]
+}

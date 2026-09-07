@@ -1,0 +1,32 @@
+ ▎                                                                                                  
+ ▎ spacing-check                                                                                    
+ ▎ 6:43 PM · 9/6/2026                                                                               
+ ▎                                                                                                  
+ 
+ ▎Step one                                     
+ ▎Step two 
+ ▎Step three 
+ ▎... (1 earlier lines, ctrl+o to expand) 
+ 
+ ▎ bash                                                                                             
+ ▎ bash                                                                                             
+ 
+ 
+ 
+ 
+ 
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+ ⠹ Running bash…                                                                                    
+ Updated for next turn                                                                              
+ ▎                                                                                                  
+ ▎                                                                                                  
+ ▎                                                                                                  
+ ▎                                                                                                  
+ ▸ workspace · iterm a · max · ● working                             ↑10 ↓12 R0 W0 · usage ? · ctx ?

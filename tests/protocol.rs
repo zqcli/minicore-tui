@@ -126,7 +126,7 @@ fn unknown_reasoning_is_rejected_but_unknown_read_only_fields_are_ignored() {
     };
     assert_eq!(response.parse_models().unwrap().models.len(), 2);
 
-    value["result"]["models"][0]["supported_reasoning"][0] = serde_json::json!("ultra");
+    value["result"]["models"][0]["supported_reasoning"][0] = serde_json::json!("turbo");
     let frame = parse_frame(serde_json::to_string(&value).unwrap().as_bytes()).unwrap();
     let IncomingFrame::Response(response) = frame else {
         panic!("expected response")

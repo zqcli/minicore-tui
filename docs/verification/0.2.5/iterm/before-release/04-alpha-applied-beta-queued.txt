@@ -1,0 +1,32 @@
+ ▎                                                                                                  
+ ▎ initial verification                                                                             
+ ▎ 7:43 AM · 9/7/2026                                                                               
+ ▎                                                                                                  
+ 
+ ▎Planning phase 
+ ▎Detailing scope 
+ ▎Analyzing constraints 
+ 
+ ▎ bash                                                                                             
+ ▎ $ printf 'TOOL_RAN\n' > tool-ran; while [ ! -f release-tool ]; do sleep 0.1; done; printf 'TOOL_D
+ ▎   exit_code: 0                                                                                   
+ ▎   stdout:                                                                                        
+ ▎   TOOL_DONE                                                                                      
+ ▎   stderr:                                                                                        
+ 
+ ▎                                                                                                  
+ ▎ ↪ steer-alpha                                                                                    
+ ▎ 7:43 AM · 9/7/2026                                                                               
+ ▎                                                                                                  
+  ⠸ applied 
+ 
+ 
+ 
+ Steering (accepted): steer-beta 
+ 
+ ⠇ Working 
+ ▎                                                                                                  
+ ▎                                                                                                  
+ ▎                                                                                                  
+ ▎                                                                                                  
+ ▸ workspace · verify a · high · ● working · queued 1                ↑10 ↓12 R0 W0 · usage ? · ctx ?

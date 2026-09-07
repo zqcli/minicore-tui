@@ -1,20 +1,18 @@
-MINICORE  v0.2.1
+ ▎
+ ▎ stream me
+ ▎ time pending
+ ▎
 
-Coding agent TUI
-q / Ctrl+C to quit
+  Streaming content
 
-Open a session — /new, Ctrl+R, or F1 for help
+ ▎thinking hard
 
- stream me
+ ▎ read
+ ▎ read
 
- thinking hard
+  more
 
- Streaming contentmore
-
- read                                                                                                           running
-  reading…
-
- ⊘ Turn cancelled (user) · persisted · requests: 1 · tool rounds: 1
+  ⊘ Turn cancelled (user) · persisted · requests: 1 · tool rounds: 1
 
 
 
@@ -29,12 +27,14 @@ Open a session — /new, Ctrl+R, or F1 for help
 
 
 
-⠋ Running read…
-Session ses_1 has active or unsaved/blocked state. Type '/close confirm' to proceed.
-╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│Steer current turn…                                                                                                   │
-│                                                                                                                      │
-│                                                                                                                      │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-/project                                                                                                            Task
-⚠ cancelled (user) · persisted                                                           request 0 · deep · high · rev 0
+
+
+
+
+ ⠋ Running read…
+ Session ses_1 has active or unsaved/blocked state. Type '/close confirm' to proceed.
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ⚠ incomplete                                                                            ctx ?

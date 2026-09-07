@@ -9,18 +9,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use crossterm::event::{Event as CrosstermEvent, MouseEvent, MouseEventKind};
+use crossterm::event::Event as CrosstermEvent;
 
 use crate::command::{AppCommand, CommandIssue, LocalCommand, is_slash_command, parse_command};
 use crate::event::{AppEvent, RpcEvent};
 use crate::keymap::{self, Action, EditorCursor};
 use crate::protocol::{
-    AgentEventWire, DEFAULT_HISTORY_LIMIT, EventMetaWire, HistoryItemWire, HistoryPageWire,
-    IncomingFrame, IndexedHistoryItemWire, METHOD_LIST_MODELS, METHOD_LIST_PROFILES,
-    METHOD_LIST_SESSIONS, OutgoingRequest, OutputChannelWire, Reasoning, RequestId,
-    RpcNotification, RpcResponse, RpcResponseError, SessionInfo, SessionStateWire,
-    SessionStatusWire, ToolOutcomeWire, ToolProgressWire, TurnPersistenceWire, TurnRef,
-    UserMessageKindWire, is_supported_agent_version,
+    AgentEventWire, AssistantDisplayPartWire, DEFAULT_HISTORY_LIMIT, EventMetaWire,
+    HistoryItemWire, HistoryPageWire, IncomingFrame, IndexedHistoryItemWire, METHOD_LIST_MODELS,
+    METHOD_LIST_PROFILES, METHOD_LIST_SESSIONS, OutgoingRequest, OutputChannelWire, Reasoning,
+    RequestId, RpcNotification, RpcResponse, RpcResponseError, SessionInfo, SessionStateWire,
+    SessionStatusWire, ToolDisplayWire, ToolOutcomeWire, ToolProgressWire, TurnPersistenceWire,
+    TurnRef, UserMessageKindWire, is_supported_agent_version,
 };
 use crate::rpc::RpcError;
 use crate::state::catalog::CatalogState;
@@ -30,18 +30,28 @@ use crate::state::selection::{
     filtered_models, filtered_profiles, filtered_sessions, supported_reasoning,
 };
 use crate::state::session::{SessionId, SessionView, SessionsState};
-use crate::state::tool::{LiveTool, ToolStatus};
+use crate::state::tool::{LiveTool, ToolKey, ToolPresentationState, ToolStatus};
 use crate::state::transcript::{
-    AssistantBlock, AssistantPart, PreparedTranscriptCache, SummaryBlock, ToolBlock,
-    TranscriptBlock, TranscriptCacheKey, UserBlock,
+    AssistantBlock, AssistantPart, SummaryBlock, ToolBlock, TranscriptBlock, UserBlock,
 };
 use crate::state::turn::{
-    LiveLoop, LocalSubmissionId, PendingSteer, PendingSteerState, UnsavedLoop,
+    AppliedSteer, LiveLoop, LivePart, LocalSubmissionId, PendingSteer, PendingSteerState,
+    SteerQueueState, UnsavedLoop,
+};
+use crate::state::view::{
+    ConversationSelection, FoldOverride, PreparedConversation, SelectionPoint,
 };
 use crate::theme::ThemeKind;
 
+pub mod ui_actions;
+pub use self::ui_actions::SlashCompletionState;
+use self::ui_actions::{EditorSelection, SelectionDrag};
+
 /// The agent's stderr ring size, App side (spec 10.8).
 pub const MAX_AGENT_LOG_LINES: usize = 200;
+/// Bound for the per-session local steer FIFO. Small by design; a full queue
+/// pauses and keeps the composer message rather than silently dropping.
+pub const MAX_STEER_QUEUE_LEN: usize = 8;
 
 const MAX_NOTICES: usize = 32;
 
@@ -98,6 +108,41 @@ impl Notice {
     }
 }
 
+#[derive(Debug)]
+struct MousePress {
+    target: MouseTarget,
+    column: u16,
+    row: u16,
+}
+
+#[derive(Debug)]
+enum MouseTarget {
+    Editor,
+    Conversation(SelectionPoint),
+    Scrollbar,
+}
+
+#[derive(Debug)]
+struct LastClick {
+    row: u16,
+    at: Instant,
+    count: u8,
+    word_start: usize,
+    word_end: usize,
+}
+
+#[derive(Debug)]
+struct ScrollbarDrag {
+    session_id: String,
+    grab_offset: usize,
+    pending_offset: usize,
+    pending_row: u16,
+    animation_from: usize,
+    animation_to: usize,
+    animation_started_at: Instant,
+    geometry: crate::ui::scrollbar::ScrollbarGeometry,
+}
+
 /// Why a request was issued; `pending_requests` routes each response to the
 /// matching handler regardless of arrival order (spec 10.9, 10.10).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,6 +161,9 @@ pub enum RequestKind {
     SessionState {
         session_id: SessionId,
         query: u64,
+    },
+    SessionPresentation {
+        session_id: SessionId,
     },
     History {
         session_id: SessionId,
@@ -188,6 +236,11 @@ pub struct App {
     pub reasoning_visible: bool,
     pub frame_count: u64,
     pub composer: Composer,
+    /// Local slash candidates derived from `command::SLASH_COMMAND_NAMES`.
+    pub slash_completion: Option<SlashCompletionState>,
+    /// Preferred visual column while moving vertically through wrapped editor
+    /// rows, matching the native editor's temporary vertical-column state.
+    composer_preferred_visual_col: Option<usize>,
     /// The dock panel below the transcript (spec 24.1).
     pub dock: Dock,
     /// Measured transcript geometry for scroll math (total wrapped rows,
@@ -200,6 +253,24 @@ pub struct App {
     pub panel_scroll: usize,
     /// Double Ctrl+C window anchor.
     ctrl_c_at: Option<Instant>,
+    /// Latest terminal size for mapping a mouse release to prepared rows.
+    terminal_size: (u16, u16),
+    mouse_down: Option<MousePress>,
+    /// A press that landed on a link cell must not toggle a section fold on
+    /// release (RAIL-14 pressedUrl guard, matching the fixed source).
+    mouse_pressed_on_link: bool,
+    last_click: Option<LastClick>,
+    scrollbar_drag: Option<ScrollbarDrag>,
+    selection_drag: Option<SelectionDrag>,
+    editor_selection: Option<EditorSelection>,
+    /// The single prepared conversation snapshot shared by measurement,
+    /// rendering, hit testing, selection, and copying.
+    prepared_conversation: Option<PreparedConversation>,
+    /// Current transcript selection. It is presentation-only and is rebased
+    /// by stable section identity when a prepared snapshot changes.
+    pub selection: Option<ConversationSelection>,
+    /// Monotonic deadline for the one-row `selection copied` footer state.
+    selection_copied_until: Option<Instant>,
     /// Notice lifetime; a field so tests can shorten/past-expire it.
     pub notice_ttl: Duration,
     /// The new-session draft while a model/reasoning/profile selector sits
@@ -291,11 +362,23 @@ impl App {
             reasoning_visible: true,
             frame_count: 0,
             composer: Composer::default(),
+            slash_completion: None,
+            composer_preferred_visual_col: None,
             dock: Dock::Composer,
             viewport: (0, 0),
             last_total: 0,
             panel_scroll: 0,
             ctrl_c_at: None,
+            terminal_size: (80, 24),
+            mouse_down: None,
+            mouse_pressed_on_link: false,
+            last_click: None,
+            scrollbar_drag: None,
+            selection_drag: None,
+            editor_selection: None,
+            prepared_conversation: None,
+            selection: None,
+            selection_copied_until: None,
             notice_ttl: NOTICE_TTL,
             draft: None,
             shutdown_sent: false,
@@ -372,6 +455,29 @@ impl App {
                 .expect("Ctrl+C expiry is representable");
             let remaining = expiry.saturating_duration_since(now);
             earliest = Some(earliest.map_or(remaining, |e| e.min(remaining)));
+        }
+        if let Some(deadline) = self.selection_copied_until {
+            let remaining = deadline.saturating_duration_since(now);
+            earliest = Some(earliest.map_or(remaining, |e| e.min(remaining)));
+        }
+        if self
+            .selection_drag
+            .as_ref()
+            .is_some_and(|drag| self.selection_drag_direction(drag.row) != 0)
+        {
+            let drag_tick = Duration::from_millis(50);
+            earliest = Some(earliest.map_or(drag_tick, |e| e.min(drag_tick)));
+        }
+        if let Some(drag) = &self.scrollbar_drag {
+            let elapsed = now.saturating_duration_since(drag.animation_started_at);
+            if drag.animation_from != drag.animation_to
+                && elapsed < crate::ui::scrollbar::DRAG_ANIMATION
+            {
+                let remaining = crate::ui::scrollbar::DRAG_ANIMATION - elapsed;
+                let frame = Duration::from_millis(33);
+                earliest =
+                    Some(earliest.map_or(frame.min(remaining), |e| e.min(frame).min(remaining)));
+            }
         }
         earliest
     }
@@ -450,8 +556,59 @@ impl App {
             self.dirty = false;
             return Vec::new();
         }
+        if matches!(&event, AppEvent::Terminal(CrosstermEvent::Mouse(mouse))
+            if mouse.kind == crossterm::event::MouseEventKind::Moved)
+            || matches!(&event, AppEvent::Viewport { total_lines, visible_rows }
+                if (*total_lines, *visible_rows) == self.viewport)
+        {
+            return Vec::new();
+        }
+        let reuse_layout = match &event {
+            AppEvent::ConversationPrepared(_) | AppEvent::Tick | AppEvent::Viewport { .. } => true,
+            AppEvent::Terminal(
+                CrosstermEvent::Mouse(_)
+                | CrosstermEvent::FocusLost
+                | CrosstermEvent::FocusGained
+                | CrosstermEvent::Paste(_),
+            ) => true,
+            AppEvent::Terminal(CrosstermEvent::Key(key)) => matches!(
+                keymap::map(self, *key),
+                Action::None
+                    | Action::TypeChar(_)
+                    | Action::Newline
+                    | Action::Backspace
+                    | Action::Delete
+                    | Action::CursorMove(_)
+                    | Action::LineStart
+                    | Action::LineEnd
+                    | Action::WordDelete
+                    | Action::Undo
+                    | Action::Redo
+                    | Action::HistoryPrev
+                    | Action::HistoryNext
+                    | Action::CompletionMove(_)
+                    | Action::CompletionAccept
+                    | Action::CompletionCancel
+                    | Action::ScrollRows(_)
+                    | Action::ScrollWindow(_)
+                    | Action::ScrollTop
+                    | Action::ScrollBottom
+            ),
+            _ => false,
+        };
+        if !reuse_layout {
+            self.prepared_conversation = None;
+        }
+        // Hit tests in one mouse event share the same immutable preparation.
+        if matches!(&event, AppEvent::Terminal(CrosstermEvent::Mouse(_))) {
+            let width = self.terminal_content_width();
+            if self.prepared_conversation(width).is_none() {
+                let prepared = crate::ui::transcript::prepare_conversation(self, width);
+                self.install_conversation(prepared);
+            }
+        }
         self.dirty = true;
-        match event {
+        let mut commands = match event {
             AppEvent::Bootstrap => self.bootstrap(),
             AppEvent::SubmitTurn { session_id, text } => self.submit_turn(session_id, text),
             AppEvent::SteerTurn { session_id, text } => self.steer_turn(&session_id, text),
@@ -491,6 +648,13 @@ impl App {
                     self.ctrl_c_at = None;
                 }
                 self.expire_notices();
+                ui_actions::auto_scroll_selection(self);
+                if self
+                    .selection_copied_until
+                    .is_some_and(|deadline| deadline <= self.instant_now())
+                {
+                    self.selection_copied_until = None;
+                }
                 Vec::new()
             }
             AppEvent::Rendered => unreachable!("handled before the match"),
@@ -503,31 +667,31 @@ impl App {
                 Vec::new()
             }
             AppEvent::ToggleTools { session_id } => {
-                if let Some(view) = self.sessions.known.get_mut(&session_id) {
-                    view.tools_expanded = !view.tools_expanded;
-                    view.transcript.render_cache.clear();
-                }
+                ui_actions::toggle_tools(self, &session_id);
                 Vec::new()
             }
             AppEvent::ToggleTool {
                 session_id,
                 loop_id,
+                request_index,
                 tool_call_id,
             } => {
-                if let Some(view) = self.sessions.known.get_mut(&session_id) {
-                    let mut changed = false;
-                    for block in &mut view.transcript.blocks {
-                        if let TranscriptBlock::Tool(tool) = block {
-                            if tool.loop_id == loop_id && tool.tool_call_id == tool_call_id {
-                                tool.expanded = !tool.expanded;
-                                changed = true;
-                            }
-                        }
-                    }
-                    if changed {
-                        view.transcript.invalidate();
-                    }
-                }
+                ui_actions::toggle_tool(self, &session_id, &loop_id, request_index, &tool_call_id);
+                Vec::new()
+            }
+            AppEvent::ToggleReasoningSection {
+                session_id,
+                loop_id,
+                request_index,
+                ordinal,
+            } => {
+                ui_actions::toggle_reasoning_section(
+                    self,
+                    &session_id,
+                    &loop_id,
+                    request_index,
+                    ordinal,
+                );
                 Vec::new()
             }
             AppEvent::OpenNewSession => self.open_new_session(),
@@ -570,15 +734,45 @@ impl App {
                 total_lines,
                 visible_rows,
             } => {
+                if self.scrollbar_drag.is_some() {
+                    ui_actions::cancel_scrollbar_drag(self);
+                }
                 self.viewport = (total_lines, visible_rows);
                 self.clamp_transcript_scroll();
                 Vec::new()
             }
-            AppEvent::TranscriptCachePrepared(prepared) => {
-                self.install_transcript_cache(prepared);
+            AppEvent::TerminalSize { width, height } => {
+                if self.terminal_size != (width, height) && self.scrollbar_drag.is_some() {
+                    ui_actions::cancel_scrollbar_drag(self);
+                }
+                self.terminal_size = (width, height);
                 Vec::new()
             }
-        }
+            AppEvent::ClipboardResult { success, error } => {
+                if success {
+                    self.selection_copied_until = Some(
+                        self.instant_now()
+                            .checked_add(Duration::from_millis(1_800))
+                            .expect("copy feedback deadline is representable"),
+                    );
+                } else {
+                    self.notice(
+                        NoticeLevel::Warning,
+                        error.unwrap_or_else(|| "copy failed".to_owned()),
+                    );
+                }
+                Vec::new()
+            }
+            AppEvent::ConversationPrepared(prepared) => {
+                self.install_conversation(prepared);
+                Vec::new()
+            }
+        };
+        // Central FIFO queue advance: after any event, at most one steer RPC
+        // per session (or a fresh-turn fallback once a finished loop settles).
+        let advance = self.advance_steer_queues();
+        commands.extend(advance);
+        commands
     }
 
     /// The active session's view, for read-only render access.
@@ -589,21 +783,123 @@ impl App {
             .and_then(|session_id| self.sessions.known.get(session_id))
     }
 
-    /// The current durable transcript cache key for the active session.
-    /// Render preparation uses the same read-only key builder before sending
-    /// a `TranscriptCachePrepared` event back through `update`.
-    pub fn transcript_cache_key(&self, width: u16) -> Option<(String, TranscriptCacheKey)> {
-        let session_id = self.sessions.active.as_ref()?.clone();
-        let view = self.sessions.known.get(&session_id)?;
-        Some((
-            session_id,
-            view.transcript.cache_key(
-                width,
-                self.theme,
-                self.reasoning_visible,
-                view.tools_expanded,
-            ),
-        ))
+    /// The prepared conversation for the requested content width, when it
+    /// still belongs to the active session and durable transcript revision.
+    pub fn prepared_conversation(&self, width: u16) -> Option<&PreparedConversation> {
+        let active = self.sessions.active.as_ref();
+        let revision = active
+            .and_then(|session_id| self.sessions.known.get(session_id))
+            .map_or(0, |view| view.transcript.render_revision);
+        self.prepared_conversation.as_ref().filter(|prepared| {
+            prepared.width == width
+                && prepared.session_id.as_ref() == active
+                && prepared.transcript_revision == revision
+                && prepared.durable.as_ref().is_none_or(|durable| {
+                    self.active_view().is_some_and(|view| {
+                        durable.key
+                            == crate::state::view::DurableCacheKey::new(
+                                view,
+                                width,
+                                self.theme,
+                                self.reasoning_visible,
+                            )
+                    })
+                })
+        })
+    }
+
+    pub fn selection_copied(&self) -> bool {
+        self.selection_copied_until
+            .is_some_and(|deadline| self.instant_now() < deadline)
+    }
+
+    pub(crate) fn conversation_for_input(
+        &self,
+        width: u16,
+    ) -> std::borrow::Cow<'_, PreparedConversation> {
+        self.prepared_conversation(width)
+            .map(std::borrow::Cow::Borrowed)
+            .unwrap_or_else(|| {
+                std::borrow::Cow::Owned(crate::ui::transcript::prepare_conversation(self, width))
+            })
+    }
+
+    pub fn scrollbar_preview_offset(&self, session_id: &str) -> Option<usize> {
+        self.scrollbar_drag
+            .as_ref()
+            .filter(|drag| drag.session_id == session_id)
+            .map(|drag| drag.pending_offset)
+    }
+
+    pub(crate) fn install_conversation(&mut self, prepared: PreparedConversation) {
+        let active = self.sessions.active.as_ref();
+        let revision = active
+            .and_then(|session_id| self.sessions.known.get(session_id))
+            .map_or(0, |view| view.transcript.render_revision);
+        if prepared.session_id.as_ref() != active || prepared.transcript_revision != revision {
+            return;
+        }
+        if let Some(durable) = &prepared.durable {
+            if let Some(view) = self
+                .sessions
+                .active
+                .as_ref()
+                .and_then(|id| self.sessions.known.get_mut(id))
+            {
+                if durable.key
+                    != crate::state::view::DurableCacheKey::new(
+                        view,
+                        prepared.width,
+                        self.theme,
+                        self.reasoning_visible,
+                    )
+                {
+                    return;
+                }
+                view.transcript.render_cache = Some(Arc::clone(durable));
+            }
+        }
+        self.rebase_selection(&prepared);
+        self.prepared_conversation = Some(prepared);
+    }
+
+    fn rebase_selection(&mut self, prepared: &PreparedConversation) {
+        if self.selection.as_ref().is_some_and(|selection| {
+            prepared.session_id.as_deref() != Some(selection.session_id.as_str())
+        }) {
+            self.selection = None;
+            return;
+        }
+        let Some(selection) = self.selection.as_mut() else {
+            return;
+        };
+        let mut valid = true;
+        for point in [&mut selection.anchor, &mut selection.focus] {
+            let Some(section_id) = point.section_id.as_ref() else {
+                continue;
+            };
+            if let Some(section) = prepared
+                .sections
+                .iter()
+                .find(|section| section_ids_match(&section.id, section_id))
+            {
+                point.section_row = point.section_row.min(section.rows.len().saturating_sub(1));
+                point.row = section.rows.start + point.section_row;
+                if section.content_columns.is_empty() {
+                    point.column = 0;
+                } else {
+                    point.column = point
+                        .column
+                        .max(section.content_columns.start)
+                        .min(section.content_columns.end - 1);
+                }
+            } else {
+                valid = false;
+            }
+        }
+        if !valid {
+            self.selection = None;
+        }
     }
 
     /// The current new-session draft, whether the form or a selector is
@@ -1343,10 +1639,11 @@ impl App {
                 let action = keymap::map(self, key);
                 self.apply_action(action)
             }
-            CrosstermEvent::Paste(text) => self.handle_paste(text),
-            CrosstermEvent::Mouse(mouse) => {
-                let action = self.mouse_action(mouse);
-                self.apply_action(action)
+            CrosstermEvent::Paste(text) => ui_actions::handle_paste(self, text),
+            CrosstermEvent::Mouse(mouse) => ui_actions::handle_mouse(self, mouse),
+            CrosstermEvent::FocusLost => {
+                ui_actions::cancel_scrollbar_drag(self);
+                Vec::new()
             }
             // Resize is consumed via AppEvent::Viewport (same frame).
             _ => Vec::new(),
@@ -1355,6 +1652,15 @@ impl App {
 
     fn apply_action(&mut self, action: Action) -> Vec<AppCommand> {
         use Action::*;
+        if !matches!(&action, None | CompletionMove(_)) {
+            self.editor_selection = std::option::Option::None;
+        }
+        if !matches!(
+            &action,
+            CursorMove(EditorCursor::Up | EditorCursor::Down) | CompletionMove(_)
+        ) {
+            self.composer_preferred_visual_col = std::option::Option::None;
+        }
         match action {
             None => Vec::new(),
             Quit => self.request_shutdown(),
@@ -1381,6 +1687,26 @@ impl App {
                         format!("composer limit is {MAX_COMPOSER_BYTES} UTF-8 bytes"),
                     );
                 }
+                ui_actions::refresh_slash_completion(self);
+                Vec::new()
+            }
+            CompletionMove(delta) => {
+                ui_actions::move_slash_completion(self, delta);
+                Vec::new()
+            }
+            CompletionAccept => {
+                ui_actions::accept_slash_completion(self);
+                Vec::new()
+            }
+            CompletionAcceptAndSubmit => {
+                if ui_actions::accept_slash_completion(self) {
+                    Vec::new()
+                } else {
+                    self.submit_composer()
+                }
+            }
+            CompletionCancel => {
+                self.slash_completion = std::option::Option::None;
                 Vec::new()
             }
             Newline => {
@@ -1390,44 +1716,63 @@ impl App {
                         format!("composer limit is {MAX_COMPOSER_BYTES} UTF-8 bytes"),
                     );
                 }
+                ui_actions::refresh_slash_completion(self);
                 Vec::new()
             }
             Backspace => {
                 self.composer.backspace();
+                ui_actions::refresh_slash_completion(self);
                 Vec::new()
             }
             Delete => {
                 self.composer.delete();
+                ui_actions::refresh_slash_completion(self);
                 Vec::new()
             }
-            CursorMove(direction) => self.composer_move(direction),
+            CursorMove(direction) => {
+                let commands = ui_actions::composer_move(self, direction);
+                ui_actions::refresh_slash_completion(self);
+                commands
+            }
             LineStart => {
                 self.composer.line_start();
+                ui_actions::refresh_slash_completion(self);
                 Vec::new()
             }
             LineEnd => {
                 self.composer.line_end();
+                ui_actions::refresh_slash_completion(self);
                 Vec::new()
             }
             WordDelete => {
                 self.composer.word_delete();
+                ui_actions::refresh_slash_completion(self);
                 Vec::new()
             }
             Undo => {
                 self.composer.undo();
+                ui_actions::refresh_slash_completion(self);
                 Vec::new()
             }
             Redo => {
                 self.composer.redo();
+                ui_actions::refresh_slash_completion(self);
                 Vec::new()
             }
             Submit => self.submit_composer(),
             HistoryPrev => {
-                self.composer.history_prev();
+                // Alt+Up on an empty editor withdraws the NEXT UNSENT queue
+                // item so a paused queue stays recoverable without copying
+                // from the display-only dock; otherwise normal history nav.
+                if !self.retrieve_next_queued_steer() {
+                    self.composer.history_prev();
+                }
+                ui_actions::refresh_slash_completion(self);
                 Vec::new()
             }
             HistoryNext => {
                 self.composer.history_next();
+                ui_actions::refresh_slash_completion(self);
                 Vec::new()
             }
             OpenHelp => self.open_dock(Dock::Help),
@@ -1437,10 +1782,7 @@ impl App {
             OpenReasoning => self.open_selector(SelectorKind::Reasoning),
             ToggleTools => {
                 if let Some(session_id) = self.sessions.active.as_ref().cloned() {
-                    if let Some(view) = self.sessions.known.get_mut(&session_id) {
-                        view.tools_expanded = !view.tools_expanded;
-                        view.transcript.render_cache.clear();
-                    }
+                    ui_actions::toggle_tools(self, &session_id);
                 }
                 Vec::new()
             }
@@ -1500,30 +1842,6 @@ impl App {
         }
     }
 
-    fn composer_move(&mut self, direction: EditorCursor) -> Vec<AppCommand> {
-        match direction {
-            EditorCursor::Left => self.composer.move_left(),
-            EditorCursor::Right => self.composer.move_right(),
-            // History recall at the buffer edges (spec 22.2): up on the
-            // first row, down on the last row.
-            EditorCursor::Up => {
-                if self.composer.at_first_line() {
-                    self.composer.history_prev();
-                } else {
-                    self.composer.move_up();
-                }
-            }
-            EditorCursor::Down => {
-                if self.composer.at_last_line() {
-                    self.composer.history_next();
-                } else {
-                    self.composer.move_down();
-                }
-            }
-        }
-        Vec::new()
-    }
-
     /// One Ctrl+C press: clears a non-empty composer, otherwise first
     /// press warns and a second press within 1s quits (spec 22.1, 43.7).
     fn ctrl_c(&mut self) -> Vec<AppCommand> {
@@ -1539,62 +1857,6 @@ impl App {
             self.ctrl_c_at = Some(self.instant_now());
             self.notice(NoticeLevel::Info, "Press Ctrl+C again to quit");
             Vec::new()
-        }
-    }
-
-    /// Pasted text: CRLF/CR normalize to LF, inserted in one edit (no
-    /// per-character events). Composer keeps the newlines; selector queries
-    /// and new-session text fields flatten them (spec 43.7).
-    fn handle_paste(&mut self, text: String) -> Vec<AppCommand> {
-        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-        match &self.dock {
-            Dock::Composer => {
-                if !self.composer.type_text(&normalized) {
-                    self.notice(
-                        NoticeLevel::Warning,
-                        format!("composer limit is {MAX_COMPOSER_BYTES} UTF-8 bytes"),
-                    );
-                }
-            }
-            Dock::NewSession(_) => {
-                if !self.new_session().is_some_and(|draft| draft.submitting) {
-                    self.field_insert(&normalized.replace('\n', ""));
-                }
-            }
-            Dock::SessionSelector(_)
-            | Dock::ModelSelector(_)
-            | Dock::ReasoningSelector(_)
-            | Dock::ProfileSelector(_) => {
-                if self.selector_state().is_some_and(|state| state.submitting) {
-                    return Vec::new();
-                }
-                if let Some(state) = self.selector_state_mut() {
-                    state.query.push_str(&normalized.replace('\n', ""));
-                    state.cursor = 0;
-                }
-            }
-            _ => {}
-        }
-        Vec::new()
-    }
-
-    fn mouse_action(&self, mouse: MouseEvent) -> Action {
-        match mouse.kind {
-            MouseEventKind::ScrollUp => {
-                if self.selector_state().is_some() {
-                    Action::SelectorMove(-1)
-                } else {
-                    Action::ScrollRows(-3)
-                }
-            }
-            MouseEventKind::ScrollDown => {
-                if self.selector_state().is_some() {
-                    Action::SelectorMove(1)
-                } else {
-                    Action::ScrollRows(3)
-                }
-            }
-            _ => Action::None,
         }
     }
 
@@ -1689,33 +1951,6 @@ impl App {
         }
     }
 
-    fn install_transcript_cache(&mut self, prepared: PreparedTranscriptCache) {
-        let Some(active) = self.sessions.active.as_ref() else {
-            return;
-        };
-        if active != &prepared.session_id {
-            return;
-        }
-        let Some(key) = prepared.key else {
-            return;
-        };
-        let Some(view) = self.sessions.known.get(active) else {
-            return;
-        };
-        let expected = view.transcript.cache_key(
-            key.width,
-            self.theme,
-            self.reasoning_visible,
-            view.tools_expanded,
-        );
-        if expected != key {
-            return;
-        }
-        if let Some(view) = self.sessions.known.get_mut(active) {
-            view.transcript.render_cache.install(prepared);
-        }
-    }
-
     fn active_session_mut(&mut self) -> Option<&mut SessionView> {
         let active = self.sessions.active.clone()?;
         self.sessions.known.get_mut(&active)
@@ -1742,6 +1977,7 @@ impl App {
     /// goes to the active session and clears the composer. Nothing is ever
     /// silently swallowed; a missing agent or session gets a notice.
     pub fn submit_composer(&mut self) -> Vec<AppCommand> {
+        self.editor_selection = None;
         let text = self.composer.content().trim().to_owned();
         if text.is_empty() {
             return Vec::new();
@@ -1795,7 +2031,11 @@ impl App {
 
         if is_running {
             let editor_revision = self.composer.editor_revision();
-            self.steer_turn_with_revision(&active, text, Some(editor_revision))
+            let mut commands = self.steer_turn_with_revision(&active, text, Some(editor_revision));
+            // Enter path issues the single in-flight steer via the same central
+            // FIFO advance used by every other event (one RPC per session).
+            commands.extend(self.advance_steer_queues());
+            commands
         } else if is_waiting || status == Some(SessionStatusWire::Finishing) {
             self.notice(
                 NoticeLevel::Warning,
@@ -1848,72 +2088,230 @@ impl App {
             self.notice(NoticeLevel::Warning, "session is blocked; cannot steer");
             return Vec::new();
         }
-        if view.live.as_ref().is_some_and(|live| {
-            live.pending_steers
-                .iter()
-                .any(|steer| steer.state == PendingSteerState::Sending)
-        }) {
-            return Vec::new();
-        }
         if !view.is_running() {
             self.notice(NoticeLevel::Warning, "session is not running; cannot steer");
             return Vec::new();
         }
-        let loop_id = if let Some(live) = &view.live {
-            live.reference.as_ref().map(|r| r.loop_id.clone())
-        } else if let Some(state) = &view.state {
-            state
-                .active_loop
-                .as_ref()
-                .map(|loop_state| loop_state.loop_id.clone())
-        } else {
-            None
-        };
-        let Some(loop_id) = loop_id else {
-            self.notice(NoticeLevel::Warning, "cannot steer: active loop id unknown");
+        // FIFO admission: a bounded per-session queue. No silent Sending-guard
+        // drop; a full queue keeps the editor text and pauses instead.
+        if view.steer_queue.len() >= MAX_STEER_QUEUE_LEN {
+            if let Some(view) = self.sessions.known.get_mut(session_id) {
+                view.steer_queue_paused = true;
+            }
+            self.notice(
+                NoticeLevel::Warning,
+                format!(
+                    "steer queue is full ({MAX_STEER_QUEUE_LEN}); keep the message and retry after the turn"
+                ),
+            );
             return Vec::new();
-        };
-
+        }
         self.next_steer_id = self
             .next_steer_id
             .checked_add(1)
             .expect("steering ids exhausted");
         let steer_id = self.next_steer_id;
-
-        if let Some(live) = self
-            .sessions
-            .known
-            .get_mut(session_id)
-            .and_then(|view| view.live.as_mut())
-        {
-            live.pending_steers.push(PendingSteer {
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            // An explicit user admission is deliberate: it re-opens the gate
+            // (the pause only blocks AUTOMATIC advance after cancel/failure).
+            view.steer_queue_paused = false;
+            view.steer_queue.push(crate::state::turn::SteerQueueItem {
                 local_id: steer_id,
                 text: text.clone(),
-                state: PendingSteerState::Sending,
+                state: crate::state::turn::SteerQueueState::Unsent,
+                editor_revision,
+                handoff: false,
             });
         }
+        // A late ACK must never clear new editor content: clear only when the
+        // submitting revision and text still match the composer exactly.
+        let composer_text = self.composer.content().trim().to_owned();
+        if self.sessions.active.as_ref() == Some(session_id)
+            && editor_revision.is_some_and(|revision| revision == self.composer.editor_revision())
+            && composer_text == text
+        {
+            self.composer.submit_pushed(&composer_text);
+            self.composer.clear();
+        }
+        // The RPC is issued by the central FIFO advance (at most one in
+        // flight per session), not inline.
+        Vec::new()
+    }
 
-        let req_loop_id = loop_id.clone();
-        let req_text = text.clone();
-        vec![self.request(
-            RequestKind::SteerTurn {
-                session_id: session_id.clone(),
-                loop_id,
-                steer_id,
-                text,
-                editor_revision,
-            },
-            |id| {
-                OutgoingRequest::steer_turn(
-                    id,
-                    &TurnRef {
-                        session_id: session_id.clone(),
-                        loop_id: req_loop_id.clone(),
-                    },
-                    &req_text,
-                )
-            },
-        )]
+    /// Central FIFO queue advance for every session. At most ONE steer RPC (or
+    /// accepted-but-unconfirmed item) per session until a receipt proves the
+    /// previous one was issued into a request. A loop that sealed before the
+    /// next unsent steer could be sent falls back to a fresh turn once the
+    /// previous loop completed, persisted, and settled.
+    fn advance_steer_queues(&mut self) -> Vec<AppCommand> {
+        // Never issue a NEW steer (or fresh-turn) RPC once the connection is
+        // failed or shutting down.
+        if !self.can_send_requests() {
+            return Vec::new();
+        }
+        let session_ids: Vec<SessionId> = self.sessions.known.keys().cloned().collect();
+        let mut commands = Vec::new();
+        for session_id in session_ids {
+            commands.extend(self.advance_steer_queue_for(&session_id));
+        }
+        commands
+    }
+
+    fn advance_steer_queue_for(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
+        let Some(view) = self.sessions.known.get(session_id) else {
+            return Vec::new();
+        };
+        if view.steer_queue_paused || view.steer_queue.is_empty() || view.closing {
+            return Vec::new();
+        }
+        if view
+            .steer_queue
+            .iter()
+            .any(|item| item.state == SteerQueueState::Unconfirmed)
+        {
+            // An uncertain outcome blocks the WHOLE queue advance: never
+            // auto-resend it, and never let a newer unsent item skip past it.
+            return Vec::new();
+        }
+        let running = view.is_running();
+        let loop_id = view
+            .live
+            .as_ref()
+            .and_then(|live| live.reference.as_ref())
+            .map(|r| r.loop_id.clone());
+        if running {
+            let Some(loop_id) = loop_id else {
+                return Vec::new();
+            };
+            let has_inflight = view.live.as_ref().is_some_and(|live| {
+                live.pending_steers.iter().any(|steer| {
+                    matches!(
+                        steer.state,
+                        PendingSteerState::Sending
+                            | PendingSteerState::Queued
+                            | PendingSteerState::Unconfirmed
+                    )
+                })
+            }) || view.steer_queue.iter().any(|item| item.handoff);
+            let Some(head) = view.steer_queue.iter().find(|item| {
+                item.state == crate::state::turn::SteerQueueState::Unsent && !item.handoff
+            }) else {
+                return Vec::new();
+            };
+            if has_inflight {
+                return Vec::new();
+            }
+            let head = head.clone();
+            // Pop from the local queue; the RPC lifecycle (Sending/Accepted,
+            // then receipts) takes over from `pending_steers`.
+            if let Some(view) = self.sessions.known.get_mut(session_id) {
+                view.steer_queue
+                    .retain(|item| item.local_id != head.local_id);
+                if let Some(live) = view.live.as_mut() {
+                    live.pending_steers.push(PendingSteer {
+                        local_id: head.local_id,
+                        text: head.text.clone(),
+                        state: PendingSteerState::Sending,
+                        accepted_at: None,
+                        steer_index: None,
+                    });
+                }
+            }
+            let req_loop_id = loop_id.clone();
+            let req_text = head.text.clone();
+            let req_revision = head.editor_revision;
+            vec![self.request(
+                RequestKind::SteerTurn {
+                    session_id: session_id.clone(),
+                    loop_id: loop_id.clone(),
+                    steer_id: head.local_id,
+                    text: head.text.clone(),
+                    editor_revision: req_revision,
+                },
+                |id| {
+                    OutgoingRequest::steer_turn(
+                        id,
+                        &TurnRef {
+                            session_id: session_id.clone(),
+                            loop_id: req_loop_id.clone(),
+                        },
+                        &req_text,
+                    )
+                },
+            )]
+        } else {
+            // Race fallback: the previous loop sealed before this unsent
+            // steer could be sent. Only after a normal completed+persisted,
+            // history-settled idle session does the head become a fresh turn
+            // (never a resend of an accepted message).
+            // Explicit normal completion gate: only a genuinely completed,
+            // persisted, history-settled idle session may start the next
+            // queued message as a fresh turn (never after cancel/refusal/
+            // error/blocked/unsaved, and never for an old loop).
+            let settled = view.last_result.as_ref().is_some_and(|result| {
+                result.outcome == crate::protocol::LoopOutcomeWire::Completed
+            }) && view.transcript.complete
+                && !view.is_blocked()
+                && view.unsaved_loop.is_none()
+                && !view.result_unconfirmed
+                && view.state.as_ref().map(|s| s.status) == Some(SessionStatusWire::Idle);
+            if !settled {
+                return Vec::new();
+            }
+            let head = view
+                .steer_queue
+                .iter()
+                .find(|item| {
+                    item.state == crate::state::turn::SteerQueueState::Unsent && !item.handoff
+                })
+                .cloned();
+            let Some(head) = head else {
+                return Vec::new();
+            };
+            let text = head.text.clone();
+            let commands = self.submit_turn(session_id.clone(), text);
+            if !commands.is_empty() {
+                // Keep the entry until the turn.send ACK (a send failure must
+                // not drop the text); the handoff marker blocks FIFO jump.
+                if let Some(view) = self.sessions.known.get_mut(session_id) {
+                    if let Some(item) = view
+                        .steer_queue
+                        .iter_mut()
+                        .find(|item| item.local_id == head.local_id)
+                    {
+                        item.handoff = true;
+                    }
+                }
+            }
+            commands
+        }
+    }
+
+    /// Withdraws the NEXT UNSENT queue item into the empty editor (only when
+    /// the composer is empty; accepted/in-flight messages cannot be withdrawn
+    /// because they are already owned by the loop). Returns true when taken.
+    pub fn retrieve_next_queued_steer(&mut self) -> bool {
+        if !self.composer.is_empty() {
+            return false;
+        }
+        let Some(session_id) = self.sessions.active.clone() else {
+            return false;
+        };
+        let Some(head) = self.sessions.known.get(&session_id).and_then(|view| {
+            view.steer_queue
+                .iter()
+                .find(|item| item.state == SteerQueueState::Unsent)
+                .cloned()
+        }) else {
+            return false;
+        };
+        let text = head.text.clone();
+        if let Some(view) = self.sessions.known.get_mut(&session_id) {
+            view.steer_queue
+                .retain(|item| item.local_id != head.local_id);
+        }
+        self.composer.set_text(&text);
+        true
     }
 
     fn run_command(&mut self, content: &str) -> Vec<AppCommand> {
@@ -2011,6 +2409,7 @@ impl App {
         }
         if let Some(view) = self.sessions.known.get_mut(&active) {
             view.transcript.clear_blocks();
+            view.usage_projection = crate::state::session::UsageProjection::default();
             view.scroll = crate::state::session::ScrollState::default();
             view.event_gap = false;
             view.reconcile_inflight = false;
@@ -2198,6 +2597,24 @@ impl App {
         )
     }
 
+    fn request_session_presentation(&mut self, session_id: &SessionId) -> Option<AppCommand> {
+        if !self.can_send_requests() {
+            return None;
+        }
+        let view = self.sessions.known.get_mut(session_id)?;
+        if view.presentation_pending {
+            view.presentation_refresh_pending = true;
+            return None;
+        }
+        view.presentation_pending = true;
+        Some(self.request(
+            RequestKind::SessionPresentation {
+                session_id: session_id.clone(),
+            },
+            |id| OutgoingRequest::session_presentation(id, session_id),
+        ))
+    }
+
     fn pending_history(&self, session_id: &SessionId) -> bool {
         self.pending_requests.values().any(|kind| {
             matches!(kind, RequestKind::History { session_id: pending, .. } if pending == session_id)
@@ -2213,6 +2630,9 @@ impl App {
     }
 
     fn activate_existing_session(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
+        if self.sessions.active.as_ref() != Some(session_id) {
+            ui_actions::clear_selection(self);
+        }
         self.sessions.active = Some(session_id.clone());
         let state_pending = self
             .sessions
@@ -2224,6 +2644,13 @@ impl App {
         } else {
             vec![self.request_session_state(session_id)]
         };
+        if let Some(view) = self.sessions.known.get(session_id) {
+            if view.presentation.is_none() && !view.presentation_pending {
+                if let Some(command) = self.request_session_presentation(session_id) {
+                    commands.push(command);
+                }
+            }
+        }
         let (fetch, gap_revision) = {
             let Some(view) = self.sessions.known.get(session_id) else {
                 return commands;
@@ -2297,6 +2724,7 @@ impl App {
             | RequestKind::UpdateSession { session_id, .. }
             | RequestKind::History { session_id, .. }
             | RequestKind::SessionState { session_id, .. } => Some(session_id),
+            RequestKind::SessionPresentation { session_id } => Some(session_id),
             RequestKind::WaitTurn(turn) | RequestKind::CancelTurn(turn) => Some(&turn.session_id),
             RequestKind::Ping
             | RequestKind::ListModels
@@ -2617,6 +3045,7 @@ impl App {
                 }
                 self.retire_reopened_session(session_id);
                 if self.sessions.active.as_deref() == Some(session_id.as_str()) {
+                    ui_actions::clear_selection(self);
                     self.sessions.active = None;
                 }
                 self.notice(NoticeLevel::Info, format!("Session {session_id} closed."));
@@ -2671,6 +3100,7 @@ impl App {
                     view.closing = false;
                 }
                 if self.sessions.active.as_deref() == Some(session_id.as_str()) {
+                    ui_actions::clear_selection(self);
                     self.sessions.active = None;
                 }
                 self.notice(
@@ -2721,6 +3151,7 @@ impl App {
                 self.sessions.known.remove(session_id);
                 self.sessions.list.retain(|s| &s.session_id != session_id);
                 if self.sessions.active.as_deref() == Some(session_id.as_str()) {
+                    ui_actions::clear_selection(self);
                     self.sessions.active = None;
                 }
                 self.notice(NoticeLevel::Info, format!("Session {session_id} deleted."));
@@ -2781,9 +3212,13 @@ impl App {
         if let Some(info) = listed_info {
             self.upsert_session_list(info);
         }
+        ui_actions::clear_selection(self);
         self.sessions.active = Some(session_id.clone());
 
         commands.push(self.request_session_state(&session_id));
+        if let Some(command) = self.request_session_presentation(&session_id) {
+            commands.push(command);
+        }
 
         let (fetch, gap_revision) = {
             let Some(view) = self.sessions.known.get(&session_id) else {
@@ -2913,8 +3348,16 @@ impl App {
             view.live = None;
             view.unsaved_loop = None;
             view.last_result = None;
+            view.usage_projection = crate::state::session::UsageProjection::default();
             view.last_request = None;
             view.config_update = None;
+            view.presentation = None;
+            view.presentation_pending = false;
+            view.presentation_refresh_pending = false;
+            view.user_timestamps.clear();
+            view.live_user_timestamp = None;
+            view.live_user_time_accepted = false;
+            view.tool_presentations.clear();
             view.completed_steers.clear();
             view.result_unconfirmed = false;
         }
@@ -2958,6 +3401,63 @@ impl App {
                 );
                 Vec::new()
             }
+        }
+    }
+
+    fn on_session_presentation_response(
+        &mut self,
+        session_id: &SessionId,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
+        let parsed = response.parse_session_presentation();
+        // Captured before the refresh closure so the receipt can be reconciled
+        // after the view borrow is released (dropped-event recovery).
+        let receipt = parsed
+            .as_ref()
+            .ok()
+            .and_then(|presentation| {
+                (presentation.session_id == *session_id)
+                    .then(|| presentation.steer_progress.clone())
+            })
+            .flatten();
+        let refresh = {
+            let Some(view) = self.sessions.known.get_mut(session_id) else {
+                return Vec::new();
+            };
+            view.presentation_pending = false;
+            let refresh = view.presentation_refresh_pending;
+            view.presentation_refresh_pending = false;
+            match parsed {
+                Ok(presentation) if presentation.session_id == *session_id => {
+                    view.presentation = Some(presentation);
+                }
+                Ok(_) => self.notice(
+                    NoticeLevel::Warning,
+                    format!(
+                        "session.presentation response does not match requested session {session_id}"
+                    ),
+                ),
+                Err(error) => self.notice(
+                    NoticeLevel::Warning,
+                    format!("failed to fetch presentation for {session_id}: {error}"),
+                ),
+            }
+            refresh
+        };
+        if let Some(progress) = receipt {
+            self.reconcile_steer_receipt(
+                session_id,
+                &progress.loop_id,
+                progress.request_index,
+                progress.applied_count,
+            );
+        }
+        if refresh {
+            self.request_session_presentation(session_id)
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
         }
     }
 
@@ -3210,7 +3710,7 @@ impl App {
             view.transcript.loaded_count += new_items.len();
             view.transcript.next_offset = page.next_offset;
 
-            if let Some(next_offset) = page.next_offset {
+            let next = if let Some(next_offset) = page.next_offset {
                 NextChain::Page {
                     offset: next_offset,
                 }
@@ -3307,6 +3807,14 @@ impl App {
                     .collect();
                 let blocked = view.is_blocked();
                 let persistence_unconfirmed = view.unsaved_loop.is_some();
+                // Terminal-only reconciliation: only a FINISHED loop (its
+                // result observed) may downgrade an in-flight accepted steer;
+                // a mid-loop empty/stale History page never marks NotRecorded
+                // and a receipt race is never downgraded before the loop ends.
+                let terminal = view
+                    .live
+                    .as_ref()
+                    .is_some_and(|live| live.last_result.is_some());
                 if let Some(live) = view.live.as_mut() {
                     for steer in &mut live.pending_steers {
                         if matches!(
@@ -3324,18 +3832,31 @@ impl App {
                                 } else {
                                     PendingSteerState::Persisted
                                 };
-                            } else if steer.state == PendingSteerState::Queued {
+                            } else if steer.state == PendingSteerState::Queued && terminal {
                                 steer.state = if blocked {
                                     PendingSteerState::Unconfirmed
                                 } else {
                                     PendingSteerState::NotRecorded
                                 };
-                            } else if steer.state == PendingSteerState::Sending {
+                            } else if steer.state == PendingSteerState::Sending && terminal {
                                 steer.state = PendingSteerState::Unconfirmed;
                             }
                         }
                     }
                 }
+                // Durable history replaces an applied steer card exactly once
+                // (duplicates consumed one-to-one by text).
+                view.applied_steers.retain(|applied| {
+                    if let Some(position) = persisted_steers
+                        .iter()
+                        .position(|text| text == &applied.text)
+                    {
+                        persisted_steers.remove(position);
+                        false
+                    } else {
+                        true
+                    }
+                });
 
                 // If live turn has finished and is contained in history, take it
                 if view.unsaved_loop.is_none()
@@ -3360,6 +3881,7 @@ impl App {
                                     local_id: steer.local_id,
                                     text: steer.text,
                                     state: steer.state,
+                                    accepted_at: steer.accepted_at,
                                 },
                             );
                         }
@@ -3390,7 +3912,9 @@ impl App {
                 } else {
                     NextChain::Done
                 }
-            }
+            };
+            view.recompute_usage_projection();
+            next
         };
 
         match next {
@@ -3512,6 +4036,11 @@ impl App {
                 event_gap: false,
                 last_result: None,
             });
+            // A fresh loop resumes the local steer queue: receipts reset, and
+            // a paused queue may flow again (the user explicitly started it).
+            view.steer_queue_paused = false;
+            view.steer_receipt = None;
+            view.applied_steers.clear();
             view.transcript
                 .blocks
                 .push(TranscriptBlock::User(UserBlock {
@@ -3564,9 +4093,16 @@ impl App {
             }
         };
         match reference {
-            Some(turn) => vec![self.request(RequestKind::CancelTurn(turn.clone()), |id| {
-                OutgoingRequest::cancel_turn(id, &turn)
-            })],
+            Some(turn) => {
+                // A cancellation pauses the unsent queue: never auto-send an
+                // ambiguous message after an explicit user cancel.
+                if let Some(view) = self.sessions.known.get_mut(session_id) {
+                    view.steer_queue_paused = true;
+                }
+                vec![self.request(RequestKind::CancelTurn(turn.clone()), |id| {
+                    OutgoingRequest::cancel_turn(id, &turn)
+                })]
+            }
             None => Vec::new(),
         }
     }
@@ -3666,6 +4202,8 @@ impl App {
                         }
                         view.result_unconfirmed = false;
                         live.reference = Some(result.turn.clone());
+                        view.live_user_timestamp = result.accepted_at.clone();
+                        view.live_user_time_accepted = true;
                         let pending_user =
                             view.transcript
                                 .blocks
@@ -3676,8 +4214,8 @@ impl App {
                                 });
                         if let Some(card) = pending_user {
                             card.loop_id = Some(result.turn.loop_id.clone());
-                            view.transcript.invalidate();
                         }
+                        view.transcript.invalidate();
                         Plan::Wait {
                             turn: result.turn,
                             cancel: live.cancel_requested,
@@ -3686,16 +4224,44 @@ impl App {
                 }
                 Err(error) => {
                     let is_blocked_err = matches!(&error, crate::protocol::RpcResponseError::Agent(err) if err.code == -32004);
-                    let recovered = if view.is_blocked() || is_blocked_err {
-                        view.live.as_ref().map(|live| live.user_text.clone())
+                    // A fresh-turn handoff whose loop the Agent ALREADY started
+                    // (a TurnStarted event bound the reference) is a PROVEN
+                    // accept: keep the running loop and wait; never abandon an
+                    // accepted turn nor retry its message.
+                    let is_handoff_send = view.steer_queue.iter().any(|item| item.handoff);
+                    if is_handoff_send
+                        && view
+                            .live
+                            .as_ref()
+                            .is_some_and(|live| live.reference.is_some())
+                    {
+                        let turn = view
+                            .live
+                            .as_ref()
+                            .and_then(|live| live.reference.as_ref())
+                            .cloned()
+                            .expect("checked above");
+                        let cancel = view.live.as_ref().is_some_and(|live| live.cancel_requested);
+                        view.transcript.blocks.retain(
+                            |block| !matches!(block, TranscriptBlock::User(card) if card.pending),
+                        );
+                        view.transcript.invalidate();
+                        // The started loop owns the text: drop the queue entry
+                        // exactly like the accepted-Wait path.
+                        view.steer_queue.retain(|item| !item.handoff);
+                        Plan::Wait { turn, cancel }
                     } else {
-                        view.live.take().map(|live| live.user_text)
-                    };
-                    view.transcript.blocks.retain(
-                        |block| !matches!(block, TranscriptBlock::User(card) if card.pending),
-                    );
-                    view.transcript.invalidate();
-                    Plan::Failed { recovered, error }
+                        let recovered = if view.is_blocked() || is_blocked_err {
+                            view.live.as_ref().map(|live| live.user_text.clone())
+                        } else {
+                            view.live.take().map(|live| live.user_text)
+                        };
+                        view.transcript.blocks.retain(
+                            |block| !matches!(block, TranscriptBlock::User(card) if card.pending),
+                        );
+                        view.transcript.invalidate();
+                        Plan::Failed { recovered, error }
+                    }
                 }
             }
         };
@@ -3705,6 +4271,11 @@ impl App {
                     && !matches!(self.connection, ConnectionState::ShuttingDown)
                 {
                     return Vec::new();
+                }
+                // A fresh-turn handoff is now an owned, accepted turn: drop the
+                // queue entry it represented (durable history owns it).
+                if let Some(view) = self.sessions.known.get_mut(session_id) {
+                    view.steer_queue.retain(|item| !item.handoff);
                 }
                 let mut commands = vec![self.request(RequestKind::WaitTurn(turn.clone()), |id| {
                     OutgoingRequest::wait_turn(id, &turn)
@@ -3717,14 +4288,46 @@ impl App {
                 commands
             }
             Plan::Failed { recovered, error } => {
-                if self.sessions.active.as_ref() == Some(session_id) {
-                    if let Some(text) = recovered {
-                        if self.composer.content().trim().is_empty() {
-                            self.composer.set_text(&text);
-                        }
+                // A handoff item already owns its queued text: restoring a
+                // second copy into the composer would duplicate it on the next
+                // Enter. Plain (non-queue) submissions keep the editor restore.
+                let is_handoff_send = self
+                    .sessions
+                    .known
+                    .get(session_id)
+                    .is_some_and(|view| view.steer_queue.iter().any(|item| item.handoff));
+                // A response that reached the Agent but cannot be decoded
+                // (Parse/Malformed) is UNCERTAIN: never auto-resend it.
+                let uncertain = is_handoff_send
+                    && matches!(
+                        &error,
+                        crate::protocol::RpcResponseError::Parse(_)
+                            | crate::protocol::RpcResponseError::Malformed
+                    );
+                if self.sessions.active.as_ref() == Some(session_id) && !is_handoff_send {
+                    if let Some(text) =
+                        recovered.filter(|_| self.composer.content().trim().is_empty())
+                    {
+                        self.composer.set_text(&text);
                     }
                 }
-                self.notice(NoticeLevel::Warning, format!("turn send failed: {error}"));
+                if let Some(view) = self.sessions.known.get_mut(session_id) {
+                    for item in &mut view.steer_queue {
+                        if item.handoff {
+                            item.handoff = false;
+                            if uncertain {
+                                item.state = SteerQueueState::Unconfirmed;
+                            }
+                        }
+                    }
+                    view.steer_queue_paused = true;
+                }
+                let message = if uncertain {
+                    "turn send response could not be decoded; the queued steering is unconfirmed and will not be resubmitted automatically".to_owned()
+                } else {
+                    format!("turn send failed: {error}")
+                };
+                self.notice(NoticeLevel::Warning, message);
                 Vec::new()
             }
             Plan::Mismatch => {
@@ -3785,6 +4388,7 @@ impl App {
         if let Some(result) = result.as_ref() {
             if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
                 view.last_result = Some(result.clone());
+                view.recompute_usage_projection();
             }
         }
 
@@ -3844,6 +4448,7 @@ impl App {
                         });
                     }
                     Self::mark_pending_steers_unconfirmed(view);
+                    view.recompute_usage_projection();
                 }
             }
             return Vec::new();
@@ -3852,7 +4457,11 @@ impl App {
         if duplicate {
             return Vec::new();
         }
-        self.reconcile_after_wait(&turn)
+        let mut commands = self.reconcile_after_wait(&turn);
+        if let Some(command) = self.request_session_presentation(&turn.session_id) {
+            commands.push(command);
+        }
+        commands
     }
 
     fn reconcile_after_wait(&mut self, turn: &TurnRef) -> Vec<AppCommand> {
@@ -3927,6 +4536,7 @@ impl App {
                 self.composer.submit_pushed(&composer_text);
                 self.composer.clear();
             }
+            let mut acked_live = false;
             if let Some(view) = self.sessions.known.get_mut(session_id) {
                 let history_proves_not_recorded =
                     Self::history_proves_steer_not_recorded(view, loop_id, steer_text);
@@ -3943,8 +4553,15 @@ impl App {
                             .iter_mut()
                             .find(|s| s.local_id == steer_id)
                         {
-                            if steer.state == PendingSteerState::Sending {
+                            if let PendingSteerState::Sending = steer.state {
                                 steer.state = PendingSteerState::Queued;
+                                steer.accepted_at = parsed
+                                    .as_ref()
+                                    .ok()
+                                    .and_then(|result| result.accepted_at.clone());
+                                steer.steer_index =
+                                    parsed.as_ref().ok().and_then(|result| result.steer_index);
+                                acked_live = true;
                             } else if steer.state == PendingSteerState::Unconfirmed
                                 && history_proves_not_recorded
                             {
@@ -3959,6 +4576,10 @@ impl App {
                 {
                     if steer.state == PendingSteerState::Sending {
                         steer.state = PendingSteerState::Queued;
+                        steer.accepted_at = parsed
+                            .as_ref()
+                            .ok()
+                            .and_then(|result| result.accepted_at.clone());
                     } else if steer.state == PendingSteerState::Unconfirmed
                         && history_proves_not_recorded
                     {
@@ -3969,11 +4590,21 @@ impl App {
                     }
                 }
             }
+            // The ACK may now pair against an already-observed receipt
+            // (progress can race ahead of the ACK); reconcile by identity.
+            if acked_live {
+                self.try_apply_steer_receipts(session_id);
+            }
             return Vec::new();
         }
 
-        // Steer rejected or failed:
-        // Do NOT clear composer; remove from pending / completed so it cannot preempt history!
+        // Steer rejected or failed. Decide first whether the rejection is
+        // DEFINITIVE (typed agent error / decoded ok:false) or AMBIGUOUS (the
+        // frame could not be decoded and the agent may still have accepted it).
+        let definitive_rejection = !matches!(
+            parsed,
+            Err(RpcResponseError::Parse(_) | RpcResponseError::Malformed)
+        );
         let (queue_full, message) = match parsed {
             Ok(_) => (false, "agent rejected the steering request".to_owned()),
             Err(RpcResponseError::Agent(err)) => {
@@ -3983,23 +4614,37 @@ impl App {
             Err(err) => (false, err.to_string()),
         };
 
-        if let Some(view) = self.sessions.known.get_mut(session_id) {
-            let is_live_matching = view
-                .live
-                .as_ref()
-                .and_then(|l| l.reference.as_ref())
-                .is_some_and(|r| r.loop_id.as_str() == loop_id);
-
-            if is_live_matching {
-                if let Some(live) = view.live.as_mut() {
-                    live.pending_steers.retain(|s| s.local_id != steer_id);
+        // Definite -> remove it from in-flight and restore the exact message
+        // into the unsent queue (FIFO front, paused); ambiguous -> keep the
+        // entry Unconfirmed, paused, and never auto-resend or copy it into the
+        // unsent queue.
+        if definitive_rejection {
+            self.remove_pending_steer(session_id, loop_id, steer_id);
+            self.pause_steer_queue(session_id);
+            self.restore_steer_unsent(session_id, steer_id, steer_text, editor_revision);
+            if self.sessions.active.as_ref() == Some(session_id) && self.composer.is_empty() {
+                self.composer.set_text(steer_text);
+            }
+        } else {
+            self.pause_steer_queue(session_id);
+            if let Some(view) = self.sessions.known.get_mut(session_id) {
+                for steer in view
+                    .live
+                    .as_mut()
+                    .into_iter()
+                    .flat_map(|live| live.pending_steers.iter_mut())
+                {
+                    if steer.local_id == steer_id
+                        && matches!(
+                            steer.state,
+                            PendingSteerState::Sending | PendingSteerState::Queued
+                        )
+                    {
+                        steer.state = PendingSteerState::Unconfirmed;
+                    }
                 }
-            } else {
-                view.completed_steers
-                    .retain(|s| !(s.loop_id == loop_id && s.local_id == steer_id));
             }
         }
-
         if queue_full {
             self.notice(
                 NoticeLevel::Warning,
@@ -4012,6 +4657,72 @@ impl App {
             );
         }
         Vec::new()
+    }
+
+    /// Removes an in-flight steer from the live or completed registry.
+    fn remove_pending_steer(&mut self, session_id: &SessionId, loop_id: &str, steer_id: u64) {
+        let Some(view) = self.sessions.known.get_mut(session_id) else {
+            return;
+        };
+        let is_live_matching = view
+            .live
+            .as_ref()
+            .and_then(|l| l.reference.as_ref())
+            .is_some_and(|r| r.loop_id.as_str() == loop_id);
+        if is_live_matching {
+            if let Some(live) = view.live.as_mut() {
+                live.pending_steers.retain(|s| s.local_id != steer_id);
+            }
+        } else {
+            view.completed_steers
+                .retain(|s| !(s.loop_id == loop_id && s.local_id == steer_id));
+        }
+    }
+
+    /// Restores a definitely-not-accepted steer into the local unsent queue at
+    /// the FIFO front, preserving its local id and text so nothing is dropped
+    /// regardless of the current editor content or active session.
+    fn restore_steer_unsent(
+        &mut self,
+        session_id: &SessionId,
+        steer_id: u64,
+        text: &str,
+        editor_revision: Option<u64>,
+    ) {
+        let Some(view) = self.sessions.known.get_mut(session_id) else {
+            return;
+        };
+        if view
+            .steer_queue
+            .iter()
+            .any(|item| item.local_id == steer_id)
+        {
+            return;
+        }
+        view.steer_queue.insert(
+            0,
+            crate::state::turn::SteerQueueItem {
+                local_id: steer_id,
+                text: text.to_owned(),
+                state: crate::state::turn::SteerQueueState::Unsent,
+                editor_revision,
+                handoff: false,
+            },
+        );
+    }
+
+    fn pause_steer_queue(&mut self, session_id: &SessionId) {
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            view.steer_queue_paused = true;
+        }
+    }
+
+    fn clear_steer_handoffs(&mut self, session_id: &SessionId) {
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            for item in &mut view.steer_queue {
+                item.handoff = false;
+            }
+        }
     }
 
     fn on_cancel_response(&mut self, response: &RpcResponse) -> Vec<AppCommand> {
@@ -4029,6 +4740,7 @@ impl App {
         reasoning: Option<Reasoning>,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
+        let mut refresh_presentation = false;
         match response.parse_session_update() {
             Ok(result) => {
                 let active_revision = result.active_revision;
@@ -4114,6 +4826,7 @@ impl App {
                 } else {
                     self.notice(NoticeLevel::Info, "Updated for next turn");
                 }
+                refresh_presentation = true;
             }
             Err(error) => {
                 let message = error.to_string();
@@ -4148,6 +4861,11 @@ impl App {
                         format!("failed to update session {session_id}: {error}"),
                     );
                 }
+            }
+        }
+        if refresh_presentation {
+            if let Some(command) = self.request_session_presentation(&session_id) {
+                return vec![command];
             }
         }
         Vec::new()
@@ -4194,14 +4912,31 @@ impl App {
                     }
                     recovered
                 };
-                if self.sessions.active.as_ref() == Some(&session_id) {
-                    if let Some(text) = recovered {
-                        if self.composer.content().trim().is_empty() {
-                            self.composer.set_text(&text);
-                        }
+                // A handoff item owns its queued text: only plain (non-queue)
+                // submissions restore the editor (a second copy would
+                // duplicate it on the next Enter).
+                let is_handoff = self
+                    .sessions
+                    .known
+                    .get(&session_id)
+                    .is_some_and(|view| view.steer_queue.iter().any(|item| item.handoff));
+                if self.sessions.active.as_ref() == Some(&session_id) && !is_handoff {
+                    if let Some(text) =
+                        recovered.filter(|_| self.composer.content().trim().is_empty())
+                    {
+                        self.composer.set_text(&text);
                     }
                 }
                 self.notice(NoticeLevel::Warning, format!("turn send failed: {error}"));
+                // The fresh-turn handoff could not be written: keep its queued
+                // entry as Unsent, clear the handoff, and PAUSE (definitive
+                // pre-write failure, so it may only be deliberately re-sent).
+                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    for item in &mut view.steer_queue {
+                        item.handoff = false;
+                    }
+                    view.steer_queue_paused = true;
+                }
             }
             RequestKind::WaitTurn(turn) => {
                 if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
@@ -4217,6 +4952,7 @@ impl App {
                         Self::mark_pending_steers_unconfirmed(view);
                     }
                 }
+                self.clear_steer_handoffs(&turn.session_id);
                 self.notice(
                     NoticeLevel::Warning,
                     format!("turn wait send failed: {error}; result/save unconfirmed"),
@@ -4224,14 +4960,19 @@ impl App {
             }
             RequestKind::SteerTurn {
                 session_id,
+                loop_id,
                 steer_id,
-                ..
+                text,
+                editor_revision,
             } => {
-                if let Some(view) = self.sessions.known.get_mut(&session_id) {
-                    if let Some(live) = view.live.as_mut() {
-                        live.pending_steers.retain(|s| s.local_id != steer_id);
-                    }
-                }
+                // A channel/serialization send failure means the steer was
+                // NEVER written to the Agent (definitively not accepted):
+                // restore it into the local unsent queue (exact FIFO front)
+                // as PAUSED so the message is never dropped, whatever the
+                // editor currently holds.
+                self.remove_pending_steer(&session_id, &loop_id, steer_id);
+                self.restore_steer_unsent(&session_id, steer_id, &text, editor_revision);
+                self.pause_steer_queue(&session_id);
                 self.notice(NoticeLevel::Warning, format!("turn.steer failed: {error}"));
             }
             RequestKind::CancelTurn(_) => {
@@ -4352,6 +5093,17 @@ impl App {
                     );
                 }
             }
+            RequestKind::SessionPresentation { session_id } => {
+                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    view.presentation_pending = false;
+                }
+                if self.connection != ConnectionState::ShuttingDown {
+                    self.notice(
+                        NoticeLevel::Warning,
+                        format!("session presentation request failed for {session_id}: {error}"),
+                    );
+                }
+            }
             RequestKind::Shutdown => {
                 self.notice(
                     NoticeLevel::Warning,
@@ -4428,6 +5180,9 @@ impl App {
         self.pending_requests.clear();
         for view in self.sessions.known.values_mut() {
             Self::mark_pending_steers_unconfirmed(view);
+            // Transport loss pauses the unsent queue: never auto-send or
+            // retry an ambiguous accepted message.
+            view.steer_queue_paused = true;
             if view.unsaved_loop.is_none() {
                 if let Some(live) = view.live.as_mut() {
                     if live.last_result.is_none() {
@@ -4535,6 +5290,9 @@ impl App {
             RequestKind::SessionState { session_id, query } => {
                 self.on_session_state_response(&session_id, query, &response)
             }
+            RequestKind::SessionPresentation { session_id } => {
+                self.on_session_presentation_response(&session_id, &response)
+            }
             RequestKind::History {
                 session_id,
                 offset,
@@ -4613,10 +5371,19 @@ impl App {
             AgentEventWire::RequestStarted { data } => {
                 (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
             }
+            AgentEventWire::RequestUsage { data } => {
+                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
+            }
+            AgentEventWire::SteerProgress { data } => {
+                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
+            }
             AgentEventWire::OutputDelta { data } => {
                 (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
             }
             AgentEventWire::ToolStarted { data } => {
+                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
+            }
+            AgentEventWire::ToolPresentation { data } => {
                 (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
             }
             AgentEventWire::ToolProgress { data } => {
@@ -4692,6 +5459,14 @@ impl App {
             AgentEventWire::TurnStarted { data } => {
                 self.mark_gap(&data.meta);
                 self.adopt_turn_started(&data.turn);
+                // A fresh turn supersedes the previous loop's live per-request
+                // usage rows (they now belong to persisted history/report).
+                if let Some(view) = self.sessions.known.get_mut(&data.turn.session_id) {
+                    view.discard_live_request_usage();
+                }
+                if let Some(command) = self.request_session_presentation(&data.turn.session_id) {
+                    commands.push(command);
+                }
             }
             AgentEventWire::RequestStarted { data } => {
                 self.mark_gap(&data.meta);
@@ -4702,6 +5477,17 @@ impl App {
                     &data.model,
                     data.reasoning,
                 );
+                if let Some(command) = self.request_session_presentation(&data.turn.session_id) {
+                    commands.push(command);
+                }
+            }
+            AgentEventWire::RequestUsage { data } => {
+                self.mark_gap(&data.meta);
+                self.on_request_usage(&data.turn, data.request_index, data.usage);
+            }
+            AgentEventWire::SteerProgress { data } => {
+                self.mark_gap(&data.meta);
+                self.on_steer_progress(&data.turn, data.request_index, data.applied_count);
             }
             AgentEventWire::OutputDelta { data } => {
                 self.mark_gap(&data.meta);
@@ -4714,6 +5500,16 @@ impl App {
                     data.request_index,
                     &data.tool_call_id,
                     &data.tool_name,
+                );
+            }
+            AgentEventWire::ToolPresentation { data } => {
+                self.mark_gap(&data.meta);
+                self.on_tool_presentation(
+                    &data.turn,
+                    data.request_index,
+                    &data.tool_call_id,
+                    &data.tool_name,
+                    data.display,
                 );
             }
             AgentEventWire::ToolProgress { data } => {
@@ -4732,6 +5528,8 @@ impl App {
                     data.request_index,
                     &data.tool_call_id,
                     data.result.outcome,
+                    data.result.content,
+                    data.result.content_truncated,
                 );
             }
             AgentEventWire::InteractionRequested { data } => {
@@ -4869,6 +5667,120 @@ impl App {
         true
     }
 
+    /// Records one real per-request usage row from the Agent's live stream.
+    /// Read-only and best-effort: a dropped or stale event only delays the
+    /// footer hint; the persisted loop total remains the completion source.
+    fn on_request_usage(
+        &mut self,
+        turn: &TurnRef,
+        request_index: u32,
+        usage: crate::protocol::UsageWire,
+    ) {
+        let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
+            return;
+        };
+        // Stale events for a retired loop must not mutate the live view.
+        if Self::is_prior_loop(view, &turn.loop_id) {
+            return;
+        }
+        view.set_live_request_usage(&turn.loop_id, request_index, usage);
+    }
+
+    /// Read-only steering receipt from `steer_progress` (real Model.start):
+    /// records the highest observed applied count and pairs it against ACK
+    /// `steer_index` values (identity, never queue position). Receipts for
+    /// other loops (late/stale after a switch) are ignored.
+    fn on_steer_progress(&mut self, turn: &TurnRef, request_index: u32, applied_count: u64) {
+        {
+            let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
+                return;
+            };
+            let loop_matches = view
+                .live
+                .as_ref()
+                .and_then(|live| live.reference.as_ref())
+                .is_some_and(|reference| reference.loop_id == turn.loop_id);
+            if !loop_matches {
+                return;
+            }
+            // Monotonic: only a higher count advances the cache, keeping the
+            // request_index of the FIRST observation of the current max.
+            let grew = view
+                .steer_receipt
+                .is_none_or(|cached| applied_count > cached.applied_count);
+            if grew {
+                view.steer_receipt = Some(crate::state::turn::SteerReceiptObserved {
+                    request_index,
+                    applied_count,
+                });
+            }
+        }
+        self.try_apply_steer_receipts(&turn.session_id);
+    }
+
+    /// Applies pending accepted entries whose ACK `steer_index` is covered by
+    /// the observed receipt. Identity-paired: never inferred by queue position
+    /// while an entry is Sending; older Agents (index None) hold conservatively
+    /// until terminal History. Applied cards keep the ACK `accepted_at`.
+    fn try_apply_steer_receipts(&mut self, session_id: &SessionId) {
+        let Some(view) = self.sessions.known.get_mut(session_id) else {
+            return;
+        };
+        let Some(receipt) = view.steer_receipt else {
+            return;
+        };
+        let (applied, applied_count) = {
+            let Some(live) = view.live.as_mut() else {
+                return;
+            };
+            let mut applied = Vec::new();
+            let mut remaining = Vec::new();
+            let mut applied_count = 0usize;
+            for steer in live.pending_steers.drain(..) {
+                let covered = matches!(steer.state, PendingSteerState::Queued)
+                    && steer
+                        .steer_index
+                        .is_some_and(|index| index <= receipt.applied_count);
+                if covered {
+                    applied.push(AppliedSteer {
+                        local_id: steer.local_id,
+                        text: steer.text,
+                        accepted_at: steer.accepted_at,
+                        request_index: receipt.request_index,
+                    });
+                    applied_count += 1;
+                } else {
+                    remaining.push(steer);
+                }
+            }
+            live.pending_steers = remaining;
+            (applied, applied_count)
+        };
+        if applied_count == 0 {
+            return;
+        }
+        let view = self.sessions.known.get_mut(session_id).expect("view");
+        for applied in applied {
+            view.applied_steers.push(applied);
+        }
+    }
+
+    /// Legacy entry point used by presentation recovery: cache the receipt,
+    /// then apply whatever the ACK indexes now cover.
+    fn reconcile_steer_receipt(
+        &mut self,
+        session_id: &SessionId,
+        loop_id: &str,
+        request_index: u32,
+        applied_count: u64,
+    ) {
+        let turn = TurnRef {
+            session_id: session_id.clone(),
+            loop_id: loop_id.to_owned(),
+        };
+        self.on_steer_progress(&turn, request_index, applied_count);
+    }
+
     fn on_request_started(
         &mut self,
         turn: &TurnRef,
@@ -4957,8 +5869,14 @@ impl App {
         live.event_gap |= request_missing;
         let request = live.ensure_request_mut(request_index, 0, String::new(), Reasoning::Auto);
         match channel {
-            OutputChannelWire::Text => request.text.push_str(delta),
-            OutputChannelWire::Reasoning => request.reasoning_text.push_str(delta),
+            OutputChannelWire::Text => {
+                request.text.push_str(delta);
+                append_live_part(request, LivePart::Text(delta.to_owned()));
+            }
+            OutputChannelWire::Reasoning => {
+                request.reasoning_text.push_str(delta);
+                append_live_part(request, LivePart::Reasoning(delta.to_owned()));
+            }
         }
     }
 
@@ -4984,21 +5902,52 @@ impl App {
         if request_missing {
             view.event_gap = true;
         }
+        let presentation = view
+            .tool_presentations
+            .get(&ToolKey::new(
+                &turn.session_id,
+                &turn.loop_id,
+                request_index,
+                tool_call_id,
+            ))
+            .cloned();
         let live = view.live.as_mut().expect("live turn was bound");
         live.event_gap |= request_missing;
         let request = live.ensure_request_mut(request_index, 0, String::new(), Reasoning::Auto);
+        if !request
+            .parts
+            .iter()
+            .any(|part| matches!(part, LivePart::Tool { tool_call_id: id } if id == tool_call_id))
+        {
+            request.parts.push(LivePart::Tool {
+                tool_call_id: tool_call_id.to_owned(),
+            });
+        }
         if let Some(tool) = request
             .tools
             .iter_mut()
             .find(|tool| tool.tool_call_id == tool_call_id)
         {
             tool.name = tool_name.to_owned();
+            if let Some(presentation) = &presentation {
+                tool.display = Some(presentation.display.clone());
+                if tool.result.is_none() {
+                    tool.result = presentation.result.clone();
+                    tool.result_truncated = presentation.result_truncated;
+                }
+            }
         } else {
             request.tools.push(LiveTool {
                 tool_call_id: tool_call_id.to_owned(),
                 name: tool_name.to_owned(),
                 status: ToolStatus::Pending,
                 progress: None,
+                display: presentation.as_ref().map(|state| state.display.clone()),
+                result: presentation.as_ref().and_then(|state| state.result.clone()),
+                result_truncated: presentation
+                    .as_ref()
+                    .is_some_and(|state| state.result_truncated),
+                expanded: false,
             });
         }
     }
@@ -5042,6 +5991,15 @@ impl App {
         let live = view.live.as_mut().expect("live turn was bound");
         live.event_gap |= request_missing || tool_missing;
         let request = live.ensure_request_mut(request_index, 0, String::new(), Reasoning::Auto);
+        if !request
+            .parts
+            .iter()
+            .any(|part| matches!(part, LivePart::Tool { tool_call_id: id } if id == tool_call_id))
+        {
+            request.parts.push(LivePart::Tool {
+                tool_call_id: tool_call_id.to_owned(),
+            });
+        }
         let tool = request
             .tools
             .iter_mut()
@@ -5059,6 +6017,10 @@ impl App {
                 name: "(unknown tool)".to_owned(),
                 status: ToolStatus::Running,
                 progress: progress.message.clone(),
+                display: None,
+                result: None,
+                result_truncated: false,
+                expanded: false,
             });
         }
     }
@@ -5069,6 +6031,8 @@ impl App {
         request_index: u32,
         tool_call_id: &str,
         outcome: ToolOutcomeWire,
+        content: Option<String>,
+        content_truncated: bool,
     ) {
         let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
             return;
@@ -5102,20 +6066,232 @@ impl App {
         let live = view.live.as_mut().expect("live turn was bound");
         live.event_gap |= request_missing || tool_missing;
         let request = live.ensure_request_mut(request_index, 0, String::new(), Reasoning::Auto);
+        if !request
+            .parts
+            .iter()
+            .any(|part| matches!(part, LivePart::Tool { tool_call_id: id } if id == tool_call_id))
+        {
+            request.parts.push(LivePart::Tool {
+                tool_call_id: tool_call_id.to_owned(),
+            });
+        }
         if let Some(tool) = request
             .tools
             .iter_mut()
             .find(|tool| tool.tool_call_id == tool_call_id)
         {
             tool.status = tool_outcome_status(outcome);
+            tool.result = content.clone();
+            tool.result_truncated = content_truncated;
         } else {
             request.tools.push(LiveTool {
                 tool_call_id: tool_call_id.to_owned(),
                 name: "(unknown tool)".to_owned(),
                 status: tool_outcome_status(outcome),
                 progress: None,
+                display: None,
+                result: content.clone(),
+                result_truncated: content_truncated,
+                expanded: false,
             });
         }
+        let fallback_name = view
+            .live
+            .as_ref()
+            .and_then(|live| {
+                live.requests
+                    .iter()
+                    .find(|request| request.request_index == request_index)
+            })
+            .and_then(|request| {
+                request
+                    .tools
+                    .iter()
+                    .find(|tool| tool.tool_call_id == tool_call_id)
+            })
+            .map(|tool| tool.name.clone())
+            .unwrap_or_else(|| "(unknown tool)".to_owned());
+        let key = ToolKey::new(&turn.session_id, &turn.loop_id, request_index, tool_call_id);
+        if let Some(presentation) = view.tool_presentations.get_mut(&key) {
+            // A completed ToolPresentation event carries the authoritative
+            // input+result hidden count. If it arrived before ToolFinished,
+            // leave that count intact; the later result event only fills the
+            // result side of the state.
+            presentation.result = content;
+            presentation.result_truncated = content_truncated;
+            presentation.display.truncated |= content_truncated;
+        } else {
+            // Presentation is best effort. A result without its companion
+            // event still gets a safe result-only card instead of losing the
+            // tool from the live/history-shaped view.
+            let hidden_line_count = content
+                .as_deref()
+                .filter(|text| !text.is_empty())
+                .map(|text| text.split('\n').count());
+            view.tool_presentations.insert(
+                key,
+                ToolPresentationState {
+                    display: ToolDisplayWire {
+                        detail: fallback_name,
+                        expanded_input: None,
+                        input_line_count: None,
+                        hidden_line_count,
+                        truncated: content_truncated,
+                    },
+                    result: content,
+                    result_truncated: content_truncated,
+                },
+            );
+        }
+        if view.transcript.blocks.iter().any(|block| {
+            matches!(block,
+            TranscriptBlock::Tool(tool) if tool.loop_id == turn.loop_id
+                && tool.request_index == request_index && tool.tool_call_id == tool_call_id)
+        }) {
+            view.transcript.invalidate();
+        }
+    }
+
+    fn on_tool_presentation(
+        &mut self,
+        turn: &TurnRef,
+        request_index: u32,
+        tool_call_id: &str,
+        tool_name: &str,
+        display: ToolDisplayWire,
+    ) {
+        let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
+            return;
+        };
+        if !Self::bind_live_turn(view, turn) {
+            return;
+        }
+        let key = ToolKey::new(&turn.session_id, &turn.loop_id, request_index, tool_call_id);
+        let existing_result = view
+            .live
+            .as_ref()
+            .and_then(|live| {
+                live.requests
+                    .iter()
+                    .find(|request| request.request_index == request_index)
+            })
+            .and_then(|request| {
+                request
+                    .tools
+                    .iter()
+                    .find(|tool| tool.tool_call_id == tool_call_id)
+            })
+            .map(|tool| (tool.result.clone(), tool.result_truncated));
+        let state = view
+            .tool_presentations
+            .entry(key)
+            .or_insert_with(|| ToolPresentationState {
+                display: display.clone(),
+                result: existing_result
+                    .as_ref()
+                    .and_then(|(result, _)| result.clone()),
+                result_truncated: existing_result
+                    .as_ref()
+                    .is_some_and(|(_, truncated)| *truncated),
+            });
+        state.display = display.clone();
+        let display_for_live = display.clone();
+        let _ = state;
+        if view.transcript.blocks.iter().any(|block| {
+            matches!(block,
+            TranscriptBlock::Tool(tool) if tool.loop_id == turn.loop_id
+                && tool.request_index == request_index && tool.tool_call_id == tool_call_id)
+        }) {
+            view.transcript.invalidate();
+        }
+        if let Some(live) = view.live.as_mut() {
+            if let Some(request) = live
+                .requests
+                .iter_mut()
+                .find(|request| request.request_index == request_index)
+            {
+                if let Some(tool) = request
+                    .tools
+                    .iter_mut()
+                    .find(|tool| tool.tool_call_id == tool_call_id)
+                {
+                    tool.name = tool_name.to_owned();
+                    tool.display = Some(display_for_live);
+                }
+            }
+        }
+    }
+}
+
+fn section_ids_match(
+    left: &crate::state::view::SectionId,
+    right: &crate::state::view::SectionId,
+) -> bool {
+    left.session_id == right.session_id
+        && left.loop_id == right.loop_id
+        && left.request_index == right.request_index
+        && left.kind == right.kind
+        && left.ordinal == right.ordinal
+        && left.tool_call_id == right.tool_call_id
+        && (left.history_index == right.history_index
+            || left.history_index.is_none()
+            || right.history_index.is_none())
+}
+
+fn assistant_parts(assistant: &crate::protocol::AssistantHistoryViewWire) -> Vec<AssistantPart> {
+    if let Some(parts) = &assistant.parts {
+        return parts
+            .iter()
+            .filter_map(|part| match part {
+                AssistantDisplayPartWire::Text { text } if !text.is_empty() => {
+                    Some(AssistantPart::Text(text.clone()))
+                }
+                AssistantDisplayPartWire::Reasoning { text } if !text.is_empty() => {
+                    Some(AssistantPart::Reasoning(text.clone()))
+                }
+                AssistantDisplayPartWire::ToolCall { tool_call_id, name } => {
+                    Some(AssistantPart::ToolCall(
+                        assistant
+                            .tool_calls
+                            .iter()
+                            .find(|call| call.tool_call_id == *tool_call_id)
+                            .cloned()
+                            .unwrap_or_else(|| crate::protocol::ToolCallViewWire {
+                                tool_call_id: tool_call_id.clone(),
+                                name: name.clone(),
+                                call_index: 0,
+                                display: None,
+                            }),
+                    ))
+                }
+                _ => None,
+            })
+            .collect();
+    }
+    let mut parts = Vec::new();
+    if !assistant.reasoning.is_empty() {
+        parts.push(AssistantPart::Reasoning(assistant.reasoning.clone()));
+    }
+    if !assistant.text.is_empty() {
+        parts.push(AssistantPart::Text(assistant.text.clone()));
+    }
+    parts.extend(
+        assistant
+            .tool_calls
+            .iter()
+            .cloned()
+            .map(AssistantPart::ToolCall),
+    );
+    parts
+}
+
+fn append_live_part(request: &mut crate::state::turn::LiveRequest, part: LivePart) {
+    match (request.parts.last_mut(), part) {
+        (Some(LivePart::Text(existing)), LivePart::Text(delta))
+        | (Some(LivePart::Reasoning(existing)), LivePart::Reasoning(delta)) => {
+            existing.push_str(&delta);
+        }
+        (_, part) => request.parts.push(part),
     }
 }
 
@@ -5168,6 +6344,9 @@ fn merge_history_items(view: &mut SessionView, items: &[IndexedHistoryItemWire])
                     card.kind = user.kind;
                     card.text = user.text.clone();
                     card.pending = false;
+                    if let Some(timestamp) = &user.timestamp {
+                        view.user_timestamps.insert(index, timestamp.clone());
+                    }
                     view.transcript.invalidate();
                 } else if !has_item_index(&view.transcript.blocks, index) {
                     view.transcript
@@ -5179,6 +6358,9 @@ fn merge_history_items(view: &mut SessionView, items: &[IndexedHistoryItemWire])
                             text: user.text.clone(),
                             pending: false,
                         }));
+                    if let Some(timestamp) = &user.timestamp {
+                        view.user_timestamps.insert(index, timestamp.clone());
+                    }
                     view.transcript.invalidate();
                 }
             }
@@ -5186,13 +6368,7 @@ fn merge_history_items(view: &mut SessionView, items: &[IndexedHistoryItemWire])
                 if has_item_index(&view.transcript.blocks, index) {
                     continue;
                 }
-                let mut parts = Vec::new();
-                if !assistant.reasoning.is_empty() {
-                    parts.push(AssistantPart::Reasoning(assistant.reasoning.clone()));
-                }
-                if !assistant.text.is_empty() {
-                    parts.push(AssistantPart::Text(assistant.text.clone()));
-                }
+                let parts = assistant_parts(assistant);
                 view.transcript
                     .blocks
                     .push(TranscriptBlock::Assistant(AssistantBlock {
@@ -5208,6 +6384,21 @@ fn merge_history_items(view: &mut SessionView, items: &[IndexedHistoryItemWire])
                         terminal_error: None,
                     }));
                 for call in &assistant.tool_calls {
+                    if let Some(display) = &call.display {
+                        view.tool_presentations.insert(
+                            ToolKey::new(
+                                &view.info.session_id,
+                                &assistant.loop_id,
+                                assistant.request_index,
+                                &call.tool_call_id,
+                            ),
+                            ToolPresentationState {
+                                display: display.clone(),
+                                result: None,
+                                result_truncated: false,
+                            },
+                        );
+                    }
                     view.transcript
                         .blocks
                         .push(TranscriptBlock::Tool(ToolBlock {
@@ -5220,7 +6411,15 @@ fn merge_history_items(view: &mut SessionView, items: &[IndexedHistoryItemWire])
                             outcome: None,
                             live_status: None,
                             progress: None,
-                            expanded: false,
+                            expanded: view
+                                .tool_folds
+                                .get(&ToolKey::new(
+                                    &view.info.session_id,
+                                    &assistant.loop_id,
+                                    assistant.request_index,
+                                    &call.tool_call_id,
+                                ))
+                                .is_some_and(FoldOverride::expanded),
                         }));
                 }
                 view.transcript.invalidate();
@@ -5261,9 +6460,41 @@ fn merge_history_items(view: &mut SessionView, items: &[IndexedHistoryItemWire])
                             outcome: Some(result.outcome),
                             live_status: None,
                             progress: None,
-                            expanded: false,
+                            expanded: view
+                                .tool_folds
+                                .get(&ToolKey::new(
+                                    &view.info.session_id,
+                                    &result.loop_id,
+                                    result.request_index,
+                                    &result.tool_call_id,
+                                ))
+                                .is_some_and(FoldOverride::expanded),
                         }));
                 }
+                let key = ToolKey::new(
+                    &view.info.session_id,
+                    &result.loop_id,
+                    result.request_index,
+                    &result.tool_call_id,
+                );
+                let presentation =
+                    view.tool_presentations
+                        .entry(key)
+                        .or_insert_with(|| ToolPresentationState {
+                            display: ToolDisplayWire {
+                                detail: result.tool_name.clone(),
+                                expanded_input: None,
+                                input_line_count: None,
+                                hidden_line_count: (!result.content.is_empty())
+                                    .then(|| result.content.split('\n').count()),
+                                truncated: result.content_truncated,
+                            },
+                            result: None,
+                            result_truncated: false,
+                        });
+                presentation.result = Some(result.content.clone());
+                presentation.result_truncated = result.content_truncated;
+                presentation.display.truncated |= result.content_truncated;
                 view.transcript.invalidate();
             }
             HistoryItemWire::Summary(summary) => {
@@ -5284,12 +6515,14 @@ fn merge_history_items(view: &mut SessionView, items: &[IndexedHistoryItemWire])
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::MouseEventKind;
     use serde_json::{Value, json};
 
     use super::*;
     use crate::command::AppCommand;
     use crate::event::{AppEvent, RpcEvent};
     use crate::protocol::{AgentEventWire, IncomingFrame, RpcResponse, TurnRef};
+    use crate::state::view::SelectionGranularity;
 
     fn test_app() -> App {
         App::new(PathBuf::from("/project"))
@@ -5490,16 +6723,33 @@ mod tests {
             json!({"session": session_info(session_id)}),
         );
         let requests = take_requests(commands);
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), 3);
         let state_req = requests
             .iter()
             .find(|r| r.method == "session.state")
+            .unwrap();
+        let presentation_req = requests
+            .iter()
+            .find(|r| r.method == "session.presentation")
             .unwrap();
         let history_req = requests
             .iter()
             .find(|r| r.method == "session.history")
             .unwrap();
         take_requests(respond(app, state_req, state_json(session_id, "idle")));
+        take_requests(respond(
+            app,
+            presentation_req,
+            json!({
+                "session_id": session_id,
+                "model_label": null,
+                "git_branch": null,
+                "context": {"tokens": null, "window": null, "percent": null, "kind": "unknown"},
+                "cost_usd": null,
+                "using_subscription": null,
+                "last_loop": null
+            }),
+        ));
         take_requests(respond(
             app,
             history_req,
@@ -5597,7 +6847,7 @@ mod tests {
         assert_eq!(create.method, "session.create");
         let commands = respond(&mut app, create, json!({"session": session_info("ses_1")}));
         let requests = take_requests(commands);
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), 3);
         let state_request = requests
             .iter()
             .find(|r| r.method == "session.state")
@@ -5606,6 +6856,10 @@ mod tests {
             .iter()
             .find(|r| r.method == "session.history")
             .unwrap();
+        let presentation_request = requests
+            .iter()
+            .find(|r| r.method == "session.presentation")
+            .unwrap();
         assert_eq!(app.sessions.active.as_deref(), Some("ses_1"));
         assert!(app.sessions.known["ses_1"].loading);
 
@@ -5613,6 +6867,14 @@ mod tests {
             &mut app,
             state_request,
             state_json("ses_1", "idle"),
+        ));
+        take_requests(respond(
+            &mut app,
+            presentation_request,
+            json!({
+                "session_id": "ses_1",
+                "context": {"kind": "unknown"}
+            }),
         ));
 
         // Page 1 is partial
@@ -5698,10 +6960,16 @@ mod tests {
                 event_gap: false,
                 last_result: None,
             });
+            view.live_user_timestamp = None;
+            view.live_user_time_accepted = false;
         }
 
-        app.composer.set_text("Please correct this direction");
-        let commands = app.submit_composer();
+        // 0.2.4 FIFO: admission is local; the central update advance issues
+        // the single in-flight turn.steer RPC.
+        let commands = app.update(AppEvent::SteerTurn {
+            session_id: "ses_1".into(),
+            text: "Please correct this direction".into(),
+        });
         let requests = take_requests(commands);
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].method, "turn.steer");
@@ -5710,13 +6978,17 @@ mod tests {
         assert_eq!(requests[0].params["text"], "Please correct this direction");
 
         let view = &app.sessions.known["ses_1"];
+        assert!(
+            view.steer_queue.is_empty(),
+            "head admitted then popped for the RPC"
+        );
         let live = view.live.as_ref().unwrap();
         assert_eq!(live.pending_steers.len(), 1);
         assert_eq!(live.pending_steers[0].state, PendingSteerState::Sending);
     }
 
     #[test]
-    fn composer_clears_on_successful_steer_acknowledgment() {
+    fn composer_clears_only_on_matching_submit_and_late_ack_never_clears_new_content() {
         let mut app = test_app();
         ready(&mut app);
         open_session(&mut app, "ses_1");
@@ -5746,18 +7018,24 @@ mod tests {
             });
         }
 
+        // Enter path (carries the composer revision): the matching submit
+        // clears the editor at admission, and the same call issues the single
+        // in-flight steer via the central FIFO advance.
         app.composer.set_text("Steer text");
-        let reqs = take_requests(app.submit_composer());
+        let commands = app.submit_composer();
+        let reqs = take_requests(commands);
         assert_eq!(reqs.len(), 1);
-        assert_eq!(app.composer.content(), "Steer text");
+        assert_eq!(reqs[0].method, "turn.steer");
+        assert_eq!(app.composer.content(), "", "cleared at admission");
 
-        respond(&mut app, &reqs[0], json!({"ok": true}));
-        assert!(app.composer.content().is_empty());
+        // A late ACK must never clear NEW editor content typed meanwhile.
+        app.composer.set_text("New content");
+        respond(&mut app, &reqs[0], json!({"ok": true, "steer_index": 1}));
+        assert_eq!(app.composer.content(), "New content");
         let view = &app.sessions.known["ses_1"];
-        assert_eq!(
-            view.live.as_ref().unwrap().pending_steers[0].state,
-            PendingSteerState::Queued
-        );
+        let steer = &view.live.as_ref().unwrap().pending_steers[0];
+        assert_eq!(steer.state, PendingSteerState::Queued);
+        assert_eq!(steer.steer_index, Some(1));
     }
 
     #[test]
@@ -5791,14 +7069,26 @@ mod tests {
             });
         }
 
+        // Direct steer (no editor revision): text stays in the composer; a
+        // rejection pauses the queue and shows a warning.
         app.composer.set_text("Steer text");
-        let reqs = take_requests(app.submit_composer());
+        let commands = app.update(AppEvent::SteerTurn {
+            session_id: "ses_1".into(),
+            text: "Steer text".into(),
+        });
+        let reqs = take_requests(commands);
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(app.composer.content(), "Steer text");
         respond_error(&mut app, &reqs[0], -32016, "steer queue full");
         assert_eq!(app.composer.content(), "Steer text");
 
         let notice = app.notices.back().unwrap();
         assert_eq!(notice.level, NoticeLevel::Warning);
         assert!(notice.text.contains("queue is full"));
+        assert!(
+            app.sessions.known["ses_1"].steer_queue_paused,
+            "rejection pauses the unsent queue"
+        );
     }
 
     #[test]
@@ -5957,6 +7247,113 @@ mod tests {
     }
 
     #[test]
+    fn request_usage_event_populates_live_projection_by_request_index() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        let turn = make_turn("ses_1", "loop_fallback");
+        app.sessions.known.get_mut("ses_1").unwrap().live = Some(LiveLoop {
+            reference: Some(turn.clone()),
+            local_submission: LocalSubmissionId(1),
+            user_text: "run it".to_owned(),
+            requests: Vec::new(),
+            pending_steers: Vec::new(),
+            waiting: false,
+            cancel_requested: false,
+            event_gap: false,
+            last_result: None,
+        });
+
+        app.update(event(wire_event(json!({
+            "type": "request_usage",
+            "data": {
+                "turn": turn_ref_json("ses_1", "loop_fallback"),
+                "request_index": 0,
+                "usage": {
+                    "input_tokens": 42,
+                    "output_tokens": 7,
+                    "reasoning_tokens": 2,
+                    "cache_read_tokens": 0,
+                    "cache_write_tokens": 0
+                },
+                "meta": meta_json("ses_1", 0)
+            }
+        }))));
+
+        let view = &app.sessions.known["ses_1"];
+        assert_eq!(
+            view.live_request_usage
+                .get(&("loop_fallback".to_owned(), 0))
+                .map(|usage| usage.input_tokens),
+            Some(Some(42)),
+            "the reported request usage must land in the live map"
+        );
+        assert_eq!(
+            view.usage_projection.usage.input_tokens,
+            Some(42),
+            "the footer projection must show the reported usage, not a fake zero"
+        );
+        assert_eq!(
+            view.usage_projection.completeness,
+            crate::state::session::UsageCompleteness::Partial
+        );
+    }
+
+    #[test]
+    fn tool_result_without_presentation_gets_a_safe_fallback() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        let turn = make_turn("ses_1", "loop_fallback");
+        app.sessions.known.get_mut("ses_1").unwrap().live = Some(LiveLoop {
+            reference: Some(turn.clone()),
+            local_submission: LocalSubmissionId(1),
+            user_text: "run it".to_owned(),
+            requests: Vec::new(),
+            pending_steers: Vec::new(),
+            waiting: false,
+            cancel_requested: false,
+            event_gap: false,
+            last_result: None,
+        });
+
+        app.update(event(wire_event(json!({
+            "type": "tool_started",
+            "data": {
+                "turn": turn_ref_json("ses_1", "loop_fallback"),
+                "request_index": 0,
+                "tool_call_id": "call_fallback",
+                "tool_name": "read",
+                "meta": meta_json("ses_1", 0)
+            }
+        }))));
+        app.update(event(wire_event(json!({
+            "type": "tool_finished",
+            "data": {
+                "turn": turn_ref_json("ses_1", "loop_fallback"),
+                "request_index": 0,
+                "tool_call_id": "call_fallback",
+                "result": {
+                    "outcome": "success",
+                    "content_bytes": 3,
+                    "content": "a\nb",
+                    "content_truncated": false
+                },
+                "meta": meta_json("ses_1", 0)
+            }
+        }))));
+
+        let view = &app.sessions.known["ses_1"];
+        let presentation =
+            &view.tool_presentations[&ToolKey::new("ses_1", "loop_fallback", 0, "call_fallback")];
+        assert_eq!(presentation.display.detail, "read");
+        assert_eq!(presentation.display.hidden_line_count, Some(2));
+        assert_eq!(presentation.result.as_deref(), Some("a\nb"));
+    }
+
+    #[test]
     fn history_merges_user_assistant_tool_summary_without_synthetic_terminals() {
         let mut app = test_app();
         ready(&mut app);
@@ -5983,5 +7380,1143 @@ mod tests {
         let view = &app.sessions.known["ses_1"];
         assert_eq!(view.transcript.blocks.len(), 4); // user, assistant, orphan tool_result, summary
         assert!(view.transcript.blocks.iter().all(|b| b.index().is_some()));
+    }
+
+    #[test]
+    fn wrapped_editor_vertical_motion_uses_visual_rows_and_preserves_history_edges() {
+        let mut app = test_app();
+        let text = "x".repeat(90);
+        app.composer.set_text(&text);
+        app.composer.submit_pushed("old message");
+
+        app.apply_action(crate::keymap::Action::CursorMove(EditorCursor::Up));
+        assert_eq!(app.composer.cursor(), (0, 12));
+        app.apply_action(crate::keymap::Action::CursorMove(EditorCursor::Up));
+        assert_eq!(app.composer.content(), text);
+        assert_eq!(app.composer.cursor(), (0, 12));
+
+        app.composer.move_to(0, 0);
+        app.apply_action(crate::keymap::Action::CursorMove(EditorCursor::Up));
+        assert_eq!(app.composer.content(), "old message");
+    }
+
+    #[test]
+    fn slash_completion_matches_native_trigger_and_selection_rules() {
+        let mut app = test_app();
+        app.composer.set_text(" /re");
+        ui_actions::refresh_slash_completion(&mut app);
+        assert!(app.slash_completion.is_none());
+
+        app.composer.set_text("/re");
+        ui_actions::refresh_slash_completion(&mut app);
+        let completion = app.slash_completion.as_ref().expect("slash popup");
+        assert_eq!(completion.start, 0);
+        assert_eq!(completion.end, 3);
+        assert!(completion.items.iter().any(|item| item == "/resume"));
+        assert_eq!(completion.items[completion.selected], "/resume");
+
+        ui_actions::accept_slash_completion(&mut app);
+        assert_eq!(app.composer.content(), "/resume ");
+        assert!(app.slash_completion.is_none());
+
+        app.composer.set_text("/zzz");
+        ui_actions::refresh_slash_completion(&mut app);
+        assert!(app.slash_completion.is_none());
+    }
+
+    #[test]
+    fn enter_accepts_a_skill_completion_without_submitting() {
+        let mut app = test_app();
+        app.composer.set_text("/ski");
+        app.slash_completion = Some(SlashCompletionState {
+            start: 0,
+            end: 4,
+            items: vec!["/skill:web-access".to_owned()],
+            selected: 0,
+        });
+
+        let commands = app.apply_action(crate::keymap::Action::CompletionAcceptAndSubmit);
+
+        assert!(commands.is_empty());
+        assert_eq!(app.composer.content(), "/skill:web-access ");
+        assert!(app.slash_completion.is_none());
+    }
+
+    #[test]
+    fn editor_click_and_drag_use_visual_cells_and_copy_the_selected_text() {
+        let mut app = test_app();
+        app.composer
+            .set_text("abcdefghijklmnopqrstuvwxyz 0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+
+        let click = |kind| {
+            CrosstermEvent::Mouse(crossterm::event::MouseEvent {
+                kind,
+                column: 14,
+                row: 20,
+                modifiers: crossterm::event::KeyModifiers::empty(),
+            })
+        };
+        app.update(AppEvent::Terminal(click(MouseEventKind::Down(
+            crossterm::event::MouseButton::Left,
+        ))));
+        app.update(AppEvent::Terminal(click(MouseEventKind::Up(
+            crossterm::event::MouseButton::Left,
+        ))));
+        assert_eq!(app.composer.cursor(), (0, 12));
+
+        app.composer.set_text("alpha select omega");
+        let mouse = |kind, column| {
+            CrosstermEvent::Mouse(crossterm::event::MouseEvent {
+                kind,
+                column,
+                row: 20,
+                modifiers: crossterm::event::KeyModifiers::empty(),
+            })
+        };
+        app.update(AppEvent::Terminal(mouse(
+            MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            8,
+        )));
+        app.update(AppEvent::Terminal(mouse(
+            MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+            13,
+        )));
+        let commands = app.update(AppEvent::Terminal(mouse(
+            MouseEventKind::Up(crossterm::event::MouseButton::Left),
+            13,
+        )));
+        assert!(matches!(
+            commands.as_slice(),
+            [AppCommand::CopySelection(text)] if text.as_str() == "select"
+        ));
+    }
+
+    #[test]
+    fn paste_normalization_matches_the_native_editor_without_changing_submit_authority() {
+        let mut app = test_app();
+        ui_actions::handle_paste(&mut app, "word\t/x\r\ny\u{1}".to_owned());
+        assert_eq!(app.composer.content(), "word    /x\ny");
+
+        app.composer.set_text("word");
+        ui_actions::handle_paste(&mut app, "/x".to_owned());
+        assert_eq!(app.composer.content(), "word /x");
+    }
+
+    #[test]
+    fn selection_auto_scroll_stops_at_both_transcript_limits() {
+        let mut app = crate::ui::testapp::new_output_marker(ThemeKind::Dark);
+        app.terminal_size = (80, 24);
+        let screen =
+            crate::ui::layout::screen_layout(&app, ratatui::layout::Rect::new(0, 0, 80, 24));
+        let prepared = crate::ui::transcript::prepare_conversation(&app, screen.content.width);
+        let total = prepared.total_rows();
+        let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
+        assert!(total > visible);
+        app.viewport = (total, visible);
+
+        let section = prepared.sections.first().expect("transcript section");
+        let point = SelectionPoint {
+            row: section.rows.start,
+            column: section.content_columns.start,
+            section_id: Some(section.id.clone()),
+            section_row: 0,
+        };
+        app.selection = Some(ConversationSelection {
+            session_id: "ses_1".to_owned(),
+            anchor: point.clone(),
+            focus: point,
+            granularity: SelectionGranularity::Character,
+            dragged: true,
+        });
+        app.selection_drag = Some(SelectionDrag {
+            session_id: "ses_1".to_owned(),
+            column: screen.content.x,
+            row: screen.transcript.bottom().saturating_sub(1),
+            initial: None,
+        });
+
+        app.active_session_mut().unwrap().scroll.follow_tail = false;
+        app.active_session_mut().unwrap().scroll.offset = total - visible;
+        ui_actions::auto_scroll_selection(&mut app);
+        assert_eq!(
+            app.active_view().unwrap().scroll.offset,
+            total - visible,
+            "selection does not jump past the lower limit"
+        );
+        assert!(app.selection_drag.is_none());
+
+        app.selection_drag = Some(SelectionDrag {
+            session_id: "ses_1".to_owned(),
+            column: screen.content.x,
+            row: screen.transcript.y,
+            initial: None,
+        });
+        app.active_session_mut().unwrap().scroll.offset = 0;
+        ui_actions::auto_scroll_selection(&mut app);
+        assert_eq!(app.active_view().unwrap().scroll.offset, 0);
+        assert!(app.selection_drag.is_none());
+    }
+
+    #[test]
+    fn clipboard_feedback_retries_after_failure_and_expires_after_1800ms() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let elapsed = Arc::new(AtomicU64::new(0));
+        let clock = Arc::clone(&elapsed);
+        let base = Instant::now();
+        let mut app = App::with_monotonic_clock(PathBuf::from("/project"), move || {
+            base + Duration::from_millis(clock.load(Ordering::Relaxed))
+        });
+
+        app.update(AppEvent::ClipboardResult {
+            success: false,
+            error: Some("copy failed: unavailable".to_owned()),
+        });
+        assert!(!app.selection_copied());
+        assert!(
+            app.notices()
+                .iter()
+                .any(|notice| notice.text.contains("copy failed"))
+        );
+
+        app.update(AppEvent::ClipboardResult {
+            success: true,
+            error: None,
+        });
+        assert!(app.selection_copied());
+        elapsed.store(1_799, Ordering::Relaxed);
+        app.update(AppEvent::Tick);
+        assert!(app.selection_copied());
+        elapsed.store(1_800, Ordering::Relaxed);
+        app.update(AppEvent::Tick);
+        assert!(!app.selection_copied());
+    }
+
+    #[test]
+    fn scrollbar_drag_requires_release_and_cancels_on_focus_or_resize() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let elapsed = Arc::new(AtomicU64::new(0));
+        let clock = Arc::clone(&elapsed);
+        let base = Instant::now();
+        let mut app = crate::ui::testapp::tools(ThemeKind::Dark);
+        app.monotonic_now =
+            Arc::new(move || base + Duration::from_millis(clock.load(Ordering::Relaxed)));
+        app.terminal_size = (80, 24);
+        let screen =
+            crate::ui::layout::screen_layout(&app, ratatui::layout::Rect::new(0, 0, 80, 24));
+        let prepared = crate::ui::transcript::prepare_conversation(&app, screen.content.width);
+        let total = prepared.total_rows();
+        let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
+        let current = app.active_view().map_or(0, |view| {
+            if view.scroll.follow_tail {
+                total.saturating_sub(visible)
+            } else {
+                view.scroll.offset
+            }
+        });
+        let geometry =
+            crate::ui::scrollbar::geometry(screen.transcript, total, visible.max(1), current)
+                .expect("overflowing transcript has a scrollbar");
+
+        assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
+        app.update_scrollbar_drag((geometry.track_top + geometry.max_thumb_start / 2) as u16);
+        let preview = app
+            .scrollbar_preview_offset("ses_1")
+            .expect("preview offset");
+        let committed = (
+            app.active_view().unwrap().scroll.offset,
+            app.active_view().unwrap().scroll.follow_tail,
+        );
+        assert_eq!(app.active_view().unwrap().scroll.offset, 0);
+        elapsed.store(999, Ordering::Relaxed);
+        app.update(AppEvent::Tick);
+        assert!(app.scrollbar_preview_offset("ses_1").is_some());
+        elapsed.store(1_000, Ordering::Relaxed);
+        app.update(AppEvent::Tick);
+        assert!(app.scrollbar_preview_offset("ses_1").is_some());
+        assert_eq!(
+            (
+                app.active_view().unwrap().scroll.offset,
+                app.active_view().unwrap().scroll.follow_tail,
+            ),
+            committed
+        );
+
+        app.finish_scrollbar_drag((geometry.track_top + geometry.max_thumb_start / 2) as u16);
+        assert!(app.scrollbar_preview_offset("ses_1").is_none());
+        assert_eq!(app.active_view().unwrap().scroll.offset, preview);
+
+        let view = app.active_view().unwrap();
+        let current = if view.scroll.follow_tail {
+            total.saturating_sub(visible)
+        } else {
+            view.scroll.offset
+        };
+        let geometry =
+            crate::ui::scrollbar::geometry(screen.transcript, total, visible.max(1), current)
+                .expect("scrollbar remains available");
+        assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
+        app.update_scrollbar_drag((geometry.track_top + geometry.max_thumb_start) as u16);
+        app.update(AppEvent::Terminal(CrosstermEvent::FocusLost));
+        assert!(app.scrollbar_preview_offset("ses_1").is_none());
+        assert_eq!(
+            (
+                app.active_view().unwrap().scroll.offset,
+                app.active_view().unwrap().scroll.follow_tail,
+            ),
+            (preview, false)
+        );
+
+        assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
+        app.update_scrollbar_drag((geometry.track_top + geometry.max_thumb_start) as u16);
+        app.update(AppEvent::TerminalSize {
+            width: 81,
+            height: 24,
+        });
+        assert!(app.scrollbar_preview_offset("ses_1").is_none());
+        assert_eq!(
+            (
+                app.active_view().unwrap().scroll.offset,
+                app.active_view().unwrap().scroll.follow_tail,
+            ),
+            (preview, false)
+        );
+    }
+
+    #[test]
+    fn scrollbar_thumb_interpolates_for_90ms_without_changing_content_scroll() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let elapsed = Arc::new(AtomicU64::new(0));
+        let clock = Arc::clone(&elapsed);
+        let base = Instant::now();
+        let mut app = crate::ui::testapp::tools(ThemeKind::Dark);
+        app.monotonic_now =
+            Arc::new(move || base + Duration::from_millis(clock.load(Ordering::Relaxed)));
+        app.terminal_size = (80, 24);
+        let screen =
+            crate::ui::layout::screen_layout(&app, ratatui::layout::Rect::new(0, 0, 80, 24));
+        let prepared = crate::ui::transcript::prepare_conversation(&app, screen.content.width);
+        let total = prepared.total_rows();
+        let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
+        let current = total.saturating_sub(visible);
+        let geometry =
+            crate::ui::scrollbar::geometry(screen.transcript, total, visible.max(1), current)
+                .expect("overflowing transcript has a scrollbar");
+        let initial = geometry.thumb_top;
+        let target_row = geometry.track_top;
+
+        assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16,));
+        app.update_scrollbar_drag(target_row as u16);
+        let target = crate::ui::scrollbar::thumb_top_for_scroll(
+            geometry,
+            app.scrollbar_preview_offset("ses_1").unwrap(),
+        );
+        elapsed.store(45, Ordering::Relaxed);
+        let middle = app
+            .scrollbar_preview_thumb_top("ses_1", geometry)
+            .expect("animated preview");
+        assert!(middle < initial);
+        assert!(middle > target);
+        assert_eq!(app.active_view().unwrap().scroll.offset, 0);
+
+        elapsed.store(90, Ordering::Relaxed);
+        assert_eq!(
+            app.scrollbar_preview_thumb_top("ses_1", geometry),
+            Some(target)
+        );
+    }
+
+    #[test]
+    fn scrollbar_wheel_input_cancels_an_uncommitted_drag() {
+        let mut app = crate::ui::testapp::tools(ThemeKind::Dark);
+        app.terminal_size = (80, 24);
+        let screen =
+            crate::ui::layout::screen_layout(&app, ratatui::layout::Rect::new(0, 0, 80, 24));
+        let prepared = crate::ui::transcript::prepare_conversation(&app, screen.content.width);
+        let total = prepared.total_rows();
+        let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
+        let current = total.saturating_sub(visible);
+        let geometry =
+            crate::ui::scrollbar::geometry(screen.transcript, total, visible.max(1), current)
+                .expect("overflowing transcript has a scrollbar");
+
+        assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
+        app.update(AppEvent::Terminal(CrosstermEvent::Mouse(
+            crossterm::event::MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                column: geometry.column as u16,
+                row: geometry.thumb_top as u16,
+                modifiers: crossterm::event::KeyModifiers::empty(),
+            },
+        )));
+        assert!(
+            app.scrollbar_preview_offset("ses_1").is_none(),
+            "wheel input must not leave a stale drag to be committed by a later release"
+        );
+    }
+
+    #[test]
+    fn rail14_link_and_overlay_clicks_never_fold_while_plain_click_toggles() {
+        use crossterm::event::MouseEvent;
+
+        fn mouse(kind: MouseEventKind, column: u16, row: u16) -> CrosstermEvent {
+            CrosstermEvent::Mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: crossterm::event::KeyModifiers::empty(),
+            })
+        }
+
+        let mut app =
+            crate::ui::testapp::open_empty(ThemeKind::Dark, "ses_1", Some("Task"), "high");
+        app.terminal_size = (100, 30);
+        let assistant = json!({
+            "index": 1,
+            "item": {
+                "type": "assistant",
+                "data": {
+                    "loop_id": "loop_1",
+                    "request_index": 0,
+                    "model": "deep",
+                    "reasoning_level": "high",
+                    "text": "See [docs](https://example.com/doc) then read.",
+                    "reasoning": "",
+                    "tool_calls": [{"tool_call_id": "call-1", "name": "read", "call_index": 0}],
+                    "usage": {},
+                    "finish_reason": "tool_calls"
+                }
+            }
+        });
+        let holes = take_requests(app.clear_transcript());
+        respond(
+            &mut app,
+            &holes[0],
+            history_page_json(
+                vec![
+                    user_item(0, "loop_1", "run the tools"),
+                    assistant,
+                    tool_result_item(2, "loop_1", "call-1", "read", "success", "one two three"),
+                ],
+                None,
+                3,
+            ),
+        );
+
+        let width = app.terminal_content_width();
+        let prepared = crate::ui::transcript::prepare_conversation(&app, width);
+        let theme = crate::theme::Theme::for_kind(ThemeKind::Dark);
+        let screen = crate::ui::layout::screen_layout(
+            &app,
+            ratatui::layout::Rect {
+                x: 0,
+                y: 0,
+                width: app.terminal_size.0,
+                height: app.terminal_size.1,
+            },
+        );
+        let content_x = screen.content.x as usize;
+
+        let mut link_cell = None;
+        for (row, line) in prepared.lines.iter().enumerate() {
+            let mut cursor = 0usize;
+            for span in &line.spans {
+                let start = cursor;
+                cursor += unicode_width::UnicodeWidthStr::width(span.content.as_ref());
+                if span.style.fg == Some(theme.md_link) && span.content.as_ref().contains("docs") {
+                    link_cell = Some((row, start));
+                }
+            }
+        }
+        let (link_row, link_col) = link_cell.expect("markdown link cell rendered");
+        let link_col_terminal = (content_x + link_col) as u16;
+        assert!(
+            app.pressed_cell_is_link(link_col_terminal, link_row as u16),
+            "link cell must be detected as a press-on-link"
+        );
+
+        let tool_section = prepared
+            .sections
+            .iter()
+            .find(|section| section.id.kind == crate::state::view::SectionKind::Tool)
+            .expect("tool section");
+        let tool_row = tool_section.rows.start + 1;
+        let tool_col_terminal = (content_x + tool_section.content_columns.start) as u16;
+        assert!(!app.pressed_cell_is_link(tool_col_terminal, tool_row as u16));
+
+        // Plain single click on a collapsible tool card toggles its fold.
+        app.update(AppEvent::Terminal(mouse(
+            MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            tool_col_terminal,
+            tool_row as u16,
+        )));
+        app.update(AppEvent::Terminal(mouse(
+            MouseEventKind::Up(crossterm::event::MouseButton::Left),
+            tool_col_terminal,
+            tool_row as u16,
+        )));
+        let folds_after_plain = app.sessions.known["ses_1"].tool_folds.len();
+        assert_eq!(folds_after_plain, 1, "plain click must record a tool fold");
+
+        // Clicking the link cell records the pressedUrl guard and leaves the
+        // fold registry untouched (RAIL-14 link click cannot fold).
+        app.update(AppEvent::Terminal(mouse(
+            MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            link_col_terminal,
+            link_row as u16,
+        )));
+        assert!(app.mouse_pressed_on_link, "link press must set the guard");
+        app.update(AppEvent::Terminal(mouse(
+            MouseEventKind::Up(crossterm::event::MouseButton::Left),
+            link_col_terminal,
+            link_row as u16,
+        )));
+        assert_eq!(
+            app.sessions.known["ses_1"].tool_folds.len(),
+            folds_after_plain,
+            "link click must not fold a section"
+        );
+
+        // Double-click selects a word and copies it instead of folding. The
+        // click target is a non-collapsible assistant row so no fold toggle can
+        // interleave (RAIL-14 selectionInitialRange guard).
+        let assistant_row = prepared
+            .copy_ranges
+            .iter()
+            .find(|range| range.text.contains("then read"))
+            .map(|range| (range.row, range.columns.start + 1))
+            .expect("assistant text row");
+        let (assistant_row, assistant_col) = assistant_row;
+        let assistant_col_terminal = (content_x + assistant_col) as u16;
+        let before_word = app.sessions.known["ses_1"].tool_folds.len();
+        // First click: plain selection, no copy.
+        app.update(AppEvent::Terminal(mouse(
+            MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            assistant_col_terminal,
+            assistant_row as u16,
+        )));
+        app.update(AppEvent::Terminal(mouse(
+            MouseEventKind::Up(crossterm::event::MouseButton::Left),
+            assistant_col_terminal,
+            assistant_row as u16,
+        )));
+        // Second click at the same cell upgrades to a word selection that
+        // copies and never folds.
+        app.update(AppEvent::Terminal(mouse(
+            MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            assistant_col_terminal,
+            assistant_row as u16,
+        )));
+        let commands = app.update(AppEvent::Terminal(mouse(
+            MouseEventKind::Up(crossterm::event::MouseButton::Left),
+            assistant_col_terminal,
+            assistant_row as u16,
+        )));
+        assert!(matches!(
+            commands.as_slice(),
+            [AppCommand::CopySelection(_)]
+        ));
+        assert_eq!(
+            app.sessions.known["ses_1"].tool_folds.len(),
+            before_word,
+            "word-selection clicks must never fold"
+        );
+
+        // While an overlay (model selector) is open, a click on the same tool
+        // card row is routed to the selector and cannot fold either.
+        app.update(AppEvent::OpenModelSelector);
+        assert!(app.selector_state().is_some());
+        app.update(AppEvent::Terminal(mouse(
+            MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            tool_col_terminal,
+            tool_row as u16,
+        )));
+        app.update(AppEvent::Terminal(mouse(
+            MouseEventKind::Up(crossterm::event::MouseButton::Left),
+            tool_col_terminal,
+            tool_row as u16,
+        )));
+        assert_eq!(
+            app.sessions.known["ses_1"].tool_folds.len(),
+            before_word,
+            "overlay-open click must not fold"
+        );
+    }
+
+    #[test]
+    fn rail14_link_geometry_covers_code_and_bold_links_but_not_plain_text() {
+        use crossterm::event::MouseEvent;
+
+        fn mouse_down(column: u16, row: u16) -> CrosstermEvent {
+            CrosstermEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                column,
+                row,
+                modifiers: crossterm::event::KeyModifiers::empty(),
+            })
+        }
+
+        let mut app =
+            crate::ui::testapp::open_empty(ThemeKind::Dark, "ses_1", Some("Task"), "high");
+        app.terminal_size = (120, 30);
+        let assistant = json!({
+            "index": 1,
+            "item": {
+                "type": "assistant",
+                "data": {
+                    "loop_id": "loop_1",
+                    "request_index": 0,
+                    "model": "deep",
+                    "reasoning_level": "high",
+                    "text": "See [`inline`](https://e.com/code) and **bold [link](https://e.com/b)** and plain.",
+                    "reasoning": "",
+                    "tool_calls": [{"tool_call_id": "call-1", "name": "read", "call_index": 0}],
+                    "usage": {},
+                    "finish_reason": "tool_calls"
+                }
+            }
+        });
+        let holes = take_requests(app.clear_transcript());
+        respond(
+            &mut app,
+            &holes[0],
+            history_page_json(
+                vec![
+                    user_item(0, "loop_1", "run"),
+                    assistant,
+                    tool_result_item(2, "loop_1", "call-1", "read", "success", "one two three"),
+                ],
+                None,
+                3,
+            ),
+        );
+
+        let width = app.terminal_content_width();
+        let prepared = crate::ui::transcript::prepare_conversation(&app, width);
+        let screen = crate::ui::layout::screen_layout(
+            &app,
+            ratatui::layout::Rect {
+                x: 0,
+                y: 0,
+                width: app.terminal_size.0,
+                height: app.terminal_size.1,
+            },
+        );
+        let content_x = screen.content.x as usize;
+        let text_row = prepared
+            .copy_ranges
+            .iter()
+            .find(|range| range.text.contains("and plain"))
+            .map(|range| range.row)
+            .expect("assistant text row");
+
+        fn cell_of(line: &ratatui::text::Line<'static>, needle: &str) -> usize {
+            line.spans
+                .iter()
+                .scan(0usize, |cursor, span| {
+                    let start = *cursor;
+                    *cursor += unicode_width::UnicodeWidthStr::width(span.content.as_ref());
+                    Some((start, span.content.as_ref()))
+                })
+                .find(|(_, text)| text.contains(needle))
+                .map(|(start, _)| start)
+                .expect("span containing the needle")
+        }
+
+        // Inline-code link cells and bold-link cells are all links even though
+        // `inline` is painted in the inline-code color, not md_link.
+        for needle in ["inline", "link", "e.com/code"] {
+            let cell = cell_of(&prepared.lines[text_row], needle);
+            assert!(
+                app.pressed_cell_is_link((content_x + cell) as u16, text_row as u16),
+                "link cell for {needle:?} must be detected"
+            );
+        }
+
+        // Plain prose is not a link cell, so a press there cannot fold and the
+        // guard stays off (no same-colored false positive).
+        let plain_cell = cell_of(&prepared.lines[text_row], "plain");
+        assert!(
+            !app.pressed_cell_is_link((content_x + plain_cell) as u16, text_row as u16),
+            "plain prose must not be treated as a link"
+        );
+        let folds_before = app.sessions.known["ses_1"].tool_folds.len();
+        app.update(AppEvent::Terminal(mouse_down(
+            (content_x + plain_cell) as u16,
+            text_row as u16,
+        )));
+        assert!(
+            !app.mouse_pressed_on_link,
+            "plain text must not arm the link guard"
+        );
+        assert_eq!(
+            app.sessions.known["ses_1"].tool_folds.len(),
+            folds_before,
+            "plain text press must not fold"
+        );
+
+        // A link press does arm the guard (RAIL-14 flow through real ranges).
+        let link_cell = cell_of(&prepared.lines[text_row], "e.com/b");
+        app.update(AppEvent::Terminal(mouse_down(
+            (content_x + link_cell) as u16,
+            text_row as u16,
+        )));
+        assert!(app.mouse_pressed_on_link, "link press must arm the guard");
+    }
+
+    #[test]
+    fn paragraph_selection_stops_at_rendered_blank_boundaries() {
+        let app = crate::ui::testapp::chat(ThemeKind::Dark);
+        let prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+        let row = prepared
+            .copy_ranges
+            .iter()
+            .find(|range| range.text.contains("A paragraph"))
+            .expect("paragraph row");
+        let section = prepared
+            .sections
+            .iter()
+            .find(|section| section.rows.contains(&row.row))
+            .expect("paragraph section");
+        let selection = app.paragraph_selection(SelectionPoint {
+            row: row.row,
+            column: row.columns.start,
+            section_id: Some(section.id.clone()),
+            section_row: row.row - section.rows.start,
+        });
+        let (start, end) = selection.ordered_points();
+        assert_eq!(start.row, row.row);
+        assert_eq!(end.row, row.row);
+        let copied = crate::ui::transcript::selection_text(&prepared, &selection);
+        assert!(copied.contains("A paragraph with bold, italic, and code."));
+        assert!(!copied.contains("first item"));
+    }
+}
+
+#[cfg(test)]
+mod steer_receipt_tests {
+    use super::*;
+    use crate::ui::testapp;
+    use serde_json::{Value, json};
+
+    fn take_requests(commands: Vec<AppCommand>) -> Vec<OutgoingRequest> {
+        commands
+            .into_iter()
+            .filter_map(|command| match command {
+                AppCommand::Rpc(request) => Some(request),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn respond(app: &mut App, request: &OutgoingRequest, result: Value) -> Vec<AppCommand> {
+        app.update(AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Response(
+            RpcResponse {
+                id: request.id,
+                result: Some(result),
+                error: None,
+            },
+        ))))
+    }
+
+    /// Submits one steer; returns the issued turn.steer request when the
+    /// FIFO advance sent it (first in-flight), or None when it was admitted
+    /// locally and held unsent behind an in-flight steer.
+    fn submit_steer(app: &mut App, text: &str) -> Option<OutgoingRequest> {
+        let commands = app.update(AppEvent::SteerTurn {
+            session_id: "ses_1".to_owned(),
+            text: text.to_owned(),
+        });
+        take_requests(commands)
+            .into_iter()
+            .find(|request| request.method == "turn.steer")
+    }
+
+    fn steer_progress_event(
+        applied_count: u64,
+        loop_id: &str,
+        session_id: &str,
+        request_index: u32,
+    ) -> AppEvent {
+        AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Notification(
+            RpcNotification::AgentEvent(
+                serde_json::from_value(serde_json::json!({
+                    "type": "steer_progress",
+                    "data": {
+                        "turn": {"session_id": session_id, "loop_id": loop_id},
+                        "request_index": request_index,
+                        "applied_count": applied_count,
+                        "meta": {"session_id": session_id, "dropped_before": 0}
+                    }
+                }))
+                .unwrap(),
+            ),
+        )))
+    }
+
+    // Receipt pairing is by ACK identity, never queue position: a receipt
+    // alone never applies a Sending entry, and an ACK index beyond the
+    // observed count is held until a covering receipt arrives.
+    #[test]
+    fn receipt_without_matching_index_holds_until_a_correct_receipt() {
+        let mut app = testapp::live_turn(crate::theme::ThemeKind::Dark);
+        let steer = submit_steer(&mut app, "first").expect("first steer in flight");
+        let _second = submit_steer(&mut app, "second queued");
+        // Receipt 1 races ahead of the ACK: history counted 1 steer but the
+        // entry is still Sending (no identity) - nothing is applied.
+        app.update(steer_progress_event(1, "loop_live", "ses_1", 5));
+        let (applied, pending) = {
+            let view = &app.sessions.known["ses_1"];
+            (
+                view.applied_steers.len(),
+                view.live.as_ref().unwrap().pending_steers.len(),
+            )
+        };
+        assert_eq!(applied, 0, "receipt alone never applies a Sending entry");
+        assert_eq!(pending, 1, "Sending entry retained, blocking the next RPC");
+
+        // ACK index 2 while the observed count is 1: not covered -> held.
+        respond(
+            &mut app,
+            &steer,
+            json!({"ok": true, "accepted_at": "T0", "steer_index": 2}),
+        );
+        let (applied, pending, queue) = {
+            let view = &app.sessions.known["ses_1"];
+            (
+                view.applied_steers.len(),
+                view.live.as_ref().unwrap().pending_steers.len(),
+                view.steer_queue.len(),
+            )
+        };
+        assert_eq!(applied, 0, "index 2 is not covered by count 1");
+        assert_eq!(
+            pending, 1,
+            "still in flight; the next unsent must not be sent"
+        );
+        assert_eq!(queue, 1, "second entry stays locally unsent");
+
+        // A covering receipt (count 2, request 7) applies entry "first" with
+        // the FIRST-observation request_index and the ACK accepted_at, then
+        // the FIFO advance issues the next unsent steer.
+        app.update(steer_progress_event(2, "loop_live", "ses_1", 7));
+        let view = &app.sessions.known["ses_1"];
+        assert_eq!(view.applied_steers.len(), 1);
+        assert_eq!(view.applied_steers[0].text, "first");
+        assert_eq!(view.applied_steers[0].request_index, 7);
+        assert_eq!(view.applied_steers[0].accepted_at.as_deref(), Some("T0"));
+        let live_steers = view.live.as_ref().unwrap().pending_steers.clone();
+        assert_eq!(live_steers.len(), 1, "the next unsent flowed to the RPC");
+        assert_eq!(live_steers[0].text, "second queued");
+        assert_eq!(view.steer_queue.len(), 0);
+    }
+
+    #[test]
+    fn valid_ack_index_applies_with_original_request_and_then_sends_next() {
+        let mut app = testapp::live_turn(crate::theme::ThemeKind::Dark);
+        let steer = submit_steer(&mut app, "first").expect("first steer in flight");
+        let _second = submit_steer(&mut app, "second queued");
+
+        respond(
+            &mut app,
+            &steer,
+            json!({"ok": true, "accepted_at": "T1", "steer_index": 1}),
+        );
+        // No receipt yet: accepted but unconfirmed, the next steer is blocked.
+        let view = &app.sessions.known["ses_1"];
+        assert!(view.applied_steers.is_empty());
+        assert_eq!(view.steer_queue.len(), 1);
+
+        // The receipt covering index 1 (observed at request 3) applies the
+        // entry with accepted_at from the ACK and the original request index.
+        app.update(steer_progress_event(1, "loop_live", "ses_1", 3));
+        let view = &app.sessions.known["ses_1"];
+        assert_eq!(view.applied_steers.len(), 1);
+        assert_eq!(view.applied_steers[0].text, "first");
+        assert_eq!(view.applied_steers[0].request_index, 3);
+        assert_eq!(view.applied_steers[0].accepted_at.as_deref(), Some("T1"));
+        assert_eq!(view.steer_queue.len(), 0, "B sent after A's receipt");
+        assert_eq!(
+            view.live.as_ref().unwrap().pending_steers.len(),
+            1,
+            "B in flight"
+        );
+    }
+
+    #[test]
+    fn stale_steer_progress_after_loop_switch_is_ignored() {
+        let mut app = testapp::live_turn(crate::theme::ThemeKind::Dark);
+        let steer = submit_steer(&mut app, "stale").expect("stale steer in flight");
+        // A receipt scoped to a DIFFERENT (old) loop must never apply or cache.
+        app.update(steer_progress_event(1, "loop_other", "ses_1", 0));
+        let view = &app.sessions.known["ses_1"];
+        assert!(view.applied_steers.is_empty());
+        assert_eq!(view.live.as_ref().unwrap().pending_steers.len(), 1);
+
+        // Current-loop duplicate progress (same count) after a valid apply is
+        // a no-op: nothing is re-applied and no extra resend happens.
+        app.update(steer_progress_event(1, "loop_live", "ses_1", 0));
+        respond(&mut app, &steer, json!({"ok": true, "steer_index": 1}));
+        let view = &app.sessions.known["ses_1"];
+        assert_eq!(view.applied_steers.len(), 1);
+        app.update(steer_progress_event(1, "loop_live", "ses_1", 0));
+        let view = &app.sessions.known["ses_1"];
+        assert_eq!(view.applied_steers.len(), 1, "same count never re-applies");
+    }
+
+    #[test]
+    fn mid_loop_history_without_steer_keeps_queued_and_terminal_marks_not_recorded() {
+        let mut app = testapp::live_turn(crate::theme::ThemeKind::Dark);
+        let steer = submit_steer(&mut app, "steer instruction").expect("steer in flight");
+        respond(&mut app, &steer, json!({"ok": true, "steer_index": 1}));
+        assert_eq!(
+            app.sessions.known["ses_1"]
+                .live
+                .as_ref()
+                .unwrap()
+                .pending_steers[0]
+                .state,
+            PendingSteerState::Queued
+        );
+
+        // MID-LOOP history page (live still present, no last_result): the
+        // accepted steer missing from the page must stay Queued (never a
+        // mid-loop NotRecorded downgrade).
+        let mid_loop = RpcResponse {
+            id: RequestId(1),
+            result: Some(serde_json::json!({
+                "items": [
+                    {"index": 0, "item": {"type": "user", "data": {"loop_id": "loop_live", "kind": "prompt", "text": "stream me"}}}
+                ],
+                "next_offset": null,
+                "total": 1
+            })),
+            error: None,
+        };
+        app.on_history_response(&"ses_1".into(), 0, None, &mid_loop);
+        assert_eq!(
+            app.sessions.known["ses_1"]
+                .live
+                .as_ref()
+                .unwrap()
+                .pending_steers[0]
+                .state,
+            PendingSteerState::Queued,
+            "mid-loop empty history must NOT mark NotRecorded"
+        );
+
+        // TERMINAL history (loop finished, last_result present, steering item
+        // absent) legitimately marks NotRecorded.
+        if let Some(live) = app
+            .sessions
+            .known
+            .get_mut("ses_1")
+            .and_then(|v| v.live.as_mut())
+        {
+            live.last_result = Some(crate::protocol::TurnResultViewWire {
+                turn: TurnRef {
+                    session_id: "ses_1".into(),
+                    loop_id: "loop_live".into(),
+                },
+                outcome: crate::protocol::LoopOutcomeWire::Completed,
+                usage: crate::protocol::UsageWire::default(),
+                requests: 1,
+                tool_rounds: 0,
+                final_config_revision: 0,
+                persistence: crate::protocol::TurnPersistenceWire::Persisted,
+                accepted_at: None,
+            });
+        }
+        let terminal = RpcResponse {
+            id: RequestId(1),
+            result: Some(serde_json::json!({
+                "items": [
+                    {"index": 0, "item": {"type": "user", "data": {"loop_id": "loop_live", "kind": "prompt", "text": "stream me"}}},
+                    {"index": 1, "item": {"type": "assistant", "data": {"loop_id": "loop_live", "request_index": 0, "model": "deep", "text": "answer", "reasoning": ""}}}
+                ],
+                "next_offset": null,
+                "total": 2
+            })),
+            error: None,
+        };
+        app.on_history_response(&"ses_1".into(), 0, None, &terminal);
+        let view = &app.sessions.known["ses_1"];
+        let terminal_state = view
+            .live
+            .as_ref()
+            .and_then(|live| live.pending_steers.first())
+            .map(|steer| steer.state.clone());
+        assert!(
+            terminal_state.is_none() || terminal_state != Some(PendingSteerState::Queued),
+            "terminal history resolves the accepted steer ({terminal_state:?})"
+        );
+    }
+
+    #[test]
+    fn dropped_receipt_recovered_via_presentation_steer_progress() {
+        let mut app = testapp::live_turn(crate::theme::ThemeKind::Dark);
+        let steer = submit_steer(&mut app, "recovered").expect("steer in flight");
+        respond(&mut app, &steer, json!({"ok": true, "steer_index": 1}));
+        let view = &app.sessions.known["ses_1"];
+        assert_eq!(
+            view.live.as_ref().unwrap().pending_steers[0].state,
+            PendingSteerState::Queued
+        );
+
+        // The steer_progress event was DROPPED in flight; the next
+        // session.presentation snapshot carries the receipt and reconciles it.
+        let response = RpcResponse {
+            id: RequestId(1),
+            result: Some(serde_json::json!({
+                "session_id": "ses_1",
+                "model_label": "deep",
+                "git_branch": null,
+                "context": {"tokens": null, "window": null, "percent": null, "kind": "unknown"},
+                "cost_usd": null,
+                "using_subscription": null,
+                "last_loop": null,
+                "steer_progress": {
+                    "loop_id": "loop_live",
+                    "request_index": 0,
+                    "applied_count": 1
+                }
+            })),
+            error: None,
+        };
+        app.on_session_presentation_response(&"ses_1".into(), &response);
+        let view = &app.sessions.known["ses_1"];
+        assert_eq!(
+            view.applied_steers.len(),
+            1,
+            "presentation receipt recovered the dropped event"
+        );
+    }
+}
+
+#[cfg(test)]
+mod steer_queue_ui_tests {
+    use super::*;
+    use crate::ui::testapp;
+
+    fn take_requests(commands: Vec<AppCommand>) -> Vec<OutgoingRequest> {
+        commands
+            .into_iter()
+            .filter_map(|command| match command {
+                AppCommand::Rpc(request) => Some(request),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn submit_steer(app: &mut App, text: &str) -> Option<OutgoingRequest> {
+        let commands = app.update(AppEvent::SteerTurn {
+            session_id: "ses_1".to_owned(),
+            text: text.to_owned(),
+        });
+        take_requests(commands)
+            .into_iter()
+            .find(|request| request.method == "turn.steer")
+    }
+
+    #[test]
+    fn alt_up_withdraws_next_unsent_into_empty_editor_only() {
+        let mut app = testapp::live_turn(crate::theme::ThemeKind::Dark);
+        // First steer flows to the RPC (Sending); second stays locally unsent.
+        let _first = submit_steer(&mut app, "first");
+        let _second = submit_steer(&mut app, "second queued");
+        assert_eq!(app.sessions.known["ses_1"].steer_queue.len(), 1);
+
+        // With nonempty editor Alt+Up stays a history navigation (no change).
+        app.composer.set_text("draft");
+        app.composer.history_prev();
+        assert_eq!(app.composer.content(), "draft");
+
+        // Empty editor: withdraw the NEXT unsent item.
+        app.composer.clear();
+        assert!(app.retrieve_next_queued_steer());
+        assert_eq!(app.composer.content(), "second queued");
+        assert_eq!(app.sessions.known["ses_1"].steer_queue.len(), 0);
+        // A second call with an empty (now filled) editor cannot withdraw.
+        assert!(!app.retrieve_next_queued_steer());
+        assert_eq!(app.composer.content(), "second queued");
+    }
+
+    #[test]
+    fn queue_layout_sits_above_status_with_one_blank_gap_and_hides_in_modal() {
+        let mut app = testapp::live_turn(crate::theme::ThemeKind::Dark);
+        let _first = submit_steer(&mut app, "first");
+        for index in 0..5 {
+            submit_steer(&mut app, &format!("s{index}"));
+        }
+        // Composer dock: queue ABOVE status, one blank gap between.
+        let layout =
+            crate::ui::layout::screen_layout(&app, ratatui::layout::Rect::new(0, 0, 80, 24));
+        let queue = layout.queue.expect("queue rect while composing");
+        let status = layout.status.expect("status row while busy");
+        assert!(
+            queue.bottom() <= status.y,
+            "queue.bottom {} < status.y {}",
+            queue.bottom(),
+            status.y
+        );
+        assert_eq!(status.y - queue.bottom(), 1, "exactly one blank gap row");
+
+        // A modal owns the dock: the queue is hidden and never squeezes it.
+        app.update(AppEvent::OpenSessionSelector);
+        let layout =
+            crate::ui::layout::screen_layout(&app, ratatui::layout::Rect::new(0, 0, 60, 16));
+        assert_eq!(layout.queue, None, "queue hidden in selector modal");
+        app.update(AppEvent::CancelDock);
+
+        // 60x16 with queue + notice + composer: footer is one row, editor
+        // visible, and the shared transcript keeps at least one row.
+        app.update(AppEvent::TerminalSize {
+            width: 60,
+            height: 16,
+        });
+        let layout =
+            crate::ui::layout::screen_layout(&app, ratatui::layout::Rect::new(0, 0, 60, 16));
+        assert_eq!(
+            layout.footer.height, 1,
+            "footer collapses to one row at 60x16"
+        );
+        assert!(layout.panel.height >= 1, "editor surface visible");
+        assert!(layout.transcript.height >= 1, "shared viewport visible");
+        // 6 entries with a withdrawable unsent item: 3 + overflow + hint.
+        assert_eq!(layout.queue.expect("queue present").height, 5);
+        // The explicit gap row keeps queue.bottom < status.y even at 60x16.
+        assert_eq!(
+            layout.status.expect("status").y - layout.queue.unwrap().bottom(),
+            1
+        );
+    }
+
+    #[test]
+    fn dock_queue_caps_display_and_footer_counts_unsent_and_inflight() {
+        let mut app = testapp::live_turn(crate::theme::ThemeKind::Dark);
+        // One flows to the RPC, five more admitted locally.
+        let _first = submit_steer(&mut app, "s1");
+        for index in 0..5 {
+            submit_steer(&mut app, &format!("s{index}"));
+        }
+        let view = &app.sessions.known["ses_1"];
+        assert_eq!(view.steer_queue.len(), 5);
+        assert_eq!(view.live.as_ref().unwrap().pending_steers.len(), 1);
+
+        // Footer: queued = unsent + in-flight = 6, never applied.
+        let view = crate::ui::footer::footer_view(&app);
+        assert!(
+            view.left.contains("queued 6"),
+            "footer queued count, got: {}",
+            view.left
+        );
+
+        // 6 entries with a withdrawable unsent item and an empty composer:
+        // 3 content + 1 overflow + 1 Alt+Up hint (the blank gap is a separate
+        // explicit row between queue and status).
+        assert_eq!(crate::ui::layout::steer_queue_rows(&app), 5);
+        assert_eq!(crate::ui::steer_queue::queue_entries(&app).len(), 6);
     }
 }

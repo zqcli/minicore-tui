@@ -1,0 +1,3959 @@
+{
+  "applied": true,
+  "roots": [
+    {
+      "root": "/root/minicore-rail-01a07210/build-agent",
+      "candidate_files": 3130,
+      "candidate_bytes": 1462670165,
+      "preserved_binaries": 46
+    },
+    {
+      "root": "/root/minicore-rail-01a07210/build-agent-final",
+      "candidate_files": 3127,
+      "candidate_bytes": 1369996944,
+      "preserved_binaries": 46
+    },
+    {
+      "root": "/root/minicore-rail-01a07210/build-cross",
+      "candidate_files": 5034,
+      "candidate_bytes": 1486124976,
+      "preserved_binaries": 76
+    },
+    {
+      "root": "/root/minicore-rail-01a07210/build-tui-msrv",
+      "candidate_files": 4065,
+      "candidate_bytes": 1152522593,
+      "preserved_binaries": 78
+    },
+    {
+      "root": "/root/minicore-rail-01a07210/build-tui-stable",
+      "candidate_files": 6638,
+      "candidate_bytes": 2032719160,
+      "preserved_binaries": 84
+    },
+    {
+      "root": "/root/minicore-rail-01a07210/r1/minicore-tui/target",
+      "candidate_files": 967,
+      "candidate_bytes": 323245850,
+      "preserved_binaries": 47
+    },
+    {
+      "root": "/root/minicore-tui-r2-01a06ec1/tui/target",
+      "candidate_files": 12597,
+      "candidate_bytes": 3205855225,
+      "preserved_binaries": 265
+    },
+    {
+      "root": "/root/minicore-tui-r2-01a06ec1/agent/target",
+      "candidate_files": 2527,
+      "candidate_bytes": 1020859780,
+      "preserved_binaries": 46
+    },
+    {
+      "root": "/root/minicore-tui-r2-01a06ec1/target-cross",
+      "candidate_files": 1694,
+      "candidate_bytes": 461477778,
+      "preserved_binaries": 51
+    },
+    {
+      "root": "/root/minicore-tui-r2-01a06ec1/macos-agent-target",
+      "candidate_files": 1036,
+      "candidate_bytes": 231597790,
+      "preserved_binaries": 39
+    }
+  ],
+  "preserved_binaries": [
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/rustls-fc6eeeefae6f26fc/build_script_build-fc6eeeefae6f26fc",
+      "sha256": "a2795ccba674f301128701e6fb1a6d25145f1cd40dba0cbe773f214ed416e50a",
+      "bytes": 4347544
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/rustls-fc6eeeefae6f26fc/build-script-build",
+      "sha256": "a2795ccba674f301128701e6fb1a6d25145f1cd40dba0cbe773f214ed416e50a",
+      "bytes": 4347544
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/zmij-37c7a7b83a60607f/build_script_build-37c7a7b83a60607f",
+      "sha256": "90de9003aa62da71cbbb22e5466a2638199148b272270833633861afc3d95d4c",
+      "bytes": 4470624
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/zmij-37c7a7b83a60607f/build-script-build",
+      "sha256": "90de9003aa62da71cbbb22e5466a2638199148b272270833633861afc3d95d4c",
+      "bytes": 4470624
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/serde-047fb28ec31c7b7d/build_script_build-047fb28ec31c7b7d",
+      "sha256": "499670944583c4f8815501463aaf629259991c4fad9a57470a8bee8f3d8ff36b",
+      "bytes": 4497056
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/serde-047fb28ec31c7b7d/build-script-build",
+      "sha256": "499670944583c4f8815501463aaf629259991c4fad9a57470a8bee8f3d8ff36b",
+      "bytes": 4497056
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/thiserror-b1616fa922246467/build_script_build-b1616fa922246467",
+      "sha256": "ca980508d34a4d46b9c73ef3e1fcdbccc79d08669dfd4f51d0b046753b4c7b9a",
+      "bytes": 4547456
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/thiserror-b1616fa922246467/build-script-build",
+      "sha256": "ca980508d34a4d46b9c73ef3e1fcdbccc79d08669dfd4f51d0b046753b4c7b9a",
+      "bytes": 4547456
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/libc-19124a20af635abc/build_script_build-19124a20af635abc",
+      "sha256": "b2386552a37f07b0b91cbe419c4820a8353305af02bdadca9fac815b54a1c350",
+      "bytes": 4549736
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/libc-19124a20af635abc/build-script-build",
+      "sha256": "b2386552a37f07b0b91cbe419c4820a8353305af02bdadca9fac815b54a1c350",
+      "bytes": 4549736
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/serde_core-f2ae637853f690ee/build_script_build-f2ae637853f690ee",
+      "sha256": "73142f9880534eb66bf34b1e0d2f5b442d95cfafe5f28073f55e33640138b7e7",
+      "bytes": 4499880
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/serde_core-f2ae637853f690ee/build-script-build",
+      "sha256": "73142f9880534eb66bf34b1e0d2f5b442d95cfafe5f28073f55e33640138b7e7",
+      "bytes": 4499880
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/ring-c21406fa7c316f72/build_script_build-c21406fa7c316f72",
+      "sha256": "a56dd15f684d30b93960c38a8b084cfafd69a56c6d5880869acb5da10bce5831",
+      "bytes": 5894056
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/ring-c21406fa7c316f72/build-script-build",
+      "sha256": "a56dd15f684d30b93960c38a8b084cfafd69a56c6d5880869acb5da10bce5831",
+      "bytes": 5894056
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/serde_json-2c0a994303fe8e5c/build_script_build-2c0a994303fe8e5c",
+      "sha256": "91e6bb5e653da2521864cff1bccd560e34104ae9c2b63fa6b309eaa72efdb74d",
+      "bytes": 4359240
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/serde_json-2c0a994303fe8e5c/build-script-build",
+      "sha256": "91e6bb5e653da2521864cff1bccd560e34104ae9c2b63fa6b309eaa72efdb74d",
+      "bytes": 4359240
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/getrandom-2d29b886237ce098/build_script_build-2d29b886237ce098",
+      "sha256": "9fbbd095b5a49bed319465d9a6fd1ab8ef59be411fe3b3b0d81ff30f63e1cb64",
+      "bytes": 4508184
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/getrandom-2d29b886237ce098/build-script-build",
+      "sha256": "9fbbd095b5a49bed319465d9a6fd1ab8ef59be411fe3b3b0d81ff30f63e1cb64",
+      "bytes": 4508184
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/httparse-052f35d69ef80cf8/build_script_build-052f35d69ef80cf8",
+      "sha256": "4bb3ff3f518a177d1b5d9634e2ce4f0f5531b27e275e328b8412ac23b5a17c6c",
+      "bytes": 4525744
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/httparse-052f35d69ef80cf8/build-script-build",
+      "sha256": "4bb3ff3f518a177d1b5d9634e2ce4f0f5531b27e275e328b8412ac23b5a17c6c",
+      "bytes": 4525744
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/icu_properties_data-f9b06ae72535caa7/build_script_build-f9b06ae72535caa7",
+      "sha256": "f8edf8091106af0822197d0475eccb9ac5afcdc4507830693b98b6c456fc4aca",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/icu_properties_data-f9b06ae72535caa7/build-script-build",
+      "sha256": "f8edf8091106af0822197d0475eccb9ac5afcdc4507830693b98b6c456fc4aca",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/icu_normalizer_data-7fa05c0e338d0e43/build-script-build",
+      "sha256": "b46945de8c962efd78c43abde67890bc747932ebecc27cc7374c53c8045b5ec0",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/icu_normalizer_data-7fa05c0e338d0e43/build_script_build-7fa05c0e338d0e43",
+      "sha256": "b46945de8c962efd78c43abde67890bc747932ebecc27cc7374c53c8045b5ec0",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/proc-macro2-7d0ed4e509752a35/build-script-build",
+      "sha256": "aa979b864f4a4e98456574706c62de6fdedc12b62faa891b7a790664bb286aef",
+      "bytes": 4524120
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/proc-macro2-7d0ed4e509752a35/build_script_build-7d0ed4e509752a35",
+      "sha256": "aa979b864f4a4e98456574706c62de6fdedc12b62faa891b7a790664bb286aef",
+      "bytes": 4524120
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/quote-6dff9724e4e81362/build_script_build-6dff9724e4e81362",
+      "sha256": "c4388fe4ef6d4f7938f9432bf020c7bcfa81dc7c9ecc2522d8574507ff044430",
+      "bytes": 4465072
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/build/quote-6dff9724e4e81362/build-script-build",
+      "sha256": "c4388fe4ef6d4f7938f9432bf020c7bcfa81dc7c9ecc2522d8574507ff044430",
+      "bytes": 4465072
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/deps/minicore_agent-23ab1927a4213e80",
+      "sha256": "98c1937e270b04619f4a3f9761ad14139395fab1626517c3b941bdba4c1d7316",
+      "bytes": 134741016
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/deps/minicore_agent-8e1a87e553715d28",
+      "sha256": "d5c2d055f470491295ebe8b429bc5c7480476f8700514f62a16015aad115608a",
+      "bytes": 7593808
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/deps/rpc_stdio-7c1056aa60829f89",
+      "sha256": "2be1b1ece5b413ea23f33fcf2559e6424162728fc7cd0c66787d7de5f2ec2f32",
+      "bytes": 91958664
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/deps/skeleton-72397b1e08fa5ec2",
+      "sha256": "2597ca4a3ac785b488145533ee3d6bf40abcae3e86348f32dbdb13c37da1dcf4",
+      "bytes": 95014344
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/deps/libfutures_macro-b5492f4e9f40dde0.so",
+      "sha256": "85cc1edb393b0e682724f938d2db5fa7381c2ecdefffbf16793f94f0ba52662e",
+      "bytes": 8012320
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/deps/libzerovec_derive-3212de27759fb781.so",
+      "sha256": "30e3dab7ddd956f5643a0f2c24751515cc03cdfcf067837af883ad1ff17e9b5f",
+      "bytes": 8751576
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/deps/minicore_agent-6b1c13137522e3a5",
+      "sha256": "edb9735559cf5cce6a2caada1ce83c6c614196aab2acfb42388782c3f7308c31",
+      "bytes": 173259736
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/deps/openai_rpc_process-81d33a9be53e41b6",
+      "sha256": "a3eabfbe8eb14d09d3be3655a7b9bbcde78f50ed9e2ceaba3d3a3ce32d29ca4e",
+      "bytes": 101983232
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/deps/libzerofrom_derive-3a4d23d5b36d2ca9.so",
+      "sha256": "ff4b9922d3d9980bb6fd5cc2499e63ac328c77577ca1785b351814b1b5e7cfaf",
+      "bytes": 9526696
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/deps/libyoke_derive-50144caf197ce3d3.so",
+      "sha256": "dcb8860ae30e3dc56a5e325a013345daa4556c970969ff3ae56a17b38629c4e7",
+      "bytes": 9149216
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/deps/libserde_derive-8643e101b88cb90a.so",
+      "sha256": "8c5e3b2895e648de8c934b81b63c4b0c83245c7715ada2da70395fb962419a35",
+      "bytes": 9870576
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/deps/rpc_soak-ca981353c2d880ff",
+      "sha256": "af93f7d27bc98038cabf9ae437a6c5a00857de7166b5c75d30c88a7245af8e3e",
+      "bytes": 101406568
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/deps/libthiserror_impl-9458ebdf4ab16962.so",
+      "sha256": "eae3ff16884d59dd31c31d05378f70add6bf35a43db72f9a5bfd53765df1cfad",
+      "bytes": 8864432
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/deps/tui_rpc_flow-5b98b1be399d18be",
+      "sha256": "3d8890ce56fd8ae0a207480731654baf0b4e103ba7c772ee4cdab5cc3febcb02",
+      "bytes": 103290368
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/deps/libtracing_attributes-dd89f51f7f268213.so",
+      "sha256": "0728502d180365afd305c5ded7fb17278fdbc7c243e6e155788d2f14e10194b3",
+      "bytes": 9220336
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/deps/libdisplaydoc-42a4aaa0bff0a159.so",
+      "sha256": "dce24ac5c53f4390fd5954975697699603e5e7bd002418460f60b4ead078f9bf",
+      "bytes": 8460904
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/deps/libtokio_macros-bd1b525e01c11e3b.so",
+      "sha256": "24f7c6ccbed19c4b498294fe595f40d0512f1e90d942d66a7a97a44c53876501",
+      "bytes": 8357032
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent/debug/minicore-agent",
+      "sha256": "98c1937e270b04619f4a3f9761ad14139395fab1626517c3b941bdba4c1d7316",
+      "bytes": 134741016
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/rustls-fc6eeeefae6f26fc/build_script_build-fc6eeeefae6f26fc",
+      "sha256": "a2795ccba674f301128701e6fb1a6d25145f1cd40dba0cbe773f214ed416e50a",
+      "bytes": 4347544
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/rustls-fc6eeeefae6f26fc/build-script-build",
+      "sha256": "a2795ccba674f301128701e6fb1a6d25145f1cd40dba0cbe773f214ed416e50a",
+      "bytes": 4347544
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/zmij-37c7a7b83a60607f/build_script_build-37c7a7b83a60607f",
+      "sha256": "90de9003aa62da71cbbb22e5466a2638199148b272270833633861afc3d95d4c",
+      "bytes": 4470624
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/zmij-37c7a7b83a60607f/build-script-build",
+      "sha256": "90de9003aa62da71cbbb22e5466a2638199148b272270833633861afc3d95d4c",
+      "bytes": 4470624
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/serde-047fb28ec31c7b7d/build_script_build-047fb28ec31c7b7d",
+      "sha256": "499670944583c4f8815501463aaf629259991c4fad9a57470a8bee8f3d8ff36b",
+      "bytes": 4497056
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/serde-047fb28ec31c7b7d/build-script-build",
+      "sha256": "499670944583c4f8815501463aaf629259991c4fad9a57470a8bee8f3d8ff36b",
+      "bytes": 4497056
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/thiserror-b1616fa922246467/build_script_build-b1616fa922246467",
+      "sha256": "ca980508d34a4d46b9c73ef3e1fcdbccc79d08669dfd4f51d0b046753b4c7b9a",
+      "bytes": 4547456
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/thiserror-b1616fa922246467/build-script-build",
+      "sha256": "ca980508d34a4d46b9c73ef3e1fcdbccc79d08669dfd4f51d0b046753b4c7b9a",
+      "bytes": 4547456
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/libc-19124a20af635abc/build_script_build-19124a20af635abc",
+      "sha256": "b2386552a37f07b0b91cbe419c4820a8353305af02bdadca9fac815b54a1c350",
+      "bytes": 4549736
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/libc-19124a20af635abc/build-script-build",
+      "sha256": "b2386552a37f07b0b91cbe419c4820a8353305af02bdadca9fac815b54a1c350",
+      "bytes": 4549736
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/serde_core-f2ae637853f690ee/build_script_build-f2ae637853f690ee",
+      "sha256": "73142f9880534eb66bf34b1e0d2f5b442d95cfafe5f28073f55e33640138b7e7",
+      "bytes": 4499880
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/serde_core-f2ae637853f690ee/build-script-build",
+      "sha256": "73142f9880534eb66bf34b1e0d2f5b442d95cfafe5f28073f55e33640138b7e7",
+      "bytes": 4499880
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/ring-c21406fa7c316f72/build_script_build-c21406fa7c316f72",
+      "sha256": "a56dd15f684d30b93960c38a8b084cfafd69a56c6d5880869acb5da10bce5831",
+      "bytes": 5894056
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/ring-c21406fa7c316f72/build-script-build",
+      "sha256": "a56dd15f684d30b93960c38a8b084cfafd69a56c6d5880869acb5da10bce5831",
+      "bytes": 5894056
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/serde_json-2c0a994303fe8e5c/build_script_build-2c0a994303fe8e5c",
+      "sha256": "91e6bb5e653da2521864cff1bccd560e34104ae9c2b63fa6b309eaa72efdb74d",
+      "bytes": 4359240
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/serde_json-2c0a994303fe8e5c/build-script-build",
+      "sha256": "91e6bb5e653da2521864cff1bccd560e34104ae9c2b63fa6b309eaa72efdb74d",
+      "bytes": 4359240
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/getrandom-2d29b886237ce098/build_script_build-2d29b886237ce098",
+      "sha256": "9fbbd095b5a49bed319465d9a6fd1ab8ef59be411fe3b3b0d81ff30f63e1cb64",
+      "bytes": 4508184
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/getrandom-2d29b886237ce098/build-script-build",
+      "sha256": "9fbbd095b5a49bed319465d9a6fd1ab8ef59be411fe3b3b0d81ff30f63e1cb64",
+      "bytes": 4508184
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/httparse-052f35d69ef80cf8/build_script_build-052f35d69ef80cf8",
+      "sha256": "4bb3ff3f518a177d1b5d9634e2ce4f0f5531b27e275e328b8412ac23b5a17c6c",
+      "bytes": 4525744
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/httparse-052f35d69ef80cf8/build-script-build",
+      "sha256": "4bb3ff3f518a177d1b5d9634e2ce4f0f5531b27e275e328b8412ac23b5a17c6c",
+      "bytes": 4525744
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/icu_properties_data-f9b06ae72535caa7/build_script_build-f9b06ae72535caa7",
+      "sha256": "f8edf8091106af0822197d0475eccb9ac5afcdc4507830693b98b6c456fc4aca",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/icu_properties_data-f9b06ae72535caa7/build-script-build",
+      "sha256": "f8edf8091106af0822197d0475eccb9ac5afcdc4507830693b98b6c456fc4aca",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/icu_normalizer_data-7fa05c0e338d0e43/build-script-build",
+      "sha256": "b46945de8c962efd78c43abde67890bc747932ebecc27cc7374c53c8045b5ec0",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/icu_normalizer_data-7fa05c0e338d0e43/build_script_build-7fa05c0e338d0e43",
+      "sha256": "b46945de8c962efd78c43abde67890bc747932ebecc27cc7374c53c8045b5ec0",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/proc-macro2-7d0ed4e509752a35/build-script-build",
+      "sha256": "aa979b864f4a4e98456574706c62de6fdedc12b62faa891b7a790664bb286aef",
+      "bytes": 4524120
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/proc-macro2-7d0ed4e509752a35/build_script_build-7d0ed4e509752a35",
+      "sha256": "aa979b864f4a4e98456574706c62de6fdedc12b62faa891b7a790664bb286aef",
+      "bytes": 4524120
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/quote-6dff9724e4e81362/build_script_build-6dff9724e4e81362",
+      "sha256": "c4388fe4ef6d4f7938f9432bf020c7bcfa81dc7c9ecc2522d8574507ff044430",
+      "bytes": 4465072
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/build/quote-6dff9724e4e81362/build-script-build",
+      "sha256": "c4388fe4ef6d4f7938f9432bf020c7bcfa81dc7c9ecc2522d8574507ff044430",
+      "bytes": 4465072
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/deps/minicore_agent-23ab1927a4213e80",
+      "sha256": "769bc58fb70af090a79a89d855b568608e4c9c9e68ec516bfddd67ec6011a385",
+      "bytes": 134741016
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/deps/minicore_agent-8e1a87e553715d28",
+      "sha256": "42f209041fdefbdea1377f51317d5d0fca67ef3c8e307bfa6c97bdebf6cdc56f",
+      "bytes": 7593808
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/deps/rpc_stdio-7c1056aa60829f89",
+      "sha256": "298355e886b32afdf2d55ae27e71f54b87005fb6027af9ec2e4de7a5efc23b58",
+      "bytes": 91958664
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/deps/skeleton-72397b1e08fa5ec2",
+      "sha256": "0a84438575f8b9e0c5c8b07055b99110c4d10562b577abc8ed2147c8673d0371",
+      "bytes": 95014344
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/deps/libfutures_macro-b5492f4e9f40dde0.so",
+      "sha256": "85cc1edb393b0e682724f938d2db5fa7381c2ecdefffbf16793f94f0ba52662e",
+      "bytes": 8012320
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/deps/libzerovec_derive-3212de27759fb781.so",
+      "sha256": "30e3dab7ddd956f5643a0f2c24751515cc03cdfcf067837af883ad1ff17e9b5f",
+      "bytes": 8751576
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/deps/minicore_agent-6b1c13137522e3a5",
+      "sha256": "8332ef10f72d4217f61f68420644d5b73b1bde619064e634ab91191dd6527dbf",
+      "bytes": 173259736
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/deps/openai_rpc_process-81d33a9be53e41b6",
+      "sha256": "a2bfbeed40abc35d5ae6c260886099de5e4f3636c8ed588f1fa71433108bddbb",
+      "bytes": 101983232
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/deps/libzerofrom_derive-3a4d23d5b36d2ca9.so",
+      "sha256": "ff4b9922d3d9980bb6fd5cc2499e63ac328c77577ca1785b351814b1b5e7cfaf",
+      "bytes": 9526696
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/deps/libyoke_derive-50144caf197ce3d3.so",
+      "sha256": "dcb8860ae30e3dc56a5e325a013345daa4556c970969ff3ae56a17b38629c4e7",
+      "bytes": 9149216
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/deps/libserde_derive-8643e101b88cb90a.so",
+      "sha256": "8c5e3b2895e648de8c934b81b63c4b0c83245c7715ada2da70395fb962419a35",
+      "bytes": 9870576
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/deps/rpc_soak-ca981353c2d880ff",
+      "sha256": "ab338b91586e3b4e954551d253033e2e55ba0639b31e2bb32b05e71c5165be74",
+      "bytes": 101406632
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/deps/libthiserror_impl-9458ebdf4ab16962.so",
+      "sha256": "eae3ff16884d59dd31c31d05378f70add6bf35a43db72f9a5bfd53765df1cfad",
+      "bytes": 8864432
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/deps/tui_rpc_flow-5b98b1be399d18be",
+      "sha256": "e2186b5c60f5ed9791e315089745ef57a178ecc6a0d4952c3e9af74adc934aa5",
+      "bytes": 103290368
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/deps/libtracing_attributes-dd89f51f7f268213.so",
+      "sha256": "0728502d180365afd305c5ded7fb17278fdbc7c243e6e155788d2f14e10194b3",
+      "bytes": 9220336
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/deps/libdisplaydoc-42a4aaa0bff0a159.so",
+      "sha256": "dce24ac5c53f4390fd5954975697699603e5e7bd002418460f60b4ead078f9bf",
+      "bytes": 8460904
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/deps/libtokio_macros-bd1b525e01c11e3b.so",
+      "sha256": "24f7c6ccbed19c4b498294fe595f40d0512f1e90d942d66a7a97a44c53876501",
+      "bytes": 8357032
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-agent-final/debug/minicore-agent",
+      "sha256": "769bc58fb70af090a79a89d855b568608e4c9c9e68ec516bfddd67ec6011a385",
+      "bytes": 134741016
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/libm-eb042e18d2bff284/build_script_build-eb042e18d2bff284",
+      "sha256": "adac339e827190c81d7a23c546c55fbfe91af0b45bb360d5923d7968c5e35511",
+      "bytes": 4658624
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/libm-eb042e18d2bff284/build-script-build",
+      "sha256": "adac339e827190c81d7a23c546c55fbfe91af0b45bb360d5923d7968c5e35511",
+      "bytes": 4658624
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/winapi-5d74ee8475752f34/build_script_build-5d74ee8475752f34",
+      "sha256": "72b8587260e357a6569be7af68d43b6627a919044c534e9bd7caff4405af09f1",
+      "bytes": 5114872
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/winapi-5d74ee8475752f34/build-script-build",
+      "sha256": "72b8587260e357a6569be7af68d43b6627a919044c534e9bd7caff4405af09f1",
+      "bytes": 5114872
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/paste-67831951e0bb28ce/build-script-build",
+      "sha256": "fe9fb27466955ce3e5f02d3e574377d05ee7e0117c19ee79c34970bfd79e7a90",
+      "bytes": 4663000
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/paste-67831951e0bb28ce/build_script_build-67831951e0bb28ce",
+      "sha256": "fe9fb27466955ce3e5f02d3e574377d05ee7e0117c19ee79c34970bfd79e7a90",
+      "bytes": 4663000
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/quote-8f4046f0a92c7969/build_script_build-8f4046f0a92c7969",
+      "sha256": "a7d12f53e9dcade3bfd93670fe57fc842b3352c3aabb37dd0f00cc6ec767fff9",
+      "bytes": 4661784
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/quote-8f4046f0a92c7969/build-script-build",
+      "sha256": "a7d12f53e9dcade3bfd93670fe57fc842b3352c3aabb37dd0f00cc6ec767fff9",
+      "bytes": 4661784
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/pulldown-cmark-dd9a30b4686fdef7/build_script_build-dd9a30b4686fdef7",
+      "sha256": "e4f986f6f9495c16e1fb528420e1d03f1769bcc656576254ca53387106eb522a",
+      "bytes": 4352496
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/pulldown-cmark-dd9a30b4686fdef7/build-script-build",
+      "sha256": "e4f986f6f9495c16e1fb528420e1d03f1769bcc656576254ca53387106eb522a",
+      "bytes": 4352496
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/parking_lot_core-56ca5032781ce5f5/build_script_build-56ca5032781ce5f5",
+      "sha256": "3d5a21f781be0a32de745194cb9aed43733f7c19eafa9d4b020117be50e29f50",
+      "bytes": 4494672
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/parking_lot_core-56ca5032781ce5f5/build-script-build",
+      "sha256": "3d5a21f781be0a32de745194cb9aed43733f7c19eafa9d4b020117be50e29f50",
+      "bytes": 4494672
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/proc-macro2-e024176cfc4fa3c8/build_script_build-e024176cfc4fa3c8",
+      "sha256": "0bf0727b80a7d278a923b4ff0d4db08385aa6fdeef85ee44def4ea354e0266f7",
+      "bytes": 4777664
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/proc-macro2-e024176cfc4fa3c8/build-script-build",
+      "sha256": "0bf0727b80a7d278a923b4ff0d4db08385aa6fdeef85ee44def4ea354e0266f7",
+      "bytes": 4777664
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/serde-f5af4cbbfb466e7d/build_script_build-f5af4cbbfb466e7d",
+      "sha256": "d284c69a2ded9df9aa169bcc65cebd411b056140e03dbe747e78b4195eb4ea09",
+      "bytes": 4776304
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/serde-f5af4cbbfb466e7d/build-script-build",
+      "sha256": "d284c69a2ded9df9aa169bcc65cebd411b056140e03dbe747e78b4195eb4ea09",
+      "bytes": 4776304
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/serde_core-b9638727b180d7fd/build_script_build-b9638727b180d7fd",
+      "sha256": "c51e564975e7dc9b402383cf8f1b39253b100dd48d678b5c06886562840f12b0",
+      "bytes": 4781448
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/serde_core-b9638727b180d7fd/build-script-build",
+      "sha256": "c51e564975e7dc9b402383cf8f1b39253b100dd48d678b5c06886562840f12b0",
+      "bytes": 4781448
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/icu_properties_data-7f3c900986840bc1/build_script_build-7f3c900986840bc1",
+      "sha256": "d7ef4b52936f07be54350e95e116ded5bda3e9ae71b0b311bb4ef5c0aa8451c9",
+      "bytes": 4369400
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/icu_properties_data-7f3c900986840bc1/build-script-build",
+      "sha256": "d7ef4b52936f07be54350e95e116ded5bda3e9ae71b0b311bb4ef5c0aa8451c9",
+      "bytes": 4369400
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/icu_locale_data-eccf96c386e46994/build_script_build-eccf96c386e46994",
+      "sha256": "53abfd6e1ea43f2f37fcdac1ddcc290ef85039ae8c563e21f855e2fd64c47bdb",
+      "bytes": 4369392
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/icu_locale_data-eccf96c386e46994/build-script-build",
+      "sha256": "53abfd6e1ea43f2f37fcdac1ddcc290ef85039ae8c563e21f855e2fd64c47bdb",
+      "bytes": 4369392
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/icu_normalizer_data-189f21d230c33d90/build_script_build-189f21d230c33d90",
+      "sha256": "17a1b8e4edc687c8c4c4dd90a1ea08efdd45ecccc5dcb8d560380c6f8caf612f",
+      "bytes": 4369400
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/icu_normalizer_data-189f21d230c33d90/build-script-build",
+      "sha256": "17a1b8e4edc687c8c4c4dd90a1ea08efdd45ecccc5dcb8d560380c6f8caf612f",
+      "bytes": 4369400
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/icu_segmenter_data-c5e7d6da405014c6/build_script_build-c5e7d6da405014c6",
+      "sha256": "d3338eb0a87bf7cd16708a3ade9447cb5a99cc3bcba0b95ce32e74842030ddcb",
+      "bytes": 4369392
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/icu_segmenter_data-c5e7d6da405014c6/build-script-build",
+      "sha256": "d3338eb0a87bf7cd16708a3ade9447cb5a99cc3bcba0b95ce32e74842030ddcb",
+      "bytes": 4369392
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/instability-fb374a6c3c9c70cb/build_script_build-fb374a6c3c9c70cb",
+      "sha256": "33337b2a0598c7544d3578fe5c37620d6d18efaecb870c1fd7052222244b9f32",
+      "bytes": 4361120
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/instability-fb374a6c3c9c70cb/build-script-build",
+      "sha256": "33337b2a0598c7544d3578fe5c37620d6d18efaecb870c1fd7052222244b9f32",
+      "bytes": 4361120
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/zmij-75c67c11249bc167/build_script_build-75c67c11249bc167",
+      "sha256": "3919d4e27b8871a8d1fac6d84e50c48396a437131fe228e592b0c6c2d6886b19",
+      "bytes": 4671152
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/zmij-75c67c11249bc167/build-script-build",
+      "sha256": "3919d4e27b8871a8d1fac6d84e50c48396a437131fe228e592b0c6c2d6886b19",
+      "bytes": 4671152
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/rustversion-1218268bd94f1c10/build_script_build-1218268bd94f1c10",
+      "sha256": "9cb004b10facc91983fb5342b8951c90bf2d36ee0abbc8eef2ce3bd97e08c88c",
+      "bytes": 4855936
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/rustversion-1218268bd94f1c10/build-script-build",
+      "sha256": "9cb004b10facc91983fb5342b8951c90bf2d36ee0abbc8eef2ce3bd97e08c88c",
+      "bytes": 4855936
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/winapi-x86_64-pc-windows-gnu-3e58230c57a02288/build_script_build-3e58230c57a02288",
+      "sha256": "87beaee3a458309a0830bf34ee4257a5bd3dec7c487cb9dec5d61c17494ebbfa",
+      "bytes": 4389504
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/winapi-x86_64-pc-windows-gnu-3e58230c57a02288/build-script-build",
+      "sha256": "87beaee3a458309a0830bf34ee4257a5bd3dec7c487cb9dec5d61c17494ebbfa",
+      "bytes": 4389504
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/thiserror-941288bb0e8da530/build-script-build",
+      "sha256": "202a351ab1ee79180c06732a770ba74345d70c11d47ae94b353c0fef5d17d07c",
+      "bytes": 4891072
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/thiserror-941288bb0e8da530/build_script_build-941288bb0e8da530",
+      "sha256": "202a351ab1ee79180c06732a770ba74345d70c11d47ae94b353c0fef5d17d07c",
+      "bytes": 4891072
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/serde_json-6ba74129456a7bed/build_script_build-6ba74129456a7bed",
+      "sha256": "fe4725bfa5116fe43a1bf8b207b40aa54d2526db5f857e9a2a770359df6b633d",
+      "bytes": 4374104
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/build/serde_json-6ba74129456a7bed/build-script-build",
+      "sha256": "fe4725bfa5116fe43a1bf8b207b40aa54d2526db5f857e9a2a770359df6b633d",
+      "bytes": 4374104
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/deps/libdisplaydoc-a5cc070dedd924c2.so",
+      "sha256": "bb5e032a71355d45845dc097178dc34e71505bb796b29a59085d8acd50987b0a",
+      "bytes": 16341256
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/deps/libzerofrom_derive-227a4ea3f8c8f065.so",
+      "sha256": "8d31d1a0ea587c186f0dfac0c09d1068e86d9a8aa88059efb05525954472ae06",
+      "bytes": 20289448
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/deps/libzerovec_derive-9e9053e2f9068a2d.so",
+      "sha256": "47af519f4cb9ba53c20a2b1553e0683802d01823c6cc3846b8ad32f5c0ebd9f1",
+      "bytes": 16344888
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/deps/libindoc-83d20510ecb7ccd2.so",
+      "sha256": "5cb75e376265cdb7c979379515f1730a10f605f56a267cd7fb1454814cf05be3",
+      "bytes": 5955576
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/deps/libserde_derive-c09c417afc1f4594.so",
+      "sha256": "b109ee6267d55db3cb0003019c04c021ad5910b9e626590a0a29cf02c50d90f0",
+      "bytes": 20445352
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/deps/libstrum_macros-3142138110d83297.so",
+      "sha256": "5fec0402773a712ed4446d5a80519cf646723e0a560e97aa4104e01ca4654eb8",
+      "bytes": 18980032
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/deps/libtokio_macros-f107f813709b531a.so",
+      "sha256": "ea1bce9efe6ec47dea8950c1d7b6f5f4666baf0fdbc7bdfe47b7c84124757625",
+      "bytes": 15519688
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/deps/libthiserror_impl-fc1338a0835b29fb.so",
+      "sha256": "d3337cf765bc8e8b6eacb5190996a78ea07328f6f8334c1eedd708dc61c08ddc",
+      "bytes": 18129280
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/deps/librustversion-6e4ae997cac3a8f8.so",
+      "sha256": "d77d1a8efe7cae8a0b154a14ee86deabf64e9622b8aaa786fa8ecec6256c3625",
+      "bytes": 6370248
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/deps/libpaste-7c0bac34ed9aeb5d.so",
+      "sha256": "e9f22dee510e15175fa9bdfd7b2846c7ac3908e3e118b163fd45410d024f9df6",
+      "bytes": 6175008
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/deps/libinstability-1fe082ccfd22a982.so",
+      "sha256": "22ccc18a1b326c71403e9e8d9566388947f7cfa5a092e14ce52e1a691752fdb9",
+      "bytes": 20446688
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/deps/libdarling_macro-8bc56d055ced75f9.so",
+      "sha256": "bf4a80719b409884c227c27d95565b079295078dc70c26994288b66235af79b4",
+      "bytes": 21518744
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/debug/deps/libyoke_derive-1ddb6dda73a74853.so",
+      "sha256": "eb5eb6c33dce51c7d3802826479fc1fb806cf359fb5e86dcd06917e6081b7508",
+      "bytes": 19324104
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/minicore_tui-eb287aab915906ce.exe",
+      "sha256": "a1aa8fba8c0f09e540d5de134caee3c3592ff45a56edff53c470faa170a37856",
+      "bytes": 85758706
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/rail_fixtures-2873efdf148781bd.exe",
+      "sha256": "ccdb0430dc5778eae5477d5df5a1c91fbb7953e7eb49b4beb7d80a80a804b517",
+      "bytes": 78783919
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/terminal_restore-6bb147e816344525.exe",
+      "sha256": "3e7d18e862ebcca29abca3ed2a65edb975530545963142b33e71bec8c1ecc91d",
+      "bytes": 61682330
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/agent_process-0931538aa256083a.exe",
+      "sha256": "aaa4c831478639eba0ff7c136104c643d18aee4b8d861f545fa15b655bd0ec64",
+      "bytes": 8253202
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/protocol-d96f9efaa93758cb.exe",
+      "sha256": "d5f95039b1d473779d04509046c4c18b33fc0928ecbd0a7224d87925ddb6ff67",
+      "bytes": 76754750
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/minicore_tui-0292e79571773587.exe",
+      "sha256": "c490d2342f6666a74066f888c74c652c5fd6d64262ba526402a826f7c45bbbfe",
+      "bytes": 63892392
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/minicore_tui-429a339d17352be7.exe",
+      "sha256": "27212def7b9a302aac2277c336890ffe9cc746087a2e9966280f2aee1be9da53",
+      "bytes": 77881499
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/rail_fixtures-aa3f065120ca6465.exe",
+      "sha256": "ae1fc488b3143401bd050f9be4882b744a453a9853c8662cb4669e3bcd1921e2",
+      "bytes": 64019274
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/word_oracle-d3b177fc77114b4d.exe",
+      "sha256": "28e6a95aef9b19a1238580d4715126a3bd669e3db0ba80e61ee5a41ddafca57f",
+      "bytes": 76167843
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/app_flow-132b6ea87ca865f9.exe",
+      "sha256": "5f741467579379d0c46b665cc8a4fca28f74a7bc763c9c223df0d23f0c6b9950",
+      "bytes": 63732141
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/minicore_tui-5b324885400b3460.exe",
+      "sha256": "73d6f827628990516aacd77369e80b33352386659ad4a532fa4cd7de56b65b72",
+      "bytes": 63113479
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/protocol-d45fc2122900526c.exe",
+      "sha256": "bc8f06b240bbb3cfdce6b8ed3f616692f79f2f4f0d4356e38091e332e91d6407",
+      "bytes": 61992458
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/minicore_tui-16b9321cb943f155.exe",
+      "sha256": "055fd776672593c4d6977525254f77457096fa98bd74f39fc229339048854b06",
+      "bytes": 70908251
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/agent_e2e-c3ad7764a1064762.exe",
+      "sha256": "2fcaccbb7a97a8516912c377e3bcd84c011a577928756eb446dd37f90dfbdd3b",
+      "bytes": 83337691
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/minicore_tui-afb4e1e2c2b3a379.exe",
+      "sha256": "6045e1155450aa868caded246963da3921b4c4df304664f8d03fa1ff0cf023a9",
+      "bytes": 78657438
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/agent_process-bbbae59f71f5aebe.exe",
+      "sha256": "68b1e1922ed5117fad77590eafb6cb3edcce639b9b368f18075e17696cdcdbb1",
+      "bytes": 8253202
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/agent_e2e-ab1e62fdac64e58f.exe",
+      "sha256": "0224e083e129968070cd4979b203c5d9e2a10ba316bbe284d59b445b6a17d84d",
+      "bytes": 68573714
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/rpc_io-b6537681a37ac251.exe",
+      "sha256": "1d08d1834bc8d89df89c43874d6d74187995647a2b611ff10f7d1f3a2bfa1324",
+      "bytes": 61485941
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/app_flow-537c9374d817312e.exe",
+      "sha256": "cf3d3447d600d27f6bd78c515d4ea39014901203a329a9853843b368c28a079a",
+      "bytes": 78498529
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/render_snapshots-d609897b89f389b2.exe",
+      "sha256": "9ae9cb352b3d42976a9427fef03b83b8238e7b5b6f4ae82976bf56edfb2e1bdd",
+      "bytes": 76620344
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/rpc_io-725208f29b2f269e.exe",
+      "sha256": "43f00665cba161cbeed70f3f0e2aef5fd5016cd5b648be69ca4393bc98105f41",
+      "bytes": 76252729
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/word_oracle-3119aa3b96771f67.exe",
+      "sha256": "2dea229509c5f43ec35173c10e120822f557c12289a130d5ae873fbb3d494c2c",
+      "bytes": 61401055
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/render_snapshots-ce49b565bd666c17.exe",
+      "sha256": "4bf42c6e1692fd8cf22c71ec425e22285540bcf079508b088218eb7719352bf9",
+      "bytes": 61853556
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/deps/terminal_restore-29ba55b1cb3488b2.exe",
+      "sha256": "1d28589787ff36c7133f7b1d7e287abad29dd9fc5426d6e4c4c46406f2045be1",
+      "bytes": 76446502
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-cross/x86_64-pc-windows-gnu/debug/minicore-tui.exe",
+      "sha256": "27212def7b9a302aac2277c336890ffe9cc746087a2e9966280f2aee1be9da53",
+      "bytes": 77881499
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/libc-09314212c550b1c8/build_script_build-09314212c550b1c8",
+      "sha256": "1386a1772720bd03db6a4f50f1dd9f502b10a937ca8eb1333734408811ffcbf4",
+      "bytes": 4171392
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/libc-09314212c550b1c8/build-script-build",
+      "sha256": "1386a1772720bd03db6a4f50f1dd9f502b10a937ca8eb1333734408811ffcbf4",
+      "bytes": 4171392
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/paste-b8d1f1464afc0d7e/build-script-build",
+      "sha256": "c5b8388891d5135d3ee59a56f17433f331d2568d75f86dbf88b84f8f1ca56d31",
+      "bytes": 4088176
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/paste-b8d1f1464afc0d7e/build_script_build-b8d1f1464afc0d7e",
+      "sha256": "c5b8388891d5135d3ee59a56f17433f331d2568d75f86dbf88b84f8f1ca56d31",
+      "bytes": 4088176
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/zmij-da74f3e9e587404c/build_script_build-da74f3e9e587404c",
+      "sha256": "b8a7689a882477f75d41099656545afd0cf7f3a78179b79cf42f55e3f9631c78",
+      "bytes": 4098192
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/zmij-da74f3e9e587404c/build-script-build",
+      "sha256": "b8a7689a882477f75d41099656545afd0cf7f3a78179b79cf42f55e3f9631c78",
+      "bytes": 4098192
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/proc-macro2-40e1e5b5938eb54b/build_script_build-40e1e5b5938eb54b",
+      "sha256": "e0e09ca86afb6ac9a343ed46b164ea317a35cf295e523c55d86b4afece2bd9fe",
+      "bytes": 4150128
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/proc-macro2-40e1e5b5938eb54b/build-script-build",
+      "sha256": "e0e09ca86afb6ac9a343ed46b164ea317a35cf295e523c55d86b4afece2bd9fe",
+      "bytes": 4150128
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/thiserror-a821c8960f9b7493/build_script_build-a821c8960f9b7493",
+      "sha256": "396849cb1d8f0085e2ee5b6d84d6100d602a6c935d60a7cac5b204028ac9f5ef",
+      "bytes": 4170328
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/thiserror-a821c8960f9b7493/build-script-build",
+      "sha256": "396849cb1d8f0085e2ee5b6d84d6100d602a6c935d60a7cac5b204028ac9f5ef",
+      "bytes": 4170328
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/icu_locale_data-4ea59e6f8756b8af/build_script_build-4ea59e6f8756b8af",
+      "sha256": "55408c25627a7d1da95d2fe45574e4f5622e492ad9f4b71ffb6b0cfd022df64d",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/icu_locale_data-4ea59e6f8756b8af/build-script-build",
+      "sha256": "55408c25627a7d1da95d2fe45574e4f5622e492ad9f4b71ffb6b0cfd022df64d",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/rustix-33f06ad1769893f4/build-script-build",
+      "sha256": "78006bb4c091ca40bb5ed62ab5c72421772032e42bf308959060ca35a46553ba",
+      "bytes": 4149464
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/rustix-33f06ad1769893f4/build_script_build-33f06ad1769893f4",
+      "sha256": "78006bb4c091ca40bb5ed62ab5c72421772032e42bf308959060ca35a46553ba",
+      "bytes": 4149464
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/quote-ff82b0dca036a282/build_script_build-ff82b0dca036a282",
+      "sha256": "23eacabbcb0be9d34941cb54acf70369df2fc73cac6d2028c6591c22526834cc",
+      "bytes": 4088072
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/quote-ff82b0dca036a282/build-script-build",
+      "sha256": "23eacabbcb0be9d34941cb54acf70369df2fc73cac6d2028c6591c22526834cc",
+      "bytes": 4088072
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/instability-3cb98148702ce047/build_script_build-3cb98148702ce047",
+      "sha256": "6571589f39a84a174950a31e13e974c7262fcbdd658617319b05cef0258397e3",
+      "bytes": 3975000
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/instability-3cb98148702ce047/build-script-build",
+      "sha256": "6571589f39a84a174950a31e13e974c7262fcbdd658617319b05cef0258397e3",
+      "bytes": 3975000
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/serde-80ffa617eca8fd12/build_script_build-80ffa617eca8fd12",
+      "sha256": "32a6cb90143cabb1980d5714f0f54759965036419d5da1dc9b8228b40694d1cc",
+      "bytes": 4122464
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/serde-80ffa617eca8fd12/build-script-build",
+      "sha256": "32a6cb90143cabb1980d5714f0f54759965036419d5da1dc9b8228b40694d1cc",
+      "bytes": 4122464
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/icu_segmenter_data-6a86baf66e1a9236/build_script_build-6a86baf66e1a9236",
+      "sha256": "f7c78ad7125306041c1685c5e95f3dfd664b93536981f1e171fe97c67228a48a",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/icu_segmenter_data-6a86baf66e1a9236/build-script-build",
+      "sha256": "f7c78ad7125306041c1685c5e95f3dfd664b93536981f1e171fe97c67228a48a",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/parking_lot_core-76abbe1947b2e382/build_script_build-76abbe1947b2e382",
+      "sha256": "56ee418249bbf500741dac4167cec0c7f808101ed29c81f2f603567aa73015b8",
+      "bytes": 4006344
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/parking_lot_core-76abbe1947b2e382/build-script-build",
+      "sha256": "56ee418249bbf500741dac4167cec0c7f808101ed29c81f2f603567aa73015b8",
+      "bytes": 4006344
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/icu_properties_data-328c9e575586bef7/build_script_build-328c9e575586bef7",
+      "sha256": "b2140d6aa326fd0b99f3497adcff305a8d9752d3bc5db27e9a57f0ed66470b18",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/icu_properties_data-328c9e575586bef7/build-script-build",
+      "sha256": "b2140d6aa326fd0b99f3497adcff305a8d9752d3bc5db27e9a57f0ed66470b18",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/libm-a5f4628cd731c801/build-script-build",
+      "sha256": "a01915c11494896bb45388ef5a33e55e984dad50cbe1c99ad718945c9f45b3bf",
+      "bytes": 4074360
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/libm-a5f4628cd731c801/build_script_build-a5f4628cd731c801",
+      "sha256": "a01915c11494896bb45388ef5a33e55e984dad50cbe1c99ad718945c9f45b3bf",
+      "bytes": 4074360
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/icu_normalizer_data-9cbf8a21df549c51/build_script_build-9cbf8a21df549c51",
+      "sha256": "cadd83157ac6a0246b9acf78bfa97811b5257fdf5bc92859a854a14936881fd5",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/icu_normalizer_data-9cbf8a21df549c51/build-script-build",
+      "sha256": "cadd83157ac6a0246b9acf78bfa97811b5257fdf5bc92859a854a14936881fd5",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/rustversion-af3c1f7d726f7958/build_script_build-af3c1f7d726f7958",
+      "sha256": "8019efad699b42b96ce203679622169d12ea17718c2f061281301bb02f2dcc50",
+      "bytes": 4152584
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/rustversion-af3c1f7d726f7958/build-script-build",
+      "sha256": "8019efad699b42b96ce203679622169d12ea17718c2f061281301bb02f2dcc50",
+      "bytes": 4152584
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/pulldown-cmark-c4c37c6b3e6790c2/build_script_build-c4c37c6b3e6790c2",
+      "sha256": "b678779fad24783987bd85c0db111753284587b2cbdba92493a3f9aad9442fa0",
+      "bytes": 3965296
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/pulldown-cmark-c4c37c6b3e6790c2/build-script-build",
+      "sha256": "b678779fad24783987bd85c0db111753284587b2cbdba92493a3f9aad9442fa0",
+      "bytes": 3965296
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/serde_json-8d2d36732f4d5387/build_script_build-8d2d36732f4d5387",
+      "sha256": "507830cae9d77fdb298531db1e4fcb091ef61071bbdabe1248b220921601717b",
+      "bytes": 3976184
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/serde_json-8d2d36732f4d5387/build-script-build",
+      "sha256": "507830cae9d77fdb298531db1e4fcb091ef61071bbdabe1248b220921601717b",
+      "bytes": 3976184
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/signal-hook-4f09dcfd1b1fc65d/build-script-build",
+      "sha256": "429289a7024ae63ded77b3ebafa42211976b13ae04b06ed9644a81113d0439ff",
+      "bytes": 3965184
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/signal-hook-4f09dcfd1b1fc65d/build_script_build-4f09dcfd1b1fc65d",
+      "sha256": "429289a7024ae63ded77b3ebafa42211976b13ae04b06ed9644a81113d0439ff",
+      "bytes": 3965184
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/serde_core-899581865f4b9050/build_script_build-899581865f4b9050",
+      "sha256": "585fe85ff86e83785615765be160d81a9c7420ba9a21f7bbae167ddf5269ff39",
+      "bytes": 4127208
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/build/serde_core-899581865f4b9050/build-script-build",
+      "sha256": "585fe85ff86e83785615765be160d81a9c7420ba9a21f7bbae167ddf5269ff39",
+      "bytes": 4127208
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/minicore_tui-929c84701d839acf",
+      "sha256": "53545bbd2c9e61286aba4be6079789abee156005f730aab35e6e63cc096decb2",
+      "bytes": 61943944
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/word_oracle-c1b27d86f234d9d2",
+      "sha256": "35d96c8978bf048ff2092ae0454b86987f5891e3c5233e601531db93ec66b5cb",
+      "bytes": 36865864
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/libtokio_macros-d53c15de4fc1f0dd.so",
+      "sha256": "c72bafae54d8fc9de4e9ff643bc943d90ddff2fbb339a8d9d62f02cdef9d7aa8",
+      "bytes": 8061824
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/libinstability-c09bea43150aa6cf.so",
+      "sha256": "503e7bd10b8c6e1bf263fcc4294dbc04294ff0113a3deeba3dee5cd1baefd9e8",
+      "bytes": 8113936
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/libthiserror_impl-ed357a82ca1c24ec.so",
+      "sha256": "ece9570a6a287cf4d81f9995b0399d89cf7797ec8b74a9f16e392ebe94550c68",
+      "bytes": 8544152
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/libpaste-5cc14007e3280d61.so",
+      "sha256": "4c780af581aca99be31649ce16d0415557fd4578797050030c46f4cb134cd1be",
+      "bytes": 5586592
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/minicore_tui-100d5b788118472c",
+      "sha256": "23f702ab39f7938d6fd45f7c82ebc04cdc06a7a2f591c4c1395b28642de16334",
+      "bytes": 46946512
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/libdarling_macro-3afafe7c9cce780d.so",
+      "sha256": "46887bfc57f3a52b6173619e43809c48fe322f9ced15999cb26535d3ce25740a",
+      "bytes": 9232240
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/agent_process-63a4f8187893c641",
+      "sha256": "ed24317077e3f30e7ac7c660e23c157f704d5d24cb8df7a826bcd3a39d017372",
+      "bytes": 6450240
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/app_flow-66121b34ab8ca177",
+      "sha256": "98e459604d047575b37506554983e8f2b5dc056e2ffa7ea4351ccd942c663a59",
+      "bytes": 53956216
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/rail_fixtures-1ab5be5e5cad0a80",
+      "sha256": "283dcba1de5ca057aca8d2ec23ab350e8c239aaf12d59e1a3bb0c6704c5eccf7",
+      "bytes": 44889616
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/terminal_restore-144db22c75e06700",
+      "sha256": "0b16bf925bd7539652ede91b11b0370146fc99c941024f3c8b5ab1814488091c",
+      "bytes": 37211296
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/minicore_tui-20572d0a5ec5c3a9",
+      "sha256": "8dcc768e070804665af4160d90b981c06717a9846d29993898bcafc114a5af65",
+      "bytes": 47011496
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/protocol-c3708fc3518b1304",
+      "sha256": "a3c9bbfe97704da5d6a51ec2982d5f2e5263c5d438016d81f7e74f7d1e2ef577",
+      "bytes": 45617048
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/render_snapshots-0a9c6d79297764f0",
+      "sha256": "4150bba37e15d3664e8bc59a0ddbccbefe06a212f8b52d6579e89863fff3c3ca",
+      "bytes": 51921384
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/librustversion-b4345a2f797913b0.so",
+      "sha256": "db9233bd2affa09949c093b9f5ba3db2c0e269384bbc5bb7cfbabe3e0fdb12fb",
+      "bytes": 5612168
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/libserde_derive-2222dcd9cc505602.so",
+      "sha256": "3c171dc6be6d0a5975a746b739ef91604fd92269e4d05b2af966220c96bdeac8",
+      "bytes": 9406064
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/minicore_tui-64635c1262527af5",
+      "sha256": "ea27c8db421b38ea2a4ac72cb1239407dc6f66f3a49b537e76c48ba56ef7f419",
+      "bytes": 55825208
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/libstrum_macros-86917de0124e841b.so",
+      "sha256": "d9127dceab4795ee989339403e553d6537d4e13e6a75fb896e23cbca2ecde0af",
+      "bytes": 9122496
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/protocol-01cf8fe9835c2abd",
+      "sha256": "25d954de52545b3cf8761730358f76aef9bbef7b80b88957a1c0205f5e1f95d3",
+      "bytes": 39538912
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/rpc_io-5780abc7de1cdfb1",
+      "sha256": "3f114cf55ea11b7c8ea80ad18fe6b5ec4ffb6c27201a518d7dec79437c11d9e7",
+      "bytes": 39602576
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/rail_fixtures-393fb016371a839d",
+      "sha256": "15a673e91fd3bf50c40a892b72535eb3fbad57b084efcef99736b5d599a516d0",
+      "bytes": 53701448
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/word_oracle-74c65db11d24ec06",
+      "sha256": "e21b496d10069b802b4eb3d1093b5b17a9378455dd44f8bf5e8d614827ea67d5",
+      "bytes": 45605696
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/libyoke_derive-0277c6e68c863e01.so",
+      "sha256": "8b3653edf7999e1b61fea0b680f023164815946c8eecfc2be5b776c247be9786",
+      "bytes": 8643584
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/render_snapshots-a6466f212759b888",
+      "sha256": "b1e9ac180bdee912c976530d6390b4d6d9858d250927972750b0288c03c05ae1",
+      "bytes": 43111472
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/libdisplaydoc-f7ce3cd5bce52f3f.so",
+      "sha256": "17d6eb27767984c32ed2721750448c7d810af404c11031f75fe4615046911df0",
+      "bytes": 8128680
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/libindoc-4b46719a0ceec546.so",
+      "sha256": "3507b6bc339930962213daa7b4df293f64091a56ce5242ebe1a6a8ef2cff7709",
+      "bytes": 5504272
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/agent_e2e-f05f752d3ed36895",
+      "sha256": "39f2b17e85621d746a39012deb4060ec4d4979df8ead474ecaa10a97d98b59cb",
+      "bytes": 50321440
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/terminal_restore-0b814fe789829c5f",
+      "sha256": "f76a65d26e756d56156587a10c76cc23b86b07f73d9d6ee0a4e20d183e5ece22",
+      "bytes": 43280136
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/agent_e2e-47cc45e127524b76",
+      "sha256": "7fd2b6374e8c3a56de61ec73110120c9b578e86b951816ed8cac585a7647094c",
+      "bytes": 59127464
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/minicore_tui-c426f595093537cb",
+      "sha256": "87fda58a4ddc25669130e5d54dc360c4e4b8ff174bc9daf046acbd73182db7b9",
+      "bytes": 53123720
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/rpc_io-e679c031b0b0705f",
+      "sha256": "c7c3a7fb8ef18b4eb78118c544abc4008d7dc6d5a5dc41bd419e1e17762bf7ce",
+      "bytes": 45680640
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/app_flow-8efa46c4797dd18f",
+      "sha256": "68255771584e3ea4a0ea1c673a8176b7cd8414d16a0d4478ff31ff33ee665437",
+      "bytes": 45147328
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/libzerovec_derive-4b284451b929876e.so",
+      "sha256": "8887df2ebdc53dfb16b5f3c1a76e1e36c592cc7f3f3951b374208d3ca930bd7e",
+      "bytes": 8446472
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/libzerofrom_derive-4897a161fd5a0624.so",
+      "sha256": "fd7571460fd2f37339eb74554fcb0051fdc2c76ce7a2ebc4f1b0967339b2389a",
+      "bytes": 8922152
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/agent_process-9bc45f0792ce147c",
+      "sha256": "d739f58c7b74855d29ca14ddedaf8ccfe6386b24eef0a939a5e4eb3d658c18d2",
+      "bytes": 6450224
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/deps/minicore_tui-bba73f490e6827eb",
+      "sha256": "0babff78731f98b07b13a61b486649b35f286936731cb0772c701666b1ce83de",
+      "bytes": 55762032
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-msrv/debug/minicore-tui",
+      "sha256": "0babff78731f98b07b13a61b486649b35f286936731cb0772c701666b1ce83de",
+      "bytes": 55762032
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/paste-f0fd735125c647b5/build_script_build-f0fd735125c647b5",
+      "sha256": "aca8bf76551c3f9efd7ebdd29ad673263fdbe1ac13a7b2718ab4486662923688",
+      "bytes": 4465504
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/paste-f0fd735125c647b5/build-script-build",
+      "sha256": "aca8bf76551c3f9efd7ebdd29ad673263fdbe1ac13a7b2718ab4486662923688",
+      "bytes": 4465504
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/rustix-fbf1ee0ddd15e5aa/build_script_build-fbf1ee0ddd15e5aa",
+      "sha256": "b94dcc20e3265f357662ef29bf797378eb7deb94aa55ef6d9881b0d4146518ac",
+      "bytes": 4524048
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/rustix-fbf1ee0ddd15e5aa/build-script-build",
+      "sha256": "b94dcc20e3265f357662ef29bf797378eb7deb94aa55ef6d9881b0d4146518ac",
+      "bytes": 4524048
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/zmij-37c7a7b83a60607f/build_script_build-37c7a7b83a60607f",
+      "sha256": "90de9003aa62da71cbbb22e5466a2638199148b272270833633861afc3d95d4c",
+      "bytes": 4470624
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/zmij-37c7a7b83a60607f/build-script-build",
+      "sha256": "90de9003aa62da71cbbb22e5466a2638199148b272270833633861afc3d95d4c",
+      "bytes": 4470624
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/serde-047fb28ec31c7b7d/build_script_build-047fb28ec31c7b7d",
+      "sha256": "499670944583c4f8815501463aaf629259991c4fad9a57470a8bee8f3d8ff36b",
+      "bytes": 4497056
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/serde-047fb28ec31c7b7d/build-script-build",
+      "sha256": "499670944583c4f8815501463aaf629259991c4fad9a57470a8bee8f3d8ff36b",
+      "bytes": 4497056
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/rustversion-b0526d303ea2073d/build-script-build",
+      "sha256": "37c6f9dcd7c0a16a5f119492a38d0e700d4a55331529ca9741719a6accac72a7",
+      "bytes": 4530464
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/rustversion-b0526d303ea2073d/build_script_build-b0526d303ea2073d",
+      "sha256": "37c6f9dcd7c0a16a5f119492a38d0e700d4a55331529ca9741719a6accac72a7",
+      "bytes": 4530464
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/thiserror-b1616fa922246467/build_script_build-b1616fa922246467",
+      "sha256": "ca980508d34a4d46b9c73ef3e1fcdbccc79d08669dfd4f51d0b046753b4c7b9a",
+      "bytes": 4547456
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/thiserror-b1616fa922246467/build-script-build",
+      "sha256": "ca980508d34a4d46b9c73ef3e1fcdbccc79d08669dfd4f51d0b046753b4c7b9a",
+      "bytes": 4547456
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/libm-53b887460510b5e4/build_script_build-53b887460510b5e4",
+      "sha256": "7bcbbf43fddbdc38fa13f1b291086b6eb957fb46d048178d76495e29ff896063",
+      "bytes": 4452312
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/libm-53b887460510b5e4/build-script-build",
+      "sha256": "7bcbbf43fddbdc38fa13f1b291086b6eb957fb46d048178d76495e29ff896063",
+      "bytes": 4452312
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/signal-hook-f19090f62ea3eded/build_script_build-f19090f62ea3eded",
+      "sha256": "951d140055658a3f0258e9b394bbb3e5ffdeabfc5de74b57b4937257fb15fc06",
+      "bytes": 4347544
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/signal-hook-f19090f62ea3eded/build-script-build",
+      "sha256": "951d140055658a3f0258e9b394bbb3e5ffdeabfc5de74b57b4937257fb15fc06",
+      "bytes": 4347544
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/instability-8fee1ff5cf499415/build_script_build-8fee1ff5cf499415",
+      "sha256": "940c902934d780085536e9177c01fcf44ea839e69daa426da872c7b01def538a",
+      "bytes": 4354904
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/instability-8fee1ff5cf499415/build-script-build",
+      "sha256": "940c902934d780085536e9177c01fcf44ea839e69daa426da872c7b01def538a",
+      "bytes": 4354904
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/libc-19124a20af635abc/build_script_build-19124a20af635abc",
+      "sha256": "b2386552a37f07b0b91cbe419c4820a8353305af02bdadca9fac815b54a1c350",
+      "bytes": 4549736
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/libc-19124a20af635abc/build-script-build",
+      "sha256": "b2386552a37f07b0b91cbe419c4820a8353305af02bdadca9fac815b54a1c350",
+      "bytes": 4549736
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/parking_lot_core-52063db600f06e4d/build_script_build-52063db600f06e4d",
+      "sha256": "130facee86cf25f39b36ac589ee8229c4f5ddb27b5c2b70e88f73160debc91f9",
+      "bytes": 4387872
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/parking_lot_core-52063db600f06e4d/build-script-build",
+      "sha256": "130facee86cf25f39b36ac589ee8229c4f5ddb27b5c2b70e88f73160debc91f9",
+      "bytes": 4387872
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/serde_core-f2ae637853f690ee/build_script_build-f2ae637853f690ee",
+      "sha256": "73142f9880534eb66bf34b1e0d2f5b442d95cfafe5f28073f55e33640138b7e7",
+      "bytes": 4499880
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/serde_core-f2ae637853f690ee/build-script-build",
+      "sha256": "73142f9880534eb66bf34b1e0d2f5b442d95cfafe5f28073f55e33640138b7e7",
+      "bytes": 4499880
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/icu_segmenter_data-dc9503f65c586636/build_script_build-dc9503f65c586636",
+      "sha256": "b1d8751aaf4a58594fad3f18206e0497c08052a8e5df76771cfd7f4fbaeb53c5",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/icu_segmenter_data-dc9503f65c586636/build-script-build",
+      "sha256": "b1d8751aaf4a58594fad3f18206e0497c08052a8e5df76771cfd7f4fbaeb53c5",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/pulldown-cmark-0dd695f554181b9c/build_script_build-0dd695f554181b9c",
+      "sha256": "7a32da077ea1bfa7a6e0757315166c02f991072c868027d5d288f37ffb12a257",
+      "bytes": 4347680
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/pulldown-cmark-0dd695f554181b9c/build-script-build",
+      "sha256": "7a32da077ea1bfa7a6e0757315166c02f991072c868027d5d288f37ffb12a257",
+      "bytes": 4347680
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/serde_json-2c0a994303fe8e5c/build_script_build-2c0a994303fe8e5c",
+      "sha256": "91e6bb5e653da2521864cff1bccd560e34104ae9c2b63fa6b309eaa72efdb74d",
+      "bytes": 4359240
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/serde_json-2c0a994303fe8e5c/build-script-build",
+      "sha256": "91e6bb5e653da2521864cff1bccd560e34104ae9c2b63fa6b309eaa72efdb74d",
+      "bytes": 4359240
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/icu_properties_data-f9b06ae72535caa7/build_script_build-f9b06ae72535caa7",
+      "sha256": "f8edf8091106af0822197d0475eccb9ac5afcdc4507830693b98b6c456fc4aca",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/icu_properties_data-f9b06ae72535caa7/build-script-build",
+      "sha256": "f8edf8091106af0822197d0475eccb9ac5afcdc4507830693b98b6c456fc4aca",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/icu_normalizer_data-7fa05c0e338d0e43/build-script-build",
+      "sha256": "b46945de8c962efd78c43abde67890bc747932ebecc27cc7374c53c8045b5ec0",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/icu_normalizer_data-7fa05c0e338d0e43/build_script_build-7fa05c0e338d0e43",
+      "sha256": "b46945de8c962efd78c43abde67890bc747932ebecc27cc7374c53c8045b5ec0",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/proc-macro2-7d0ed4e509752a35/build-script-build",
+      "sha256": "aa979b864f4a4e98456574706c62de6fdedc12b62faa891b7a790664bb286aef",
+      "bytes": 4524120
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/proc-macro2-7d0ed4e509752a35/build_script_build-7d0ed4e509752a35",
+      "sha256": "aa979b864f4a4e98456574706c62de6fdedc12b62faa891b7a790664bb286aef",
+      "bytes": 4524120
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/icu_locale_data-cb6bb43cc5fbf368/build_script_build-cb6bb43cc5fbf368",
+      "sha256": "5458742a614e84fe2e6bb0de3ad917c466a1e3e30714e9fdc33907b11c379b7a",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/icu_locale_data-cb6bb43cc5fbf368/build-script-build",
+      "sha256": "5458742a614e84fe2e6bb0de3ad917c466a1e3e30714e9fdc33907b11c379b7a",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/quote-6dff9724e4e81362/build_script_build-6dff9724e4e81362",
+      "sha256": "c4388fe4ef6d4f7938f9432bf020c7bcfa81dc7c9ecc2522d8574507ff044430",
+      "bytes": 4465072
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/build/quote-6dff9724e4e81362/build-script-build",
+      "sha256": "c4388fe4ef6d4f7938f9432bf020c7bcfa81dc7c9ecc2522d8574507ff044430",
+      "bytes": 4465072
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/minicore_tui-ef138e7384294e93",
+      "sha256": "a03a0e3ab134d9ff37ca32589e0d72b72b4d889c701c32c83bf7dc897633cfb3",
+      "bytes": 63113864
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/protocol-90e02638fcf8ac9d",
+      "sha256": "69b14ed92de89715dc901eca47d50e7527f00e2cb077ef0f07fce8f3de309541",
+      "bytes": 45155392
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/libserde_derive-aae5f77b6f183704.so",
+      "sha256": "149f44cd31707bce5c99ae8a351ea222e542b24adfd1dd4455cfeba05c2a5da5",
+      "bytes": 9866312
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/word_oracle-9b182b7949950e04",
+      "sha256": "c3d989f95995af05c5241569a36ff9e03a8578ba2db503e70a3f1ee34fe3d058",
+      "bytes": 41944544
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/agent_e2e-8956ce6a44250b70",
+      "sha256": "44961b9fd75f21d3e49961507631abee54a726b35d21ded294923923e942a10d",
+      "bytes": 57659064
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/minicore_tui-81b2da05fe7b2b86",
+      "sha256": "6d55e0c01eef6d4b844fb09537ccd184b9e4371cd185f53165dcbdd8ceea6ff2",
+      "bytes": 53674800
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/libthiserror_impl-c45a74476924386f.so",
+      "sha256": "577923ab46157f38c84c9f5386c29dfa8297486266c5ce055828b3bb9c06918b",
+      "bytes": 8849232
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/agent_process-f1a73096f6ad56ee",
+      "sha256": "9d8cc3027b491149750f9329ca8a0a5699e19056a48af40a85254cfd16acdf8a",
+      "bytes": 6979536
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/minicore_tui-20e2ea8c8085caed",
+      "sha256": "c34d51304cb0e3bf87174a8c7d21798c7a6bf7c43de260a9e7c1888153e3533f",
+      "bytes": 70556416
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/libdarling_macro-d0c4787e8e197f99.so",
+      "sha256": "1ffd2a1dc54deffe5e3f89ad0c6cc004f6c489a3eab54c585f9e28dec212bd4b",
+      "bytes": 9717128
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/app_flow-c71cc3361eb5c129",
+      "sha256": "ed1a10586d7ebf7f3519fe69c80e099b93b664dc20aab12d3d6d6d29d50d7d39",
+      "bytes": 51390968
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/agent_process-b390e2e576e53b44",
+      "sha256": "d030cd891f00bad1aa29cdfc12da24af327fcb56f2eeb33cea002ce957a05bd0",
+      "bytes": 6979520
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/rail_fixtures-5769735e4e54a6f3",
+      "sha256": "08b569e8962d6bf7ef7c976be00bae474838fed4419e332e8d6a780ebf3836dd",
+      "bytes": 51057128
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/libyoke_derive-283e6c6ccebd5ab5.so",
+      "sha256": "e754283b3367b596fce23a1732078a1b6cedc6fc05d02461610e677eceaa6ca5",
+      "bytes": 9149208
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/render_snapshots-65074a3269b70597",
+      "sha256": "bae5ced794f3afb6efa795d537de788ffec6d1eee51275c9336b96a92df26b14",
+      "bytes": 49025768
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/word_oracle-1d4a74a39bc65388",
+      "sha256": "17fe180d2ad6ab02d5dac63bbb9ed555e610c4a807076aad065886f8b241773f",
+      "bytes": 51287480
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/libzerovec_derive-3212de27759fb781.so",
+      "sha256": "30e3dab7ddd956f5643a0f2c24751515cc03cdfcf067837af883ad1ff17e9b5f",
+      "bytes": 8751576
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/terminal_restore-3e95b7e134218452",
+      "sha256": "2fd17c04f2dd05dd3c8575978793f71d3f6458fc8685a861e324591cc9970e97",
+      "bytes": 49044576
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/rail_fixtures-5630a201bf0937db",
+      "sha256": "c9227afef3acc59a46d6ccde51f3a0352370d295d332a09be29987bf1ce6dd14",
+      "bytes": 60460080
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/libdarling_macro-7fbf526e69decf9c.so",
+      "sha256": "e0c93196fe4f2ecf53467e286f2a1ef089439b47edc58d1d68321af613d7197f",
+      "bytes": 9710448
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/terminal_restore-19b16f49f6dcdf23",
+      "sha256": "ae156480a0db08fd8f3c084eaeb2c32f9e0ccd0d4b4c7d64668a2981c3329a15",
+      "bytes": 42402736
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/libserde_derive-8643e101b88cb90a.so",
+      "sha256": "8c5e3b2895e648de8c934b81b63c4b0c83245c7715ada2da70395fb962419a35",
+      "bytes": 9870576
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/libinstability-4ac5e122d8e2993c.so",
+      "sha256": "b9f88af77e80e74a0d58a0acf2148a2cdf357d51d10946649ee9c45adfd68d36",
+      "bytes": 8489496
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/app_flow-9e0aed225ec106ad",
+      "sha256": "53bdb7d4fa03130d5eb9768b1ae9bb4ef9d660d453d8a83a6976b14d7b65d1e6",
+      "bytes": 60795040
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/libthiserror_impl-9458ebdf4ab16962.so",
+      "sha256": "eae3ff16884d59dd31c31d05378f70add6bf35a43db72f9a5bfd53765df1cfad",
+      "bytes": 8864432
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/render_snapshots-793320a5f8a38e90",
+      "sha256": "3327fd7560bb1b940e0cabd45c95167c26ad5dd33d8808c071f4bb9bc9f925ba",
+      "bytes": 58431536
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/librustversion-d7df6ce16ce770b8.so",
+      "sha256": "98ed145663f40f960efc1f7b52ce5b7dbe7607d6871a8f8428ca343985f73da9",
+      "bytes": 5640456
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/protocol-13c3800b7c69934a",
+      "sha256": "1471d915d51dec7a50ba13d0fb3cf058ef579fad9f9d715fcdd233a606084bfc",
+      "bytes": 51804768
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/agent_e2e-021e2258bb743203",
+      "sha256": "187cdcd59c2f78f78fa25ab9e2ec8b7482a8b45a01ab41d46b606083f7ed0f6c",
+      "bytes": 67062584
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/minicore_tui-eafb4e012ae5add1",
+      "sha256": "555afb1632dc4f97c68b07eba172411439273702566cc12cb0770d5da39cda03",
+      "bytes": 53706800
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/libindoc-cfcff364e6cdfcc8.so",
+      "sha256": "3c7c3745b9d5011b6e8207b1a95d9727932fb2d7acfa2f0fc207749093af472c",
+      "bytes": 5519400
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/libstrum_macros-ff7a64a350cf6c73.so",
+      "sha256": "55aba714c751901c3d84cf985f0ce23a46ca22cd8b56f025070b454c23786549",
+      "bytes": 9526936
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/libstrum_macros-b48fd722c67f8667.so",
+      "sha256": "9a57da44ae89cd09fbf6e6c6c7eaacdc96fafa818bbe38c6407011f46c3639f7",
+      "bytes": 9533584
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/minicore_tui-a12f03a0fbfd81b8",
+      "sha256": "38d1130b54ca1f8e8c5fd09321a537ad578a3c5b2c17fc8b8293dce28c44cff9",
+      "bytes": 61208648
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/libzerofrom_derive-8adb8aa89aa4f1ca.so",
+      "sha256": "863a46a7313e5327d9aa50be24a8dac26be17dbb221f6057a1794fa5c027d801",
+      "bytes": 9526752
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/libinstability-b5aedb9e7d0f41b1.so",
+      "sha256": "557ba94b13bcd94aaf710e08a44f2617024cdca47ec5001da45dfbbd7512ec76",
+      "bytes": 8494704
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/libtokio_macros-4f1d1222e8b945ba.so",
+      "sha256": "bbda8a3cab21da88581ccc49479aa22d613ee800cd338cacd86801edf99032d9",
+      "bytes": 8355504
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/libdisplaydoc-42a4aaa0bff0a159.so",
+      "sha256": "dce24ac5c53f4390fd5954975697699603e5e7bd002418460f60b4ead078f9bf",
+      "bytes": 8460904
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/rpc_io-d4cb659ba8663301",
+      "sha256": "b43af97aa03043e89628a93696c197a409a3ec27df7b4505ebce814318a908d9",
+      "bytes": 52095544
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/minicore_tui-6a14ba7fe9365e81",
+      "sha256": "94af2184334e8ce6e4e49d381bcc34afdcd386b2dc1dfad260be84e3c963848b",
+      "bytes": 63079520
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/libpaste-a03d36d0470502fc.so",
+      "sha256": "8c61b62b5530ede5b9cf8978b242c37fc0b1112e3cb638f62ec49dbdf49b5595",
+      "bytes": 5579600
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/libtokio_macros-bd1b525e01c11e3b.so",
+      "sha256": "24f7c6ccbed19c4b498294fe595f40d0512f1e90d942d66a7a97a44c53876501",
+      "bytes": 8357032
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/deps/rpc_io-7f0a96df48a54ab0",
+      "sha256": "314c372a493e64f72d9b731aec296d0b3545dfe1b14969a2111a9e8efc33fd37",
+      "bytes": 45442656
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/build-tui-stable/debug/minicore-tui",
+      "sha256": "a03a0e3ab134d9ff37ca32589e0d72b72b4d889c701c32c83bf7dc897633cfb3",
+      "bytes": 63113864
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/libc-09314212c550b1c8/build_script_build-09314212c550b1c8",
+      "sha256": "1386a1772720bd03db6a4f50f1dd9f502b10a937ca8eb1333734408811ffcbf4",
+      "bytes": 4171392
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/libc-09314212c550b1c8/build-script-build",
+      "sha256": "1386a1772720bd03db6a4f50f1dd9f502b10a937ca8eb1333734408811ffcbf4",
+      "bytes": 4171392
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/paste-b8d1f1464afc0d7e/build-script-build",
+      "sha256": "c5b8388891d5135d3ee59a56f17433f331d2568d75f86dbf88b84f8f1ca56d31",
+      "bytes": 4088176
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/paste-b8d1f1464afc0d7e/build_script_build-b8d1f1464afc0d7e",
+      "sha256": "c5b8388891d5135d3ee59a56f17433f331d2568d75f86dbf88b84f8f1ca56d31",
+      "bytes": 4088176
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/zmij-da74f3e9e587404c/build_script_build-da74f3e9e587404c",
+      "sha256": "b8a7689a882477f75d41099656545afd0cf7f3a78179b79cf42f55e3f9631c78",
+      "bytes": 4098192
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/zmij-da74f3e9e587404c/build-script-build",
+      "sha256": "b8a7689a882477f75d41099656545afd0cf7f3a78179b79cf42f55e3f9631c78",
+      "bytes": 4098192
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/proc-macro2-40e1e5b5938eb54b/build_script_build-40e1e5b5938eb54b",
+      "sha256": "e0e09ca86afb6ac9a343ed46b164ea317a35cf295e523c55d86b4afece2bd9fe",
+      "bytes": 4150128
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/proc-macro2-40e1e5b5938eb54b/build-script-build",
+      "sha256": "e0e09ca86afb6ac9a343ed46b164ea317a35cf295e523c55d86b4afece2bd9fe",
+      "bytes": 4150128
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/thiserror-a821c8960f9b7493/build_script_build-a821c8960f9b7493",
+      "sha256": "396849cb1d8f0085e2ee5b6d84d6100d602a6c935d60a7cac5b204028ac9f5ef",
+      "bytes": 4170328
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/thiserror-a821c8960f9b7493/build-script-build",
+      "sha256": "396849cb1d8f0085e2ee5b6d84d6100d602a6c935d60a7cac5b204028ac9f5ef",
+      "bytes": 4170328
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/rustix-33f06ad1769893f4/build-script-build",
+      "sha256": "78006bb4c091ca40bb5ed62ab5c72421772032e42bf308959060ca35a46553ba",
+      "bytes": 4149464
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/rustix-33f06ad1769893f4/build_script_build-33f06ad1769893f4",
+      "sha256": "78006bb4c091ca40bb5ed62ab5c72421772032e42bf308959060ca35a46553ba",
+      "bytes": 4149464
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/quote-ff82b0dca036a282/build_script_build-ff82b0dca036a282",
+      "sha256": "23eacabbcb0be9d34941cb54acf70369df2fc73cac6d2028c6591c22526834cc",
+      "bytes": 4088072
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/quote-ff82b0dca036a282/build-script-build",
+      "sha256": "23eacabbcb0be9d34941cb54acf70369df2fc73cac6d2028c6591c22526834cc",
+      "bytes": 4088072
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/instability-3cb98148702ce047/build_script_build-3cb98148702ce047",
+      "sha256": "6571589f39a84a174950a31e13e974c7262fcbdd658617319b05cef0258397e3",
+      "bytes": 3975000
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/instability-3cb98148702ce047/build-script-build",
+      "sha256": "6571589f39a84a174950a31e13e974c7262fcbdd658617319b05cef0258397e3",
+      "bytes": 3975000
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/serde-80ffa617eca8fd12/build_script_build-80ffa617eca8fd12",
+      "sha256": "32a6cb90143cabb1980d5714f0f54759965036419d5da1dc9b8228b40694d1cc",
+      "bytes": 4122464
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/serde-80ffa617eca8fd12/build-script-build",
+      "sha256": "32a6cb90143cabb1980d5714f0f54759965036419d5da1dc9b8228b40694d1cc",
+      "bytes": 4122464
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/parking_lot_core-76abbe1947b2e382/build_script_build-76abbe1947b2e382",
+      "sha256": "56ee418249bbf500741dac4167cec0c7f808101ed29c81f2f603567aa73015b8",
+      "bytes": 4006344
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/parking_lot_core-76abbe1947b2e382/build-script-build",
+      "sha256": "56ee418249bbf500741dac4167cec0c7f808101ed29c81f2f603567aa73015b8",
+      "bytes": 4006344
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/icu_properties_data-328c9e575586bef7/build_script_build-328c9e575586bef7",
+      "sha256": "b2140d6aa326fd0b99f3497adcff305a8d9752d3bc5db27e9a57f0ed66470b18",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/icu_properties_data-328c9e575586bef7/build-script-build",
+      "sha256": "b2140d6aa326fd0b99f3497adcff305a8d9752d3bc5db27e9a57f0ed66470b18",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/icu_normalizer_data-9cbf8a21df549c51/build_script_build-9cbf8a21df549c51",
+      "sha256": "cadd83157ac6a0246b9acf78bfa97811b5257fdf5bc92859a854a14936881fd5",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/icu_normalizer_data-9cbf8a21df549c51/build-script-build",
+      "sha256": "cadd83157ac6a0246b9acf78bfa97811b5257fdf5bc92859a854a14936881fd5",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/rustversion-af3c1f7d726f7958/build_script_build-af3c1f7d726f7958",
+      "sha256": "8019efad699b42b96ce203679622169d12ea17718c2f061281301bb02f2dcc50",
+      "bytes": 4152584
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/rustversion-af3c1f7d726f7958/build-script-build",
+      "sha256": "8019efad699b42b96ce203679622169d12ea17718c2f061281301bb02f2dcc50",
+      "bytes": 4152584
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/pulldown-cmark-c4c37c6b3e6790c2/build_script_build-c4c37c6b3e6790c2",
+      "sha256": "b678779fad24783987bd85c0db111753284587b2cbdba92493a3f9aad9442fa0",
+      "bytes": 3965296
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/pulldown-cmark-c4c37c6b3e6790c2/build-script-build",
+      "sha256": "b678779fad24783987bd85c0db111753284587b2cbdba92493a3f9aad9442fa0",
+      "bytes": 3965296
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/serde_json-8d2d36732f4d5387/build_script_build-8d2d36732f4d5387",
+      "sha256": "507830cae9d77fdb298531db1e4fcb091ef61071bbdabe1248b220921601717b",
+      "bytes": 3976184
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/serde_json-8d2d36732f4d5387/build-script-build",
+      "sha256": "507830cae9d77fdb298531db1e4fcb091ef61071bbdabe1248b220921601717b",
+      "bytes": 3976184
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/signal-hook-4f09dcfd1b1fc65d/build-script-build",
+      "sha256": "429289a7024ae63ded77b3ebafa42211976b13ae04b06ed9644a81113d0439ff",
+      "bytes": 3965184
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/signal-hook-4f09dcfd1b1fc65d/build_script_build-4f09dcfd1b1fc65d",
+      "sha256": "429289a7024ae63ded77b3ebafa42211976b13ae04b06ed9644a81113d0439ff",
+      "bytes": 3965184
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/serde_core-899581865f4b9050/build_script_build-899581865f4b9050",
+      "sha256": "585fe85ff86e83785615765be160d81a9c7420ba9a21f7bbae167ddf5269ff39",
+      "bytes": 4127208
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/build/serde_core-899581865f4b9050/build-script-build",
+      "sha256": "585fe85ff86e83785615765be160d81a9c7420ba9a21f7bbae167ddf5269ff39",
+      "bytes": 4127208
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/deps/libtokio_macros-d53c15de4fc1f0dd.so",
+      "sha256": "c72bafae54d8fc9de4e9ff643bc943d90ddff2fbb339a8d9d62f02cdef9d7aa8",
+      "bytes": 8061824
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/deps/libinstability-c09bea43150aa6cf.so",
+      "sha256": "503e7bd10b8c6e1bf263fcc4294dbc04294ff0113a3deeba3dee5cd1baefd9e8",
+      "bytes": 8113936
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/deps/libthiserror_impl-ed357a82ca1c24ec.so",
+      "sha256": "ece9570a6a287cf4d81f9995b0399d89cf7797ec8b74a9f16e392ebe94550c68",
+      "bytes": 8544152
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/deps/libpaste-5cc14007e3280d61.so",
+      "sha256": "4c780af581aca99be31649ce16d0415557fd4578797050030c46f4cb134cd1be",
+      "bytes": 5586592
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/deps/libdarling_macro-3afafe7c9cce780d.so",
+      "sha256": "46887bfc57f3a52b6173619e43809c48fe322f9ced15999cb26535d3ce25740a",
+      "bytes": 9232240
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/deps/librustversion-b4345a2f797913b0.so",
+      "sha256": "c776cbc6f06a0eff64d33c1b88c5852af3b03fb7990f39d6b7633a763c8c2bde",
+      "bytes": 5612168
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/deps/libserde_derive-2222dcd9cc505602.so",
+      "sha256": "3c171dc6be6d0a5975a746b739ef91604fd92269e4d05b2af966220c96bdeac8",
+      "bytes": 9406064
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/deps/libstrum_macros-86917de0124e841b.so",
+      "sha256": "75f387a86658821a6ee8c085f5ca159349fc0b99d267f944e1a60b413db3aae6",
+      "bytes": 9122496
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/deps/libyoke_derive-0277c6e68c863e01.so",
+      "sha256": "8b3653edf7999e1b61fea0b680f023164815946c8eecfc2be5b776c247be9786",
+      "bytes": 8643584
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/deps/libdisplaydoc-f7ce3cd5bce52f3f.so",
+      "sha256": "17d6eb27767984c32ed2721750448c7d810af404c11031f75fe4615046911df0",
+      "bytes": 8128680
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/deps/libindoc-4b46719a0ceec546.so",
+      "sha256": "3507b6bc339930962213daa7b4df293f64091a56ce5242ebe1a6a8ef2cff7709",
+      "bytes": 5504272
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/deps/libzerovec_derive-4b284451b929876e.so",
+      "sha256": "8887df2ebdc53dfb16b5f3c1a76e1e36c592cc7f3f3951b374208d3ca930bd7e",
+      "bytes": 8446472
+    },
+    {
+      "path": "/root/minicore-rail-01a07210/r1/minicore-tui/target/debug/deps/libzerofrom_derive-4897a161fd5a0624.so",
+      "sha256": "fd7571460fd2f37339eb74554fcb0051fdc2c76ce7a2ebc4f1b0967339b2389a",
+      "bytes": 8922152
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/libc-09314212c550b1c8/build_script_build-09314212c550b1c8",
+      "sha256": "1386a1772720bd03db6a4f50f1dd9f502b10a937ca8eb1333734408811ffcbf4",
+      "bytes": 4171392
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/libc-09314212c550b1c8/build-script-build",
+      "sha256": "1386a1772720bd03db6a4f50f1dd9f502b10a937ca8eb1333734408811ffcbf4",
+      "bytes": 4171392
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/paste-b8d1f1464afc0d7e/build-script-build",
+      "sha256": "c5b8388891d5135d3ee59a56f17433f331d2568d75f86dbf88b84f8f1ca56d31",
+      "bytes": 4088176
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/paste-b8d1f1464afc0d7e/build_script_build-b8d1f1464afc0d7e",
+      "sha256": "c5b8388891d5135d3ee59a56f17433f331d2568d75f86dbf88b84f8f1ca56d31",
+      "bytes": 4088176
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/zmij-da74f3e9e587404c/build_script_build-da74f3e9e587404c",
+      "sha256": "b8a7689a882477f75d41099656545afd0cf7f3a78179b79cf42f55e3f9631c78",
+      "bytes": 4098192
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/zmij-da74f3e9e587404c/build-script-build",
+      "sha256": "b8a7689a882477f75d41099656545afd0cf7f3a78179b79cf42f55e3f9631c78",
+      "bytes": 4098192
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/paste-f0fd735125c647b5/build_script_build-f0fd735125c647b5",
+      "sha256": "aca8bf76551c3f9efd7ebdd29ad673263fdbe1ac13a7b2718ab4486662923688",
+      "bytes": 4465504
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/paste-f0fd735125c647b5/build-script-build",
+      "sha256": "aca8bf76551c3f9efd7ebdd29ad673263fdbe1ac13a7b2718ab4486662923688",
+      "bytes": 4465504
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/rustix-fbf1ee0ddd15e5aa/build_script_build-fbf1ee0ddd15e5aa",
+      "sha256": "b94dcc20e3265f357662ef29bf797378eb7deb94aa55ef6d9881b0d4146518ac",
+      "bytes": 4524048
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/rustix-fbf1ee0ddd15e5aa/build-script-build",
+      "sha256": "b94dcc20e3265f357662ef29bf797378eb7deb94aa55ef6d9881b0d4146518ac",
+      "bytes": 4524048
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/zmij-37c7a7b83a60607f/build_script_build-37c7a7b83a60607f",
+      "sha256": "90de9003aa62da71cbbb22e5466a2638199148b272270833633861afc3d95d4c",
+      "bytes": 4470624
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/zmij-37c7a7b83a60607f/build-script-build",
+      "sha256": "90de9003aa62da71cbbb22e5466a2638199148b272270833633861afc3d95d4c",
+      "bytes": 4470624
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/serde-047fb28ec31c7b7d/build_script_build-047fb28ec31c7b7d",
+      "sha256": "499670944583c4f8815501463aaf629259991c4fad9a57470a8bee8f3d8ff36b",
+      "bytes": 4497056
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/serde-047fb28ec31c7b7d/build-script-build",
+      "sha256": "499670944583c4f8815501463aaf629259991c4fad9a57470a8bee8f3d8ff36b",
+      "bytes": 4497056
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/rustversion-b0526d303ea2073d/build-script-build",
+      "sha256": "37c6f9dcd7c0a16a5f119492a38d0e700d4a55331529ca9741719a6accac72a7",
+      "bytes": 4530464
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/rustversion-b0526d303ea2073d/build_script_build-b0526d303ea2073d",
+      "sha256": "37c6f9dcd7c0a16a5f119492a38d0e700d4a55331529ca9741719a6accac72a7",
+      "bytes": 4530464
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/thiserror-b1616fa922246467/build_script_build-b1616fa922246467",
+      "sha256": "ca980508d34a4d46b9c73ef3e1fcdbccc79d08669dfd4f51d0b046753b4c7b9a",
+      "bytes": 4547456
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/thiserror-b1616fa922246467/build-script-build",
+      "sha256": "ca980508d34a4d46b9c73ef3e1fcdbccc79d08669dfd4f51d0b046753b4c7b9a",
+      "bytes": 4547456
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/proc-macro2-40e1e5b5938eb54b/build_script_build-40e1e5b5938eb54b",
+      "sha256": "e0e09ca86afb6ac9a343ed46b164ea317a35cf295e523c55d86b4afece2bd9fe",
+      "bytes": 4150128
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/proc-macro2-40e1e5b5938eb54b/build-script-build",
+      "sha256": "e0e09ca86afb6ac9a343ed46b164ea317a35cf295e523c55d86b4afece2bd9fe",
+      "bytes": 4150128
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/signal-hook-f19090f62ea3eded/build_script_build-f19090f62ea3eded",
+      "sha256": "951d140055658a3f0258e9b394bbb3e5ffdeabfc5de74b57b4937257fb15fc06",
+      "bytes": 4347544
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/signal-hook-f19090f62ea3eded/build-script-build",
+      "sha256": "951d140055658a3f0258e9b394bbb3e5ffdeabfc5de74b57b4937257fb15fc06",
+      "bytes": 4347544
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/thiserror-a821c8960f9b7493/build_script_build-a821c8960f9b7493",
+      "sha256": "396849cb1d8f0085e2ee5b6d84d6100d602a6c935d60a7cac5b204028ac9f5ef",
+      "bytes": 4170328
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/thiserror-a821c8960f9b7493/build-script-build",
+      "sha256": "396849cb1d8f0085e2ee5b6d84d6100d602a6c935d60a7cac5b204028ac9f5ef",
+      "bytes": 4170328
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/instability-8fee1ff5cf499415/build_script_build-8fee1ff5cf499415",
+      "sha256": "940c902934d780085536e9177c01fcf44ea839e69daa426da872c7b01def538a",
+      "bytes": 4354904
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/instability-8fee1ff5cf499415/build-script-build",
+      "sha256": "940c902934d780085536e9177c01fcf44ea839e69daa426da872c7b01def538a",
+      "bytes": 4354904
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/libc-19124a20af635abc/build_script_build-19124a20af635abc",
+      "sha256": "b2386552a37f07b0b91cbe419c4820a8353305af02bdadca9fac815b54a1c350",
+      "bytes": 4549736
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/libc-19124a20af635abc/build-script-build",
+      "sha256": "b2386552a37f07b0b91cbe419c4820a8353305af02bdadca9fac815b54a1c350",
+      "bytes": 4549736
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/parking_lot_core-52063db600f06e4d/build_script_build-52063db600f06e4d",
+      "sha256": "130facee86cf25f39b36ac589ee8229c4f5ddb27b5c2b70e88f73160debc91f9",
+      "bytes": 4387872
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/parking_lot_core-52063db600f06e4d/build-script-build",
+      "sha256": "130facee86cf25f39b36ac589ee8229c4f5ddb27b5c2b70e88f73160debc91f9",
+      "bytes": 4387872
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/serde_core-f2ae637853f690ee/build_script_build-f2ae637853f690ee",
+      "sha256": "73142f9880534eb66bf34b1e0d2f5b442d95cfafe5f28073f55e33640138b7e7",
+      "bytes": 4499880
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/serde_core-f2ae637853f690ee/build-script-build",
+      "sha256": "73142f9880534eb66bf34b1e0d2f5b442d95cfafe5f28073f55e33640138b7e7",
+      "bytes": 4499880
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/rustix-33f06ad1769893f4/build-script-build",
+      "sha256": "78006bb4c091ca40bb5ed62ab5c72421772032e42bf308959060ca35a46553ba",
+      "bytes": 4149464
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/rustix-33f06ad1769893f4/build_script_build-33f06ad1769893f4",
+      "sha256": "78006bb4c091ca40bb5ed62ab5c72421772032e42bf308959060ca35a46553ba",
+      "bytes": 4149464
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/quote-ff82b0dca036a282/build_script_build-ff82b0dca036a282",
+      "sha256": "23eacabbcb0be9d34941cb54acf70369df2fc73cac6d2028c6591c22526834cc",
+      "bytes": 4088072
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/quote-ff82b0dca036a282/build-script-build",
+      "sha256": "23eacabbcb0be9d34941cb54acf70369df2fc73cac6d2028c6591c22526834cc",
+      "bytes": 4088072
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/instability-3cb98148702ce047/build_script_build-3cb98148702ce047",
+      "sha256": "6571589f39a84a174950a31e13e974c7262fcbdd658617319b05cef0258397e3",
+      "bytes": 3975000
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/instability-3cb98148702ce047/build-script-build",
+      "sha256": "6571589f39a84a174950a31e13e974c7262fcbdd658617319b05cef0258397e3",
+      "bytes": 3975000
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/pulldown-cmark-0dd695f554181b9c/build_script_build-0dd695f554181b9c",
+      "sha256": "7a32da077ea1bfa7a6e0757315166c02f991072c868027d5d288f37ffb12a257",
+      "bytes": 4347680
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/pulldown-cmark-0dd695f554181b9c/build-script-build",
+      "sha256": "7a32da077ea1bfa7a6e0757315166c02f991072c868027d5d288f37ffb12a257",
+      "bytes": 4347680
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/serde_json-2c0a994303fe8e5c/build_script_build-2c0a994303fe8e5c",
+      "sha256": "91e6bb5e653da2521864cff1bccd560e34104ae9c2b63fa6b309eaa72efdb74d",
+      "bytes": 4359240
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/serde_json-2c0a994303fe8e5c/build-script-build",
+      "sha256": "91e6bb5e653da2521864cff1bccd560e34104ae9c2b63fa6b309eaa72efdb74d",
+      "bytes": 4359240
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/serde-80ffa617eca8fd12/build_script_build-80ffa617eca8fd12",
+      "sha256": "32a6cb90143cabb1980d5714f0f54759965036419d5da1dc9b8228b40694d1cc",
+      "bytes": 4122464
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/serde-80ffa617eca8fd12/build-script-build",
+      "sha256": "32a6cb90143cabb1980d5714f0f54759965036419d5da1dc9b8228b40694d1cc",
+      "bytes": 4122464
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/parking_lot_core-76abbe1947b2e382/build_script_build-76abbe1947b2e382",
+      "sha256": "56ee418249bbf500741dac4167cec0c7f808101ed29c81f2f603567aa73015b8",
+      "bytes": 4006344
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/parking_lot_core-76abbe1947b2e382/build-script-build",
+      "sha256": "56ee418249bbf500741dac4167cec0c7f808101ed29c81f2f603567aa73015b8",
+      "bytes": 4006344
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/icu_properties_data-f9b06ae72535caa7/build_script_build-f9b06ae72535caa7",
+      "sha256": "f8edf8091106af0822197d0475eccb9ac5afcdc4507830693b98b6c456fc4aca",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/icu_properties_data-f9b06ae72535caa7/build-script-build",
+      "sha256": "f8edf8091106af0822197d0475eccb9ac5afcdc4507830693b98b6c456fc4aca",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/icu_properties_data-328c9e575586bef7/build_script_build-328c9e575586bef7",
+      "sha256": "b2140d6aa326fd0b99f3497adcff305a8d9752d3bc5db27e9a57f0ed66470b18",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/icu_properties_data-328c9e575586bef7/build-script-build",
+      "sha256": "b2140d6aa326fd0b99f3497adcff305a8d9752d3bc5db27e9a57f0ed66470b18",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/icu_normalizer_data-7fa05c0e338d0e43/build-script-build",
+      "sha256": "b46945de8c962efd78c43abde67890bc747932ebecc27cc7374c53c8045b5ec0",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/icu_normalizer_data-7fa05c0e338d0e43/build_script_build-7fa05c0e338d0e43",
+      "sha256": "b46945de8c962efd78c43abde67890bc747932ebecc27cc7374c53c8045b5ec0",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/icu_normalizer_data-9cbf8a21df549c51/build_script_build-9cbf8a21df549c51",
+      "sha256": "cadd83157ac6a0246b9acf78bfa97811b5257fdf5bc92859a854a14936881fd5",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/icu_normalizer_data-9cbf8a21df549c51/build-script-build",
+      "sha256": "cadd83157ac6a0246b9acf78bfa97811b5257fdf5bc92859a854a14936881fd5",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/rustversion-af3c1f7d726f7958/build_script_build-af3c1f7d726f7958",
+      "sha256": "8019efad699b42b96ce203679622169d12ea17718c2f061281301bb02f2dcc50",
+      "bytes": 4152584
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/rustversion-af3c1f7d726f7958/build-script-build",
+      "sha256": "8019efad699b42b96ce203679622169d12ea17718c2f061281301bb02f2dcc50",
+      "bytes": 4152584
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/proc-macro2-7d0ed4e509752a35/build-script-build",
+      "sha256": "aa979b864f4a4e98456574706c62de6fdedc12b62faa891b7a790664bb286aef",
+      "bytes": 4524120
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/proc-macro2-7d0ed4e509752a35/build_script_build-7d0ed4e509752a35",
+      "sha256": "aa979b864f4a4e98456574706c62de6fdedc12b62faa891b7a790664bb286aef",
+      "bytes": 4524120
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/pulldown-cmark-c4c37c6b3e6790c2/build_script_build-c4c37c6b3e6790c2",
+      "sha256": "b678779fad24783987bd85c0db111753284587b2cbdba92493a3f9aad9442fa0",
+      "bytes": 3965296
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/pulldown-cmark-c4c37c6b3e6790c2/build-script-build",
+      "sha256": "b678779fad24783987bd85c0db111753284587b2cbdba92493a3f9aad9442fa0",
+      "bytes": 3965296
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/serde_json-8d2d36732f4d5387/build_script_build-8d2d36732f4d5387",
+      "sha256": "507830cae9d77fdb298531db1e4fcb091ef61071bbdabe1248b220921601717b",
+      "bytes": 3976184
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/serde_json-8d2d36732f4d5387/build-script-build",
+      "sha256": "507830cae9d77fdb298531db1e4fcb091ef61071bbdabe1248b220921601717b",
+      "bytes": 3976184
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/signal-hook-4f09dcfd1b1fc65d/build-script-build",
+      "sha256": "429289a7024ae63ded77b3ebafa42211976b13ae04b06ed9644a81113d0439ff",
+      "bytes": 3965184
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/signal-hook-4f09dcfd1b1fc65d/build_script_build-4f09dcfd1b1fc65d",
+      "sha256": "429289a7024ae63ded77b3ebafa42211976b13ae04b06ed9644a81113d0439ff",
+      "bytes": 3965184
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/serde_core-899581865f4b9050/build_script_build-899581865f4b9050",
+      "sha256": "585fe85ff86e83785615765be160d81a9c7420ba9a21f7bbae167ddf5269ff39",
+      "bytes": 4127208
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/serde_core-899581865f4b9050/build-script-build",
+      "sha256": "585fe85ff86e83785615765be160d81a9c7420ba9a21f7bbae167ddf5269ff39",
+      "bytes": 4127208
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/quote-6dff9724e4e81362/build_script_build-6dff9724e4e81362",
+      "sha256": "c4388fe4ef6d4f7938f9432bf020c7bcfa81dc7c9ecc2522d8574507ff044430",
+      "bytes": 4465072
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/build/quote-6dff9724e4e81362/build-script-build",
+      "sha256": "c4388fe4ef6d4f7938f9432bf020c7bcfa81dc7c9ecc2522d8574507ff044430",
+      "bytes": 4465072
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/minicore_tui-3fe7bc2d579c3036",
+      "sha256": "a7218e16a6c915bd48931507971dbc7fd04b63278aa1a60f6a17fa635a1d496d",
+      "bytes": 46749336
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libtokio_macros-d53c15de4fc1f0dd.so",
+      "sha256": "c72bafae54d8fc9de4e9ff643bc943d90ddff2fbb339a8d9d62f02cdef9d7aa8",
+      "bytes": 8061824
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libinstability-c09bea43150aa6cf.so",
+      "sha256": "503e7bd10b8c6e1bf263fcc4294dbc04294ff0113a3deeba3dee5cd1baefd9e8",
+      "bytes": 8113936
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libserde_derive-aae5f77b6f183704.so",
+      "sha256": "149f44cd31707bce5c99ae8a351ea222e542b24adfd1dd4455cfeba05c2a5da5",
+      "bytes": 9866312
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/minicore_tui-eff60b2099bd0af4",
+      "sha256": "123fb3a2f36f10738dc53b3efe496ada3c7563444ba7191c50d87a7018ebf107",
+      "bytes": 46757224
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/app_flow-05a4735f9768357f",
+      "sha256": "9ef7c1df58b3f890e8c0de9eb9d1a3eed3601bd5076edf02d723b1ebda2b00de",
+      "bytes": 38764600
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/minicore_tui-b1a466930df996c5",
+      "sha256": "70d9abf81ee760e1f606506ee4827e6cdb92058090e31c3b2feecd960cec42df",
+      "bytes": 52703936
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/minicore_tui-f53f2ed45c18c2b8",
+      "sha256": "65815034b5017320e6d937b33091ac4079dabbf08a9166f97d9bfdc4b672fbf4",
+      "bytes": 52698048
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libthiserror_impl-ed357a82ca1c24ec.so",
+      "sha256": "ece9570a6a287cf4d81f9995b0399d89cf7797ec8b74a9f16e392ebe94550c68",
+      "bytes": 8544152
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/minicore_tui-98c7ec4080dad5e5",
+      "sha256": "86875ad44e1f46f690b3fdbe7c13dbe52530d70b2019bacfaaced4b384d4f4e0",
+      "bytes": 45706984
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libpaste-5cc14007e3280d61.so",
+      "sha256": "4c780af581aca99be31649ce16d0415557fd4578797050030c46f4cb134cd1be",
+      "bytes": 5586592
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libdarling_macro-e9e6aa8afadf254f.so",
+      "sha256": "3b94494ebd94b32e8cc8770daa2c12d53e928695cc94b3cea4a83baa004ee10d",
+      "bytes": 9232072
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libdarling_macro-3afafe7c9cce780d.so",
+      "sha256": "46887bfc57f3a52b6173619e43809c48fe322f9ced15999cb26535d3ce25740a",
+      "bytes": 9232240
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/rpc_io-dfa9d3efe9912eb1",
+      "sha256": "15fbdd0e0e36cb8651b4526884382a05be3b13894a685403cb0c5be7350c2773",
+      "bytes": 35167312
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/rpc_io-488a2d2a98df7651",
+      "sha256": "4b58d843e39892802f79cf120f8db35c48a0dcb2cb7830dcf94dd04ca1b25291",
+      "bytes": 40311312
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libthiserror_impl-c45a74476924386f.so",
+      "sha256": "577923ab46157f38c84c9f5386c29dfa8297486266c5ce055828b3bb9c06918b",
+      "bytes": 8849232
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/app_flow-6e628d8bd4c75f6e",
+      "sha256": "7347d352ba7d2482b85b503cf61520d71f056f785f59f2e00cc0da467a5f23f4",
+      "bytes": 38632512
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/minicore_tui-8557932f7168e2d1",
+      "sha256": "02bcd94e4ba5595809792af2e5aa4fd6b14c1feabdfb6904a34b020fdc83d886",
+      "bytes": 39412504
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/terminal_restore-fac0df76860f6fde",
+      "sha256": "4178587f4de74096924d6c7731c030eb35b928f10ff7713c37c9bbf6e22c8690",
+      "bytes": 32935576
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libtokio_macros-f545de255eae24be.so",
+      "sha256": "dd912d2b9a1a3f8a5101a3b8e0567b85ca6620f53915c9214227014368d9513d",
+      "bytes": 8061496
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/render_snapshots-87e0a1eff5bc5909",
+      "sha256": "a4fd0d9d1a5a829afed7f544b33bd42208fe72f4d32708636646b78c59b1dbb2",
+      "bytes": 42370840
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/rpc_io-11366341bb75314c",
+      "sha256": "479516a1cbb2f56575f00a7bb2ac8204bbb27de926ea131343d177ba95fe9587",
+      "bytes": 35169456
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/agent_e2e-2b14b051b8f730f7",
+      "sha256": "f6a37df3e170747d84ece82db517ec85786fe5580913e5c46987b080f52d2ef5",
+      "bytes": 41560104
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/minicore_tui-bdda065144a1d60c",
+      "sha256": "1587bcc9aa6de97d7c134a4e77ad5d279a87113b0bf1932aa57e655f27a8407c",
+      "bytes": 44943000
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/agent_process-fd8a24a42b5b7c44",
+      "sha256": "016ab5029024750c4e61e445278b862c40a14fd017cc00438f848d87e8cd98df",
+      "bytes": 6979536
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/render_snapshots-ed29005c7061e091",
+      "sha256": "0f3e1c725df501cdf4a555a83f0505b7e1ceee2e17ce1547a33e3423940d39ff",
+      "bytes": 37337288
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libdarling_macro-d0c4787e8e197f99.so",
+      "sha256": "1ffd2a1dc54deffe5e3f89ad0c6cc004f6c489a3eab54c585f9e28dec212bd4b",
+      "bytes": 9717128
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/app_flow-84deb6f1e3c55be2",
+      "sha256": "33d417c3988f52714bc130fb3348668df1cac31a5efac5f575a4a62546ef4886",
+      "bytes": 44043224
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/librustversion-b4345a2f797913b0.so",
+      "sha256": "ddf623971f1997d9ee87415d0689a12e5b872bed32945370826908a5f5cb3cf4",
+      "bytes": 5612168
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libserde_derive-2222dcd9cc505602.so",
+      "sha256": "3c171dc6be6d0a5975a746b739ef91604fd92269e4d05b2af966220c96bdeac8",
+      "bytes": 9406064
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libstrum_macros-86917de0124e841b.so",
+      "sha256": "222e4e4157ebafdfcad171443f436f13d8fe350b12eed8a249db48d2b7bfaaf8",
+      "bytes": 9122496
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libyoke_derive-283e6c6ccebd5ab5.so",
+      "sha256": "e754283b3367b596fce23a1732078a1b6cedc6fc05d02461610e677eceaa6ca5",
+      "bytes": 9149208
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/agent_process-d16a900ff6a42425",
+      "sha256": "f55b32cdda8af4545e90dcc5964b66b88aecff379a9079d63fdb55a29a12f64c",
+      "bytes": 6979520
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/protocol-65ae914c8b121d4e",
+      "sha256": "7e488035e08ee1c11167607fc653111fbb5fac24c33868a6289de469509f96e0",
+      "bytes": 34908880
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libzerovec_derive-3212de27759fb781.so",
+      "sha256": "30e3dab7ddd956f5643a0f2c24751515cc03cdfcf067837af883ad1ff17e9b5f",
+      "bytes": 8751576
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/minicore_tui-5aad28babb555393",
+      "sha256": "c827773bed192d650355392fdfac3f9c83af5c218aa9d0d47bc270a8a89d880b",
+      "bytes": 44954648
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/rpc_io-e56eea3995179de5",
+      "sha256": "f273ab89e34b4c616648b8262f79b0db76bc6933cf06d188ce2eb3efacf0a83f",
+      "bytes": 40303312
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libdarling_macro-7fbf526e69decf9c.so",
+      "sha256": "e0c93196fe4f2ecf53467e286f2a1ef089439b47edc58d1d68321af613d7197f",
+      "bytes": 9710448
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libyoke_derive-0277c6e68c863e01.so",
+      "sha256": "8b3653edf7999e1b61fea0b680f023164815946c8eecfc2be5b776c247be9786",
+      "bytes": 8643584
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/terminal_restore-3df6d6fb57e15a48",
+      "sha256": "f01b92ba5e93515f02dd29e75b7a6338303e9914557f40ea7bd54b101398cbea",
+      "bytes": 37470568
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/render_snapshots-fa8ca57930ecb307",
+      "sha256": "e6a250bbfc3fadb00f4327bc07d5cc9755afb2f30acbaa552d145477aaa5133f",
+      "bytes": 37329304
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libserde_derive-8643e101b88cb90a.so",
+      "sha256": "8c5e3b2895e648de8c934b81b63c4b0c83245c7715ada2da70395fb962419a35",
+      "bytes": 9870576
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libinstability-4ac5e122d8e2993c.so",
+      "sha256": "b9f88af77e80e74a0d58a0acf2148a2cdf357d51d10946649ee9c45adfd68d36",
+      "bytes": 8489496
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/minicore_tui-040e597e28906498",
+      "sha256": "facd8a177ed8cd2ded08546ec11104b9e54cf55292eb7cd1b4fc804dffbd6649",
+      "bytes": 39410168
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/minicore_tui-675f0ed165ae517e",
+      "sha256": "276ed5471a120d21f2e9fe3d2cb57280e3726ba0acc6858ecaebeb7a8062b72a",
+      "bytes": 40890464
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libdisplaydoc-f7ce3cd5bce52f3f.so",
+      "sha256": "17d6eb27767984c32ed2721750448c7d810af404c11031f75fe4615046911df0",
+      "bytes": 8128680
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libindoc-4b46719a0ceec546.so",
+      "sha256": "3507b6bc339930962213daa7b4df293f64091a56ce5242ebe1a6a8ef2cff7709",
+      "bytes": 5504272
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/app_flow-a2664560b378b79b",
+      "sha256": "71ac74b11c5a7c79d4d0d1d3d67921500631c63000f8a5b7994b84daea583ffe",
+      "bytes": 42447544
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libthiserror_impl-9458ebdf4ab16962.so",
+      "sha256": "eae3ff16884d59dd31c31d05378f70add6bf35a43db72f9a5bfd53765df1cfad",
+      "bytes": 8864432
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libstrum_macros-1e73fff1c4ee3b14.so",
+      "sha256": "50bcec795780ba8556b1811c77f9397245c39e494bbc0194ab606286d028a9a3",
+      "bytes": 9122536
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/terminal_restore-67ee345873695fc4",
+      "sha256": "6d18b9c7ea72c6b2b96413ac80c0873e80aa2383d9906ca0d00925c3479391d1",
+      "bytes": 32933192
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/librustversion-d7df6ce16ce770b8.so",
+      "sha256": "dee709b902611bfca6f7e3558b1fd8a4696af57cc151fda6324d707a03e3428a",
+      "bytes": 5640456
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/agent_process-7fa5ece8e669beaa",
+      "sha256": "4cbe3177c0846eb58be2760e1d7eeb55dc582db6caa89916c4ae4b861bc6e376",
+      "bytes": 6450224
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libindoc-cfcff364e6cdfcc8.so",
+      "sha256": "3c7c3745b9d5011b6e8207b1a95d9727932fb2d7acfa2f0fc207749093af472c",
+      "bytes": 5519400
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libserde_derive-df1e86f99edc1e6e.so",
+      "sha256": "33b6e30b65e9950541229b3c86c8fb03ac401b34f97e7c856f6456965f6cbb71",
+      "bytes": 9405616
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libstrum_macros-ff7a64a350cf6c73.so",
+      "sha256": "b746bd4c6a4e7f841f602d6e1297b662d62be53137930545513236e9ee83fa3d",
+      "bytes": 9526936
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/protocol-d125a2302e028bed",
+      "sha256": "747db8c01e707408b649e7b916d165aa8ee9ed0b4dc1a75fed03ee4727287a76",
+      "bytes": 34911200
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libstrum_macros-b48fd722c67f8667.so",
+      "sha256": "5732bc4a7345f062a89e2fc9d4564924ddff12c2b3876e98b54c98ad837643a2",
+      "bytes": 9533584
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libzerofrom_derive-8adb8aa89aa4f1ca.so",
+      "sha256": "863a46a7313e5327d9aa50be24a8dac26be17dbb221f6057a1794fa5c027d801",
+      "bytes": 9526752
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/render_snapshots-1e4a9dcd890a73be",
+      "sha256": "06cc21afb12a609dcf7e6b2ddaa0d14d9e932eb194b9bef08533bb31d691f4d3",
+      "bytes": 42374240
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libinstability-b5aedb9e7d0f41b1.so",
+      "sha256": "557ba94b13bcd94aaf710e08a44f2617024cdca47ec5001da45dfbbd7512ec76",
+      "bytes": 8494704
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/agent_e2e-87e08c9de5e815ea",
+      "sha256": "c17f9951b0867d290cb31813649b6b6b2f83d7adbc56b30747dd2ba5f49f1bbf",
+      "bytes": 47472280
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/minicore_tui-00ea0959f69688a0",
+      "sha256": "34661eb0daf2c0ba5dc702664e2366da05450120f512f28a12f58235b246ee43",
+      "bytes": 45710016
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/protocol-288609ccdf515b8f",
+      "sha256": "e06c26b31264101f7116121fef27aa0d1ceb05b821d6b56863103cc93b918e4c",
+      "bytes": 39777736
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libtokio_macros-4f1d1222e8b945ba.so",
+      "sha256": "bbda8a3cab21da88581ccc49479aa22d613ee800cd338cacd86801edf99032d9",
+      "bytes": 8355504
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/agent_process-c8e607fab5979978",
+      "sha256": "85be49a6766629e119c94b2599b2ef20a0658abda4f2d6487bde658c39485141",
+      "bytes": 6450224
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/minicore_tui-42e63a5358f42e3c",
+      "sha256": "a7190bec4352673abcc5fe9d0f3ccb1afc7060965b9969c8a12ac9686b226612",
+      "bytes": 40878120
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libdisplaydoc-42a4aaa0bff0a159.so",
+      "sha256": "dce24ac5c53f4390fd5954975697699603e5e7bd002418460f60b4ead078f9bf",
+      "bytes": 8460904
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/protocol-8e0ffd48c70225a9",
+      "sha256": "16a1ed3df75eacfafcd65649d52972ca0448db3525b0b185ebac577aedcef1c2",
+      "bytes": 39785400
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libzerovec_derive-4b284451b929876e.so",
+      "sha256": "8887df2ebdc53dfb16b5f3c1a76e1e36c592cc7f3f3951b374208d3ca930bd7e",
+      "bytes": 8446472
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/agent_e2e-659864513042370d",
+      "sha256": "16278697f4df7029ccf8d94e45a918ad133ed93c6b030245f935897a635a53e8",
+      "bytes": 47484136
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libpaste-a03d36d0470502fc.so",
+      "sha256": "8c61b62b5530ede5b9cf8978b242c37fc0b1112e3cb638f62ec49dbdf49b5595",
+      "bytes": 5579600
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/terminal_restore-541dbf8d9eaa545e",
+      "sha256": "5a8aabefbbe1bee8b78d8fbb15274a10ab62581da173b77189d7ae6625f5e859",
+      "bytes": 37467168
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libinstability-276032178ed50cb2.so",
+      "sha256": "3af753b72d47d144ddd96e519d81a069b527a98f67dc401ba432666855a5cca3",
+      "bytes": 8113952
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libzerofrom_derive-4897a161fd5a0624.so",
+      "sha256": "fd7571460fd2f37339eb74554fcb0051fdc2c76ce7a2ebc4f1b0967339b2389a",
+      "bytes": 8922152
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libthiserror_impl-ce301939b0471668.so",
+      "sha256": "7594b6ac2e15bc5eafd1418f6d813e16475f3f44cfd4a83e1a1610ae625f20ee",
+      "bytes": 8530472
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/agent_e2e-a720d65293315010",
+      "sha256": "0dbb44d7c6ddd1786fdf73deb0c18e64114eae36aedb990cf64171e760a52bc2",
+      "bytes": 41557776
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/deps/libtokio_macros-bd1b525e01c11e3b.so",
+      "sha256": "24f7c6ccbed19c4b498294fe595f40d0512f1e90d942d66a7a97a44c53876501",
+      "bytes": 8357032
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/debug/minicore-tui",
+      "sha256": "123fb3a2f36f10738dc53b3efe496ada3c7563444ba7191c50d87a7018ebf107",
+      "bytes": 46757224
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/serde_json-b7dbe6878695db79/build-script-build",
+      "sha256": "50134bb15263cf943aeb9ca790825fcff844ff5d8d21f82c73c08bc333a2edbb",
+      "bytes": 437224
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/serde_json-b7dbe6878695db79/build_script_build-b7dbe6878695db79",
+      "sha256": "50134bb15263cf943aeb9ca790825fcff844ff5d8d21f82c73c08bc333a2edbb",
+      "bytes": 437224
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/libc-e61c08386c208454/build_script_build-e61c08386c208454",
+      "sha256": "9a4735905ad7b5bbd082f7a91d2366faf6dc9a400c5752fc486f3420aacd6f3e",
+      "bytes": 620768
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/libc-e61c08386c208454/build-script-build",
+      "sha256": "9a4735905ad7b5bbd082f7a91d2366faf6dc9a400c5752fc486f3420aacd6f3e",
+      "bytes": 620768
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/rustversion-cf65b9f0d5a12bd8/build_script_build-cf65b9f0d5a12bd8",
+      "sha256": "02a8842698ec55c0ae7a46df8bf73e04f78c8336cf6caa012dc72c04c8066638",
+      "bytes": 601600
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/rustversion-cf65b9f0d5a12bd8/build-script-build",
+      "sha256": "02a8842698ec55c0ae7a46df8bf73e04f78c8336cf6caa012dc72c04c8066638",
+      "bytes": 601600
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/pulldown-cmark-3cdefce463bf3ec8/build_script_build-3cdefce463bf3ec8",
+      "sha256": "b3266f8244226dc1b9cb0707c79ccfdef49f0a575c2491b8dfaf521482acdc97",
+      "bytes": 438872
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/pulldown-cmark-3cdefce463bf3ec8/build-script-build",
+      "sha256": "b3266f8244226dc1b9cb0707c79ccfdef49f0a575c2491b8dfaf521482acdc97",
+      "bytes": 438872
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/icu_properties_data-96aa9bd36ba80917/build_script_build-96aa9bd36ba80917",
+      "sha256": "f89f8012bb70958c4ed4724447bb8d313f9752d4d536faf240c82ce565439908",
+      "bytes": 449824
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/icu_properties_data-96aa9bd36ba80917/build-script-build",
+      "sha256": "f89f8012bb70958c4ed4724447bb8d313f9752d4d536faf240c82ce565439908",
+      "bytes": 449824
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/thiserror-cb3c9fe5f9fa9fa6/build_script_build-cb3c9fe5f9fa9fa6",
+      "sha256": "25b8e4ccbce9237d7f90b18c0f5ae0d6c71fa34918be65a5ff7c59a5fd9064b7",
+      "bytes": 622848
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/thiserror-cb3c9fe5f9fa9fa6/build-script-build",
+      "sha256": "25b8e4ccbce9237d7f90b18c0f5ae0d6c71fa34918be65a5ff7c59a5fd9064b7",
+      "bytes": 622848
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/instability-49270cda04eef087/build_script_build-49270cda04eef087",
+      "sha256": "196e2cd5cc34a8c639f905d52502f536d1ddb62b8379f094e7224ff3a4e232c8",
+      "bytes": 446096
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/instability-49270cda04eef087/build-script-build",
+      "sha256": "196e2cd5cc34a8c639f905d52502f536d1ddb62b8379f094e7224ff3a4e232c8",
+      "bytes": 446096
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/proc-macro2-5a7d2d8d8fc0131e/build_script_build-5a7d2d8d8fc0131e",
+      "sha256": "3a8838d1dff4b0a3c4652f4a3b14a6289698de4667dc066bfca28fa3b221f004",
+      "bytes": 604472
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/proc-macro2-5a7d2d8d8fc0131e/build-script-build",
+      "sha256": "3a8838d1dff4b0a3c4652f4a3b14a6289698de4667dc066bfca28fa3b221f004",
+      "bytes": 604472
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/icu_normalizer_data-a5becb8ccb849598/build_script_build-a5becb8ccb849598",
+      "sha256": "03d01ba55050cc870eb93c7460ed4307a5960c01d11332dbc60d05d709f95053",
+      "bytes": 449824
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/icu_normalizer_data-a5becb8ccb849598/build-script-build",
+      "sha256": "03d01ba55050cc870eb93c7460ed4307a5960c01d11332dbc60d05d709f95053",
+      "bytes": 449824
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/instability-512fdb3662c17be6/build_script_build-512fdb3662c17be6",
+      "sha256": "275deaadcd979109123b73df8b72b8611a192a7310742d0b2a287b8bdbc867b7",
+      "bytes": 436200
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/instability-512fdb3662c17be6/build-script-build",
+      "sha256": "275deaadcd979109123b73df8b72b8611a192a7310742d0b2a287b8bdbc867b7",
+      "bytes": 436200
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/paste-1fc6cc793c6ec901/build_script_build-1fc6cc793c6ec901",
+      "sha256": "729150f292524ba7a7011be9ddce6c0a7821f07372cc8b4d2af74f7de8799148",
+      "bytes": 544920
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/paste-1fc6cc793c6ec901/build-script-build",
+      "sha256": "729150f292524ba7a7011be9ddce6c0a7821f07372cc8b4d2af74f7de8799148",
+      "bytes": 544920
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/libc-cc32ca9ecf8b272c/build_script_build-cc32ca9ecf8b272c",
+      "sha256": "c802c8fc5ec568575b6e5429cf9d74484e5292ee49c9cfc16b16171f4677875e",
+      "bytes": 615848
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/libc-cc32ca9ecf8b272c/build-script-build",
+      "sha256": "c802c8fc5ec568575b6e5429cf9d74484e5292ee49c9cfc16b16171f4677875e",
+      "bytes": 615848
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/quote-707c608f2c0793e4/build-script-build",
+      "sha256": "91f8d1da366403442881bf9c0bf7159ddc520efde75b077a2a7627d41931a652",
+      "bytes": 544480
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/quote-707c608f2c0793e4/build_script_build-707c608f2c0793e4",
+      "sha256": "91f8d1da366403442881bf9c0bf7159ddc520efde75b077a2a7627d41931a652",
+      "bytes": 544480
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/serde-c6ebb0794615edd7/build_script_build-c6ebb0794615edd7",
+      "sha256": "3bea35a888c96b197f0e0271d999476772421f6339e9c759e8c07864e60704ff",
+      "bytes": 571600
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/serde-c6ebb0794615edd7/build-script-build",
+      "sha256": "3bea35a888c96b197f0e0271d999476772421f6339e9c759e8c07864e60704ff",
+      "bytes": 571600
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/signal-hook-aecbbd72c17bf006/build_script_build-aecbbd72c17bf006",
+      "sha256": "0515b23ba21dda53e49da3e6534ffcdd34b08a5134684d3d13f2b0640499ccef",
+      "bytes": 426384
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/signal-hook-aecbbd72c17bf006/build-script-build",
+      "sha256": "0515b23ba21dda53e49da3e6534ffcdd34b08a5134684d3d13f2b0640499ccef",
+      "bytes": 426384
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/serde_json-5bbc8fd8eaeae337/build_script_build-5bbc8fd8eaeae337",
+      "sha256": "9c3db635c3f8cefc9f83ad30f80e741ffc4bcc4a48edd51a2b57b30bdc3afbc6",
+      "bytes": 450432
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/serde_json-5bbc8fd8eaeae337/build-script-build",
+      "sha256": "9c3db635c3f8cefc9f83ad30f80e741ffc4bcc4a48edd51a2b57b30bdc3afbc6",
+      "bytes": 450432
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/serde_core-85cb5be636414c4b/build_script_build-85cb5be636414c4b",
+      "sha256": "dbd773a79f50a05ca8e2641c70605c5148db66766a975f2ce7a550ca3907886a",
+      "bytes": 572344
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/serde_core-85cb5be636414c4b/build-script-build",
+      "sha256": "dbd773a79f50a05ca8e2641c70605c5148db66766a975f2ce7a550ca3907886a",
+      "bytes": 572344
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/parking_lot_core-98088183e2fe0c24/build_script_build-98088183e2fe0c24",
+      "sha256": "102727f7a0e2c429fc763b1c5db48e92192c026ee971a39d9eddd2d24d77c0d9",
+      "bytes": 473384
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/parking_lot_core-98088183e2fe0c24/build-script-build",
+      "sha256": "102727f7a0e2c429fc763b1c5db48e92192c026ee971a39d9eddd2d24d77c0d9",
+      "bytes": 473384
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/rustix-e47ae54b00e88f5d/build_script_build-e47ae54b00e88f5d",
+      "sha256": "be9d6a0323bb18464c8c5bafa6076db17ba2f2d9fb53459353adaf2ca3fdbb6f",
+      "bytes": 599184
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/rustix-e47ae54b00e88f5d/build-script-build",
+      "sha256": "be9d6a0323bb18464c8c5bafa6076db17ba2f2d9fb53459353adaf2ca3fdbb6f",
+      "bytes": 599184
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/libc-2e2572b62cac4727/build_script_build-2e2572b62cac4727",
+      "sha256": "4811f0d3deabe3af6f4b84dc9a59428447d4febdf59e8eaca7d6d27e988831ec",
+      "bytes": 615888
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/libc-2e2572b62cac4727/build-script-build",
+      "sha256": "4811f0d3deabe3af6f4b84dc9a59428447d4febdf59e8eaca7d6d27e988831ec",
+      "bytes": 615888
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/proc-macro2-fb4941d7fe8be6e8/build_script_build-fb4941d7fe8be6e8",
+      "sha256": "be980949cb065e5a7b863cb7d76f8a013cd1e197420bb81e7b0dd62fdbbf62c4",
+      "bytes": 604304
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/proc-macro2-fb4941d7fe8be6e8/build-script-build",
+      "sha256": "be980949cb065e5a7b863cb7d76f8a013cd1e197420bb81e7b0dd62fdbbf62c4",
+      "bytes": 604304
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/quote-7ac01c89e2453ba8/build_script_build-7ac01c89e2453ba8",
+      "sha256": "30dcf501714013462768f14662da6fcec07f8fa84c9cb025831bc8e5e4cfd71a",
+      "bytes": 542008
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/quote-7ac01c89e2453ba8/build-script-build",
+      "sha256": "30dcf501714013462768f14662da6fcec07f8fa84c9cb025831bc8e5e4cfd71a",
+      "bytes": 542008
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/signal-hook-6f7c014b50fd1907/build_script_build-6f7c014b50fd1907",
+      "sha256": "3f65a8adc6d2a9858c3aa636bb882d17bfd2fe1454b2a34bf8e969e9b26167da",
+      "bytes": 438736
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/signal-hook-6f7c014b50fd1907/build-script-build",
+      "sha256": "3f65a8adc6d2a9858c3aa636bb882d17bfd2fe1454b2a34bf8e969e9b26167da",
+      "bytes": 438736
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/parking_lot_core-dbca4d15c8fcc903/build_script_build-dbca4d15c8fcc903",
+      "sha256": "7dc4aac535298b628a2710d7889e3298d5cab27a2fed831dcb18e31e6ad1598e",
+      "bytes": 462248
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/parking_lot_core-dbca4d15c8fcc903/build-script-build",
+      "sha256": "7dc4aac535298b628a2710d7889e3298d5cab27a2fed831dcb18e31e6ad1598e",
+      "bytes": 462248
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/pulldown-cmark-89205550800f1904/build_script_build-89205550800f1904",
+      "sha256": "1028cffc361a34c0384f2ff680a3b214520e9f453a2855ed531ed4f5e2562a4e",
+      "bytes": 426496
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/pulldown-cmark-89205550800f1904/build-script-build",
+      "sha256": "1028cffc361a34c0384f2ff680a3b214520e9f453a2855ed531ed4f5e2562a4e",
+      "bytes": 426496
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/rustix-1749099587fd2cb8/build_script_build-1749099587fd2cb8",
+      "sha256": "d245246c7cdde949c01dc00afa345d15af37a3c35be50a15a09e3de4ebe6c807",
+      "bytes": 599200
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/rustix-1749099587fd2cb8/build-script-build",
+      "sha256": "d245246c7cdde949c01dc00afa345d15af37a3c35be50a15a09e3de4ebe6c807",
+      "bytes": 599200
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/icu_properties_data-bc472f0a7c81f805/build_script_build-bc472f0a7c81f805",
+      "sha256": "7a0c078b26a38cf0e11ead1f95fb8ee098da3b33e5e2a999617067707b89f4c3",
+      "bytes": 437632
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/icu_properties_data-bc472f0a7c81f805/build-script-build",
+      "sha256": "7a0c078b26a38cf0e11ead1f95fb8ee098da3b33e5e2a999617067707b89f4c3",
+      "bytes": 437632
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/zmij-744e3b6a49b582d1/build_script_build-744e3b6a49b582d1",
+      "sha256": "dd5f07cab90034aecdcc2632f76d483b77b2368a20f96888cc962d8f4d721aeb",
+      "bytes": 547936
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/zmij-744e3b6a49b582d1/build-script-build",
+      "sha256": "dd5f07cab90034aecdcc2632f76d483b77b2368a20f96888cc962d8f4d721aeb",
+      "bytes": 547936
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/serde-ac8359aaf0ecf10b/build-script-build",
+      "sha256": "06edcbe898448db99ede13fcbecf1a161946091aa0c5672436af4f67062a9500",
+      "bytes": 571752
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/serde-ac8359aaf0ecf10b/build_script_build-ac8359aaf0ecf10b",
+      "sha256": "06edcbe898448db99ede13fcbecf1a161946091aa0c5672436af4f67062a9500",
+      "bytes": 571752
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/paste-5ca97c0a47ea538f/build_script_build-5ca97c0a47ea538f",
+      "sha256": "7f313de0a3346f094a8000e12a14216ca4aa94c6f66c32cbe8abd0210b9a9b4b",
+      "bytes": 542112
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/paste-5ca97c0a47ea538f/build-script-build",
+      "sha256": "7f313de0a3346f094a8000e12a14216ca4aa94c6f66c32cbe8abd0210b9a9b4b",
+      "bytes": 542112
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/serde_core-2114c36e30f8335a/build_script_build-2114c36e30f8335a",
+      "sha256": "2093582db6613f8f0c9be54215b7aa92efe6e0cd593c323b8b419e6f188f3d6c",
+      "bytes": 574752
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/serde_core-2114c36e30f8335a/build-script-build",
+      "sha256": "2093582db6613f8f0c9be54215b7aa92efe6e0cd593c323b8b419e6f188f3d6c",
+      "bytes": 574752
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/icu_normalizer_data-6af1ab73c6974a50/build_script_build-6af1ab73c6974a50",
+      "sha256": "02c5bfde50a06742ddc0172cf7e14f3cb2b793a29cfca7bc35b504aa7c4a4fac",
+      "bytes": 437632
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/icu_normalizer_data-6af1ab73c6974a50/build-script-build",
+      "sha256": "02c5bfde50a06742ddc0172cf7e14f3cb2b793a29cfca7bc35b504aa7c4a4fac",
+      "bytes": 437632
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/rustversion-f41035f0d6c60f9a/build_script_build-f41035f0d6c60f9a",
+      "sha256": "95b1879b533ccddeab36490a7c296f7c4c6badc793b54b8153a91fe52af6e5a1",
+      "bytes": 604712
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/rustversion-f41035f0d6c60f9a/build-script-build",
+      "sha256": "95b1879b533ccddeab36490a7c296f7c4c6badc793b54b8153a91fe52af6e5a1",
+      "bytes": 604712
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/thiserror-d7ca4aaa8508cb86/build_script_build-d7ca4aaa8508cb86",
+      "sha256": "9cd17c802b4486338e797ffee149dfb19db6910494a1f4413723360601da688f",
+      "bytes": 619520
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/thiserror-d7ca4aaa8508cb86/build-script-build",
+      "sha256": "9cd17c802b4486338e797ffee149dfb19db6910494a1f4413723360601da688f",
+      "bytes": 619520
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/zmij-6276b0b69c99cf8d/build_script_build-6276b0b69c99cf8d",
+      "sha256": "f1d381076fddb7aaf167362c09ba6c94be352393bf177c16452e9a194c5f526b",
+      "bytes": 550040
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/build/zmij-6276b0b69c99cf8d/build-script-build",
+      "sha256": "f1d381076fddb7aaf167362c09ba6c94be352393bf177c16452e9a194c5f526b",
+      "bytes": 550040
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libzerofrom_derive-31f753d26bfccbe8.so",
+      "sha256": "3c33199e2ea52a89bbe0ca68f68d63db5fff1490106fd26cfd494aa4688dee2d",
+      "bytes": 4535576
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/terminal_restore-770ab6f0231fe6b7",
+      "sha256": "049215c98fdb5ed5675e6eb8693081c77c4e6482390bde1182cc21d0f4a2af71",
+      "bytes": 1297976
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libtokio_macros-271accbd0fb73043.so",
+      "sha256": "d7fbcb15d10aa9f8ee0cbc4953089d4b5c92118789e8de366362bcccbffdc31b",
+      "bytes": 3435056
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libindoc-d98383bd93ae8d5f.so",
+      "sha256": "8af525e11a4405f8077b0689eaba537ce195c575901e371f71cd2c43e0857e00",
+      "bytes": 675736
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libserde_derive-968c2dd996b3aa19.so",
+      "sha256": "2826a79abb1de45db96c5ffa1b8e1f1e70f70128872cd7cf5cbbad786ab181d7",
+      "bytes": 4486992
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libtokio_macros-abf2b5568133bf8f.so",
+      "sha256": "5d9c96fba3c6bf3412481e0c154df06a8c20d579f918db5386710cb4c604b6af",
+      "bytes": 3156184
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libyoke_derive-dce40f48b17abca8.so",
+      "sha256": "19a8db70782c4e802575dd4b31797e0a438e4fc924be1dfccdde54fc83f25c0e",
+      "bytes": 4165952
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/minicore_tui-b800a4118e9d1bd3",
+      "sha256": "42a47a93b199a7f672be4673c150bcb269ed407e4ac3c724a7d6627f90a0afd6",
+      "bytes": 4739272
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libdisplaydoc-c404614956c1b705.so",
+      "sha256": "00441e3ddce02626cf69a5fa0cb8ace167227675152f1353e8d8e18dac2c0b4b",
+      "bytes": 3213904
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libstrum_macros-5e922244792ac0d1.so",
+      "sha256": "dc140aa5e60c44ebf41aa1a721334fc80651c749de2b0a881bd30845a0962889",
+      "bytes": 4202592
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/app_flow-d67fb12e8f0d9675",
+      "sha256": "b53f4f8284f2fad7429ef4ea74b1532bf2a9e87ef171ec39407bb2348ecb2683",
+      "bytes": 2695720
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/rpc_io-c7b21b306947ad8e",
+      "sha256": "226d24f340b9b8201c4e229e00b072e2031d5e829e658f673b4b728b2b870563",
+      "bytes": 1949928
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/agent_process-dec4607a3fbfec78",
+      "sha256": "0089434e22b70589c02eb1cb3fa5e27633f5642489581e0b21bf4591f616c2a9",
+      "bytes": 618304
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libyoke_derive-a863b722e46f20a1.so",
+      "sha256": "ca5ddd11fef16ecbc9093a453263c7bee2323776ba956e3fef467b53fc8bdad4",
+      "bytes": 3708048
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/librustversion-bc53ae463f288a74.so",
+      "sha256": "f09f0960a291552ffa1116134c0cf8db8547b1d62c62da01f6dbdaeef89380ca",
+      "bytes": 791504
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libserde_derive-b657091e1ad40ca6.so",
+      "sha256": "e026cfffc358a6984fad3ae5582fbf0b38007405ebe0e98ee0bb96785c121a06",
+      "bytes": 4923448
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/protocol-0d13983709c82ee5",
+      "sha256": "b11fd5c21065f2fb8ae2e274e7341ef274b08add959c05cf153a2250192b2d17",
+      "bytes": 2095456
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libstrum_macros-0ca10978098f7506.so",
+      "sha256": "dc5d0beb65ad63746bef4048a9301ad3b1678922ce96737fd30927c9aef582eb",
+      "bytes": 4585512
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/minicore_tui-4fe0b5abca5db800",
+      "sha256": "3d253b075bfe4f78705570be36c65b80d5b9ae8cfb7822539adea883e3298a63",
+      "bytes": 4898752
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libpaste-1941714ed313531c.so",
+      "sha256": "cb4c032580ba612d75885541e83d024a43972be57c48ed19d2e7fde23d601ebd",
+      "bytes": 731016
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libinstability-0ec36ed5d20d8f97.so",
+      "sha256": "b04dce2c1af4a6ffb9281f6bfc7216d3443dedce6adb4741001e408e6069afd1",
+      "bytes": 3195656
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libstrum_macros-52549b879758acb2.so",
+      "sha256": "b5dbf2477ef21211939fba4c0b45d452b3f596f319fc50abd9fd235aa908131c",
+      "bytes": 4202592
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/minicore_tui-065494bc82a0533c",
+      "sha256": "5f69500e17e3a76eca0996e530478297f13a23b4a423b5cf7e69209bde814251",
+      "bytes": 2402400
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libdisplaydoc-c2b081e69b82f0c5.so",
+      "sha256": "c8b2e2354a2bedf8993ae6fdc47ebebbd981407fd563848cf7e3c086fb4c1d4d",
+      "bytes": 3527640
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/minicore_tui-d65c9b64052ed26f",
+      "sha256": "93deb2cf081577a4174554df78a856bce678183c6fb4585c9b9ffc9c6bb51d0b",
+      "bytes": 4900552
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libdarling_macro-06a175e0446de9c3.so",
+      "sha256": "8eba95b4f39073a06fc56add0f7b20a27f0de9c05294334679ec3a68c8e72145",
+      "bytes": 4769832
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libthiserror_impl-131acd9491d7f035.so",
+      "sha256": "4be307b422893a2ea46d5c49367ed4cb165f8b2587d09621b0d654ee929402f2",
+      "bytes": 3923128
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/render_snapshots-ed77ce7239b60963",
+      "sha256": "ecae8c401718c4b4e834194802199d3caa4f61bae24879d2784cf4d990c8916f",
+      "bytes": 2933496
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libserde_derive-c3852d6245fced63.so",
+      "sha256": "4c2743c57b705110e5e26c1f60da7bb4578a9a1cc5f5d47f85bfb03b78a09eb4",
+      "bytes": 4486440
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/agent_e2e-30fa77d04314b84c",
+      "sha256": "ec7f960d4004392c057407b8148716321d13398accbb72d714ce79f45508554f",
+      "bytes": 3620576
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libindoc-62ca2db78125e60e.so",
+      "sha256": "33409961b237dae79d613dca670a1225e8bb021adbb8aa1c86df1b891d02aeeb",
+      "bytes": 642232
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libthiserror_impl-cb900c44063b034e.so",
+      "sha256": "5c215168849f844be5ab3421a22ffb381a7acf3eb5848f3363f57e7431af251f",
+      "bytes": 3633232
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/minicore_tui-460584721e46f47a",
+      "sha256": "53dc0d6b3cc4d01ab4bfd9c6b8b8a3c759599f0a55a8fafbe65c3bf73dcd9b84",
+      "bytes": 3778968
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libtokio_macros-d038d620b46fe76d.so",
+      "sha256": "6ace70382fcce9c01d8ebb26c466c739a6b7780b31dd78098506bebfd090cf02",
+      "bytes": 3156496
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libinstability-e830633f83008c42.so",
+      "sha256": "172968de39dbd268518ed72d96e2ab226e2fd565c765227c8de3a7093862da26",
+      "bytes": 3556152
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libdarling_macro-226d3b22e2e3dc9b.so",
+      "sha256": "2f6ec1c8ff4347a359ed4823f6897749db645b37904ea2c2c12ce3a9d3fd860b",
+      "bytes": 4314096
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libthiserror_impl-568a1223cc239581.so",
+      "sha256": "4eeebc9576fe1aca61a4f289d4f64253910576c02f7d0f3c4299736c9bb0ff75",
+      "bytes": 3615568
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libpaste-e8c11b814c73abf8.so",
+      "sha256": "3edae118aded6eb9a577e21a7fc9aecba18239a7c1b6aaa995d28ab7b3bd9a98",
+      "bytes": 723984
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libzerovec_derive-09b034f5371f6e31.so",
+      "sha256": "a680d136b3bc2e913a95be2985cb0b25f7ee67ff588d2d7b8b22602579e7f1e8",
+      "bytes": 3823240
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libdarling_macro-f199fd9fd35ac9f7.so",
+      "sha256": "755777e5cef87c6fb053795baeb69c5488b3bc7d5d58a2f8b2cc392909047ed1",
+      "bytes": 4314080
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libzerofrom_derive-5d53ae2fafac4f2a.so",
+      "sha256": "2867e795b22ee6ee865118119d2aae4f1fecce1277a94c9151561e5d29c63bf5",
+      "bytes": 3986952
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libzerovec_derive-76266a5bbf1e6396.so",
+      "sha256": "9460a7e32ec895179a7c88827152843b960e5c91f38748f2feb7277f3143987f",
+      "bytes": 3536464
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/librustversion-ccb5811047b7d5be.so",
+      "sha256": "c0ad27f6c4081a12c23a472bcb24a496c31a310d0d2ef5d09d3b8e0c4c5def16",
+      "bytes": 754256
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/deps/libinstability-1e8c59641fa05b7a.so",
+      "sha256": "5598fac0c21a383d356f5e8f97146bf1c91fbd137c0355faf2ae5adc3f4fe489",
+      "bytes": 3195680
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/release/minicore-tui",
+      "sha256": "53dc0d6b3cc4d01ab4bfd9c6b8b8a3c759599f0a55a8fafbe65c3bf73dcd9b84",
+      "bytes": 3778968
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/x86_64-apple-darwin/release/deps/minicore_tui-0ee72970fcfb8ff3",
+      "sha256": "26ca04adbfe973ce2eb0a0d931816bf61dfcbd9e824fd42ff2d855269c75fd4f",
+      "bytes": 3497236
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/x86_64-apple-darwin/release/deps/minicore_tui-864c8d03e10e420a",
+      "sha256": "bf32021c4ac036365cd2d9f69c964c797133cd43a6ff67eb219825829d991ec3",
+      "bytes": 3498196
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/tui/target/x86_64-apple-darwin/release/minicore-tui",
+      "sha256": "bf32021c4ac036365cd2d9f69c964c797133cd43a6ff67eb219825829d991ec3",
+      "bytes": 3498196
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/libc-09314212c550b1c8/build_script_build-09314212c550b1c8",
+      "sha256": "1386a1772720bd03db6a4f50f1dd9f502b10a937ca8eb1333734408811ffcbf4",
+      "bytes": 4171392
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/libc-09314212c550b1c8/build-script-build",
+      "sha256": "1386a1772720bd03db6a4f50f1dd9f502b10a937ca8eb1333734408811ffcbf4",
+      "bytes": 4171392
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/zmij-da74f3e9e587404c/build_script_build-da74f3e9e587404c",
+      "sha256": "b8a7689a882477f75d41099656545afd0cf7f3a78179b79cf42f55e3f9631c78",
+      "bytes": 4098192
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/zmij-da74f3e9e587404c/build-script-build",
+      "sha256": "b8a7689a882477f75d41099656545afd0cf7f3a78179b79cf42f55e3f9631c78",
+      "bytes": 4098192
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/proc-macro2-40e1e5b5938eb54b/build_script_build-40e1e5b5938eb54b",
+      "sha256": "e0e09ca86afb6ac9a343ed46b164ea317a35cf295e523c55d86b4afece2bd9fe",
+      "bytes": 4150128
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/proc-macro2-40e1e5b5938eb54b/build-script-build",
+      "sha256": "e0e09ca86afb6ac9a343ed46b164ea317a35cf295e523c55d86b4afece2bd9fe",
+      "bytes": 4150128
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/thiserror-a821c8960f9b7493/build_script_build-a821c8960f9b7493",
+      "sha256": "396849cb1d8f0085e2ee5b6d84d6100d602a6c935d60a7cac5b204028ac9f5ef",
+      "bytes": 4170328
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/thiserror-a821c8960f9b7493/build-script-build",
+      "sha256": "396849cb1d8f0085e2ee5b6d84d6100d602a6c935d60a7cac5b204028ac9f5ef",
+      "bytes": 4170328
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/rustls-db8ccf39f9038d6b/build_script_build-db8ccf39f9038d6b",
+      "sha256": "be9cc2421535ec4c3780657f7fa5db7fb6f95eda0605caeb51f9309e8ba28db1",
+      "bytes": 3965184
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/rustls-db8ccf39f9038d6b/build-script-build",
+      "sha256": "be9cc2421535ec4c3780657f7fa5db7fb6f95eda0605caeb51f9309e8ba28db1",
+      "bytes": 3965184
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/quote-ff82b0dca036a282/build_script_build-ff82b0dca036a282",
+      "sha256": "23eacabbcb0be9d34941cb54acf70369df2fc73cac6d2028c6591c22526834cc",
+      "bytes": 4088072
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/quote-ff82b0dca036a282/build-script-build",
+      "sha256": "23eacabbcb0be9d34941cb54acf70369df2fc73cac6d2028c6591c22526834cc",
+      "bytes": 4088072
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/serde-80ffa617eca8fd12/build_script_build-80ffa617eca8fd12",
+      "sha256": "32a6cb90143cabb1980d5714f0f54759965036419d5da1dc9b8228b40694d1cc",
+      "bytes": 4122464
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/serde-80ffa617eca8fd12/build-script-build",
+      "sha256": "32a6cb90143cabb1980d5714f0f54759965036419d5da1dc9b8228b40694d1cc",
+      "bytes": 4122464
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/icu_properties_data-328c9e575586bef7/build_script_build-328c9e575586bef7",
+      "sha256": "b2140d6aa326fd0b99f3497adcff305a8d9752d3bc5db27e9a57f0ed66470b18",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/icu_properties_data-328c9e575586bef7/build-script-build",
+      "sha256": "b2140d6aa326fd0b99f3497adcff305a8d9752d3bc5db27e9a57f0ed66470b18",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/icu_normalizer_data-9cbf8a21df549c51/build_script_build-9cbf8a21df549c51",
+      "sha256": "cadd83157ac6a0246b9acf78bfa97811b5257fdf5bc92859a854a14936881fd5",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/icu_normalizer_data-9cbf8a21df549c51/build-script-build",
+      "sha256": "cadd83157ac6a0246b9acf78bfa97811b5257fdf5bc92859a854a14936881fd5",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/serde_json-8d2d36732f4d5387/build_script_build-8d2d36732f4d5387",
+      "sha256": "507830cae9d77fdb298531db1e4fcb091ef61071bbdabe1248b220921601717b",
+      "bytes": 3976184
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/serde_json-8d2d36732f4d5387/build-script-build",
+      "sha256": "507830cae9d77fdb298531db1e4fcb091ef61071bbdabe1248b220921601717b",
+      "bytes": 3976184
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/ring-1e464ce2c45e1997/build-script-build",
+      "sha256": "78eaaafa22b21994bd0571ef22e3111821ff516bb58a8314257da070057df30c",
+      "bytes": 5378440
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/ring-1e464ce2c45e1997/build_script_build-1e464ce2c45e1997",
+      "sha256": "78eaaafa22b21994bd0571ef22e3111821ff516bb58a8314257da070057df30c",
+      "bytes": 5378440
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/httparse-d6075e317b971b2e/build_script_build-d6075e317b971b2e",
+      "sha256": "1b8e91d5a243fcb96f926020d506c321da87e90318d22138ac697afe574a195a",
+      "bytes": 4151096
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/httparse-d6075e317b971b2e/build-script-build",
+      "sha256": "1b8e91d5a243fcb96f926020d506c321da87e90318d22138ac697afe574a195a",
+      "bytes": 4151096
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/getrandom-e262d4548f849d00/build_script_build-e262d4548f849d00",
+      "sha256": "13d275d1d4204e833faab4afcf86bd6a61a99ea485642f636d118e7deb3d9d15",
+      "bytes": 4129568
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/getrandom-e262d4548f849d00/build-script-build",
+      "sha256": "13d275d1d4204e833faab4afcf86bd6a61a99ea485642f636d118e7deb3d9d15",
+      "bytes": 4129568
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/serde_core-899581865f4b9050/build_script_build-899581865f4b9050",
+      "sha256": "585fe85ff86e83785615765be160d81a9c7420ba9a21f7bbae167ddf5269ff39",
+      "bytes": 4127208
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/build/serde_core-899581865f4b9050/build-script-build",
+      "sha256": "585fe85ff86e83785615765be160d81a9c7420ba9a21f7bbae167ddf5269ff39",
+      "bytes": 4127208
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/deps/libtokio_macros-d53c15de4fc1f0dd.so",
+      "sha256": "c72bafae54d8fc9de4e9ff643bc943d90ddff2fbb339a8d9d62f02cdef9d7aa8",
+      "bytes": 8061824
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/deps/libtracing_attributes-b5c176eca2ff51f8.so",
+      "sha256": "45f949259173143f33096d34379453145dc9e85f15dd4d3ac760818d96981593",
+      "bytes": 8775632
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/deps/libthiserror_impl-ed357a82ca1c24ec.so",
+      "sha256": "ece9570a6a287cf4d81f9995b0399d89cf7797ec8b74a9f16e392ebe94550c68",
+      "bytes": 8544152
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/deps/libzerofrom_derive-48bbd9c13a77a7d5.so",
+      "sha256": "85aeaf81c5a7df27901988fa4b4e8b309fca10e2101f0ba31a2e563aec31e7b6",
+      "bytes": 8922288
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/deps/minicore_agent-ae86ce9a6ff553d2",
+      "sha256": "4b0993cfc4823c560ed451b30d1ec3fecd7b24f43a1bfd390a451cbc6b62fcd9",
+      "bytes": 6992712
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/deps/libserde_derive-2222dcd9cc505602.so",
+      "sha256": "3c171dc6be6d0a5975a746b739ef91604fd92269e4d05b2af966220c96bdeac8",
+      "bytes": 9406064
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/deps/minicore_agent-d33fa0b9e9284c61",
+      "sha256": "bc82d6c0908129e45c3bc48b9e21f020967165e16f912fa61fbc6eb84925aa2d",
+      "bytes": 112801128
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/deps/rpc_stdio-c500b07aeba1549a",
+      "sha256": "9037d5ba458297865118ca7578371ba0a97fd6d87d415117b1eff2c0e28fe972",
+      "bytes": 68275144
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/deps/openai_rpc_process-2b660c13a1b5bb0a",
+      "sha256": "9b9bd701a87292c77aba838f92d740bfae80fd74dcd09d4abef6eb1b97f142fa",
+      "bytes": 76305240
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/deps/libdisplaydoc-f7ce3cd5bce52f3f.so",
+      "sha256": "17d6eb27767984c32ed2721750448c7d810af404c11031f75fe4615046911df0",
+      "bytes": 8128680
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/deps/tui_rpc_flow-0d631d8816c61149",
+      "sha256": "d61a46d90bd776b6f9bbaf368888be21f7a6f3d257d976aaca2e19f192db4e89",
+      "bytes": 77145168
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/deps/libyoke_derive-0e04992efe9070be.so",
+      "sha256": "9a4f8387c12b21d500e0de993508cffd44e25209d59a4bc206d6f3db6d340ab8",
+      "bytes": 8643672
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/deps/libfutures_macro-44aab2495864de42.so",
+      "sha256": "e468adff4ef3f9c2e91825f08f594fdbc402ba9aa55a50edade252b777682ab5",
+      "bytes": 7722840
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/deps/minicore_agent-fa43f10d6787f247",
+      "sha256": "9b5245f1a6d3d3fece6c1629b303d907ebd6f61e34c03e32b782d51bbc711a91",
+      "bytes": 137237752
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/deps/skeleton-415b1afee4c51d47",
+      "sha256": "6761425e3971d37df886bec3652e726e0774e10699e43f9636106ea764d89e03",
+      "bytes": 70776552
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/deps/rpc_soak-5cbe652b6f647089",
+      "sha256": "37ee13dc64c69f4156967597edd4be8e162b391acf54a0921097974aab255cc9",
+      "bytes": 75849632
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/deps/libzerovec_derive-4b284451b929876e.so",
+      "sha256": "8887df2ebdc53dfb16b5f3c1a76e1e36c592cc7f3f3951b374208d3ca930bd7e",
+      "bytes": 8446472
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/agent/target/debug/minicore-agent",
+      "sha256": "bc82d6c0908129e45c3bc48b9e21f020967165e16f912fa61fbc6eb84925aa2d",
+      "bytes": 112801128
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/winapi-5d74ee8475752f34/build_script_build-5d74ee8475752f34",
+      "sha256": "72b8587260e357a6569be7af68d43b6627a919044c534e9bd7caff4405af09f1",
+      "bytes": 5114872
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/winapi-5d74ee8475752f34/build-script-build",
+      "sha256": "72b8587260e357a6569be7af68d43b6627a919044c534e9bd7caff4405af09f1",
+      "bytes": 5114872
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/paste-67831951e0bb28ce/build-script-build",
+      "sha256": "fe9fb27466955ce3e5f02d3e574377d05ee7e0117c19ee79c34970bfd79e7a90",
+      "bytes": 4663000
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/paste-67831951e0bb28ce/build_script_build-67831951e0bb28ce",
+      "sha256": "fe9fb27466955ce3e5f02d3e574377d05ee7e0117c19ee79c34970bfd79e7a90",
+      "bytes": 4663000
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/quote-8f4046f0a92c7969/build_script_build-8f4046f0a92c7969",
+      "sha256": "a7d12f53e9dcade3bfd93670fe57fc842b3352c3aabb37dd0f00cc6ec767fff9",
+      "bytes": 4661784
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/quote-8f4046f0a92c7969/build-script-build",
+      "sha256": "a7d12f53e9dcade3bfd93670fe57fc842b3352c3aabb37dd0f00cc6ec767fff9",
+      "bytes": 4661784
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/libc-3ee1683d07ddf05a/build-script-build",
+      "sha256": "31a799ec2a7da05dd9e0ae5d201e6f71a21a08b5e0cee5710d6994ecb72e79c3",
+      "bytes": 4943136
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/libc-3ee1683d07ddf05a/build_script_build-3ee1683d07ddf05a",
+      "sha256": "31a799ec2a7da05dd9e0ae5d201e6f71a21a08b5e0cee5710d6994ecb72e79c3",
+      "bytes": 4943136
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/pulldown-cmark-dd9a30b4686fdef7/build_script_build-dd9a30b4686fdef7",
+      "sha256": "e4f986f6f9495c16e1fb528420e1d03f1769bcc656576254ca53387106eb522a",
+      "bytes": 4352496
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/pulldown-cmark-dd9a30b4686fdef7/build-script-build",
+      "sha256": "e4f986f6f9495c16e1fb528420e1d03f1769bcc656576254ca53387106eb522a",
+      "bytes": 4352496
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/parking_lot_core-56ca5032781ce5f5/build_script_build-56ca5032781ce5f5",
+      "sha256": "3d5a21f781be0a32de745194cb9aed43733f7c19eafa9d4b020117be50e29f50",
+      "bytes": 4494672
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/parking_lot_core-56ca5032781ce5f5/build-script-build",
+      "sha256": "3d5a21f781be0a32de745194cb9aed43733f7c19eafa9d4b020117be50e29f50",
+      "bytes": 4494672
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/proc-macro2-e024176cfc4fa3c8/build_script_build-e024176cfc4fa3c8",
+      "sha256": "0bf0727b80a7d278a923b4ff0d4db08385aa6fdeef85ee44def4ea354e0266f7",
+      "bytes": 4777664
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/proc-macro2-e024176cfc4fa3c8/build-script-build",
+      "sha256": "0bf0727b80a7d278a923b4ff0d4db08385aa6fdeef85ee44def4ea354e0266f7",
+      "bytes": 4777664
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/serde-f5af4cbbfb466e7d/build_script_build-f5af4cbbfb466e7d",
+      "sha256": "d284c69a2ded9df9aa169bcc65cebd411b056140e03dbe747e78b4195eb4ea09",
+      "bytes": 4776304
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/serde-f5af4cbbfb466e7d/build-script-build",
+      "sha256": "d284c69a2ded9df9aa169bcc65cebd411b056140e03dbe747e78b4195eb4ea09",
+      "bytes": 4776304
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/serde_core-b9638727b180d7fd/build_script_build-b9638727b180d7fd",
+      "sha256": "c51e564975e7dc9b402383cf8f1b39253b100dd48d678b5c06886562840f12b0",
+      "bytes": 4781448
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/serde_core-b9638727b180d7fd/build-script-build",
+      "sha256": "c51e564975e7dc9b402383cf8f1b39253b100dd48d678b5c06886562840f12b0",
+      "bytes": 4781448
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/icu_properties_data-7f3c900986840bc1/build_script_build-7f3c900986840bc1",
+      "sha256": "d7ef4b52936f07be54350e95e116ded5bda3e9ae71b0b311bb4ef5c0aa8451c9",
+      "bytes": 4369400
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/icu_properties_data-7f3c900986840bc1/build-script-build",
+      "sha256": "d7ef4b52936f07be54350e95e116ded5bda3e9ae71b0b311bb4ef5c0aa8451c9",
+      "bytes": 4369400
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/rustix-e0389be6b6101be0/build-script-build",
+      "sha256": "a9757ac523fe5d8af89f13a2b147f143c092ba2f8464e1aaa03dfa60d987f7fe",
+      "bytes": 4866528
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/rustix-e0389be6b6101be0/build_script_build-e0389be6b6101be0",
+      "sha256": "a9757ac523fe5d8af89f13a2b147f143c092ba2f8464e1aaa03dfa60d987f7fe",
+      "bytes": 4866528
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/icu_normalizer_data-189f21d230c33d90/build_script_build-189f21d230c33d90",
+      "sha256": "17a1b8e4edc687c8c4c4dd90a1ea08efdd45ecccc5dcb8d560380c6f8caf612f",
+      "bytes": 4369400
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/icu_normalizer_data-189f21d230c33d90/build-script-build",
+      "sha256": "17a1b8e4edc687c8c4c4dd90a1ea08efdd45ecccc5dcb8d560380c6f8caf612f",
+      "bytes": 4369400
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/instability-fb374a6c3c9c70cb/build_script_build-fb374a6c3c9c70cb",
+      "sha256": "33337b2a0598c7544d3578fe5c37620d6d18efaecb870c1fd7052222244b9f32",
+      "bytes": 4361120
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/instability-fb374a6c3c9c70cb/build-script-build",
+      "sha256": "33337b2a0598c7544d3578fe5c37620d6d18efaecb870c1fd7052222244b9f32",
+      "bytes": 4361120
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/zmij-75c67c11249bc167/build_script_build-75c67c11249bc167",
+      "sha256": "3919d4e27b8871a8d1fac6d84e50c48396a437131fe228e592b0c6c2d6886b19",
+      "bytes": 4671152
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/zmij-75c67c11249bc167/build-script-build",
+      "sha256": "3919d4e27b8871a8d1fac6d84e50c48396a437131fe228e592b0c6c2d6886b19",
+      "bytes": 4671152
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/rustversion-1218268bd94f1c10/build_script_build-1218268bd94f1c10",
+      "sha256": "9cb004b10facc91983fb5342b8951c90bf2d36ee0abbc8eef2ce3bd97e08c88c",
+      "bytes": 4855936
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/rustversion-1218268bd94f1c10/build-script-build",
+      "sha256": "9cb004b10facc91983fb5342b8951c90bf2d36ee0abbc8eef2ce3bd97e08c88c",
+      "bytes": 4855936
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/signal-hook-4a6d55e009dbda5d/build_script_build-4a6d55e009dbda5d",
+      "sha256": "529372f5939f8746e18335cd4d0c96c6397751ba96da4815454cfa95e1e81dab",
+      "bytes": 4352160
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/signal-hook-4a6d55e009dbda5d/build-script-build",
+      "sha256": "529372f5939f8746e18335cd4d0c96c6397751ba96da4815454cfa95e1e81dab",
+      "bytes": 4352160
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/winapi-x86_64-pc-windows-gnu-3e58230c57a02288/build_script_build-3e58230c57a02288",
+      "sha256": "87beaee3a458309a0830bf34ee4257a5bd3dec7c487cb9dec5d61c17494ebbfa",
+      "bytes": 4389504
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/winapi-x86_64-pc-windows-gnu-3e58230c57a02288/build-script-build",
+      "sha256": "87beaee3a458309a0830bf34ee4257a5bd3dec7c487cb9dec5d61c17494ebbfa",
+      "bytes": 4389504
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/thiserror-941288bb0e8da530/build-script-build",
+      "sha256": "202a351ab1ee79180c06732a770ba74345d70c11d47ae94b353c0fef5d17d07c",
+      "bytes": 4891072
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/thiserror-941288bb0e8da530/build_script_build-941288bb0e8da530",
+      "sha256": "202a351ab1ee79180c06732a770ba74345d70c11d47ae94b353c0fef5d17d07c",
+      "bytes": 4891072
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/serde_json-6ba74129456a7bed/build_script_build-6ba74129456a7bed",
+      "sha256": "fe4725bfa5116fe43a1bf8b207b40aa54d2526db5f857e9a2a770359df6b633d",
+      "bytes": 4374104
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/build/serde_json-6ba74129456a7bed/build-script-build",
+      "sha256": "fe4725bfa5116fe43a1bf8b207b40aa54d2526db5f857e9a2a770359df6b633d",
+      "bytes": 4374104
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/deps/libdisplaydoc-a5cc070dedd924c2.so",
+      "sha256": "bb5e032a71355d45845dc097178dc34e71505bb796b29a59085d8acd50987b0a",
+      "bytes": 16341256
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/deps/libzerofrom_derive-227a4ea3f8c8f065.so",
+      "sha256": "8d31d1a0ea587c186f0dfac0c09d1068e86d9a8aa88059efb05525954472ae06",
+      "bytes": 20289448
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/deps/libzerovec_derive-9e9053e2f9068a2d.so",
+      "sha256": "47af519f4cb9ba53c20a2b1553e0683802d01823c6cc3846b8ad32f5c0ebd9f1",
+      "bytes": 16344888
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/deps/libindoc-83d20510ecb7ccd2.so",
+      "sha256": "5cb75e376265cdb7c979379515f1730a10f605f56a267cd7fb1454814cf05be3",
+      "bytes": 5955576
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/deps/libserde_derive-c09c417afc1f4594.so",
+      "sha256": "b109ee6267d55db3cb0003019c04c021ad5910b9e626590a0a29cf02c50d90f0",
+      "bytes": 20445352
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/deps/libstrum_macros-3142138110d83297.so",
+      "sha256": "606d27a155219288f7ce25509b6c16227cb3635ae00ee8c0da4acaff890e55ae",
+      "bytes": 18980032
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/deps/libtokio_macros-f107f813709b531a.so",
+      "sha256": "ea1bce9efe6ec47dea8950c1d7b6f5f4666baf0fdbc7bdfe47b7c84124757625",
+      "bytes": 15519688
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/deps/libthiserror_impl-fc1338a0835b29fb.so",
+      "sha256": "d3337cf765bc8e8b6eacb5190996a78ea07328f6f8334c1eedd708dc61c08ddc",
+      "bytes": 18129280
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/deps/librustversion-6e4ae997cac3a8f8.so",
+      "sha256": "1d4957727e9642f592a777505d360e49614c148bb24b5e2cd24ab464331398da",
+      "bytes": 6370248
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/deps/libpaste-7c0bac34ed9aeb5d.so",
+      "sha256": "e9f22dee510e15175fa9bdfd7b2846c7ac3908e3e118b163fd45410d024f9df6",
+      "bytes": 6175008
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/deps/libinstability-1fe082ccfd22a982.so",
+      "sha256": "22ccc18a1b326c71403e9e8d9566388947f7cfa5a092e14ce52e1a691752fdb9",
+      "bytes": 20446688
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/deps/libdarling_macro-8bc56d055ced75f9.so",
+      "sha256": "bf4a80719b409884c227c27d95565b079295078dc70c26994288b66235af79b4",
+      "bytes": 21518744
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/target-cross/debug/deps/libyoke_derive-1ddb6dda73a74853.so",
+      "sha256": "eb5eb6c33dce51c7d3802826479fc1fb806cf359fb5e86dcd06917e6081b7508",
+      "bytes": 19324104
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/serde_json-b7dbe6878695db79/build-script-build",
+      "sha256": "50134bb15263cf943aeb9ca790825fcff844ff5d8d21f82c73c08bc333a2edbb",
+      "bytes": 437224
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/serde_json-b7dbe6878695db79/build_script_build-b7dbe6878695db79",
+      "sha256": "50134bb15263cf943aeb9ca790825fcff844ff5d8d21f82c73c08bc333a2edbb",
+      "bytes": 437224
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/proc-macro2-5a7d2d8d8fc0131e/build_script_build-5a7d2d8d8fc0131e",
+      "sha256": "3a8838d1dff4b0a3c4652f4a3b14a6289698de4667dc066bfca28fa3b221f004",
+      "bytes": 604472
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/proc-macro2-5a7d2d8d8fc0131e/build-script-build",
+      "sha256": "3a8838d1dff4b0a3c4652f4a3b14a6289698de4667dc066bfca28fa3b221f004",
+      "bytes": 604472
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/rustls-9a031c7d99036835/build_script_build-9a031c7d99036835",
+      "sha256": "14020d81f473da9779d47702d9d7aefca951e6afec089822468ab54ff396dc9e",
+      "bytes": 426408
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/rustls-9a031c7d99036835/build-script-build",
+      "sha256": "14020d81f473da9779d47702d9d7aefca951e6afec089822468ab54ff396dc9e",
+      "bytes": 426408
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/serde-c6ebb0794615edd7/build_script_build-c6ebb0794615edd7",
+      "sha256": "3bea35a888c96b197f0e0271d999476772421f6339e9c759e8c07864e60704ff",
+      "bytes": 571600
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/serde-c6ebb0794615edd7/build-script-build",
+      "sha256": "3bea35a888c96b197f0e0271d999476772421f6339e9c759e8c07864e60704ff",
+      "bytes": 571600
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/serde_core-85cb5be636414c4b/build_script_build-85cb5be636414c4b",
+      "sha256": "dbd773a79f50a05ca8e2641c70605c5148db66766a975f2ce7a550ca3907886a",
+      "bytes": 572344
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/serde_core-85cb5be636414c4b/build-script-build",
+      "sha256": "dbd773a79f50a05ca8e2641c70605c5148db66766a975f2ce7a550ca3907886a",
+      "bytes": 572344
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/libc-2e2572b62cac4727/build_script_build-2e2572b62cac4727",
+      "sha256": "4811f0d3deabe3af6f4b84dc9a59428447d4febdf59e8eaca7d6d27e988831ec",
+      "bytes": 615888
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/libc-2e2572b62cac4727/build-script-build",
+      "sha256": "4811f0d3deabe3af6f4b84dc9a59428447d4febdf59e8eaca7d6d27e988831ec",
+      "bytes": 615888
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/quote-7ac01c89e2453ba8/build_script_build-7ac01c89e2453ba8",
+      "sha256": "30dcf501714013462768f14662da6fcec07f8fa84c9cb025831bc8e5e4cfd71a",
+      "bytes": 542008
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/quote-7ac01c89e2453ba8/build-script-build",
+      "sha256": "30dcf501714013462768f14662da6fcec07f8fa84c9cb025831bc8e5e4cfd71a",
+      "bytes": 542008
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/icu_properties_data-bc472f0a7c81f805/build_script_build-bc472f0a7c81f805",
+      "sha256": "7a0c078b26a38cf0e11ead1f95fb8ee098da3b33e5e2a999617067707b89f4c3",
+      "bytes": 437632
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/icu_properties_data-bc472f0a7c81f805/build-script-build",
+      "sha256": "7a0c078b26a38cf0e11ead1f95fb8ee098da3b33e5e2a999617067707b89f4c3",
+      "bytes": 437632
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/zmij-744e3b6a49b582d1/build_script_build-744e3b6a49b582d1",
+      "sha256": "dd5f07cab90034aecdcc2632f76d483b77b2368a20f96888cc962d8f4d721aeb",
+      "bytes": 547936
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/zmij-744e3b6a49b582d1/build-script-build",
+      "sha256": "dd5f07cab90034aecdcc2632f76d483b77b2368a20f96888cc962d8f4d721aeb",
+      "bytes": 547936
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/getrandom-937c0b9ca056e852/build-script-build",
+      "sha256": "0e08fc168e876c349693c9b2cab844d14426d8feaa4cfd7fdee0837d8dc39f17",
+      "bytes": 574968
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/getrandom-937c0b9ca056e852/build_script_build-937c0b9ca056e852",
+      "sha256": "0e08fc168e876c349693c9b2cab844d14426d8feaa4cfd7fdee0837d8dc39f17",
+      "bytes": 574968
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/icu_normalizer_data-6af1ab73c6974a50/build_script_build-6af1ab73c6974a50",
+      "sha256": "02c5bfde50a06742ddc0172cf7e14f3cb2b793a29cfca7bc35b504aa7c4a4fac",
+      "bytes": 437632
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/icu_normalizer_data-6af1ab73c6974a50/build-script-build",
+      "sha256": "02c5bfde50a06742ddc0172cf7e14f3cb2b793a29cfca7bc35b504aa7c4a4fac",
+      "bytes": 437632
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/thiserror-d7ca4aaa8508cb86/build_script_build-d7ca4aaa8508cb86",
+      "sha256": "9cd17c802b4486338e797ffee149dfb19db6910494a1f4413723360601da688f",
+      "bytes": 619520
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/thiserror-d7ca4aaa8508cb86/build-script-build",
+      "sha256": "9cd17c802b4486338e797ffee149dfb19db6910494a1f4413723360601da688f",
+      "bytes": 619520
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/ring-20047f893a247228/build_script_build-20047f893a247228",
+      "sha256": "7844bab8321b1bec4d047a432abcf742db18089437d2ebfbb07e2da698aa3572",
+      "bytes": 1796816
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/ring-20047f893a247228/build-script-build",
+      "sha256": "7844bab8321b1bec4d047a432abcf742db18089437d2ebfbb07e2da698aa3572",
+      "bytes": 1796816
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/httparse-1d2c174d21ec78c0/build_script_build-1d2c174d21ec78c0",
+      "sha256": "37807dd0f3788dcb383dc44473144c159e3c9e8a4c5a27491f5dd31de5c3aaa0",
+      "bytes": 595960
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/build/httparse-1d2c174d21ec78c0/build-script-build",
+      "sha256": "37807dd0f3788dcb383dc44473144c159e3c9e8a4c5a27491f5dd31de5c3aaa0",
+      "bytes": 595960
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/deps/libzerofrom_derive-d380b01edce4558d.so",
+      "sha256": "30ba48a34d7e896c8784fcc3fa452659968763efbe699e4594e852be3c933364",
+      "bytes": 3986952
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/deps/libserde_derive-968c2dd996b3aa19.so",
+      "sha256": "2826a79abb1de45db96c5ffa1b8e1f1e70f70128872cd7cf5cbbad786ab181d7",
+      "bytes": 4486992
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/deps/libdisplaydoc-c404614956c1b705.so",
+      "sha256": "00441e3ddce02626cf69a5fa0cb8ace167227675152f1353e8d8e18dac2c0b4b",
+      "bytes": 3213904
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/deps/libfutures_macro-0d83e378ff655993.so",
+      "sha256": "5354c8530376e59de579a9d27d276aca3ca110b6343eb7bf27e8fd06e9f00230",
+      "bytes": 2818232
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/deps/libthiserror_impl-cb900c44063b034e.so",
+      "sha256": "5c215168849f844be5ab3421a22ffb381a7acf3eb5848f3363f57e7431af251f",
+      "bytes": 3633232
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/deps/libyoke_derive-a671ddf482412545.so",
+      "sha256": "67cf500c9075be3b6d58c1bb5a9f401eee33e94887bdeb702bbcfac03d71d012",
+      "bytes": 3708048
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/deps/libtokio_macros-d038d620b46fe76d.so",
+      "sha256": "6ace70382fcce9c01d8ebb26c466c739a6b7780b31dd78098506bebfd090cf02",
+      "bytes": 3156496
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/deps/libtracing_attributes-f4bf80bf24d16656.so",
+      "sha256": "4e05f4ed306055ff5a4ad0e6dd0a9f2756f2ebe70d22ec71becc248692f8ee0c",
+      "bytes": 3861976
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/release/deps/libzerovec_derive-76266a5bbf1e6396.so",
+      "sha256": "9460a7e32ec895179a7c88827152843b960e5c91f38748f2feb7277f3143987f",
+      "bytes": 3536464
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/x86_64-apple-darwin/release/deps/minicore_agent-ba9564614f377c0d",
+      "sha256": "36d54cf1a5200bacf5a5a119a4ba8600dadb231558a5bc046e6b912c5086f898",
+      "bytes": 9111004
+    },
+    {
+      "path": "/root/minicore-tui-r2-01a06ec1/macos-agent-target/x86_64-apple-darwin/release/minicore-agent",
+      "sha256": "36d54cf1a5200bacf5a5a119a4ba8600dadb231558a5bc046e6b912c5086f898",
+      "bytes": 9111004
+    }
+  ],
+  "binary_hash_check": "PASS",
+  "deleted_files": 40815
+}

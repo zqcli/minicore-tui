@@ -1,24 +1,24 @@
-MINICORE  v0.2.1
+ MINICORE  v0.2.7
 
-Coding agent TUI
-q / Ctrl+C to quit
+ Coding agent TUI
+ q / Ctrl+C to quit
 
-Open a session — /new, Ctrl+R, or F1 for help
+ Open a session — /new, Ctrl+R, or F1 for help
 
 
-┌──────────────────────────────────────────────────────────────────────────────┐
-│Select profile                                                                │
-│>                                                                             │
-│→ coding  tools: read, edit, bash                                             │
-│  review  tools: read                                                         │
-│(1/2)                                                                         │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
-/project                                                              no session
-Idle
+
+ ┌─────────────────────────────────────────────────────────────────────────────┐
+ │Select profile                                                               │
+ │>                                                                            │
+ │→ coding  tools: read, edit, bash                                            │
+ │  review  tools: read                                                        │
+ │(1/2)                                                                        │
+ │                                                                             │
+ │                                                                             │
+ │                                                                             │
+ │                                                                             │
+ │                                                                             │
+ │                                                                             │
+ │                                                                             │
+ └─────────────────────────────────────────────────────────────────────────────┘
+ ● ready

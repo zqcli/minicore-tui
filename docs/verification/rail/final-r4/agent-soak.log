@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.24s
+     Running tests/rpc_soak.rs (/root/minicore-rail-01a07210/build-agent-final/debug/deps/rpc_soak-ca981353c2d880ff)
+
+running 2 tests
+test cancel_does_not_break_subsequent_turns_or_history ... ok
+test repeated_turns_on_two_sessions_persist_contiguous_histories ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+

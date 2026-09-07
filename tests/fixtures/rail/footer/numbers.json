@@ -1,0 +1,38 @@
+{
+ "schema": "minicore-rail-cell-v1",
+ "case": "numbers",
+ "kind": "text",
+ "term": {
+  "cols": 80,
+  "rows": 24
+ },
+ "source": {
+  "rail_commit": "1d0dd1611a4d9546c64fe9f5b5c966253fb88eba",
+  "pi": "0.84.4",
+  "theme": "pi dark (initTheme('dark'))"
+ },
+ "rows": [
+  "formatNum(0)=0",
+  "formatNum(999)=999",
+  "formatNum(999.8)=1000",
+  "formatNum(1000)=1.0k",
+  "formatNum(42000)=42.0k",
+  "formatNum(999999)=1000.0k",
+  "formatNum(1000000)=1.0m",
+  "formatNum(12345000)=12.3m",
+  "formatNum(-5)=0",
+  "formatNum(NaN)=0",
+  "formatCost(0)=$0",
+  "formatCost(0.004)=$0.0040",
+  "formatCost(0.0049)=$0.0049",
+  "formatCost(0.01)=$0.010",
+  "formatCost(0.05)=$0.050",
+  "formatCost(0.5)=$0.500",
+  "formatCost(0.999)=$0.999",
+  "formatCost(1)=$1.00",
+  "formatCost(1.5)=$1.50",
+  "formatCost(12345)=$12345.00",
+  "formatCost(-1)=$0",
+  "formatCost(NaN)=$0"
+ ]
+}

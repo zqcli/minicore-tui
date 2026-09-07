@@ -1,0 +1,986 @@
+       Fresh unicode-ident v1.0.24
+       Fresh stable_deref_trait v1.2.1
+       Fresh writeable v0.6.4
+       Fresh fnv v1.0.7
+       Fresh log v0.4.34
+       Fresh strsim v0.11.1
+       Fresh proc-macro2 v1.0.107
+       Fresh cfg-if v1.0.4
+       Fresh ident_case v1.0.1
+warning: use of deprecated trait `std::ascii::AsciiExt`: use inherent methods instead
+  --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ident_case-1.0.1/src/lib.rs:25:17
+   |
+25 | use std::ascii::AsciiExt;
+   |                 ^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: unused import: `std::ascii::AsciiExt`
+  --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ident_case-1.0.1/src/lib.rs:25:5
+   |
+25 | use std::ascii::AsciiExt;
+   |     ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling smallvec v1.15.2
+       Fresh scopeguard v1.2.0
+       Fresh bitflags v2.13.1
+warning: `ident_case` (lib) generated 2 warnings
+     Running `CARGO=/usr/local/bin/cargo CARGO_CRATE_NAME=smallvec CARGO_MANIFEST_DIR=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smallvec-1.15.2 CARGO_MANIFEST_PATH=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smallvec-1.15.2/Cargo.toml CARGO_PKG_AUTHORS='The Servo Project Developers' CARGO_PKG_DESCRIPTION=''\''Small vector'\'' optimization: store up to a small number of items on the stack' CARGO_PKG_HOMEPAGE='' CARGO_PKG_LICENSE='MIT OR Apache-2.0' CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=smallvec CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/servo/rust-smallvec' CARGO_PKG_RUST_VERSION='' CARGO_PKG_VERSION=1.15.2 CARGO_PKG_VERSION_MAJOR=1 CARGO_PKG_VERSION_MINOR=15 CARGO_PKG_VERSION_PATCH=2 CARGO_PKG_VERSION_PRE='' DYLD_FALLBACK_LIBRARY_PATH='/Users/zzq/Develops/minicore-tui/target/debug/deps:/Users/zzq/lib:/usr/local/lib:/usr/lib' rustc --crate-name smallvec --edition=2018 /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smallvec-1.15.2/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=2 -C embed-bitcode=no -C debuginfo=2 -C split-debuginfo=unpacked -C debug-assertions=on --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values("arbitrary", "bincode", "const_generics", "const_new", "debugger_visualizer", "drain_filter", "drain_keep_rest", "impl_bincode", "malloc_size_of", "may_dangle", "serde", "specialization", "union", "unty", "write"))' -C metadata=562931bbc5ea52c8 -C extra-filename=-b181d34bb70c2057 --out-dir /Users/zzq/Develops/minicore-tui/target/debug/deps -L dependency=/Users/zzq/Develops/minicore-tui/target/debug/deps --cap-lints warn -C link-arg=-Wl,-headerpad,0x4000 -C link-arg=-mmacosx-version-min=11.0`
+       Fresh quote v1.0.47
+       Fresh libc v0.2.189
+       Fresh rustversion v1.0.23
+       Fresh lock_api v0.4.14
+       Fresh litemap v0.8.3
+       Fresh equivalent v1.0.2
+       Fresh foldhash v0.1.5
+warning: direct cast of function item into an integer
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/foldhash-0.1.5/src/seed.rs:138:35
+    |
+138 |         seed = mix(seed, func_ptr as usize as u64);
+    |                                   ^^^^^^^^
+    |
+    = note: `#[warn(function_casts_as_integer)]` on by default
+help: first cast to a pointer `as *const ()`
+    |
+138 |         seed = mix(seed, func_ptr as *const () as usize as u64);
+    |                                   ++++++++++++
+
+       Fresh allocator-api2 v0.2.21
+warning: implicit autoref creates a reference to the dereference of a raw pointer
+    --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/allocator-api2-0.2.21/src/stable/vec/mod.rs:1902:30
+     |
+1902 |         let count = unsafe { (*other).len() };
+     |                              ^^-----^^^^^^^
+     |                                |
+     |                                this raw pointer has type `*const [T]`
+     |
+     = note: creating a reference requires the pointer target to be valid and imposes aliasing requirements
+note: autoref is being applied to this expression, resulting in: `&[T]`
+    --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/allocator-api2-0.2.21/src/stable/vec/mod.rs:1902:30
+     |
+1902 |         let count = unsafe { (*other).len() };
+     |                              ^^^^^^^^
+note: method calls to `len` require a reference
+    --> /usr/local/Cellar/rust/1.98.0/lib/rustlib/src/rust/library/core/src/slice/mod.rs:116:5
+     |
+ 116 |     pub const fn len(&self) -> usize {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: `#[warn(dangerous_implicit_autorefs)]` on by default
+help: try using a raw pointer method instead; or if this reference is intentional, make it explicit
+     |
+1902 |         let count = unsafe { (&(*other)).len() };
+     |                              ++        +
+
+warning: `foldhash` (lib) generated 1 warning
+warning: `allocator-api2` (lib) generated 1 warning
+       Fresh syn v2.0.119
+       Fresh syn v3.0.4
+       Fresh errno v0.3.14
+       Fresh mio v1.2.2
+       Fresh heck v0.5.0
+       Fresh either v1.18.0
+       Fresh futures-core v0.3.34
+       Fresh itoa v1.0.18
+       Fresh synstructure v0.13.2
+       Fresh zerovec-derive v0.11.6
+       Fresh displaydoc v0.2.7
+       Fresh signal-hook-registry v1.4.8
+       Fresh darling_core v0.20.11
+       Fresh rustix v0.38.44
+warning: unnecessary transmute
+  --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustix-0.38.44/src/bitcast.rs:24:17
+   |
+24 |                 ::core::mem::transmute($x)
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+  ::: /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustix-0.38.44/src/backend/libc/io/types.rs:13:25
+   |
+13 |         const CLOEXEC = bitcast!(c::FD_CLOEXEC);
+   |                         ----------------------- in this macro invocation
+   |
+   = note: `#[warn(unnecessary_transmutes)]` on by default
+   = note: this warning originates in the macro `bitcast` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: replace this with
+   |
+24 -                 ::core::mem::transmute($x)
+24 +                 i32::cast_unsigned($x)
+   |
+
+warning: unnecessary transmute
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustix-0.38.44/src/bitcast.rs:24:17
+    |
+ 24 |                 ::core::mem::transmute($x)
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustix-0.38.44/src/backend/libc/io/syscalls.rs:283:34
+    |
+283 |     Ok(FdFlags::from_bits_retain(bitcast!(flags)))
+    |                                  --------------- in this macro invocation
+    |
+    = note: this warning originates in the macro `bitcast` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: replace this with
+    |
+ 24 -                 ::core::mem::transmute($x)
+ 24 +                 i32::cast_unsigned($x)
+    |
+
+       Fresh itertools v0.13.0
+warning: hiding a lifetime that's elided elsewhere is confusing
+    --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/itertools-0.13.0/src/lib.rs:1491:30
+     |
+1491 |     fn peeking_take_while<F>(&mut self, accept: F) -> PeekingTakeWhile<Self, F>
+     |                              ^^^^^^^^^                ^^^^^^^^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+     |                              |
+     |                              the lifetime is elided here
+     |
+     = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+     = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+     |
+1491 |     fn peeking_take_while<F>(&mut self, accept: F) -> PeekingTakeWhile<'_, Self, F>
+     |                                                                        +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+    --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/itertools-0.13.0/src/lib.rs:1517:26
+     |
+1517 |     fn take_while_ref<F>(&mut self, accept: F) -> TakeWhileRef<Self, F>
+     |                          ^^^^^^^^^                ^^^^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+     |                          |
+     |                          the lifetime is elided here
+     |
+     = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+     |
+1517 |     fn take_while_ref<F>(&mut self, accept: F) -> TakeWhileRef<'_, Self, F>
+     |                                                                +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+    --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/itertools-0.13.0/src/lib.rs:2331:26
+     |
+2331 |     fn format(self, sep: &str) -> Format<Self>
+     |                          ^^^^     ^^^^^^^^^^^^ the same lifetime is hidden here
+     |                          |
+     |                          the lifetime is elided here
+     |
+     = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+     |
+2331 |     fn format(self, sep: &str) -> Format<'_, Self>
+     |                                          +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+    --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/itertools-0.13.0/src/lib.rs:2370:34
+     |
+2370 |     fn format_with<F>(self, sep: &str, format: F) -> FormatWith<Self, F>
+     |                                  ^^^^                ^^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+     |                                  |
+     |                                  the lifetime is elided here
+     |
+     = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+     |
+2370 |     fn format_with<F>(self, sep: &str, format: F) -> FormatWith<'_, Self, F>
+     |                                                                 +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/itertools-0.13.0/src/adaptors/mod.rs:526:35
+    |
+526 | pub fn take_while_ref<I, F>(iter: &mut I, f: F) -> TakeWhileRef<I, F>
+    |                                   ^^^^^^           ^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |                                   |
+    |                                   the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+526 | pub fn take_while_ref<I, F>(iter: &mut I, f: F) -> TakeWhileRef<'_, I, F>
+    |                                                                 +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/itertools-0.13.0/src/peeking_take_while.rs:129:39
+    |
+129 | pub fn peeking_take_while<I, F>(iter: &mut I, f: F) -> PeekingTakeWhile<I, F>
+    |                                       ^^^^^^           ^^^^^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |                                       |
+    |                                       the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+129 | pub fn peeking_take_while<I, F>(iter: &mut I, f: F) -> PeekingTakeWhile<'_, I, F>
+    |                                                                         +++
+
+       Fresh strum_macros v0.26.4
+warning: field `kw` is never read
+  --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/strum_macros-0.26.4/src/helpers/metadata.rs:90:14
+   |
+90 |     Derive { kw: kw::derive, paths: Vec<Path> },
+   |     ------   ^^
+   |     |
+   |     field in this variant
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `kw` is never read
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/strum_macros-0.26.4/src/helpers/metadata.rs:157:9
+    |
+156 |     Serialize {
+    |     --------- field in this variant
+157 |         kw: kw::serialize,
+    |         ^^
+
+warning: field `kw` is never read
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/strum_macros-0.26.4/src/helpers/metadata.rs:178:9
+    |
+177 |     Props {
+    |     ----- field in this variant
+178 |         kw: kw::props,
+    |         ^^
+
+warning: `rustix` (lib) generated 2 warnings
+warning: `itertools` (lib) generated 6 warnings
+warning: `strum_macros` (lib) generated 3 warnings
+       Fresh zerofrom-derive v0.1.7
+       Fresh yoke-derive v0.8.2
+       Fresh darling_macro v0.20.11
+       Fresh signal-hook v0.3.18
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/signal-hook-0.3.18/src/iterator/mod.rs:268:20
+    |
+268 |     pub fn forever(&mut self) -> Forever<E> {
+    |                    ^^^^^^^^^     ^^^^^^^^^^ the same lifetime is hidden here
+    |                    |
+    |                    the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+268 |     pub fn forever(&mut self) -> Forever<'_, E> {
+    |                                          +++
+
+   Compiling zerotrie v0.2.5
+       Fresh hashbrown v0.15.5
+       Fresh castaway v0.2.4
+       Fresh indoc v2.0.7
+warning: `signal-hook` (lib) generated 1 warning
+     Running `CARGO=/usr/local/bin/cargo CARGO_CRATE_NAME=zerotrie CARGO_MANIFEST_DIR=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zerotrie-0.2.5 CARGO_MANIFEST_PATH=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zerotrie-0.2.5/Cargo.toml CARGO_PKG_AUTHORS='The ICU4X Project Developers' CARGO_PKG_DESCRIPTION='A data structure that efficiently maps strings to integers' CARGO_PKG_HOMEPAGE='https://icu4x.unicode.org' CARGO_PKG_LICENSE=Unicode-3.0 CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=zerotrie CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/unicode-org/icu4x' CARGO_PKG_RUST_VERSION=1.82 CARGO_PKG_VERSION=0.2.5 CARGO_PKG_VERSION_MAJOR=0 CARGO_PKG_VERSION_MINOR=2 CARGO_PKG_VERSION_PATCH=5 CARGO_PKG_VERSION_PRE='' DYLD_FALLBACK_LIBRARY_PATH='/Users/zzq/Develops/minicore-tui/target/debug/deps:/Users/zzq/lib:/usr/local/lib:/usr/lib' rustc --crate-name zerotrie --edition=2021 /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zerotrie-0.2.5/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=2 -C embed-bitcode=no -C debuginfo=2 -C split-debuginfo=unpacked '--warn=clippy::wildcard_dependencies' '--warn=clippy::useless_transmute' --warn=unused_qualifications --warn=unused_macro_rules --warn=unused_lifetimes '--warn=clippy::unnecessary_wraps' --warn=unexpected_cfgs '--deny=clippy::trivially_copy_pass_by_ref' --deny=trivial_numeric_casts '--warn=clippy::transmutes_expressible_as_ptr_casts' '--warn=clippy::transmute_undefined_repr' '--warn=clippy::transmute_ptr_to_ref' '--warn=clippy::transmute_ptr_to_ptr' '--warn=clippy::transmute_int_to_non_zero' '--warn=clippy::transmute_int_to_bool' '--warn=clippy::transmute_bytes_to_str' '--warn=clippy::todo' '--warn=clippy::same_functions_in_if_condition' '--warn=clippy::or_fun_call' '--warn=clippy::negative_feature_names' '--warn=clippy::missing_transmute_annotations' '--warn=clippy::missing_fields_in_debug' --deny=missing_debug_implementations '--warn=clippy::mismatching_type_param_order' '--warn=clippy::large_stack_arrays' '--warn=clippy::infinite_loop' '--warn=clippy::fn_to_numeric_cast_any' '--deny=clippy::exhaustive_structs' '--deny=clippy::exhaustive_enums' '--warn=clippy::doc_markdown' '--warn=clippy::debug_assert_with_mut_call' '--warn=clippy::dbg_macro' '--warn=clippy::crosspointer_transmute' '--warn=clippy::collection_is_never_read' '--warn=clippy::branches_sharing_code' '--allow=clippy::bool_assert_comparison' '--warn=clippy::alloc_instead_of_core' --check-cfg 'cfg(icu4c_enable_renaming)' --check-cfg 'cfg(needs_alloc_error_handler)' --check-cfg 'cfg(icu4x_nightly_tests)' --check-cfg 'cfg(icu4x_run_size_tests)' --check-cfg 'cfg(icu4x_unstable_fast_trie_only)' -C debug-assertions=on --cfg 'feature="alloc"' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values("alloc", "databake", "default", "dense", "litemap", "serde", "yoke", "zerofrom", "zerovec"))' -C metadata=b544ee75fd10bffc -C extra-filename=-daa8c6a23777c11e --out-dir /Users/zzq/Develops/minicore-tui/target/debug/deps -L dependency=/Users/zzq/Develops/minicore-tui/target/debug/deps --extern displaydoc=/Users/zzq/Develops/minicore-tui/target/debug/deps/libdisplaydoc-97a13766ffc9e254.dylib --cap-lints warn -C link-arg=-Wl,-headerpad,0x4000 -C link-arg=-mmacosx-version-min=11.0`
+       Fresh zerofrom v0.1.8
+       Fresh signal-hook-mio v0.2.5
+       Fresh darling v0.20.11
+       Fresh static_assertions v1.1.0
+       Fresh unicode-width v0.1.14
+       Fresh unicode-segmentation v1.13.3
+       Fresh ryu v1.0.23
+       Fresh paste v1.0.15
+       Fresh icu_locale_data v2.1.2
+       Fresh yoke v0.8.3
+       Fresh unicode-truncate v1.1.0
+       Fresh instability v0.3.10
+       Fresh compact_str v0.8.2
+       Fresh lru v0.12.5
+       Fresh libm v0.2.16
+warning: a method with this name may be added to the standard library in the future
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libm-0.2.16/src/math/support/big.rs:200:14
+    |
+200 |         self.widen()
+    |              ^^^^^
+    |
+    = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: `#[warn(unstable_name_collisions)]` (part of `#[warn(future_incompatible)]`) on by default
+
+warning: an associated constant with this name may be added to the standard library in the future
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libm-0.2.16/src/math/support/float_traits.rs:232:68
+    |
+232 |               const NEG_NAN: Self = $from_bits($to_bits(Self::NAN) | Self::SIGN_MASK);
+    |                                                                      ^^^^^^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f32 as float_traits::Float>::SIGN_MASK`
+...
+324 | / float_impl!(
+325 | |     f32,
+326 | |     u32,
+327 | |     i32,
+...   |
+333 | |     fmaf32
+334 | | );
+    | |_- in this macro invocation
+    |
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `float_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: an associated constant with this name may be added to the standard library in the future
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libm-0.2.16/src/math/support/float_traits.rs:248:48
+    |
+248 |               const SIGN_MASK: Self::Int = 1 << (Self::BITS - 1);
+    |                                                  ^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f32 as float_traits::Float>::BITS`
+...
+324 | / float_impl!(
+325 | |     f32,
+326 | |     u32,
+327 | |     i32,
+...   |
+333 | |     fmaf32
+334 | | );
+    | |_- in this macro invocation
+    |
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `float_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: an associated constant with this name may be added to the standard library in the future
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libm-0.2.16/src/math/support/float_traits.rs:250:43
+    |
+250 |               const EXP_MASK: Self::Int = !(Self::SIGN_MASK | Self::SIG_MASK);
+    |                                             ^^^^^^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f32 as float_traits::Float>::SIGN_MASK`
+...
+324 | / float_impl!(
+325 | |     f32,
+326 | |     u32,
+327 | |     i32,
+...   |
+333 | |     fmaf32
+334 | | );
+    | |_- in this macro invocation
+    |
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `float_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: an associated constant with this name may be added to the standard library in the future
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libm-0.2.16/src/math/support/float_traits.rs:232:68
+    |
+232 |               const NEG_NAN: Self = $from_bits($to_bits(Self::NAN) | Self::SIGN_MASK);
+    |                                                                      ^^^^^^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f64 as float_traits::Float>::SIGN_MASK`
+...
+335 | / float_impl!(
+336 | |     f64,
+337 | |     u64,
+338 | |     i64,
+...   |
+344 | |     fmaf64
+345 | | );
+    | |_- in this macro invocation
+    |
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `float_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: an associated constant with this name may be added to the standard library in the future
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libm-0.2.16/src/math/support/float_traits.rs:248:48
+    |
+248 |               const SIGN_MASK: Self::Int = 1 << (Self::BITS - 1);
+    |                                                  ^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f64 as float_traits::Float>::BITS`
+...
+335 | / float_impl!(
+336 | |     f64,
+337 | |     u64,
+338 | |     i64,
+...   |
+344 | |     fmaf64
+345 | | );
+    | |_- in this macro invocation
+    |
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `float_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: an associated constant with this name may be added to the standard library in the future
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libm-0.2.16/src/math/support/float_traits.rs:250:43
+    |
+250 |               const EXP_MASK: Self::Int = !(Self::SIGN_MASK | Self::SIG_MASK);
+    |                                             ^^^^^^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f64 as float_traits::Float>::SIGN_MASK`
+...
+335 | / float_impl!(
+336 | |     f64,
+337 | |     u64,
+338 | |     i64,
+...   |
+344 | |     fmaf64
+345 | | );
+    | |_- in this macro invocation
+    |
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `float_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libm-0.2.16/src/math/support/int_traits/narrowing_div.rs:37:28
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                            ^^^^^
+...
+75 | impl_narrowing_div_primitive!(u16);
+   | ---------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libm-0.2.16/src/math/support/int_traits/narrowing_div.rs:37:55
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                                                       ^^^^^
+...
+75 | impl_narrowing_div_primitive!(u16);
+   | ---------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libm-0.2.16/src/math/support/int_traits/narrowing_div.rs:37:28
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                            ^^^^^
+...
+76 | impl_narrowing_div_primitive!(u32);
+   | ---------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libm-0.2.16/src/math/support/int_traits/narrowing_div.rs:37:55
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                                                       ^^^^^
+...
+76 | impl_narrowing_div_primitive!(u32);
+   | ---------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libm-0.2.16/src/math/support/int_traits/narrowing_div.rs:37:28
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                            ^^^^^
+...
+77 | impl_narrowing_div_primitive!(u64);
+   | ---------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libm-0.2.16/src/math/support/int_traits/narrowing_div.rs:37:55
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                                                       ^^^^^
+...
+77 | impl_narrowing_div_primitive!(u64);
+   | ---------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libm-0.2.16/src/math/support/int_traits/narrowing_div.rs:37:28
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                            ^^^^^
+...
+78 | impl_narrowing_div_primitive!(u128);
+   | ----------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libm-0.2.16/src/math/support/int_traits/narrowing_div.rs:37:55
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                                                       ^^^^^
+...
+78 | impl_narrowing_div_primitive!(u128);
+   | ----------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libm-0.2.16/src/math/support/int_traits.rs:382:26
+    |
+382 |                       self.widen().wrapping_mul(rhs.widen())
+    |                            ^^^^^
+...
+393 | / impl_h_int!(
+394 | |     u8 u8 u16,
+395 | |     u16 u16 u32,
+396 | |     u32 u32 u64,
+...   |
+401 | |     i64 u64 i128
+402 | | );
+    | |_- in this macro invocation
+    |
+    = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `impl_h_int` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libm-0.2.16/src/math/support/int_traits.rs:382:51
+    |
+382 |                       self.widen().wrapping_mul(rhs.widen())
+    |                                                     ^^^^^
+...
+393 | / impl_h_int!(
+394 | |     u8 u8 u16,
+395 | |     u16 u16 u32,
+396 | |     u32 u32 u64,
+...   |
+401 | |     i64 u64 i128
+402 | | );
+    | |_- in this macro invocation
+    |
+    = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `impl_h_int` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: an associated constant with this name may be added to the standard library in the future
+  --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libm-0.2.16/src/math/cbrt.rs:49:29
+   |
+49 |         let ix: u64 = hx & !f64::SIGN_MASK;
+   |                             ^^^^^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f64 as float_traits::Float>::SIGN_MASK`
+   |
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+
+       Fresh serde_core v1.0.229
+       Fresh strum v0.26.3
+warning: `libm` (lib) generated 18 warnings
+       Fresh zerovec v0.11.8
+       Fresh memchr v2.8.3
+       Fresh cassowary v0.3.0
+warning: use of deprecated macro `try`: use the `?` operator instead
+  --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cassowary-0.3.0/src/solver_impl.rs:77:13
+   |
+77 |             try!(self.add_constraint(constraint.clone()));
+   |             ^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated macro `try`: use the `?` operator instead
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cassowary-0.3.0/src/solver_impl.rs:135:9
+    |
+135 |         try!(self.optimise(&objective).map_err(|e| AddConstraintError::InternalSolverError(e.0)));
+    |         ^^^
+
+warning: use of deprecated macro `try`: use the `?` operator instead
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cassowary-0.3.0/src/solver_impl.rs:115:17
+    |
+115 |             if !try!(self.add_with_artificial_variable(&row)
+    |                 ^^^
+
+warning: use of deprecated macro `try`: use the `?` operator instead
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cassowary-0.3.0/src/solver_impl.rs:163:9
+    |
+163 |         try!(self.optimise(&objective).map_err(|e| RemoveConstraintError::InternalSolverError(e.0)));
+    |         ^^^
+
+warning: use of deprecated macro `try`: use the `?` operator instead
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cassowary-0.3.0/src/solver_impl.rs:141:19
+    |
+141 |         let tag = try!(self.cns.remove(constraint).ok_or(RemoveConstraintError::UnknownConstraint));
+    |                   ^^^
+
+warning: use of deprecated macro `try`: use the `?` operator instead
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cassowary-0.3.0/src/solver_impl.rs:151:38
+    |
+151 |             let (leaving, mut row) = try!(self.get_marker_leaving_row(tag.marker)
+    |                                      ^^^
+
+warning: use of deprecated macro `try`: use the `?` operator instead
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cassowary-0.3.0/src/solver_impl.rs:215:13
+    |
+215 |             try!(self.remove_constraint(&constraint)
+    |             ^^^
+
+warning: use of deprecated macro `try`: use the `?` operator instead
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cassowary-0.3.0/src/solver_impl.rs:286:9
+    |
+286 |         try!(self.dual_optimise().map_err(|e| SuggestValueError::InternalSolverError(e.0)));
+    |         ^^^
+
+warning: use of deprecated macro `try`: use the `?` operator instead
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cassowary-0.3.0/src/solver_impl.rs:239:24
+    |
+239 |             let info = try!(self.edits.get_mut(&variable).ok_or(SuggestValueError::UnknownEditVariable));
+    |                        ^^^
+
+warning: use of deprecated macro `try`: use the `?` operator instead
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cassowary-0.3.0/src/solver_impl.rs:497:9
+    |
+497 |         try!(self.optimise(&artificial));
+    |         ^^^
+
+warning: use of deprecated macro `try`: use the `?` operator instead
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cassowary-0.3.0/src/solver_impl.rs:560:38
+    |
+560 |             let (leaving, mut row) = try!(self.get_leaving_row(entering)
+    |                                      ^^^
+
+warning: use of deprecated constant `std::sync::atomic::ATOMIC_USIZE_INIT`: the `new` function is now preferred
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cassowary-0.3.0/src/lib.rs:235:77
+    |
+235 | static VARIABLE_ID: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::ATOMIC_USIZE_INIT;
+    |                                                                             ^^^^^^^^^^^^^^^^^
+    |
+help: replace the use of the deprecated constant
+    |
+235 - static VARIABLE_ID: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::ATOMIC_USIZE_INIT;
+235 + static VARIABLE_ID: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::AtomicUsize::new(0);
+    |
+
+       Fresh powerfmt v0.2.0
+warning: unexpected `cfg` condition name: `__powerfmt_docs`
+ --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/powerfmt-0.2.0/src/lib.rs:6:13
+  |
+6 | #![cfg_attr(__powerfmt_docs, feature(doc_auto_cfg, rustc_attrs))]
+  |             ^^^^^^^^^^^^^^^
+  |
+  = help: expected names are: `docsrs`, `feature`, and `test` and 32 more
+  = help: consider using a Cargo feature instead
+  = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+           [lints.rust]
+           unexpected_cfgs = { level = "warn", check-cfg = ['cfg(__powerfmt_docs)'] }
+  = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(__powerfmt_docs)");` to the top of the `build.rs`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+  = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: unexpected `cfg` condition name: `__powerfmt_docs`
+ --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/powerfmt-0.2.0/src/lib.rs:7:13
+  |
+7 | #![cfg_attr(__powerfmt_docs, allow(internal_features))]
+  |             ^^^^^^^^^^^^^^^
+  |
+  = help: consider using a Cargo feature instead
+  = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+           [lints.rust]
+           unexpected_cfgs = { level = "warn", check-cfg = ['cfg(__powerfmt_docs)'] }
+  = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(__powerfmt_docs)");` to the top of the `build.rs`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `__powerfmt_docs`
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/powerfmt-0.2.0/src/smart_display.rs:629:12
+    |
+629 | #[cfg_attr(__powerfmt_docs, rustc_must_implement_one_of(fmt, fmt_with_metadata))]
+    |            ^^^^^^^^^^^^^^^
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(__powerfmt_docs)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(__powerfmt_docs)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+       Fresh unicode-width v0.2.0
+       Fresh pin-project-lite v0.2.17
+warning: `cassowary` (lib) generated 12 warnings
+warning: `powerfmt` (lib) generated 3 warnings
+       Fresh tinystr v0.8.4
+       Fresh potential_utf v0.1.6
+       Fresh deranged v0.5.8
+       Fresh zmij v1.0.23
+       Fresh icu_segmenter_data v2.1.1
+       Fresh core_maths v0.1.1
+       Fresh icu_locale_core v2.1.1
+       Fresh icu_collections v2.1.1
+       Fresh tokio-macros v2.7.2
+       Fresh thiserror-impl v2.0.20
+       Fresh serde_derive v1.0.229
+       Fresh num_threads v0.1.7
+warning: use of deprecated function `imp::libc::mach_task_self`: Use the `mach2` crate instead
+  --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num_threads-0.1.7/src/apple.rs:34:31
+   |
+34 |     let task = unsafe { libc::mach_task_self() };
+   |                               ^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+       Fresh unicase v2.9.0
+       Fresh utf8_iter v1.0.4
+       Fresh bytes v1.12.1
+       Fresh futures-task v0.3.34
+warning: `num_threads` (lib) generated 1 warning
+       Fresh time-core v0.1.7
+       Fresh slab v0.4.12
+       Fresh num-conv v0.1.0
+       Fresh thiserror v2.0.20
+       Fresh pulldown-cmark v0.12.2
+warning: unexpected `cfg` condition name: `rustbuild`
+  --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pulldown-cmark-0.12.2/src/lib.rs:74:13
+   |
+74 | #![cfg_attr(rustbuild, feature(staged_api, rustc_private))]
+   |             ^^^^^^^^^
+   |
+   = help: expected names are: `docsrs`, `feature`, and `test` and 32 more
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(rustbuild)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(rustbuild)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: requested on the command line with `-W unexpected-cfgs`
+
+warning: unexpected `cfg` condition name: `rustbuild`
+  --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pulldown-cmark-0.12.2/src/lib.rs:75:13
+   |
+75 | #![cfg_attr(rustbuild, unstable(feature = "rustc_private", issue = "27812"))]
+   |             ^^^^^^^^^
+   |
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(rustbuild)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(rustbuild)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+       Fresh serde v1.0.229
+       Fresh tokio v1.53.1
+       Fresh serde_json v1.0.151
+warning: `pulldown-cmark` (lib) generated 2 warnings
+       Fresh time v0.3.45
+       Fresh futures-util v0.3.34
+   Compiling parking_lot_core v0.9.12
+     Running `CARGO=/usr/local/bin/cargo CARGO_CRATE_NAME=parking_lot_core CARGO_MANIFEST_DIR=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/parking_lot_core-0.9.12 CARGO_MANIFEST_PATH=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/parking_lot_core-0.9.12/Cargo.toml CARGO_PKG_AUTHORS='Amanieu d'\''Antras <amanieu@gmail.com>' CARGO_PKG_DESCRIPTION='An advanced API for creating custom synchronization primitives.' CARGO_PKG_HOMEPAGE='' CARGO_PKG_LICENSE='MIT OR Apache-2.0' CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=parking_lot_core CARGO_PKG_README='' CARGO_PKG_REPOSITORY='https://github.com/Amanieu/parking_lot' CARGO_PKG_RUST_VERSION=1.71.0 CARGO_PKG_VERSION=0.9.12 CARGO_PKG_VERSION_MAJOR=0 CARGO_PKG_VERSION_MINOR=9 CARGO_PKG_VERSION_PATCH=12 CARGO_PKG_VERSION_PRE='' DYLD_FALLBACK_LIBRARY_PATH='/Users/zzq/Develops/minicore-tui/target/debug/deps:/Users/zzq/lib:/usr/local/lib:/usr/lib' OUT_DIR=/Users/zzq/Develops/minicore-tui/target/debug/build/parking_lot_core-916dcdf0eed5af91/out rustc --crate-name parking_lot_core --edition=2021 /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/parking_lot_core-0.9.12/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=2 -C embed-bitcode=no -C debuginfo=2 -C split-debuginfo=unpacked -C debug-assertions=on --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values("backtrace", "deadlock_detection", "nightly", "petgraph"))' -C metadata=534b7ec79260dfe1 -C extra-filename=-89a165600813700a --out-dir /Users/zzq/Develops/minicore-tui/target/debug/deps -L dependency=/Users/zzq/Develops/minicore-tui/target/debug/deps --extern cfg_if=/Users/zzq/Develops/minicore-tui/target/debug/deps/libcfg_if-861b84df9ce85425.rmeta --extern libc=/Users/zzq/Develops/minicore-tui/target/debug/deps/liblibc-fb671c2ec420b49d.rmeta --extern smallvec=/Users/zzq/Develops/minicore-tui/target/debug/deps/libsmallvec-b181d34bb70c2057.rmeta --cap-lints warn -C link-arg=-Wl,-headerpad,0x4000 -C link-arg=-mmacosx-version-min=11.0 --check-cfg 'cfg(tsan_enabled)'`
+   Compiling icu_provider v2.1.1
+     Running `CARGO=/usr/local/bin/cargo CARGO_CRATE_NAME=icu_provider CARGO_MANIFEST_DIR=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_provider-2.1.1 CARGO_MANIFEST_PATH=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_provider-2.1.1/Cargo.toml CARGO_PKG_AUTHORS='The ICU4X Project Developers' CARGO_PKG_DESCRIPTION='Trait and struct definitions for the ICU data provider' CARGO_PKG_HOMEPAGE='https://icu4x.unicode.org' CARGO_PKG_LICENSE=Unicode-3.0 CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=icu_provider CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/unicode-org/icu4x' CARGO_PKG_RUST_VERSION=1.83 CARGO_PKG_VERSION=2.1.1 CARGO_PKG_VERSION_MAJOR=2 CARGO_PKG_VERSION_MINOR=1 CARGO_PKG_VERSION_PATCH=1 CARGO_PKG_VERSION_PRE='' DYLD_FALLBACK_LIBRARY_PATH='/Users/zzq/Develops/minicore-tui/target/debug/deps:/Users/zzq/lib:/usr/local/lib:/usr/lib' rustc --crate-name icu_provider --edition=2021 /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_provider-2.1.1/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=2 -C embed-bitcode=no -C debuginfo=2 -C split-debuginfo=unpacked -C debug-assertions=on --cfg 'feature="alloc"' --cfg 'feature="baked"' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values("alloc", "baked", "deserialize_bincode_1", "deserialize_json", "deserialize_postcard_1", "export", "logging", "serde", "std", "sync", "zerotrie"))' -C metadata=ac77d40d00843e71 -C extra-filename=-a1e946c5248c6360 --out-dir /Users/zzq/Develops/minicore-tui/target/debug/deps -L dependency=/Users/zzq/Develops/minicore-tui/target/debug/deps --extern displaydoc=/Users/zzq/Develops/minicore-tui/target/debug/deps/libdisplaydoc-97a13766ffc9e254.dylib --extern icu_locale_core=/Users/zzq/Develops/minicore-tui/target/debug/deps/libicu_locale_core-59e979e4251775b0.rmeta --extern stable_deref_trait=/Users/zzq/Develops/minicore-tui/target/debug/deps/libstable_deref_trait-b5ce973b97d0dc3e.rmeta --extern writeable=/Users/zzq/Develops/minicore-tui/target/debug/deps/libwriteable-60438394e61c51b2.rmeta --extern yoke=/Users/zzq/Develops/minicore-tui/target/debug/deps/libyoke-250c60969c0380cd.rmeta --extern zerofrom=/Users/zzq/Develops/minicore-tui/target/debug/deps/libzerofrom-af42bad690022246.rmeta --extern zerotrie=/Users/zzq/Develops/minicore-tui/target/debug/deps/libzerotrie-daa8c6a23777c11e.rmeta --extern zerovec=/Users/zzq/Develops/minicore-tui/target/debug/deps/libzerovec-79e1d497c9de02b7.rmeta --cap-lints warn -C link-arg=-Wl,-headerpad,0x4000 -C link-arg=-mmacosx-version-min=11.0`
+   Compiling parking_lot v0.12.5
+     Running `CARGO=/usr/local/bin/cargo CARGO_CRATE_NAME=parking_lot CARGO_MANIFEST_DIR=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/parking_lot-0.12.5 CARGO_MANIFEST_PATH=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/parking_lot-0.12.5/Cargo.toml CARGO_PKG_AUTHORS='Amanieu d'\''Antras <amanieu@gmail.com>' CARGO_PKG_DESCRIPTION='More compact and efficient implementations of the standard synchronization primitives.' CARGO_PKG_HOMEPAGE='' CARGO_PKG_LICENSE='MIT OR Apache-2.0' CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=parking_lot CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/Amanieu/parking_lot' CARGO_PKG_RUST_VERSION=1.71 CARGO_PKG_VERSION=0.12.5 CARGO_PKG_VERSION_MAJOR=0 CARGO_PKG_VERSION_MINOR=12 CARGO_PKG_VERSION_PATCH=5 CARGO_PKG_VERSION_PRE='' DYLD_FALLBACK_LIBRARY_PATH='/Users/zzq/Develops/minicore-tui/target/debug/deps:/Users/zzq/lib:/usr/local/lib:/usr/lib' rustc --crate-name parking_lot --edition=2021 /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/parking_lot-0.12.5/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=2 -C embed-bitcode=no -C debuginfo=2 -C split-debuginfo=unpacked -C debug-assertions=on --cfg 'feature="default"' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values("arc_lock", "deadlock_detection", "default", "hardware-lock-elision", "nightly", "owning_ref", "send_guard", "serde"))' -C metadata=11e2832bbcfb7f2a -C extra-filename=-561ffd12a4e3e729 --out-dir /Users/zzq/Develops/minicore-tui/target/debug/deps -L dependency=/Users/zzq/Develops/minicore-tui/target/debug/deps --extern lock_api=/Users/zzq/Develops/minicore-tui/target/debug/deps/liblock_api-45fb9f6317796c4e.rmeta --extern parking_lot_core=/Users/zzq/Develops/minicore-tui/target/debug/deps/libparking_lot_core-89a165600813700a.rmeta --cap-lints warn -C link-arg=-Wl,-headerpad,0x4000 -C link-arg=-mmacosx-version-min=11.0`
+   Compiling icu_locale v2.1.1
+     Running `CARGO=/usr/local/bin/cargo CARGO_CRATE_NAME=icu_locale CARGO_MANIFEST_DIR=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_locale-2.1.1 CARGO_MANIFEST_PATH=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_locale-2.1.1/Cargo.toml CARGO_PKG_AUTHORS='The ICU4X Project Developers' CARGO_PKG_DESCRIPTION='API for Unicode Language and Locale Identifiers canonicalization' CARGO_PKG_HOMEPAGE='https://icu4x.unicode.org' CARGO_PKG_LICENSE=Unicode-3.0 CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=icu_locale CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/unicode-org/icu4x' CARGO_PKG_RUST_VERSION=1.83 CARGO_PKG_VERSION=2.1.1 CARGO_PKG_VERSION_MAJOR=2 CARGO_PKG_VERSION_MINOR=1 CARGO_PKG_VERSION_PATCH=1 CARGO_PKG_VERSION_PRE='' DYLD_FALLBACK_LIBRARY_PATH='/Users/zzq/Develops/minicore-tui/target/debug/deps:/Users/zzq/lib:/usr/local/lib:/usr/lib' rustc --crate-name icu_locale --edition=2021 /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_locale-2.1.1/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=2 -C embed-bitcode=no -C debuginfo=2 -C split-debuginfo=unpacked -C debug-assertions=on --cfg 'feature="compiled_data"' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values("compiled_data", "datagen", "default", "serde"))' -C metadata=a62a0e33623d3051 -C extra-filename=-7c84425649d46d69 --out-dir /Users/zzq/Develops/minicore-tui/target/debug/deps -L dependency=/Users/zzq/Develops/minicore-tui/target/debug/deps --extern icu_collections=/Users/zzq/Develops/minicore-tui/target/debug/deps/libicu_collections-ca092f3a93adddea.rmeta --extern icu_locale_core=/Users/zzq/Develops/minicore-tui/target/debug/deps/libicu_locale_core-59e979e4251775b0.rmeta --extern icu_locale_data=/Users/zzq/Develops/minicore-tui/target/debug/deps/libicu_locale_data-b2e1edfc4d59bad9.rmeta --extern icu_provider=/Users/zzq/Develops/minicore-tui/target/debug/deps/libicu_provider-a1e946c5248c6360.rmeta --extern potential_utf=/Users/zzq/Develops/minicore-tui/target/debug/deps/libpotential_utf-95318577094c4497.rmeta --extern tinystr=/Users/zzq/Develops/minicore-tui/target/debug/deps/libtinystr-03ecaa322d08d33b.rmeta --extern zerovec=/Users/zzq/Develops/minicore-tui/target/debug/deps/libzerovec-79e1d497c9de02b7.rmeta --cap-lints warn -C link-arg=-Wl,-headerpad,0x4000 -C link-arg=-mmacosx-version-min=11.0`
+   Compiling crossterm v0.28.1
+     Running `CARGO=/usr/local/bin/cargo CARGO_CRATE_NAME=crossterm CARGO_MANIFEST_DIR=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1 CARGO_MANIFEST_PATH=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/Cargo.toml CARGO_PKG_AUTHORS='T. Post' CARGO_PKG_DESCRIPTION='A crossplatform terminal library for manipulating terminals.' CARGO_PKG_HOMEPAGE='' CARGO_PKG_LICENSE=MIT CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=crossterm CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/crossterm-rs/crossterm' CARGO_PKG_RUST_VERSION=1.63.0 CARGO_PKG_VERSION=0.28.1 CARGO_PKG_VERSION_MAJOR=0 CARGO_PKG_VERSION_MINOR=28 CARGO_PKG_VERSION_PATCH=1 CARGO_PKG_VERSION_PRE='' DYLD_FALLBACK_LIBRARY_PATH='/Users/zzq/Develops/minicore-tui/target/debug/deps:/Users/zzq/lib:/usr/local/lib:/usr/lib' rustc --crate-name crossterm --edition=2021 /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=2 -C embed-bitcode=no -C debuginfo=2 -C split-debuginfo=unpacked -C debug-assertions=on --cfg 'feature="bracketed-paste"' --cfg 'feature="default"' --cfg 'feature="event-stream"' --cfg 'feature="events"' --cfg 'feature="windows"' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values("bracketed-paste", "default", "event-stream", "events", "filedescriptor", "libc", "serde", "use-dev-tty", "windows"))' -C metadata=59ac012c7355d17d -C extra-filename=-ab9f9ae6dbac8c77 --out-dir /Users/zzq/Develops/minicore-tui/target/debug/deps -L dependency=/Users/zzq/Develops/minicore-tui/target/debug/deps --extern bitflags=/Users/zzq/Develops/minicore-tui/target/debug/deps/libbitflags-40f77881f06c9ee7.rmeta --extern futures_core=/Users/zzq/Develops/minicore-tui/target/debug/deps/libfutures_core-e680b6f400e7e0ba.rmeta --extern mio=/Users/zzq/Develops/minicore-tui/target/debug/deps/libmio-8bf5a26e5862871f.rmeta --extern parking_lot=/Users/zzq/Develops/minicore-tui/target/debug/deps/libparking_lot-561ffd12a4e3e729.rmeta --extern rustix=/Users/zzq/Develops/minicore-tui/target/debug/deps/librustix-f1435ba5094f17bd.rmeta --extern signal_hook=/Users/zzq/Develops/minicore-tui/target/debug/deps/libsignal_hook-36f7a41d7c5533bd.rmeta --extern signal_hook_mio=/Users/zzq/Develops/minicore-tui/target/debug/deps/libsignal_hook_mio-303f57a6556ba308.rmeta --cap-lints warn -C link-arg=-Wl,-headerpad,0x4000 -C link-arg=-mmacosx-version-min=11.0`
+warning: unexpected `cfg` condition name: `winapi`
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/lib.rs:256:11
+    |
+256 | #[cfg(all(winapi, not(feature = "winapi")))]
+    |           ^^^^^^
+    |
+    = help: expected names are: `docsrs`, `feature`, and `test` and 32 more
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(winapi)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(winapi)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+    = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: unexpected `cfg` condition value: `winapi`
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/lib.rs:256:23
+    |
+256 | #[cfg(all(winapi, not(feature = "winapi")))]
+    |                       ^^^^^^^^^^^^^^^^^^
+    |
+    = note: expected values for `feature` are: `bracketed-paste`, `default`, `event-stream`, `events`, `filedescriptor`, `libc`, `serde`, `use-dev-tty`, and `windows`
+    = help: consider adding `winapi` as a feature in `Cargo.toml`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossterm_winapi`
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/lib.rs:259:11
+    |
+259 | #[cfg(all(crossterm_winapi, not(feature = "crossterm_winapi")))]
+    |           ^^^^^^^^^^^^^^^^
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossterm_winapi)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossterm_winapi)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `crossterm_winapi`
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/lib.rs:259:33
+    |
+259 | #[cfg(all(crossterm_winapi, not(feature = "crossterm_winapi")))]
+    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: expected values for `feature` are: `bracketed-paste`, `default`, `event-stream`, `events`, `filedescriptor`, `libc`, `serde`, `use-dev-tty`, and `windows`
+    = help: consider adding `crossterm_winapi` as a feature in `Cargo.toml`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unnecessary parentheses around closure body
+  --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/terminal/sys/unix.rs:85:50
+   |
+85 |     let file = File::open("/dev/tty").map(|file| (FileDesc::Owned(file.into())));
+   |                                                  ^                            ^
+   |
+   = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+   |
+85 -     let file = File::open("/dev/tty").map(|file| (FileDesc::Owned(file.into())));
+85 +     let file = File::open("/dev/tty").map(|file| FileDesc::Owned(file.into()));
+   |
+
+warning: struct `InternalEventFilter` is never constructed
+  --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/event/filter.rs:65:19
+   |
+65 | pub(crate) struct InternalEventFilter;
+   |                   ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling icu_segmenter v2.1.2
+     Running `CARGO=/usr/local/bin/cargo CARGO_CRATE_NAME=icu_segmenter CARGO_MANIFEST_DIR=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_segmenter-2.1.2 CARGO_MANIFEST_PATH=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_segmenter-2.1.2/Cargo.toml CARGO_PKG_AUTHORS='The ICU4X Project Developers' CARGO_PKG_DESCRIPTION='Unicode line breaking and text segmentation algorithms for text boundaries analysis' CARGO_PKG_HOMEPAGE='https://icu4x.unicode.org' CARGO_PKG_LICENSE=Unicode-3.0 CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=icu_segmenter CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/unicode-org/icu4x' CARGO_PKG_RUST_VERSION=1.83 CARGO_PKG_VERSION=2.1.2 CARGO_PKG_VERSION_MAJOR=2 CARGO_PKG_VERSION_MINOR=1 CARGO_PKG_VERSION_PATCH=2 CARGO_PKG_VERSION_PRE='' DYLD_FALLBACK_LIBRARY_PATH='/Users/zzq/Develops/minicore-tui/target/debug/deps:/Users/zzq/lib:/usr/local/lib:/usr/lib' rustc --crate-name icu_segmenter --edition=2021 /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_segmenter-2.1.2/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=2 -C embed-bitcode=no -C debuginfo=2 -C split-debuginfo=unpacked -C debug-assertions=on --cfg 'feature="auto"' --cfg 'feature="compiled_data"' --cfg 'feature="lstm"' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values("auto", "compiled_data", "datagen", "default", "lstm", "serde"))' -C metadata=1df10ac6d1fcbe53 -C extra-filename=-f063d3de5d7562f9 --out-dir /Users/zzq/Develops/minicore-tui/target/debug/deps -L dependency=/Users/zzq/Develops/minicore-tui/target/debug/deps --extern core_maths=/Users/zzq/Develops/minicore-tui/target/debug/deps/libcore_maths-39600a356024bb77.rmeta --extern icu_collections=/Users/zzq/Develops/minicore-tui/target/debug/deps/libicu_collections-ca092f3a93adddea.rmeta --extern icu_locale=/Users/zzq/Develops/minicore-tui/target/debug/deps/libicu_locale-7c84425649d46d69.rmeta --extern icu_provider=/Users/zzq/Develops/minicore-tui/target/debug/deps/libicu_provider-a1e946c5248c6360.rmeta --extern icu_segmenter_data=/Users/zzq/Develops/minicore-tui/target/debug/deps/libicu_segmenter_data-c44359fa00802b18.rmeta --extern potential_utf=/Users/zzq/Develops/minicore-tui/target/debug/deps/libpotential_utf-95318577094c4497.rmeta --extern utf8_iter=/Users/zzq/Develops/minicore-tui/target/debug/deps/libutf8_iter-68cebf4090985188.rmeta --extern zerovec=/Users/zzq/Develops/minicore-tui/target/debug/deps/libzerovec-79e1d497c9de02b7.rmeta --cap-lints warn -C link-arg=-Wl,-headerpad,0x4000 -C link-arg=-mmacosx-version-min=11.0`
+   Compiling ratatui v0.29.0
+     Running `CARGO=/usr/local/bin/cargo CARGO_CRATE_NAME=ratatui CARGO_MANIFEST_DIR=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-0.29.0 CARGO_MANIFEST_PATH=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-0.29.0/Cargo.toml CARGO_PKG_AUTHORS='Florian Dehau <work@fdehau.com>:The Ratatui Developers' CARGO_PKG_DESCRIPTION='A library that'\''s all about cooking up terminal user interfaces' CARGO_PKG_HOMEPAGE='https://ratatui.rs' CARGO_PKG_LICENSE=MIT CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=ratatui CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/ratatui/ratatui' CARGO_PKG_RUST_VERSION=1.74.0 CARGO_PKG_VERSION=0.29.0 CARGO_PKG_VERSION_MAJOR=0 CARGO_PKG_VERSION_MINOR=29 CARGO_PKG_VERSION_PATCH=0 CARGO_PKG_VERSION_PRE='' DYLD_FALLBACK_LIBRARY_PATH='/Users/zzq/Develops/minicore-tui/target/debug/deps:/Users/zzq/lib:/usr/local/lib:/usr/lib' rustc --crate-name ratatui --edition=2021 /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-0.29.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=2 -C embed-bitcode=no -C debuginfo=2 -C split-debuginfo=unpacked '--warn=clippy::pedantic' '--warn=clippy::cargo' '--warn=clippy::use_self' --forbid=unsafe_code '--warn=clippy::unnecessary_self_imports' '--warn=clippy::string_to_string' '--warn=clippy::string_slice' '--warn=clippy::string_lit_chars_any' '--warn=clippy::rest_pat_in_fully_bound_structs' '--warn=clippy::redundant_type_annotations' '--warn=clippy::or_fun_call' '--warn=clippy::needless_raw_strings' '--warn=clippy::needless_pass_by_ref_mut' '--allow=clippy::must_use_candidate' '--allow=clippy::module_name_repetitions' '--allow=clippy::module_inception' '--warn=clippy::mod_module_files' '--warn=clippy::mixed_read_write_in_expression' '--allow=clippy::missing_panics_doc' '--allow=clippy::missing_errors_doc' '--warn=clippy::missing_const_for_fn' '--warn=clippy::map_err_ignore' '--warn=clippy::format_push_string' '--warn=clippy::fn_to_numeric_cast_any' '--warn=clippy::equatable_if_let' '--warn=clippy::empty_line_after_doc_comments' '--warn=clippy::else_if_without_else' '--warn=clippy::deref_by_slicing' '--allow=clippy::cast_sign_loss' '--allow=clippy::cast_precision_loss' '--allow=clippy::cast_possible_wrap' '--allow=clippy::cast_possible_truncation' '--warn=clippy::as_underscore' -C debug-assertions=on --cfg 'feature="crossterm"' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values("all-widgets", "crossterm", "default", "document-features", "macros", "palette", "scrolling-regions", "serde", "termion", "termwiz", "underline-color", "unstable", "unstable-backend-writer", "unstable-rendered-line-info", "unstable-widget-ref", "widget-calendar"))' -C metadata=bb1516904fc084b7 -C extra-filename=-d98f92c6e91aeca5 --out-dir /Users/zzq/Develops/minicore-tui/target/debug/deps -L dependency=/Users/zzq/Develops/minicore-tui/target/debug/deps --extern bitflags=/Users/zzq/Develops/minicore-tui/target/debug/deps/libbitflags-40f77881f06c9ee7.rmeta --extern cassowary=/Users/zzq/Develops/minicore-tui/target/debug/deps/libcassowary-17a520dd50770366.rmeta --extern compact_str=/Users/zzq/Develops/minicore-tui/target/debug/deps/libcompact_str-7ce31234e31c007f.rmeta --extern crossterm=/Users/zzq/Develops/minicore-tui/target/debug/deps/libcrossterm-ab9f9ae6dbac8c77.rmeta --extern indoc=/Users/zzq/Develops/minicore-tui/target/debug/deps/libindoc-156ab27f21976fb2.dylib --extern instability=/Users/zzq/Develops/minicore-tui/target/debug/deps/libinstability-6769e5b8079758ec.dylib --extern itertools=/Users/zzq/Develops/minicore-tui/target/debug/deps/libitertools-95a645314b560e3b.rmeta --extern lru=/Users/zzq/Develops/minicore-tui/target/debug/deps/liblru-50a60d685d5ef1ae.rmeta --extern paste=/Users/zzq/Develops/minicore-tui/target/debug/deps/libpaste-7b8467947c092243.dylib --extern strum=/Users/zzq/Develops/minicore-tui/target/debug/deps/libstrum-8093492fae5f36ec.rmeta --extern unicode_segmentation=/Users/zzq/Develops/minicore-tui/target/debug/deps/libunicode_segmentation-e04d02c7d7f3e7bd.rmeta --extern unicode_truncate=/Users/zzq/Develops/minicore-tui/target/debug/deps/libunicode_truncate-53cf068584898b52.rmeta --extern unicode_width=/Users/zzq/Develops/minicore-tui/target/debug/deps/libunicode_width-746c31020748f9df.rmeta --cap-lints warn -C link-arg=-Wl,-headerpad,0x4000 -C link-arg=-mmacosx-version-min=11.0`
+warning: `crossterm` (lib) generated 6 warnings
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-0.29.0/src/terminal/terminal.rs:171:22
+    |
+171 |     pub fn get_frame(&mut self) -> Frame {
+    |                      ^^^^^^^^^     ^^^^^ the same lifetime is hidden here
+    |                      |
+    |                      the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+171 |     pub fn get_frame(&mut self) -> Frame<'_> {
+    |                                         ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-0.29.0/src/terminal/terminal.rs:304:20
+    |
+304 |     pub fn draw<F>(&mut self, render_callback: F) -> io::Result<CompletedFrame>
+    |                    ^^^^^^^^^ the lifetime is elided here        ^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+304 |     pub fn draw<F>(&mut self, render_callback: F) -> io::Result<CompletedFrame<'_>>
+    |                                                                               ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-0.29.0/src/terminal/terminal.rs:379:27
+    |
+379 |     pub fn try_draw<F, E>(&mut self, render_callback: F) -> io::Result<CompletedFrame>
+    |                           ^^^^^^^^^ the lifetime is elided here        ^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+379 |     pub fn try_draw<F, E>(&mut self, render_callback: F) -> io::Result<CompletedFrame<'_>>
+    |                                                                                      ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-0.29.0/src/text/line.rs:545:17
+    |
+545 |     pub fn iter(&self) -> std::slice::Iter<Span<'a>> {
+    |                 ^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |                 |
+    |                 the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+545 |     pub fn iter(&self) -> std::slice::Iter<'_, Span<'a>> {
+    |                                            +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-0.29.0/src/text/line.rs:550:21
+    |
+550 |     pub fn iter_mut(&mut self) -> std::slice::IterMut<Span<'a>> {
+    |                     ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |                     |
+    |                     the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+550 |     pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Span<'a>> {
+    |                                                       +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-0.29.0/src/text/text.rs:519:17
+    |
+519 |     pub fn iter(&self) -> std::slice::Iter<Line<'a>> {
+    |                 ^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |                 |
+    |                 the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+519 |     pub fn iter(&self) -> std::slice::Iter<'_, Line<'a>> {
+    |                                            +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-0.29.0/src/text/text.rs:524:21
+    |
+524 |     pub fn iter_mut(&mut self) -> std::slice::IterMut<Line<'a>> {
+    |                     ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |                     |
+    |                     the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+524 |     pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Line<'a>> {
+    |                                                       +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-0.29.0/src/text/text.rs:711:16
+    |
+711 |     fn to_text(&self) -> Text {
+    |                ^^^^^     ^^^^ the same lifetime is hidden here
+    |                |
+    |                the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+711 |     fn to_text(&self) -> Text<'_> {
+    |                              ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-0.29.0/src/widgets/block.rs:912:9
+    |
+912 |         &self,
+    |         ^^^^^ the lifetime is elided here
+...
+915 |     ) -> impl DoubleEndedIterator<Item = &Line> {
+    |                                          ^^^^^
+    |                                          ||
+    |                                          |the same lifetime is hidden here
+    |                                          the same lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+915 |     ) -> impl DoubleEndedIterator<Item = &Line<'_>> {
+    |                                               ++++
+
+   Compiling tui-textarea v0.7.0
+     Running `CARGO=/usr/local/bin/cargo CARGO_CRATE_NAME=tui_textarea CARGO_MANIFEST_DIR=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tui-textarea-0.7.0 CARGO_MANIFEST_PATH=/Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tui-textarea-0.7.0/Cargo.toml CARGO_PKG_AUTHORS='rhysd <lin90162@yahoo.co.jp>' CARGO_PKG_DESCRIPTION='tui-textarea is a simple yet powerful text editor widget for ratatui and tui-rs. Multi-line
+text editor can be easily put as part of your TUI application.
+' CARGO_PKG_HOMEPAGE='https://github.com/rhysd/tui-textarea#readme' CARGO_PKG_LICENSE=MIT CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=tui-textarea CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/rhysd/tui-textarea' CARGO_PKG_RUST_VERSION=1.56.1 CARGO_PKG_VERSION=0.7.0 CARGO_PKG_VERSION_MAJOR=0 CARGO_PKG_VERSION_MINOR=7 CARGO_PKG_VERSION_PATCH=0 CARGO_PKG_VERSION_PRE='' DYLD_FALLBACK_LIBRARY_PATH='/Users/zzq/Develops/minicore-tui/target/debug/deps:/Users/zzq/lib:/usr/local/lib:/usr/lib' rustc --crate-name tui_textarea --edition=2021 /Users/zzq/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tui-textarea-0.7.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=2 -C embed-bitcode=no -C debuginfo=2 -C split-debuginfo=unpacked -C debug-assertions=on --cfg 'feature="crossterm"' --cfg 'feature="ratatui"' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values("arbitrary", "crossterm", "default", "no-backend", "ratatui", "search", "serde", "termion", "termwiz", "tuirs", "tuirs-crossterm", "tuirs-no-backend", "tuirs-termion"))' -C metadata=9c42c81635ac424b -C extra-filename=-15a5a8b7e66e8d8c --out-dir /Users/zzq/Develops/minicore-tui/target/debug/deps -L dependency=/Users/zzq/Develops/minicore-tui/target/debug/deps --extern crossterm=/Users/zzq/Develops/minicore-tui/target/debug/deps/libcrossterm-ab9f9ae6dbac8c77.rmeta --extern ratatui=/Users/zzq/Develops/minicore-tui/target/debug/deps/libratatui-d98f92c6e91aeca5.rmeta --extern unicode_width=/Users/zzq/Develops/minicore-tui/target/debug/deps/libunicode_width-746c31020748f9df.rmeta --cap-lints warn -C link-arg=-Wl,-headerpad,0x4000 -C link-arg=-mmacosx-version-min=11.0`
+   Compiling minicore-tui v0.2.6 (/Users/zzq/Develops/minicore-tui)
+     Running `CARGO=/usr/local/bin/cargo CARGO_CRATE_NAME=minicore_tui CARGO_MANIFEST_DIR=/Users/zzq/Develops/minicore-tui CARGO_MANIFEST_PATH=/Users/zzq/Develops/minicore-tui/Cargo.toml CARGO_PKG_AUTHORS='' CARGO_PKG_DESCRIPTION='A pi-style coding agent TUI frontend for minicore-agent over stdio JSON-RPC' CARGO_PKG_HOMEPAGE='' CARGO_PKG_LICENSE='MIT OR Apache-2.0' CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=minicore-tui CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='' CARGO_PKG_RUST_VERSION=1.85.0 CARGO_PKG_VERSION=0.2.6 CARGO_PKG_VERSION_MAJOR=0 CARGO_PKG_VERSION_MINOR=2 CARGO_PKG_VERSION_PATCH=6 CARGO_PKG_VERSION_PRE='' CARGO_PRIMARY_PACKAGE=1 DYLD_FALLBACK_LIBRARY_PATH='/Users/zzq/Develops/minicore-tui/target/debug/deps:/Users/zzq/lib:/usr/local/lib:/usr/lib' rustc --crate-name minicore_tui --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C embed-bitcode=no -C debuginfo=2 -C split-debuginfo=unpacked --forbid=unsafe_code --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=14d4eee18b28736a -C extra-filename=-b61475db34b3d967 --out-dir /Users/zzq/Develops/minicore-tui/target/debug/deps -C incremental=/Users/zzq/Develops/minicore-tui/target/debug/incremental -L dependency=/Users/zzq/Develops/minicore-tui/target/debug/deps --extern crossterm=/Users/zzq/Develops/minicore-tui/target/debug/deps/libcrossterm-ab9f9ae6dbac8c77.rmeta --extern futures_util=/Users/zzq/Develops/minicore-tui/target/debug/deps/libfutures_util-14f7fddc5e27f826.rmeta --extern icu_segmenter=/Users/zzq/Develops/minicore-tui/target/debug/deps/libicu_segmenter-f063d3de5d7562f9.rmeta --extern pulldown_cmark=/Users/zzq/Develops/minicore-tui/target/debug/deps/libpulldown_cmark-d8fff7c16f40e6e3.rmeta --extern ratatui=/Users/zzq/Develops/minicore-tui/target/debug/deps/libratatui-d98f92c6e91aeca5.rmeta --extern serde=/Users/zzq/Develops/minicore-tui/target/debug/deps/libserde-c0edcb0011f61eeb.rmeta --extern serde_json=/Users/zzq/Develops/minicore-tui/target/debug/deps/libserde_json-03a3b335d9723569.rmeta --extern thiserror=/Users/zzq/Develops/minicore-tui/target/debug/deps/libthiserror-b49fa8bd7d37db86.rmeta --extern time=/Users/zzq/Develops/minicore-tui/target/debug/deps/libtime-5179f9476cb2fa35.rmeta --extern tokio=/Users/zzq/Develops/minicore-tui/target/debug/deps/libtokio-b8e0a9649af0b72e.rmeta --extern tui_textarea=/Users/zzq/Develops/minicore-tui/target/debug/deps/libtui_textarea-15a5a8b7e66e8d8c.rmeta --extern unicode_segmentation=/Users/zzq/Develops/minicore-tui/target/debug/deps/libunicode_segmentation-e04d02c7d7f3e7bd.rmeta --extern unicode_width=/Users/zzq/Develops/minicore-tui/target/debug/deps/libunicode_width-746c31020748f9df.rmeta -C link-arg=-Wl,-headerpad,0x4000 -C link-arg=-mmacosx-version-min=11.0`
+warning: `ratatui` (lib) generated 9 warnings
+     Running `CARGO=/usr/local/bin/cargo CARGO_BIN_NAME=minicore-tui CARGO_CRATE_NAME=minicore_tui CARGO_MANIFEST_DIR=/Users/zzq/Develops/minicore-tui CARGO_MANIFEST_PATH=/Users/zzq/Develops/minicore-tui/Cargo.toml CARGO_PKG_AUTHORS='' CARGO_PKG_DESCRIPTION='A pi-style coding agent TUI frontend for minicore-agent over stdio JSON-RPC' CARGO_PKG_HOMEPAGE='' CARGO_PKG_LICENSE='MIT OR Apache-2.0' CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=minicore-tui CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='' CARGO_PKG_RUST_VERSION=1.85.0 CARGO_PKG_VERSION=0.2.6 CARGO_PKG_VERSION_MAJOR=0 CARGO_PKG_VERSION_MINOR=2 CARGO_PKG_VERSION_PATCH=6 CARGO_PKG_VERSION_PRE='' CARGO_PRIMARY_PACKAGE=1 DYLD_FALLBACK_LIBRARY_PATH='/Users/zzq/Develops/minicore-tui/target/debug/deps:/Users/zzq/lib:/usr/local/lib:/usr/lib' rustc --crate-name minicore_tui --edition=2024 src/main.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type bin --emit=dep-info,link -C embed-bitcode=no -C debuginfo=2 -C split-debuginfo=unpacked --forbid=unsafe_code --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=e63e42f20ee85cf4 -C extra-filename=-b52962357bdaa435 --out-dir /Users/zzq/Develops/minicore-tui/target/debug/deps -C incremental=/Users/zzq/Develops/minicore-tui/target/debug/incremental -L dependency=/Users/zzq/Develops/minicore-tui/target/debug/deps --extern crossterm=/Users/zzq/Develops/minicore-tui/target/debug/deps/libcrossterm-ab9f9ae6dbac8c77.rlib --extern futures_util=/Users/zzq/Develops/minicore-tui/target/debug/deps/libfutures_util-14f7fddc5e27f826.rlib --extern icu_segmenter=/Users/zzq/Develops/minicore-tui/target/debug/deps/libicu_segmenter-f063d3de5d7562f9.rlib --extern minicore_tui=/Users/zzq/Develops/minicore-tui/target/debug/deps/libminicore_tui-b61475db34b3d967.rlib --extern pulldown_cmark=/Users/zzq/Develops/minicore-tui/target/debug/deps/libpulldown_cmark-d8fff7c16f40e6e3.rlib --extern ratatui=/Users/zzq/Develops/minicore-tui/target/debug/deps/libratatui-d98f92c6e91aeca5.rlib --extern serde=/Users/zzq/Develops/minicore-tui/target/debug/deps/libserde-c0edcb0011f61eeb.rlib --extern serde_json=/Users/zzq/Develops/minicore-tui/target/debug/deps/libserde_json-03a3b335d9723569.rlib --extern thiserror=/Users/zzq/Develops/minicore-tui/target/debug/deps/libthiserror-b49fa8bd7d37db86.rlib --extern time=/Users/zzq/Develops/minicore-tui/target/debug/deps/libtime-5179f9476cb2fa35.rlib --extern tokio=/Users/zzq/Develops/minicore-tui/target/debug/deps/libtokio-b8e0a9649af0b72e.rlib --extern tui_textarea=/Users/zzq/Develops/minicore-tui/target/debug/deps/libtui_textarea-15a5a8b7e66e8d8c.rlib --extern unicode_segmentation=/Users/zzq/Develops/minicore-tui/target/debug/deps/libunicode_segmentation-e04d02c7d7f3e7bd.rlib --extern unicode_width=/Users/zzq/Develops/minicore-tui/target/debug/deps/libunicode_width-746c31020748f9df.rlib -C link-arg=-Wl,-headerpad,0x4000 -C link-arg=-mmacosx-version-min=11.0`
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.17s

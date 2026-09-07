@@ -20,6 +20,10 @@ pub enum Action {
     /// Ctrl+D.
     CtrlD,
     TypeChar(char),
+    CompletionMove(i32),
+    CompletionAccept,
+    CompletionAcceptAndSubmit,
+    CompletionCancel,
     Newline,
     Backspace,
     Delete,
@@ -133,6 +137,9 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
             KeyCode::Char('o') if ctrl(&key) => return Action::ToggleTools,
             KeyCode::Char('t') if ctrl(&key) => return Action::ToggleReasoning,
             KeyCode::Esc => {
+                if matches!(app.dock, Dock::Composer) && app.slash_completion.is_some() {
+                    return Action::CompletionCancel;
+                }
                 return match &app.dock {
                     Dock::Composer if cancellable => Action::CancelTurn,
                     Dock::Composer => Action::None,
@@ -186,6 +193,21 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
                 };
             }
             _ => {}
+        }
+    }
+
+    if matches!(app.dock, Dock::Composer) && app.slash_completion.is_some() {
+        if typing && key.code == KeyCode::Up {
+            return Action::CompletionMove(-1);
+        }
+        if typing && key.code == KeyCode::Down {
+            return Action::CompletionMove(1);
+        }
+        if press && key.code == KeyCode::Tab {
+            return Action::CompletionAccept;
+        }
+        if press && key.code == KeyCode::Enter {
+            return Action::CompletionAcceptAndSubmit;
         }
     }
 

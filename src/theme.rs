@@ -31,11 +31,33 @@ pub struct Theme {
     pub error: Color,
     pub selected_bg: Color,
     pub user_message_bg: Color,
+    pub rail_editor: Color,
+    pub rail_thinking: Color,
+    pub selection_fg: Color,
+    pub selection_bg: Color,
     /// Card surfaces for summaries, notices, and neutral tool cards.
     pub card_bg: Color,
+    pub tool_title: Color,
+    pub tool_output: Color,
+    pub tool_muted: Color,
     pub tool_pending_bg: Color,
+    pub tool_pending_rail: Color,
     pub tool_success_bg: Color,
+    pub tool_success_rail: Color,
     pub tool_error_bg: Color,
+    pub tool_error_rail: Color,
+    pub tool_cancelled_bg: Color,
+    pub tool_cancelled_rail: Color,
+    pub bash_execution_bg: Color,
+    pub bash_execution_rail: Color,
+    pub command_output_rail: Color,
+    pub resource_status_rail: Color,
+    pub footer_sky: Color,
+    pub footer_mint: Color,
+    pub footer_amber: Color,
+    pub footer_lilac: Color,
+    pub footer_text: Color,
+    pub footer_muted: Color,
     pub md_heading: Color,
     pub md_link: Color,
     pub md_link_url: Color,
@@ -49,6 +71,9 @@ pub struct Theme {
     pub thinking_low: Color,
     pub thinking_medium: Color,
     pub thinking_high: Color,
+    pub thinking_xhigh: Color,
+    pub thinking_max: Color,
+    pub thinking_ultra: Color,
 }
 
 impl ThemeKind {
@@ -70,7 +95,7 @@ impl Theme {
     /// `thinking_disabled` is darkGray.
     pub fn dark() -> Self {
         Self {
-            page_bg: rgb(0x18, 0x18, 0x1e),
+            page_bg: Color::Reset,
             text: rgb(0xd4, 0xd4, 0xd4),
             muted: rgb(0x80, 0x80, 0x80),
             dim: rgb(0x66, 0x66, 0x66),
@@ -82,11 +107,33 @@ impl Theme {
             warning: rgb(0xff, 0xff, 0x00),
             error: rgb(0xcc, 0x66, 0x66),
             selected_bg: rgb(0x3a, 0x3a, 0x4a),
-            user_message_bg: rgb(0x34, 0x35, 0x41),
+            user_message_bg: rgb(0x31, 0x32, 0x44),
+            rail_editor: rgb(0x89, 0xb4, 0xfa),
+            rail_thinking: rgb(0xcb, 0xa6, 0xf7),
+            selection_fg: rgb(0xf5, 0xf5, 0xfa),
+            selection_bg: rgb(0x45, 0x47, 0x5a),
             card_bg: rgb(0x1e, 0x1e, 0x24),
-            tool_pending_bg: rgb(0x28, 0x28, 0x32),
-            tool_success_bg: rgb(0x28, 0x32, 0x28),
-            tool_error_bg: rgb(0x3c, 0x28, 0x28),
+            tool_title: rgb(0xcd, 0xd6, 0xf4),
+            tool_output: rgb(0xa6, 0xad, 0xc8),
+            tool_muted: rgb(0x7f, 0x84, 0x9c),
+            tool_pending_bg: rgb(0x28, 0x2b, 0x3d),
+            tool_pending_rail: rgb(0x89, 0xb4, 0xfa),
+            tool_success_bg: rgb(0x29, 0x31, 0x2e),
+            tool_success_rail: rgb(0x7b, 0x9f, 0x88),
+            tool_error_bg: rgb(0x34, 0x2b, 0x2f),
+            tool_error_rail: rgb(0xbc, 0x78, 0x88),
+            tool_cancelled_bg: rgb(0x29, 0x2a, 0x35),
+            tool_cancelled_rail: rgb(0x7f, 0x84, 0x9c),
+            bash_execution_bg: rgb(0x18, 0x18, 0x25),
+            bash_execution_rail: rgb(0xf9, 0xe2, 0xaf),
+            command_output_rail: rgb(0x94, 0xe2, 0xd5),
+            resource_status_rail: rgb(0xfa, 0xb3, 0x87),
+            footer_sky: rgb(0x89, 0xb4, 0xfa),
+            footer_mint: rgb(0xa6, 0xe3, 0xa1),
+            footer_amber: rgb(0xf9, 0xe2, 0xaf),
+            footer_lilac: rgb(0xcb, 0xa6, 0xf7),
+            footer_text: rgb(0xcd, 0xd6, 0xf4),
+            footer_muted: rgb(0x7f, 0x84, 0x9c),
             md_heading: rgb(0xf0, 0xc6, 0x74),
             md_link: rgb(0x81, 0xa2, 0xbe),
             md_link_url: rgb(0x66, 0x66, 0x66),
@@ -100,6 +147,9 @@ impl Theme {
             thinking_low: rgb(0x5f, 0x87, 0xaf),
             thinking_medium: rgb(0x81, 0xa2, 0xbe),
             thinking_high: rgb(0xb2, 0x94, 0xbb),
+            thinking_xhigh: rgb(0xc4, 0xa4, 0xd0),
+            thinking_max: rgb(0xd4, 0xb4, 0xe0),
+            thinking_ultra: rgb(0xe4, 0xc8, 0xf0),
         }
     }
 
@@ -121,14 +171,36 @@ impl Theme {
             error: rgb(0xaa, 0x55, 0x55),
             selected_bg: rgb(0xd0, 0xd0, 0xe0),
             user_message_bg: rgb(0xe8, 0xe8, 0xe8),
+            rail_editor: rgb(0x54, 0x7d, 0xa7),
+            rail_thinking: rgb(0x8a, 0x6d, 0xa8),
+            selection_fg: rgb(0x1f, 0x23, 0x28),
+            selection_bg: rgb(0xd0, 0xd0, 0xe0),
             // card and markdown-surface colors are documented derivations of
             // the defined light colors (spec 16.3): white card surface,
             // dim for link URLs, borderMuted for code borders, accent for
             // list bullets.
             card_bg: rgb(0xff, 0xff, 0xff),
+            tool_title: rgb(0x1f, 0x23, 0x28),
+            tool_output: rgb(0x4f, 0x56, 0x63),
+            tool_muted: rgb(0x76, 0x76, 0x76),
             tool_pending_bg: rgb(0xe8, 0xe8, 0xf0),
+            tool_pending_rail: rgb(0x54, 0x7d, 0xa7),
             tool_success_bg: rgb(0xe8, 0xf0, 0xe8),
+            tool_success_rail: rgb(0x58, 0x84, 0x58),
             tool_error_bg: rgb(0xf0, 0xe8, 0xe8),
+            tool_error_rail: rgb(0xaa, 0x55, 0x55),
+            tool_cancelled_bg: rgb(0xee, 0xee, 0xee),
+            tool_cancelled_rail: rgb(0x76, 0x76, 0x76),
+            bash_execution_bg: rgb(0xf0, 0xe8, 0xd8),
+            bash_execution_rail: rgb(0x9a, 0x73, 0x26),
+            command_output_rail: rgb(0x3a, 0x66, 0x66),
+            resource_status_rail: rgb(0x9a, 0x73, 0x26),
+            footer_sky: rgb(0x54, 0x7d, 0xa7),
+            footer_mint: rgb(0x58, 0x84, 0x58),
+            footer_amber: rgb(0x9a, 0x73, 0x26),
+            footer_lilac: rgb(0x8a, 0x6d, 0xa8),
+            footer_text: rgb(0x1f, 0x23, 0x28),
+            footer_muted: rgb(0x76, 0x76, 0x76),
             md_heading: rgb(0x9a, 0x73, 0x26),
             md_link: rgb(0x54, 0x7d, 0xa7),
             md_link_url: rgb(0x76, 0x76, 0x76),
@@ -142,6 +214,9 @@ impl Theme {
             thinking_low: rgb(0x4a, 0x74, 0x9c),
             thinking_medium: rgb(0x5f, 0x80, 0x99),
             thinking_high: rgb(0x8a, 0x6d, 0xa8),
+            thinking_xhigh: rgb(0x9a, 0x7c, 0xb8),
+            thinking_max: rgb(0xa8, 0x88, 0xc8),
+            thinking_ultra: rgb(0xb8, 0x96, 0xd8),
         }
     }
     /// The dot-composed thinking color for a reasoning level (spec 15.7).
@@ -152,6 +227,9 @@ impl Theme {
             Reasoning::Low => self.thinking_low,
             Reasoning::Medium => self.thinking_medium,
             Reasoning::High => self.thinking_high,
+            Reasoning::XHigh => self.thinking_xhigh,
+            Reasoning::Max => self.thinking_max,
+            Reasoning::Ultra => self.thinking_ultra,
         }
     }
 }
@@ -174,7 +252,7 @@ mod tests {
     #[test]
     fn dark_palette_matches_spec() {
         let theme = Theme::dark();
-        assert_eq!(theme.page_bg, rgb(0x18, 0x18, 0x1e));
+        assert_eq!(theme.page_bg, Color::Reset);
         assert_eq!(theme.text, rgb(0xd4, 0xd4, 0xd4));
         assert_eq!(theme.muted, rgb(0x80, 0x80, 0x80));
         assert_eq!(theme.dim, rgb(0x66, 0x66, 0x66));
@@ -186,11 +264,14 @@ mod tests {
         assert_eq!(theme.warning, rgb(0xff, 0xff, 0x00));
         assert_eq!(theme.error, rgb(0xcc, 0x66, 0x66));
         assert_eq!(theme.selected_bg, rgb(0x3a, 0x3a, 0x4a));
-        assert_eq!(theme.user_message_bg, rgb(0x34, 0x35, 0x41));
+        assert_eq!(theme.user_message_bg, rgb(0x31, 0x32, 0x44));
+        assert_eq!(theme.rail_editor, rgb(0x89, 0xb4, 0xfa));
+        assert_eq!(theme.rail_thinking, rgb(0xcb, 0xa6, 0xf7));
+        assert_eq!(theme.selection_bg, rgb(0x45, 0x47, 0x5a));
         assert_eq!(theme.card_bg, rgb(0x1e, 0x1e, 0x24));
-        assert_eq!(theme.tool_pending_bg, rgb(0x28, 0x28, 0x32));
-        assert_eq!(theme.tool_success_bg, rgb(0x28, 0x32, 0x28));
-        assert_eq!(theme.tool_error_bg, rgb(0x3c, 0x28, 0x28));
+        assert_eq!(theme.tool_pending_bg, rgb(0x28, 0x2b, 0x3d));
+        assert_eq!(theme.tool_success_bg, rgb(0x29, 0x31, 0x2e));
+        assert_eq!(theme.tool_error_bg, rgb(0x34, 0x2b, 0x2f));
         assert_eq!(theme.md_heading, rgb(0xf0, 0xc6, 0x74));
         assert_eq!(theme.md_link, rgb(0x81, 0xa2, 0xbe));
         assert_eq!(theme.md_link_url, rgb(0x66, 0x66, 0x66));
@@ -249,6 +330,15 @@ mod tests {
         assert_eq!(
             theme.reasoning_color(Reasoning::High),
             rgb(0xb2, 0x94, 0xbb)
+        );
+        assert_eq!(
+            theme.reasoning_color(Reasoning::XHigh),
+            rgb(0xc4, 0xa4, 0xd0)
+        );
+        assert_eq!(theme.reasoning_color(Reasoning::Max), rgb(0xd4, 0xb4, 0xe0));
+        assert_eq!(
+            theme.reasoning_color(Reasoning::Ultra),
+            rgb(0xe4, 0xc8, 0xf0)
         );
     }
 }

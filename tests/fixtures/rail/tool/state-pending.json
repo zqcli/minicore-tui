@@ -1,0 +1,34 @@
+{
+ "schema": "minicore-rail-cell-v1",
+ "case": "state-pending",
+ "term": {
+  "cols": 80,
+  "rows": 24
+ },
+ "source": {
+  "rail_commit": "1d0dd1611a4d9546c64fe9f5b5c966253fb88eba",
+  "pi": "0.84.4",
+  "theme": "pi dark (initTheme('dark'))"
+ },
+ "rows": [
+  [
+   {
+    "c": "▎",
+    "fg": [
+     137,
+     180,
+     250
+    ]
+   },
+   {
+    "c": "native title line width=79                                                     ",
+    "bg": [
+     40,
+     43,
+     61
+    ]
+   }
+  ]
+ ],
+ "kind": "cells"
+}

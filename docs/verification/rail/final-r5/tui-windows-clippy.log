@@ -1,0 +1,25 @@
+    Checking stable_deref_trait v1.2.1
+    Checking writeable v0.6.4
+    Checking litemap v0.8.3
+   Compiling icu_locale_data v2.1.2
+   Compiling libm v0.2.16
+   Compiling icu_segmenter_data v2.1.1
+    Checking zerofrom v0.1.8
+    Checking yoke v0.8.3
+    Checking zerovec v0.11.8
+    Checking zerotrie v0.2.5
+    Checking core_maths v0.1.1
+    Checking tinystr v0.8.4
+    Checking potential_utf v0.1.6
+    Checking icu_collections v2.1.1
+    Checking icu_locale_core v2.1.1
+    Checking icu_provider v2.1.1
+    Checking icu_normalizer v2.1.1
+    Checking icu_properties v2.1.2
+    Checking icu_locale v2.1.1
+    Checking icu_segmenter v2.1.2
+    Checking idna_adapter v1.2.1
+    Checking idna v1.1.0
+    Checking url v2.5.4
+    Checking minicore-tui v0.2.1 (/root/minicore-rail-01a07210/r5/minicore-tui)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.66s

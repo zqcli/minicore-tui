@@ -1,0 +1,60 @@
+ ▎                                                                                                   
+                                                                                                     
+  ITERM_FINAL_OK: steering received.                                                                 
+                                                                                                     
+                                                                                                     
+                                                                                                     
+ Updated for next turn                                                                               
+ ▎                                                                                                   
+ ▎                                                                                                   
+ ▎                                                                                                   
+ ▎                                                                                                   
+ ▸ workspace · iterm b · max · ● ready · 0m                                    ↑20 ↓24 R0 W0 · ctx ? 
+ ▎                                                                              
+ ▎ spacing-check                                                                
+ ▎ 6:43 PM · 9/6/2026                                                           
+ ▎                                                                              
+ 
+ ▎Step one 
+ ▎Step two 
+ ▎Step three 
+ ▎... (1 earlier lines, ctrl+o to expand) 
+ 
+ ▎ bash                                                                         
+ ▎ $ printf 'ITERM_TOOL_OK\n' > tool-ran; while [ ! -f release-tool ]; do sleep 
+ ▎   exit_code: 0                                                               
+ ▎   stdout:                                                                    
+ ▎   ITERM_TOOL_OK                                                              
+ ▎   stderr:                                                                    
+ 
+ ▎                                                                              
+ ▎ ↪ steer-check                                                                
+ ▎ 6:43 PM · 9/6/2026                                                           
+ ▎                                                                              
+ 
+  ITERM_FINAL_OK: steering received. 
+ ▸ workspace · iterm b · max · ● ready · 0m                ↑20 ↓24 R0 W0 · ctx ?
+ ▎Step two 
+ ▎Step three 
+ ▎... (1 earlier lines, ctrl+o to expand) 
+ 
+ ▎ bash                                                                        █
+ ▎ $ printf 'ITERM_TOOL_OK\n' > tool-ran; while [ ! -f release-tool ]; do sleep█
+ ▎   exit_code: 0                                                              █
+ ▎   stdout:                                                                   █
+ ▎   ITERM_TOOL_OK                                                             █
+ ▎   stderr:                                                                   █
+                                                                               █
+ ▎                                                                             █
+ ▎ ↪ steer-check                                                               █
+ ▎ 6:43 PM · 9/6/2026                                                          █
+ ▎                                                                             █
+                                                                               █
+  ITERM_FINAL_OK: steering received.                                           █
+                                                                               █
+ Updated for next turn 
+ ▎                                                                              
+ ▎                                                                              
+ ▎                                                                              
+ ▎                                                                              
+ ▸ workspace · iterm b · max · ● ready · 0m                ↑20 ↓24 R0 W0 · ctx ?

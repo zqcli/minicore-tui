@@ -1,0 +1,11 @@
+minicore-tui 0.2.7
+minicore-tui 0.2.7
+55fcae84f309448926212dd12d0f88af950045f1e0d97546543fda782d4fd638  target/debug/minicore-tui
+a3b23dac99a0e998f7406b108dd89aca90a93e7cd8560558406b4d142048fdd9  target/release/minicore-tui
+bf853fa383ab8be376d4261f803106b1faadc3b6cf97a275f04dc063c5d8c866  target/preserved-0.2.6-RXdxEP/debug-minicore-tui
+c24bd8027577a9d3211a080cd4564333464380dabe7562731b0ad5d315079859  target/preserved-0.2.6-RXdxEP/release-minicore-tui
+61836c0738f799533221bb07408122bf2964a7926b499b5c982b1f731d3cce3b  ../minicore-agent/target/debug/minicore-agent
+UUID: 4C4C44FA-5555-3144-A10B-24D7EF746AC3 (x86_64) target/debug/minicore-tui
+UUID: 4C4C44FA-5555-3144-A10B-24D7EF746AC3 (x86_64) target/debug/minicore-tui.dSYM/Contents/Resources/DWARF/minicore-tui
+inode=76336797 links=1 target/preserved-0.2.6-RXdxEP/debug-minicore-tui
+inode=76336876 links=1 target/preserved-0.2.6-RXdxEP/release-minicore-tui

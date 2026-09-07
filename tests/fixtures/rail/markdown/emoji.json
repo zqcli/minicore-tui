@@ -1,0 +1,29 @@
+{
+ "schema": "minicore-rail-cell-v1",
+ "case": "emoji",
+ "term": {
+  "cols": 40,
+  "rows": 24
+ },
+ "source": {
+  "rail_commit": "1d0dd1611a4d9546c64fe9f5b5c966253fb88eba",
+  "pi": "0.84.4",
+  "theme": "pi dark (initTheme('dark'))"
+ },
+ "rows": [
+  [
+   "result ",
+   {
+    "c": "🚀",
+    "w": 2
+   },
+   " (positive) ",
+   {
+    "c": "✨",
+    "w": 2
+   },
+   " done            "
+  ]
+ ],
+ "kind": "cells"
+}

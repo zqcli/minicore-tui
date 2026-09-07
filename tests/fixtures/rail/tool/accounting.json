@@ -1,0 +1,27 @@
+{
+ "schema": "minicore-rail-cell-v1",
+ "case": "accounting",
+ "kind": "text",
+ "term": {
+  "cols": 120,
+  "rows": 40
+ },
+ "source": {
+  "rail_commit": "1d0dd1611a4d9546c64fe9f5b5c966253fb88eba",
+  "pi": "0.84.4",
+  "theme": "pi dark (initTheme('dark'))"
+ },
+ "rows": [
+  "collapseHint(theme, 5)=\"\\u001b[38;2;128;128;128m... (5 earlier lines, \\u001b[38;2;102;102;102mctrl+o\\u001b[39m\\u001b[38;2;128;128;128m to expand\\u001b[39m)\"",
+  "collapseHint(theme, 0)=\"\\u001b[38;2;128;128;128m... (0 earlier lines, \\u001b[38;2;102;102;102mctrl+o\\u001b[39m\\u001b[38;2;128;128;128m to expand\\u001b[39m)\"",
+  "collapseHint(undefined, 5)=\"... (5 earlier lines, \\u001b[38;2;102;102;102mctrl+o\\u001b[39m\\u001b[38;2;128;128;128m to expand\\u001b[39m)\"",
+  "simpleCollapseHint(theme, 68)=\"\\u001b[38;2;128;128;128m... (68 more lines, \\u001b[38;2;102;102;102mctrl+o\\u001b[39m\\u001b[38;2;128;128;128m to expand\\u001b[39m)\"",
+  "collapsedSimpleLine('a\\nb\\tc\\td')=\"a b c d\"",
+  "collapsedSimpleLine('multi  space')=\"multi space\"",
+  "hidden(write content 2+out1)=3",
+  "hidden(edit old2/new1+out1)=4",
+  "hidden(generic args)=4",
+  "simpleRows=[\"write\",\"src/a.ts\",\"\\u001b[38;2;128;128;128m... (42 more lines, \\u001b[38;2;102;102;102mctrl+o\\u001b[39m\\u001b[38;2;128;128;128m to expand\\u001b[39m)\"]",
+  "simpleRowsOuter=[\"\",\"bash\",\"$ cargo test\",\"\\u001b[38;2;128;128;128m... (20 more lines, \\u001b[38;2;102;102;102mctrl+o\\u001b[39m\\u001b[38;2;128;128;128m to expand\\u001b[39m)\",\"\"]"
+ ]
+}

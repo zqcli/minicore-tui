@@ -9,20 +9,26 @@ pub mod session;
 pub mod tool;
 pub mod transcript;
 pub mod turn;
+pub mod view;
 
 pub use catalog::CatalogState;
-pub use composer::Composer;
+pub use composer::{Composer, PasteRange};
 pub use selection::{
     Dock, NewSessionField, NewSessionState, SELECTOR_PAGE, SelectorKind, SelectorState,
 };
 pub use session::{
     ConfigUpdateState, PendingConfigUpdate, ScrollState, SessionId, SessionView, SessionsState,
 };
-pub use tool::{LiveTool, ToolStatus};
+pub use tool::{LiveTool, ToolKey, ToolPresentationState, ToolStatus};
 pub use transcript::{
-    AssistantBlock, AssistantPart, PreparedTranscriptCache, SummaryBlock, ToolBlock, ToolExpansion,
-    TranscriptBlock, TranscriptCacheKey, TranscriptRenderCache, TranscriptState, UserBlock,
+    AssistantBlock, AssistantPart, SummaryBlock, ToolBlock, ToolExpansion, TranscriptBlock,
+    TranscriptState, UserBlock,
 };
 pub use turn::{
-    LiveLoop, LiveRequest, LocalSubmissionId, PendingSteer, PendingSteerState, UnsavedLoop,
+    AppliedSteer, LiveLoop, LivePart, LiveRequest, LocalSubmissionId, PendingSteer,
+    PendingSteerState, SteerQueueItem, SteerQueueState, SteerReceiptObserved, UnsavedLoop,
+};
+pub use view::{
+    ConversationSelection, CopyRange, FoldOverride, PreparedConversation, ReasoningKey, SectionId,
+    SectionKind, SectionRange, SelectionGranularity, SelectionPoint,
 };

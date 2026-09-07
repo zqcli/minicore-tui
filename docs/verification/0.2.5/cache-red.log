@@ -1,0 +1,37 @@
+   Compiling minicore-tui v0.2.4 (/Users/zzq/Develops/minicore-tui)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.33s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-d2da2904c7539785)
+
+running 5 tests
+
+thread 'ui::render_cache_tests::no_op_mouse_moved_retains_prepared_conversation_and_does_not_dirty' (32629533) panicked at src/ui/render_cache_tests.rs:98:5:
+RED: no-op mouse move must retain prepared conversation
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test ui::render_cache_tests::no_op_mouse_moved_retains_prepared_conversation_and_does_not_dirty ... FAILED
+
+thread 'ui::render_cache_tests::scroll_and_tick_and_viewport_retain_prepared_conversation' (32629534) panicked at src/ui/render_cache_tests.rs:115:5:
+RED: Tick must retain prepared conversation
+test ui::render_cache_tests::scroll_and_tick_and_viewport_retain_prepared_conversation ... FAILED
+test ui::render_cache_tests::durable_history_mutation_invalidates_and_reparses ... ok
+
+thread 'ui::render_cache_tests::live_delta_reuses_durable_markdown_without_reparsing' (32629532) panicked at src/ui/render_cache_tests.rs:174:5:
+assertion `left == right` failed: RED: live delta preparation must reuse durable layout and not re-parse historical markdown
+  left: 3
+ right: 0
+test ui::render_cache_tests::live_delta_reuses_durable_markdown_without_reparsing ... FAILED
+
+thread 'ui::render_cache_tests::viewport_duplicate_is_idempotent_and_does_not_cancel_drag' (32629535) panicked at src/ui/render_cache_tests.rs:252:5:
+RED: Idempotent Viewport must not cancel active scrollbar drag
+test ui::render_cache_tests::viewport_duplicate_is_idempotent_and_does_not_cancel_drag ... FAILED
+
+failures:
+
+failures:
+    ui::render_cache_tests::live_delta_reuses_durable_markdown_without_reparsing
+    ui::render_cache_tests::no_op_mouse_moved_retains_prepared_conversation_and_does_not_dirty
+    ui::render_cache_tests::scroll_and_tick_and_viewport_retain_prepared_conversation
+    ui::render_cache_tests::viewport_duplicate_is_idempotent_and_does_not_cancel_drag
+
+test result: FAILED. 1 passed; 4 failed; 0 ignored; 0 measured; 301 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `--lib`

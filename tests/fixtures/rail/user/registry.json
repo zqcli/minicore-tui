@@ -1,0 +1,20 @@
+{
+ "schema": "minicore-rail-cell-v1",
+ "case": "registry",
+ "kind": "text",
+ "term": {
+  "cols": 80,
+  "rows": 24
+ },
+ "source": {
+  "rail_commit": "1d0dd1611a4d9546c64fe9f5b5c966253fb88eba",
+  "pi": "0.84.4",
+  "theme": "pi dark (initTheme('dark'))"
+ },
+ "rows": [
+  "first occurrence -> 8:00 AM · 9/5/2026",
+  "second occurrence -> 9:30 AM · 9/5/2026",
+  "unknown text -> number",
+  "surface case completed with Rail patch active=true"
+ ]
+}

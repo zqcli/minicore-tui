@@ -1,11 +1,9 @@
-MINICORE  v0.2.1
+ MINICORE  v0.2.7
 
-Coding agent TUI
-q / Ctrl+C to quit
+ Coding agent TUI
+ q / Ctrl+C to quit
 
-Open a session — /new, Ctrl+R, or F1 for help
-
-
+ Open a session — /new, Ctrl+R, or F1 for help
 
 
 
@@ -22,19 +20,21 @@ Open a session — /new, Ctrl+R, or F1 for help
 
 
 
-┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│New session                                                                                                           │
-│workspace  /project                                                                                                   │
-│profile    coding  →                                                                                                  │
-│model      deep  →                                                                                                    │
-│reasoning  high  →                                                                                                    │
-│title      (optional)                                                                                                 │
-│action     Create session                                                                                             │
-│Tab moves · Enter confirms · Esc closes                                                                               │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-/project                                                                                                      no session
-Idle
+
+
+
+ ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │New session                                                                                                          │
+ │workspace  /project                                                                                                  │
+ │profile    coding  →                                                                                                 │
+ │model      deep  →                                                                                                   │
+ │reasoning  high  →                                                                                                   │
+ │title      (optional)                                                                                                │
+ │action     Create session                                                                                            │
+ │Tab moves · Enter confirms · Esc closes                                                                              │
+ │                                                                                                                     │
+ │                                                                                                                     │
+ │                                                                                                                     │
+ │                                                                                                                     │
+ └─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ● ready

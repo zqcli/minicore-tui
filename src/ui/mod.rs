@@ -1,18 +1,18 @@
 //! Rendering: the Pi-style fullscreen conversation layout (development spec
 //! 14-20, 29-31). `ui::render` is a pure read-only view: it never mutates
-//! `App` or writes caches. Durable transcript lines are prepared by the
-//! read-only `transcript::prepare_cache` function and installed only through
-//! `App::update`; header, notices, layout and live streaming remain per-frame
-//! derivations without interior mutability.
+//! `App` or writes caches. The complete conversation snapshot is prepared
+//! read-only and installed only through `App::update`; header, notices, layout
+//! and the snapshot are consumed without interior mutability.
 //!
 //! Phase 3 covers the transcript + fixed dock (status/composer/footer), the
 //! durable/live blocks, and markdown. Phase 4 replaces the composer in the
 //! dock with the new-session form and the session/model/reasoning/profile
-//! selectors; Phase 5 adds full input and scrolling; Phase 7 adds the
-//! update-installed durable line cache.
+//! selectors; Phase 5 adds full input and scrolling; the update-installed
+//! conversation snapshot is shared by all transcript consumers.
 
 pub mod assistant;
 pub mod composer;
+pub mod editor_layout;
 pub mod error;
 pub mod footer;
 pub mod header;
@@ -20,9 +20,12 @@ pub mod help;
 pub mod layout;
 pub mod logs;
 pub mod new_session;
+pub mod rail;
 pub mod reasoning;
+pub mod scrollbar;
 pub mod selector;
 pub mod status;
+pub mod steer_queue;
 pub mod tool;
 pub mod transcript;
 pub mod user;
@@ -39,6 +42,12 @@ use crate::theme::Theme;
 
 #[cfg(test)]
 mod component_tests;
+#[cfg(test)]
+mod render_cache_tests;
+#[cfg(test)]
+mod section_gap_tests;
+#[cfg(test)]
+mod settings_footer_steer_tests;
 #[cfg(test)]
 mod snapshots;
 #[cfg(test)]
@@ -77,57 +86,29 @@ pub fn render(frame: &mut Frame, app: &App) {
         );
         return;
     }
-    let short = area.height < 24;
-    let busy = layout::busy(app);
-    // Selector / new-session panels replace the composer in the dock and
-    // are taller (spec 24.2); the composer keeps its Phase 3 height.
-    // The panel is the composer (which now grows with its content), one of
-    // the selectors, or Help/Logs (spec 24.2).
-    let panel = match &app.dock {
-        Dock::Composer => layout::composer_height_phase5(app, area.width, area.height, short),
-        Dock::Help | Dock::Logs => layout::help_panel_height(area.height),
-        _ => layout::panel_height(short),
-    };
-    let footer_h = layout::footer_height(area.width, area.height);
-    let notice_h = u16::from(!app.notices.is_empty());
-    let status_h = u16::from(busy);
-    let dock_h = status_h + notice_h + panel + footer_h;
+    let screen = layout::screen_layout(app, area);
+    transcript::render(frame, screen.transcript, app, &theme);
 
-    let [transcript_area, dock_area] =
-        Layout::vertical([Constraint::Min(1), Constraint::Length(dock_h)]).areas(area);
-    transcript::render(frame, transcript_area, app, &theme);
-
-    let mut rows: Vec<Constraint> = Vec::new();
-    if busy {
-        rows.push(Constraint::Length(status_h));
+    if let Some(status_area) = screen.status {
+        status::render(frame, status_area, app, &theme);
     }
-    if notice_h == 1 {
-        rows.push(Constraint::Length(1));
+    if let Some(queue_area) = screen.queue {
+        steer_queue::render(frame, queue_area, app, &theme);
     }
-    rows.push(Constraint::Length(panel));
-    rows.push(Constraint::Length(footer_h));
-    let chunks = Layout::vertical(rows).split(dock_area);
-    let mut index = 0;
-    if busy {
-        status::render(frame, chunks[index], app, &theme);
-        index += 1;
-    }
-    if notice_h == 1 {
-        error::render_notice(frame, chunks[index], &theme, app.notices.back().unwrap());
-        index += 1;
+    if let Some(notice_area) = screen.notice {
+        error::render_notice(frame, notice_area, &theme, app.notices.back().unwrap());
     }
     match &app.dock {
-        Dock::Composer => composer::render(frame, chunks[index], app, &theme),
-        Dock::NewSession(draft) => new_session::render(frame, chunks[index], &theme, draft),
+        Dock::Composer => composer::render(frame, screen.panel, app, &theme),
+        Dock::NewSession(draft) => new_session::render(frame, screen.panel, &theme, draft),
         Dock::SessionSelector(_)
         | Dock::ModelSelector(_)
         | Dock::ReasoningSelector(_)
-        | Dock::ProfileSelector(_) => selector::render(frame, chunks[index], app, &theme),
-        Dock::Help => help::render(frame, chunks[index], app, &theme),
-        Dock::Logs => logs::render(frame, chunks[index], app, &theme),
+        | Dock::ProfileSelector(_) => selector::render(frame, screen.panel, app, &theme),
+        Dock::Help => help::render(frame, screen.panel, app, &theme),
+        Dock::Logs => logs::render(frame, screen.panel, app, &theme),
     }
-    index += 1;
-    footer::render(frame, chunks[index], app, &theme);
+    footer::render(frame, screen.footer, app, &theme);
 }
 
 fn render_small_terminal_hint(frame: &mut Frame, area: Rect, theme: &Theme) {
@@ -199,13 +180,17 @@ mod tests {
     }
 
     #[test]
-    fn dock_is_below_the_transcript_with_a_composer_border() {
+    fn dock_is_below_the_transcript_with_a_rail_composer() {
         let app = crate::ui::testapp::fresh(ThemeKind::Dark);
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|frame| render(frame, &app)).unwrap();
         let buffer = terminal.backend().buffer();
         let has_rounded_corner = buffer.content().iter().any(|cell| cell.symbol() == "╭");
-        assert!(has_rounded_corner, "rounded composer border must be drawn");
+        assert!(
+            !has_rounded_corner,
+            "Rail composer has no rectangular border"
+        );
+        assert!(buffer.content().iter().any(|cell| cell.symbol() == "▎"));
         // The empty transcript still shows the startup header.
         let text: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
         assert!(text.contains("MINICORE"));

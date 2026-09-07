@@ -1117,12 +1117,19 @@ mod tests {
     impl TempConfigFile {
         fn new(mode: &str) -> Self {
             static SEQ: AtomicU64 = AtomicU64::new(0);
-            let dir = std::env::temp_dir().join(format!("mct-rpc-{}", std::process::id()));
-            std::fs::create_dir_all(&dir).expect("create temp dir");
-            let path = dir.join(format!(
-                "agent-{}.toml",
-                SEQ.fetch_add(1, Ordering::Relaxed)
-            ));
+            let dir = loop {
+                let candidate = std::env::temp_dir().join(format!(
+                    "mct-rpc-{}-{}",
+                    std::process::id(),
+                    SEQ.fetch_add(1, Ordering::Relaxed)
+                ));
+                match std::fs::create_dir(&candidate) {
+                    Ok(()) => break candidate,
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("create fake config directory: {error}"),
+                }
+            };
+            let path = dir.join("agent.toml");
             std::fs::write(&path, mode).expect("write fake config");
             Self { path }
         }
@@ -1133,6 +1140,15 @@ mod tests {
             let _ = std::fs::remove_file(&self.path);
             let _ = std::fs::remove_dir(self.path.parent().expect("temp dir path"));
         }
+    }
+
+    #[test]
+    fn fake_configs_have_independently_owned_directories() {
+        let first = TempConfigFile::new("first");
+        let second = TempConfigFile::new("second");
+        assert_ne!(first.path.parent(), second.path.parent());
+        drop(first);
+        assert_eq!(std::fs::read_to_string(&second.path).unwrap(), "second");
     }
 
     /// Locates the harness=false `agent_process` test target binary. Cargo may

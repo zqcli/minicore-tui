@@ -1,0 +1,6 @@
+67b918e60f33a60f1d6d7dae0f3f237b9688b147fb141007089b98ef650dead8  minicore-tui/Cargo.lock
+66ed295edb9cd714fbd0269519f770e283d85330efb23cd472023a7a71d4e632  minicore-tui/src/app.rs
+2649cae73fe4ef255fe2f16812016ad379d8c635cb3ae8d919a014be248e443c  minicore-tui/src/clipboard.rs
+638e604cf9d153b9b259554264ff2e76e1285c0254a8d4ed1ae9dd1a8ac795d0  minicore-tui/src/ui/footer.rs
+32702621f0974b95309295ab9a482043a04d15e0a46311dd08825fd87be5c39a  minicore-agent/Cargo.lock
+478d08eef13e348105ccdbba94988167735984553b0e0abd41a8d091c5d1353e  minicore-agent/src/presentation.rs

@@ -1,22 +1,47 @@
-//! The composer (development spec 15.7, 21, 22.2): a rounded border colored
-//! by the active session's reasoning level, the buffered lines rendered
-//! read-only from the `Composer` wrapper (wrapped with the same
-//! `unicode-width` math as the transcript), a block cursor, and the
-//! hardware cursor positioned from the (row, column) cell so IME lands
-//! correctly on multi-line buffers.
+//! The composer as a Rail editor surface. The existing `Composer` remains the
+//! editable text authority; this module only maps its wrapped rows into the
+//! fixed blue-rail surface and positions the hardware cursor.
 
 use ratatui::Frame;
-use ratatui::layout::{Margin, Rect};
-use ratatui::style::{Modifier, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, BorderType, Paragraph};
+use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
-use crate::markdown::{char_width, wrap_plain};
-use crate::state::composer::MAX_COMPOSER_BYTES;
 use crate::theme::Theme;
+use crate::ui::editor_layout::EditorLayout;
+use crate::ui::rail;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    let completion_rows = crate::ui::layout::composer_completion_rows(app);
+    let editor_height = area.height.saturating_sub(completion_rows);
+    let editor_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: editor_height,
+    };
+    if editor_height > 0 {
+        render_editor(frame, editor_area, app, theme);
+    }
+    if completion_rows > 0 {
+        render_completion(
+            frame,
+            Rect {
+                x: area.x,
+                y: area.y + editor_height,
+                width: area.width,
+                height: completion_rows,
+            },
+            app,
+            theme,
+        );
+    }
+}
+
+fn render_editor(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let view = app.active_view();
     let waiting = view.is_some_and(|view| {
         view.live.as_ref().is_some_and(|live| live.waiting)
@@ -30,75 +55,123 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             .is_some_and(|state| state.status == crate::protocol::SessionStatusWire::Finishing)
     });
     let running = view.is_some_and(|view| view.is_running());
-    let border_color = match view {
-        Some(view) => {
-            let reasoning = view
-                .live
-                .as_ref()
-                .and_then(|l| l.requests.last().map(|r| r.reasoning))
-                .or_else(|| view.last_request.as_ref().map(|r| r.reasoning))
-                .unwrap_or(view.info.reasoning);
-            theme.reasoning_color(reasoning)
-        }
-        None => theme.thinking_disabled,
-    };
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(border_color).add_modifier(Modifier::BOLD));
-    frame.render_widget(block, area);
-
-    let inner = area.inner(Margin::new(1, 1));
-    let width = inner.width as usize;
-    let contents = compose_lines(app, theme, width, running, waiting, finishing);
-    let (cursor_row, cursor_col) = cursor_cell(app, width);
-
-    // Keep the cursor row visible when the buffer overflows the panel.
-    let height = inner.height as usize;
-    let top = if contents.is_empty() {
-        0
-    } else {
-        cursor_row
-            .min(contents.len().saturating_sub(1))
-            .saturating_sub(height - 1)
-    };
-    let rows: Vec<Line<'static>> = contents.iter().skip(top).take(height).cloned().collect();
-    // Flat for the paragraph model does not apply here: forced rows.
-    let mut padded = rows;
-    while padded.len() < height {
-        padded.push(Line::default());
-    }
-    frame.render_widget(Paragraph::new(padded), inner);
+    let width = rail::content_width(area.width as usize, rail::RAIL_WIDTH);
+    let height = area.height as usize;
+    let display_content = app.composer.display_content();
+    let display_lines = display_content
+        .split('\n')
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let paste_markers = app.composer.display_paste_markers();
+    let editor_layout = EditorLayout::new_with_atomic_ranges(
+        &display_lines,
+        width,
+        height,
+        app.composer.display_cursor(),
+        &paste_markers,
+    );
+    let contents = compose_lines(app, theme, &editor_layout, running, waiting, finishing);
+    let colors = rail::editor_colors(theme);
+    let padded = editor_layout
+        .visible_rows()
+        .into_iter()
+        .map(|source| {
+            let line = source
+                .and_then(|index| contents.get(index).cloned())
+                .unwrap_or_default();
+            rail::surface_row(area.width as usize, colors, rail::RAIL_WIDTH, line)
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(padded), area);
 
     // Block cursor + hardware cursor at the (row, column) cell, so IME
     // composition and multi-line editing land on the right cell. The cursor
     // column can sit exactly at the wrap boundary (== width), which has no
     // cell: clamp drawing into the inner area while the helper keeps the
     // true boundary column for logic.
-    let (cell_row, cell_col) = (cursor_row.saturating_sub(top), cursor_col);
-    let inner_w = inner.width as usize;
-    let draw_col = cell_col.min(inner_w.saturating_sub(1));
-    let x = inner.x + draw_col as u16;
-    let y = inner.y + cell_row as u16;
-    if x < inner.x + inner.width && y < inner.y + inner.height && inner_w > 0 && inner.height > 0 {
+    let (cell_row, cell_col) = editor_layout.screen_cursor();
+    let content_w = width;
+    let draw_col = cell_col.min(content_w.saturating_sub(1));
+    let x = area.x + rail::RAIL_WIDTH as u16 + draw_col as u16;
+    let y = area.y + cell_row as u16;
+    if x < area.x + area.width && y < area.y + area.height && content_w > 0 && area.height > 0 {
         if let Some(cell) = frame.buffer_mut().cell_mut((x, y)) {
-            cell.set_fg(theme.page_bg);
-            cell.set_bg(theme.text);
+            cell.set_bg(theme.user_message_bg);
+            cell.set_style(Style::default().add_modifier(ratatui::style::Modifier::REVERSED));
         }
         frame.set_cursor_position((x, y));
     }
 }
 
-/// The wrapped composer rows, styled as plain text (the buffer may be
-/// empty, in which case a placeholder row is returned by `compose_lines`).
+fn render_completion(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    let Some(completion) = app.slash_completion.as_ref() else {
+        return;
+    };
+    let colors = rail::editor_colors(theme);
+    let max_visible = 5usize;
+    let start = completion
+        .selected
+        .saturating_sub(max_visible / 2)
+        .min(completion.items.len().saturating_sub(max_visible));
+    let end = (start + max_visible).min(completion.items.len());
+    let mut lines = completion.items[start..end]
+        .iter()
+        .enumerate()
+        .map(|(visible_index, item)| {
+            let index = start + visible_index;
+            let selected = index == completion.selected;
+            let style = if selected {
+                Style::new().fg(theme.rail_editor)
+            } else {
+                Style::default()
+            };
+            let prefix = if selected { "→ " } else { "  " };
+            let label = item.strip_prefix('/').unwrap_or(item);
+            let content_width = area.width.saturating_sub(rail::RAIL_WIDTH as u16) as usize;
+            let text_width = content_width.saturating_sub(UnicodeWidthStr::width(prefix));
+            let text = crate::ui::rail::clip_cells(label, text_width);
+            let content = format!(
+                "{prefix}{text}{}",
+                " ".repeat(content_width.saturating_sub(
+                    UnicodeWidthStr::width(prefix) + UnicodeWidthStr::width(text.as_str()),
+                ))
+            );
+            rail::surface_row(
+                area.width as usize,
+                colors,
+                rail::RAIL_WIDTH,
+                Line::from(Span::styled(content, style)),
+            )
+        })
+        .collect::<Vec<_>>();
+    if start > 0 || end < completion.items.len() {
+        lines.push(rail::surface_row(
+            area.width as usize,
+            colors,
+            rail::RAIL_WIDTH,
+            Line::from(Span::raw(format!(
+                "  ({}/{})",
+                completion.selected + 1,
+                completion.items.len()
+            ))),
+        ));
+    }
+    lines.truncate(area.height as usize);
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// The wrapped composer rows, styled as plain text. Empty input deliberately
+/// has no instructional paragraph; mode/error state is carried by status.
 fn compose_lines(
     app: &App,
     theme: &Theme,
-    width: usize,
+    layout: &EditorLayout,
     running: bool,
     waiting: bool,
     finishing: bool,
 ) -> Vec<Line<'static>> {
     let style = Style::new().fg(theme.text);
+    let selection = app.composer_selection_range();
     if app.composer.is_empty() {
         let blocked = app.active_view().is_some_and(|view| {
             view.state
@@ -108,73 +181,107 @@ fn compose_lines(
         let placeholder = if blocked {
             "Session blocked"
         } else if running {
-            "Steer current turn…"
+            ""
         } else if waiting {
             "Unsupported interaction — Esc to cancel"
         } else if finishing {
             "Saving turn…"
-        } else if app.active_view().is_none() {
-            "Create or open a session"
         } else {
-            "Type a message…"
+            ""
         };
         return vec![Line::styled(placeholder, Style::new().fg(theme.muted))];
     }
-    let mut rows = Vec::new();
-    for raw in app.composer.lines() {
-        rows.extend(wrap_plain(raw, width, style));
+    layout
+        .rows
+        .iter()
+        .map(|row| {
+            let start = display_row_start(layout, row);
+            marker_line(
+                &row.text,
+                start,
+                &app.composer.display_paste_markers(),
+                selection.as_ref(),
+                style,
+                theme,
+            )
+        })
+        .collect()
+}
+
+fn display_row_start(layout: &EditorLayout, row: &crate::ui::editor_layout::VisualLine) -> usize {
+    let mut offset = 0;
+    for logical in 0..row.logical_line {
+        offset += layout
+            .rows
+            .iter()
+            .filter(|candidate| candidate.logical_line == logical)
+            .map(|candidate| candidate.text.chars().count())
+            .sum::<usize>();
+        offset += 1;
     }
-    if app.composer.content().len() >= MAX_COMPOSER_BYTES * 9 / 10 {
-        rows.push(Line::styled(
-            format!(
-                "{}/{} bytes",
-                app.composer.content().len(),
-                MAX_COMPOSER_BYTES
-            ),
-            Style::new().fg(theme.muted),
-        ));
+    offset + row.start_char
+}
+
+fn marker_line(
+    text: &str,
+    global_start: usize,
+    markers: &[std::ops::Range<usize>],
+    selection: Option<&std::ops::Range<usize>>,
+    normal: Style,
+    theme: &Theme,
+) -> Line<'static> {
+    let mut spans = Vec::new();
+    let mut current = String::new();
+    let marker_style = normal
+        .fg(theme.rail_editor)
+        .bg(theme.selection_bg)
+        .add_modifier(ratatui::style::Modifier::BOLD);
+    let selection_style = normal.fg(theme.selection_fg).bg(theme.selection_bg);
+    for (global, character) in (global_start..).zip(text.chars()) {
+        let marker = markers.iter().any(|range| range.contains(&global));
+        let selected = selection.is_some_and(|range| range.contains(&global));
+        if marker || selected {
+            if !current.is_empty() {
+                spans.push(Span::styled(std::mem::take(&mut current), normal));
+            }
+            let style = if selected {
+                selection_style
+            } else {
+                marker_style
+            };
+            spans.push(Span::styled(character.to_string(), style));
+        } else {
+            current.push(character);
+        }
     }
-    rows
+    if !current.is_empty() {
+        spans.push(Span::styled(current, normal));
+    }
+    Line::from(spans)
 }
 
 /// The visual (row, col) of the block cursor in wrapped-cell space.
 /// `Composer::cursor()` is (row, **char index**, as tui-textarea reports);
-/// this converts to display columns here using the exact greedy rule as
-/// `wrap_plain`/`chunk_line`, so the rendered row/col always matches the
-/// wrapping the renderer (and the height estimator) use.
+/// this converts to display columns through the same `EditorLayout` used by
+/// the renderer and height estimator.
+#[cfg(test)]
 fn cursor_cell(app: &App, width: usize) -> (usize, usize) {
     let width = width.max(1);
-    let (line_index, char_col) = app.composer.cursor();
-    let mut cell_row = 0;
-    for (index, raw) in app.composer.lines().iter().enumerate() {
-        if index == line_index {
-            let (rows, col) = cursor_wrap_pos(raw, char_col, width);
-            return (cell_row + rows, col);
-        }
-        cell_row += wrap_plain(raw, width, Style::new()).len();
-    }
-    (0, 0)
+    let rows = EditorLayout::row_count(app.composer.lines(), width);
+    EditorLayout::new(
+        app.composer.lines(),
+        width,
+        rows.max(1),
+        app.composer.cursor(),
+    )
+    .screen_cursor()
 }
 
-/// Simulates the greedy wrap exactly like `chunk_line`: the visual row and
-/// display column of the cursor after `cursor_col` characters of `line`
-/// wrapped to `width`. The column may equal `width` at a wrap boundary.
+#[cfg(test)]
 fn cursor_wrap_pos(line: &str, cursor_col: usize, width: usize) -> (usize, usize) {
-    let width = width.max(1);
-    let mut rows = 0usize;
-    let mut used = 0usize;
-    for (index, ch) in line.chars().enumerate() {
-        if index == cursor_col {
-            break;
-        }
-        let cw = char_width(ch);
-        if used + cw > width && used > 0 {
-            rows += 1;
-            used = 0;
-        }
-        used += cw;
-    }
-    (rows, used)
+    let lines = vec![line.to_owned()];
+    let rows = EditorLayout::row_count(&lines, width.max(1));
+    EditorLayout::new(&lines, width.max(1), rows.max(1), (0, cursor_col)).screen_cursor()
 }
 
 #[cfg(test)]
@@ -200,13 +307,14 @@ mod tests {
 
     #[test]
     fn cursor_wrap_pos_matches_the_greedy_rule() {
-        // ASCII exactly at the wrap boundary (col == width).
+        // ASCII at the end of a soft-wrapped line moves to the next visual
+        // row, matching Pi's word-wrap cursor map.
         assert_eq!(cursor_wrap_pos("abcdef", 6, 3), (1, 3));
         assert_eq!(cursor_wrap_pos("abcdef", 5, 3), (1, 2));
         assert_eq!(
             cursor_wrap_pos("abcdef", 3, 3),
-            (0, 3),
-            "boundary col can equal width"
+            (1, 0),
+            "soft-wrap boundary belongs to the next row"
         );
         // CJK counts 2 columns each.
         assert_eq!(cursor_wrap_pos("你好世界", 4, 4), (1, 4));
@@ -218,7 +326,7 @@ mod tests {
         assert_eq!(cursor_wrap_pos("ab", 2, 0), (1, 1));
         // Multi logical lines: cursor_row counts whole previous lines.
         // A trailing cursor past the end lands at the end.
-        assert_eq!(cursor_wrap_pos("hello world", 11, 4), (2, 3));
+        assert_eq!(cursor_wrap_pos("hello world", 11, 4), (3, 1));
     }
 
     #[test]
@@ -256,9 +364,10 @@ mod tests {
             .draw(|frame| crate::ui::render(frame, &app))
             .unwrap();
         let pos = terminal.backend_mut().get_cursor_position().unwrap();
-        // Composer area: dock = footer(2) + composer(5) => composer at
-        // y=17..23, inner y=18..21, inner.x=1. Cursor row 1 -> y=19, col 1 -> x=2.
-        assert_eq!((pos.x, pos.y), (2, 19));
+        // Rail composer: dock = footer(1) + composer(4) => composer at
+        // y=19..23. Two wrapped rows are vertically centered, so row 1 is
+        // y=21; the rail and first content column place the cursor at x=3.
+        assert_eq!((pos.x, pos.y), (3, 21));
     }
 
     #[test]

@@ -1,11 +1,9 @@
-MINICORE  v0.2.1
+ MINICORE  v0.2.7
 
-Coding agent TUI
-q / Ctrl+C to quit
+ Coding agent TUI
+ q / Ctrl+C to quit
 
-Starting agent…
-
-
+ Starting agent…
 
 
 
@@ -15,10 +13,12 @@ Starting agent…
 
 
 
-╭──────────────────────────────────────────────────────────────────────────────╮
-│Create or open a session                                                      │
-│                                                                              │
-│                                                                              │
-╰──────────────────────────────────────────────────────────────────────────────╯
-/project                                                              no session
-Starting
+
+
+
+
+ ▎
+ ▎
+ ▎
+ ▎
+ starting

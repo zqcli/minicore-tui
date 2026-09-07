@@ -1,0 +1,12 @@
+{
+  "name": "minicore-rail-fixture-generator",
+  "private": true,
+  "type": "module",
+  "description": "Test-only generator for the Rail reference fixtures (tests/fixtures/rail). Invokes the fixed pi-rail-ui reference renderers with Pi 0.84.4. Not part of Cargo builds.",
+  "scripts": {
+    "generate": "tsx generate.mts"
+  },
+  "devDependencies": {
+    "tsx": "4.23.12"
+  }
+}

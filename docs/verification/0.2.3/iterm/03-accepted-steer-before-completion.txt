@@ -1,0 +1,32 @@
+ ▎                                                                                                  
+ ▎ spacing-check                                                                                    
+ ▎ 6:43 PM · 9/6/2026                                                                               
+ ▎                                                                                                  
+ 
+ ▎Step one                                     
+ ▎Step two 
+ ▎Step three 
+ ▎... (1 earlier lines, ctrl+o to expand) 
+ 
+ ▎ bash                                                                                             
+ ▎ bash                                                                                             
+ 
+ ▎                                                                                                  
+ ▎ ↪ steer-check                                                                                    
+ ▎ 6:43 PM · 9/6/2026                                                                               
+ ▎                                                                                                  
+  ⠸ awaiting history                                                                                
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+ ⠏ Running bash…                                                                                    
+ Saved · applies at next model request (rev 1)                                                      
+ ▎                                                                                                  
+ ▎                                                                                                  
+ ▎                                                                                                  
+ ▎                                                                                                  
+ ▸ workspace · iterm a · high · ● working · queued                   ↑10 ↓12 R0 W0 · usage ? · ctx ?

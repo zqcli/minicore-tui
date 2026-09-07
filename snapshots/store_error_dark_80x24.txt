@@ -1,24 +1,24 @@
 
- • first item
- • second item
+  A paragraph with bold, italic, and code.
 
- ▍ quoted wisdom
-
- ╭─────────────────────────────────────────────────────────────────────────────╮
- │fn hello() {                                                                 │
- │    println!("hi");                                                          │
- │}                                                                            │
- ╰─────────────────────────────────────────────────────────────────────────────╯
-
- link (https://example.com) at the end.
-
- ───────────────────────────────────────────────────────────────────────────────
-
-Unable to open this session. Its data may be unavailable, invalid, or from an un
-╭──────────────────────────────────────────────────────────────────────────────╮
-│Type a message…                                                               │
-│                                                                              │
-│                                                                              │
-╰──────────────────────────────────────────────────────────────────────────────╯
-/project                                                                    Task
-Idle                                                                 deep • high
+  • first item
+  • second item                                                                █
+                                                                               █
+  ▍ quoted wisdom                                                              █
+                                                                               █
+  ╭────────────────────────────────────────────────────────────────────────────█
+  │fn hello() {                                                                █
+  │    println!("hi");                                                         █
+  │}                                                                           █
+  ╰────────────────────────────────────────────────────────────────────────────█
+                                                                               █
+  link (https://example.com) at the end.                                       █
+                                                                               █
+  ─────────────────────────────────────────────────────────────────────────────█
+                                                                               █
+ Unable to open this session. Its data may be unavailable, invalid, or from an u
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ● ready                                         ctx ?

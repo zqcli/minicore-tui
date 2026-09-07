@@ -8,7 +8,7 @@
 //! that can only run under a TTY.
 
 use std::env;
-use std::io::{IsTerminal, Read};
+use std::io::{IsTerminal, Read, Write};
 use std::panic::{self, AssertUnwindSafe};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::{
@@ -41,6 +41,7 @@ fn real_pty_enter_and_restore_round_trip() {
         return;
     }
     let mut guard = TerminalGuard::enter().expect("enter the alternate screen");
+    queue_unflushed_frame(&mut guard);
     // A twice-called restore must be a no-op the second time (retry latch).
     guard.restore().expect("restore the terminal");
     guard
@@ -99,6 +100,14 @@ fn child_test() {
     }
     let _install_during_unwind = InstallDuringUnwind;
     let _guard = PanicHookGuard::install();
+    let mut terminal = if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        Some(TerminalGuard::enter().expect("enter child terminal"))
+    } else {
+        None
+    };
+    if let Some(guard) = terminal.as_mut() {
+        queue_unflushed_frame(guard);
+    }
     panic!("panic hook unwind regression child");
 }
 
@@ -142,6 +151,16 @@ fn panic_hook_drop_child() {
     let current = panic::take_hook();
     drop(current);
     panic::set_hook(harness_hook);
+}
+
+// Native test capture must never contain this deliberately unflushed marker.
+fn queue_unflushed_frame(guard: &mut TerminalGuard) {
+    guard.terminal_mut().hide_cursor().expect("hide cursor");
+    guard
+        .terminal_mut()
+        .backend_mut()
+        .write_all(b"UNFLUSHED_TUI_FRAME_MUST_NOT_LEAK")
+        .expect("queue incomplete frame");
 }
 
 struct ChildResult {

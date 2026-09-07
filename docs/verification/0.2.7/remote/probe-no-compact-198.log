@@ -1,0 +1,15 @@
+   Compiling unwind-probe v0.0.0 (/root/minicore-tui-027-RXdxEP/unwind-probe)
+warning: invoking `"xcrun" "--sdk" "macosx" "--show-sdk-path"` to find MacOSX.sdk failed: No such file or directory (os error 2)
+  |
+  = note: the SDK is needed by the linker to know where to find symbols in system libraries and for embedding the SDK version in the final object file
+  = help: pass the path of an Xcode installation via the DEVELOPER_DIR environment variable, or an SDK with the SDKROOT environment variable
+
+error: linking with `/root/minicore-tui-027-RXdxEP/darwin-linker` failed: exit status: 1
+  |
+  = note:  "/root/minicore-tui-027-RXdxEP/darwin-linker" "/root/minicore-tui-027-RXdxEP/probe-no-compact-198/x86_64-apple-darwin/debug/deps/rustcMrr4yv/symbols.o" "<14 object files omitted>" "<sysroot>/lib/rustlib/x86_64-apple-darwin/lib/{libstd-*,libpanic_unwind-*,libobject-*,libmemchr-*,libaddr2line-*,libgimli-*,libcfg_if-*,librustc_demangle-*,libstd_detect-*,libhashbrown-*,librustc_std_workspace_alloc-*,libminiz_oxide-*,libadler2-*,libunwind-*,liblibc-*,librustc_std_workspace_core-*,liballoc-*,libcore-*,libcompiler_builtins-*}.rlib" "-lSystem" "-lc" "-lm" "-arch" "x86_64" "-mmacosx-version-min=11.0.0" "-o" "/root/minicore-tui-027-RXdxEP/probe-no-compact-198/x86_64-apple-darwin/debug/deps/unwind_probe-c43ea0da58bb15c2" "-Wl,-dead_strip" "-nodefaultlibs" "-Wl,-headerpad,0x4000" "-mmacosx-version-min=11.0" "-Wl,-no_compact_unwind"
+  = note: some arguments are omitted. use `--verbose` to show all linker arguments
+  = note: error: unsupported linker arg: -no_compact_unwind
+          
+
+warning: `unwind-probe` (bin "unwind-probe") generated 1 warning
+error: could not compile `unwind-probe` (bin "unwind-probe") due to 1 previous error; 1 warning emitted

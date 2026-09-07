@@ -1,0 +1,5 @@
+viewport=240x80,messages=200,prepared_rows=10016,busy_frame_ms=12.5272,estimated_render_cpu_at_10_fps_percent=12.527
+
+thread 'main' (33070106) panicked at src/main.rs:106:13:
+RED: fixed 240x80 busy rendering exceeds the local 3 ms/frame goal: 12.5272 ms
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

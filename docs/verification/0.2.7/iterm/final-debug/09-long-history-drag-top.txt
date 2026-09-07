@@ -1,0 +1,32 @@
+ ▎                                                                                                 █
+ ▎ initial verification                                                                            █
+ ▎ 10:35 PM · 9/7/2026                                                                              
+ ▎                                                                                                  
+                                                                                           
+ ▎Planning phase                                                                                    
+ ▎Detailing scope                                                                                   
+ ▎Analyzing constraints                                                                    
+                                                                                           
+ ▎ bash                                                                                             
+ ▎ $ printf 'TOOL_RAN\n' > tool-ran; while [ ! -f release-tool ]; do sleep 0.1; done; printf 'TOOL_D
+ ▎   exit_code: 0                                                                                   
+ ▎   stdout:                                                                                        
+ ▎   TOOL_DONE                                                                                      
+ ▎   stderr:                                                                                        
+                                                                                           
+ ▎                                                                                                  
+ ▎ ↪ steer-alpha                                                                                    
+ ▎ 10:35 PM · 9/7/2026                                                                              
+ ▎                                                                                                  
+                                                                                                    
+  DONE_ALPHA                                                                                        
+                                                                                                    
+ ▎                                                                                                  
+ ▎ ↪ steer-beta                                                                                     
+ ▎ 10:35 PM · 9/7/2026                                                                              
+ ↑ scroll position                                                                                  
+ ▎                                                                                                  
+ ▎                                                                                                  
+ ▎                                                                                                  
+ ▎                                                                                                  
+ ▸ workspace · verify a · max · ● ready · 0m                                   ↑50 ↓60 R0 W0 · ctx ?

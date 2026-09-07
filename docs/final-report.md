@@ -1,23 +1,121 @@
 # Final Report: Agent v0.3 / Runtime v0.4 Migration
 
-The current delivery is **0.2.1**. See [release-0.2.1.md](release-0.2.1.md) for
-the post-migration reasoning Markdown/order fixes, 277-test remote suites,
-and updated macOS package. The migration evidence below remains a historical
-record of **0.2.0**; its test counts and cross-target checks are not relabeled
-as new runs. Agent/Runtime pins and protocol compatibility are unchanged.
+The current executable versions are **TUI 0.2.7 / Agent 0.3.2**. See
+[release-0.2.7.md](release-0.2.7.md) for buffered terminal output, level-1 Debug
+package optimization, preserved executables/cache cleanup, and remote-only builds.
+Current verification is in [verification/0.2.7](verification/0.2.7/README.md).
+The [0.2.6 changes](release-0.2.6.md) retain dependency-level optimization, and the
+[0.2.5 changes](release-0.2.5.md) retain history-layout reuse, bounded visible-row
+painting and coalesced preparation.
+The [0.2.4 changes](release-0.2.4.md) retain true reasoning-part boundaries,
+paired Steer receipts and the gray FIFO queue above Working. Runtime remains untouched.
+No release tag or commit was created.
+
+The [0.2.3 Footer fixes](release-0.2.3.md) remain, but its pending-Steer User-card
+UI is superseded by the 0.2.4 queue. The [0.2.2 fixes](release-0.2.2.md) cover
+spacing and extended reasoning levels. Earlier verification remains historical.
+
+The [0.2.1 package](release-0.2.1.md), Rail gates below, and **0.2.0** migration
+evidence are historical; their counts and cross-platform checks are not
+relabeled as new runs. Agent/Runtime protocol compatibility is unchanged.
+
+## Rail Follow-Up Status
+
+The uncommitted worktree also contains the Rail Stage 0–7 follow-up described
+in [rail-ui-parity-stage0.md](rail-ui-parity-stage0.md) and summarized in
+[rail-ui-parity-report.md](rail-ui-parity-report.md). Its fixed source oracle is
+Rail `1d0dd1611a4d9546c64fe9f5b5c966253fb88eba` with Pi `0.84.4`;
+`minicore-runtime` remains untouched. This section records the pre-0.2.2 Rail
+verification, not the current patch gates, and does not claim complete Rail
+product parity.
+
+- Agent presentation support is bounded, read-only, identity-keyed, and
+  redacted from `Debug`; it covers Tool display facts, ordered assistant parts,
+  acceptance timestamps, and `session.presentation` without changing execution
+  outcomes or cancellation/deadline behavior.
+- TUI Stage 2–5 covers shared Rail geometry, the one-row footer, the fixed
+  editor surface, User/Thinking/Assistant/Tool presentation, stable section
+  ranges, per-section fold state, order-safe Tool result fallback, timestamp
+  formatting, mouse folding, anchored selection/copy, clipboard feedback,
+  scrollbar preview/commit, native paste projection, slash completion, native
+  Editor click cases, RAIL-14 click arbitration with **real link geometry**
+  (link/overlay clicks never fold; inline-code/bold links are links, plain
+  text is not), and a word-selection model locked to the **real pinned Pi
+  0.84.4 fullscreen word selector** via the native oracle in
+  `tools/reference_fixtures/cases/word_oracle.mts` + `tests/word_oracle.rs`. The generated corpus
+  contains 114 cases in the worktree; it remains uncommitted by request.
+- Historical Rail gates: TUI default all-target tests **360 passed / 12 ignored**
+  (and the same 360 on MSRV Rust 1.85), Agent all-target **263 passed / 2
+  ignored** including the extended 20-turn RPC soak, and **11 real-Agent
+  loopback E2E scenarios pass** under the official serial command
+  (`--ignored --test-threads=1`; parallel spawn of eleven real Agent processes is
+  CPU/memory-contended and can exceed a single bounded wait window, so serial
+  is the official run — failures in parallel are always harness wait-window
+  errors, never product assertions). The new E2E scenario proves per-request
+  usage shows in the footer while the loop is still gated and the persisted
+  loop total replaces it after history reload (spec 9.4/12.4). Rustfmt, locked
+  offline check, Clippy `-D warnings`, rustdoc, and `git diff --check` pass in
+  both repositories.
+- Stage 7 real-terminal evidence is present: `scripts/stage7_xtermjs.py` and
+  the pinned xterm.js/Playwright driver capture real PTY bytes through a real
+  terminal emulator in headless Edge. The parent-inspected r4 archive is
+  `docs/verification/rail/capture-20260906T055811Z/`; the final capture after
+  the CJK dictionary build is archived locally at
+  `docs/verification/rail/capture-20260906T062517Z/`. Both hold the four mandated
+  screenshots: mixed-loop running, same-loop completed, single-card expanded
+  with anchor, multiline editor + single footer — plus three bonus shots —
+  along with raw PTY, cast, inputs, loopback-request logs, and a compact
+  `PROVENANCE.json` with binary SHA-256 and font/geometry provenance). The
+  archived copy passed per-checkpoint buffer-marker assertions and the parent
+  read all four 80x24 PNGs clean. The regenerable `artifacts/` copies are
+  git-ignored scratch. See the RAIL matrix (RAIL-34 PASS with its in-capture
+  identity scoped as inferential and the hard loop_id as a separate E2E RPC
+  assertion; RAIL-33 PARTIAL because the fixture corpus is
+  reference-generated, uncommitted, and only a 9-suite differential/fact/
+  schema subset) and the Source -> Target Coverage table in the parity report.
+
+Independent final TUI verification is archived at
+`docs/verification/rail/final-r5/`: native Linux stable and MSRV 1.85 each
+**360 passed / 12 ignored**, 11 serial real-Agent E2E scenarios (0.52 s),
+real-PTY restore (1 pass), Windows GNU cross-clippy and all-target test linking
+(`--no-run`), plus rustfmt/clippy/rustdoc. Key source hashes match the final
+local tree, including dictionary-based CJK selection. The unchanged Agent's
+independent **263 passed / 2 ignored**, quality checks, and 20-turn soak
+remain archived in `final-r4/`; they are not relabeled r5 runs. Neither
+cross-compilation nor these direct machine runs are hosted CI evidence.
+The authoritative final screenshot archive is
+`docs/verification/rail/capture-20260906T062517Z/`; the parent inspected all
+four mandated 80×24 PNGs and confirmed them clean.
+
+Remaining parity work is reported rather than hidden: CJK word selection is
+now real dictionary segmentation (icu_segmenter 2.1.2 `new_auto`, matching
+the pinned Pi `Intl.Segmenter` on the tested Chinese/Japanese corpus, cell by
+cell), with the scope precisely bounded — `々`/combining-voiced-mark and the
+Thai/Lao/Khmer/Myanmar dictionary scripts are documented non-targets and do
+not make this an "all locales" claim. Still partial: a hosted cross-platform
+CI service (native Linux plus macOS and Windows-GNU cross were run, but not
+on a scheduled CI host; RAIL-32) and the uncommitted fixture corpus
+(RAIL-33). The PTY-restore case remains ignored outside a TTY. Context, cost,
+subscription, unavailable old timestamps, and missing branch values remain
+explicit unknowns where the Agent has no reliable source. No commits were
+created by this work.
 
 ## Delivery Identity
 
-| Repository | Starting HEAD | Final HEAD |
-|---|---|---|
-| TUI | `3ecb509e353a666711b11bfdee7f50bdc92fe674` | `3ecb509e353a666711b11bfdee7f50bdc92fe674` + uncommitted migration |
-| Agent 0.3.0 | `b2e23938d073ab21c2775faa623561ba929a5ed1` | unchanged |
-| Runtime 0.4.0 | `87f3cf92b9b5980b0f468174a319cf53427d858e` | unchanged |
+| Repository | Original start HEAD | End HEAD | Change owner |
+|---|---|---|---|
+| TUI | `2b8268dbba81c162b30e984b9b31a58ebc3bba65` | unchanged + uncommitted parity work | this work |
+| Agent 0.3.0 | `b2e23938d073ab21c2775faa623561ba929a5ed1` | user committed mid-task to `2d16f554796861a21a49afcd77f4eab74022bf92` + our uncommitted presentation work | user commit + this work |
+| Runtime 0.4.0 | `87f3cf92b9b5980b0f468174a319cf53427d858e` | user committed to `6cd2bdbc634437dea925495c61c7eb0be10ba171` | user commit; never modified by this work |
+| pi-rail-ui (dev checkout) | `86c6fe96b59ac07e4c4e649aaa974ef8bcb1723e` | user advanced to `395ee40af5bf5d89283b8dd9d19e86c1ae198bef` during the work | user commit |
+| pi-rail-ui (fixed reference) | `1d0dd1611a4d9546c64fe9f5b5c966253fb88eba` (Pi `0.84.4`) | unchanged, clean | none |
 
-The user's Agent reference `c362446a…` was older than the actual starting
-`dev HEAD`. This migration uses the actual `b2e23938…`, matching the r2 baseline.
+The recorded repository heads above are the actual local provenance for this
+parity work; see the parity report for the compact modified-production-file
+inventory and preserved-paths summary.
 - Migration baseline package: `0.2.0`; supported wire range: Agent `0.3.x` only
-- No Agent or Runtime source was modified. No commit was created.
+- Agent presentation/RPC source is modified as described above; Runtime source
+  was not modified. No commit was created.
 
 ## Implemented Semantics
 

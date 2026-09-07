@@ -1,0 +1,576 @@
+Analysis of sampling minicore-tui-0.2.7-debug-macos (pid 32674) every 1 millisecond
+Process:         minicore-tui-0.2.7-debug-macos [32674]
+Path:            /private/tmp/*/minicore-tui-0.2.7-debug-macos
+Load Address:    0x1071d7000
+Identifier:      minicore-tui-0.2.7-debug-macos
+Version:         ???
+Code Type:       X86-64
+Platform:        macOS
+Parent Process:  bash [32673]
+Target Type:     live task
+
+Date/Time:       2026-09-07 22:36:21.351 +0800
+Launch Time:     2026-09-07 22:35:35.848 +0800
+OS Version:      macOS 15.7.3 (24G419)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         17.6M
+Physical footprint (peak):  19.2M
+Idle exit:                  untracked
+----
+
+Call graph:
+    2151 Thread_33191754   DispatchQueue_1: com.apple.main-thread  (serial)
+    + 2151 start  (in dyld) + 3056  [0x7ff806990530]
+    +   2151 main  (in minicore-tui-0.2.7-debug-macos) + 44  [0x1071e553c]
+    +     2151 _RNvNtCskZC1eJQ4Z1r_3std2rt19lang_start_internal  (in minicore-tui-0.2.7-debug-macos) + 875  [0x10743c50b]  rt.rs:171
+    +       2151 _RNCINvNtCskZC1eJQ4Z1r_3std2rt10lang_startNtNtB6_7process8ExitCodeE0Cs1lVi9Nk3V5e_12minicore_tui.llvm.15116661304508869904  (in minicore-tui-0.2.7-debug-macos) + 12  [0x1071dc85c]  rt.rs:206
+    +         2151 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceFENtNtB6_7process8ExitCodeB19_ECs1lVi9Nk3V5e_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 6  [0x1071e68b6]  backtrace.rs:166
+    +           2151 _RNvCs1lVi9Nk3V5e_12minicore_tui4main  (in minicore-tui-0.2.7-debug-macos) + 135  [0x1071e5397]  main.rs:92
+    +             2151 _RINvMNtNtCskjUvu4PH1w_5tokio7runtime7runtimeNtB3_7Runtime8block_onNCNvCs1lVi9Nk3V5e_12minicore_tui4main0EB16_  (in minicore-tui-0.2.7-debug-macos) + 159  [0x1071e55ef]  runtime.rs:341
+    +               2151 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCINvMNtNtB6_9scheduler12multi_threadNtB1a_11MultiThread8block_onINtNtCsl7QZrza34zr_4core3pin3PinINtNtCsleUFRS6CW9P_5alloc5boxed3BoxNCNvCs1lVi9Nk3V5e_12minicore_tui4main0EEE0NtNtCskZC1eJQ4Z1r_3std7process8ExitCodeEB3g_  (in minicore-tui-0.2.7-debug-macos) + 99  [0x1071e6133]  runtime.rs:65
+    +                 2005 _RINvMs2_NtNtCskjUvu4PH1w_5tokio7runtime4parkNtB6_16CachedParkThread8block_onINtNtCsl7QZrza34zr_4core3pin3PinINtNtCsleUFRS6CW9P_5alloc5boxed3BoxNCNvCs1lVi9Nk3V5e_12minicore_tui4main0EEEB2l_  (in minicore-tui-0.2.7-debug-macos) + 198  [0x1071db996]  park.rs:288
+    +                 ! 2005 _RNvMs_NtNtCskjUvu4PH1w_5tokio7runtime4parkNtB4_5Inner4park.llvm.3906970673295854527  (in minicore-tui-0.2.7-debug-macos) + 142  [0x10738dc5e]  park.rs:111
+    +                 !   2005 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in minicore-tui-0.2.7-debug-macos) + 76  [0x10738c78c]  condvar.rs:128
+    +                 !     2004 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                 !     : 2004 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    +                 !     1 _pthread_cond_wait  (in libsystem_pthread.dylib) + 1046  [0x7ff806d362e8]
+    +                 146 _RINvMs2_NtNtCskjUvu4PH1w_5tokio7runtime4parkNtB6_16CachedParkThread8block_onINtNtCsl7QZrza34zr_4core3pin3PinINtNtCsleUFRS6CW9P_5alloc5boxed3BoxNCNvCs1lVi9Nk3V5e_12minicore_tui4main0EEEB2l_  (in minicore-tui-0.2.7-debug-macos) + 164  [0x1071db974]  park.rs:284
+    +                   74 _RNCNvCs1lVi9Nk3V5e_12minicore_tui4main0B3_.llvm.10950561770575134977  (in minicore-tui-0.2.7-debug-macos) + 5149  [0x1071e09bd]  main.rs:88
+    +                   : 57 _RINvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB5_8TerminalINtNtNtB9_7backend9crossterm16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE4drawNCNCNvCs1lVi9Nk3V5e_12minicore_tui14run_fullscreen0s0_0EB3A_  (in minicore-tui-0.2.7-debug-macos) + 151  [0x1071e3837]  terminal.rs:308
+    +                   : | 57 _RNvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB4_8TerminalINtNtNtB8_7backend9crossterm16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE11show_cursorB1Q_  (in minicore-tui-0.2.7-debug-macos) + 57  [0x1071ec839]  terminal.rs:434
+    +                   : |   57 _RNvMs_NtNtNtCskZC1eJQ4Z1r_3std2io8buffered9bufwriterINtB4_9BufWriterNtNtB8_5stdio6StdoutE9flush_bufCs4HmSFNaG8ik_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 106  [0x10733980a]  bufwriter.rs:249
+    +                   : |     57 _RNvXsd_NtNtCskZC1eJQ4Z1r_3std2io5stdioNtB5_6StdoutNtB7_5Write5write  (in minicore-tui-0.2.7-debug-macos) + 43  [0x10744731b]  stdio.rs:790
+    +                   : |       57 _RNvXsh_NtNtCskZC1eJQ4Z1r_3std2io5stdioNtB5_10StdoutLockNtB7_5Write5write  (in minicore-tui-0.2.7-debug-macos) + 528  [0x1074477a0]  stdio.rs:848
+    +                   : |         57 _RNvMs_NtNtNtCskZC1eJQ4Z1r_3std2io8buffered9bufwriterINtB4_9BufWriterNtNtB8_5stdio9StdoutRawE10write_coldBa_  (in minicore-tui-0.2.7-debug-macos) + 135  [0x107433c07]  bufwriter.rs:386
+    +                   : |           57 write  (in libsystem_kernel.dylib) + 10  [0x7ff806cf6966]
+    +                   : 7 _RINvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB5_8TerminalINtNtNtB9_7backend9crossterm16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE4drawNCNCNvCs1lVi9Nk3V5e_12minicore_tui14run_fullscreen0s0_0EB3A_  (in minicore-tui-0.2.7-debug-macos) + 105  [0x1071e3809]  terminal.rs:308
+    +                   : | 3 _RNvNtCs4HmSFNaG8ik_12minicore_tui2ui6render  (in minicore-tui-0.2.7-debug-macos) + 1316  [0x107211774]  mod.rs:90
+    +                   : | + 3 _RNvNtNtCs4HmSFNaG8ik_12minicore_tui2ui10transcript6render  (in minicore-tui-0.2.7-debug-macos) + 1091  [0x1071fee33]  transcript.rs:1328
+    +                   : | +   3 _RNvXs_NtNtCs6DgKIVn6Azl_7ratatui7widgets9paragraphNtB4_9ParagraphNtB6_6Widget6render  (in minicore-tui-0.2.7-debug-macos) + 15  [0x1073d17bf]  paragraph.rs:420
+    +                   : | +     3 _RNvXs0_NtNtCs6DgKIVn6Azl_7ratatui7widgets9paragraphNtB5_9ParagraphNtB7_9WidgetRef10render_ref  (in minicore-tui-0.2.7-debug-macos) + 351  [0x1073d102f]  paragraph.rs:429
+    +                   : | +       2 _RNvXs1_NtNtCs6DgKIVn6Azl_7ratatui7widgets6reflowINtB5_13LineTruncatorINtNtNtNtCsl7QZrza34zr_4core4iter8adapters3map3MapINtNtNtB1e_5slice4iter4IterNtNtNtB9_4text4line4LineENCNvMs1_NtB7_9paragraphNtB2R_9Paragraph16render_paragraph0EINtNtB1a_7flatten7FlatMapIB1U_NtNtB2o_4span4SpanEIB16_INtNtB1a_6filter6FilterNtNtCsbRA72J3LoxY_20unicode_segmentation8grapheme9GraphemesNCINvMs_B4c_B4a_16styled_graphemesNtNtB9_5style5StyleE0ENCB5U_s_0ENCINvMs_B2m_B2k_16styled_graphemesB6q_E0EENtB5_12LineComposer9next_lineB9_  (in minicore-tui-0.2.7-debug-macos) + 488  [0x1073d43c8]  reflow.rs:287
+    +                   : | +       ! 2 _RNvXs2_NtCsbRA72J3LoxY_20unicode_segmentation8graphemeNtB5_9GraphemesNtNtNtNtCsl7QZrza34zr_4core4iter6traits8iterator8Iterator4next  (in minicore-tui-0.2.7-debug-macos) + 1223,1871  [0x1073d4b57,0x1073d4ddf]  grapheme.rs:120
+    +                   : | +       1 _RNvXs1_NtNtCs6DgKIVn6Azl_7ratatui7widgets6reflowINtB5_13LineTruncatorINtNtNtNtCsl7QZrza34zr_4core4iter8adapters3map3MapINtNtNtB1e_5slice4iter4IterNtNtNtB9_4text4line4LineENCNvMs1_NtB7_9paragraphNtB2R_9Paragraph16render_paragraph0EINtNtB1a_7flatten7FlatMapIB1U_NtNtB2o_4span4SpanEIB16_INtNtB1a_6filter6FilterNtNtCsbRA72J3LoxY_20unicode_segmentation8grapheme9GraphemesNCINvMs_B4c_B4a_16styled_graphemesNtNtB9_5style5StyleE0ENCB5U_s_0ENCINvMs_B2m_B2k_16styled_graphemesB6q_E0EENtB5_12LineComposer9next_lineB9_  (in minicore-tui-0.2.7-debug-macos) + 907  [0x1073d456b]  reflow.rs:311
+    +                   : | +         1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in minicore-tui-0.2.7-debug-macos) + 81  [0x1073d30f1]  double_ended.rs:359
+    +                   : | 2 _RNvNtCs4HmSFNaG8ik_12minicore_tui2ui6render  (in minicore-tui-0.2.7-debug-macos) + 1809  [0x107211961]  mod.rs:102
+    +                   : | + 2 _RNvNtNtCs4HmSFNaG8ik_12minicore_tui2ui8composer6render  (in minicore-tui-0.2.7-debug-macos) + 1602  [0x10721ecc2]  composer.rs:27
+    +                   : | +   2 _RNvXs_NtNtCs6DgKIVn6Azl_7ratatui7widgets9paragraphNtB4_9ParagraphNtB6_6Widget6render  (in minicore-tui-0.2.7-debug-macos) + 15  [0x1073d17bf]  paragraph.rs:420
+    +                   : | +     1 _RNvXs0_NtNtCs6DgKIVn6Azl_7ratatui7widgets9paragraphNtB5_9ParagraphNtB7_9WidgetRef10render_ref  (in minicore-tui-0.2.7-debug-macos) + 351  [0x1073d102f]  paragraph.rs:429
+    +                   : | +     ! 1 _RNvXs1_NtNtCs6DgKIVn6Azl_7ratatui7widgets6reflowINtB5_13LineTruncatorINtNtNtNtCsl7QZrza34zr_4core4iter8adapters3map3MapINtNtNtB1e_5slice4iter4IterNtNtNtB9_4text4line4LineENCNvMs1_NtB7_9paragraphNtB2R_9Paragraph16render_paragraph0EINtNtB1a_7flatten7FlatMapIB1U_NtNtB2o_4span4SpanEIB16_INtNtB1a_6filter6FilterNtNtCsbRA72J3LoxY_20unicode_segmentation8grapheme9GraphemesNCINvMs_B4c_B4a_16styled_graphemesNtNtB9_5style5StyleE0ENCB5U_s_0ENCINvMs_B2m_B2k_16styled_graphemesB6q_E0EENtB5_12LineComposer9next_lineB9_  (in minicore-tui-0.2.7-debug-macos) + 488  [0x1073d43c8]  reflow.rs:287
+    +                   : | +     !   1 _RNvXs2_NtCsbRA72J3LoxY_20unicode_segmentation8graphemeNtB5_9GraphemesNtNtNtNtCsl7QZrza34zr_4core4iter6traits8iterator8Iterator4next  (in minicore-tui-0.2.7-debug-macos) + 3645  [0x1073d54cd]  grapheme.rs:121
+    +                   : | +     1 _RNvXs0_NtNtCs6DgKIVn6Azl_7ratatui7widgets9paragraphNtB5_9ParagraphNtB7_9WidgetRef10render_ref  (in minicore-tui-0.2.7-debug-macos) + 882  [0x1073d1242]  paragraph.rs:429
+    +                   : | 2 _RNvNtCs4HmSFNaG8ik_12minicore_tui2ui6render  (in minicore-tui-0.2.7-debug-macos) + 222  [0x10721132e]  mod.rs:61
+    +                   : |   2 _RNvXs0_NtNtCs6DgKIVn6Azl_7ratatui7widgets5blockNtB5_5BlockNtB7_6Widget6render  (in minicore-tui-0.2.7-debug-macos) + 25  [0x1073d22f9]  block.rs:697
+    +                   : |     2 _RNvXs1_NtNtCs6DgKIVn6Azl_7ratatui7widgets5blockNtB5_5BlockNtB7_9WidgetRef10render_ref  (in minicore-tui-0.2.7-debug-macos) + 249  [0x1073d2529]  block.rs:707
+    +                   : |       2 _RINvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB3_6Buffer9set_styleNtNtB7_5style5StyleEB7_  (in minicore-tui-0.2.7-debug-macos) + 424,467  [0x1073d75a8,0x1073d75d3]  buffer.rs:405
+    +                   : 7 _RINvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB5_8TerminalINtNtNtB9_7backend9crossterm16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE4drawNCNCNvCs1lVi9Nk3V5e_12minicore_tui14run_fullscreen0s0_0EB3A_  (in minicore-tui-0.2.7-debug-macos) + 128  [0x1071e3820]  terminal.rs:308
+    +                   : | 5 _RNvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB4_8TerminalINtNtNtB8_7backend9crossterm16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE5flushCs1lVi9Nk3V5e_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 132  [0x1071e3d94]  terminal.rs:205
+    +                   : | + 4 _RINvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB6_16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB8_7Backend4drawINtNtNtCsleUFRS6CW9P_5alloc3vec9into_iter8IntoIterTttRNtNtNtBa_6buffer4cell4CellEEECs1lVi9Nk3V5e_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 1143  [0x1071e2b27]  crossterm.rs:176
+    +                   : | + ! 4 _RINvNtCs1p8YcskkrDG_9crossterm7command18write_command_ansiNtNtB4_5style9SetColorsINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEECs1lVi9Nk3V5e_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 49  [0x1071dc0c1]  command.rs:277
+    +                   : | + !   4 _RINvXs1_NtCs1p8YcskkrDG_9crossterm5styleNtB6_9SetColorsNtNtB8_7command7Command10write_ansiINtNvBT_18write_command_ansi7AdapterQINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEECs1lVi9Nk3V5e_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 205  [0x1071dbc5d]  style.rs:0
+    +                   : | + !     4 _RNvNtCsl7QZrza34zr_4core3fmt5write  (in minicore-tui-0.2.7-debug-macos) + 359  [0x107457e57]  mod.rs:0
+    +                   : | + !       3 _RNvXs_NtNtNtCs1p8YcskkrDG_9crossterm5style5types7coloredNtB4_7ColoredNtNtCsl7QZrza34zr_4core3fmt7Display3fmt  (in minicore-tui-0.2.7-debug-macos) + 453  [0x1073f9915]  colored.rs:0
+    +                   : | + !       : 1 _RNvNtCsl7QZrza34zr_4core3fmt5write  (in minicore-tui-0.2.7-debug-macos) + 359  [0x107457e57]  mod.rs:0
+    +                   : | + !       : | 1 _RNvXNtNtNtCsl7QZrza34zr_4core3fmt3num3imphNtB6_7Display3fmt  (in minicore-tui-0.2.7-debug-macos) + 62  [0x10745d74e]  num.rs:143
+    +                   : | + !       : 1 _RNvNtCsl7QZrza34zr_4core3fmt5write  (in minicore-tui-0.2.7-debug-macos) + 85  [0x107457d45]  mod.rs:1648
+    +                   : | + !       : 1 _RNvNtCsl7QZrza34zr_4core3fmt5write  (in minicore-tui-0.2.7-debug-macos) + 168  [0x107457d98]  mod.rs:1687
+    +                   : | + !       1 _RNvXs_NtNtNtCs1p8YcskkrDG_9crossterm5style5types7coloredNtB4_7ColoredNtNtCsl7QZrza34zr_4core3fmt7Display3fmt  (in minicore-tui-0.2.7-debug-macos) + 47  [0x1073f977f]  colored.rs:0
+    +                   : | + 1 _RINvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB6_16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB8_7Backend4drawINtNtNtCsleUFRS6CW9P_5alloc3vec9into_iter8IntoIterTttRNtNtNtBa_6buffer4cell4CellEEECs1lVi9Nk3V5e_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 127  [0x1071e272f]  crossterm.rs:161
+    +                   : | 2 _RNvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB4_8TerminalINtNtNtB8_7backend9crossterm16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE5flushCs1lVi9Nk3V5e_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 55  [0x1071e3d47]  terminal.rs:201
+    +                   : |   1 _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB2_6Buffer4diff  (in minicore-tui-0.2.7-debug-macos) + 630  [0x1073d84c6]  buffer.rs:502
+    +                   : |   ! 1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in minicore-tui-0.2.7-debug-macos) + 81  [0x1073d7741]  double_ended.rs:359
+    +                   : |   1 _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB2_6Buffer4diff  (in minicore-tui-0.2.7-debug-macos) + 777  [0x1073d8559]  buffer.rs:504
+    +                   : |     1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in minicore-tui-0.2.7-debug-macos) + 53  [0x1073d7725]  double_ended.rs:360
+    +                   : |       1 _RNvNtCs5ZHaQAd8SSY_13unicode_width6tables12lookup_width  (in minicore-tui-0.2.7-debug-macos) + 242  [0x1073d8a82]  tables.rs:167
+    +                   : 2 _RINvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB5_8TerminalINtNtNtB9_7backend9crossterm16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE4drawNCNCNvCs1lVi9Nk3V5e_12minicore_tui14run_fullscreen0s0_0EB3A_  (in minicore-tui-0.2.7-debug-macos) + 284  [0x1071e38bc]  terminal.rs:308
+    +                   : | 2 _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB2_6Buffer5reset  (in minicore-tui-0.2.7-debug-macos) + 49,65  [0x1073d86d1,0x1073d86e1]  buffer.rs:425
+    +                   : 1 _RINvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB5_8TerminalINtNtNtB9_7backend9crossterm16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE4drawNCNCNvCs1lVi9Nk3V5e_12minicore_tui14run_fullscreen0s0_0EB3A_  (in minicore-tui-0.2.7-debug-macos) + 34  [0x1071e37c2]  terminal.rs:308
+    +                   :   1 _RNvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB4_8TerminalINtNtNtB8_7backend9crossterm16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE10autoresizeCs1lVi9Nk3V5e_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 50  [0x1071e3bd2]  terminal.rs:246
+    +                   :     1 _RNvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB5_16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB7_7Backend4sizeB1g_  (in minicore-tui-0.2.7-debug-macos) + 21  [0x1072d9305]  crossterm.rs:254
+    +                   :       1 _RNvNtNtNtCs1p8YcskkrDG_9crossterm8terminal3sys4unix4size  (in minicore-tui-0.2.7-debug-macos) + 25  [0x1074023e9]  unix.rs:98
+    +                   :         1 _RNvNtNtNtCs1p8YcskkrDG_9crossterm8terminal3sys4unix11window_size  (in minicore-tui-0.2.7-debug-macos) + 122  [0x107401cda]  unix.rs:92
+    +                   :           1 _RNvNtNtNtCs50RnizqxLwW_6rustix7backend7termios8syscalls12tcgetwinsize  (in minicore-tui-0.2.7-debug-macos) + 29  [0x107405aed]  syscalls.rs:365
+    +                   :             1 ioctl  (in libsystem_kernel.dylib) + 150  [0x7ff806cf71fe]
+    +                   :               1 __ioctl  (in libsystem_kernel.dylib) + 10  [0x7ff806cf7212]
+    +                   53 _RNCNvCs1lVi9Nk3V5e_12minicore_tui4main0B3_.llvm.10950561770575134977  (in minicore-tui-0.2.7-debug-macos) + 9024  [0x1071e18e0]  main.rs:88
+    +                   : 34 _RINvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB5_8TerminalINtNtNtB9_7backend9crossterm16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE4drawNCNCNvCs1lVi9Nk3V5e_12minicore_tui14run_fullscreen0s1_0EB3A_  (in minicore-tui-0.2.7-debug-macos) + 151  [0x1071e3a37]  terminal.rs:308
+    +                   : | 34 _RNvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB4_8TerminalINtNtNtB8_7backend9crossterm16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE11show_cursorB1Q_  (in minicore-tui-0.2.7-debug-macos) + 57  [0x1071ec839]  terminal.rs:434
+    +                   : |   34 _RNvMs_NtNtNtCskZC1eJQ4Z1r_3std2io8buffered9bufwriterINtB4_9BufWriterNtNtB8_5stdio6StdoutE9flush_bufCs4HmSFNaG8ik_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 106  [0x10733980a]  bufwriter.rs:249
+    +                   : |     34 _RNvXsd_NtNtCskZC1eJQ4Z1r_3std2io5stdioNtB5_6StdoutNtB7_5Write5write  (in minicore-tui-0.2.7-debug-macos) + 43  [0x10744731b]  stdio.rs:790
+    +                   : |       34 _RNvXsh_NtNtCskZC1eJQ4Z1r_3std2io5stdioNtB5_10StdoutLockNtB7_5Write5write  (in minicore-tui-0.2.7-debug-macos) + 528  [0x1074477a0]  stdio.rs:848
+    +                   : |         34 _RNvMs_NtNtNtCskZC1eJQ4Z1r_3std2io8buffered9bufwriterINtB4_9BufWriterNtNtB8_5stdio9StdoutRawE10write_coldBa_  (in minicore-tui-0.2.7-debug-macos) + 135  [0x107433c07]  bufwriter.rs:386
+    +                   : |           34 write  (in libsystem_kernel.dylib) + 10  [0x7ff806cf6966]
+    +                   : 10 _RINvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB5_8TerminalINtNtNtB9_7backend9crossterm16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE4drawNCNCNvCs1lVi9Nk3V5e_12minicore_tui14run_fullscreen0s1_0EB3A_  (in minicore-tui-0.2.7-debug-macos) + 128  [0x1071e3a20]  terminal.rs:308
+    +                   : | 5 _RNvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB4_8TerminalINtNtNtB8_7backend9crossterm16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE5flushCs1lVi9Nk3V5e_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 55  [0x1071e3d47]  terminal.rs:201
+    +                   : | + 2 _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB2_6Buffer4diff  (in minicore-tui-0.2.7-debug-macos) + 712  [0x1073d8518]  buffer.rs:504
+    +                   : | + ! 1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in minicore-tui-0.2.7-debug-macos) + 57  [0x1073d7729]  double_ended.rs:360
+    +                   : | + ! 1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in minicore-tui-0.2.7-debug-macos) + 2435  [0x1073d8073]  double_ended.rs:363
+    +                   : | + 2 _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB2_6Buffer4diff  (in minicore-tui-0.2.7-debug-macos) + 777  [0x1073d8559]  buffer.rs:504
+    +                   : | + ! 1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in minicore-tui-0.2.7-debug-macos) + 81  [0x1073d7741]  double_ended.rs:359
+    +                   : | + ! 1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in minicore-tui-0.2.7-debug-macos) + 2380  [0x1073d803c]  double_ended.rs:360
+    +                   : | + 1 _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB2_6Buffer4diff  (in minicore-tui-0.2.7-debug-macos) + 758  [0x1073d8546]  buffer.rs:504
+    +                   : | 5 _RNvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB4_8TerminalINtNtNtB8_7backend9crossterm16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE5flushCs1lVi9Nk3V5e_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 132  [0x1071e3d94]  terminal.rs:205
+    +                   : |   3 _RINvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB6_16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB8_7Backend4drawINtNtNtCsleUFRS6CW9P_5alloc3vec9into_iter8IntoIterTttRNtNtNtBa_6buffer4cell4CellEEECs1lVi9Nk3V5e_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 1235  [0x1071e2b83]  crossterm.rs:190
+    +                   : |   ! 3 _RINvXs_NtCs1p8YcskkrDG_9crossterm7commandINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutENtB5_16QueueableCommand5queueINtNtB7_5style5PrintReEEBI_  (in minicore-tui-0.2.7-debug-macos) + 14  [0x1072dfefe]  command.rs:132
+    +                   : |   !   2 _RINvNtCs1p8YcskkrDG_9crossterm7command18write_command_ansiINtNtB4_5style5PrintReEINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEB1m_  (in minicore-tui-0.2.7-debug-macos) + 86  [0x107216ef6]  command.rs:277
+    +                   : |   !   : 1 _RNvNtCsl7QZrza34zr_4core3fmt5write  (in minicore-tui-0.2.7-debug-macos) + 359  [0x107457e57]  mod.rs:0
+    +                   : |   !   : | 1 _RNvMsa_NtCsl7QZrza34zr_4core3fmtNtB5_9Formatter3pad  (in minicore-tui-0.2.7-debug-macos) + 775  [0x107457377]  mod.rs:0
+    +                   : |   !   : 1 _RNvNtCsl7QZrza34zr_4core3fmt5write  (in minicore-tui-0.2.7-debug-macos) + 443  [0x107457eab]  mod.rs:1740
+    +                   : |   !   1 _RINvNtCs1p8YcskkrDG_9crossterm7command18write_command_ansiINtNtB4_5style5PrintReEINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEB1m_  (in minicore-tui-0.2.7-debug-macos) + 0  [0x107216ea0]  command.rs:253
+    +                   : |   1 _RINvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB6_16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB8_7Backend4drawINtNtNtCsleUFRS6CW9P_5alloc3vec9into_iter8IntoIterTttRNtNtNtBa_6buffer4cell4CellEEECs1lVi9Nk3V5e_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 226  [0x1071e2792]  crossterm.rs:164
+    +                   : |   ! 1 _RINvXs_NtCs1p8YcskkrDG_9crossterm7commandINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutENtB5_16QueueableCommand5queueNtNtB7_6cursor6MoveToEBI_  (in minicore-tui-0.2.7-debug-macos) + 14  [0x1072dff2e]  command.rs:132
+    +                   : |   !   1 _RINvNtCs1p8YcskkrDG_9crossterm7command18write_command_ansiNtNtB4_6cursor6MoveToINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEB1k_  (in minicore-tui-0.2.7-debug-macos) + 122  [0x10721702a]  command.rs:277
+    +                   : |   !     1 _RNvNtCsl7QZrza34zr_4core3fmt5write  (in minicore-tui-0.2.7-debug-macos) + 359  [0x107457e57]  mod.rs:0
+    +                   : |   !       1 _RNvXs3_NtNtNtCsl7QZrza34zr_4core3fmt3num3imptNtB9_7Display3fmt  (in minicore-tui-0.2.7-debug-macos) + 11  [0x10745ec9b]  num.rs:143
+    +                   : |   1 _RINvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB6_16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB8_7Backend4drawINtNtNtCsleUFRS6CW9P_5alloc3vec9into_iter8IntoIterTttRNtNtNtBa_6buffer4cell4CellEEECs1lVi9Nk3V5e_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 1335  [0x1071e2be7]  crossterm.rs:191
+    +                   : |     1 free_medium  (in libsystem_malloc.dylib) + 2699  [0x7ff806b46e5b]
+    +                   : |       1 mvm_madvise_free  (in libsystem_malloc.dylib) + 13  [0x7ff806b48791]
+    +                   : |         1 mvm_madvise_free_plat  (in libsystem_malloc.dylib) + 90  [0x7ff806b5a1a0]
+    +                   : |           1 <deduplicated_symbol>  (in libsystem_malloc.dylib) + 9  [0x7ff806b5a12c]
+    +                   : |             1 madvise  (in libsystem_kernel.dylib) + 10  [0x7ff806cf5e5a]
+    +                   : 9 _RINvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB5_8TerminalINtNtNtB9_7backend9crossterm16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE4drawNCNCNvCs1lVi9Nk3V5e_12minicore_tui14run_fullscreen0s1_0EB3A_  (in minicore-tui-0.2.7-debug-macos) + 105  [0x1071e3a09]  terminal.rs:308
+    +                   :   9 _RNvNtCs4HmSFNaG8ik_12minicore_tui2ui6render  (in minicore-tui-0.2.7-debug-macos) + 1316  [0x107211774]  mod.rs:90
+    +                   :     8 _RNvNtNtCs4HmSFNaG8ik_12minicore_tui2ui10transcript6render  (in minicore-tui-0.2.7-debug-macos) + 1091  [0x1071fee33]  transcript.rs:1328
+    +                   :     + 8 _RNvXs_NtNtCs6DgKIVn6Azl_7ratatui7widgets9paragraphNtB4_9ParagraphNtB6_6Widget6render  (in minicore-tui-0.2.7-debug-macos) + 15  [0x1073d17bf]  paragraph.rs:420
+    +                   :     +   8 _RNvXs0_NtNtCs6DgKIVn6Azl_7ratatui7widgets9paragraphNtB5_9ParagraphNtB7_9WidgetRef10render_ref  (in minicore-tui-0.2.7-debug-macos) + 351  [0x1073d102f]  paragraph.rs:429
+    +                   :     +     5 _RNvXs1_NtNtCs6DgKIVn6Azl_7ratatui7widgets6reflowINtB5_13LineTruncatorINtNtNtNtCsl7QZrza34zr_4core4iter8adapters3map3MapINtNtNtB1e_5slice4iter4IterNtNtNtB9_4text4line4LineENCNvMs1_NtB7_9paragraphNtB2R_9Paragraph16render_paragraph0EINtNtB1a_7flatten7FlatMapIB1U_NtNtB2o_4span4SpanEIB16_INtNtB1a_6filter6FilterNtNtCsbRA72J3LoxY_20unicode_segmentation8grapheme9GraphemesNCINvMs_B4c_B4a_16styled_graphemesNtNtB9_5style5StyleE0ENCB5U_s_0ENCINvMs_B2m_B2k_16styled_graphemesB6q_E0EENtB5_12LineComposer9next_lineB9_  (in minicore-tui-0.2.7-debug-macos) + 488  [0x1073d43c8]  reflow.rs:287
+    +                   :     +     ! 2 _RNvXs2_NtCsbRA72J3LoxY_20unicode_segmentation8graphemeNtB5_9GraphemesNtNtNtNtCsl7QZrza34zr_4core4iter6traits8iterator8Iterator4next  (in minicore-tui-0.2.7-debug-macos) + 134,1871  [0x1073d4716,0x1073d4ddf]  grapheme.rs:120
+    +                   :     +     ! 1 _RNvXs2_NtCsbRA72J3LoxY_20unicode_segmentation8graphemeNtB5_9GraphemesNtNtNtNtCsl7QZrza34zr_4core4iter6traits8iterator8Iterator4next  (in minicore-tui-0.2.7-debug-macos) + 0  [0x1073d4690]  grapheme.rs:115
+    +                   :     +     ! 1 _RNvXs2_NtCsbRA72J3LoxY_20unicode_segmentation8graphemeNtB5_9GraphemesNtNtNtNtCsl7QZrza34zr_4core4iter6traits8iterator8Iterator4next  (in minicore-tui-0.2.7-debug-macos) + 2405  [0x1073d4ff5]  grapheme.rs:120
+    +                   :     +     ! : 1 _RNvMs4_NtCsbRA72J3LoxY_20unicode_segmentation8graphemeNtB5_14GraphemeCursor12handle_emoji  (in minicore-tui-0.2.7-debug-macos) + 178  [0x1073d3c52]  grapheme.rs:544
+    +                   :     +     ! :   1 _RNvMs4_NtCsbRA72J3LoxY_20unicode_segmentation8graphemeNtB5_14GraphemeCursor17grapheme_category  (in minicore-tui-0.2.7-debug-macos) + 261  [0x1073f0d55]  grapheme.rs:345
+    +                   :     +     ! 1 _RNvXs2_NtCsbRA72J3LoxY_20unicode_segmentation8graphemeNtB5_9GraphemesNtNtNtNtCsl7QZrza34zr_4core4iter6traits8iterator8Iterator4next  (in minicore-tui-0.2.7-debug-macos) + 3651  [0x1073d54d3]  grapheme.rs:121
+    +                   :     +     2 _RNvXs1_NtNtCs6DgKIVn6Azl_7ratatui7widgets6reflowINtB5_13LineTruncatorINtNtNtNtCsl7QZrza34zr_4core4iter8adapters3map3MapINtNtNtB1e_5slice4iter4IterNtNtNtB9_4text4line4LineENCNvMs1_NtB7_9paragraphNtB2R_9Paragraph16render_paragraph0EINtNtB1a_7flatten7FlatMapIB1U_NtNtB2o_4span4SpanEIB16_INtNtB1a_6filter6FilterNtNtCsbRA72J3LoxY_20unicode_segmentation8grapheme9GraphemesNCINvMs_B4c_B4a_16styled_graphemesNtNtB9_5style5StyleE0ENCB5U_s_0ENCINvMs_B2m_B2k_16styled_graphemesB6q_E0EENtB5_12LineComposer9next_lineB9_  (in minicore-tui-0.2.7-debug-macos) + 757  [0x1073d44d5]  reflow.rs:289
+    +                   :     +     ! 1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in minicore-tui-0.2.7-debug-macos) + 60  [0x1073d30dc]  double_ended.rs:360
+    +                   :     +     ! 1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in minicore-tui-0.2.7-debug-macos) + 2407  [0x1073d3a07]  tables.rs:0
+    +                   :     +     1 _RNvXs1_NtNtCs6DgKIVn6Azl_7ratatui7widgets6reflowINtB5_13LineTruncatorINtNtNtNtCsl7QZrza34zr_4core4iter8adapters3map3MapINtNtNtB1e_5slice4iter4IterNtNtNtB9_4text4line4LineENCNvMs1_NtB7_9paragraphNtB2R_9Paragraph16render_paragraph0EINtNtB1a_7flatten7FlatMapIB1U_NtNtB2o_4span4SpanEIB16_INtNtB1a_6filter6FilterNtNtCsbRA72J3LoxY_20unicode_segmentation8grapheme9GraphemesNCINvMs_B4c_B4a_16styled_graphemesNtNtB9_5style5StyleE0ENCB5U_s_0ENCINvMs_B2m_B2k_16styled_graphemesB6q_E0EENtB5_12LineComposer9next_lineB9_  (in minicore-tui-0.2.7-debug-macos) + 907  [0x1073d456b]  reflow.rs:311
+    +                   :     +       1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in minicore-tui-0.2.7-debug-macos) + 209  [0x1073d3171]  double_ended.rs:359
+    +                   :     1 _RNvNtNtCs4HmSFNaG8ik_12minicore_tui2ui10transcript6render  (in minicore-tui-0.2.7-debug-macos) + 463  [0x1071febbf]  transcript.rs:1316
+    +                   :       1 _RNvXs_NtNtCsleUFRS6CW9P_5alloc3vec21spec_from_iter_nestedINtB6_3VecNtNtNtCs6DgKIVn6Azl_7ratatui4text4line4LineEINtB4_18SpecFromIterNestedB13_INtNtNtNtCsl7QZrza34zr_4core4iter8adapters6cloned6ClonedINtNtB2k_4take4TakeINtNtB2k_4skip4SkipINtNtNtB2o_5slice4iter4IterB13_EEEEE9from_iterCs4HmSFNaG8ik_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 154  [0x1072b762a]  spec_from_iter_nested.rs:60
+    +                   :         1 _RINvMsj_NtCsleUFRS6CW9P_5alloc3vecINtB6_3VecNtNtNtCs6DgKIVn6Azl_7ratatui4text4line4LineE14extend_trustedINtNtNtNtCsl7QZrza34zr_4core4iter8adapters6cloned6ClonedINtNtB1J_4take4TakeINtNtB1J_4skip4SkipINtNtNtB1N_5slice4iter4IterBG_EEEEECs4HmSFNaG8ik_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 227  [0x1072b09d3]  mod.rs:4077
+    +                   :           1 _RNvXsa_NtCsleUFRS6CW9P_5alloc3vecINtB5_3VecNtNtNtCs6DgKIVn6Azl_7ratatui4text4span4SpanENtNtCsl7QZrza34zr_4core5clone5Clone5cloneCs4HmSFNaG8ik_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 289  [0x1072ba401]  mod.rs:3823
+    +                   :             1 _RNvXs0_NtCsleUFRS6CW9P_5alloc6borrowINtB5_3CoweENtNtCsl7QZrza34zr_4core5clone5Clone5cloneCs4HmSFNaG8ik_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 118  [0x107368486]  borrow.rs:202
+    +                   :               1 _platform_memmove$VARIANT$Haswell  (in libsystem_platform.dylib) + 198  [0x7ff806d6ba06]
+    +                   6 _RNCNvCs1lVi9Nk3V5e_12minicore_tui4main0B3_.llvm.10950561770575134977  (in minicore-tui-0.2.7-debug-macos) + 2981  [0x1071e0145]  main.rs:88
+    +                   : 4 _RNvXs0_NtNtCsl7QZrza34zr_4core6future7poll_fnINtB5_6PollFnNCNCNvCs1lVi9Nk3V5e_12minicore_tui14run_fullscreen0s2_0ENtNtB7_6future6Future4pollB10_  (in minicore-tui-0.2.7-debug-macos) + 648  [0x1071ea878]  poll_fn.rs:151
+    +                   : | 3 _RNvXs0_NtNtCs1p8YcskkrDG_9crossterm5event6streamNtB5_11EventStreamNtNtCscawXhDtNOym_12futures_core6stream6Stream9poll_next  (in minicore-tui-0.2.7-debug-macos) + 42  [0x107403a6a]  stream.rs:105
+    +                   : | + 2 _RINvNtCs1p8YcskkrDG_9crossterm5event13poll_internalNtNtB2_6filter11EventFilterEB4_  (in minicore-tui-0.2.7-debug-macos) + 122  [0x1073f8a6a]  event.rs:270
+    +                   : | + ! 2 _RINvMs_NtNtCs1p8YcskkrDG_9crossterm5event4readNtB5_19InternalEventReader4pollNtNtB7_6filter11EventFilterEB9_  (in minicore-tui-0.2.7-debug-macos) + 279  [0x107403ec7]  read.rs:65
+    +                   : | + !   2 _RNvXs_NtNtNtNtCs1p8YcskkrDG_9crossterm5event6source4unix3mioNtB4_23UnixInternalEventSourceNtB8_11EventSource8try_read  (in minicore-tui-0.2.7-debug-macos) + 227  [0x107400713]  mio.rs:76
+    +                   : | + !     2 _RNvMNtNtNtCsj32O19rI2t2_3mio3sys4unix8selectorNtB2_8Selector6select  (in minicore-tui-0.2.7-debug-macos) + 100  [0x10740c8c4]  mod.rs:8
+    +                   : | + !       2 kevent  (in libsystem_kernel.dylib) + 10  [0x7ff806cf8822]
+    +                   : | + 1 _RINvNtCs1p8YcskkrDG_9crossterm5event13poll_internalNtNtB2_6filter11EventFilterEB4_  (in minicore-tui-0.2.7-debug-macos) + 63  [0x1073f8a2f]  event.rs:262
+    +                   : | +   1 _RNvNtCs1p8YcskkrDG_9crossterm5event34try_lock_internal_event_reader_for.llvm.16112055571816143984  (in minicore-tui-0.2.7-debug-macos) + 138  [0x1073f8d0a]  event.rs:158
+    +                   : | +     1 _RNvMs1_NtCs35FCzpVto6C_11parking_lot9raw_mutexNtB5_8RawMutex9lock_slow  (in minicore-tui-0.2.7-debug-macos) + 400  [0x107406010]  raw_mutex.rs:229
+    +                   : | +       1 cthread_yield  (in libsystem_pthread.dylib) + 20  [0x7ff806d3350b]
+    +                   : | +         1 swtch_pri  (in libsystem_kernel.dylib) + 10  [0x7ff806cf3b9e]
+    +                   : | 1 _RNvXs0_NtNtCs1p8YcskkrDG_9crossterm5event6streamNtB5_11EventStreamNtNtCscawXhDtNOym_12futures_core6stream6Stream9poll_next  (in minicore-tui-0.2.7-debug-macos) + 275  [0x107403b53]  stream.rs:126
+    +                   : |   1 _RNvMs2_NtNtCskZC1eJQ4Z1r_3std4sync4mpmcINtB5_6SenderNtNtNtCs1p8YcskkrDG_9crossterm5event6stream4TaskE4sendBU_  (in minicore-tui-0.2.7-debug-macos) + 144  [0x1073f85d0]  mod.rs:396
+    +                   : |     1 _RNvMs_NtNtNtCskZC1eJQ4Z1r_3std4sync4mpmc5arrayINtB4_7ChannelNtNtNtCs1p8YcskkrDG_9crossterm5event6stream4TaskE4sendB12_  (in minicore-tui-0.2.7-debug-macos) + 1055  [0x1073f307f]  array.rs:328
+    +                   : |       1 _RNvMs0_NtNtNtCskZC1eJQ4Z1r_3std4sync4mpmc5wakerNtB5_9SyncWaker6notify  (in minicore-tui-0.2.7-debug-macos) + 240  [0x1073f22b0]  waker.rs:175
+    +                   : |         1 _dispatch_semaphore_signal_slow  (in libdispatch.dylib) + 39  [0x7ff806b8c03c]
+    +                   : |           1 _dispatch_sema4_signal  (in libdispatch.dylib) + 21  [0x7ff806b8bc54]
+    +                   : |             1 semaphore_signal_trap  (in libsystem_kernel.dylib) + 10  [0x7ff806cf3aa2]
+    +                   : 1 _RNvXs0_NtNtCsl7QZrza34zr_4core6future7poll_fnINtB5_6PollFnNCNCNvCs1lVi9Nk3V5e_12minicore_tui14run_fullscreen0s2_0ENtNtB7_6future6Future4pollB10_  (in minicore-tui-0.2.7-debug-macos) + 810  [0x1071ea91a]  poll_fn.rs:151
+    +                   : | 1 _RNCNvCs1lVi9Nk3V5e_12minicore_tui16sleep_or_pending0B3_  (in minicore-tui-0.2.7-debug-macos) + 204  [0x1071ea56c]  main.rs:441
+    +                   : |   1 _RINvNtCsl7QZrza34zr_4core3ptr9drop_glueNtNtNtNtCskjUvu4PH1w_5tokio4sync4task12atomic_waker11AtomicWakerECs4HmSFNaG8ik_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 0  [0x107357310]  mod.rs:823
+    +                   : 1 _RNvXs0_NtNtCsl7QZrza34zr_4core6future7poll_fnINtB5_6PollFnNCNCNvCs1lVi9Nk3V5e_12minicore_tui14run_fullscreen0s2_0ENtNtB7_6future6Future4pollB10_  (in minicore-tui-0.2.7-debug-macos) + 884  [0x1071ea964]  poll_fn.rs:151
+    +                   :   1 _RNvMsa_NtNtNtCskjUvu4PH1w_5tokio4sync4mpsc4chanINtB5_2RxNtNtCs4HmSFNaG8ik_12minicore_tui5event8RpcEventNtNtB7_7bounded9SemaphoreE4recvCs1lVi9Nk3V5e_12minicore_tui  (in minicore-tui-0.2.7-debug-macos) + 333  [0x1071e2f6d]  chan.rs:297
+    +                   :     1 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio4sync4task12atomic_wakerNtB5_11AtomicWaker15register_by_ref  (in minicore-tui-0.2.7-debug-macos) + 30  [0x10739672e]  atomic_waker.rs:172
+    +                   4 _RNCNvCs1lVi9Nk3V5e_12minicore_tui4main0B3_.llvm.10950561770575134977  (in minicore-tui-0.2.7-debug-macos) + 5031  [0x1071e0947]  main.rs:88
+    +                   : 4 _RNvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB5_16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB7_7Backend4sizeB1g_  (in minicore-tui-0.2.7-debug-macos) + 21  [0x1072d9305]  crossterm.rs:254
+    +                   :   4 _RNvNtNtNtCs1p8YcskkrDG_9crossterm8terminal3sys4unix4size  (in minicore-tui-0.2.7-debug-macos) + 25  [0x1074023e9]  unix.rs:98
+    +                   :     4 _RNvNtNtNtCs1p8YcskkrDG_9crossterm8terminal3sys4unix11window_size  (in minicore-tui-0.2.7-debug-macos) + 69  [0x107401ca5]  unix.rs:85
+    +                   :       4 _RNvMsj_NtCskZC1eJQ4Z1r_3std2fsNtB5_11OpenOptions5__open  (in minicore-tui-0.2.7-debug-macos) + 136  [0x10743b2e8]  fs.rs:1889
+    +                   :         4 _RNvMsi_NtNtNtCskZC1eJQ4Z1r_3std3sys2fs4unixNtB5_4File6open_c  (in minicore-tui-0.2.7-debug-macos) + 257  [0x1074390a1]  unix.rs:1390
+    +                   :           4 open  (in libsystem_kernel.dylib) + 202  [0x7ff806cfd313]
+    +                   :             4 __open  (in libsystem_kernel.dylib) + 10  [0x7ff806cf4316]
+    +                   4 _RNCNvCs1lVi9Nk3V5e_12minicore_tui4main0B3_.llvm.10950561770575134977  (in minicore-tui-0.2.7-debug-macos) + 7493  [0x1071e12e5]  main.rs:88
+    +                   : 4 _RNvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB5_16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB7_7Backend4sizeB1g_  (in minicore-tui-0.2.7-debug-macos) + 21  [0x1072d9305]  crossterm.rs:254
+    +                   :   3 _RNvNtNtNtCs1p8YcskkrDG_9crossterm8terminal3sys4unix4size  (in minicore-tui-0.2.7-debug-macos) + 25  [0x1074023e9]  unix.rs:98
+    +                   :   | 2 _RNvNtNtNtCs1p8YcskkrDG_9crossterm8terminal3sys4unix11window_size  (in minicore-tui-0.2.7-debug-macos) + 69  [0x107401ca5]  unix.rs:85
+    +                   :   | + 2 _RNvMsj_NtCskZC1eJQ4Z1r_3std2fsNtB5_11OpenOptions5__open  (in minicore-tui-0.2.7-debug-macos) + 136  [0x10743b2e8]  fs.rs:1889
+    +                   :   | +   2 _RNvMsi_NtNtNtCskZC1eJQ4Z1r_3std3sys2fs4unixNtB5_4File6open_c  (in minicore-tui-0.2.7-debug-macos) + 257  [0x1074390a1]  unix.rs:1390
+    +                   :   | +     2 open  (in libsystem_kernel.dylib) + 202  [0x7ff806cfd313]
+    +                   :   | +       2 __open  (in libsystem_kernel.dylib) + 10  [0x7ff806cf4316]
+    +                   :   | 1 _RNvNtNtNtCs1p8YcskkrDG_9crossterm8terminal3sys4unix11window_size  (in minicore-tui-0.2.7-debug-macos) + 209  [0x107401d31]  unix.rs:94
+    +                   :   |   1 __close_nocancel  (in libsystem_kernel.dylib) + 10  [0x7ff806cf4f9a]
+    +                   :   1 _RNvNtCs1p8YcskkrDG_9crossterm8terminal4size  (in minicore-tui-0.2.7-debug-macos) + 0  [0x1073f9ef0]  terminal.rs:136
+    +                   2 _RNCNvCs1lVi9Nk3V5e_12minicore_tui4main0B3_.llvm.10950561770575134977  (in minicore-tui-0.2.7-debug-macos) + 8910  [0x1071e186e]  main.rs:88
+    +                   : 2 _RNvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB5_16CrosstermBackendINtNtCs4HmSFNaG8ik_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB7_7Backend4sizeB1g_  (in minicore-tui-0.2.7-debug-macos) + 21  [0x1072d9305]  crossterm.rs:254
+    +                   :   2 _RNvNtNtNtCs1p8YcskkrDG_9crossterm8terminal3sys4unix4size  (in minicore-tui-0.2.7-debug-macos) + 25  [0x1074023e9]  unix.rs:98
+    +                   :     2 _RNvNtNtNtCs1p8YcskkrDG_9crossterm8terminal3sys4unix11window_size  (in minicore-tui-0.2.7-debug-macos) + 69  [0x107401ca5]  unix.rs:85
+    +                   :       2 _RNvMsj_NtCskZC1eJQ4Z1r_3std2fsNtB5_11OpenOptions5__open  (in minicore-tui-0.2.7-debug-macos) + 136  [0x10743b2e8]  fs.rs:1889
+    +                   :         2 _RNvMsi_NtNtNtCskZC1eJQ4Z1r_3std3sys2fs4unixNtB5_4File6open_c  (in minicore-tui-0.2.7-debug-macos) + 257  [0x1074390a1]  unix.rs:1390
+    +                   :           2 open  (in libsystem_kernel.dylib) + 202  [0x7ff806cfd313]
+    +                   :             2 __open  (in libsystem_kernel.dylib) + 10  [0x7ff806cf4316]
+    +                   1 _RNCNvCs1lVi9Nk3V5e_12minicore_tui4main0B3_.llvm.10950561770575134977  (in minicore-tui-0.2.7-debug-macos) + 3043  [0x1071e0183]  main.rs:88
+    +                   : 1 _platform_memmove$VARIANT$Haswell  (in libsystem_platform.dylib) + 240  [0x7ff806d6ba30]
+    +                   1 _RNCNvCs1lVi9Nk3V5e_12minicore_tui4main0B3_.llvm.10950561770575134977  (in minicore-tui-0.2.7-debug-macos) + 3055  [0x1071e018f]  main.rs:88
+    +                   : 1 _RINvNtCsl7QZrza34zr_4core3ptr9drop_glueTNCNvCs1lVi9Nk3V5e_12minicore_tui16sleep_or_pending0NCNvMNtCs4HmSFNaG8ik_12minicore_tui3rpcNtB1w_10RpcProcess4recv0BC_INtNtNtNtCsl3EoSpysRSB_12futures_util6stream6stream4next4NextNtNtNtCs1p8YcskkrDG_9crossterm5event6stream11EventStreamENCNvBG_15shutdown_signal0NtNtNtCskjUvu4PH1w_5tokio4time5sleep5SleepBC_EEBG_  (in minicore-tui-0.2.7-debug-macos) + 192  [0x1071ddaa0]  mod.rs:823
+    +                   :   1 _RINvNtCsl7QZrza34zr_4core3ptr9drop_glueINtNtB4_6option6OptionNtNtCskjUvu4PH1w_5tokio7runtime5TimerEECs1lVi9Nk3V5e_12minicore_tui.llvm.1010628040453777021  (in minicore-tui-0.2.7-debug-macos) + 25  [0x1071e7819]  mod.rs:823
+    +                   :     1 _RNvMs_NtNtCskjUvu4PH1w_5tokio7runtime4timeNtNtB4_6handle6Handle11clear_entry  (in minicore-tui-0.2.7-debug-macos) + 90  [0x10739a11a]  mod.rs:385
+    +                   :       1 _RNvMNtNtNtCskjUvu4PH1w_5tokio7runtime4time5wheelNtB2_5Wheel6remove  (in minicore-tui-0.2.7-debug-macos) + 0  [0x107381670]  mod.rs:116
+    +                   1 _RNCNvCs1lVi9Nk3V5e_12minicore_tui4main0B3_.llvm.10950561770575134977  (in minicore-tui-0.2.7-debug-macos) + 9002  [0x1071e18ca]  main.rs:88
+    +                     1 _RNvCs1lVi9Nk3V5e_12minicore_tui13prepare_frame  (in minicore-tui-0.2.7-debug-macos) + 53  [0x1071e4ec5]  main.rs:283
+    +                       1 _RNvNtNtCs4HmSFNaG8ik_12minicore_tui2ui6layout13screen_layout  (in minicore-tui-0.2.7-debug-macos) + 363  [0x1072e2dbb]  layout.rs:95
+    +                         1 _RNvNtNtCs4HmSFNaG8ik_12minicore_tui2ui6layout21composer_content_rows  (in minicore-tui-0.2.7-debug-macos) + 236  [0x1072e398c]  layout.rs:192
+    +                           1 _RNvNtNtCs4HmSFNaG8ik_12minicore_tui2ui13editor_layout12visual_lines.llvm.10752885569302783402  (in minicore-tui-0.2.7-debug-macos) + 2083  [0x107348ae3]  editor_layout.rs:125
+    +                             1 _RNvMs4_NtCsleUFRS6CW9P_5alloc7raw_vecINtB5_6RawVecNtNtNtCs4HmSFNaG8ik_12minicore_tui2ui13editor_layout10VisualLineE8grow_oneBS_  (in minicore-tui-0.2.7-debug-macos) + 28  [0x1071f5c6c]  mod.rs:188
+    +                               1 _RNvMs5_NtCsleUFRS6CW9P_5alloc7raw_vecNtB5_11RawVecInner14grow_amortizedCsd6kKWsTdYjz_5gimli  (in minicore-tui-0.2.7-debug-macos) + 98  [0x10744bd32]
+    +                                 1 _RNvMs5_NtCsleUFRS6CW9P_5alloc7raw_vecNtB5_11RawVecInner11finish_growCsd6kKWsTdYjz_5gimli  (in minicore-tui-0.2.7-debug-macos) + 175  [0x10744bc97]
+    +                                   1 nanov2_malloc_type  (in libsystem_malloc.dylib) + 137  [0x7ff806b632d3]
+    2151 Thread_33191782: tokio-rt-worker
+    + 2151 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2151 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2151 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in minicore-tui-0.2.7-debug-macos) + 375  [0x107444497]  unix.rs:123
+    +       2151 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in minicore-tui-0.2.7-debug-macos) + 215  [0x1073a60f7]  function.rs:250
+    +         2151 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in minicore-tui-0.2.7-debug-macos) + 130  [0x107389d32]  backtrace.rs:166
+    +           2151 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in minicore-tui-0.2.7-debug-macos) + 510  [0x10738317e]  pool.rs:518
+    +             2151 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in minicore-tui-0.2.7-debug-macos) + 16  [0x1073971b0]  mod.rs:565
+    +               2151 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 201  [0x10737e8c9]  harness.rs:155
+    +                 2151 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 59  [0x10738a94b]  task.rs:42
+    +                   2151 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in minicore-tui-0.2.7-debug-macos) + 192  [0x107392970]  worker.rs:548
+    +                     2151 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in minicore-tui-0.2.7-debug-macos) + 250  [0x1073a5eca]  runtime.rs:65
+    +                       2151 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in minicore-tui-0.2.7-debug-macos) + 56  [0x1073a3c98]  scoped.rs:40
+    +                         2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in minicore-tui-0.2.7-debug-macos) + 1776  [0x107391ee0]  worker.rs:614
+    +                           2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in minicore-tui-0.2.7-debug-macos) + 636  [0x10739166c]  worker.rs:887
+    +                             2151 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in minicore-tui-0.2.7-debug-macos) + 420  [0x107396fa4]  park.rs:203
+    +                               2151 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in minicore-tui-0.2.7-debug-macos) + 76  [0x10738c78c]  condvar.rs:128
+    +                                 2151 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2151 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2151 Thread_33191783: tokio-rt-worker
+    + 2151 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2151 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2151 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in minicore-tui-0.2.7-debug-macos) + 375  [0x107444497]  unix.rs:123
+    +       2151 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in minicore-tui-0.2.7-debug-macos) + 215  [0x1073a60f7]  function.rs:250
+    +         2151 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in minicore-tui-0.2.7-debug-macos) + 130  [0x107389d32]  backtrace.rs:166
+    +           2151 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in minicore-tui-0.2.7-debug-macos) + 510  [0x10738317e]  pool.rs:518
+    +             2151 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in minicore-tui-0.2.7-debug-macos) + 16  [0x1073971b0]  mod.rs:565
+    +               2151 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 201  [0x10737e8c9]  harness.rs:155
+    +                 2151 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 59  [0x10738a94b]  task.rs:42
+    +                   2151 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in minicore-tui-0.2.7-debug-macos) + 192  [0x107392970]  worker.rs:548
+    +                     2151 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in minicore-tui-0.2.7-debug-macos) + 250  [0x1073a5eca]  runtime.rs:65
+    +                       2151 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in minicore-tui-0.2.7-debug-macos) + 56  [0x1073a3c98]  scoped.rs:40
+    +                         2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in minicore-tui-0.2.7-debug-macos) + 1776  [0x107391ee0]  worker.rs:614
+    +                           2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in minicore-tui-0.2.7-debug-macos) + 636  [0x10739166c]  worker.rs:887
+    +                             2151 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in minicore-tui-0.2.7-debug-macos) + 420  [0x107396fa4]  park.rs:203
+    +                               2151 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in minicore-tui-0.2.7-debug-macos) + 76  [0x10738c78c]  condvar.rs:128
+    +                                 2151 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2151 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2151 Thread_33191784: tokio-rt-worker
+    + 2151 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2151 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2151 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in minicore-tui-0.2.7-debug-macos) + 375  [0x107444497]  unix.rs:123
+    +       2151 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in minicore-tui-0.2.7-debug-macos) + 215  [0x1073a60f7]  function.rs:250
+    +         2151 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in minicore-tui-0.2.7-debug-macos) + 130  [0x107389d32]  backtrace.rs:166
+    +           2151 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in minicore-tui-0.2.7-debug-macos) + 510  [0x10738317e]  pool.rs:518
+    +             2151 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in minicore-tui-0.2.7-debug-macos) + 16  [0x1073971b0]  mod.rs:565
+    +               2151 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 201  [0x10737e8c9]  harness.rs:155
+    +                 2151 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 59  [0x10738a94b]  task.rs:42
+    +                   2151 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in minicore-tui-0.2.7-debug-macos) + 192  [0x107392970]  worker.rs:548
+    +                     2151 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in minicore-tui-0.2.7-debug-macos) + 250  [0x1073a5eca]  runtime.rs:65
+    +                       2151 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in minicore-tui-0.2.7-debug-macos) + 56  [0x1073a3c98]  scoped.rs:40
+    +                         2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in minicore-tui-0.2.7-debug-macos) + 1776  [0x107391ee0]  worker.rs:614
+    +                           2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in minicore-tui-0.2.7-debug-macos) + 636  [0x10739166c]  worker.rs:887
+    +                             2151 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in minicore-tui-0.2.7-debug-macos) + 420  [0x107396fa4]  park.rs:203
+    +                               2151 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in minicore-tui-0.2.7-debug-macos) + 76  [0x10738c78c]  condvar.rs:128
+    +                                 2151 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2151 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2151 Thread_33191785: tokio-rt-worker
+    + 2151 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2151 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2151 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in minicore-tui-0.2.7-debug-macos) + 375  [0x107444497]  unix.rs:123
+    +       2151 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in minicore-tui-0.2.7-debug-macos) + 215  [0x1073a60f7]  function.rs:250
+    +         2151 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in minicore-tui-0.2.7-debug-macos) + 130  [0x107389d32]  backtrace.rs:166
+    +           2151 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in minicore-tui-0.2.7-debug-macos) + 510  [0x10738317e]  pool.rs:518
+    +             2151 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in minicore-tui-0.2.7-debug-macos) + 16  [0x1073971b0]  mod.rs:565
+    +               2151 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 201  [0x10737e8c9]  harness.rs:155
+    +                 2151 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 59  [0x10738a94b]  task.rs:42
+    +                   2151 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in minicore-tui-0.2.7-debug-macos) + 192  [0x107392970]  worker.rs:548
+    +                     2151 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in minicore-tui-0.2.7-debug-macos) + 250  [0x1073a5eca]  runtime.rs:65
+    +                       2151 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in minicore-tui-0.2.7-debug-macos) + 56  [0x1073a3c98]  scoped.rs:40
+    +                         2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in minicore-tui-0.2.7-debug-macos) + 1776  [0x107391ee0]  worker.rs:614
+    +                           2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in minicore-tui-0.2.7-debug-macos) + 636  [0x10739166c]  worker.rs:887
+    +                             2151 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in minicore-tui-0.2.7-debug-macos) + 420  [0x107396fa4]  park.rs:203
+    +                               2151 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in minicore-tui-0.2.7-debug-macos) + 76  [0x10738c78c]  condvar.rs:128
+    +                                 2151 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2151 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2151 Thread_33191786: tokio-rt-worker
+    + 2151 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2151 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2151 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in minicore-tui-0.2.7-debug-macos) + 375  [0x107444497]  unix.rs:123
+    +       2151 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in minicore-tui-0.2.7-debug-macos) + 215  [0x1073a60f7]  function.rs:250
+    +         2151 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in minicore-tui-0.2.7-debug-macos) + 130  [0x107389d32]  backtrace.rs:166
+    +           2151 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in minicore-tui-0.2.7-debug-macos) + 510  [0x10738317e]  pool.rs:518
+    +             2151 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in minicore-tui-0.2.7-debug-macos) + 16  [0x1073971b0]  mod.rs:565
+    +               2151 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 201  [0x10737e8c9]  harness.rs:155
+    +                 2151 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 59  [0x10738a94b]  task.rs:42
+    +                   2151 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in minicore-tui-0.2.7-debug-macos) + 192  [0x107392970]  worker.rs:548
+    +                     2151 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in minicore-tui-0.2.7-debug-macos) + 250  [0x1073a5eca]  runtime.rs:65
+    +                       2151 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in minicore-tui-0.2.7-debug-macos) + 56  [0x1073a3c98]  scoped.rs:40
+    +                         2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in minicore-tui-0.2.7-debug-macos) + 1776  [0x107391ee0]  worker.rs:614
+    +                           2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in minicore-tui-0.2.7-debug-macos) + 636  [0x10739166c]  worker.rs:887
+    +                             2151 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in minicore-tui-0.2.7-debug-macos) + 420  [0x107396fa4]  park.rs:203
+    +                               2151 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in minicore-tui-0.2.7-debug-macos) + 76  [0x10738c78c]  condvar.rs:128
+    +                                 2151 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2151 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2151 Thread_33191787: tokio-rt-worker
+    + 2151 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2151 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2151 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in minicore-tui-0.2.7-debug-macos) + 375  [0x107444497]  unix.rs:123
+    +       2151 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in minicore-tui-0.2.7-debug-macos) + 215  [0x1073a60f7]  function.rs:250
+    +         2151 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in minicore-tui-0.2.7-debug-macos) + 130  [0x107389d32]  backtrace.rs:166
+    +           2151 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in minicore-tui-0.2.7-debug-macos) + 510  [0x10738317e]  pool.rs:518
+    +             2151 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in minicore-tui-0.2.7-debug-macos) + 16  [0x1073971b0]  mod.rs:565
+    +               2151 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 201  [0x10737e8c9]  harness.rs:155
+    +                 2151 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 59  [0x10738a94b]  task.rs:42
+    +                   2151 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in minicore-tui-0.2.7-debug-macos) + 192  [0x107392970]  worker.rs:548
+    +                     2151 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in minicore-tui-0.2.7-debug-macos) + 250  [0x1073a5eca]  runtime.rs:65
+    +                       2151 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in minicore-tui-0.2.7-debug-macos) + 56  [0x1073a3c98]  scoped.rs:40
+    +                         2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in minicore-tui-0.2.7-debug-macos) + 1776  [0x107391ee0]  worker.rs:614
+    +                           2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in minicore-tui-0.2.7-debug-macos) + 636  [0x10739166c]  worker.rs:887
+    +                             2151 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in minicore-tui-0.2.7-debug-macos) + 420  [0x107396fa4]  park.rs:203
+    +                               2151 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in minicore-tui-0.2.7-debug-macos) + 76  [0x10738c78c]  condvar.rs:128
+    +                                 2151 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2151 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2151 Thread_33191788: tokio-rt-worker
+    + 2151 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2151 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2151 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in minicore-tui-0.2.7-debug-macos) + 375  [0x107444497]  unix.rs:123
+    +       2151 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in minicore-tui-0.2.7-debug-macos) + 215  [0x1073a60f7]  function.rs:250
+    +         2151 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in minicore-tui-0.2.7-debug-macos) + 130  [0x107389d32]  backtrace.rs:166
+    +           2151 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in minicore-tui-0.2.7-debug-macos) + 510  [0x10738317e]  pool.rs:518
+    +             2151 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in minicore-tui-0.2.7-debug-macos) + 16  [0x1073971b0]  mod.rs:565
+    +               2151 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 201  [0x10737e8c9]  harness.rs:155
+    +                 2151 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 59  [0x10738a94b]  task.rs:42
+    +                   2151 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in minicore-tui-0.2.7-debug-macos) + 192  [0x107392970]  worker.rs:548
+    +                     2151 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in minicore-tui-0.2.7-debug-macos) + 250  [0x1073a5eca]  runtime.rs:65
+    +                       2151 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in minicore-tui-0.2.7-debug-macos) + 56  [0x1073a3c98]  scoped.rs:40
+    +                         2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in minicore-tui-0.2.7-debug-macos) + 1776  [0x107391ee0]  worker.rs:614
+    +                           2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in minicore-tui-0.2.7-debug-macos) + 636  [0x10739166c]  worker.rs:887
+    +                             2151 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in minicore-tui-0.2.7-debug-macos) + 420  [0x107396fa4]  park.rs:203
+    +                               2151 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in minicore-tui-0.2.7-debug-macos) + 76  [0x10738c78c]  condvar.rs:128
+    +                                 2151 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2151 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2151 Thread_33191789: tokio-rt-worker
+    + 2151 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2151 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2151 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in minicore-tui-0.2.7-debug-macos) + 375  [0x107444497]  unix.rs:123
+    +       2151 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in minicore-tui-0.2.7-debug-macos) + 215  [0x1073a60f7]  function.rs:250
+    +         2151 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in minicore-tui-0.2.7-debug-macos) + 130  [0x107389d32]  backtrace.rs:166
+    +           2151 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in minicore-tui-0.2.7-debug-macos) + 510  [0x10738317e]  pool.rs:518
+    +             2151 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in minicore-tui-0.2.7-debug-macos) + 16  [0x1073971b0]  mod.rs:565
+    +               2151 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 201  [0x10737e8c9]  harness.rs:155
+    +                 2151 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 59  [0x10738a94b]  task.rs:42
+    +                   2151 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in minicore-tui-0.2.7-debug-macos) + 192  [0x107392970]  worker.rs:548
+    +                     2151 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in minicore-tui-0.2.7-debug-macos) + 250  [0x1073a5eca]  runtime.rs:65
+    +                       2151 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in minicore-tui-0.2.7-debug-macos) + 56  [0x1073a3c98]  scoped.rs:40
+    +                         2150 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in minicore-tui-0.2.7-debug-macos) + 1776  [0x107391ee0]  worker.rs:614
+    +                         ! 2149 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in minicore-tui-0.2.7-debug-macos) + 283  [0x10739150b]  worker.rs:887
+    +                         ! : 2149 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner11park_driver.llvm.6315534270510162444  (in minicore-tui-0.2.7-debug-macos) + 160  [0x107396d40]  park.rs:265
+    +                         ! :   2145 _RNvMNtNtCskjUvu4PH1w_5tokio7runtime4timeNtB2_6Driver13park_internal.llvm.6315534270510162444  (in minicore-tui-0.2.7-debug-macos) + 595  [0x1073957d3]  mod.rs:0
+    +                         ! :   | 2145 _RNvMNtNtNtCskjUvu4PH1w_5tokio7runtime2io6driverNtB2_6Driver4turn.llvm.6315534270510162444  (in minicore-tui-0.2.7-debug-macos) + 304  [0x107395ed0]  driver.rs:188
+    +                         ! :   |   2145 _RNvMNtNtNtCsj32O19rI2t2_3mio3sys4unix8selectorNtB2_8Selector6select  (in minicore-tui-0.2.7-debug-macos) + 100  [0x10740c8c4]  mod.rs:8
+    +                         ! :   |     2145 kevent  (in libsystem_kernel.dylib) + 10  [0x7ff806cf8822]
+    +                         ! :   4 _RNvMNtNtCskjUvu4PH1w_5tokio7runtime4timeNtB2_6Driver13park_internal.llvm.6315534270510162444  (in minicore-tui-0.2.7-debug-macos) + 785  [0x107395891]  mod.rs:255
+    +                         ! :     4 _RNvMs_NtNtCskjUvu4PH1w_5tokio7runtime4timeNtNtB4_6handle6Handle15process_at_time  (in minicore-tui-0.2.7-debug-macos) + 469  [0x10739a385]  mod.rs:336
+    +                         ! :       4 _RNvMNtNtCskjUvu4PH1w_5tokio4util9wake_listNtB2_8WakeList8wake_all  (in minicore-tui-0.2.7-debug-macos) + 91  [0x10738bafb]  wake_list.rs:71
+    +                         ! :         4 _RNvNtNtCskjUvu4PH1w_5tokio7runtime4park4wake.llvm.3906970673295854527  (in minicore-tui-0.2.7-debug-macos) + 29  [0x10738eded]  park.rs:346
+    +                         ! :           4 pthread_cond_signal  (in libsystem_pthread.dylib) + 794  [0x7ff806d353d6]
+    +                         ! :             4 __psynch_cvsignal  (in libsystem_kernel.dylib) + 10  [0x7ff806cf77b6]
+    +                         ! 1 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in minicore-tui-0.2.7-debug-macos) + 457  [0x1073915b9]  worker.rs:912
+    +                         1 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in minicore-tui-0.2.7-debug-macos) + 1865  [0x107391f39]  worker.rs:614
+    +                           1 _RNvMNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4idleNtB2_4Idle9is_parked  (in minicore-tui-0.2.7-debug-macos) + 38  [0x1073894a6]  idle.rs:149
+    +                             1 _RNvMNtNtNtNtNtCskZC1eJQ4Z1r_3std3sys3pal4unix4sync5mutexNtB2_5Mutex4lock  (in minicore-tui-0.2.7-debug-macos) + 9  [0x107427da9]  mutex.rs:72
+    +                               1 pthread_mutex_lock  (in libsystem_pthread.dylib) + 106  [0x7ff806d311b1]
+    2151 Thread_33191790: tokio-rt-worker
+    + 2151 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2151 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2151 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in minicore-tui-0.2.7-debug-macos) + 375  [0x107444497]  unix.rs:123
+    +       2151 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in minicore-tui-0.2.7-debug-macos) + 215  [0x1073a60f7]  function.rs:250
+    +         2151 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in minicore-tui-0.2.7-debug-macos) + 130  [0x107389d32]  backtrace.rs:166
+    +           2151 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in minicore-tui-0.2.7-debug-macos) + 510  [0x10738317e]  pool.rs:518
+    +             2151 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in minicore-tui-0.2.7-debug-macos) + 16  [0x1073971b0]  mod.rs:565
+    +               2151 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 201  [0x10737e8c9]  harness.rs:155
+    +                 2151 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 59  [0x10738a94b]  task.rs:42
+    +                   2151 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in minicore-tui-0.2.7-debug-macos) + 192  [0x107392970]  worker.rs:548
+    +                     2151 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in minicore-tui-0.2.7-debug-macos) + 250  [0x1073a5eca]  runtime.rs:65
+    +                       2151 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in minicore-tui-0.2.7-debug-macos) + 56  [0x1073a3c98]  scoped.rs:40
+    +                         2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in minicore-tui-0.2.7-debug-macos) + 1776  [0x107391ee0]  worker.rs:614
+    +                           2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in minicore-tui-0.2.7-debug-macos) + 636  [0x10739166c]  worker.rs:887
+    +                             2151 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in minicore-tui-0.2.7-debug-macos) + 420  [0x107396fa4]  park.rs:203
+    +                               2151 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in minicore-tui-0.2.7-debug-macos) + 76  [0x10738c78c]  condvar.rs:128
+    +                                 2151 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2151 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2151 Thread_33191791: tokio-rt-worker
+    + 2151 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2151 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2151 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in minicore-tui-0.2.7-debug-macos) + 375  [0x107444497]  unix.rs:123
+    +       2151 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in minicore-tui-0.2.7-debug-macos) + 215  [0x1073a60f7]  function.rs:250
+    +         2151 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in minicore-tui-0.2.7-debug-macos) + 130  [0x107389d32]  backtrace.rs:166
+    +           2151 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in minicore-tui-0.2.7-debug-macos) + 510  [0x10738317e]  pool.rs:518
+    +             2151 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in minicore-tui-0.2.7-debug-macos) + 16  [0x1073971b0]  mod.rs:565
+    +               2151 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 201  [0x10737e8c9]  harness.rs:155
+    +                 2151 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 59  [0x10738a94b]  task.rs:42
+    +                   2151 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in minicore-tui-0.2.7-debug-macos) + 192  [0x107392970]  worker.rs:548
+    +                     2151 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in minicore-tui-0.2.7-debug-macos) + 250  [0x1073a5eca]  runtime.rs:65
+    +                       2151 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in minicore-tui-0.2.7-debug-macos) + 56  [0x1073a3c98]  scoped.rs:40
+    +                         2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in minicore-tui-0.2.7-debug-macos) + 1776  [0x107391ee0]  worker.rs:614
+    +                           2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in minicore-tui-0.2.7-debug-macos) + 636  [0x10739166c]  worker.rs:887
+    +                             2151 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in minicore-tui-0.2.7-debug-macos) + 420  [0x107396fa4]  park.rs:203
+    +                               2151 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in minicore-tui-0.2.7-debug-macos) + 76  [0x10738c78c]  condvar.rs:128
+    +                                 2151 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2151 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2151 Thread_33191792: tokio-rt-worker
+    + 2151 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2151 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2151 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in minicore-tui-0.2.7-debug-macos) + 375  [0x107444497]  unix.rs:123
+    +       2151 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in minicore-tui-0.2.7-debug-macos) + 215  [0x1073a60f7]  function.rs:250
+    +         2151 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in minicore-tui-0.2.7-debug-macos) + 130  [0x107389d32]  backtrace.rs:166
+    +           2151 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in minicore-tui-0.2.7-debug-macos) + 510  [0x10738317e]  pool.rs:518
+    +             2151 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in minicore-tui-0.2.7-debug-macos) + 16  [0x1073971b0]  mod.rs:565
+    +               2151 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 201  [0x10737e8c9]  harness.rs:155
+    +                 2151 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 59  [0x10738a94b]  task.rs:42
+    +                   2151 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in minicore-tui-0.2.7-debug-macos) + 192  [0x107392970]  worker.rs:548
+    +                     2151 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in minicore-tui-0.2.7-debug-macos) + 250  [0x1073a5eca]  runtime.rs:65
+    +                       2151 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in minicore-tui-0.2.7-debug-macos) + 56  [0x1073a3c98]  scoped.rs:40
+    +                         2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in minicore-tui-0.2.7-debug-macos) + 1776  [0x107391ee0]  worker.rs:614
+    +                           2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in minicore-tui-0.2.7-debug-macos) + 636  [0x10739166c]  worker.rs:887
+    +                             2151 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in minicore-tui-0.2.7-debug-macos) + 420  [0x107396fa4]  park.rs:203
+    +                               2151 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in minicore-tui-0.2.7-debug-macos) + 76  [0x10738c78c]  condvar.rs:128
+    +                                 2151 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2151 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2151 Thread_33191793: tokio-rt-worker
+    + 2151 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2151 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2151 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in minicore-tui-0.2.7-debug-macos) + 375  [0x107444497]  unix.rs:123
+    +       2151 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in minicore-tui-0.2.7-debug-macos) + 215  [0x1073a60f7]  function.rs:250
+    +         2151 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in minicore-tui-0.2.7-debug-macos) + 130  [0x107389d32]  backtrace.rs:166
+    +           2151 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in minicore-tui-0.2.7-debug-macos) + 510  [0x10738317e]  pool.rs:518
+    +             2151 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in minicore-tui-0.2.7-debug-macos) + 16  [0x1073971b0]  mod.rs:565
+    +               2151 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 201  [0x10737e8c9]  harness.rs:155
+    +                 2151 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 59  [0x10738a94b]  task.rs:42
+    +                   2151 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in minicore-tui-0.2.7-debug-macos) + 192  [0x107392970]  worker.rs:548
+    +                     2151 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in minicore-tui-0.2.7-debug-macos) + 250  [0x1073a5eca]  runtime.rs:65
+    +                       2151 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in minicore-tui-0.2.7-debug-macos) + 56  [0x1073a3c98]  scoped.rs:40
+    +                         2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in minicore-tui-0.2.7-debug-macos) + 1776  [0x107391ee0]  worker.rs:614
+    +                           2151 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in minicore-tui-0.2.7-debug-macos) + 636  [0x10739166c]  worker.rs:887
+    +                             2151 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in minicore-tui-0.2.7-debug-macos) + 420  [0x107396fa4]  park.rs:203
+    +                               2151 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in minicore-tui-0.2.7-debug-macos) + 76  [0x10738c78c]  condvar.rs:128
+    +                                 2151 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2151 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2151 Thread_33191795
+      2151 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+        2151 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+          2151 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in minicore-tui-0.2.7-debug-macos) + 375  [0x107444497]  unix.rs:123
+            2151 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvXNtNtCs1p8YcskkrDG_9crossterm5event6streamNtB18_11EventStreamNtNtCsl7QZrza34zr_4core7default7Default7default0uEs_0INtNtNtB2a_3ops8function6FnOnceuE9call_once6vtableB1c_  (in minicore-tui-0.2.7-debug-macos) + 119  [0x1073f8487]  function.rs:250
+              2083 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvXNtNtCs1p8YcskkrDG_9crossterm5event6streamNtB1c_11EventStreamNtNtCsl7QZrza34zr_4core7default7Default7default0uEB1g_  (in minicore-tui-0.2.7-debug-macos) + 267  [0x1073fb47b]  backtrace.rs:166
+              ! 2082 _RINvMs_NtNtCs1p8YcskkrDG_9crossterm5event4readNtB5_19InternalEventReader4pollNtNtB7_6filter11EventFilterEB9_  (in minicore-tui-0.2.7-debug-macos) + 279  [0x107403ec7]  read.rs:65
+              ! : 2081 _RNvXs_NtNtNtNtCs1p8YcskkrDG_9crossterm5event6source4unix3mioNtB4_23UnixInternalEventSourceNtB8_11EventSource8try_read  (in minicore-tui-0.2.7-debug-macos) + 227  [0x107400713]  mio.rs:76
+              ! : | 2081 _RNvMNtNtNtCsj32O19rI2t2_3mio3sys4unix8selectorNtB2_8Selector6select  (in minicore-tui-0.2.7-debug-macos) + 100  [0x10740c8c4]  mod.rs:8
+              ! : |   2081 kevent  (in libsystem_kernel.dylib) + 10  [0x7ff806cf8822]
+              ! : 1 _RNvXs_NtNtNtNtCs1p8YcskkrDG_9crossterm5event6source4unix3mioNtB4_23UnixInternalEventSourceNtB8_11EventSource8try_read  (in minicore-tui-0.2.7-debug-macos) + 706  [0x1074008f2]  mio.rs:99
+              ! :   1 _RNvNtNtNtNtCs1p8YcskkrDG_9crossterm5event3sys4unix5parse11parse_event  (in minicore-tui-0.2.7-debug-macos) + 540  [0x1073fce0c]  parse.rs:76
+              ! :     1 _RNvNtNtNtNtCs1p8YcskkrDG_9crossterm5event3sys4unix5parse9parse_csi  (in minicore-tui-0.2.7-debug-macos) + 1293  [0x1073ff1ed]  parse.rs:169
+              ! :       1 _RINvNtNtNtNtCs1p8YcskkrDG_9crossterm5event3sys4unix5parse11next_parsedtEBa_  (in minicore-tui-0.2.7-debug-macos) + 17  [0x1073fc891]  parse.rs:220
+              ! :         1 _RNvMsf_NtNtCsl7QZrza34zr_4core3str4iterINtB5_13SplitInternalcE4nextCs1p8YcskkrDG_9crossterm  (in minicore-tui-0.2.7-debug-macos) + 0  [0x1073fca00]  iter.rs:657
+              ! 1 _RINvMs_NtNtCs1p8YcskkrDG_9crossterm5event4readNtB5_19InternalEventReader4pollNtNtB7_6filter11EventFilterEB9_  (in minicore-tui-0.2.7-debug-macos) + 208  [0x107403e80]  read.rs:62
+              !   1 _RNvMNtNtNtNtCskZC1eJQ4Z1r_3std3sys3pal4unix4timeNtB2_8Timespec3now  (in minicore-tui-0.2.7-debug-macos) + 18  [0x107426422]  time.rs:107
+              !     1 clock_gettime  (in libsystem_c.dylib) + 51  [0x7ff806be4097]
+              !       1 clock_gettime_nsec_np  (in libsystem_c.dylib) + 237  [0x7ff806bd4f01]
+              !         1 mach_timebase_info  (in libsystem_kernel.dylib) + 9  [0x7ff806cf3e4c]
+              67 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvXNtNtCs1p8YcskkrDG_9crossterm5event6streamNtB1c_11EventStreamNtNtCsl7QZrza34zr_4core7default7Default7default0uEB1g_  (in minicore-tui-0.2.7-debug-macos) + 129  [0x1073fb3f1]  backtrace.rs:166
+              ! 67 _RNvMs_NtNtNtCskZC1eJQ4Z1r_3std4sync4mpmc5arrayINtB4_7ChannelNtNtNtCs1p8YcskkrDG_9crossterm5event6stream4TaskE4recvB12_  (in minicore-tui-0.2.7-debug-macos) + 771  [0x1073f2a43]  array.rs:390
+              !   67 _RNCNvMs_NtNtNtCskZC1eJQ4Z1r_3std4sync4mpmc5arrayINtB6_7ChannelNtNtNtCs1p8YcskkrDG_9crossterm5event6stream4TaskE4recvs_0B14_  (in minicore-tui-0.2.7-debug-macos) + 152  [0x1073f1ad8]  array.rs:402
+              !     67 _RNvMs_NtNtCskZC1eJQ4Z1r_3std6thread6threadNtB4_6Thread4park  (in minicore-tui-0.2.7-debug-macos) + 48  [0x1074307d0]  thread.rs:121
+              !       67 _dispatch_semaphore_wait_slow  (in libdispatch.dylib) + 98  [0x7ff806b8c0c6]
+              !         67 _dispatch_sema4_wait  (in libdispatch.dylib) + 16  [0x7ff806b8bc8f]
+              !           66 semaphore_wait_trap  (in libsystem_kernel.dylib) + 10  [0x7ff806cf3ac6]
+              !           1 semaphore_wait  (in libsystem_kernel.dylib) + 0  [0x7ff806cf614f]
+              1 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvXNtNtCs1p8YcskkrDG_9crossterm5event6streamNtB1c_11EventStreamNtNtCsl7QZrza34zr_4core7default7Default7default0uEB1g_  (in minicore-tui-0.2.7-debug-macos) + 245  [0x1073fb465]  backtrace.rs:166
+                1 _RNvNtCs1p8YcskkrDG_9crossterm5event26lock_internal_event_reader  (in minicore-tui-0.2.7-debug-macos) + 109  [0x1073f8c3d]  event.rs:150
+                  1 _RNvMs1_NtCs35FCzpVto6C_11parking_lot9raw_mutexNtB5_8RawMutex9lock_slow  (in minicore-tui-0.2.7-debug-macos) + 824  [0x1074061b8]  raw_mutex.rs:262
+                    1 _RNvXNtNtCsej87I68ELN3_16parking_lot_core13thread_parker3impNtB2_12ThreadParkerNtB4_13ThreadParkerT4park  (in minicore-tui-0.2.7-debug-macos) + 59  [0x10740711b]  unix.rs:77
+                      1 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+                        1 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+
+Total number in stack (recursive counted multiple, when >=5):
+        13       _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in minicore-tui-0.2.7-debug-macos) + 375  [0x107444497]  unix.rs:123
+        13       __psynch_cvwait  (in libsystem_kernel.dylib) + 0  [0x7ff806cf66ec]
+        13       _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+        13       _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+        13       thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+        12       _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in minicore-tui-0.2.7-debug-macos) + 76  [0x10738c78c]  condvar.rs:128
+        12       _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in minicore-tui-0.2.7-debug-macos) + 56  [0x1073a3c98]  scoped.rs:40
+        12       _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in minicore-tui-0.2.7-debug-macos) + 130  [0x107389d32]  backtrace.rs:166
+        12       _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in minicore-tui-0.2.7-debug-macos) + 250  [0x1073a5eca]  runtime.rs:65
+        12       _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in minicore-tui-0.2.7-debug-macos) + 215  [0x1073a60f7]  function.rs:250
+        12       _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 201  [0x10737e8c9]  harness.rs:155
+        12       _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in minicore-tui-0.2.7-debug-macos) + 510  [0x10738317e]  pool.rs:518
+        12       _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in minicore-tui-0.2.7-debug-macos) + 1776  [0x107391ee0]  worker.rs:614
+        12       _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in minicore-tui-0.2.7-debug-macos) + 16  [0x1073971b0]  mod.rs:565
+        12       _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in minicore-tui-0.2.7-debug-macos) + 192  [0x107392970]  worker.rs:548
+        12       _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in minicore-tui-0.2.7-debug-macos) + 59  [0x10738a94b]  task.rs:42
+        11       _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in minicore-tui-0.2.7-debug-macos) + 420  [0x107396fa4]  park.rs:203
+        11       _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in minicore-tui-0.2.7-debug-macos) + 636  [0x10739166c]  worker.rs:887
+
+Sort by top of stack, same collapsed (when >= 5):
+        __psynch_cvwait  (in libsystem_kernel.dylib)        25666
+        kevent  (in libsystem_kernel.dylib)        4228
+        write  (in libsystem_kernel.dylib)        91
+        semaphore_wait_trap  (in libsystem_kernel.dylib)        66
+        _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in minicore-tui-0.2.7-debug-macos)        9
+        __open  (in libsystem_kernel.dylib)        8
+        _RNvXs2_NtCsbRA72J3LoxY_20unicode_segmentation8graphemeNtB5_9GraphemesNtNtNtNtCsl7QZrza34zr_4core4iter6traits8iterator8Iterator4next  (in minicore-tui-0.2.7-debug-macos)        7
+
+Binary Images:
+       0x1071d7000 -        0x1077590ff +minicore-tui-0.2.7-debug-macos (???) <4C4C44FA-5555-3144-A10B-24D7EF746AC3> /tmp/*/minicore-tui-0.2.7-debug-macos
+    0x7ff806944000 -     0x7ff80698905b  libobjc.A.dylib (940.4) <087DB838-675B-3BC5-B554-DAD42196C77A> /usr/lib/libobjc.A.dylib
+    0x7ff80698a000 -     0x7ff806a246c7  dyld (1.0.0 - 1286.10) <1A622D74-549F-3F53-BD70-412BD11345E8> /usr/lib/dyld
+    0x7ff806a25000 -     0x7ff806a286d8  libsystem_blocks.dylib (96) <17F8CB93-59F9-324C-93ED-A5A03A0A7C58> /usr/lib/system/libsystem_blocks.dylib
+    0x7ff806a29000 -     0x7ff806a6fbd5  libxpc.dylib (2894.140.12.700.1) <C2D833C5-89AF-3DAE-AE71-AF61769CAB0C> /usr/lib/system/libxpc.dylib
+    0x7ff806a70000 -     0x7ff806a8a805  libsystem_trace.dylib (1643.120.5) <8775DCD9-CE39-3A08-9631-0A4C93E335D9> /usr/lib/system/libsystem_trace.dylib
+    0x7ff806a8b000 -     0x7ff806b3d14f  libcorecrypto.dylib (1736.140.2) <55A104DF-190B-30D9-9481-016D3497FBA2> /usr/lib/system/libcorecrypto.dylib
+    0x7ff806b3e000 -     0x7ff806b8889f  libsystem_malloc.dylib (715.140.5) <B26A86B5-A181-367C-89EA-D1ED5545EF77> /usr/lib/system/libsystem_malloc.dylib
+    0x7ff806b89000 -     0x7ff806bd0339  libdispatch.dylib (1521.140.2) <6CA6112A-70C8-39A2-8CFA-DA2139709D3C> /usr/lib/system/libdispatch.dylib
+    0x7ff806bd1000 -     0x7ff806bd3b0f  libsystem_featureflags.dylib (97) <E0A31BA9-C76D-3218-8B70-5D6B4028082B> /usr/lib/system/libsystem_featureflags.dylib
+    0x7ff806bd4000 -     0x7ff806c5cb27  libsystem_c.dylib (1698.140.3.700.2) <0251DD0C-67BC-3A58-A477-5E34D4D54F3E> /usr/lib/system/libsystem_c.dylib
+    0x7ff806c5d000 -     0x7ff806cdbfff  libc++.1.dylib (1900.181) <1BA8415D-93C3-301F-80AA-C2D396C32DD7> /usr/lib/libc++.1.dylib
+    0x7ff806cdc000 -     0x7ff806cf2fff  libc++abi.dylib (1900.181) <67A06E4F-032A-344F-8F4F-D77A2B8C7EEA> /usr/lib/libc++abi.dylib
+    0x7ff806cf3000 -     0x7ff806d2fb6f  libsystem_kernel.dylib (11417.140.69.705.2) <DF27EB28-275E-3046-A421-655EA736BE57> /usr/lib/system/libsystem_kernel.dylib
+    0x7ff806d30000 -     0x7ff806d3bfd7  libsystem_pthread.dylib (536.0.0.701.1) <A031F066-4DAA-3801-9155-88106D874835> /usr/lib/system/libsystem_pthread.dylib
+    0x7ff806d3c000 -     0x7ff806d6a7c7  libdyld.dylib (1286.10) <C68A8513-2993-3F6F-A271-4074E26FF392> /usr/lib/system/libdyld.dylib
+    0x7ff806d6b000 -     0x7ff806d7493f  libsystem_platform.dylib (349.140.6) <78C9DCC0-2FBA-3BE4-A1DD-DA618362AE68> /usr/lib/system/libsystem_platform.dylib
+    0x7ff806d75000 -     0x7ff806da3477  libsystem_info.dylib (597.0.0.701.2) <CD7C41C5-CE28-3129-9B0E-B8D126B2A0C5> /usr/lib/system/libsystem_info.dylib
+    0x7ff80a399000 -     0x7ff80a3a371f  libsystem_darwin.dylib (1698.140.3.700.2) <96D36E47-C1BD-3DA0-BAF4-FAD8DF276A08> /usr/lib/system/libsystem_darwin.dylib
+    0x7ff80a7d6000 -     0x7ff80a7e70db  libsystem_notify.dylib (342) <4244B485-A96B-350F-94BE-4DFFE7C97F93> /usr/lib/system/libsystem_notify.dylib
+    0x7ff80c8d9000 -     0x7ff80c8f236f  libsystem_networkextension.dylib (2063.140.6) <C4D49367-9833-30AD-95FF-C6F28811A6EA> /usr/lib/system/libsystem_networkextension.dylib
+    0x7ff80c969000 -     0x7ff80c98013b  libsystem_asl.dylib (402) <C9CEFBC7-AB24-3D71-8CC3-4F6C103ACD63> /usr/lib/system/libsystem_asl.dylib
+    0x7ff80e719000 -     0x7ff80e720c57  libsystem_symptoms.dylib (2022.140.4) <5058A6B6-664F-38C7-B224-FF58D757CCA1> /usr/lib/system/libsystem_symptoms.dylib
+    0x7ff812154000 -     0x7ff812182a33  libsystem_containermanager.dylib (689.100.6.700.1) <58031C10-98CA-3CB1-82B5-52172EB003CF> /usr/lib/system/libsystem_containermanager.dylib
+    0x7ff813404000 -     0x7ff8134078df  libsystem_configuration.dylib (1351.140.5.700.1) <C9A0E3A0-375D-3D16-81EB-C5F9B4789F22> /usr/lib/system/libsystem_configuration.dylib
+    0x7ff813408000 -     0x7ff81340e697  libsystem_sandbox.dylib (2401.140.15.700.3) <23238A76-3554-3EF9-93A5-D2DE566C6CAC> /usr/lib/system/libsystem_sandbox.dylib
+    0x7ff81453a000 -     0x7ff81453cbfb  libquarantine.dylib (181.120.2) <5C677B12-B313-3281-A65F-16FE27EDFB8B> /usr/lib/system/libquarantine.dylib
+    0x7ff814dd0000 -     0x7ff814dd68df  libsystem_coreservices.dylib (178.6.6) <3C717B49-880D-3348-83AF-44A3E4D2991B> /usr/lib/system/libsystem_coreservices.dylib
+    0x7ff81519b000 -     0x7ff81520843f  libsystem_m.dylib (3291.100.4) <C9D04FC0-05AA-3F79-B684-E1429049BF9B> /usr/lib/system/libsystem_m.dylib
+    0x7ff815209000 -     0x7ff815209b9b  libcharset.1.dylib (109.100.2) <D6FD4D65-2A96-3791-A0B4-2E8AB307B1D8> /usr/lib/libcharset.1.dylib
+    0x7ff81520a000 -     0x7ff81520d5c7  libmacho.dylib (1024.3) <DC79A644-E79E-3F74-AF02-E4EC6970ECA3> /usr/lib/system/libmacho.dylib
+    0x7ff815225000 -     0x7ff81523133f  libcommonCrypto.dylib (600035) <4DC97572-8957-3E35-91D6-B871A2D97B18> /usr/lib/system/libcommonCrypto.dylib
+    0x7ff815232000 -     0x7ff81523a6ef  libunwind.dylib (1900.125) <BC907228-2952-3EE1-98FA-55191C0B9DA7> /usr/lib/system/libunwind.dylib
+    0x7ff815243000 -     0x7ff81524e4af  libcopyfile.dylib (224) <5887775F-4C7E-35EF-B0E3-604B313D46F3> /usr/lib/system/libcopyfile.dylib
+    0x7ff81524f000 -     0x7ff8152569cf  libcompiler_rt.dylib (103.3) <D2ED00EF-50D8-3C85-9F87-657F2F40C72E> /usr/lib/system/libcompiler_rt.dylib
+    0x7ff815257000 -     0x7ff81525b76b  libsystem_collections.dylib (1698.140.3.700.2) <FBC61848-54B1-3855-A8D4-870EDD772AFE> /usr/lib/system/libsystem_collections.dylib
+    0x7ff81525c000 -     0x7ff81525eef7  libsystem_secinit.dylib (153.140.2) <44080C2A-259C-3E2E-B260-BBFAA381A9CB> /usr/lib/system/libsystem_secinit.dylib
+    0x7ff81525f000 -     0x7ff815261727  libremovefile.dylib (81) <B97DBF02-2EA5-36FC-8891-424EC4D8BA67> /usr/lib/system/libremovefile.dylib
+    0x7ff815262000 -     0x7ff815262b47  libkeymgr.dylib (31) <D324A0E6-D224-35C7-87CD-D5DAF27170D5> /usr/lib/system/libkeymgr.dylib
+    0x7ff815263000 -     0x7ff81526b557  libsystem_dnssd.dylib (2600.140.3) <726339C0-DE67-327E-825A-89F33EEAB679> /usr/lib/system/libsystem_dnssd.dylib
+    0x7ff81526c000 -     0x7ff815271003  libcache.dylib (95) <AD3F4A9E-4CF4-33CC-9D6B-093E3B4BAC01> /usr/lib/system/libcache.dylib
+    0x7ff815272000 -     0x7ff815273a8b  libSystem.B.dylib (1351) <38338C6F-32BA-3913-99EF-3276EB69F2B4> /usr/lib/libSystem.B.dylib
+    0x7ff8152ae000 -     0x7ff8152b4a47  libiconv.2.dylib (109.100.2) <7F0A7FA9-606C-3C82-8FBE-07BECE3AB7DC> /usr/lib/libiconv.2.dylib
+    0x7ffd14b44000 -     0x7ffd14b4b707  libRosetta.dylib (349) <A2D5AB2A-02FB-3E33-8433-D16A5CF209CA> /usr/lib/libRosetta.dylib
+    0x7ffd160ea000 -     0x7ffd160ee023  libsystem_darwindirectory.dylib (122) <F4366BE9-16AB-31D4-BE97-084DFDB6E361> /usr/lib/system/libsystem_darwindirectory.dylib
+    0x7ffd160ef000 -     0x7ffd160f6323  libsystem_eligibility.dylib (181.140.5) <42555080-4741-388A-B027-929D18CFB59F> /usr/lib/system/libsystem_eligibility.dylib
+    0x7ffd160f7000 -     0x7ffd160fc27f  libsystem_sanitizers.dylib (19) <BAD83526-183F-36D0-8A0A-FFCE14D32BB6> /usr/lib/system/libsystem_sanitizers.dylib

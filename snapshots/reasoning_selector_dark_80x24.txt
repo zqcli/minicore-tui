@@ -1,24 +1,24 @@
-MINICORE  v0.2.1
+ MINICORE  v0.2.7
 
-Coding agent TUI
-q / Ctrl+C to quit
+ Coding agent TUI
+ q / Ctrl+C to quit
 
-Open a session — /new, Ctrl+R, or F1 for help
+ Open a session — /new, Ctrl+R, or F1 for help
 
 
-┌──────────────────────────────────────────────────────────────────────────────┐
-│Select reasoning                                                              │
-│Current session: —                                                            │
-│New session setting: high                                                     │
-│  auto  Provider default                                                      │
-│  low  Light reasoning                                                        │
-│  medium  Moderate reasoning                                                  │
-│→ high  Deep reasoning                                                        │
-│(4/4)                                                                         │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
-/project                                                              no session
-Idle
+
+ ┌─────────────────────────────────────────────────────────────────────────────┐
+ │Select reasoning                                                             │
+ │Current session: —                                                           │
+ │New session setting: high                                                    │
+ │  auto  Provider default                                                     │
+ │  low  Light reasoning                                                       │
+ │  medium  Moderate reasoning                                                 │
+ │→ high  Deep reasoning                                                       │
+ │(4/4)                                                                        │
+ │                                                                             │
+ │                                                                             │
+ │                                                                             │
+ │                                                                             │
+ └─────────────────────────────────────────────────────────────────────────────┘
+ ● ready

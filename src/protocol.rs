@@ -23,6 +23,7 @@ pub const METHOD_SESSION_DELETE: &str = "session.delete";
 pub const METHOD_SESSION_STATE: &str = "session.state";
 pub const METHOD_SESSION_UPDATE: &str = "session.update";
 pub const METHOD_SESSION_HISTORY: &str = "session.history";
+pub const METHOD_SESSION_PRESENTATION: &str = "session.presentation";
 pub const METHOD_GET_HISTORY: &str = METHOD_SESSION_HISTORY;
 pub const METHOD_TURN_SEND: &str = "turn.send";
 pub const METHOD_TURN_CANCEL: &str = "turn.cancel";
@@ -187,6 +188,14 @@ impl OutgoingRequest {
         )
     }
 
+    pub fn session_presentation(id: RequestId, session_id: &str) -> Self {
+        Self::new(
+            id,
+            METHOD_SESSION_PRESENTATION,
+            json!({ "session_id": session_id }),
+        )
+    }
+
     pub fn send_turn(id: RequestId, session_id: &str, text: &str) -> Self {
         Self::new(
             id,
@@ -303,13 +312,16 @@ impl RpcResponse {
     pub fn parse_history(&self) -> Result<HistoryPageWire, RpcResponseError> {
         self.result_as()
     }
+    pub fn parse_session_presentation(&self) -> Result<SessionPresentationWire, RpcResponseError> {
+        self.result_as()
+    }
     pub fn parse_turn_send(&self) -> Result<TurnResult, RpcResponseError> {
         self.result_as()
     }
     pub fn parse_turn_wait(&self) -> Result<TurnResultViewWire, RpcResponseError> {
         self.result_as()
     }
-    pub fn parse_steer(&self) -> Result<OkResultWire, RpcResponseError> {
+    pub fn parse_steer(&self) -> Result<SteerResult, RpcResponseError> {
         self.result_as()
     }
     pub fn parse_cancel(&self) -> Result<CancelledResult, RpcResponseError> {
@@ -371,11 +383,20 @@ pub enum AgentEventWire {
     RequestStarted {
         data: RequestStartedDataWire,
     },
+    RequestUsage {
+        data: RequestUsageDataWire,
+    },
+    SteerProgress {
+        data: SteerProgressDataWire,
+    },
     OutputDelta {
         data: OutputDeltaDataWire,
     },
     ToolStarted {
         data: ToolStartedDataWire,
+    },
+    ToolPresentation {
+        data: ToolPresentationDataWire,
     },
     ToolProgress {
         data: ToolProgressDataWire,
@@ -433,6 +454,25 @@ pub struct RequestStartedDataWire {
     pub reasoning: Reasoning,
     pub meta: EventMetaWire,
 }
+/// Real per-request usage reported by the Agent while its loop is running
+/// (read-only; the TUI never treats it as a promise of the final total).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct RequestUsageDataWire {
+    pub turn: TurnRef,
+    pub request_index: u32,
+    pub usage: UsageWire,
+    pub meta: EventMetaWire,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SteerProgressDataWire {
+    pub turn: TurnRef,
+    pub request_index: u32,
+    /// Number of Steering User items present in the prepared prompt history
+    /// at this request boundary (authoritative; may lag the ACK counter).
+    pub applied_count: u64,
+    pub meta: EventMetaWire,
+}
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct OutputDeltaDataWire {
     pub turn: TurnRef,
@@ -447,6 +487,15 @@ pub struct ToolStartedDataWire {
     pub request_index: u32,
     pub tool_call_id: String,
     pub tool_name: String,
+    pub meta: EventMetaWire,
+}
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ToolPresentationDataWire {
+    pub turn: TurnRef,
+    pub request_index: u32,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub display: ToolDisplayWire,
     pub meta: EventMetaWire,
 }
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -492,11 +541,22 @@ pub enum OutputChannelWire {
     Reasoning,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ToolProgressWire {
     pub message: Option<String>,
     pub completed: Option<u64>,
     pub total: Option<u64>,
+}
+
+impl fmt::Debug for ToolProgressWire {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ToolProgressWire")
+            .field("message_bytes", &self.message.as_ref().map(String::len))
+            .field("completed", &self.completed)
+            .field("total", &self.total)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -511,10 +571,26 @@ pub enum ToolOutcomeWire {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Deserialize, Serialize)]
 pub struct ToolResultWire {
     pub outcome: ToolOutcomeWire,
     pub content_bytes: usize,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub content_truncated: bool,
+}
+
+impl fmt::Debug for ToolResultWire {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ToolResultWire")
+            .field("outcome", &self.outcome)
+            .field("content_bytes", &self.content_bytes)
+            .field("content_len", &self.content.as_ref().map(String::len))
+            .field("content_truncated", &self.content_truncated)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -768,10 +844,22 @@ pub struct SessionUpdateResult {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct TurnResult {
     pub turn: TurnRef,
+    #[serde(default)]
+    pub accepted_at: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct OkResultWire {
     pub ok: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SteerResult {
+    pub ok: bool,
+    #[serde(default)]
+    pub accepted_at: Option<String>,
+    /// 1-based FIFO acceptance index within the loop; absent on older Agents
+    /// that predate steer receipts. Progress receipts compare against it.
+    #[serde(default)]
+    pub steer_index: Option<u64>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct CancelledResult {
@@ -874,6 +962,8 @@ pub struct TurnResultViewWire {
     pub tool_rounds: u16,
     pub final_config_revision: u64,
     pub persistence: TurnPersistenceWire,
+    #[serde(default)]
+    pub accepted_at: Option<String>,
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct UsageWire {
@@ -926,13 +1016,26 @@ pub enum UserMessageKindWire {
     Prompt,
     Steering,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 pub struct UserHistoryViewWire {
     pub loop_id: String,
     pub kind: UserMessageKindWire,
     pub text: String,
+    #[serde(default)]
+    pub timestamp: Option<String>,
 }
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+impl fmt::Debug for UserHistoryViewWire {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("UserHistoryViewWire")
+            .field("loop_id", &self.loop_id)
+            .field("kind", &self.kind)
+            .field("text_bytes", &self.text.len())
+            .field("timestamp", &self.timestamp)
+            .finish()
+    }
+}
+#[derive(Clone, PartialEq, Deserialize)]
 pub struct AssistantHistoryViewWire {
     pub loop_id: String,
     pub request_index: u32,
@@ -943,6 +1046,25 @@ pub struct AssistantHistoryViewWire {
     pub tool_calls: Vec<ToolCallViewWire>,
     pub usage: UsageWire,
     pub finish_reason: String,
+    #[serde(default)]
+    pub parts: Option<Vec<AssistantDisplayPartWire>>,
+}
+impl fmt::Debug for AssistantHistoryViewWire {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AssistantHistoryViewWire")
+            .field("loop_id", &self.loop_id)
+            .field("request_index", &self.request_index)
+            .field("model", &self.model)
+            .field("reasoning_level", &self.reasoning_level)
+            .field("text_bytes", &self.text.len())
+            .field("reasoning_bytes", &self.reasoning.len())
+            .field("tool_call_count", &self.tool_calls.len())
+            .field("usage", &self.usage)
+            .field("finish_reason", &self.finish_reason)
+            .field("part_count", &self.parts.as_ref().map(Vec::len))
+            .finish()
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ToolCallViewWire {
@@ -950,8 +1072,10 @@ pub struct ToolCallViewWire {
     pub name: String,
     #[serde(default)]
     pub call_index: u32,
+    #[serde(default)]
+    pub display: Option<ToolDisplayWire>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 pub struct ToolResultHistoryViewWire {
     pub loop_id: String,
     pub request_index: u32,
@@ -959,10 +1083,136 @@ pub struct ToolResultHistoryViewWire {
     pub tool_name: String,
     pub outcome: ToolOutcomeWire,
     pub content: String,
+    #[serde(default)]
+    pub content_truncated: bool,
+}
+impl fmt::Debug for ToolResultHistoryViewWire {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ToolResultHistoryViewWire")
+            .field("loop_id", &self.loop_id)
+            .field("request_index", &self.request_index)
+            .field("tool_call_id", &self.tool_call_id)
+            .field("tool_name", &self.tool_name)
+            .field("outcome", &self.outcome)
+            .field("content_len", &self.content.len())
+            .field("content_truncated", &self.content_truncated)
+            .finish()
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SummaryHistoryViewWire {
     pub content: String,
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct ToolDisplayWire {
+    pub detail: String,
+    #[serde(default)]
+    pub expanded_input: Option<String>,
+    #[serde(default)]
+    pub input_line_count: Option<usize>,
+    #[serde(default)]
+    pub hidden_line_count: Option<usize>,
+    #[serde(default)]
+    pub truncated: bool,
+}
+impl fmt::Debug for ToolDisplayWire {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ToolDisplayWire")
+            .field("detail_bytes", &self.detail.len())
+            .field(
+                "expanded_input_bytes",
+                &self.expanded_input.as_ref().map(String::len),
+            )
+            .field("input_line_count", &self.input_line_count)
+            .field("hidden_line_count", &self.hidden_line_count)
+            .field("truncated", &self.truncated)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum AssistantDisplayPartWire {
+    Text { text: String },
+    Reasoning { text: String },
+    ToolCall { tool_call_id: String, name: String },
+}
+impl fmt::Debug for AssistantDisplayPartWire {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Text { text } => formatter
+                .debug_struct("AssistantDisplayPartWire::Text")
+                .field("text_bytes", &text.len())
+                .finish(),
+            Self::Reasoning { text } => formatter
+                .debug_struct("AssistantDisplayPartWire::Reasoning")
+                .field("text_bytes", &text.len())
+                .finish(),
+            Self::ToolCall { tool_call_id, name } => formatter
+                .debug_struct("AssistantDisplayPartWire::ToolCall")
+                .field("tool_call_id", tool_call_id)
+                .field("name", name)
+                .finish(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextKindWire {
+    Estimated,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ContextUsageWire {
+    #[serde(default)]
+    pub tokens: Option<u64>,
+    #[serde(default)]
+    pub window: Option<u64>,
+    #[serde(default)]
+    pub percent: Option<f64>,
+    pub kind: ContextKindWire,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct LastLoopWire {
+    pub loop_id: String,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub finished_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SessionPresentationWire {
+    pub session_id: String,
+    #[serde(default)]
+    pub model_label: Option<String>,
+    #[serde(default)]
+    pub git_branch: Option<String>,
+    pub context: ContextUsageWire,
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
+    #[serde(default)]
+    pub using_subscription: Option<bool>,
+    #[serde(default)]
+    pub last_loop: Option<LastLoopWire>,
+    /// Latest steering receipt committed at a real Model.start; used for
+    /// lost-event reconciliation after a dropped steer_progress event.
+    #[serde(default)]
+    pub steer_progress: Option<SteerProgressViewWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SteerProgressViewWire {
+    pub loop_id: String,
+    pub request_index: u32,
+    pub applied_count: u64,
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -973,11 +1223,40 @@ pub enum Reasoning {
     Low,
     Medium,
     High,
+    #[serde(rename = "xhigh")]
+    XHigh,
+    Max,
+    Ultra,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reasoning_wire_roundtrips_all_agent_levels() {
+        for (level, wire) in [
+            (Reasoning::Auto, "auto"),
+            (Reasoning::Disabled, "disabled"),
+            (Reasoning::Low, "low"),
+            (Reasoning::Medium, "medium"),
+            (Reasoning::High, "high"),
+            (Reasoning::XHigh, "xhigh"),
+            (Reasoning::Max, "max"),
+            (Reasoning::Ultra, "ultra"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(level).unwrap(),
+                serde_json::json!(wire),
+                "serialize {level:?}"
+            );
+            assert_eq!(
+                serde_json::from_value::<Reasoning>(serde_json::json!(wire)).unwrap(),
+                level,
+                "deserialize {wire}"
+            );
+        }
+    }
+
     #[test]
     fn version_gate_is_exactly_0_3_major_minor() {
         assert!(is_supported_agent_version("0.3.0"));
@@ -1013,5 +1292,28 @@ mod tests {
         let result: TurnResultViewWire = serde_json::from_value(value).unwrap();
         assert_eq!(result.requests, 2);
         assert_eq!(result.persistence, TurnPersistenceWire::Persisted);
+    }
+
+    #[test]
+    fn presentation_wire_debug_redacts_content_bodies() {
+        let display = ToolDisplayWire {
+            detail: "$ cat secret".to_owned(),
+            expanded_input: Some("private body".to_owned()),
+            input_line_count: Some(1),
+            hidden_line_count: Some(2),
+            truncated: false,
+        };
+        let result = ToolResultWire {
+            outcome: ToolOutcomeWire::Success,
+            content_bytes: 13,
+            content: Some("private result".to_owned()),
+            content_truncated: false,
+        };
+        let debug = format!("{display:?} {result:?}");
+        assert!(!debug.contains("secret"));
+        assert!(!debug.contains("private body"));
+        assert!(!debug.contains("private result"));
+        assert!(debug.contains("detail_bytes"));
+        assert!(debug.contains("content_len"));
     }
 }

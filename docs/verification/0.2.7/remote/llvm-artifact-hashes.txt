@@ -1,0 +1,5 @@
+3548462a1b5155967e16b3373b520633ec2728375f788a2940cd365e7542b7e5  /root/minicore-tui-027-RXdxEP/artifacts-llvm/minicore-tui-0.2.6-debug-macos
+55fcae84f309448926212dd12d0f88af950045f1e0d97546543fda782d4fd638  /root/minicore-tui-027-RXdxEP/artifacts-llvm/minicore-tui-0.2.7-debug-macos
+a3b23dac99a0e998f7406b108dd89aca90a93e7cd8560558406b4d142048fdd9  /root/minicore-tui-027-RXdxEP/artifacts-llvm/minicore-tui-0.2.7-release-macos
+497f63f4585fc45a24bdf0f5598248e253a059164c424896ee1ab0f736668785  /root/minicore-tui-027-RXdxEP/artifacts-llvm/minicore-tui-lib-tests-0.2.7-macos
+473123563f3d48ed423443ba69f678b6c787050837e0c0e8f3df7fe010f82d6e  /root/minicore-tui-027-RXdxEP/artifacts-llvm/terminal-restore-0.2.7-macos

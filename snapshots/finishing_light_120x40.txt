@@ -1,18 +1,16 @@
-MINICORE  v0.2.1
+ ▎
+ ▎ stream me
+ ▎ time pending
+ ▎
 
-Coding agent TUI
-q / Ctrl+C to quit
+  Streaming content
 
-Open a session — /new, Ctrl+R, or F1 for help
+ ▎thinking hard
 
- stream me
+ ▎ read
+ ▎ read
 
- thinking hard
-
- Streaming contentmore
-
- read                                                                                                           running
-  reading…
+  more
 
 
 
@@ -30,11 +28,13 @@ Open a session — /new, Ctrl+R, or F1 for help
 
 
 
-⠋ Saving
-╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│Saving turn…                                                                                                          │
-│                                                                                                                      │
-│                                                                                                                      │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-/project                                                                                                            Task
-Saving                                                                                   request 0 · deep · high · rev 0
+
+
+
+
+ ⠋ Saving
+ ▎
+ ▎Saving turn…
+ ▎
+ ▎
+ ▸ project · deep · high · ⚠ incomplete                                                                            ctx ?

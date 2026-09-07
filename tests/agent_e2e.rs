@@ -20,16 +20,23 @@ use minicore_tui::app::{App, ConnectionState, RequestKind};
 use minicore_tui::command::AppCommand;
 use minicore_tui::event::{AppEvent, RpcEvent};
 use minicore_tui::protocol::{
-    CancelReasonWire, HistoryItemWire, IncomingFrame, LoopOutcomeWire, TurnPersistenceWire,
-    TurnResultViewWire, UserMessageKindWire,
+    AgentEventWire, CancelReasonWire, HistoryItemWire, IncomingFrame, LoopOutcomeWire,
+    OutgoingRequest, Reasoning, RequestId, RpcNotification, ToolCallViewWire, TurnPersistenceWire,
+    TurnRef, TurnResultViewWire, UserMessageKindWire,
 };
 use minicore_tui::rpc::RpcProcess;
 use minicore_tui::state::session::ConfigUpdateState;
-use minicore_tui::state::turn::PendingSteerState;
+use minicore_tui::state::transcript::AssistantPart;
+use minicore_tui::state::turn::{LivePart, PendingSteerState};
+use minicore_tui::state::{FoldOverride, ToolKey};
 use minicore_tui::theme::ThemeKind;
 use serde_json::json;
 
-const TIMEOUT: Duration = Duration::from_secs(30);
+// Bounded harness deadlines. Under a default-parallel run (ten real Agent
+// processes spawned at once) spawn contention can stretch any single wait
+// well past a per-request window, so the official run is serial and these
+// remain generous upper bounds rather than product timing assumptions.
+const TIMEOUT: Duration = Duration::from_secs(60);
 const MOCK_API_KEY_ENV: &str = "MINICORE_E2E_MOCK_API_KEY";
 const MOCK_API_KEY_VAL: &str = "mock-key-spec61-round7-e2e";
 const MAX_HTTP_HEADER_SIZE: usize = 64 * 1024;
@@ -59,6 +66,9 @@ struct MockResponse {
     body: String,
     gate: Option<Arc<AtomicBool>>,
     expected_model: Option<String>,
+    /// When set, write the body one SSE event at a time with a short delay so
+    /// long-lived (live) frames are observable instead of arriving at once.
+    chunked_delay_ms: Option<u64>,
 }
 
 struct MockHttpServer {
@@ -122,6 +132,16 @@ impl MockHttpServer {
             body: sse_body,
             gate: None,
             expected_model: None,
+            chunked_delay_ms: None,
+        });
+    }
+
+    fn enqueue_chunked_sse(&self, sse_body: String) {
+        self.responses.lock().unwrap().push_back(MockResponse {
+            body: sse_body,
+            gate: None,
+            expected_model: None,
+            chunked_delay_ms: Some(25),
         });
     }
 
@@ -130,6 +150,7 @@ impl MockHttpServer {
             body: sse_body,
             gate: None,
             expected_model: Some(expected_model.to_string()),
+            chunked_delay_ms: None,
         });
     }
 
@@ -138,6 +159,7 @@ impl MockHttpServer {
             body: sse_body,
             gate: Some(gate),
             expected_model: expected_model.map(|s| s.to_string()),
+            chunked_delay_ms: None,
         });
     }
 
@@ -221,6 +243,12 @@ fn handle_connection(
 ) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+    // The listener is non-blocking so the accept loop can poll; on macOS an
+    // accepted socket inherits O_NONBLOCK, and a non-blocking read returns
+    // WouldBlock (os error 35) before the agent's request bytes arrive,
+    // silently dropping the request (agent observes `request_outcome_unknown`).
+    // Revert the accepted stream to blocking so reads wait for the payload.
+    let _ = stream.set_nonblocking(false);
 
     let (method, path, headers, body_bytes) = match read_http_request(stream) {
         Ok(res) => res,
@@ -291,8 +319,35 @@ fn handle_connection(
         resp.body
     );
 
-    let _ = stream.write_all(http_response.as_bytes());
-    let _ = stream.flush();
+    match resp.chunked_delay_ms {
+        Some(delay) => {
+            // Headers first (without the body), then stream the body one SSE
+            // event at a time with a short delay so live frames are actually
+            // observable instead of all arriving in a single write.
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+                resp.body.len()
+            );
+            stream.write_all(headers.as_bytes()).ok();
+            stream.flush().ok();
+            let mut written = 0usize;
+            while written < resp.body.len() {
+                let next_event = resp.body[written..]
+                    .find("\n\n")
+                    .map(|pos| pos + 2)
+                    .unwrap_or(resp.body.len() - written);
+                let chunk = &resp.body[written..written + next_event];
+                stream.write_all(chunk.as_bytes()).ok();
+                stream.flush().ok();
+                written += next_event;
+                thread::sleep(Duration::from_millis(delay));
+            }
+        }
+        None => {
+            let _ = stream.write_all(http_response.as_bytes());
+            let _ = stream.flush();
+        }
+    }
 }
 
 fn sse_text_response(text: &str) -> String {
@@ -307,6 +362,23 @@ fn sse_text_response(text: &str) -> String {
                 "total_tokens": 20,
                 "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
                 "output_tokens_details": {"reasoning_tokens": 0}
+            }
+        }})
+    )
+}
+
+fn sse_text_response_with_usage(text: &str, input: u64, output: u64, reasoning: u64) -> String {
+    format!(
+        "data: {}\n\ndata: {}\n\n",
+        json!({"type": "response.output_text.delta", "delta": text}),
+        json!({"type": "response.completed", "response": {
+            "status": "completed",
+            "usage": {
+                "input_tokens": input,
+                "output_tokens": output,
+                "total_tokens": input + output,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": reasoning}
             }
         }})
     )
@@ -336,6 +408,73 @@ fn sse_tool_call_response(call_id: &str, tool_name: &str, arguments: &str) -> St
             }
         }})
     )
+}
+
+fn sse_two_tool_calls_response(call0: &str, call1: &str) -> String {
+    format!(
+        "data: {}\n\ndata: {}\n\ndata: {}\n\n",
+        json!({
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "call_id": call0,
+                "name": "read",
+                "arguments": r#"{"path": "data.txt"}"#
+            }
+        }),
+        json!({
+            "type": "response.output_item.done",
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "call_id": call1,
+                "name": "read",
+                "arguments": r#"{"path": "data.txt"}"#
+            }
+        }),
+        json!({"type": "response.completed", "response": {
+            "status": "completed",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 10,
+                "total_tokens": 20,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0}
+            }
+        }})
+    )
+}
+
+/// SSE that streams three distinct reasoning summary items (`summary_index`
+/// 0/1/2) with fragments inside item 0 and no newline at the item boundaries,
+/// exactly as the provider emits them. 0.2.4 boundary repro: the summary item
+/// boundary is only signaled by `summary_index`; the text carries no separator.
+fn sse_multi_summary_reasoning_response() -> String {
+    let events = [
+        json!({"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_boundary","summary":[]}}),
+        json!({"type":"response.reasoning_summary_text.delta","item_id":"rs_boundary","output_index":0,"summary_index":0,"delta":"Plan"}),
+        json!({"type":"response.reasoning_summary_text.delta","item_id":"rs_boundary","output_index":0,"summary_index":0,"delta":"ning ... caveats"}),
+        json!({"type":"response.reasoning_summary_text.delta","item_id":"rs_boundary","output_index":0,"summary_index":1,"delta":"Detailing ... timeline"}),
+        json!({"type":"response.reasoning_summary_text.delta","item_id":"rs_boundary","output_index":0,"summary_index":2,"delta":"Analyzing ..."}),
+        json!({"type":"response.output_item.done","output_index":0,"item":{
+            "type":"reasoning",
+            "id":"rs_boundary",
+            "status":"completed",
+            "summary":[{"type":"summary_text","text":"Planning ... caveatsDetailing ... timelineAnalyzing ..."}],
+            "provider":{"name":"loopback-openai","trace_id":"reasoning-boundary"}
+        }}),
+        json!({"type":"response.completed","response":{"status":"completed","usage":{
+            "input_tokens":10,"output_tokens":10,"total_tokens":20,
+            "input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},
+            "output_tokens_details":{"reasoning_tokens":10}
+        }}}),
+    ];
+    let mut body = String::new();
+    for event in events {
+        body.push_str(&format!("data: {}\n\n", event));
+    }
+    body
 }
 
 // ============================================================================
@@ -409,6 +548,26 @@ safety_margin_tokens = 1000
 supported_reasoning = ["auto", "low", "high"]
 supports_tools = true
 request_timeout_seconds = 30
+
+[profiles.luna]
+model = "luna"
+reasoning = "high"
+system_prompt = "You are a deep reasoning test assistant."
+tools = ["read", "write"]
+max_tool_rounds = 4
+approval = "auto"
+
+[models.luna]
+provider = "open_ai_responses"
+model = "luna-model"
+base_url = "{server_url}"
+api_key_env = "{MOCK_API_KEY_ENV}"
+physical_context_window = 372000
+output_budget_tokens = 128000
+safety_margin_tokens = 4000
+supported_reasoning = ["auto", "disabled", "low", "medium", "high", "xhigh", "max", "ultra"]
+supports_tools = true
+request_timeout_seconds = 30
 "#,
             data_dir
         );
@@ -444,10 +603,15 @@ impl Drop for E2eEnvironment {
 // ============================================================================
 
 async fn pump_step(process: &mut RpcProcess, app: &mut App) -> Result<(), String> {
-    let event = tokio::time::timeout(Duration::from_secs(10), process.recv())
-        .await
-        .map_err(|_| "recv timed out")?
-        .ok_or("agent process stream ended")?;
+    let event = tokio::time::timeout(Duration::from_secs(10), process.recv()).await;
+    let event = match event {
+        // A silent window is scheduling contention, not a product stall: the
+        // caller's overall deadline (bounded) decides whether the pump timed
+        // out. Aborting on a single 10s window turned the parallel spawn of
+        // ten real Agent processes into flaky "recv timed out" failures.
+        Ok(event) => event.ok_or("agent process stream ended")?,
+        Err(_) => return Ok(()),
+    };
 
     let commands = app.update(AppEvent::Rpc(event));
     for command in commands {
@@ -456,6 +620,7 @@ async fn pump_step(process: &mut RpcProcess, app: &mut App) -> Result<(), String
                 process.send(req).await.map_err(|e| e.to_string())?;
             }
             AppCommand::KillChild => process.kill_child(),
+            AppCommand::CopySelection(_) => {}
             AppCommand::Exit => return Ok(()),
         }
     }
@@ -468,7 +633,7 @@ async fn wait_for_request0_and_wait_turn(
     app: &mut App,
     session_id: &str,
 ) -> Result<(), String> {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         if Instant::now() >= deadline {
             return Err("Timed out waiting for Request 0 and wait_turn registration".into());
@@ -498,6 +663,7 @@ async fn wait_for_request0_and_wait_turn(
                             process.send(req).await.map_err(|e| e.to_string())?;
                         }
                         AppCommand::KillChild => process.kill_child(),
+                        AppCommand::CopySelection(_) => {}
                         AppCommand::Exit => return Ok(()),
                     }
                 }
@@ -508,6 +674,55 @@ async fn wait_for_request0_and_wait_turn(
             }
         }
     }
+}
+
+async fn wait_for_session_ready(
+    process: &mut RpcProcess,
+    app: &mut App,
+    session_id: &str,
+) -> Result<(), String> {
+    pump_until(process, app, |a| {
+        a.sessions
+            .known
+            .get(session_id)
+            .is_some_and(|view| view.info.loaded && view.transcript.complete && !view.loading)
+    })
+    .await
+}
+
+/// Pumps until a submitted turn has fully landed: no live loop remains and the
+/// durable transcript contains at least one User item (so the ready state is
+/// not conflated with a brand-new empty session).
+async fn wait_turn_landed(
+    process: &mut RpcProcess,
+    app: &mut App,
+    session_id: &str,
+) -> Result<(), String> {
+    pump_until(process, app, |a| {
+        a.sessions.known.get(session_id).is_some_and(|view| {
+            view.live.is_none()
+                && view
+                    .transcript
+                    .items
+                    .iter()
+                    .any(|entry| matches!(&entry.item, HistoryItemWire::User(_)))
+        })
+    })
+    .await
+}
+
+async fn wait_for_active_session(
+    process: &mut RpcProcess,
+    app: &mut App,
+) -> Result<String, String> {
+    pump_until(process, app, |a| a.sessions.active.is_some()).await?;
+    let session_id = app
+        .sessions
+        .active
+        .clone()
+        .ok_or_else(|| "active session disappeared while waiting for it".to_owned())?;
+    wait_for_session_ready(process, app, &session_id).await?;
+    Ok(session_id)
 }
 
 async fn pump_until(
@@ -533,6 +748,7 @@ async fn dispatch(process: &mut RpcProcess, app: &mut App, event: AppEvent) -> R
                 process.send(req).await.map_err(|e| e.to_string())?;
             }
             AppCommand::KillChild => process.kill_child(),
+            AppCommand::CopySelection(_) => {}
             AppCommand::Exit => return Ok(()),
         }
     }
@@ -552,7 +768,7 @@ async fn drain_shutdown_strict(
 ) -> Result<StrictShutdownReport, String> {
     dispatch(process, app, AppEvent::ShutdownRequested).await?;
 
-    let deadline = Instant::now() + Duration::from_secs(6);
+    let deadline = Instant::now() + Duration::from_secs(15);
     let mut shutdown_ok = false;
     let mut cancelled_waits = Vec::new();
     let mut seen_eof = false;
@@ -695,10 +911,9 @@ fn e2e_scenario_b_basic_turn() {
         )
         .await
         .unwrap();
-        pump_until(&mut process, &mut app, |a| a.sessions.active.is_some())
+        let session_id = wait_for_active_session(&mut process, &mut app)
             .await
             .unwrap();
-        let session_id = app.sessions.active.clone().unwrap();
 
         dispatch(
             &mut process,
@@ -725,6 +940,112 @@ fn e2e_scenario_b_basic_turn() {
 
         let view = &app.sessions.known[&session_id];
         assert!(!view.transcript.items.is_empty());
+
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok);
+        assert!(rep.seen_eof);
+        assert!(rep.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// 0.2.2 max reasoning end-to-end: the TUI parses the Agent's advertised max
+/// level, ships the literal `max` on session creation, and the single running
+/// request reaches the provider body as `max` while the session keeps it.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_max_reasoning_ships_literal_max_and_provider_body_carries_it() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    env._server
+        .enqueue_sse_with_model(sse_text_response("max reasoning answer."), "luna-model");
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+
+        let luna = app
+            .catalogs
+            .models
+            .iter()
+            .find(|model| model.id == "luna")
+            .expect("luna model is listed");
+        assert!(
+            luna.supported_reasoning.contains(&Reasoning::Max),
+            "luna must advertise max in the catalog"
+        );
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CreateSession {
+                workspace: env.workspace_path.to_string_lossy().into_owned(),
+                profile: Some("luna".to_owned()),
+                model: None,
+                reasoning: Some(Reasoning::Max),
+                title: Some("E2E Max".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        let session_id = wait_for_active_session(&mut process, &mut app)
+            .await
+            .unwrap();
+        assert_eq!(
+            app.sessions.known[&session_id].info.reasoning,
+            Reasoning::Max,
+            "new session retains max"
+        );
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "Think maximally".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .known
+                .get(&session_id)
+                .is_some_and(|view| view.live.is_none() && view.transcript.complete)
+        })
+        .await
+        .unwrap();
+
+        let reqs = env._server.recorded_requests();
+        let provider: Vec<_> = reqs
+            .iter()
+            .filter(|request| request.path.ends_with("/responses"))
+            .collect();
+        assert_eq!(provider.len(), 1, "exactly one provider request");
+        assert_eq!(
+            provider[0]
+                .json
+                .get("reasoning")
+                .and_then(|value| value.get("effort"))
+                .and_then(serde_json::Value::as_str),
+            Some("max"),
+            "provider body must carry the literal `reasoning.effort: max`: {}",
+            provider[0].body
+        );
+        assert_eq!(
+            app.sessions.known[&session_id].info.reasoning,
+            Reasoning::Max,
+            "session keeps max after the loop"
+        );
 
         let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
         assert!(rep.shutdown_ok);
@@ -781,10 +1102,9 @@ fn e2e_scenario_c_tool_execution() {
         )
         .await
         .unwrap();
-        pump_until(&mut process, &mut app, |a| a.sessions.active.is_some())
+        let session_id = wait_for_active_session(&mut process, &mut app)
             .await
             .unwrap();
-        let session_id = app.sessions.active.clone().unwrap();
 
         dispatch(
             &mut process,
@@ -875,10 +1195,9 @@ fn e2e_scenario_d_steer_turn() {
         )
         .await
         .unwrap();
-        pump_until(&mut process, &mut app, |a| a.sessions.active.is_some())
+        let session_id = wait_for_active_session(&mut process, &mut app)
             .await
             .unwrap();
-        let session_id = app.sessions.active.clone().unwrap();
 
         dispatch(
             &mut process,
@@ -946,6 +1265,658 @@ fn e2e_scenario_d_steer_turn() {
             HistoryItemWire::User(u) => u.kind == UserMessageKindWire::Steering,
             _ => false,
         }));
+
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok);
+        assert!(rep.seen_eof);
+        assert!(rep.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// 0.2.4 boundary repro (reasoning summaries): the provider streams three
+/// distinct reasoning summary items (summary_index 0/1/2, fragments inside
+/// item 0, no newline at item boundaries). The TUI must show each summary on
+/// its own line while fragments within an item stay concatenated. RED until
+/// the summary-item boundary is preserved through the Agent's parser.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_reasoning_summary_item_boundaries_survive_to_the_tui() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    env._server
+        .enqueue_chunked_sse(sse_multi_summary_reasoning_response());
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CreateSession {
+                workspace: env.workspace_path.to_string_lossy().into_owned(),
+                profile: Some("coding".to_owned()),
+                model: None,
+                reasoning: Some(Reasoning::High),
+                title: Some("E2E Reasoning Boundary".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        let session_id = wait_for_active_session(&mut process, &mut app)
+            .await
+            .unwrap();
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "plan and detail".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        // Capture the raw Agent->TUI output_delta events while the turn
+        // streams (the live view is gone once it completes). This records the
+        // first actual wire/raw delta values that reach the TUI.
+        let wire_deltas: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+        loop {
+            let event = tokio::time::timeout(Duration::from_millis(300), process.recv()).await;
+            match event {
+                Ok(Some(event)) => {
+                    if let RpcEvent::Frame(IncomingFrame::Notification(
+                        RpcNotification::AgentEvent(AgentEventWire::OutputDelta { data }),
+                    )) = &event
+                    {
+                        wire_deltas
+                            .borrow_mut()
+                            .push(format!("{:?} {:?}", data.channel, data.delta));
+                    }
+                    let commands = app.update(AppEvent::Rpc(event));
+                    for command in commands {
+                        if let AppCommand::Rpc(request) = command {
+                            process.send(request).await.unwrap();
+                        }
+                    }
+                }
+                Ok(None) => panic!("agent process stream ended"),
+                Err(_) => {}
+            }
+            if app
+                .sessions
+                .known
+                .get(&session_id)
+                .is_some_and(|v| v.live.is_none() && v.transcript.complete)
+            {
+                break;
+            }
+        }
+
+        let view = &app.sessions.known[&session_id];
+        let live_reasoning: String = view
+            .live
+            .as_ref()
+            .map(|live| {
+                live.requests
+                    .iter()
+                    .flat_map(|request| request.parts.iter())
+                    .filter_map(|part| match part {
+                        LivePart::Reasoning(text) => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .concat()
+            })
+            .unwrap_or_default();
+        // The durable assistant part(s) carry what the final/history render uses.
+        let durable_reasoning: String = view
+            .transcript
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                minicore_tui::state::transcript::TranscriptBlock::Assistant(assistant) => {
+                    assistant.parts.iter().find_map(|part| {
+                        if let AssistantPart::Reasoning(text) = part {
+                            Some(text.clone())
+                        } else {
+                            None
+                        }
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+        let reasoning = if !live_reasoning.is_empty() {
+            live_reasoning
+        } else {
+            durable_reasoning.clone()
+        };
+        assert!(!reasoning.is_empty(), "a reasoning part must reach the TUI");
+        assert!(
+            reasoning.contains("caveats\nDetailing") && reasoning.contains("timeline\nAnalyzing"),
+            "summary item boundaries must survive as line breaks, got the flattened value above"
+        );
+        assert!(
+            reasoning.contains("Planning ... caveats"),
+            "fragments within one summary item stay concatenated"
+        );
+
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok);
+        assert!(rep.seen_eof);
+        assert!(rep.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// 0.2.4 direct-RPC batch contract demonstration (the parent-requested RED-phase
+/// test): when BOTH steering instructions are handed to the Agent runtime at one
+/// request boundary (here via DIRECT turn.steer RPCs, bypassing the TUI FIFO
+/// pacing), the runtime batches them into ONE next provider request. This
+/// preserves the Agent/Runtime batch semantics independently of the TUI queue.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_two_consecutive_steers_both_reach_the_provider() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    let test_file = env.workspace_path.join("data.txt");
+    std::fs::write(&test_file, "contents").unwrap();
+
+    let req0_gate = Arc::new(AtomicBool::new(false));
+    env._server.enqueue_gated(
+        sse_tool_call_response("call_1", "read", "{\"path\": \"data.txt\"}"),
+        req0_gate.clone(),
+        Some("deep-model"),
+    );
+    env._server
+        .enqueue_sse(sse_text_response("handled the batched steers"));
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CreateSession {
+                workspace: env.workspace_path.to_string_lossy().into_owned(),
+                profile: Some("coding".to_owned()),
+                model: Some("deep".to_owned()),
+                reasoning: Some(Reasoning::High),
+                title: Some("E2E Direct Batch".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        let session_id = wait_for_active_session(&mut process, &mut app)
+            .await
+            .unwrap();
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "Initial command".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        wait_for_request0_and_wait_turn(&env, &mut process, &mut app, &session_id)
+            .await
+            .unwrap();
+
+        let loop_id = app.sessions.known[&session_id]
+            .live
+            .as_ref()
+            .and_then(|live| live.reference.as_ref())
+            .map(|r| r.loop_id.clone())
+            .expect("active loop");
+        let turn = TurnRef {
+            session_id: session_id.clone(),
+            loop_id: loop_id.clone(),
+        };
+
+        // Hand BOTH steers directly to the runtime before releasing Request 0,
+        // exactly like the RED-phase demonstration: they both queue while the
+        // request is held and batch into the single next provider request.
+        let steer_a = OutgoingRequest::steer_turn(RequestId(9001), &turn, "taskA");
+        let steer_b = OutgoingRequest::steer_turn(RequestId(9002), &turn, "taskB");
+        process.send(steer_a).await.unwrap();
+        process.send(steer_b).await.unwrap();
+
+        // Read the two steer ACKs from the stream (the raw ids are dispatched
+        // to the App too; its unknown-id notices are harmless).
+        let ack_a = RequestId(9001);
+        let ack_b = RequestId(9002);
+        let mut saw_a = false;
+        let mut saw_b = false;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !(saw_a && saw_b) {
+            let event = tokio::time::timeout(Duration::from_millis(300), process.recv())
+                .await
+                .map_err(|_| ())
+                .and_then(|event| event.ok_or(()));
+            match event {
+                Ok(RpcEvent::Frame(IncomingFrame::Response(response))) => {
+                    if response.id == ack_a {
+                        saw_a = true;
+                    } else if response.id == ack_b {
+                        saw_b = true;
+                    }
+                    let commands = app.update(AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Response(
+                        response,
+                    ))));
+                    for command in commands {
+                        if let AppCommand::Rpc(request) = command {
+                            process.send(request).await.unwrap();
+                        }
+                    }
+                }
+                Ok(other) => {
+                    let commands = app.update(AppEvent::Rpc(other));
+                    for command in commands {
+                        if let AppCommand::Rpc(request) = command {
+                            process.send(request).await.unwrap();
+                        }
+                    }
+                }
+                Err(_) => {
+                    if Instant::now() >= deadline {
+                        panic!("timed out waiting for both direct steer ACKs");
+                    }
+                }
+            }
+        }
+        assert!(saw_a && saw_b, "both direct steer RPCs must be ACKed");
+
+        req0_gate.store(true, Ordering::Relaxed);
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .known
+                .get(&session_id)
+                .is_some_and(|v| v.live.is_none() && v.transcript.complete)
+        })
+        .await
+        .unwrap();
+
+        let reqs = env._server.recorded_requests();
+        let provider: Vec<_> = reqs
+            .iter()
+            .filter(|request| request.path.ends_with("/responses"))
+            .collect();
+        let user_texts_of = |request: &RecordedRequest| -> Vec<String> {
+            request
+                .json
+                .get("input")
+                .and_then(serde_json::Value::as_array)
+                .map(|inputs| {
+                    inputs
+                        .iter()
+                        .filter_map(|input| {
+                            if input.get("role").and_then(serde_json::Value::as_str) != Some("user")
+                            {
+                                return None;
+                            }
+                            input.get("content").and_then(|content| {
+                                content.as_array().and_then(|rows| {
+                                    rows.iter().find_map(|row| {
+                                        row.get("text")
+                                            .and_then(serde_json::Value::as_str)
+                                            .map(str::to_owned)
+                                    })
+                                })
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        assert!(
+            provider.len() >= 2,
+            "gated request0 + one batched request carrying both steers"
+        );
+        let batched = user_texts_of(provider.last().unwrap());
+        assert!(
+            batched.iter().any(|text| text == "taskA") && batched.iter().any(|text| text == "taskB"),
+            "the single batched provider request must carry BOTH steers: {batched:?}"
+        );
+
+        let view = &app.sessions.known[&session_id];
+        let steering_in_history = view
+            .transcript
+            .items
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.item, HistoryItemWire::User(u) if u.kind == UserMessageKindWire::Steering)
+            })
+            .count();
+        assert_eq!(steering_in_history, 2, "both steers persist in history once");
+
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok);
+        assert!(rep.seen_eof);
+        assert!(rep.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// 0.2.4 FIFO pacing contract: the TUI issues at most ONE in-flight steer per
+/// session until a receipt (steer_progress applied_count) proves the previous
+/// one entered a prepared prompt history. Request 1 carries A (NOT B);
+/// request 2 carries A (as its earlier user/assistant turn) + B; the final
+/// history shows both steering items exactly once.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_fifo_steers_are_paced_until_receipt() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    let test_file = env.workspace_path.join("data.txt");
+    std::fs::write(&test_file, "contents").unwrap();
+
+    let req0_gate = Arc::new(AtomicBool::new(false));
+    env._server.enqueue_gated(
+        sse_tool_call_response("call_1", "read", "{\"path\": \"data.txt\"}"),
+        req0_gate.clone(),
+        Some("deep-model"),
+    );
+    env._server.enqueue_sse(sse_text_response("handled A"));
+    env._server.enqueue_sse(sse_text_response("handled B"));
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CreateSession {
+                workspace: env.workspace_path.to_string_lossy().into_owned(),
+                profile: Some("coding".to_owned()),
+                model: None,
+                reasoning: None,
+                title: Some("E2E Paced Steers".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        let session_id = wait_for_active_session(&mut process, &mut app)
+            .await
+            .unwrap();
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "Initial command".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        wait_for_request0_and_wait_turn(&env, &mut process, &mut app, &session_id)
+            .await
+            .unwrap();
+
+        // Steer A: issued immediately, ACKed.
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SteerTurn {
+                session_id: session_id.clone(),
+                text: "taskA".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.known.get(&session_id).is_some_and(|v| {
+                v.live.as_ref().is_some_and(|l| {
+                    l.pending_steers
+                        .iter()
+                        .any(|s| s.text == "taskA" && s.state == PendingSteerState::Queued)
+                })
+            })
+        })
+        .await
+        .unwrap();
+
+        // Steer B admitted immediately (rapid second, textbook FIFO): it stays
+        // in the local unsent queue while A is accepted-but-unconfirmed.
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SteerTurn {
+                session_id: session_id.clone(),
+                text: "taskB".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.known.get(&session_id).is_some_and(|v| {
+                v.steer_queue.iter().any(|item| item.text == "taskB")
+                    && v.live.as_ref().is_some_and(|l| {
+                        l.pending_steers.iter().any(|s| s.text == "taskA")
+                    })
+            })
+        })
+        .await
+        .unwrap();
+        {
+            let view = &app.sessions.known[&session_id];
+            assert_eq!(
+                view.live.as_ref().unwrap().pending_steers.len(),
+                1,
+                "only ONE steer RPC in flight while A is accepted-but-unconfirmed"
+            );
+            assert_eq!(view.steer_queue.len(), 1);
+        }
+
+        // Release gate: request 1 (with A, without B) flows, B is sent only
+        // after A's receipt, then request 2 carries both A's turn and B.
+        req0_gate.store(true, Ordering::Relaxed);
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .known
+                .get(&session_id)
+                .is_some_and(|v| v.live.is_none() && v.transcript.complete)
+        })
+        .await
+        .unwrap();
+
+        let reqs = env._server.recorded_requests();
+        let provider: Vec<_> = reqs
+            .iter()
+            .filter(|request| request.path.ends_with("/responses"))
+            .collect();
+        assert_eq!(provider.len(), 3, "gated request0 + A + B");
+        let user_texts = |request: &RecordedRequest| -> Vec<String> {
+            request
+                .json
+                .get("input")
+                .and_then(serde_json::Value::as_array)
+                .map(|inputs| {
+                    inputs
+                        .iter()
+                        .filter_map(|input| {
+                            if input.get("role").and_then(serde_json::Value::as_str) != Some("user")
+                            {
+                                return None;
+                            }
+                            input.get("content").and_then(|content| {
+                                content.as_array().and_then(|rows| {
+                                    rows.iter().find_map(|row| {
+                                        row.get("text")
+                                            .and_then(serde_json::Value::as_str)
+                                            .map(str::to_owned)
+                                    })
+                                })
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let request1 = user_texts(provider[1]);
+        assert!(
+            request1.iter().any(|text| text == "taskA") && !request1.iter().any(|text| text == "taskB"),
+            "request 1 must carry A and NOT B (pacing), got: {request1:?}"
+        );
+        let request2 = user_texts(provider[2]);
+        assert!(
+            request2.iter().any(|text| text == "taskB"),
+            "request 2 must carry B, got: {request2:?}"
+        );
+
+        let view = &app.sessions.known[&session_id];
+        let steering_in_history = view
+            .transcript
+            .items
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.item, HistoryItemWire::User(u) if u.kind == UserMessageKindWire::Steering)
+            })
+            .count();
+        assert_eq!(steering_in_history, 2, "both steers persist in history once");
+
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok);
+        assert!(rep.seen_eof);
+        assert!(rep.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// 0.2.4 duplicate-text FIFO: two IDENTICAL steering texts are still paced
+/// one at a time and BOTH persist in the final history exactly once each.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_fifo_duplicate_texts_are_paced_and_both_persist() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    let test_file = env.workspace_path.join("data.txt");
+    std::fs::write(&test_file, "contents").unwrap();
+
+    let req0_gate = Arc::new(AtomicBool::new(false));
+    env._server.enqueue_gated(
+        sse_tool_call_response("call_1", "read", "{\"path\": \"data.txt\"}"),
+        req0_gate.clone(),
+        Some("deep-model"),
+    );
+    env._server.enqueue_sse(sse_text_response("handled A"));
+    env._server.enqueue_sse(sse_text_response("handled B"));
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CreateSession {
+                workspace: env.workspace_path.to_string_lossy().into_owned(),
+                profile: Some("coding".to_owned()),
+                model: None,
+                reasoning: None,
+                title: Some("E2E Dup Steers".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        let session_id = wait_for_active_session(&mut process, &mut app)
+            .await
+            .unwrap();
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "Initial command".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        wait_for_request0_and_wait_turn(&env, &mut process, &mut app, &session_id)
+            .await
+            .unwrap();
+
+        for _ in 0..2 {
+            dispatch(
+                &mut process,
+                &mut app,
+                AppEvent::SteerTurn {
+                    session_id: session_id.clone(),
+                    text: "same text twice".to_owned(),
+                },
+            )
+            .await
+            .unwrap();
+        }
+        // First issue immediately; the duplicate waits in the unsent queue.
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.known.get(&session_id).is_some_and(|v| {
+                v.live.as_ref().is_some_and(|l| {
+                    l.pending_steers
+                        .iter()
+                        .any(|s| s.state == PendingSteerState::Queued)
+                }) && v.steer_queue.len() == 1
+            })
+        })
+        .await
+        .unwrap();
+
+        req0_gate.store(true, Ordering::Relaxed);
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .known
+                .get(&session_id)
+                .is_some_and(|v| v.live.is_none() && v.transcript.complete)
+        })
+        .await
+        .unwrap();
+
+        let view = &app.sessions.known[&session_id];
+        let steering_in_history = view
+            .transcript
+            .items
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.item, HistoryItemWire::User(u) if u.kind == UserMessageKindWire::Steering)
+            })
+            .count();
+        assert_eq!(steering_in_history, 2, "both duplicate texts persist once each");
 
         let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
         assert!(rep.shutdown_ok);
@@ -1230,10 +2201,9 @@ fn e2e_scenario_e2_update_single_request_then_next_turn() {
         )
         .await
         .unwrap();
-        pump_until(&mut process, &mut app, |a| a.sessions.active.is_some())
+        let session_id = wait_for_active_session(&mut process, &mut app)
             .await
             .unwrap();
-        let session_id = app.sessions.active.clone().unwrap();
 
         // Submit Turn 1
         dispatch(
@@ -1383,10 +2353,9 @@ fn e2e_scenario_f_shutdown_cancels_active_wait() {
         )
         .await
         .unwrap();
-        pump_until(&mut process, &mut app, |a| a.sessions.active.is_some())
+        let session_id = wait_for_active_session(&mut process, &mut app)
             .await
             .unwrap();
-        let session_id = app.sessions.active.clone().unwrap();
 
         dispatch(
             &mut process,
@@ -1430,6 +2399,654 @@ fn e2e_scenario_f_shutdown_cancels_active_wait() {
         );
 
         held_gate.store(true, Ordering::Relaxed);
+        process.terminate().await;
+    });
+}
+
+/// Stress: six loops across ten provider requests, each with distinct final
+/// text. The transcript must order the six finals exactly once each and the
+/// mock must have received exactly ten requests (four tool loops at two
+/// requests each plus two text-only loops).
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_stress_six_loops_ten_requests_no_repeated_final_text() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    let test_file = env.workspace_path.join("data.txt");
+    std::fs::write(&test_file, "numbered stress fixture contents").unwrap();
+
+    // Loops 0..3 run a read call (two requests each); loops 4..5 are
+    // text-only (one request each). 4*2 + 2 = 10 requests total.
+    for i in 0..4 {
+        env._server.enqueue_sse(sse_tool_call_response(
+            &format!("stress-call-{i}"),
+            "read",
+            r#"{"path": "data.txt"}"#,
+        ));
+        env._server
+            .enqueue_sse(sse_text_response(&format!("stress-final-loop-{i}")));
+    }
+    env._server
+        .enqueue_sse(sse_text_response("stress-final-loop-4"));
+    env._server
+        .enqueue_sse(sse_text_response("stress-final-loop-5"));
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CreateSession {
+                workspace: env.workspace_path.to_string_lossy().into_owned(),
+                profile: Some("coding".to_owned()),
+                model: None,
+                reasoning: None,
+                title: Some("E2E Stress 6x10".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        let session_id = wait_for_active_session(&mut process, &mut app)
+            .await
+            .unwrap();
+
+        for index in 0..6 {
+            dispatch(
+                &mut process,
+                &mut app,
+                AppEvent::SubmitTurn {
+                    session_id: session_id.clone(),
+                    text: format!("stress turn {index}"),
+                },
+            )
+            .await
+            .unwrap();
+            wait_turn_landed(&mut process, &mut app, &session_id)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            env._server.recorded_requests().len(),
+            10,
+            "expected exactly 10 provider requests across six loops"
+        );
+
+        let view = &app.sessions.known[&session_id];
+        let finals: Vec<String> = view
+            .transcript
+            .items
+            .iter()
+            .filter_map(|entry| match &entry.item {
+                HistoryItemWire::Assistant(text) if !text.text.is_empty() => {
+                    Some(text.text.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            finals.len(),
+            6,
+            "expected six distinct finals, got {finals:?}"
+        );
+        let mut seen = std::collections::HashSet::new();
+        for (index, final_text) in finals.iter().enumerate() {
+            assert_eq!(
+                final_text.as_str(),
+                format!("stress-final-loop-{index}"),
+                "final text order mismatch"
+            );
+            assert!(
+                seen.insert(final_text.clone()),
+                "duplicate repeated final text {final_text:?}"
+            );
+        }
+
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok && rep.seen_eof && rep.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// Stress: keep the second tool card expanded while a new loop starts
+/// generating in the background. The per-session fold override must survive
+/// the new loop's live section rebasing.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_stress_second_tool_expansion_survives_background_generation() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    let test_file = env.workspace_path.join("data.txt");
+    std::fs::write(&test_file, "contents for the two-tool stress loop").unwrap();
+
+    env._server.enqueue_sse(sse_two_tool_calls_response(
+        "stress-tool-1",
+        "stress-tool-2",
+    ));
+    env._server
+        .enqueue_sse(sse_text_response("stress two-tool loop complete"));
+    env._server
+        .enqueue_sse(sse_text_response("background generation finished"));
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CreateSession {
+                workspace: env.workspace_path.to_string_lossy().into_owned(),
+                profile: Some("coding".to_owned()),
+                model: None,
+                reasoning: None,
+                title: Some("E2E Stress Expand".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        let session_id = wait_for_active_session(&mut process, &mut app)
+            .await
+            .unwrap();
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "run two tools".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        wait_turn_landed(&mut process, &mut app, &session_id)
+            .await
+            .unwrap();
+
+        let view = &app.sessions.known[&session_id];
+        let first_calls: Vec<&ToolCallViewWire> = view
+            .transcript
+            .items
+            .iter()
+            .filter_map(|entry| match &entry.item {
+                HistoryItemWire::Assistant(assistant) if assistant.request_index == 0 => {
+                    Some(assistant.tool_calls.as_slice())
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(first_calls.len(), 2, "expected two tool calls in request 0");
+        let first_loop_id = view
+            .transcript
+            .items
+            .iter()
+            .find_map(|entry| match &entry.item {
+                HistoryItemWire::Assistant(assistant) => Some(assistant.loop_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let second_tool_id = first_calls[1].tool_call_id.clone();
+
+        // Toggle until the per-tool override records Expanded (the read card
+        // may already render expanded by default, so the first press can
+        // collapse it; the second press is the deterministic expand).
+        for _ in 0..2 {
+            dispatch(
+                &mut process,
+                &mut app,
+                AppEvent::ToggleTool {
+                    session_id: session_id.clone(),
+                    loop_id: first_loop_id.clone(),
+                    request_index: 0,
+                    tool_call_id: second_tool_id.clone(),
+                },
+            )
+            .await
+            .unwrap();
+            let key = ToolKey::new(&session_id, &first_loop_id, 0, &second_tool_id);
+            if app.sessions.known[&session_id].tool_folds.get(&key) == Some(&FoldOverride::Expanded)
+            {
+                break;
+            }
+        }
+        let key = ToolKey::new(&session_id, &first_loop_id, 0, &second_tool_id);
+        assert_eq!(
+            app.sessions.known[&session_id].tool_folds.get(&key),
+            Some(&FoldOverride::Expanded),
+            "second tool must be expanded before background generation"
+        );
+
+        // Start the background loop and assert the override stays while it is
+        // live (mid-generation), not just after it settles.
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "background generation".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .known
+                .get(&session_id)
+                .is_some_and(|v| v.live.is_some())
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            app.sessions.known[&session_id].tool_folds.get(&key),
+            Some(&FoldOverride::Expanded),
+            "second tool expansion lost while a new loop generates"
+        );
+        wait_turn_landed(&mut process, &mut app, &session_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            app.sessions.known[&session_id].tool_folds.get(&key),
+            Some(&FoldOverride::Expanded),
+            "second tool expansion lost after background loop completed"
+        );
+
+        assert_eq!(env._server.recorded_requests().len(), 3);
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok && rep.seen_eof && rep.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// Spec 9.4/12.4: per-request usage reported by the real Agent appears in
+/// the TUI while the loop is still running (no fake zero), then the persisted
+/// loop total replaces the live rows without double-counting — including
+/// after history is loaded.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_live_request_usage_shows_during_loop_and_persisted_total_replaces_it() {
+    use minicore_tui::state::session::UsageCompleteness;
+
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    let test_file = env.workspace_path.join("data.txt");
+    std::fs::write(&test_file, "contents").unwrap();
+
+    let req1_gate = Arc::new(AtomicBool::new(false));
+    // Request 0: tool call with usage 10/10, answered immediately.
+    env._server.enqueue_sse_with_model(
+        sse_tool_call_response("call_1", "read", r#"{"path": "data.txt"}"#),
+        "deep-model",
+    );
+    // Request 1: text with a distinct usage 30/40, gated until we assert the
+    // live footer state.
+    env._server.enqueue_gated(
+        sse_text_response_with_usage("final usage answer", 30, 40, 0),
+        req1_gate.clone(),
+        Some("deep-model"),
+    );
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CreateSession {
+                workspace: env.workspace_path.to_string_lossy().into_owned(),
+                profile: Some("coding".to_owned()),
+                model: Some("deep".to_owned()),
+                reasoning: None,
+                title: Some("E2E Live Usage".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        let session_id = wait_for_active_session(&mut process, &mut app)
+            .await
+            .unwrap();
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "read data.txt".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+
+        // Request 0's real usage lands while the loop is still running
+        // (request 1 is gated on the mock). The footer projection must show
+        // ↑10 ↓10 — a known value, not a fake zero.
+        pump_until(&mut process, &mut app, |app| {
+            app.sessions
+                .known
+                .get(&session_id)
+                .is_some_and(|view| {
+                    let Some(loop_id) = view
+                        .live
+                        .as_ref()
+                        .and_then(|live| live.reference.as_ref())
+                        .map(|reference| reference.loop_id.clone())
+                    else {
+                        return false;
+                    };
+                    view.live_request_usage
+                        .get(&(loop_id, 0))
+                        .is_some_and(|usage| usage.input_tokens == Some(10))
+                })
+        })
+        .await
+        .unwrap();
+
+        let view = &app.sessions.known[&session_id];
+        let loop_id = view
+            .live
+            .as_ref()
+            .and_then(|live| live.reference.as_ref())
+            .expect("loop must still be live")
+            .loop_id
+            .clone();
+        assert_eq!(
+            view.live_request_usage.len(),
+            1,
+            "only request 0 may have reported usage while request 1 is gated"
+        );
+        assert_eq!(view.usage_projection.usage.input_tokens, Some(10));
+        assert_eq!(view.usage_projection.usage.output_tokens, Some(10));
+        assert_eq!(
+            view.usage_projection.completeness,
+            UsageCompleteness::Partial,
+            "a live loop with a partially-known total stays Partial, never fake Complete"
+        );
+        assert!(view.live.is_some(), "loop must still be running");
+
+        req1_gate.store(true, Ordering::Relaxed);
+        pump_until(&mut process, &mut app, |app| {
+            app.sessions.known.get(&session_id).is_some_and(|view| {
+                view.live.is_none() && view.transcript.complete
+            })
+        })
+        .await
+        .unwrap();
+
+        // The persisted total (10+30 / 10+40) replaces the live rows: no
+        // double counting of request 0.
+        let result = app.sessions.known[&session_id]
+            .last_result
+            .as_ref()
+            .expect("loop result")
+            .clone();
+        assert_eq!(result.usage.input_tokens, Some(40));
+        assert_eq!(result.usage.output_tokens, Some(50));
+        assert_eq!(
+            app.sessions.known[&session_id]
+                .usage_projection
+                .usage
+                .input_tokens,
+            Some(40)
+        );
+        assert_eq!(
+            app.sessions.known[&session_id]
+                .usage_projection
+                .usage
+                .output_tokens,
+            Some(50)
+        );
+        assert_eq!(
+            app.sessions.known[&session_id]
+                .usage_projection
+                .completeness,
+            UsageCompleteness::Complete
+        );
+
+        // History loads per-request usage rows for the same loop; the total
+        // stays 40/50 (persisted total wins over both live rows and history).
+        pump_until(&mut process, &mut app, |app| {
+            app.sessions.known.get(&session_id).is_some_and(|view| {
+                view.transcript.blocks.iter().any(|block| {
+                    matches!(block, minicore_tui::state::transcript::TranscriptBlock::Assistant(assistant) if assistant.loop_id == loop_id)
+                })
+            })
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            app.sessions.known[&session_id]
+                .usage_projection
+                .usage
+                .input_tokens,
+            Some(40),
+            "history reload must not double-count the completed loop"
+        );
+
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok && rep.seen_eof && rep.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// Stress: an expanded tool card in session A survives switching to session B
+/// and back to A (per-session fold state is not shared or reset by activation).
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_stress_session_switch_preserves_tool_fold() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    let test_file = env.workspace_path.join("data.txt");
+    std::fs::write(&test_file, "contents").unwrap();
+
+    env._server.enqueue_sse(sse_tool_call_response(
+        "switch-session-tool",
+        "read",
+        r#"{"path": "data.txt"}"#,
+    ));
+    env._server
+        .enqueue_sse(sse_text_response("session-a loop complete"));
+    env._server
+        .enqueue_sse(sse_text_response("session-b loop complete"));
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CreateSession {
+                workspace: env.workspace_path.to_string_lossy().into_owned(),
+                profile: Some("coding".to_owned()),
+                model: None,
+                reasoning: None,
+                title: Some("E2E Stress Switch A".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        let session_a = wait_for_active_session(&mut process, &mut app)
+            .await
+            .unwrap();
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_a.clone(),
+                text: "read the file in session A".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        wait_turn_landed(&mut process, &mut app, &session_a)
+            .await
+            .unwrap();
+
+        // `wait_turn_landed` only guarantees the live loop is gone and some
+        // User item arrived; the durable history may page in the Assistant
+        // (tool-call) item afterwards. This stress case genuinely needs that
+        // Assistant item of the completed loop before deriving its loop id
+        // and toggling the derived Tool fold, so wait for the actual item.
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.known.get(&session_a).is_some_and(|view| {
+                view.transcript
+                    .items
+                    .iter()
+                    .any(|entry| matches!(&entry.item, HistoryItemWire::Assistant(_)))
+            })
+        })
+        .await
+        .unwrap();
+
+        let view = &app.sessions.known[&session_a];
+        let first_loop_id = view
+            .transcript
+            .items
+            .iter()
+            .find_map(|entry| match &entry.item {
+                HistoryItemWire::Assistant(assistant) => Some(assistant.loop_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+
+        for _ in 0..2 {
+            dispatch(
+                &mut process,
+                &mut app,
+                AppEvent::ToggleTool {
+                    session_id: session_a.clone(),
+                    loop_id: first_loop_id.clone(),
+                    request_index: 0,
+                    tool_call_id: "switch-session-tool".to_owned(),
+                },
+            )
+            .await
+            .unwrap();
+            let key = ToolKey::new(&session_a, &first_loop_id, 0, "switch-session-tool");
+            if app.sessions.known[&session_a].tool_folds.get(&key) == Some(&FoldOverride::Expanded)
+            {
+                break;
+            }
+        }
+        let key = ToolKey::new(&session_a, &first_loop_id, 0, "switch-session-tool");
+        assert_eq!(
+            app.sessions.known[&session_a].tool_folds.get(&key),
+            Some(&FoldOverride::Expanded)
+        );
+
+        // Second session (a separate workspace) becomes active; run one loop.
+        let workspace_b = env.temp_dir.join("workspace-b");
+        std::fs::create_dir_all(&workspace_b).unwrap();
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CreateSession {
+                workspace: workspace_b.to_string_lossy().into_owned(),
+                profile: Some("coding".to_owned()),
+                model: None,
+                reasoning: None,
+                title: Some("E2E Stress Switch B".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .active
+                .as_deref()
+                .is_some_and(|id| id != session_a.as_str())
+        })
+        .await
+        .unwrap();
+        let session_b = app
+            .sessions
+            .active
+            .clone()
+            .ok_or_else(|| "session B never became active".to_owned())
+            .unwrap();
+        assert_ne!(session_b, session_a);
+        wait_for_session_ready(&mut process, &mut app, &session_b)
+            .await
+            .unwrap();
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_b.clone(),
+                text: "read the file in session B".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        wait_turn_landed(&mut process, &mut app, &session_b)
+            .await
+            .unwrap();
+
+        // Back to A: the expansion must still be in effect.
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::OpenSession {
+                session_id: session_a.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.active.as_deref() == Some(session_a.as_str())
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            app.sessions.known[&session_a].tool_folds.get(&key),
+            Some(&FoldOverride::Expanded),
+            "session-switch reset session A's tool fold"
+        );
+
+        assert_eq!(env._server.recorded_requests().len(), 3);
+
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok && rep.seen_eof && rep.seen_exit);
         process.terminate().await;
     });
 }

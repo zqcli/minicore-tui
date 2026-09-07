@@ -1,24 +1,24 @@
-  line 31 of a long file
-  line 32 of a long file
-  line 33 of a long file
-  line 34 of a long file
-  line 35 of a long file
-  line 36 of a long file
-  line 37 of a long file
-  line 38 of a long file
-  line 39 of a long file
-  … 20 more lines
+ ▎   line 50 of a long file
+ ▎   line 51 of a long file
+ ▎   line 52 of a long file
+ ▎   line 53 of a long file
+ ▎   line 54 of a long file
+ ▎   line 55 of a long file
+ ▎   line 56 of a long file
+ ▎   line 57 of a long file
+ ▎   line 58 of a long file
+ ▎   line 59 of a long file
 
- bash                                                                    denied
-  not allowed
-
- edit                                                                    failed
-  edit rejected
-
-╭──────────────────────────────────────────────────────────────────────────────╮
-│Type a message…                                                               │
-│                                                                              │
-│                                                                              │
-╰──────────────────────────────────────────────────────────────────────────────╯
-/project                                                                    Task
-Idle                                                                 deep • high
+ ▎ bash
+ ▎ bash
+ ▎   not allowed
+                                                                               █
+ ▎ edit                                                                        █
+ ▎ edit                                                                        █
+ ▎   edit rejected                                                             █
+                                                                               █
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ● ready                                         ctx ?

@@ -1,0 +1,20 @@
+{
+ "schema": "minicore-rail-cell-v1",
+ "case": "thresholds",
+ "kind": "text",
+ "term": {
+  "cols": 80,
+  "rows": 24
+ },
+ "source": {
+  "rail_commit": "1d0dd1611a4d9546c64fe9f5b5c966253fb88eba",
+  "pi": "0.84.4",
+  "theme": "pi dark (initTheme('dark'))"
+ },
+ "rows": [
+  "10 lines  -> \"pasted line 1\\npasted line 2\\npasted line 3\\npasted line 4\\npasted line 5\\npasted line 6\\npasted line 7\\npasted line 8\\npasted line 9\\npasted line 10\"",
+  "11 lines  -> \"[paste #1 +11 lines]\"",
+  "1000 chars-> \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "1001 chars-> \"[paste #1 1001 chars]\""
+ ]
+}

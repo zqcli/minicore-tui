@@ -1,0 +1,116 @@
+{
+ "schema": "minicore-rail-cell-v1",
+ "case": "reference-bash-mode-output-19",
+ "term": {
+  "cols": 80,
+  "rows": 24
+ },
+ "source": {
+  "rail_commit": "1d0dd1611a4d9546c64fe9f5b5c966253fb88eba",
+  "pi": "0.84.4",
+  "theme": "pi dark (initTheme('dark'))"
+ },
+ "rows": [
+  [],
+  [
+   {
+    "c": "▎",
+    "fg": [
+     249,
+     226,
+     175
+    ]
+   },
+   {
+    "c": "bash                                                                           ",
+    "bg": [
+     24,
+     24,
+     37
+    ]
+   }
+  ],
+  [
+   {
+    "c": "▎",
+    "fg": [
+     249,
+     226,
+     175
+    ]
+   },
+   {
+    "c": "$ make                                                                         ",
+    "bg": [
+     24,
+     24,
+     37
+    ]
+   }
+  ],
+  [
+   {
+    "c": "▎",
+    "fg": [
+     249,
+     226,
+     175
+    ]
+   },
+   {
+    "c": "... (19 more lines, ",
+    "fg": [
+     128,
+     128,
+     128
+    ],
+    "bg": [
+     24,
+     24,
+     37
+    ]
+   },
+   {
+    "c": "ctrl+o",
+    "fg": [
+     102,
+     102,
+     102
+    ],
+    "bg": [
+     24,
+     24,
+     37
+    ]
+   },
+   {
+    "c": " to expand",
+    "fg": [
+     128,
+     128,
+     128
+    ],
+    "bg": [
+     24,
+     24,
+     37
+    ]
+   },
+   {
+    "c": ")                                          ",
+    "bg": [
+     24,
+     24,
+     37
+    ]
+   }
+  ],
+  []
+ ],
+ "kind": "cells",
+ "annotations": [
+  "source-only bashExecution fixture; not a model ToolExecutionComponent oracle",
+  "expanded=false",
+  "hidden=19"
+ ]
+}

@@ -1,0 +1,8 @@
+{"label":"create-session","t":1.7773,"data":"09090909090d"}
+{"label":"prompt","t":1.8826,"data":"696e737065637420666978747572650d"}
+{"label":"editor-line-1","t":7.4502,"data":"666972737420656469746f72206c696e65"}
+{"label":"editor-newline","t":7.4503,"data":"0a"}
+{"label":"editor-line-2","t":7.4504,"data":"7365636f6e6420656469746f72206c696e65"}
+{"label":"first-ctrl-c","t":10.483,"data":"03"}
+{"label":"second-ctrl-c","t":10.7861,"data":"03"}
+{"label":"third-ctrl-c","t":11.0903,"data":"03"}

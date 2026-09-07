@@ -28,14 +28,20 @@ The resulting binary is `target/release/minicore-tui` (or the platform
 executable equivalent). The package is one Cargo package, uses Edition 2024,
 and forbids unsafe code.
 
-For a reproducible macOS x86_64 cross-build with the tracked Darwin linker
-settings, run `scripts/build-macos-x86_64.sh` (requires `cargo-zigbuild` and
-`zig`). The script fixes `MACOSX_DEPLOYMENT_TARGET=11.0`, clears external
-Cargo/Rust flag and target-directory overrides, and prints the unsigned
-artifact path `target/x86_64-apple-darwin/release/minicore-tui`. Verify it
-before and after signing with `scripts/verify-macos-binary.sh`; run
-`scripts/verify-macos-binary.sh --self-test` on any platform for parser
-regression checks.
+Since 0.2.7, Debug builds use `opt-level=1` for this package and level 2 for
+dependencies. Debug information and assertions remain enabled, but optimization
+can affect stepping and local-variable visibility. Terminal output batches small
+ANSI writes through a 64 KiB buffer; render rates are unchanged. The Release
+profile is unchanged. See [release notes](docs/release-0.2.7.md).
+
+For a macOS x86_64 cross-build, put LLVM's `clang` and `ld64.lld` on `PATH`,
+set `SDKROOT` to a macOS SDK, and run `scripts/build-macos-x86_64.sh`.
+The script uses Rust 1.85, fixes `MACOSX_DEPLOYMENT_TARGET=11.0`, clears external
+Cargo/Rust flag and target-directory overrides, and prints the ad-hoc-signed
+artifact path `target/x86_64-apple-darwin/release/minicore-tui`. Verify it with
+`scripts/verify-macos-binary.sh`; its `--self-test` mode provides portable parser
+checks. LLVM 19 was verified in 0.2.7; the previous Zig 0.13 link path failed a
+native standalone `catch_unwind` probe and is no longer used.
 
 ## Usage
 
@@ -71,7 +77,7 @@ cargo run --locked -- \
 | `--workspace <PATH>` | Workspace string used by a new session; defaults to the current directory. |
 | `--profile <ID>` | Default profile for a new session. |
 | `--model <ID>` | Default model for a new session. |
-| `--reasoning <LEVEL>` | `auto`, `disabled`, `low`, `medium`, or `high`; default is Agent/profile selection. |
+| `--reasoning <LEVEL>` | `auto`, `disabled`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; default is Agent/profile selection. |
 | `--theme <dark\|light>` | Built-in palette; default is `dark`. |
 | `--debug` | Append request metadata (method, id, byte count, duration) to a local temporary log; never message or tool content. |
 | `--help`, `-h` | Print usage and exit. |

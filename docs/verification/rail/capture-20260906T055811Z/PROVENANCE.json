@@ -1,0 +1,272 @@
+{
+  "artifacts": {
+    "cast": {
+      "bytes": 35198,
+      "path": "/Users/zzq/Develops/minicore-tui/artifacts/stage7-xtermjs/20260906T055811Z/tui.pty.cast.jsonl",
+      "sha256": "a451ea723a14e36e7ea53367d670f507b0a6ee7fc96e7a7b599d979d71b1f5ab"
+    },
+    "inputs": {
+      "bytes": 492,
+      "path": "/Users/zzq/Develops/minicore-tui/artifacts/stage7-xtermjs/20260906T055811Z/inputs.jsonl",
+      "sha256": "ede1655c405784141940cb1a407b03ee5f9be95b220f6988118ba4d5fa904a1c"
+    },
+    "loopback_requests": {
+      "bytes": 312,
+      "path": "/Users/zzq/Develops/minicore-tui/artifacts/stage7-xtermjs/20260906T055811Z/loopback.requests.jsonl",
+      "sha256": "759341898bdfb5de74580d342a8ae1864e92c1ed5137368c6c526eda5e44b0a2"
+    },
+    "pty_raw": {
+      "bytes": 16784,
+      "path": "/Users/zzq/Develops/minicore-tui/artifacts/stage7-xtermjs/20260906T055811Z/tui.pty.raw",
+      "sha256": "6af878c7de286256561ff1edb7250e323bf748426efb54f73482796f34a75f77"
+    },
+    "screenshots": [
+      {
+        "bytes": 39068,
+        "path": "/Users/zzq/Develops/minicore-tui/artifacts/stage7-xtermjs/20260906T055811Z/screenshots/01-mixed-loop-running-80x24.png",
+        "sha256": "e9003d9ad6918d5596645bbbf278c93b0a61118c351ec10c564ef1708abd2661"
+      },
+      {
+        "bytes": 47644,
+        "path": "/Users/zzq/Develops/minicore-tui/artifacts/stage7-xtermjs/20260906T055811Z/screenshots/02-same-loop-completed-80x24.png",
+        "sha256": "d76c6a0c50fdd6c8fb1547fc244d7a6b6d2a195c9a7267ae309b87e2d9436e45"
+      },
+      {
+        "bytes": 44545,
+        "path": "/Users/zzq/Develops/minicore-tui/artifacts/stage7-xtermjs/20260906T055811Z/screenshots/03-card-expanded-anchor-80x24.png",
+        "sha256": "47cfa1593a55b6695cc41f1996e2fe5827dbe56da2e8d910e46fd1c283d5b7d5"
+      },
+      {
+        "bytes": 48379,
+        "path": "/Users/zzq/Develops/minicore-tui/artifacts/stage7-xtermjs/20260906T055811Z/screenshots/04-multiline-editor-footer-80x24.png",
+        "sha256": "15e98e2cec8774a1b3b007e15ea4de6d5c4bf2dbee6a748cb3f8c9887d2d1c5e"
+      },
+      {
+        "bytes": 50722,
+        "path": "/Users/zzq/Develops/minicore-tui/artifacts/stage7-xtermjs/20260906T055811Z/screenshots/05-same-loop-completed-120x40.png",
+        "sha256": "ba152e2ea19bfdf09a9ba987997559145eba06e2eb462bb1207443d4ba52bf11"
+      },
+      {
+        "bytes": 50722,
+        "path": "/Users/zzq/Develops/minicore-tui/artifacts/stage7-xtermjs/20260906T055811Z/screenshots/06-multiline-editor-footer-120x40.png",
+        "sha256": "ba152e2ea19bfdf09a9ba987997559145eba06e2eb462bb1207443d4ba52bf11"
+      },
+      {
+        "bytes": 33028,
+        "path": "/Users/zzq/Develops/minicore-tui/artifacts/stage7-xtermjs/20260906T055811Z/screenshots/07-narrow-final.png",
+        "sha256": "e5e1efa95fad28d59f0b958dcdc9eccee04251afd5ce191c9a4a6a445e29cded"
+      }
+    ]
+  },
+  "assertions": {
+    "01": {
+      "found": {
+        "Step one:": true,
+        "inspect": true,
+        "working": true
+      },
+      "markers": [
+        "working",
+        "Step one:",
+        "inspect"
+      ]
+    },
+    "02": {
+      "dom_final_sentence_clean": true,
+      "found": {
+        "fixture.txt": true,
+        "ready": true,
+        "same-loop verification": true
+      },
+      "full_final_sentence_clean": true,
+      "markers": [
+        "ready",
+        "same-loop verification",
+        "fixture.txt"
+      ]
+    },
+    "03": {
+      "anchor_preserved": true,
+      "anchor_row_after": 1,
+      "anchor_row_before": 1,
+      "anchor_top_after": [
+        " \u258e                                                                              ",
+        " \u258e inspect fixture                                                              ",
+        " \u258e 1:58 PM \u00b7 9/6/2026                                                           "
+      ],
+      "anchor_top_before": [
+        " \u258e                                                                              ",
+        " \u258e inspect fixture                                                              ",
+        " \u258e 1:58 PM \u00b7 9/6/2026                                                           "
+      ],
+      "collapsed_hint_removed": true,
+      "expanded": true
+    },
+    "04": {
+      "editor_has_two_lines": true,
+      "footer_markers": {
+        "@dev": true,
+        "ctx ?": true,
+        "\u25b8": true
+      },
+      "footer_ok": true,
+      "footer_single_row": true,
+      "last_two_rows": [
+        " \u258e                                                                              ",
+        " \u25b8 workspace@dev \u00b7 deep \u00b7 high \u00b7 \u25cf ready \u00b7 0m              \u219120 \u219324 R0 W0 \u00b7 ctx ?"
+      ]
+    }
+  },
+  "binaries": {
+    "agent": {
+      "path": "/Users/zzq/Develops/minicore-agent/target/debug/minicore-agent",
+      "sha256": "08b73b82a2978c90fdd8577a284f043a5ec0aa5191166a31ca6a8ce7bd87e4e7"
+    },
+    "tui": {
+      "path": "/Users/zzq/Develops/minicore-tui/target/debug/minicore-tui",
+      "sha256": "7be2b7ac3d6d55032eaba0a0952603f98709c41a52f8182c9fa06a7b95783443"
+    }
+  },
+  "capture": {
+    "browser_channel": "msedge",
+    "fonts": "Menlo / SF Mono / Consolas / Liberation Mono (14px, line-height 1.12)",
+    "mode": "real PTY -> xterm.js (Edge headless) element screenshots",
+    "page_background": "#2D2A2E (xterm theme + CSS)",
+    "playwright": "1.63.0",
+    "sizes": [
+      {
+        "columns": 80,
+        "rows": 24,
+        "shot": "01-mixed-loop-running-80x24.png"
+      },
+      {
+        "columns": 80,
+        "rows": 24,
+        "shot": "02-same-loop-completed-80x24.png"
+      },
+      {
+        "columns": 80,
+        "rows": 24,
+        "shot": "03-card-expanded-anchor-80x24.png"
+      },
+      {
+        "columns": 80,
+        "rows": 24,
+        "shot": "04-multiline-editor-footer-80x24.png"
+      },
+      {
+        "columns": 120,
+        "rows": 40,
+        "shot": "05-same-loop-completed-120x40.png"
+      },
+      {
+        "columns": 120,
+        "rows": 40,
+        "shot": "06-multiline-editor-footer-120x40.png"
+      },
+      {
+        "columns": 62,
+        "rows": 18,
+        "shot": "07-narrow-final.png"
+      }
+    ],
+    "terminal_emulator": "@xterm/xterm 5.5.0",
+    "valid": true
+  },
+  "command": "scripts/stage7_xtermjs.py",
+  "generated_at": "2026-09-06T05:58:26.370522Z",
+  "provenance": {
+    "agent": {
+      "counts": {
+        "deleted": 0,
+        "modified": 16,
+        "others": 0,
+        "renamed": 0,
+        "staged": 1,
+        "untracked": 9668
+      },
+      "dirty": true,
+      "head": "2d16f554796861a21a49afcd77f4eab74022bf92",
+      "root": "/Users/zzq/Develops/minicore-agent",
+      "sample": [
+        "M README.md",
+        " M docs/rpc.md",
+        " M src/agent.rs",
+        " M src/agent/tests.rs",
+        " M src/event.rs",
+        " M src/history.rs",
+        " M src/lib.rs",
+        " M src/rpc/protocol.rs",
+        " M src/rpc/server.rs",
+        " M src/rpc/server/tests.rs",
+        " M src/sessions.rs",
+        " M src/store.rs",
+        " M src/tools/mod.rs",
+        " M src/workspace.rs",
+        " M tests/openai_rpc_process.rs",
+        " M tests/rpc_soak.rs",
+        " M tests/tui_rpc_flow.rs",
+        "?? minicore-agent-v0.3-closeout-fix-spec.md",
+        "?? minicore-agent-v0.3-runtime-v0.4-migration-spec.md",
+        "?? src/presentation.rs",
+        "?? target/.rustc_info.json",
+        "?? target/.rustdoc_fingerprint.json",
+        "?? target/CACHEDIR.TAG",
+        "?? target/debug/.cargo-artifact-lock",
+        "?? target/debug/.cargo-build-lock"
+      ],
+      "status_lines": 9685
+    },
+    "loopback_model": "deterministic stage7_loopback_model.py (labeled mock; no external model)",
+    "node": "v24.15.0",
+    "playwright": "1.63.0",
+    "tui": {
+      "counts": {
+        "deleted": 0,
+        "modified": 79,
+        "others": 0,
+        "renamed": 0,
+        "staged": 1,
+        "untracked": 351
+      },
+      "dirty": true,
+      "head": "2b8268dbba81c162b30e984b9b31a58ebc3bba65",
+      "root": "/Users/zzq/Develops/minicore-tui",
+      "sample": [
+        "M Cargo.lock",
+        " M Cargo.toml",
+        " M docs/final-report.md",
+        " M docs/testing.md",
+        " M snapshots/chat_dark_80x24.txt",
+        " M snapshots/chat_light_80x24.txt",
+        " M snapshots/cjk_80x24.txt",
+        " M snapshots/close_user_dark_80x24.txt",
+        " M snapshots/close_user_light_120x40.txt",
+        " M snapshots/empty_dark_80x24.txt",
+        " M snapshots/empty_light_80x24.txt",
+        " M snapshots/empty_model_search_dark_80x24.txt",
+        " M snapshots/finishing_dark_80x24.txt",
+        " M snapshots/finishing_light_120x40.txt",
+        " M snapshots/help_dark_80x24.txt",
+        " M snapshots/help_light_120x40.txt",
+        " M snapshots/logs_dark_80x24.txt",
+        " M snapshots/model_selector_dark_80x24.txt",
+        " M snapshots/model_selector_light_120x40.txt",
+        " M snapshots/multiline_composer_dark_80x24.txt",
+        " M snapshots/narrow_model_selector_dark_60x16.txt",
+        " M snapshots/new_output_marker_dark_80x24.txt",
+        " M snapshots/new_session_dark_80x24.txt",
+        " M snapshots/new_session_light_120x40.txt",
+        " M snapshots/pending_model_dark_60x16.txt"
+      ],
+      "status_lines": 431
+    },
+    "xterm": "5.5.0"
+  },
+  "result": {
+    "all_screenshots_captured": true,
+    "footer_ok": true,
+    "tui_exit": 0
+  },
+  "schema": "minicore-stage7-xtermjs-evidence-v1"
+}

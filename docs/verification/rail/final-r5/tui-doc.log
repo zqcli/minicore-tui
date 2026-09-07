@@ -1,0 +1,9 @@
+    Checking zerotrie v0.2.5
+    Checking ratatui v0.29.0
+    Checking icu_provider v2.1.1
+    Checking icu_locale v2.1.1
+    Checking icu_segmenter v2.1.2
+    Checking tui-textarea v0.7.0
+ Documenting minicore-tui v0.2.1 (/root/minicore-rail-01a07210/r5/minicore-tui)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.06s
+   Generated /root/minicore-rail-01a07210/build-tui-stable/doc/minicore_tui/index.html

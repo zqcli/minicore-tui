@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>minicore-stage7-xtermjs</title>
+  <link rel="stylesheet" href="/vendor/xterm.css" />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #2D2A2E;
+      height: 100%;
+      overflow: hidden;
+    }
+    #host {
+      padding: 8px;
+      display: inline-block;
+      background: #2D2A2E;
+    }
+    .terminal {
+      background: #2D2A2E;
+      font-family: "Menlo", "SF Mono", "Consolas", "Liberation Mono", monospace;
+      font-size: 14px;
+      line-height: 1.12;
+      letter-spacing: 0;
+    }
+  </style>
+</head>
+<body>
+  <div id="host">
+    <div id="terminal"></div>
+  </div>
+  <script src="/vendor/xterm.js"></script>
+  <script>
+    "use strict";
+
+    // Reference page background (Pi dark shell) applied both to the page CSS
+    // and to xterm's own theme so cell backgrounds and the host agree.
+    const PAGE_BG = "#2D2A2E";
+
+    const term = new Terminal({
+      fontFamily: '"Menlo", "SF Mono", "Consolas", "Liberation Mono", monospace',
+      fontSize: 14,
+      lineHeight: 1.12,
+      cursorBlink: false,
+      scrollback: 4000,
+      allowProposedApi: true,
+      convertEol: false,
+      theme: { background: PAGE_BG },
+    });
+    term.open(document.getElementById("terminal"));
+    if (term.options.theme) term.options.theme.background = PAGE_BG;
+
+    const wsUrl = (() => {
+      const params = new URLSearchParams(location.search);
+      if (params.get("ws")) return params.get("ws");
+      return `ws://${location.host}/ws`;
+    })();
+
+    const socket = new WebSocket(wsUrl);
+    socket.binaryType = "arraybuffer";
+    let opened = false;
+
+    // Writes are fed to xterm strictly sequentially with the parser-ACK
+    // callback; a single late-connecting burst (catch-up replay) can otherwise
+    // leave the renderer mid-backlog and a screenshot would capture a stale
+    // partially-drawn frame.
+    let writeQueue = Promise.resolve();
+    function enqueueWrite(data) {
+      const task = writeQueue.then(
+        () =>
+          new Promise((resolve) => {
+            term.write(data, () => resolve());
+          }),
+      );
+      writeQueue = task.catch(() => {});
+      return task;
+    }
+
+    window.__stage7Stats = { messages: 0, errors: 0, bytes: 0, lastHead: "", state: "new" };
+
+    socket.addEventListener("open", () => {
+      opened = true;
+      window.__stage7Stats.state = "open";
+    });
+    socket.addEventListener("close", (ev) => {
+      window.__stage7Stats.state = `closed:${ev.code}:${ev.reason}`;
+    });
+    socket.addEventListener("error", () => {
+      window.__stage7Stats.errors += 1;
+      window.__stage7Stats.state = "error";
+    });
+
+    function handleTerminalData(value, byteLen) {
+      window.__stage7Stats.messages += 1;
+      window.__stage7Stats.bytes += byteLen;
+      const head = value.slice(0, 12);
+      window.__stage7Stats.lastHead = (
+        typeof head === "string" ? head : new TextDecoder().decode(head)
+      ).replace(/\x1b/g, "^");
+      enqueueWrite(typeof value === "string" ? value : new Uint8Array(value));
+    }
+
+    socket.addEventListener("message", (event) => {
+      if (typeof event.data === "string") {
+        const value = event.data;
+        if (value && value[0] === "{") {
+          try {
+            const control = JSON.parse(value);
+            if (control.type === "resize") {
+              term.resize(control.cols, control.rows);
+              return;
+            }
+          } catch (err) {
+            // Not a control frame; treat as terminal input below.
+          }
+        }
+        handleTerminalData(value, value.length);
+        return;
+      }
+      const buf = event.data instanceof ArrayBuffer ? event.data : null;
+      if (buf) {
+        handleTerminalData(new Uint8Array(buf), buf.byteLength);
+      }
+    });
+
+    term.onData((data) => {
+      if (opened) socket.send(data);
+    });
+
+    // Keep Tab inside the emulator: xterm forwards it through onData.
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type === "keydown" && event.key === "Tab" && !event.ctrlKey && !event.metaKey) {
+        term.input("\t");
+        event.preventDefault();
+        return false;
+      }
+      return true;
+    });
+
+    window.__stage7Term = term;
+    window.__stage7Ready = true;
+
+    window.__stage7Resize = (cols, rows) => {
+      term.resize(cols, rows);
+      if (opened) socket.send(JSON.stringify({ type: "resize", cols, rows }));
+    };
+
+    // Awaits every queued parser ACK and then two animation frames so the
+    // final screenshot matches the fully-processed buffer, never a backlog.
+    window.__stage7Flush = async () => {
+      await writeQueue;
+      term.refresh(0, term.rows - 1);
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      return window.__stage7Stats;
+    };
+
+    window.__stage7Buffer = () => {
+      const buf = term.buffer.active;
+      const lines = [];
+      // viewportY is the absolute buffer index of the first visible line
+      const top = buf.viewportY ?? 0;
+      for (let row = 0; row < term.rows; row++) {
+        lines.push(buf.getLine(top + row)?.translateToString(true) ?? "");
+      }
+      const cursor = { col: buf.cursorX, row: buf.cursorY };
+      return { lines, cursor, cols: term.cols, rows: term.rows };
+    };
+
+    window.__stage7CellPoint = (col, row) => {
+      const host = document.getElementById("host");
+      const rect = host.getBoundingClientRect();
+      const rowsEl = document.querySelector(".xterm-rows");
+      const rowsRect = rowsEl.getBoundingClientRect();
+      const rowCount = term.rows;
+      const rowHeight = rowsRect.height / rowCount;
+      const colWidth = rowsRect.width / term.cols;
+      return {
+        x: rowsRect.left + col * colWidth + colWidth / 2,
+        y: rowsRect.top + row * rowHeight + rowHeight / 2,
+      };
+    };
+  </script>
+</body>
+</html>

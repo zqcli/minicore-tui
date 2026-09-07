@@ -1,16 +1,16 @@
-MINICORE  v0.2.1
 
-Coding agent TUI
-q / Ctrl+C to quit
 
-Open a session — /new, Ctrl+R, or F1 for help
 
-┌──────────────────────────────────────────────────────────┐
-│Select model                                              │
-│Model applies at the next model request.                  │
-│>                                                         │
-│→ fast  32k context  — tools  • low/medium                │
-│  tiny  8k context  ✓ tools  • disabled/low               │
-│(2/3)                                                     │
-└──────────────────────────────────────────────────────────┘
-Idle                                             deep • high
+
+
+
+
+ ┌─────────────────────────────────────────────────────────┐
+ │Select model                                             │
+ │Model applies at the next model request.                 │
+ │>                                                        │
+ │→ fast  32k context  — tools  • low/medium               │
+ │  tiny  8k context  ✓ tools  • disabled/low              │
+ │(2/3)                                                    │
+ └─────────────────────────────────────────────────────────┘
+ ▸ project · deep · high · ● ready                     ctx ?

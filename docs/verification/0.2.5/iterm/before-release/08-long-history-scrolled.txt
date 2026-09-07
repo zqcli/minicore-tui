@@ -1,0 +1,32 @@
+  • second item                                                                                     
+                                                                                                    
+  Performance section 177                                                                           
+                                                                                                    
+  A synthetic bold paragraph with code and link (https://example.invalid). Measured history text. Me
+  asured history text. Measured history text. Measured history text. Measured history text. Measured
+   history text. Measured history text. Measured history text. Measured history text. Measured histo
+  ry text. Measured history text. Measured history text. Measured history text. Measured history tex
+  t. Measured history text. Measured history text. Measured history text. Measured history text. Mea
+  sured history text. Measured history text. Measured history text. Measured history text. Measured 
+  history text. Measured history text. Measured history text. Measured history text. Measured histor
+  y text. Measured history text. Measured history text. Measured history text.                      
+                                                                                                    
+  • first item                                                                                      
+  • second item                                                                                     
+                                                                                                    
+  Performance section 178                                                                           
+                                                                                                    
+  A synthetic bold paragraph with code and link (https://example.invalid). Measured history text. Me
+  asured history text. Measured history text. Measured history text. Measured history text. Measured
+   history text. Measured history text. Measured history text. Measured history text. Measured histo
+  ry text. Measured history text. Measured history text. Measured history text. Measured history tex
+  t. Measured history text. Measured history text. Measured history text. Measured history text. Me█
+  sured history text. Measured history text. Measured history text. Measured history text. Measured█
+  history text. Measured history text. Measured history text. Measured history text. Measured histor
+  y text. Measured history text. Measured history text. Measured history text.                      
+ ↑ scroll position                                                                                  
+ ▎                                                                                                  
+ ▎                                                                                                  
+ ▎                                                                                                  
+ ▎                                                                                                  
+ ▸ workspace · verify a · max · ● ready · 0m                                   ↑40 ↓48 R0 W0 · ctx ?

@@ -1,24 +1,24 @@
-MINICORE  v0.2.1
-
-Coding agent TUI
-q / Ctrl+C to quit
-
-Open a session — /new, Ctrl+R, or F1 for help
-
- Hello world with code.
-
- Heading
-
- A paragraph with bold, italic, and code.
-
- • first item
- • second item
-
-↓ new output
-╭──────────────────────────────────────────────────────────────────────────────╮
-│Type a message…                                                               │
-│                                                                              │
-│                                                                              │
-╰──────────────────────────────────────────────────────────────────────────────╯
-/project                                                                    Task
-Idle                                                                 deep • high
+ ▎                                                                             █
+ ▎ Hello world with code.                                                      █
+ ▎ time unavailable                                                            █
+ ▎                                                                             █
+                                                                               █
+  Heading                                                                      █
+                                                                               █
+  A paragraph with bold, italic, and code.                                     █
+                                                                               █
+  • first item                                                                 █
+  • second item                                                                █
+                                                                               █
+  ▍ quoted wisdom                                                              █
+                                                                               █
+  ╭────────────────────────────────────────────────────────────────────────────█
+  │fn hello() {                                                                │
+  │    println!("hi");                                                         │
+  │}                                                                           │
+ ↓ new output
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ● ready                                         ctx ?

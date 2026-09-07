@@ -1,0 +1,18 @@
+{
+  "version": "0.2.3",
+  "native_terminal": "iTerm2 3.6.11",
+  "native_interaction_and_screen_text": "PASS",
+  "provider_scope": "synthetic loopback only",
+  "real_bash_auto_approval": "PASS",
+  "acknowledged_footer_updates_without_next_turn": "PASS",
+  "request_boundary_reasoning_preserved": "PASS",
+  "accepted_steer_card_before_tool_completion": "PASS",
+  "final_steer_card_not_duplicated": "PASS",
+  "binary_hashes_unchanged_during_native_run": true,
+  "real_tty_restoration": "PASS",
+  "native_pixel_screenshots": "UNVERIFIED",
+  "attempted_pngs": "REJECTED: contained only desktop; not archived",
+  "observed_window_sharing_state": 0,
+  "window_privacy_settings_changed": false,
+  "notes": "The driver PASS excludes screenshot validation. Native text is not font/color/pixel parity evidence."
+}

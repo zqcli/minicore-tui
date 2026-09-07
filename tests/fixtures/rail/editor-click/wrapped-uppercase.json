@@ -1,0 +1,109 @@
+{
+ "schema": "minicore-rail-cell-v1",
+ "case": "wrapped-uppercase",
+ "term": {
+  "cols": 40,
+  "rows": 24
+ },
+ "source": {
+  "rail_commit": "1d0dd1611a4d9546c64fe9f5b5c966253fb88eba",
+  "pi": "0.84.4",
+  "theme": "pi dark (initTheme('dark'))"
+ },
+ "cursor": [
+  2,
+  13
+ ],
+ "rows": [
+  [
+   {
+    "c": "▎",
+    "fg": [
+     137,
+     180,
+     250
+    ]
+   },
+   {
+    "c": "                                       ",
+    "bg": [
+     49,
+     50,
+     68
+    ]
+   }
+  ],
+  [
+   {
+    "c": "▎",
+    "fg": [
+     137,
+     180,
+     250
+    ]
+   },
+   {
+    "c": "abcdefghijklmnopqrstuvwxyz 0123456789  ",
+    "bg": [
+     49,
+     50,
+     68
+    ]
+   }
+  ],
+  [
+   {
+    "c": "▎",
+    "fg": [
+     137,
+     180,
+     250
+    ]
+   },
+   {
+    "c": "ABCDEFGHIJKL",
+    "bg": [
+     49,
+     50,
+     68
+    ]
+   },
+   {
+    "c": "M",
+    "bg": [
+     49,
+     50,
+     68
+    ],
+    "s": 32
+   },
+   {
+    "c": "NOPQRSTUVWXYZ             ",
+    "bg": [
+     49,
+     50,
+     68
+    ]
+   }
+  ],
+  [
+   {
+    "c": "▎",
+    "fg": [
+     137,
+     180,
+     250
+    ]
+   },
+   {
+    "c": "                                       ",
+    "bg": [
+     49,
+     50,
+     68
+    ]
+   }
+  ]
+ ],
+ "kind": "cells"
+}

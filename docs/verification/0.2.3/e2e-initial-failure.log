@@ -1,0 +1,151 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling libc v0.2.189
+   Compiling stable_deref_trait v1.2.1
+   Compiling writeable v0.6.4
+   Compiling smallvec v1.15.2
+   Compiling litemap v0.8.3
+   Compiling serde_core v1.0.229
+   Compiling rustversion v1.0.23
+   Compiling equivalent v1.0.2
+   Compiling serde v1.0.229
+   Compiling fnv v1.0.7
+   Compiling ident_case v1.0.1
+   Compiling log v0.4.34
+   Compiling strsim v0.11.1
+   Compiling cfg-if v1.0.4
+   Compiling parking_lot_core v0.9.12
+   Compiling signal-hook v0.3.18
+   Compiling rustix v0.38.44
+   Compiling scopeguard v1.2.0
+   Compiling bitflags v2.13.1
+   Compiling libm v0.2.16
+   Compiling foldhash v0.1.5
+   Compiling lock_api v0.4.14
+   Compiling futures-core v0.3.34
+   Compiling either v1.18.0
+   Compiling itoa v1.0.18
+   Compiling paste v1.0.15
+   Compiling icu_properties_data v2.1.2
+   Compiling icu_normalizer_data v2.1.1
+   Compiling heck v0.5.0
+   Compiling allocator-api2 v0.2.21
+   Compiling instability v0.3.10
+   Compiling icu_locale_data v2.1.2
+   Compiling itertools v0.13.0
+   Compiling castaway v0.2.4
+   Compiling errno v0.3.14
+   Compiling mio v1.2.2
+   Compiling syn v2.0.119
+   Compiling syn v3.0.4
+   Compiling hashbrown v0.15.5
+   Compiling signal-hook-registry v1.4.8
+   Compiling static_assertions v1.1.0
+   Compiling parking_lot v0.12.5
+   Compiling utf8_iter v1.0.4
+   Compiling unicode-segmentation v1.13.3
+   Compiling icu_segmenter_data v2.1.1
+   Compiling zmij v1.0.23
+   Compiling ryu v1.0.23
+   Compiling indoc v2.0.7
+   Compiling unicode-width v0.1.14
+   Compiling signal-hook-mio v0.2.5
+   Compiling lru v0.12.5
+   Compiling compact_str v0.8.2
+   Compiling unicode-truncate v1.1.0
+   Compiling crossterm v0.28.1
+   Compiling cassowary v0.3.0
+   Compiling serde_json v1.0.151
+   Compiling pulldown-cmark v0.12.2
+   Compiling pin-project-lite v0.2.17
+   Compiling powerfmt v0.2.0
+   Compiling memchr v2.8.3
+   Compiling unicode-width v0.2.0
+   Compiling synstructure v0.13.2
+   Compiling darling_core v0.20.11
+   Compiling thiserror v2.0.20
+   Compiling deranged v0.5.8
+   Compiling core_maths v0.1.1
+   Compiling num_threads v0.1.7
+   Compiling bytes v1.12.1
+   Compiling slab v0.4.12
+   Compiling time-core v0.1.7
+   Compiling futures-task v0.3.34
+   Compiling unicase v2.9.0
+   Compiling zerovec-derive v0.11.6
+   Compiling displaydoc v0.2.7
+   Compiling serde_derive v1.0.229
+   Compiling tokio-macros v2.7.2
+   Compiling zerofrom-derive v0.1.7
+   Compiling yoke-derive v0.8.2
+   Compiling strum_macros v0.26.4
+   Compiling thiserror-impl v2.0.20
+   Compiling num-conv v0.1.0
+   Compiling hashbrown v0.17.1
+   Compiling futures-util v0.3.34
+   Compiling tokio v1.53.1
+   Compiling time v0.3.45
+   Compiling darling_macro v0.20.11
+   Compiling indexmap v2.14.1
+   Compiling toml_write v0.1.2
+   Compiling zerofrom v0.1.8
+   Compiling darling v0.20.11
+   Compiling percent-encoding v2.3.2
+   Compiling strum v0.26.3
+   Compiling winnow v0.7.15
+   Compiling form_urlencoded v1.2.2
+   Compiling yoke v0.8.3
+   Compiling toml_datetime v0.6.11
+   Compiling serde_spanned v0.6.9
+   Compiling toml_edit v0.22.27
+   Compiling zerovec v0.11.8
+   Compiling zerotrie v0.2.5
+   Compiling ratatui v0.29.0
+   Compiling toml v0.8.23
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling icu_collections v2.1.1
+   Compiling icu_locale_core v2.1.1
+   Compiling icu_provider v2.1.1
+   Compiling icu_properties v2.1.2
+   Compiling icu_locale v2.1.1
+   Compiling icu_normalizer v2.1.1
+   Compiling tui-textarea v0.7.0
+   Compiling icu_segmenter v2.1.2
+   Compiling idna_adapter v1.2.1
+   Compiling idna v1.1.0
+   Compiling minicore-tui v0.2.3 (/Users/zzq/Develops/minicore-tui)
+   Compiling url v2.5.4
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 31.76s
+     Running tests/agent_e2e.rs (target/debug/deps/agent_e2e-27a971f42ad34cc6)
+
+running 12 tests
+test e2e_live_request_usage_shows_during_loop_and_persisted_total_replaces_it ... ok
+test e2e_max_reasoning_ships_literal_max_and_provider_body_carries_it ... ok
+test e2e_scenario_a_discovery ... ok
+test e2e_scenario_b_basic_turn ... ok
+test e2e_scenario_c_tool_execution ... ok
+test e2e_scenario_d_steer_turn ... ok
+test e2e_scenario_e2_update_single_request_then_next_turn ... ok
+test e2e_scenario_e_same_loop_update ... ok
+test e2e_scenario_f_shutdown_cancels_active_wait ... ok
+test e2e_stress_second_tool_expansion_survives_background_generation ... ok
+test e2e_stress_session_switch_preserves_tool_fold ... FAILED
+test e2e_stress_six_loops_ten_requests_no_repeated_final_text ... ok
+
+failures:
+
+---- e2e_stress_session_switch_preserves_tool_fold stdout ----
+
+thread 'e2e_stress_session_switch_preserves_tool_fold' (31967279) panicked at tests/agent_e2e.rs:2200:14:
+called `Option::unwrap()` on a `None` value
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    e2e_stress_session_switch_preserves_tool_fold
+
+test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.21s
+
+error: test failed, to rerun pass `--test agent_e2e`

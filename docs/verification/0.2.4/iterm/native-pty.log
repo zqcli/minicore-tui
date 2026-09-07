@@ -1,0 +1,23 @@
+Last login: Mon Sep  7 00:00:59 on ttys008 
+python3 /tmp/minicore-024-final.BLunZL/native_driver.py > /tmp/minicore-024-final.BLunZL/native-controller-r3.log 2>&1; printf '\nNATIVE_DRIVER_EXIT=%s\n' "$?" >> /tmp/minicore-024-final.BLunZL/native-controller-r3.log 
+➜  ~ python3 /tmp/minicore-024-final.BLunZL/native_driver.py > /tmp/minicore-024
+-final.BLunZL/native-controller-r3.log 2>&1; printf '\nNATIVE_DRIVER_EXIT=%s\n' 
+"$?" >> /tmp/minicore-024-final.BLunZL/native-controller-r3.log 
+➜  ~ test -t 0 && test -t 1 && printf 'NATIVE_TTY_STREAMS_OK\n'; /Users/zzq/Deve
+lops/minicore-tui/target/debug/deps/terminal_restore-dc5216f30e80148a real_pty_e
+nter_and_restore_round_trip --ignored --exact --nocapture; printf '\nNATIVE_PTY_
+EXIT=%s\n' "$?" 
+NATIVE_TTY_STREAMS_OK 
+ 
+running 1 test 
+test real_pty_enter_and_restore_round_trip ... ok 
+ 
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s 
+ 
+ 
+NATIVE_PTY_EXIT=0 
+➜  ~  
+ 
+ 
+ 
+

@@ -1,0 +1,6 @@
+minicore-tui 0.2.5
+minicore-tui 0.2.5
+98e9b7602c5379509f7c7a5e1e139b2a59787ae2ea5973e1e7186b7ad112087a  target/debug/minicore-tui
+c0da0d6d4c176836c4c2feed6c1c43dd266f65100d0e05bcbcb8a56b23424a3d  target/release/minicore-tui
+61836c0738f799533221bb07408122bf2964a7926b499b5c982b1f731d3cce3b  ../minicore-agent/target/debug/minicore-agent
+4248af21f895bdcb14f2036af30d9b78d7889fc8e4a8aec6fdd98b96c309c56e  /tmp/minicore-025.PdlDub/before-release-minicore-tui

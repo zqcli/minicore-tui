@@ -1,236 +1,543 @@
-//! The footer (development spec 15.8, 31): shortened workspace on the left,
-//! session title or short id on the right, a status word, and
-//! `model • reasoning`. Nothing fabricated is ever shown (no token or cost).
+//! The one-row Rail footer. Formatting is pure: it consumes the session
+//! snapshot and optional `session.presentation` data already held by `App`.
+//! It never reads the workspace, Store, or network.
 
 use std::path::{Path, PathBuf};
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::{App, ConnectionState};
 use crate::markdown::column_width;
+use crate::protocol::Reasoning;
 use crate::state::selection::reasoning_label;
-use crate::state::session::SessionView;
-use crate::state::tool::ToolStatus;
+use crate::state::session::{SessionView, UsageCompleteness, UsageProjection};
+use crate::state::turn::PendingSteerState;
 use crate::theme::Theme;
 use crate::ui::layout;
-use crate::ui::status::{result_color, result_summary};
+use crate::ui::rail;
+
+const CWD_MAX_WIDTH: usize = 20;
+const BRANCH_MAX_WIDTH: usize = 16;
+const MODEL_MAX_WIDTH: usize = 24;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FooterView {
+    pub left: String,
+    pub right: String,
+    pub status: FooterStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FooterStatus {
+    Ready,
+    Working,
+    Blocked,
+    Starting,
+    ShuttingDown,
+    Disconnected,
+}
+
+#[derive(Clone, Debug)]
+struct FooterPart {
+    text: String,
+    color: Option<Color>,
+}
+
+#[derive(Clone, Debug)]
+struct FooterParts {
+    left: Vec<FooterPart>,
+    right: Vec<FooterPart>,
+    status: FooterStatus,
+}
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
-    let view = app.active_view();
-    let width = area.width as usize;
-    let two_rows = area.height > 1 && width >= 80;
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let parts = footer_parts(app, theme);
+    let fitted = fit_aligned_parts(&parts.left, &parts.right, area.width as usize, theme);
+    let line = Line::from(
+        fitted
+            .into_iter()
+            .map(|part| match part.color {
+                Some(color) => Span::styled(part.text, Style::new().fg(color)),
+                None => Span::raw(part.text),
+            })
+            .collect::<Vec<_>>(),
+    );
+    frame.render_widget(Paragraph::new(line), area);
+}
 
-    let (status_word, status_color) = status_line(app, view, theme);
-    let model = view.map(|view| {
-        if view.unsaved_loop.is_some() {
-            "unsaved turn".to_owned()
-        } else {
-            let current_desc =
-                if let Some(request) = view.live.as_ref().and_then(|live| live.requests.last()) {
-                    if request.model.is_empty() {
-                        format!("request {} · config unknown", request.request_index)
-                    } else {
-                        format!(
-                            "request {} · {} · {} · rev {}",
-                            request.request_index,
-                            request.model,
-                            reasoning_label(request.reasoning),
-                            request.config_revision,
-                        )
-                    }
-                } else if let Some(request) = view.last_request.as_ref() {
-                    format!(
-                        "request {} · {} · {} · rev {}",
-                        request.request_index,
-                        request.model,
-                        reasoning_label(request.reasoning),
-                        request.revision,
-                    )
-                } else if let Some(loop_state) = view
-                    .state
-                    .as_ref()
-                    .and_then(|state| state.active_loop.as_ref())
-                {
-                    format!("request {} · config unknown", loop_state.request_index)
-                } else {
-                    format!(
-                        "{} • {}",
-                        view.info.model,
-                        reasoning_label(view.info.reasoning)
-                    )
-                };
+pub fn footer_view(app: &App) -> FooterView {
+    let theme = Theme::for_kind(app.theme);
+    let parts = footer_parts(app, &theme);
+    FooterView {
+        left: parts_text(&parts.left),
+        right: parts_text(&parts.right),
+        status: parts.status,
+    }
+}
 
-            if let Some(update) = &view.config_update {
-                if update.state == crate::state::session::ConfigUpdateState::WaitingBoundary {
-                    let live_loop_matches = match (&update.loop_id, &view.live) {
-                        (Some(target), Some(live)) => live
-                            .reference
-                            .as_ref()
-                            .is_some_and(|r| &r.loop_id == target),
-                        (None, _) => true,
-                        _ => false,
-                    };
-                    if live_loop_matches {
-                        let next_config = match (&update.model, update.reasoning) {
-                            (Some(m), Some(r)) => format!("{} • {}", m, reasoning_label(r)),
-                            (Some(m), None) => m.clone(),
-                            (None, Some(r)) => reasoning_label(r).to_string(),
-                            (None, None) => String::new(),
-                        };
-                        if !next_config.is_empty() {
-                            let next_str = if let Some(rev) = update.revision {
-                                format!("next: {next_config} · rev {rev}")
-                            } else {
-                                format!("next: {next_config}")
-                            };
-                            return format!("{current_desc}      {next_str}");
-                        }
-                    }
-                }
-            }
-            current_desc
-        }
-    });
+fn footer_parts(app: &App, theme: &Theme) -> FooterParts {
+    let Some(view) = app.active_view() else {
+        let status = match app.connection {
+            ConnectionState::Starting => FooterStatus::Starting,
+            ConnectionState::ShuttingDown => FooterStatus::ShuttingDown,
+            ConnectionState::Failed(_) => FooterStatus::Disconnected,
+            ConnectionState::Ready => FooterStatus::Ready,
+        };
+        return FooterParts {
+            left: vec![FooterPart {
+                text: status_label(status, false).to_owned(),
+                color: Some(footer_status_color(status, theme)),
+            }],
+            right: Vec::new(),
+            status,
+        };
+    };
 
-    if two_rows {
-        let home = home_dir();
-        let workspace = view
-            .map(|view| shorten_workspace(Path::new(&view.info.workspace), home.as_deref()))
-            .unwrap_or_else(|| shorten_workspace(&app.catalogs.default_workspace, home.as_deref()));
-        let right = view
-            .map(title_or_short_id)
-            .unwrap_or_else(|| "no session".to_owned());
-        let row0 = sides_line(&workspace, &right, width, theme.dim, theme.dim);
-        let row1 = model
-            .map(|model| sides_line(&status_word, &model, width, status_color, theme.muted))
-            .unwrap_or_else(|| sides_line(&status_word, "", width, status_color, theme.dim));
-        let lines = vec![row0, row1];
-        frame.render_widget(Paragraph::new(lines), area);
+    let status = if view.is_blocked() || view.unsaved_loop.is_some() {
+        FooterStatus::Blocked
+    } else if layout::busy(app) {
+        FooterStatus::Working
     } else {
-        let line = model
-            .map(|model| sides_line(&status_word, &model, width, status_color, theme.muted))
-            .unwrap_or_else(|| sides_line(&status_word, "", width, status_color, theme.dim));
-        frame.render_widget(Paragraph::new(vec![line]), area);
+        FooterStatus::Ready
+    };
+    let workspace = workspace_basename(&view.info.workspace);
+    let branch = view
+        .presentation
+        .as_ref()
+        .and_then(|presentation| presentation.git_branch.as_deref())
+        .map(str::to_owned);
+    let model = current_model(view);
+    let model = short_model(model);
+    let reasoning = current_reasoning(view);
+    let mut left = Vec::new();
+    push_identity_parts(&mut left, &workspace, branch.as_deref(), theme);
+    push_separator(&mut left, theme);
+    push_part(&mut left, model, theme.footer_sky);
+    push_separator(&mut left, theme);
+    push_part(
+        &mut left,
+        reasoning_label(reasoning).to_owned(),
+        theme.footer_amber,
+    );
+    push_separator(&mut left, theme);
+    push_part(
+        &mut left,
+        status_label(status, view.event_gap).to_owned(),
+        footer_status_color(status, theme),
+    );
+    if let Some(duration) = loop_duration(view) {
+        push_separator(&mut left, theme);
+        push_part(&mut left, duration, theme.footer_amber);
+    }
+    // Footer `queued`: locally unsent + in-flight (accepted) entries only;
+    // receipt-proven applied steers are not queued.
+    let pending_inflight = view
+        .live
+        .as_ref()
+        .map(|live| {
+            live.pending_steers
+                .iter()
+                .filter(|steer| {
+                    matches!(
+                        steer.state,
+                        PendingSteerState::Sending
+                            | PendingSteerState::Queued
+                            | PendingSteerState::Unconfirmed
+                    )
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    if view.steer_queue.len() + pending_inflight > 0 {
+        push_separator(&mut left, theme);
+        push_part(
+            &mut left,
+            format!("queued {}", view.steer_queue.len() + pending_inflight),
+            theme.footer_amber,
+        );
+    }
+    if app.selection_copied() {
+        push_separator(&mut left, theme);
+        push_part(&mut left, "selection copied".to_owned(), theme.footer_mint);
+    }
+
+    FooterParts {
+        left,
+        right: right_usage_parts(view, theme),
+        status,
     }
 }
 
-/// One footer row with the right side anchored to the edge.
-fn sides_line(
-    left: &str,
-    right: &str,
-    width: usize,
-    left_color: ratatui::style::Color,
-    right_color: ratatui::style::Color,
-) -> Line<'static> {
-    let right_w = column_width(right);
-    let left = layout::truncate(left, width.saturating_sub(right_w).saturating_sub(1));
-    let left_w = column_width(&left);
-    let gap = width.saturating_sub(left_w + right_w);
-    Line::from(vec![
-        Span::styled(left.to_owned(), Style::new().fg(left_color)),
-        Span::styled(" ".repeat(gap), Style::new()),
-        Span::styled(right.to_owned(), Style::new().fg(right_color)),
-    ])
+fn push_part(parts: &mut Vec<FooterPart>, text: String, color: Color) {
+    if !text.is_empty() {
+        parts.push(FooterPart {
+            text,
+            color: Some(color),
+        });
+    }
 }
 
-fn status_line(
-    app: &App,
-    view: Option<&SessionView>,
+fn push_separator(parts: &mut Vec<FooterPart>, theme: &Theme) {
+    parts.push(FooterPart {
+        text: " · ".to_owned(),
+        color: Some(theme.footer_muted),
+    });
+}
+
+fn push_identity_parts(
+    parts: &mut Vec<FooterPart>,
+    workspace: &str,
+    branch: Option<&str>,
     theme: &Theme,
-) -> (String, ratatui::style::Color) {
-    match app.connection {
-        ConnectionState::Starting => ("Starting".to_owned(), theme.dim),
-        ConnectionState::ShuttingDown => ("Shutting down".to_owned(), theme.dim),
-        ConnectionState::Failed(_) => ("Disconnected".to_owned(), theme.error),
-        ConnectionState::Ready => match view {
-            None => ("Idle".to_owned(), theme.dim),
-            Some(view) => {
-                if let Some(state) = view.state.as_ref() {
-                    match state.status {
-                        crate::protocol::SessionStatusWire::WaitingForInput => {
-                            return ("Waiting for input".to_owned(), theme.warning);
-                        }
-                        crate::protocol::SessionStatusWire::Finishing => {
-                            if view.can_show_last_result() {
-                                if let Some(result) = view.last_result.as_ref() {
-                                    return (result_summary(result), result_color(result, theme));
-                                }
-                            }
-                            return ("Saving".to_owned(), theme.dim);
-                        }
-                        crate::protocol::SessionStatusWire::Blocked => {
-                            let reason = match state.block_reason {
-                                Some(crate::protocol::SessionBlockReasonWire::Persistence) => {
-                                    "persistence"
-                                }
-                                Some(crate::protocol::SessionBlockReasonWire::Internal) => {
-                                    "internal"
-                                }
-                                None => "unknown",
-                            };
-                            let label = format!("Blocked · {reason}");
-                            return if view.can_show_last_result() {
-                                if let Some(result) = view.last_result.as_ref() {
-                                    (format!("{label} · {}", result_summary(result)), theme.error)
-                                } else {
-                                    (label, theme.error)
-                                }
-                            } else {
-                                (label, theme.error)
-                            };
-                        }
-                        crate::protocol::SessionStatusWire::Idle
-                        | crate::protocol::SessionStatusWire::Running => {}
-                    }
-                }
-                if view.can_show_last_result() {
-                    if let Some(result) = view.last_result.as_ref() {
-                        let summary = result_summary(result);
-                        return if view.event_gap {
-                            (format!("⚠ {summary}"), theme.warning)
-                        } else {
-                            (summary, result_color(result, theme))
-                        };
-                    }
-                }
-                if view.event_gap {
-                    return ("⚠ live output incomplete".to_owned(), theme.warning);
-                }
-                if view.live.as_ref().is_some_and(|live| live.waiting) {
-                    return ("Result unconfirmed".to_owned(), theme.warning);
-                }
-                if let Some(live) = &view.live {
-                    if live.cancel_requested {
-                        ("Cancelling".to_owned(), theme.dim)
-                    } else if let Some(tool) = live
-                        .requests
-                        .iter()
-                        .flat_map(|request| request.tools.iter())
-                        .find(|tool| {
-                            matches!(tool.status, ToolStatus::Pending | ToolStatus::Running)
-                        })
-                    {
-                        (format!("Running {}", tool.name), theme.dim)
-                    } else {
-                        ("Streaming".to_owned(), theme.dim)
-                    }
-                } else {
-                    ("Idle".to_owned(), theme.dim)
-                }
-            }
-        },
+) {
+    let identity = format!("▸ {}", fit_width(workspace, CWD_MAX_WIDTH));
+    push_part(parts, identity, theme.footer_text);
+    if let Some(branch) = branch.filter(|branch| !branch.is_empty()) {
+        push_part(
+            parts,
+            format!("@{}", fit_width(branch, BRANCH_MAX_WIDTH)),
+            theme.footer_mint,
+        );
     }
 }
 
-fn title_or_short_id(view: &SessionView) -> String {
-    match &view.info.title {
-        Some(title) if !title.is_empty() => title.clone(),
-        _ => view.info.session_id.chars().take(8).collect(),
+fn footer_status_color(status: FooterStatus, theme: &Theme) -> Color {
+    match status {
+        FooterStatus::Working => theme.footer_amber,
+        FooterStatus::Blocked | FooterStatus::Disconnected => theme.error,
+        FooterStatus::Starting | FooterStatus::ShuttingDown => theme.footer_muted,
+        FooterStatus::Ready => theme.footer_mint,
     }
+}
+
+fn current_reasoning(view: &SessionView) -> Reasoning {
+    // The durable session setting is the Agent-acknowledged truth: a
+    // session.update ack updates `view.info`, so the footer reflects the
+    // selected reasoning immediately (idle and live) without a new turn.
+    // Per-request metadata stays immutable and is not shown here.
+    view.info.reasoning
+}
+
+fn current_model(view: &SessionView) -> &str {
+    // Also the acknowledged session model; a stale presentation label or past
+    // request must never override the current model identity.
+    &view.info.model
+}
+
+fn loop_duration(view: &SessionView) -> Option<String> {
+    let last_loop = view.presentation.as_ref()?.last_loop.as_ref()?;
+    let started = crate::state::selection::parse_rfc3339(last_loop.started_at.as_deref()?)?;
+    let finished = crate::state::selection::parse_rfc3339(last_loop.finished_at.as_deref()?)?;
+    let minutes = finished.duration_since(started).ok()?.as_secs() / 60;
+    Some(format_duration(minutes))
+}
+
+pub fn format_duration(minutes: u64) -> String {
+    if minutes < 60 {
+        return format!("{minutes}m");
+    }
+    format!("{}h{}m", minutes / 60, minutes % 60)
+}
+
+fn status_label(status: FooterStatus, event_gap: bool) -> &'static str {
+    match status {
+        FooterStatus::Ready if event_gap => "⚠ incomplete",
+        FooterStatus::Working if event_gap => "⚠ incomplete",
+        FooterStatus::Ready => "● ready",
+        FooterStatus::Working => "● working",
+        FooterStatus::Blocked => "● blocked",
+        FooterStatus::Starting => "starting",
+        FooterStatus::ShuttingDown => "shutting down",
+        FooterStatus::Disconnected => "disconnected",
+    }
+}
+
+fn right_usage_parts(view: &SessionView, theme: &Theme) -> Vec<FooterPart> {
+    let projection = &view.usage_projection;
+    let usage = (!matches!(projection.completeness, UsageCompleteness::Unknown))
+        .then_some(projection.usage);
+    let mut parts = Vec::new();
+    if let Some(usage) = usage {
+        let input_output = [
+            usage
+                .input_tokens
+                .map(|value| format!("↑{}", format_num(value))),
+            usage
+                .output_tokens
+                .map(|value| format!("↓{}", format_num(value))),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        let cache = [
+            usage
+                .cache_read_tokens
+                .map(|value| format!("R{}", format_num(value))),
+            usage
+                .cache_write_tokens
+                .map(|value| format!("W{}", format_num(value))),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        if !input_output.is_empty() {
+            let mut text = input_output.join(" ");
+            if !cache.is_empty() {
+                text.push(' ');
+            }
+            push_part(&mut parts, text, theme.footer_sky);
+        }
+        if !cache.is_empty() {
+            push_part(&mut parts, cache.join(" "), theme.footer_lilac);
+        }
+        if projection.completeness == UsageCompleteness::Partial {
+            if !parts.is_empty() {
+                push_separator(&mut parts, theme);
+            }
+            push_part(&mut parts, "usage ?".to_owned(), theme.footer_amber);
+        }
+    } else if projection.completeness == UsageCompleteness::Partial {
+        push_part(&mut parts, "usage ?".to_owned(), theme.footer_amber);
+    }
+    append_unsaved_usage(&mut parts, projection, theme);
+    if let Some(presentation) = &view.presentation {
+        let context = match (presentation.context.kind, presentation.context.percent) {
+            (crate::protocol::ContextKindWire::Estimated, Some(percent)) => {
+                format!("ctx ~{percent:.2}%")
+            }
+            (_, Some(percent)) => format!("ctx {percent:.2}%"),
+            _ => "ctx ?".to_owned(),
+        };
+        if !parts.is_empty() {
+            push_separator(&mut parts, theme);
+        }
+        let context_color = presentation
+            .context
+            .percent
+            .filter(|percent| *percent >= 70.0)
+            .map_or(theme.footer_lilac, |_| theme.footer_amber);
+        push_part(&mut parts, context, context_color);
+        if let Some(cost) = presentation.cost_usd.filter(|cost| {
+            cost.is_finite() && (*cost > 0.0 || presentation.using_subscription == Some(true))
+        }) {
+            let mut cost = format_cost(cost);
+            if presentation.using_subscription == Some(true) {
+                cost.push_str(" (sub)");
+            }
+            push_separator(&mut parts, theme);
+            push_part(&mut parts, cost, theme.footer_mint);
+        }
+    } else {
+        if !parts.is_empty() {
+            push_separator(&mut parts, theme);
+        }
+        push_part(&mut parts, "ctx ?".to_owned(), theme.footer_lilac);
+    }
+    parts
+}
+
+fn append_unsaved_usage(parts: &mut Vec<FooterPart>, projection: &UsageProjection, theme: &Theme) {
+    let Some(usage) = projection.unsaved_usage else {
+        if projection.unsaved_completeness != UsageCompleteness::Unknown {
+            push_separator(parts, theme);
+            push_part(parts, "unsaved usage ?".to_owned(), theme.error);
+        } else {
+            return;
+        }
+        return;
+    };
+    let values = [
+        usage
+            .input_tokens
+            .map(|value| format!("↑{}", format_num(value))),
+        usage
+            .output_tokens
+            .map(|value| format!("↓{}", format_num(value))),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    if values.is_empty() {
+        return;
+    }
+    push_separator(parts, theme);
+    push_part(parts, format!("unsaved {}", values.join(" ")), theme.error);
+    if projection.unsaved_completeness == UsageCompleteness::Partial {
+        push_part(parts, "?".to_owned(), theme.error);
+    }
+}
+
+pub fn format_num(value: u64) -> String {
+    if value < 1_000 {
+        return value.to_string();
+    }
+    if value < 1_000_000 {
+        return format_one_decimal(value as f64 / 1_000.0, "k");
+    }
+    format_one_decimal(value as f64 / 1_000_000.0, "m")
+}
+
+fn format_one_decimal(value: f64, suffix: &str) -> String {
+    format!("{value:.1}{suffix}")
+}
+
+pub fn format_cost(value: f64) -> String {
+    if !value.is_finite() || value <= 0.0 {
+        "$0".to_owned()
+    } else if value < 0.01 {
+        format!("${value:.4}")
+    } else if value < 1.0 {
+        format!("${value:.3}")
+    } else {
+        format!("${value:.2}")
+    }
+}
+
+pub fn fit_aligned(left: &str, right: &str, width: usize) -> (String, String) {
+    if width == 0 {
+        return (String::new(), String::new());
+    }
+    let right = fit_width(right, width);
+    let right_width = column_width(&right);
+    if right_width >= width {
+        return (String::new(), right);
+    }
+    let left_width = width.saturating_sub(right_width + 1);
+    (fit_width(left, left_width), right)
+}
+
+fn parts_text(parts: &[FooterPart]) -> String {
+    parts.iter().map(|part| part.text.as_str()).collect()
+}
+
+fn fit_parts(parts: &[FooterPart], width: usize, _theme: &Theme) -> Vec<FooterPart> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let text = parts_text(parts);
+    if column_width(&text) <= width {
+        return parts.to_vec();
+    }
+    if width == 1 {
+        return vec![FooterPart {
+            text: "…".to_owned(),
+            color: None,
+        }];
+    }
+    let limit = width - 1;
+    let mut used: usize = 0;
+    let mut fitted = Vec::new();
+    for part in parts {
+        let mut text = String::new();
+        for character in part.text.chars() {
+            let cells = unicode_width::UnicodeWidthChar::width(character).unwrap_or(0);
+            if used.saturating_add(cells) > limit {
+                break;
+            }
+            text.push(character);
+            used = used.saturating_add(cells);
+        }
+        if !text.is_empty() {
+            fitted.push(FooterPart {
+                text,
+                color: part.color,
+            });
+        }
+        if used >= limit {
+            break;
+        }
+    }
+    fitted.push(FooterPart {
+        text: "…".to_owned(),
+        color: None,
+    });
+    fitted
+}
+
+fn fit_aligned_parts(
+    left: &[FooterPart],
+    right: &[FooterPart],
+    width: usize,
+    theme: &Theme,
+) -> Vec<FooterPart> {
+    if width == 0 {
+        return Vec::new();
+    }
+    if right.is_empty() {
+        return fit_parts(left, width, theme);
+    }
+    let right = fit_parts(right, width, theme);
+    let right_width = column_width(&parts_text(&right));
+    if right_width >= width {
+        return right;
+    }
+    let left = fit_parts(left, width.saturating_sub(right_width + 1), theme);
+    let left_width = column_width(&parts_text(&left));
+    let gap = width.saturating_sub(left_width + right_width).max(1);
+    let gap_color = left.last().and_then(|part| part.color);
+    let mut fitted = left;
+    fitted.push(FooterPart {
+        text: " ".repeat(gap),
+        color: gap_color,
+    });
+    fitted.extend(right);
+    fitted
+}
+
+fn short_model(model: &str) -> String {
+    let mut value = model
+        .replace("claude-", "claude ")
+        .replace("gemini-", "gemini ")
+        .replace("gpt-", "gpt ");
+    if value.len() >= 9 {
+        let suffix_start = value.len() - 9;
+        if value.as_bytes().get(suffix_start) == Some(&b'-')
+            && value.as_bytes()[suffix_start + 1..]
+                .iter()
+                .all(u8::is_ascii_digit)
+            && value.as_bytes()[suffix_start + 1] == b'2'
+            && value.as_bytes()[suffix_start + 2] == b'0'
+        {
+            value.truncate(suffix_start);
+        }
+    }
+    for suffix in ["-latest", "-preview"] {
+        if let Some(stripped) = value.strip_suffix(suffix) {
+            value = stripped.to_owned();
+        }
+    }
+    value = value.replace('-', " ");
+    value = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    fit_width(&value, MODEL_MAX_WIDTH)
+}
+
+fn fit_width(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    if column_width(text) <= width {
+        return text.to_owned();
+    }
+    if width == 1 {
+        return "…".to_owned();
+    }
+    format!("{}…", rail::clip_cells(text, width - 1))
+}
+
+fn workspace_basename(workspace: &str) -> String {
+    Path::new(workspace)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(workspace)
+        .to_owned()
 }
 
 /// The user's home directory for workspace shortening; `None` keeps paths
@@ -261,4 +568,202 @@ pub fn shorten_workspace(path: &Path, home: Option<&Path>) -> String {
         }
     }
     path_text.into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn numbers_cost_and_right_group_follow_rail_boundaries() {
+        assert_eq!(format_num(999), "999");
+        assert_eq!(format_num(1_000), "1.0k");
+        assert_eq!(format_num(1_000_000), "1.0m");
+        assert_eq!(format_cost(0.0012), "$0.0012");
+        assert_eq!(format_cost(0.12), "$0.120");
+        assert_eq!(format_cost(2.0), "$2.00");
+        assert_eq!(format_cost(f64::NAN), "$0");
+        assert_eq!(
+            fit_aligned("abcdef", "ctx ?", 10),
+            ("abc…".to_owned(), "ctx ?".to_owned())
+        );
+    }
+
+    #[test]
+    fn model_shortening_preserves_unknown_model_identity_without_raw_prefixes() {
+        assert_eq!(short_model("claude-3-7-sonnet-latest"), "claude 3 7 sonnet");
+        assert_eq!(short_model("gpt-5.6-sol"), "gpt 5.6 sol");
+    }
+
+    #[test]
+    fn fit_aligned_matches_reference_narrow_footer_text() {
+        let left = "▸ project · gpt 4o · high · ● ready · 1h1m";
+        let right = "↑4.2k ↓67.1k R7.9m W0 · ctx ? · $0.020";
+        let render = |width| {
+            let (left, right) = fit_aligned(left, right, width);
+            if right.is_empty() {
+                left
+            } else {
+                format!("{left} {right}")
+            }
+        };
+        assert_eq!(render(40), "… ↑4.2k ↓67.1k R7.9m W0 · ctx ? · $0.020");
+        assert_eq!(
+            render(60),
+            "▸ project · gpt 4o ·… ↑4.2k ↓67.1k R7.9m W0 · ctx ? · $0.020"
+        );
+    }
+
+    #[test]
+    fn duration_format_matches_rail_boundaries() {
+        assert_eq!(format_duration(0), "0m");
+        assert_eq!(format_duration(59), "59m");
+        assert_eq!(format_duration(61), "1h1m");
+    }
+
+    #[test]
+    fn ready_footer_styled_cells_match_the_source_fixture() {
+        let mut app = crate::ui::testapp::open_empty(
+            crate::theme::ThemeKind::Dark,
+            "ses_1",
+            Some("Task"),
+            "high",
+        );
+        let view = app.sessions.known.get_mut("ses_1").expect("active view");
+        view.info.model = "gpt-4o".to_owned();
+        view.last_result = Some(crate::protocol::TurnResultViewWire {
+            turn: crate::protocol::TurnRef {
+                session_id: "ses_1".to_owned(),
+                loop_id: "loop_1".to_owned(),
+            },
+            outcome: crate::protocol::LoopOutcomeWire::Completed,
+            usage: crate::protocol::UsageWire {
+                input_tokens: Some(4_200),
+                output_tokens: Some(67_100),
+                reasoning_tokens: None,
+                cache_read_tokens: Some(7_900_000),
+                cache_write_tokens: Some(0),
+                provider_total_tokens: None,
+            },
+            requests: 1,
+            tool_rounds: 0,
+            final_config_revision: 0,
+            persistence: crate::protocol::TurnPersistenceWire::Persisted,
+            accepted_at: None,
+        });
+        view.recompute_usage_projection();
+        view.presentation = Some(crate::protocol::SessionPresentationWire {
+            session_id: "ses_1".to_owned(),
+            model_label: None,
+            git_branch: None,
+            context: crate::protocol::ContextUsageWire {
+                tokens: None,
+                window: None,
+                percent: None,
+                kind: crate::protocol::ContextKindWire::Unknown,
+            },
+            cost_usd: Some(0.02),
+            using_subscription: Some(false),
+            last_loop: None,
+            steer_progress: None,
+        });
+
+        let theme = Theme::dark();
+        let parts = footer_parts(&app, &theme);
+        let actual = fit_aligned_parts(&parts.left, &parts.right, 80, &theme)
+            .into_iter()
+            .flat_map(|part| {
+                let color = part.color;
+                part.text
+                    .chars()
+                    .map(move |character| (character, color))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let source: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/rail/footer/ready.json"))
+                .expect("ready footer fixture");
+        let expected = source["rows"][0]
+            .as_array()
+            .expect("ready footer row")
+            .iter()
+            .flat_map(|token| {
+                let text = token
+                    .as_str()
+                    .or_else(|| token.get("c").and_then(serde_json::Value::as_str))
+                    .expect("footer token text");
+                let color = token.get("fg").map(|rgb| {
+                    let rgb = rgb.as_array().expect("footer rgb");
+                    Color::Rgb(
+                        rgb[0].as_u64().unwrap() as u8,
+                        rgb[1].as_u64().unwrap() as u8,
+                        rgb[2].as_u64().unwrap() as u8,
+                    )
+                });
+                text.chars()
+                    .map(move |character| (character, color))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn partial_usage_annotation_gets_a_separator_not_a_jammed_suffix() {
+        let mut app = crate::ui::testapp::open_empty(
+            crate::theme::ThemeKind::Dark,
+            "ses_1",
+            Some("Task"),
+            "high",
+        );
+        let view = app.sessions.known.get_mut("ses_1").expect("active view");
+        // One known metric with another missing: a partially-known total.
+        view.transcript
+            .blocks
+            .push(crate::state::transcript::TranscriptBlock::Assistant(
+                crate::state::transcript::AssistantBlock {
+                    index: 0,
+                    loop_id: "loop_1".to_owned(),
+                    request_index: 0,
+                    model: "deep".to_owned(),
+                    reasoning_level: crate::protocol::Reasoning::High,
+                    parts: Vec::new(),
+                    tool_calls: Vec::new(),
+                    usage: crate::protocol::UsageWire {
+                        input_tokens: Some(4_200),
+                        output_tokens: None,
+                        cache_read_tokens: Some(0),
+                        cache_write_tokens: Some(0),
+                        ..crate::protocol::UsageWire::default()
+                    },
+                    finish_reason: "stop".to_owned(),
+                    terminal_error: None,
+                },
+            ));
+        view.transcript.complete = true;
+        view.recompute_usage_projection();
+        view.presentation = Some(crate::protocol::SessionPresentationWire {
+            session_id: "ses_1".to_owned(),
+            model_label: None,
+            git_branch: None,
+            context: crate::protocol::ContextUsageWire {
+                tokens: None,
+                window: None,
+                percent: None,
+                kind: crate::protocol::ContextKindWire::Unknown,
+            },
+            cost_usd: None,
+            using_subscription: None,
+            last_loop: None,
+            steer_progress: None,
+        });
+
+        let theme = Theme::dark();
+        let parts = footer_parts(&app, &theme);
+        let right = parts_text(&parts.right);
+        assert_eq!(
+            right, "↑4.2k R0 W0 · usage ? · ctx ?",
+            "the partial annotation must be separated from the numbers and context"
+        );
+    }
 }

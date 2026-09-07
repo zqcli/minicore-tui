@@ -18,9 +18,11 @@ use std::pin::Pin;
 
 use crossterm::event::{Event, EventStream};
 use futures_util::StreamExt;
+use ratatui::layout::Rect;
 
 use minicore_tui::app::{App, CliPrefs};
 use minicore_tui::args::{self, Args};
+use minicore_tui::clipboard::{self, ClipboardPort};
 use minicore_tui::command::AppCommand;
 use minicore_tui::event::{AppEvent, RpcEvent};
 use minicore_tui::protocol::OutgoingRequest;
@@ -134,6 +136,7 @@ async fn run_fullscreen(
     };
     let mut app = App::with_cli_prefs(workspace, prefs);
     app.update(AppEvent::SetTheme(opts.theme));
+    let mut clipboard = clipboard::terminal_clipboard();
 
     let terminal = guard.terminal_mut();
     // The application does not create a blocking input-reader thread.
@@ -147,14 +150,11 @@ async fn run_fullscreen(
 
     // Bootstrap fires the four discovery requests concurrently (spec 6).
     let commands = app.update(AppEvent::Bootstrap);
-    if run_commands(process, &mut app, commands, opts.debug).await? {
+    if run_commands(process, &mut app, commands, opts.debug, &mut clipboard).await? {
         return Ok(());
     }
 
     let mut last_size = (0, 0);
-    let mut last_total = 0usize;
-    let mut last_visible = 0usize;
-    let mut last_dock_rows = 0usize;
     let mut last_render = Instant::now();
     let mut rpc_open = true;
     let mut rpc_cooldown_until: Option<Instant> = None;
@@ -163,25 +163,12 @@ async fn run_fullscreen(
         // Measured geometry flows back through `AppEvent::Viewport`; the
         // renderer never writes scroll state (spec 3, 7).
         let size = terminal.size()?;
-        prepare_transcript_cache(&mut app, size.width);
-        let width = size.width as usize;
-        let total = ui::transcript::total_lines(&app, size.width);
-        let dock_rows = ui::layout::dock_rows(&app, size.width, size.height) as usize;
-        let transcript_height = size.height.saturating_sub(dock_rows as u16);
-        let visible = ui::transcript::visible_rows(&app, total, transcript_height);
-        if (width, size.height as usize) != last_size
-            || total != last_total
-            || visible != last_visible
-            || dock_rows != last_dock_rows
-        {
-            last_size = (width, size.height as usize);
-            last_total = total;
-            last_visible = visible;
-            last_dock_rows = dock_rows;
-            app.update(AppEvent::Viewport {
-                total_lines: total,
-                visible_rows: visible,
+        if (size.width as usize, size.height as usize) != last_size {
+            app.update(AppEvent::TerminalSize {
+                width: size.width,
+                height: size.height,
             });
+            last_size = (size.width as usize, size.height as usize);
         }
         if shutdown_timeout_command(&app).is_some() {
             return Err(force_kill_and_report(process, &mut app).await);
@@ -221,12 +208,14 @@ async fn run_fullscreen(
                 }
             }
             Selected::Rpc(Some(event)) => {
-                let batch = run_rpc_batch(process, &mut app, event, opts.debug).await?;
+                let batch =
+                    run_rpc_batch(process, &mut app, event, opts.debug, &mut clipboard).await?;
                 if batch.exit {
                     exit = true;
                 } else if batch.channel_ended {
                     let commands = rpc_channel_ended(&mut rpc_open, &mut app);
-                    if run_commands(process, &mut app, commands, opts.debug).await? {
+                    if run_commands(process, &mut app, commands, opts.debug, &mut clipboard).await?
+                    {
                         exit = true;
                     }
                 } else {
@@ -235,7 +224,7 @@ async fn run_fullscreen(
             }
             Selected::Rpc(None) => {
                 let commands = rpc_channel_ended(&mut rpc_open, &mut app);
-                if run_commands(process, &mut app, commands, opts.debug).await? {
+                if run_commands(process, &mut app, commands, opts.debug, &mut clipboard).await? {
                     exit = true;
                 }
             }
@@ -245,7 +234,7 @@ async fn run_fullscreen(
             }
             Selected::Terminal(event) => {
                 let commands = app.update(AppEvent::Terminal(event));
-                if run_commands(process, &mut app, commands, opts.debug).await? {
+                if run_commands(process, &mut app, commands, opts.debug, &mut clipboard).await? {
                     exit = true;
                 }
             }
@@ -255,7 +244,7 @@ async fn run_fullscreen(
             Selected::Signal => {
                 signal_fired = true;
                 let commands = app.update(AppEvent::ShutdownRequested);
-                if run_commands(process, &mut app, commands, opts.debug).await? {
+                if run_commands(process, &mut app, commands, opts.debug, &mut clipboard).await? {
                     exit = true;
                 }
             }
@@ -263,7 +252,8 @@ async fn run_fullscreen(
                 app.update(AppEvent::Tick);
             }
             Selected::Render => {
-                prepare_transcript_cache(&mut app, terminal.size()?.width);
+                let size = terminal.size()?;
+                prepare_frame(&mut app, Rect::new(0, 0, size.width, size.height));
                 terminal.draw(|frame| ui::render(frame, &app))?;
                 last_render = Instant::now();
                 app.update(AppEvent::Rendered);
@@ -276,7 +266,8 @@ async fn run_fullscreen(
         // Render when state changed and the 30 FPS budget allows it; the
         // Rendered event clears the dirty flag so idle frames never draw.
         if app.dirty && last_render.elapsed() >= RENDER_INTERVAL {
-            prepare_transcript_cache(&mut app, terminal.size()?.width);
+            let size = terminal.size()?;
+            prepare_frame(&mut app, Rect::new(0, 0, size.width, size.height));
             terminal.draw(|frame| ui::render(frame, &app))?;
             last_render = Instant::now();
             app.update(AppEvent::Rendered);
@@ -284,9 +275,30 @@ async fn run_fullscreen(
     }
 }
 
-fn prepare_transcript_cache(app: &mut App, width: u16) {
-    if let Some(prepared) = ui::transcript::prepare_cache(app, width) {
-        app.update(AppEvent::TranscriptCachePrepared(prepared));
+/// Layout is coalesced with drawing, not repeated for every queued input/delta.
+fn prepare_frame(app: &mut App, area: Rect) {
+    if ui::layout::is_too_small(area) {
+        return;
+    }
+    let screen = ui::layout::screen_layout(app, area);
+    prepare_conversation(app, screen.content.width);
+    let total = app
+        .prepared_conversation(screen.content.width)
+        .expect("conversation was prepared")
+        .total_rows();
+    let visible = ui::transcript::visible_rows(app, total, screen.transcript.height);
+    if app.viewport != (total, visible) {
+        app.update(AppEvent::Viewport {
+            total_lines: total,
+            visible_rows: visible,
+        });
+    }
+}
+
+fn prepare_conversation(app: &mut App, width: u16) {
+    if app.prepared_conversation(width).is_none() {
+        let prepared = ui::transcript::prepare_conversation(app, width);
+        app.update(AppEvent::ConversationPrepared(prepared));
     }
 }
 
@@ -325,6 +337,7 @@ async fn run_rpc_batch(
     app: &mut App,
     first: RpcEvent,
     debug: bool,
+    clipboard: &mut dyn ClipboardPort,
 ) -> io::Result<RpcBatchResult> {
     let started = Instant::now();
     let mut processed = 0usize;
@@ -333,7 +346,7 @@ async fn run_rpc_batch(
     while let Some(event) = pending {
         processed += 1;
         let commands = app.update(AppEvent::Rpc(event));
-        if run_commands(process, app, commands, debug).await? {
+        if run_commands(process, app, commands, debug, clipboard).await? {
             return Ok(RpcBatchResult {
                 exit: true,
                 channel_ended: false,
@@ -438,6 +451,7 @@ async fn run_commands(
     app: &mut App,
     commands: Vec<AppCommand>,
     debug: bool,
+    clipboard: &mut dyn ClipboardPort,
 ) -> io::Result<bool> {
     let mut queue: VecDeque<AppCommand> = commands.into();
     while let Some(command) = queue.pop_front() {
@@ -459,6 +473,20 @@ async fn run_commands(
                 }
             }
             AppCommand::KillChild => process.kill_child(),
+            AppCommand::CopySelection(text) => {
+                let result = clipboard.set_text(text.as_str());
+                let event = match result {
+                    Ok(()) => AppEvent::ClipboardResult {
+                        success: true,
+                        error: None,
+                    },
+                    Err(error) => AppEvent::ClipboardResult {
+                        success: false,
+                        error: Some(format!("copy failed: {error}")),
+                    },
+                };
+                app.update(event);
+            }
             AppCommand::Exit => return Ok(true),
         }
     }
@@ -491,6 +519,35 @@ fn debug_log_request(request: &OutgoingRequest, start: Instant) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepare_frame_reuses_layout_and_reports_real_geometry() {
+        let mut app = App::new(std::path::PathBuf::from("/synthetic"));
+        let area = Rect::new(0, 0, 80, 24);
+        prepare_frame(&mut app, area);
+        let width = ui::layout::screen_layout(&app, area).content.width;
+        let prepared = app.prepared_conversation(width).unwrap();
+        assert_eq!(app.viewport.0, prepared.total_rows());
+        let pointer = prepared.lines.as_ptr();
+        app.update(AppEvent::Rendered);
+        for _ in 0..20 {
+            prepare_frame(&mut app, area);
+            assert_eq!(
+                app.prepared_conversation(width).unwrap().lines.as_ptr(),
+                pointer
+            );
+            assert!(!app.dirty);
+        }
+    }
+
+    #[test]
+    fn small_terminal_skips_hidden_conversation_preparation() {
+        let mut app = App::new(std::path::PathBuf::from("/synthetic"));
+        let area = Rect::new(0, 0, 10, 4);
+        prepare_frame(&mut app, area);
+        let width = ui::layout::screen_layout(&app, area).content.width;
+        assert!(app.prepared_conversation(width).is_none());
+    }
 
     #[cfg(unix)]
     /// The OS-signal listener is registered once at construction and is safe

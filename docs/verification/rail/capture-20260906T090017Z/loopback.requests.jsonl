@@ -1,0 +1,2 @@
+{"count": 1, "has_tools": true, "input_item_types": ["message", "message"], "model": "stage7-loopback", "path": "/v1/responses"}
+{"count": 2, "has_tools": true, "input_item_types": ["message", "message", "reasoning", "function_call", "function_call_output"], "model": "stage7-loopback", "path": "/v1/responses"}

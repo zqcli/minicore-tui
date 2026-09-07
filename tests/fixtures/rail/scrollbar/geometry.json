@@ -1,0 +1,22 @@
+{
+ "schema": "minicore-rail-cell-v1",
+ "case": "geometry",
+ "kind": "text",
+ "term": {
+  "cols": 80,
+  "rows": 24
+ },
+ "source": {
+  "rail_commit": "1d0dd1611a4d9546c64fe9f5b5c966253fb88eba",
+  "pi": "0.84.4",
+  "theme": "pi dark (initTheme('dark'))"
+ },
+ "rows": [
+  "top: {\"column\":79,\"trackTop\":0,\"trackHeight\":20,\"thumbTop\":0,\"thumbHeight\":4,\"maxThumbStart\":16,\"maxScrollTop\":80}",
+  "mid: {\"column\":79,\"trackTop\":0,\"trackHeight\":20,\"thumbTop\":8,\"thumbHeight\":4,\"maxThumbStart\":16,\"maxScrollTop\":80}",
+  "bottom: {\"column\":79,\"trackTop\":0,\"trackHeight\":20,\"thumbTop\":16,\"thumbHeight\":4,\"maxThumbStart\":16,\"maxScrollTop\":80}",
+  "content=track -> undefined",
+  "marked=true scrollbar-mode=hidden",
+  "drag-preview at 60: {\"column\":79,\"trackTop\":0,\"trackHeight\":20,\"thumbTop\":12,\"thumbHeight\":4,\"maxThumbStart\":16,\"maxScrollTop\":80}"
+ ]
+}

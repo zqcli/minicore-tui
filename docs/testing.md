@@ -6,6 +6,23 @@ flows, Ratatui `TestBackend` snapshots, and terminal lifecycle checks. It does
 not call a real provider, require an installed Agent, read a user config, or
 enter an alternate screen during normal CI tests.
 
+## Current Patch Verification
+
+For **TUI 0.2.7 / Agent 0.3.2**, see
+[verification/0.2.7/README.md](verification/0.2.7/README.md). All compilation was
+performed remotely on Linux: stable and Rust 1.85 each passed 423 default tests
+with 17 ignored; 16 real-Agent loopback E2E tests passed separately. Native macOS
+ran the cross-built executables, including 10 writer tests, isolated-config
+regression, real-TTY normal/panic restoration, and iTerm2 interaction checks.
+Debug uses package level 1/dependency level 2, with debug info and assertions;
+optimized stepping/local-variable tradeoffs are intentional.
+The fixed-scroll experiment uses an actual 220×53 terminal, absolute 25 Hz
+injection and recorded event timestamps. Each of three 8-second process-CPU
+windows excludes profiling. The supplemental full 800-event CPU span includes
+subsequent sampling and drain overhead. Neither is a streaming CPU ceiling.
+No native pixel screenshot or new Windows result is claimed.
+The older platform gates below remain historical.
+
 ## Default Linux Commands
 
 Run these commands from the repository root:
@@ -29,10 +46,14 @@ Credentials and private workspace paths are never recorded in test artifacts.
 
 ## Reproducible macOS Artifact
 
-From the repository root, `scripts/build-macos-x86_64.sh` checks for
-`cargo-zigbuild` and `zig`, fixes `MACOSX_DEPLOYMENT_TARGET=11.0`, clears
-external Rust flag/target-directory overrides, and runs the locked Rust 1.85
-Darwin release build. The target-specific `.cargo/config.toml` reserves
+From the repository root, put LLVM's `clang` and `ld64.lld` on `PATH` and set
+`SDKROOT` to a macOS SDK. `scripts/build-macos-x86_64.sh` checks those prerequisites,
+fixes `MACOSX_DEPLOYMENT_TARGET=11.0`, clears external Rust flag/target-directory
+overrides, and runs the locked Rust 1.85 Darwin release build with ad-hoc signing.
+The 0.2.7 delivery binaries use Rust 1.98/LLVM 19 to match the comparison compiler;
+the canonical Rust 1.85 build was separately exercised. Zig 0.13-linked probes
+crashed during native exception unwinding; LLVM-linked probes passed. The precise
+internal cause of the Zig-path crash was not established. The target-specific `.cargo/config.toml` reserves
 `0x4000` bytes of Mach-O header padding without affecting Linux or Windows
 targets; the script checks and prints the relative and absolute artifact path.
 On macOS, `scripts/verify-macos-binary.sh [binary]` locates the
@@ -119,8 +140,39 @@ desensitized configuration; no provider key or real user data is used.
 
 A delivery run should wrap this command in a 300-second timeout and a cleanup
 trap. The trap must kill/reap only processes created by the run and remove its
-temporary root. Final6 ran seven ignored E2E scenarios against the pinned Agent
-binary; this is loopback evidence, not external-provider coverage.
+temporary root. The official serial command is `--ignored --test-threads=1`
+(eleven scenarios, deterministic ~1 s; the final-source r5 archive shows
+0.52 s on the Linux builder). This is loopback evidence against the real Agent
+binary, not external-provider coverage.
+
+
+## Stage 7 PTY Evidence
+
+`scripts/stage7_xtermjs.py` drives the real TUI and Agent through a PTY with an
+isolated loopback Responses server and temporary Git workspace. Actual PTY
+bytes feed pinned xterm.js in headless Edge; Playwright screenshots the
+terminal element after a renderer-flush barrier. It records raw bytes, input
+sequences, terminal sizes, binary hashes, and exact final-sentence assertions.
+No desktop screenshot or synthetic cell image is used for the final evidence.
+
+```bash
+cargo build --locked --offline
+(cd ../minicore-agent && cargo build --locked --offline)
+npm --prefix tools/stage7-xtermjs ci
+python3 scripts/stage7_xtermjs.py \
+  --tui-bin target/debug/minicore-tui \
+  --agent-bin ../minicore-agent/target/debug/minicore-agent
+```
+
+The development-only driver requires its Python dependencies and the browser
+channel specified in `tools/stage7-xtermjs/driver.mjs`; neither is required by
+default Rust tests. The final archive is
+`docs/verification/rail/capture-20260906T062517Z/`: four mandated 80×24
+screenshots, two 120×40 scenes, and one 62×18 scene, plus raw PTY and compact
+provenance. `artifacts/` is ignored regenerable scratch. The earlier iTerm/OCR
+prototype `stage7_pty.py` remains available but is not the final capture path.
+This evidence uses a mock provider with real Agent/tools, not an external LLM,
+and does not substitute for hosted CI or exhaustive source-cell equivalence.
 
 ## Windows Cross-Check
 
@@ -134,7 +186,10 @@ cargo test --locked --target x86_64-pc-windows-gnu --all-targets --no-run
 
 The Windows GNU toolchain commands are compile/clippy cross-checks, not native
 Windows execution or GitHub Actions CI evidence. Windows-specific code paths are
-kept under `cfg(windows)` and must remain warning-free.
+kept under `cfg(windows)` and must remain warning-free. On the frozen source
+this pair passed on the Linux builder (cross-clippy `-D warnings` and all-target
+`--no-run` link); the final logs are archived under `docs/verification/rail/final-r5/`
+(`tui-windows-clippy.log`, `tui-windows-build.log`).
 
 ## CI Workflow
 
