@@ -1,0 +1,2 @@
+# Snapshot comparisons are byte-exact; checkout must preserve renderer LF endings.
+/snapshots/*.txt text eol=lf
