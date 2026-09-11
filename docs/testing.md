@@ -13,6 +13,16 @@ The paired **TUI 0.2.8 / Agent 0.3.3** release is documented in
 matches the preceding local builds; version-bearing snapshots were updated.
 No local compilation is used for this release.
 
+The Session-panel verification follow-ups are recorded in
+[verification/stage3-session-panel/README.md](verification/stage3-session-panel/README.md)
+and [verification/stage4-session-panel/README.md](verification/stage4-session-panel/README.md).
+The current Stage 6 history-safety run reports **460 passed, 0 failed, 18
+ignored** on both stable and Rust 1.85 with Cargo's default test-thread
+behavior; the 17 ignored real-Agent E2E tests then passed serially on both
+toolchains. Stable strict Clippy and stable/MSRV rustdoc and rustfmt remain
+part of the remote quality gates. MSRV strict Clippy still reports only the
+pre-existing diagnostics in unmodified files.
+
 For the preceding **TUI 0.2.7 / Agent 0.3.2**, see
 [verification/0.2.7/README.md](verification/0.2.7/README.md). All compilation was
 performed remotely on Linux: stable and Rust 1.85 each passed 423 default tests
@@ -129,26 +139,23 @@ cannot safely exercise terminal modes.
 
 ## Real-Agent E2E
 
-The E2E test is ignored by default:
+The E2E tests are ignored by default:
 
 ```bash
 MINICORE_AGENT_BIN=/path/to/minicore-agent \
-MINICORE_AGENT_CONFIG=/path/to/loopback-agent.toml \
-cargo test --locked --test agent_e2e -- --ignored --nocapture
+cargo test --locked --test agent_e2e -- --ignored --test-threads=1 --nocapture
 ```
 
-The configuration must use a loopback mock model endpoint and an isolated
-Agent data directory/workspace. The ignored smoke flow covers ping/catalog
-discovery, session creation, one turn with durable reconciliation, and
-shutdown/child cleanup. The caller is responsible for supplying the isolated,
-desensitized configuration; no provider key or real user data is used.
+The test harness creates an isolated configuration, data directory, workspace,
+and loopback mock model endpoint. The ignored suite covers discovery, turns,
+steering, updates, shutdown, and the Session-panel rename/close/delete flow.
+No provider key or real user data is used.
 
 A delivery run should wrap this command in a 300-second timeout and a cleanup
 trap. The trap must kill/reap only processes created by the run and remove its
-temporary root. The official serial command is `--ignored --test-threads=1`
-(eleven scenarios, deterministic ~1 s; the final-source r5 archive shows
-0.52 s on the Linux builder). This is loopback evidence against the real Agent
-binary, not external-provider coverage.
+temporary root. The official serial command is `--ignored --test-threads=1` (17 scenarios,
+deterministic in the remote final run). This is loopback evidence against the
+real Agent binary, not external-provider coverage.
 
 
 ## Stage 7 PTY Evidence

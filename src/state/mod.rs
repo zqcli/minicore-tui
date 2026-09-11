@@ -14,7 +14,8 @@ pub mod view;
 pub use catalog::CatalogState;
 pub use composer::{Composer, PasteRange};
 pub use selection::{
-    Dock, NewSessionField, NewSessionState, SELECTOR_PAGE, SelectorKind, SelectorState,
+    Dock, NewSessionField, NewSessionState, SelectorKind, SelectorState, SessionConfirmChoice,
+    SessionPanelAction, SessionPanelMode, SessionSelectorState,
 };
 pub use session::{
     ConfigUpdateState, PendingConfigUpdate, ScrollState, SessionId, SessionView, SessionsState,

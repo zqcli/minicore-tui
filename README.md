@@ -97,8 +97,10 @@ new-session form; `/resume` and `/sessions` open the existing-session
 selector. Workspace, profile, model, and reasoning are sent to
 `session.create` as appropriate.
 
-A session's model and reasoning can be updated with `session.update`; an
-active loop observes the new setting only at a later request boundary. Model A,
+A session title is edited from the Session panel through `session.rename`; the
+TUI waits for the complete acknowledgement and never optimistically changes
+metadata. A session's model and reasoning can be updated with `session.update`;
+an active loop observes the new setting only at a later request boundary. Model A,
 tool work, and model B therefore remain separate request views. A turn sends
 `turn.send` and registers `turn.wait` immediately. If submitted while a loop
 is running, the composer routes the text to `turn.steer`. Agent events are
@@ -116,7 +118,8 @@ The complete current keymap and slash-command semantics are in
 [docs/keybindings.md](docs/keybindings.md). The short list is:
 
 - `F1` opens Help;
-- `Ctrl+R` opens Sessions, `Ctrl+L` opens Model, and `Shift+Tab` opens Reasoning;
+- `Ctrl+R` opens Sessions, `Ctrl+N` opens New Session, `Ctrl+L` opens Model, and `Shift+Tab` opens Reasoning;
+- In Sessions, `F2` renames, `F5` refreshes, `Ctrl+W` closes, and `Delete`/`Ctrl+D` deletes after the required confirmations;
 - `Ctrl+T` toggles reasoning and `Ctrl+O` toggles tool previews;
 - `PageUp`/`PageDown`, `Ctrl+Home`/`Ctrl+End`, and mouse wheel scroll the transcript;
 - `Esc` closes a dock or cancels the exact running turn;
@@ -171,10 +174,12 @@ The default suite is offline and uses protocol fixtures, a production-driven
 fake Agent harness, app-flow tests, TestBackend snapshots, and terminal
 lifecycle tests. See [docs/testing.md](docs/testing.md) for the remote Rust
 1.85 commands, snapshot inventory, ignored tests, Windows checks, and E2E
-procedure. See [docs/acceptance.md](docs/acceptance.md) for the honest
-MIG-001..160 status note and [docs/verification.md](docs/verification.md)
-for the final delivery evidence. The concise implementation and verification
-summary is in [docs/final-report.md](docs/final-report.md).
+procedure. Stage 3 Session-panel verification and its requirement matrix are
+in [docs/verification/stage3-session-panel/README.md](docs/verification/stage3-session-panel/README.md).
+See [docs/acceptance.md](docs/acceptance.md) for the honest MIG-001..160
+status note and [docs/verification.md](docs/verification.md) for the final
+delivery evidence. The concise implementation and verification summary is in
+[docs/final-report.md](docs/final-report.md).
 
 A real-Agent E2E is ignored by default and must use a loopback mock endpoint;
 it does not require or permit access to a real provider. Do not put secrets or

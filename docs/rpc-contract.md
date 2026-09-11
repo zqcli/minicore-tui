@@ -57,6 +57,7 @@ the reader does not scan ahead for a later line. Agent log lines are capped at
 | `session.delete` | `session_id` | explicit confirmed deletion result |
 | `session.state` | `session_id` | current five-state session view and active loop object |
 | `session.update` | `session_id`, optional `model`/`reasoning` (at least one) | updated `SessionInfo` and optional `active_revision` |
+| `session.rename` | `session_id`, required `title` string (empty clears the title) | complete renamed `SessionInfo`; no execution revision |
 | `session.history` | `session_id`, `offset`, `limit` | durable indexed history page (`HistoryPageWire`) |
 | `turn.send` | `session_id`, `text` | `TurnRef` (`{session_id, loop_id}`) |
 | `turn.wait` | exact `TurnRef` | direct `TurnResultViewWire` (`{turn, outcome, usage, requests, tool_rounds, final_config_revision, persistence}`) |
@@ -67,11 +68,11 @@ the reader does not scan ahead for a later line. Agent log lines are capped at
 The TUI also understands Agent event notifications for session state/open/
 close, turn start/finish, request start, text/reasoning deltas, and tool lifecycle.
 
-## RPC-16 Audit
+## RPC-17 Audit
 
 The complete v0.3 method surface is covered explicitly below. “PASS” means the
 method is represented by the production request/response path and covered by a
-remote final6 flow or protocol test; it does not claim a separate
+remote final6/Stage 3 flow or protocol test; it does not claim a separate
 real-provider test for every method.
 
 | # | Method | Request/response evidence | Status |
@@ -86,12 +87,13 @@ real-provider test for every method.
 | 8 | `session.delete` | `tests/app_flow.rs:session_close_and_delete_command_lifecycle` | PASS |
 | 9 | `session.state` | `tests/protocol.rs:session_state_uses_an_active_loop_object` | PASS |
 | 10 | `session.update` | `tests/app_flow.rs:session_update_is_sent_for_an_active_session` | PASS |
-| 11 | `session.history` | `tests/app_flow.rs:history_pages_by_contiguous_item_index_not_render_block_count` | PASS |
-| 12 | `turn.send` | `tests/app_flow.rs:send_response_registers_direct_wait_and_durable_history_replaces_live` | PASS |
-| 13 | `turn.cancel` | `tests/app_flow.rs:slash_cancel_sends_exact_turn_cancel_and_wait_reconciles` | PASS |
-| 14 | `turn.wait` | `tests/protocol.rs:turn_wait_is_a_direct_turn_result_view` | PASS |
-| 15 | `turn.steer` | `tests/app_flow.rs:late_steer_ack_after_complete_history_marks_missing_steer_not_recorded` | PASS |
-| 16 | `agent.shutdown` | `tests/app_flow.rs:shutdown_drains_after_child_exit_until_rpc_channel_ends` | PASS |
+| 11 | `session.rename` | `src/ui/component_tests.rs:session_panel_rename_uses_id_and_waits_for_complete_ack`; real Agent path: `tests/agent_e2e.rs:e2e_session_panel_rename_and_delete_against_current_agent` | PASS |
+| 12 | `session.history` | `tests/app_flow.rs:history_pages_by_contiguous_item_index_not_render_block_count` | PASS |
+| 13 | `turn.send` | `tests/app_flow.rs:send_response_registers_direct_wait_and_durable_history_replaces_live` | PASS |
+| 14 | `turn.cancel` | `tests/app_flow.rs:slash_cancel_sends_exact_turn_cancel_and_wait_reconciles` | PASS |
+| 15 | `turn.wait` | `tests/protocol.rs:turn_wait_is_a_direct_turn_result_view` | PASS |
+| 16 | `turn.steer` | `tests/app_flow.rs:late_steer_ack_after_complete_history_marks_missing_steer_not_recorded` | PASS |
+| 17 | `agent.shutdown` | `tests/app_flow.rs:shutdown_drains_after_child_exit_until_rpc_channel_ends` | PASS |
 
 ## Correlation And Ordering
 

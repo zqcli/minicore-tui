@@ -568,11 +568,24 @@ pub fn reasoning_selector(theme: ThemeKind) -> App {
 }
 
 /// The session selector with running, loaded, and known-but-unloaded markers.
+pub fn open_session_selector(app: &mut App, sessions: Vec<Value>) {
+    let requests = take_requests(app.update(AppEvent::OpenSessionSelector));
+    for request in requests {
+        if request.method == "session.list" {
+            take_requests(respond(
+                app,
+                &request,
+                json!({"sessions": sessions.clone()}),
+            ));
+        }
+    }
+}
+
 pub fn session_selector(theme: ThemeKind) -> App {
     let (models, profiles, sessions) = standard_catalog();
-    let mut app = ready_catalog(theme, models, profiles, sessions);
+    let mut app = ready_catalog(theme, models, profiles, sessions.clone());
     set_session_running(&mut app, "ses_main", "loop_main");
-    app.update(AppEvent::OpenSessionSelector);
+    open_session_selector(&mut app, sessions);
     app
 }
 
@@ -805,10 +818,14 @@ pub fn close_user(theme: ThemeKind) -> App {
             accepted_at: None,
         });
     }
+    // Keep the rendered incomplete marker from the live-turn fixture while
+    // isolating this snapshot's close-confirm notice from the gap guard.
+    app.sessions.known.get_mut("ses_1").unwrap().event_gap = false;
     app.update(AppEvent::CloseSession {
         session_id: "ses_1".to_string(),
         confirm: false,
     });
+    app.sessions.known.get_mut("ses_1").unwrap().event_gap = true;
     app
 }
 

@@ -12,6 +12,7 @@ binary; v0.2 has no user keybinding configuration. All key actions become
 | `Ctrl+D` | Request shutdown only when the composer is empty and the active session is idle. |
 | `F1` | Open Help; press `F1` or `Esc` to close it. |
 | `Ctrl+R` | Open the session selector. |
+| `Ctrl+N` | Open the new-session form. |
 | `Ctrl+L` | Open the model selector; updates the active session at a request boundary, or edits a new-session draft. |
 | `Shift+Tab` | Open the reasoning selector from the composer; move to the previous form field in a new-session form; close the reasoning selector. |
 | `Ctrl+O` | Toggle all durable tool result previews for the active session. |
@@ -48,6 +49,22 @@ submits a new turn. While the loop is in a
 running model/tool state, `Enter` submits a mid-turn steering message via
 `turn.steer`; WaitingForInput and Finishing disable submission. `Esc` remains
 the cancellation action.
+
+## Session Panel
+
+When the session selector is open, the selected session is stored by its stable
+`session_id`; refreshes, sorting, filtering, and late responses do not retarget
+an action to a different row.
+
+| Key | Behavior |
+|---|---|
+| `F2` | Edit the selected title; `Enter` sends `session.rename` and waits for the ACK. |
+| `F5` | Refresh the session catalog while preserving the selected ID. |
+| `Ctrl+W` | Begin the explicit close confirmation; unsafe busy/blocked/finishing/unsaved or unconfirmed sessions are refused. |
+| `Delete` / `Ctrl+D` | Begin deletion; loaded sessions must be closed first, then a dedicated delete confirmation is required. |
+| `Enter` | Open the selected session; double-clicking a session row has the same effect. |
+| `Mouse click` | Select a row; footer actions remain visible in the panel. |
+| `Esc` | Cancel rename/confirmation first, then close the panel. |
 
 ## Selectors
 

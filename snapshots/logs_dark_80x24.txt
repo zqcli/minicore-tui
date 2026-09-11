@@ -15,10 +15,10 @@
  │agent 12:34:13  session ses_1 opened                                         │
  │agent 12:34:12  loaded profile coding                                        │
  │                                                                             │
+ │                                                                             │
+ │                                                                             │
+ │                                                                             │
+ │                                                                             │
  │Esc closes this panel                                                        │
- │                                                                             │
- │                                                                             │
- │                                                                             │
- │                                                                             │
  └─────────────────────────────────────────────────────────────────────────────┘
  starting

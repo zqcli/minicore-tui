@@ -6,7 +6,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::app::{App, ConnectionState};
-use crate::state::selection::Dock;
+use crate::state::selection::{Dock, SessionPanelMode};
 
 /// One semantic action produced by the key map. `App::update` decides the
 /// side effects; the map never touches the app mutably.
@@ -66,6 +66,19 @@ pub enum Action {
     ScrollWindow(i32),
     ScrollTop,
     ScrollBottom,
+    OpenNewSession,
+    RefreshSessions,
+    SessionRename,
+    SessionClose,
+    SessionDelete,
+    SessionDeleteToggle,
+    SessionRenameChar(char),
+    SessionRenameBackspace,
+    SessionRenameDelete,
+    SessionRenameCursor(i32),
+    SessionRenameClear,
+    SessionRenameHome,
+    SessionRenameEnd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +128,12 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
         })
     });
 
+    if let Dock::SessionSelector(state) = &app.dock {
+        if matches!(&state.mode, SessionPanelMode::Rename { .. }) {
+            return session_rename_keys(key, press, typing);
+        }
+    }
+
     if press {
         // `q` quits only from the help panel and the fatal overlay; it is
         // an ordinary character everywhere else (spec 22.1).
@@ -127,11 +146,33 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
                 return Action::Quit;
             }
         }
+        if matches!(&app.dock, Dock::SessionSelector(state) if matches!(&state.mode, SessionPanelMode::Browse))
+        {
+            match key.code {
+                KeyCode::F(2) => return Action::SessionRename,
+                KeyCode::F(5) => return Action::RefreshSessions,
+                KeyCode::Delete => return Action::SessionDelete,
+                KeyCode::Char('d') if ctrl(&key) => return Action::SessionDelete,
+                KeyCode::Char('w') if ctrl(&key) => return Action::SessionClose,
+                _ => {}
+            }
+        }
+        if matches!(
+            &app.dock,
+            Dock::SessionSelector(state)
+                if matches!(&state.mode, SessionPanelMode::ConfirmDelete { .. })
+        ) && matches!(
+            key.code,
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right
+        ) {
+            return Action::SessionDeleteToggle;
+        }
         match key.code {
             KeyCode::F(1) if matches!(app.dock, Dock::Help) => return Action::CloseDock,
             KeyCode::F(1) => return Action::OpenHelp,
             KeyCode::Char('c') if ctrl(&key) => return Action::FirstCtrlC,
             KeyCode::Char('d') if ctrl(&key) => return Action::CtrlD,
+            KeyCode::Char('n') if ctrl(&key) => return Action::OpenNewSession,
             KeyCode::Char('r') if ctrl(&key) => return Action::OpenSessions,
             KeyCode::Char('l') if ctrl(&key) => return Action::OpenModel,
             KeyCode::Char('o') if ctrl(&key) => return Action::ToggleTools,
@@ -306,6 +347,24 @@ fn selector_keys(key: KeyEvent, press: bool, typing: bool) -> Action {
     }
 }
 
+fn session_rename_keys(key: KeyEvent, press: bool, typing: bool) -> Action {
+    match key.code {
+        KeyCode::Enter if press => Action::SelectorConfirm,
+        KeyCode::Esc if press => Action::CloseDock,
+        KeyCode::Char('a') if ctrl(&key) && press => Action::SessionRenameHome,
+        KeyCode::Char('e') if ctrl(&key) && press => Action::SessionRenameEnd,
+        KeyCode::Char('u') if ctrl(&key) && press => Action::SessionRenameClear,
+        KeyCode::Char(c) if !ctrl(&key) && typing => Action::SessionRenameChar(c),
+        KeyCode::Backspace if typing => Action::SessionRenameBackspace,
+        KeyCode::Delete if typing => Action::SessionRenameDelete,
+        KeyCode::Left if typing => Action::SessionRenameCursor(-1),
+        KeyCode::Right if typing => Action::SessionRenameCursor(1),
+        KeyCode::Home if press => Action::SessionRenameHome,
+        KeyCode::End if press => Action::SessionRenameEnd,
+        _ => Action::None,
+    }
+}
+
 fn new_session_keys(key: KeyEvent, press: bool, typing: bool) -> Action {
     match key.code {
         KeyCode::Enter if press => Action::SelectorConfirm,
@@ -333,7 +392,7 @@ fn panel_keys(key: KeyEvent, press: bool, typing: bool) -> Action {
 mod tests {
     use super::*;
     use crate::app::App;
-    use crate::state::selection::Dock;
+    use crate::state::selection::{Dock, SessionPanelMode, SessionSelectorState};
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
     fn app() -> App {
@@ -494,6 +553,47 @@ mod tests {
         assert_eq!(
             map(&a, press(KeyCode::Down, KeyModifiers::ALT)),
             Action::HistoryNext
+        );
+    }
+
+    #[test]
+    fn session_panel_shortcuts_do_not_consume_filter_letters() {
+        let mut app = app();
+        app.dock = Dock::SessionSelector(SessionSelectorState::new(Some("ses_1".into())));
+        assert_eq!(
+            map(&app, press(KeyCode::F(2), KeyModifiers::empty())),
+            Action::SessionRename
+        );
+        assert_eq!(
+            map(&app, press(KeyCode::F(5), KeyModifiers::empty())),
+            Action::RefreshSessions
+        );
+        assert_eq!(
+            map(&app, press(KeyCode::Char('w'), KeyModifiers::CONTROL)),
+            Action::SessionClose
+        );
+        assert_eq!(
+            map(&app, press(KeyCode::Delete, KeyModifiers::empty())),
+            Action::SessionDelete
+        );
+        assert_eq!(map(&app, ctrl('d')), Action::SessionDelete);
+        assert_eq!(map(&app, char_press('r')), Action::SelectorChar('r'));
+
+        if let Dock::SessionSelector(state) = &mut app.dock {
+            state.mode = SessionPanelMode::Rename {
+                draft: "old".into(),
+                cursor: 3,
+                submitting: false,
+            };
+        }
+        assert_eq!(map(&app, char_press('中')), Action::SessionRenameChar('中'));
+        assert_eq!(
+            map(&app, press(KeyCode::Backspace, KeyModifiers::empty())),
+            Action::SessionRenameBackspace
+        );
+        assert_eq!(
+            map(&app, press(KeyCode::Enter, KeyModifiers::empty())),
+            Action::SelectorConfirm
         );
     }
 }

@@ -7,18 +7,15 @@ use std::cmp::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::protocol::{ModelInfo, ProfileInfo, Reasoning, SessionInfo};
+use crate::state::session::SessionId;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-
-/// Fixed page step for `PageSelector`. The app has no terminal geometry, so
-/// paging uses a stable constant rather than a viewport-dependent height.
-pub const SELECTOR_PAGE: usize = 6;
 
 /// What occupies the dock area below the transcript (spec 24.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dock {
     Composer,
     NewSession(NewSessionState),
-    SessionSelector(SelectorState),
+    SessionSelector(SessionSelectorState),
     ModelSelector(SelectorState),
     ReasoningSelector(SelectorState),
     ProfileSelector(SelectorState),
@@ -65,6 +62,66 @@ pub enum SelectorKind {
     Model,
     Reasoning,
     Profile,
+}
+
+/// The session panel has lifecycle actions and a stable identity selection;
+/// those concerns are intentionally separate from the catalog selectors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSelectorState {
+    pub query: String,
+    pub selected_session_id: Option<SessionId>,
+    pub mode: SessionPanelMode,
+    pub error: Option<String>,
+}
+
+impl SessionSelectorState {
+    pub fn new(selected_session_id: Option<SessionId>) -> Self {
+        Self {
+            query: String::new(),
+            selected_session_id,
+            mode: SessionPanelMode::Browse,
+            error: None,
+        }
+    }
+
+    pub fn editing(&self) -> bool {
+        matches!(self.mode, SessionPanelMode::Rename { .. })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionPanelMode {
+    Browse,
+    Rename {
+        draft: String,
+        cursor: usize,
+        submitting: bool,
+    },
+    ConfirmClose,
+    ConfirmDelete {
+        choice: SessionConfirmChoice,
+        submitting: bool,
+    },
+    ConfirmCloseForDelete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionConfirmChoice {
+    Cancel,
+    Confirm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionPanelAction {
+    Open,
+    New,
+    Refresh,
+    Rename,
+    Close,
+    Delete,
+    Cancel,
+    ConfirmDelete,
+    SaveRename,
 }
 
 /// One selector panel (spec 24.1). `cursor` indexes into the filtered item

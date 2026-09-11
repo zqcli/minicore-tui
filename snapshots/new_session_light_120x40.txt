@@ -31,10 +31,10 @@
  │reasoning  high  →                                                                                                   │
  │title      (optional)                                                                                                │
  │action     Create session                                                                                            │
+ │                                                                                                                     │
+ │                                                                                                                     │
+ │                                                                                                                     │
+ │                                                                                                                     │
  │Tab moves · Enter confirms · Esc closes                                                                              │
- │                                                                                                                     │
- │                                                                                                                     │
- │                                                                                                                     │
- │                                                                                                                     │
  └─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
  ● ready

@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
+use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
 use minicore_tui::app::{App, ConnectionState, RequestKind};
 use minicore_tui::command::AppCommand;
 use minicore_tui::event::{AppEvent, RpcEvent};
@@ -870,6 +871,179 @@ fn e2e_scenario_a_discovery() {
         assert!(rep.shutdown_ok);
         assert!(rep.seen_eof);
         assert!(rep.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// Real-Agent session lifecycle coverage: drive the Session panel through the
+/// public App event path and verify the same session.list response that the
+/// current Agent persists after rename and delete.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_session_panel_rename_and_delete_against_current_agent() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+
+        let key_with_modifiers = |code, modifiers| {
+            AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(code, modifiers)))
+        };
+        let key = |code| key_with_modifiers(code, KeyModifiers::empty());
+
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CreateSession {
+                workspace: env.workspace_path.to_string_lossy().into_owned(),
+                profile: Some("coding".to_owned()),
+                model: None,
+                reasoning: None,
+                title: Some("Panel lifecycle original".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        let session_id = wait_for_active_session(&mut process, &mut app)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.known.get(&session_id).is_some_and(|view| {
+                view.state.as_ref().is_some_and(|state| {
+                    state.status == minicore_tui::protocol::SessionStatusWire::Idle
+                })
+            })
+        })
+        .await
+        .unwrap();
+
+        dispatch(&mut process, &mut app, AppEvent::OpenSessionSelector)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            !a.pending_requests
+                .values()
+                .any(|kind| matches!(kind, RequestKind::RefreshSessions { .. }))
+        })
+        .await
+        .unwrap();
+
+        dispatch(&mut process, &mut app, key(KeyCode::F(2)))
+            .await
+            .unwrap();
+        dispatch(
+            &mut process,
+            &mut app,
+            key_with_modifiers(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::Terminal(CrosstermEvent::Paste("Panel lifecycle renamed".to_owned())),
+        )
+        .await
+        .unwrap();
+        dispatch(&mut process, &mut app, key(KeyCode::Enter))
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .known
+                .get(&session_id)
+                .is_some_and(|view| view.info.title.as_deref() == Some("Panel lifecycle renamed"))
+        })
+        .await
+        .unwrap();
+
+        dispatch(&mut process, &mut app, key(KeyCode::F(5)))
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            !a.pending_requests
+                .values()
+                .any(|kind| matches!(kind, RequestKind::RefreshSessions { .. }))
+                && a.sessions.list.iter().any(|session| {
+                    session.session_id == session_id
+                        && session.title.as_deref() == Some("Panel lifecycle renamed")
+                })
+        })
+        .await
+        .unwrap();
+
+        dispatch(&mut process, &mut app, key(KeyCode::Delete))
+            .await
+            .unwrap();
+        dispatch(&mut process, &mut app, key(KeyCode::Enter))
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.closed.contains(&session_id)
+                && a.sessions
+                    .known
+                    .get(&session_id)
+                    .is_some_and(|view| !view.info.loaded)
+        })
+        .await
+        .unwrap();
+
+        // Permanent deletion defaults to Cancel: Enter alone must return to
+        // Browse without sending session.delete.
+        dispatch(&mut process, &mut app, key(KeyCode::Enter))
+            .await
+            .unwrap();
+        assert!(!app.pending_requests.values().any(|kind| {
+            matches!(kind, RequestKind::DeleteSession { session_id: pending } if pending == &session_id)
+        }));
+        assert!(!app.sessions.deleted.contains(&session_id));
+
+        // Re-enter the confirmation and explicitly choose Delete.
+        dispatch(&mut process, &mut app, key(KeyCode::Delete))
+            .await
+            .unwrap();
+        dispatch(&mut process, &mut app, key(KeyCode::Tab))
+            .await
+            .unwrap();
+        dispatch(&mut process, &mut app, key(KeyCode::Enter))
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.deleted.contains(&session_id) && !a.sessions.known.contains_key(&session_id)
+        })
+        .await
+        .unwrap();
+
+        dispatch(&mut process, &mut app, key(KeyCode::F(5)))
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            !a.pending_requests
+                .values()
+                .any(|kind| matches!(kind, RequestKind::RefreshSessions { .. }))
+                && !a
+                    .sessions
+                    .list
+                    .iter()
+                    .any(|session| session.session_id == session_id)
+        })
+        .await
+        .unwrap();
+
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok && rep.seen_eof && rep.seen_exit);
         process.terminate().await;
     });
 }

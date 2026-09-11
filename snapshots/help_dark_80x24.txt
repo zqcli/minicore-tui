@@ -17,8 +17,8 @@
  │Ctrl+R  session selector                                                     │
  │Ctrl+L  model selector; updates active session at a request boundary         │
  │Shift+Tab  reasoning selector; updates active session at a request boundary  │
- │Ctrl+O  expand/collapse all tool cards                                       │
- │Ctrl+T  show/hide reasoning                                                  │
- │PageUp/PageDown  scroll; page selectors when focused                         │
+ │Ctrl+N  open the new-session form                                            │
+ │F2  rename the selected session                                              │
+ │Esc or F1 closes this panel                                                  │
  └─────────────────────────────────────────────────────────────────────────────┘
  starting

@@ -95,6 +95,10 @@ pub fn screen_layout(app: &App, area: Rect) -> ScreenLayout {
         Dock::Composer => composer_height_phase5(app, content.width, content.height, short)
             .saturating_add(composer_completion_rows(app)),
         Dock::Help | Dock::Logs => help_panel_height(content.height),
+        Dock::SessionSelector(state) => panel_height(short).saturating_add(u16::from(!matches!(
+            &state.mode,
+            crate::state::selection::SessionPanelMode::Browse
+        ))),
         _ => panel_height(short),
     };
     let footer_height = footer_height(content.width, content.height);

@@ -5,63 +5,76 @@
 //! `ConfirmDock` drive it through `App::update`.
 
 use ratatui::Frame;
-use ratatui::layout::{Margin, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::state::selection::{NewSessionField, NewSessionState, reasoning_label};
 use crate::theme::Theme;
 use crate::ui::layout;
+use crate::ui::panel::{self, PanelSpec};
 use crate::ui::selector::highlight;
 
 const LABEL_WIDTH: usize = 11;
 
-pub fn render(frame: &mut Frame, area: Rect, theme: &Theme, draft: &NewSessionState) {
-    frame.render_widget(
-        Block::bordered().border_style(Style::new().fg(theme.border_accent)),
-        area,
-    );
-    let inner = area.inner(Margin::new(1, 1));
-    let width = inner.width as usize;
-    let tall = inner.height >= 8;
+const FIELDS: [NewSessionField; 6] = [
+    NewSessionField::Workspace,
+    NewSessionField::Profile,
+    NewSessionField::Model,
+    NewSessionField::Reasoning,
+    NewSessionField::Title,
+    NewSessionField::Create,
+];
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    if tall {
-        lines.push(Line::from(Span::styled(
+pub fn render(frame: &mut Frame, area: Rect, theme: &Theme, draft: &NewSessionState) {
+    let panel = panel::layout(area, PanelSpec::new(0, false, 1));
+    panel::render_frame(frame, panel, theme);
+    frame.render_widget(
+        Paragraph::new(vec![Line::from(Span::styled(
             "New session",
             Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
-        )));
-    }
-    lines.push(field_line(theme, draft, NewSessionField::Workspace, width));
-    lines.push(field_line(theme, draft, NewSessionField::Profile, width));
-    lines.push(field_line(theme, draft, NewSessionField::Model, width));
-    lines.push(field_line(theme, draft, NewSessionField::Reasoning, width));
-    lines.push(field_line(theme, draft, NewSessionField::Title, width));
-    lines.push(field_line(theme, draft, NewSessionField::Create, width));
-    if tall {
-        let status = if draft.submitting {
-            Line::from(Span::styled(
-                "Creating session…",
-                Style::new().fg(theme.dim),
-            ))
-        } else if let Some(error) = &draft.error {
-            Line::from(Span::styled(
-                format!("⚠ {error}"),
-                Style::new().fg(theme.error),
-            ))
-        } else {
-            Line::from(Span::styled(
-                "Tab moves · Enter confirms · Esc closes",
-                Style::new().fg(theme.dim),
-            ))
-        };
-        lines.push(status);
-    }
-    while lines.len() < inner.height as usize {
+        ))]),
+        panel.title,
+    );
+    let width = panel.content.width as usize;
+    let selected = FIELDS
+        .iter()
+        .position(|field| *field == draft.field)
+        .unwrap_or(0);
+    let visible = panel::visible_window(
+        &vec![1; FIELDS.len()],
+        selected,
+        panel.content.height as usize,
+    );
+    let mut lines = FIELDS
+        .iter()
+        .enumerate()
+        .take(visible.end)
+        .skip(visible.start)
+        .map(|(_, field)| field_line(theme, draft, *field, width))
+        .collect::<Vec<_>>();
+    while lines.len() < panel.content.height as usize {
         lines.push(Line::default());
     }
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines), panel.content);
+    let status = if draft.submitting {
+        Line::from(Span::styled(
+            "Creating session…",
+            Style::new().fg(theme.dim),
+        ))
+    } else if let Some(error) = &draft.error {
+        Line::from(Span::styled(
+            format!("⚠ {error}"),
+            Style::new().fg(theme.error),
+        ))
+    } else {
+        Line::from(Span::styled(
+            "Tab moves · Enter confirms · Esc closes",
+            Style::new().fg(theme.dim),
+        ))
+    };
+    frame.render_widget(Paragraph::new(vec![status]), panel.footer);
 
     // A block cursor on the editable workspace/title field so IME and
     // editing land visibly (read-only; the buffer lives in the draft).
@@ -69,21 +82,75 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &Theme, draft: &NewSessionSt
         draft.field,
         NewSessionField::Workspace | NewSessionField::Title
     ) {
-        let row_offset = if tall { 1 } else { 0 };
-        let row = inner.y + row_offset;
+        let Some(row_in_window) = selected.checked_sub(visible.start) else {
+            return;
+        };
+        let row = panel.content.y + row_in_window as u16;
         let value = match draft.field {
             NewSessionField::Workspace => &draft.workspace,
             _ => &draft.title,
         };
         let col = crate::markdown::column_width(&value[..char_to_byte(value, draft.field_cursor)]);
-        let x = inner.x + LABEL_WIDTH as u16 + col as u16;
-        if x < inner.x + inner.width && row < inner.y + inner.height {
+        let x = panel.content.x + LABEL_WIDTH as u16 + col as u16;
+        if x < panel.content.x + panel.content.width && row < panel.content.bottom() {
             if let Some(cell) = frame.buffer_mut().cell_mut((x, row)) {
                 cell.set_fg(theme.page_bg);
                 cell.set_bg(theme.text);
             }
         }
     }
+}
+
+/// Maps a terminal cell in the shared form geometry to a field and, for an
+/// editable field, a Unicode character cursor position.
+pub(crate) fn field_at(
+    area: Rect,
+    draft: &NewSessionState,
+    column: u16,
+    row: u16,
+) -> Option<(NewSessionField, Option<usize>)> {
+    let panel = panel::layout(area, PanelSpec::new(0, false, 1));
+    if column < panel.content.x || column >= panel.content.right() {
+        return None;
+    }
+    let row = panel.content_row(row)?;
+    let selected = FIELDS
+        .iter()
+        .position(|field| *field == draft.field)
+        .unwrap_or(0);
+    let visible = panel::visible_window(
+        &vec![1; FIELDS.len()],
+        selected,
+        panel.content.height as usize,
+    );
+    let index = visible.start + row;
+    let field = *FIELDS.get(index)?;
+    let cursor = match field {
+        NewSessionField::Workspace => Some(cursor_at_column(
+            &draft.workspace,
+            column.saturating_sub(panel.content.x) as usize,
+        )),
+        NewSessionField::Title => Some(cursor_at_column(
+            &draft.title,
+            column.saturating_sub(panel.content.x) as usize,
+        )),
+        _ => None,
+    };
+    Some((field, cursor))
+}
+
+fn cursor_at_column(value: &str, column: usize) -> usize {
+    let mut used = LABEL_WIDTH;
+    let mut cursor = 0;
+    for character in value.chars() {
+        let width = unicode_width::UnicodeWidthChar::width(character).unwrap_or(0);
+        if column < used + width.max(1) / 2 {
+            break;
+        }
+        used += width;
+        cursor += 1;
+    }
+    cursor.min(value.chars().count())
 }
 
 fn char_to_byte(text: &str, cursor: usize) -> usize {

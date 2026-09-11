@@ -26,8 +26,9 @@ use crate::rpc::RpcError;
 use crate::state::catalog::CatalogState;
 use crate::state::composer::{Composer, MAX_COMPOSER_BYTES};
 use crate::state::selection::{
-    Dock, NewSessionField, NewSessionState, SELECTOR_PAGE, SelectorKind, SelectorState,
-    filtered_models, filtered_profiles, filtered_sessions, supported_reasoning,
+    Dock, NewSessionField, NewSessionState, SelectorKind, SelectorState, SessionConfirmChoice,
+    SessionPanelAction, SessionPanelMode, SessionSelectorState, filtered_models, filtered_profiles,
+    filtered_sessions, supported_reasoning,
 };
 use crate::state::session::{SessionId, SessionView, SessionsState};
 use crate::state::tool::{LiveTool, ToolKey, ToolPresentationState, ToolStatus};
@@ -120,6 +121,17 @@ enum MouseTarget {
     Editor,
     Conversation(SelectionPoint),
     Scrollbar,
+    SessionSelector {
+        session_id: SessionId,
+        click_count: u8,
+    },
+    Selector {
+        kind: SelectorKind,
+        key: String,
+        click_count: u8,
+    },
+    SessionAction(SessionPanelAction),
+    NewSessionField(NewSessionField),
 }
 
 #[derive(Debug)]
@@ -129,6 +141,21 @@ struct LastClick {
     count: u8,
     word_start: usize,
     word_end: usize,
+}
+
+#[derive(Debug)]
+struct PanelClick {
+    session_id: SessionId,
+    at: Instant,
+    count: u8,
+}
+
+#[derive(Debug)]
+struct SelectorClick {
+    kind: SelectorKind,
+    key: String,
+    at: Instant,
+    count: u8,
 }
 
 #[derive(Debug)]
@@ -150,6 +177,9 @@ pub enum RequestKind {
     ListModels,
     ListProfiles,
     ListSessions,
+    RefreshSessions {
+        selected_session_id: Option<SessionId>,
+    },
     CreateSession {
         draft: u64,
     },
@@ -188,6 +218,9 @@ pub enum RequestKind {
         loop_id: Option<String>,
         model: Option<String>,
         reasoning: Option<Reasoning>,
+    },
+    RenameSession {
+        session_id: SessionId,
     },
     CloseSession {
         session_id: SessionId,
@@ -259,6 +292,8 @@ pub struct App {
     /// release (RAIL-14 pressedUrl guard, matching the fixed source).
     mouse_pressed_on_link: bool,
     last_click: Option<LastClick>,
+    panel_click: Option<PanelClick>,
+    selector_click: Option<SelectorClick>,
     scrollbar_drag: Option<ScrollbarDrag>,
     selection_drag: Option<SelectionDrag>,
     editor_selection: Option<EditorSelection>,
@@ -328,15 +363,17 @@ enum BootstrapPart {
 
 /// What a completed history chain should do next.
 enum NextChain {
-    Page {
-        offset: usize,
-    },
-    Reconcile {
-        offset: usize,
-        gap_revision: Option<u64>,
-    },
+    Page { offset: usize },
+    Reconcile { offset: usize },
     LoopNotContained(String),
     Done,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionActionSafety {
+    Safe,
+    Unknown,
+    Busy,
 }
 
 impl App {
@@ -372,6 +409,8 @@ impl App {
             mouse_down: None,
             mouse_pressed_on_link: false,
             last_click: None,
+            panel_click: None,
+            selector_click: None,
             scrollbar_drag: None,
             selection_drag: None,
             editor_selection: None,
@@ -696,9 +735,17 @@ impl App {
                 if self.selector_state().is_some_and(|state| state.submitting) {
                     return Vec::new();
                 }
+                if self.session_selector_state().is_some() && self.session_panel_busy() {
+                    return Vec::new();
+                }
                 if let Some(state) = self.selector_state_mut() {
                     state.query = query;
                     state.cursor = 0;
+                } else if let Some(state) = self.session_selector_state_mut() {
+                    if matches!(&state.mode, SessionPanelMode::Browse) {
+                        state.query = query;
+                        self.reconcile_session_selection(true);
+                    }
                 }
                 Vec::new()
             }
@@ -912,6 +959,18 @@ impl App {
     }
 
     fn upsert_session_list(&mut self, session: SessionInfo) {
+        let mut session = session;
+        if self.sessions.deleted.contains(&session.session_id)
+            || self.sessions.pending_deletes.contains(&session.session_id)
+        {
+            return;
+        }
+        if self.sessions.closed.contains(&session.session_id) {
+            session.loaded = false;
+        }
+        if let Some(title) = self.sessions.title_overrides.get(&session.session_id) {
+            session.title = title.clone();
+        }
         if let Some(existing) = self
             .sessions
             .list
@@ -925,6 +984,71 @@ impl App {
         self.sessions
             .list
             .sort_by(|left, right| left.session_id.cmp(&right.session_id));
+    }
+
+    fn session_is_visible(&self, session_id: &str) -> bool {
+        !self.sessions.pending_deletes.contains(session_id)
+            && !self.sessions.deleted.contains(session_id)
+            && self
+                .sessions
+                .list
+                .iter()
+                .any(|session| session.session_id == session_id)
+    }
+
+    fn filtered_session_items(&self, query: &str) -> Vec<&SessionInfo> {
+        filtered_sessions(&self.sessions.list, query)
+            .into_iter()
+            .filter(|session| self.session_is_visible(&session.session_id))
+            .collect()
+    }
+
+    fn session_selector_cursor(&self, state: &SessionSelectorState) -> usize {
+        let items = self.filtered_session_items(&state.query);
+        state
+            .selected_session_id
+            .as_deref()
+            .and_then(|selected| {
+                items
+                    .iter()
+                    .position(|session| session.session_id == selected)
+            })
+            .unwrap_or(0)
+    }
+
+    fn session_panel_busy(&self) -> bool {
+        self.pending_requests.values().any(|request| {
+            matches!(
+                request,
+                RequestKind::OpenSession { .. }
+                    | RequestKind::RefreshSessions { .. }
+                    | RequestKind::RenameSession { .. }
+                    | RequestKind::CloseSession { .. }
+                    | RequestKind::CloseVerifyState { .. }
+                    | RequestKind::DeleteSession { .. }
+            )
+        })
+    }
+
+    /// Reconciles only invalid identities. Filtering and reordering never
+    /// silently retargets an existing selection.
+    fn reconcile_session_selection(&mut self, choose_first_when_empty: bool) {
+        let (query, selected) = self
+            .session_selector_state()
+            .map(|state| (state.query.clone(), state.selected_session_id.clone()))
+            .unwrap_or_default();
+        let next = match selected {
+            Some(id) if self.session_is_visible(&id) => Some(id),
+            Some(_) => None,
+            None if choose_first_when_empty => self
+                .filtered_session_items(&query)
+                .first()
+                .map(|session| session.session_id.clone()),
+            None => None,
+        };
+        if let Some(state) = self.session_selector_state_mut() {
+            state.selected_session_id = next;
+        }
     }
 
     // ---- dock & selectors (spec 24-28) -------------------------------
@@ -1000,10 +1124,16 @@ impl App {
 
     fn selector_state(&self) -> Option<&SelectorState> {
         match &self.dock {
-            Dock::SessionSelector(state)
-            | Dock::ModelSelector(state)
+            Dock::ModelSelector(state)
             | Dock::ReasoningSelector(state)
             | Dock::ProfileSelector(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    fn session_selector_state(&self) -> Option<&SessionSelectorState> {
+        match &self.dock {
+            Dock::SessionSelector(state) => Some(state),
             _ => None,
         }
     }
@@ -1017,10 +1147,16 @@ impl App {
 
     fn selector_state_mut(&mut self) -> Option<&mut SelectorState> {
         match &mut self.dock {
-            Dock::SessionSelector(state)
-            | Dock::ModelSelector(state)
+            Dock::ModelSelector(state)
             | Dock::ReasoningSelector(state)
             | Dock::ProfileSelector(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    fn session_selector_state_mut(&mut self) -> Option<&mut SessionSelectorState> {
+        match &mut self.dock {
+            Dock::SessionSelector(state) => Some(state),
             _ => None,
         }
     }
@@ -1059,6 +1195,20 @@ impl App {
                 return Vec::new();
             }
         }
+        if kind == SelectorKind::Session {
+            let selected = self
+                .sessions
+                .active
+                .clone()
+                .filter(|id| self.session_is_visible(id))
+                .or_else(|| {
+                    self.filtered_session_items("")
+                        .first()
+                        .map(|session| session.session_id.clone())
+                });
+            self.dock = Dock::SessionSelector(SessionSelectorState::new(selected));
+            return self.refresh_sessions();
+        }
         let mut state = SelectorState::new(kind);
         if kind != SelectorKind::Session {
             // A model/reasoning selector edits a draft when the form is open;
@@ -1096,7 +1246,7 @@ impl App {
             };
         }
         self.dock = match kind {
-            SelectorKind::Session => Dock::SessionSelector(state),
+            SelectorKind::Session => unreachable!("session selector handled above"),
             SelectorKind::Model => Dock::ModelSelector(state),
             SelectorKind::Reasoning => Dock::ReasoningSelector(state),
             SelectorKind::Profile => Dock::ProfileSelector(state),
@@ -1116,6 +1266,30 @@ impl App {
     }
 
     fn move_selector(&mut self, delta: i32) -> Vec<AppCommand> {
+        if self.session_selector_state().is_some() && self.session_panel_busy() {
+            return Vec::new();
+        }
+        if let Some((query, cursor, editable)) = self.session_selector_state().map(|state| {
+            (
+                state.query.clone(),
+                self.session_selector_cursor(state),
+                matches!(&state.mode, SessionPanelMode::Browse),
+            )
+        }) {
+            if !editable {
+                return Vec::new();
+            }
+            let items = self.filtered_session_items(&query);
+            if items.is_empty() {
+                return Vec::new();
+            }
+            let next = (cursor as i64 + delta as i64).rem_euclid(items.len() as i64) as usize;
+            let next_id = items[next].session_id.clone();
+            if let Some(state) = self.session_selector_state_mut() {
+                state.selected_session_id = Some(next_id);
+            }
+            return Vec::new();
+        }
         let (kind, query, cursor, model_context) = {
             let Some(state) = self.selector_state() else {
                 return Vec::new();
@@ -1141,7 +1315,87 @@ impl App {
     }
 
     fn page_selector(&mut self, delta: i32) -> Vec<AppCommand> {
-        self.move_selector(delta * SELECTOR_PAGE as i32)
+        if self.session_selector_state().is_some() && self.session_panel_busy() {
+            return Vec::new();
+        }
+        let step = self.selector_page_step();
+        if let Some((query, cursor, editable)) = self.session_selector_state().map(|state| {
+            (
+                state.query.clone(),
+                self.session_selector_cursor(state),
+                matches!(&state.mode, SessionPanelMode::Browse),
+            )
+        }) {
+            if !editable {
+                return Vec::new();
+            }
+            let count = self.filtered_session_items(&query).len();
+            if count == 0 {
+                return Vec::new();
+            }
+            let next = (cursor as i64 + delta as i64 * step as i64)
+                .clamp(0, count.saturating_sub(1) as i64) as usize;
+            let next_id = self
+                .filtered_session_items(&query)
+                .get(next)
+                .map(|session| session.session_id.clone());
+            if let Some(state) = self.session_selector_state_mut() {
+                state.selected_session_id = next_id;
+            }
+            return Vec::new();
+        }
+        let (kind, query, cursor, model_context) = {
+            let Some(state) = self.selector_state() else {
+                return Vec::new();
+            };
+            if state.submitting {
+                return Vec::new();
+            }
+            (
+                state.kind,
+                state.query.clone(),
+                state.cursor,
+                state.model_context.clone(),
+            )
+        };
+        let count = self.selector_count(kind, &query, model_context.as_deref());
+        if count == 0 {
+            return Vec::new();
+        }
+        if let Some(state) = self.selector_state_mut() {
+            state.cursor = (cursor as i64 + delta as i64 * step as i64)
+                .clamp(0, count.saturating_sub(1) as i64) as usize;
+        }
+        Vec::new()
+    }
+
+    fn selector_page_step(&self) -> usize {
+        let area = ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1);
+        let screen = crate::ui::layout::screen_layout(self, area);
+        match &self.dock {
+            Dock::SessionSelector(state) => {
+                let items = self.filtered_session_items(&state.query);
+                let wide = screen.panel.width >= 70;
+                let heights = vec![usize::from(wide) + 1; items.len()];
+                crate::ui::panel::visible_window(
+                    &heights,
+                    self.session_selector_cursor(state),
+                    crate::ui::selector::session_panel_layout(screen.panel, state)
+                        .content
+                        .height as usize,
+                )
+                .len()
+                .max(1)
+            }
+            Dock::ModelSelector(state)
+            | Dock::ReasoningSelector(state)
+            | Dock::ProfileSelector(state) => {
+                crate::ui::selector::catalog_visible_window(self, screen.panel, state)
+                    .len()
+                    .max(1)
+            }
+            _ => 1,
+        }
     }
 
     fn selector_count(
@@ -1186,7 +1440,7 @@ impl App {
         };
         match target {
             Target::Composer => Vec::new(),
-            Target::SessionSelector => self.confirm_session_selector(),
+            Target::SessionSelector => self.session_panel_confirm(),
             Target::ModelSelector => self.confirm_model_item(),
             Target::ReasoningSelector => self.confirm_reasoning_item(),
             Target::ProfileSelector => self.confirm_profile_item(),
@@ -1203,6 +1457,9 @@ impl App {
     fn cancel_dock(&mut self) -> Vec<AppCommand> {
         if self.selector_state().is_some_and(|state| state.submitting) {
             return Vec::new();
+        }
+        if self.session_selector_state().is_some() {
+            return self.session_panel_cancel();
         }
         enum Target {
             Composer,
@@ -1271,31 +1528,41 @@ impl App {
         if !self.guard_ready() {
             return Vec::new();
         }
-        let (cursor, query, submitting) = {
-            let Some(state) = self.selector_state() else {
-                return Vec::new();
-            };
-            if state.kind != SelectorKind::Session {
-                return Vec::new();
-            }
-            (state.cursor, state.query.clone(), state.submitting)
-        };
-        // One open at a time; the pending response owns the panel.
-        if submitting {
+        if self.session_panel_busy() {
             return Vec::new();
         }
-        let Some(selected) = filtered_sessions(&self.sessions.list, &query)
-            .get(cursor)
-            .map(|session| session.session_id.clone())
-        else {
+        let selected = {
+            let Some(state) = self.session_selector_state() else {
+                return Vec::new();
+            };
+            if !matches!(&state.mode, SessionPanelMode::Browse) {
+                return Vec::new();
+            }
+            state.selected_session_id.clone()
+        };
+        let Some(selected) = selected else {
             return Vec::new();
         };
+        if !self.session_is_visible(&selected) {
+            self.reconcile_session_selection(true);
+            return Vec::new();
+        }
+        // One open at a time; the pending response owns the panel.
         if self.pending_open_or_history(&selected)
             || self
                 .sessions
                 .known
                 .get(&selected)
                 .is_some_and(|view| view.closing)
+            || self.pending_requests.values().any(|request| {
+                matches!(
+                    request,
+                    RequestKind::RenameSession { session_id }
+                        | RequestKind::CloseSession { session_id }
+                        | RequestKind::DeleteSession { session_id }
+                        if session_id == &selected
+                )
+            })
         {
             return Vec::new();
         }
@@ -1303,11 +1570,492 @@ impl App {
             self.dock = Dock::Composer;
             return self.activate_existing_session(&selected);
         }
-        if let Some(state) = self.selector_state_mut() {
-            state.submitting = true;
+        if let Some(state) = self.session_selector_state_mut() {
             state.error = None;
         }
         self.open_session(&selected)
+    }
+
+    fn selected_session_id(&self) -> Option<SessionId> {
+        self.session_selector_state()
+            .and_then(|state| state.selected_session_id.clone())
+    }
+
+    fn panel_click_count(&mut self, session_id: &SessionId) -> u8 {
+        let now = self.instant_now();
+        let count = self
+            .panel_click
+            .as_ref()
+            .filter(|click| {
+                click.session_id == *session_id
+                    && now.saturating_duration_since(click.at) <= Duration::from_millis(500)
+            })
+            .map_or(1, |click| click.count.saturating_add(1).min(2));
+        self.panel_click = Some(PanelClick {
+            session_id: session_id.clone(),
+            at: now,
+            count,
+        });
+        count
+    }
+
+    fn selector_click_count(&mut self, kind: SelectorKind, key: &str) -> u8 {
+        let now = self.instant_now();
+        let count = self
+            .selector_click
+            .as_ref()
+            .filter(|click| {
+                click.kind == kind
+                    && click.key == key
+                    && now.saturating_duration_since(click.at) <= Duration::from_millis(500)
+            })
+            .map_or(1, |click| click.count.saturating_add(1).min(2));
+        self.selector_click = Some(SelectorClick {
+            kind,
+            key: key.to_owned(),
+            at: now,
+            count,
+        });
+        count
+    }
+
+    fn session_action_safety(&self, session_id: &SessionId) -> SessionActionSafety {
+        let listed = self
+            .sessions
+            .list
+            .iter()
+            .find(|session| &session.session_id == session_id);
+        let Some(view) = self.sessions.known.get(session_id) else {
+            return if self.sessions.closed.contains(session_id) {
+                SessionActionSafety::Safe
+            } else if listed.is_some_and(|session| session.loaded) {
+                SessionActionSafety::Unknown
+            } else {
+                SessionActionSafety::Safe
+            };
+        };
+
+        if view.event_gap {
+            return SessionActionSafety::Busy;
+        }
+        if view.close_verification_unknown || view.latest_state_query.is_some() {
+            return SessionActionSafety::Unknown;
+        }
+
+        if view.closing
+            || view.live.is_some()
+            || view.unsaved_loop.is_some()
+            || view.result_unconfirmed
+            || view.is_blocked()
+            || view
+                .state
+                .as_ref()
+                .is_some_and(|state| state.status != SessionStatusWire::Idle)
+        {
+            return SessionActionSafety::Busy;
+        }
+
+        let loaded = !self.sessions.closed.contains(session_id)
+            && (view.info.loaded || listed.is_some_and(|session| session.loaded));
+        if loaded && view.state.is_none() {
+            return SessionActionSafety::Unknown;
+        }
+        if loaded && (view.loading || view.reconcile_inflight || self.pending_history(session_id)) {
+            return SessionActionSafety::Busy;
+        }
+        SessionActionSafety::Safe
+    }
+
+    fn request_session_state_for_action(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
+        if !self.can_send_requests() {
+            return Vec::new();
+        }
+        if self.sessions.deleted.contains(session_id)
+            || self.sessions.pending_deletes.contains(session_id)
+        {
+            return Vec::new();
+        }
+        if !self.sessions.known.contains_key(session_id) {
+            let Some(info) = self
+                .sessions
+                .list
+                .iter()
+                .find(|session| &session.session_id == session_id)
+                .cloned()
+            else {
+                return Vec::new();
+            };
+            self.sessions
+                .known
+                .insert(session_id.clone(), SessionView::new(info));
+        }
+        if self
+            .sessions
+            .known
+            .get(session_id)
+            .is_some_and(|view| view.latest_state_query.is_some())
+            || self.pending_requests.values().any(|request| {
+                matches!(
+                    request,
+                    RequestKind::SessionState { session_id: pending, .. }
+                        if pending == session_id
+                )
+            })
+        {
+            return Vec::new();
+        }
+        vec![self.request_session_state(session_id)]
+    }
+
+    fn session_loaded(&self, session_id: &SessionId) -> Option<bool> {
+        if self.sessions.closed.contains(session_id) {
+            return Some(false);
+        }
+        let listed = self
+            .sessions
+            .list
+            .iter()
+            .find(|session| &session.session_id == session_id)
+            .map(|session| session.loaded)
+            .unwrap_or(false);
+        self.sessions
+            .known
+            .get(session_id)
+            .map(|view| view.info.loaded || listed)
+            .or_else(|| {
+                self.sessions
+                    .list
+                    .iter()
+                    .find(|session| &session.session_id == session_id)
+                    .map(|session| session.loaded)
+            })
+    }
+
+    fn invalidate_session_state_requests(&mut self, session_id: &SessionId) {
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            view.latest_state_query = None;
+        }
+        self.pending_requests.retain(|_, request| {
+            !matches!(
+                request,
+                RequestKind::SessionState { session_id: pending, .. }
+                    if pending == session_id
+            )
+        });
+    }
+
+    fn mark_close_verification_unknown(&mut self, session_id: &SessionId) {
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            view.closing = false;
+            view.close_verification_unknown = true;
+            if view
+                .state
+                .as_ref()
+                .is_some_and(|state| state.status == SessionStatusWire::Idle)
+            {
+                view.state = None;
+            }
+        }
+    }
+
+    fn report_unknown_session_state(
+        &mut self,
+        session_id: &SessionId,
+        action: &str,
+    ) -> Vec<AppCommand> {
+        if let Some(state) = self.session_selector_state_mut() {
+            state.error = Some(format!(
+                "cannot {action} while session state is unknown; reread it before retrying"
+            ));
+        }
+        self.notice(
+            NoticeLevel::Warning,
+            format!("Session {session_id} state is unknown; reread it before retrying."),
+        );
+        self.request_session_state_for_action(session_id)
+    }
+
+    fn panel_session_action_safe(
+        &mut self,
+        session_id: &SessionId,
+        action: &str,
+    ) -> Option<Vec<AppCommand>> {
+        match self.session_action_safety(session_id) {
+            SessionActionSafety::Safe => None,
+            SessionActionSafety::Unknown => {
+                Some(self.report_unknown_session_state(session_id, action))
+            }
+            SessionActionSafety::Busy => {
+                if let Some(state) = self.session_selector_state_mut() {
+                    state.error = Some(format!("cannot {action}: session is busy or unsafe"));
+                }
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("Cannot {action} session {session_id}: it is busy or unsafe."),
+                );
+                Some(Vec::new())
+            }
+        }
+    }
+
+    fn begin_session_rename(&mut self) -> Vec<AppCommand> {
+        if !self.guard_ready() {
+            return Vec::new();
+        }
+        let Some(session_id) = self.selected_session_id() else {
+            self.notice(NoticeLevel::Info, "Select a session before renaming it.");
+            return Vec::new();
+        };
+        if !self.session_is_visible(&session_id) {
+            self.reconcile_session_selection(true);
+            return Vec::new();
+        }
+        let title = self
+            .sessions
+            .known
+            .get(&session_id)
+            .and_then(|view| view.info.title.clone())
+            .or_else(|| {
+                self.sessions
+                    .list
+                    .iter()
+                    .find(|session| session.session_id == session_id)
+                    .and_then(|session| session.title.clone())
+            })
+            .unwrap_or_default();
+        if let Some(state) = self.session_selector_state_mut() {
+            state.error = None;
+            state.mode = SessionPanelMode::Rename {
+                cursor: title.chars().count(),
+                draft: title,
+                submitting: false,
+            };
+        }
+        Vec::new()
+    }
+
+    fn begin_session_close(&mut self) -> Vec<AppCommand> {
+        if !self.guard_ready() {
+            return Vec::new();
+        }
+        if self.session_panel_busy() {
+            return Vec::new();
+        }
+        let Some(session_id) = self.selected_session_id() else {
+            self.notice(NoticeLevel::Info, "Select a session before closing it.");
+            return Vec::new();
+        };
+        match self.session_loaded(&session_id) {
+            Some(true) => {}
+            Some(false) => {
+                self.notice(NoticeLevel::Info, "Session is already closed.");
+                return Vec::new();
+            }
+            None => {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("Session {session_id} is not available for closing."),
+                );
+                return Vec::new();
+            }
+        }
+        if let Some(commands) = self.panel_session_action_safe(&session_id, "close") {
+            return commands;
+        }
+        if let Some(state) = self.session_selector_state_mut() {
+            state.error = None;
+            state.mode = SessionPanelMode::ConfirmClose;
+        }
+        Vec::new()
+    }
+
+    fn begin_session_delete(&mut self) -> Vec<AppCommand> {
+        if !self.guard_ready() {
+            return Vec::new();
+        }
+        if self.session_panel_busy() {
+            return Vec::new();
+        }
+        let Some(session_id) = self.selected_session_id() else {
+            self.notice(NoticeLevel::Info, "Select a session before deleting it.");
+            return Vec::new();
+        };
+        if self.session_loaded(&session_id).is_none() {
+            self.notice(
+                NoticeLevel::Warning,
+                format!("Session {session_id} is not available for deletion."),
+            );
+            return Vec::new();
+        }
+        if let Some(commands) = self.panel_session_action_safe(&session_id, "delete") {
+            return commands;
+        }
+        let loaded = self.session_loaded(&session_id).unwrap_or(true);
+        if let Some(state) = self.session_selector_state_mut() {
+            state.error = None;
+            state.mode = if loaded {
+                SessionPanelMode::ConfirmCloseForDelete
+            } else {
+                SessionPanelMode::ConfirmDelete {
+                    choice: SessionConfirmChoice::Cancel,
+                    submitting: false,
+                }
+            };
+        }
+        Vec::new()
+    }
+
+    fn session_panel_confirm(&mut self) -> Vec<AppCommand> {
+        let Some(session_id) = self.selected_session_id() else {
+            return Vec::new();
+        };
+        let mode = self
+            .session_selector_state()
+            .map(|state| state.mode.clone())
+            .unwrap_or(SessionPanelMode::Browse);
+        match mode {
+            SessionPanelMode::Browse => self.confirm_session_selector(),
+            SessionPanelMode::Rename { .. } => self.submit_session_rename(&session_id),
+            SessionPanelMode::ConfirmClose => {
+                if let Some(commands) = self.panel_session_action_safe(&session_id, "close") {
+                    commands
+                } else {
+                    self.close_session(&session_id, true)
+                }
+            }
+            SessionPanelMode::ConfirmCloseForDelete => {
+                if let Some(commands) = self.panel_session_action_safe(&session_id, "close") {
+                    commands
+                } else {
+                    self.close_session(&session_id, true)
+                }
+            }
+            SessionPanelMode::ConfirmDelete {
+                choice: SessionConfirmChoice::Cancel,
+                ..
+            } => self.session_panel_cancel(),
+            SessionPanelMode::ConfirmDelete {
+                choice: SessionConfirmChoice::Confirm,
+                ..
+            } => self.confirm_session_delete(&session_id),
+        }
+    }
+
+    fn session_panel_action(&mut self, action: SessionPanelAction) -> Vec<AppCommand> {
+        match action {
+            SessionPanelAction::Open => self.confirm_session_selector(),
+            SessionPanelAction::New => self.open_new_session(),
+            SessionPanelAction::Refresh => self.refresh_sessions(),
+            SessionPanelAction::Rename => self.begin_session_rename(),
+            SessionPanelAction::Close => self.begin_session_close(),
+            SessionPanelAction::Delete => self.begin_session_delete(),
+            SessionPanelAction::Cancel => self.session_panel_cancel(),
+            SessionPanelAction::ConfirmDelete => {
+                if let Some(state) = self.session_selector_state_mut() {
+                    if let SessionPanelMode::ConfirmDelete { choice, .. } = &mut state.mode {
+                        *choice = SessionConfirmChoice::Confirm;
+                    }
+                }
+                self.session_panel_confirm()
+            }
+            SessionPanelAction::SaveRename => self.session_panel_confirm(),
+        }
+    }
+
+    fn confirm_session_delete(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
+        if let Some(commands) = self.panel_session_action_safe(session_id, "delete") {
+            return commands;
+        }
+        let commands = self.delete_session(session_id, true);
+        if !commands.is_empty() {
+            if let Some(state) = self.session_selector_state_mut() {
+                state.mode = SessionPanelMode::ConfirmDelete {
+                    choice: SessionConfirmChoice::Confirm,
+                    submitting: true,
+                };
+            }
+        }
+        commands
+    }
+
+    fn toggle_session_delete_choice(&mut self) -> Vec<AppCommand> {
+        if let Some(state) = self.session_selector_state_mut() {
+            if let SessionPanelMode::ConfirmDelete { choice, .. } = &mut state.mode {
+                *choice = match choice {
+                    SessionConfirmChoice::Cancel => SessionConfirmChoice::Confirm,
+                    SessionConfirmChoice::Confirm => SessionConfirmChoice::Cancel,
+                };
+            }
+        }
+        Vec::new()
+    }
+
+    fn session_panel_cancel(&mut self) -> Vec<AppCommand> {
+        let mode = self
+            .session_selector_state()
+            .map(|state| state.mode.clone())
+            .unwrap_or(SessionPanelMode::Browse);
+        match mode {
+            SessionPanelMode::Browse => self.dock = Dock::Composer,
+            SessionPanelMode::Rename {
+                submitting: false, ..
+            }
+            | SessionPanelMode::ConfirmClose
+            | SessionPanelMode::ConfirmCloseForDelete => {
+                if let Some(state) = self.session_selector_state_mut() {
+                    state.mode = SessionPanelMode::Browse;
+                    state.error = None;
+                }
+            }
+            SessionPanelMode::Rename {
+                submitting: true, ..
+            } => {}
+            SessionPanelMode::ConfirmDelete { .. } => {
+                if let Some(state) = self.session_selector_state_mut() {
+                    state.mode = SessionPanelMode::Browse;
+                    state.error = None;
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    fn submit_session_rename(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
+        if self.sessions.deleted.contains(session_id)
+            || self.sessions.pending_deletes.contains(session_id)
+        {
+            return Vec::new();
+        }
+        let Some((draft, submitting)) =
+            self.session_selector_state()
+                .and_then(|state| match &state.mode {
+                    SessionPanelMode::Rename {
+                        draft, submitting, ..
+                    } => Some((draft.clone(), *submitting)),
+                    _ => None,
+                })
+        else {
+            return Vec::new();
+        };
+        if submitting
+            || self.pending_requests.values().any(|request| {
+                matches!(request, RequestKind::RenameSession { session_id: pending } if pending == session_id)
+            })
+        {
+            return Vec::new();
+        }
+        if let Some(state) = self.session_selector_state_mut() {
+            if let SessionPanelMode::Rename { submitting, .. } = &mut state.mode {
+                *submitting = true;
+                state.error = None;
+            }
+        }
+        vec![self.request(
+            RequestKind::RenameSession {
+                session_id: session_id.clone(),
+            },
+            |id| OutgoingRequest::session_rename(id, session_id, &draft),
+        )]
     }
 
     fn confirm_model_item(&mut self) -> Vec<AppCommand> {
@@ -1778,8 +2526,14 @@ impl App {
             OpenHelp => self.open_dock(Dock::Help),
             OpenLogs => self.open_dock(Dock::Logs),
             OpenSessions => self.open_selector(SelectorKind::Session),
+            OpenNewSession => self.open_new_session(),
             OpenModel => self.open_selector(SelectorKind::Model),
             OpenReasoning => self.open_selector(SelectorKind::Reasoning),
+            RefreshSessions => self.refresh_sessions(),
+            SessionRename => self.begin_session_rename(),
+            SessionClose => self.begin_session_close(),
+            SessionDelete => self.begin_session_delete(),
+            SessionDeleteToggle => self.toggle_session_delete_choice(),
             ToggleTools => {
                 if let Some(session_id) = self.sessions.active.as_ref().cloned() {
                     ui_actions::toggle_tools(self, &session_id);
@@ -1796,35 +2550,63 @@ impl App {
             SelectorPage(delta) => self.page_selector(delta),
             SelectorConfirm => self.confirm_dock(),
             SelectorChar(c) => {
-                if self.selector_state().is_some_and(|state| state.submitting) {
+                if self.selector_state().is_some_and(|state| state.submitting)
+                    || (self.session_selector_state().is_some() && self.session_panel_busy())
+                {
                     return Vec::new();
                 }
                 if let Some(state) = self.selector_state_mut() {
                     state.query.push(c);
                     state.cursor = 0;
+                } else if let Some(state) = self.session_selector_state_mut() {
+                    if matches!(&state.mode, SessionPanelMode::Browse) {
+                        state.query.push(c);
+                        self.reconcile_session_selection(true);
+                    }
                 }
                 Vec::new()
             }
             SelectorBackspace => {
-                if self.selector_state().is_some_and(|state| state.submitting) {
+                if self.selector_state().is_some_and(|state| state.submitting)
+                    || (self.session_selector_state().is_some() && self.session_panel_busy())
+                {
                     return Vec::new();
                 }
                 if let Some(state) = self.selector_state_mut() {
                     state.query.pop();
                     state.cursor = 0;
+                } else if let Some(state) = self.session_selector_state_mut() {
+                    if matches!(&state.mode, SessionPanelMode::Browse) {
+                        state.query.pop();
+                        self.reconcile_session_selection(true);
+                    }
                 }
                 Vec::new()
             }
             SelectorClear => {
-                if self.selector_state().is_some_and(|state| state.submitting) {
+                if self.selector_state().is_some_and(|state| state.submitting)
+                    || (self.session_selector_state().is_some() && self.session_panel_busy())
+                {
                     return Vec::new();
                 }
                 if let Some(state) = self.selector_state_mut() {
                     state.query.clear();
                     state.cursor = 0;
+                } else if let Some(state) = self.session_selector_state_mut() {
+                    if matches!(&state.mode, SessionPanelMode::Browse) {
+                        state.query.clear();
+                        self.reconcile_session_selection(true);
+                    }
                 }
                 Vec::new()
             }
+            SessionRenameChar(c) => self.field_char(c),
+            SessionRenameBackspace => self.field_backspace(),
+            SessionRenameDelete => self.field_delete(),
+            SessionRenameCursor(delta) => self.field_cursor_move(delta),
+            SessionRenameClear => self.field_clear(),
+            SessionRenameHome => self.field_cursor_home(),
+            SessionRenameEnd => self.field_cursor_end(),
             FieldStep(delta) => self.dock_field_step(delta),
             FieldChar(c) => self.field_char(c),
             FieldBackspace => self.field_backspace(),
@@ -1834,11 +2616,15 @@ impl App {
             FieldEnd => self.field_cursor_end(),
             ScrollRows(delta) => self.scroll_focused(delta),
             ScrollWindow(delta) => {
-                let visible = self.viewport.1.max(1) as i32;
-                self.scroll_focused(delta * visible)
+                if matches!(self.dock, Dock::Help | Dock::Logs) {
+                    self.panel_scroll_page(delta)
+                } else {
+                    let visible = self.viewport.1.max(1) as i32;
+                    self.scroll_focused(delta * visible)
+                }
             }
-            ScrollTop => self.transcript_scroll_top(),
-            ScrollBottom => self.transcript_scroll_bottom(),
+            ScrollTop => self.scroll_top_focused(),
+            ScrollBottom => self.scroll_bottom_focused(),
         }
     }
 
@@ -1864,16 +2650,84 @@ impl App {
     /// selection, Help/Logs scroll their own view, everything else scrolls
     /// the transcript.
     fn scroll_focused(&mut self, delta: i32) -> Vec<AppCommand> {
-        if self.selector_state().is_some() {
+        if self.selector_state().is_some() || self.session_selector_state().is_some() {
             return self.move_selector(delta);
         }
         match &self.dock {
             Dock::Help | Dock::Logs => {
-                self.panel_scroll = (self.panel_scroll as i64 + delta as i64).max(0) as usize;
+                self.panel_scroll_by(delta);
             }
             _ => self.transcript_scroll(delta),
         }
         Vec::new()
+    }
+
+    fn panel_scroll_layout(&self) -> Option<crate::ui::panel::PanelLayout> {
+        let area = ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1);
+        let screen = crate::ui::layout::screen_layout(self, area);
+        match &self.dock {
+            Dock::Help => Some(crate::ui::panel::layout(
+                screen.panel,
+                crate::ui::panel::PanelSpec::new(0, false, 1),
+            )),
+            Dock::Logs => Some(crate::ui::panel::layout(
+                screen.panel,
+                crate::ui::panel::PanelSpec::new(1, false, 1),
+            )),
+            _ => None,
+        }
+    }
+
+    fn panel_scroll_line_count(&self) -> usize {
+        match &self.dock {
+            Dock::Help => crate::ui::help::content_line_count(),
+            Dock::Logs => {
+                if self.agent_logs.is_empty() {
+                    2
+                } else {
+                    self.agent_logs.len() + 1
+                }
+            }
+            _ => 0,
+        }
+    }
+
+    fn panel_scroll_max(&self) -> usize {
+        let height = self
+            .panel_scroll_layout()
+            .map_or(0, |panel| panel.content.height as usize);
+        self.panel_scroll_line_count().saturating_sub(height)
+    }
+
+    fn panel_scroll_by(&mut self, delta: i32) {
+        let max = self.panel_scroll_max();
+        self.panel_scroll = (self.panel_scroll as i64 + delta as i64).clamp(0, max as i64) as usize;
+    }
+
+    fn panel_scroll_page(&mut self, delta: i32) -> Vec<AppCommand> {
+        let height = self
+            .panel_scroll_layout()
+            .map_or(1, |panel| usize::from(panel.content.height).max(1));
+        self.panel_scroll_by(delta.saturating_mul(height as i32));
+        Vec::new()
+    }
+
+    fn scroll_top_focused(&mut self) -> Vec<AppCommand> {
+        if matches!(self.dock, Dock::Help | Dock::Logs) {
+            self.panel_scroll = 0;
+            Vec::new()
+        } else {
+            self.transcript_scroll_top()
+        }
+    }
+
+    fn scroll_bottom_focused(&mut self) -> Vec<AppCommand> {
+        if matches!(self.dock, Dock::Help | Dock::Logs) {
+            self.panel_scroll = self.panel_scroll_max();
+            Vec::new()
+        } else {
+            self.transcript_scroll_bottom()
+        }
     }
 
     /// Transcript scroll: negative deltas leave the tail and store an
@@ -2416,27 +3270,38 @@ impl App {
             );
             return Vec::new();
         }
+        let reconciling_gap = self
+            .sessions
+            .known
+            .get(&active)
+            .is_some_and(|view| view.event_gap);
         if let Some(view) = self.sessions.known.get_mut(&active) {
             view.transcript.clear_blocks();
             view.usage_projection = crate::state::session::UsageProjection::default();
             view.scroll = crate::state::session::ScrollState::default();
-            view.event_gap = false;
-            view.reconcile_inflight = false;
+            view.reconcile_inflight = reconciling_gap;
             view.loading = true;
         }
         let offset = 0;
-        vec![self.request(
-            RequestKind::History {
-                session_id: active.clone(),
-                offset,
-                limit: DEFAULT_HISTORY_LIMIT,
-                gap_revision: None,
-            },
-            |id| OutgoingRequest::get_history(id, &active, offset, DEFAULT_HISTORY_LIMIT),
-        )]
+        vec![self.request_history(&active, offset, DEFAULT_HISTORY_LIMIT)]
     }
 
     fn field_char(&mut self, c: char) -> Vec<AppCommand> {
+        if let Some(state) = self.session_selector_state_mut() {
+            if let SessionPanelMode::Rename {
+                draft,
+                cursor,
+                submitting,
+            } = &mut state.mode
+            {
+                if !*submitting {
+                    let offset = Self::char_to_byte(draft, *cursor);
+                    draft.insert(offset, c);
+                    *cursor += 1;
+                }
+            }
+            return Vec::new();
+        }
         if self.new_session().is_some_and(|draft| draft.submitting) {
             return Vec::new();
         }
@@ -2460,6 +3325,25 @@ impl App {
     }
 
     fn field_backspace(&mut self) -> Vec<AppCommand> {
+        if let Some(state) = self.session_selector_state_mut() {
+            if let SessionPanelMode::Rename {
+                draft,
+                cursor,
+                submitting,
+            } = &mut state.mode
+            {
+                if !*submitting && *cursor > 0 {
+                    let offset = Self::char_to_byte(draft, *cursor);
+                    let previous = draft[..offset]
+                        .chars()
+                        .next_back()
+                        .map_or(0, char::len_utf8);
+                    draft.remove(offset - previous);
+                    *cursor -= 1;
+                }
+            }
+            return Vec::new();
+        }
         if self.new_session().is_some_and(|draft| draft.submitting) {
             return Vec::new();
         }
@@ -2493,7 +3377,44 @@ impl App {
         Vec::new()
     }
 
+    fn field_delete(&mut self) -> Vec<AppCommand> {
+        let Some(state) = self.session_selector_state_mut() else {
+            return Vec::new();
+        };
+        if let SessionPanelMode::Rename {
+            draft,
+            cursor,
+            submitting,
+        } = &mut state.mode
+        {
+            if !*submitting {
+                let len = draft.chars().count();
+                if *cursor < len {
+                    let offset = Self::char_to_byte(draft, *cursor);
+                    let next = draft[offset..].chars().next().map_or(0, char::len_utf8);
+                    draft.drain(offset..offset + next);
+                }
+            }
+        }
+        Vec::new()
+    }
+
     fn field_insert(&mut self, text: &str) -> Vec<AppCommand> {
+        if let Some(state) = self.session_selector_state_mut() {
+            if let SessionPanelMode::Rename {
+                draft,
+                cursor,
+                submitting,
+            } = &mut state.mode
+            {
+                if !*submitting {
+                    let offset = Self::char_to_byte(draft, *cursor);
+                    draft.insert_str(offset, text);
+                    *cursor += text.chars().count();
+                }
+            }
+            return Vec::new();
+        }
         if self.new_session().is_some_and(|draft| draft.submitting) {
             return Vec::new();
         }
@@ -2517,6 +3438,20 @@ impl App {
     }
 
     fn field_clear(&mut self) -> Vec<AppCommand> {
+        if let Some(state) = self.session_selector_state_mut() {
+            if let SessionPanelMode::Rename {
+                draft,
+                cursor,
+                submitting,
+            } = &mut state.mode
+            {
+                if !*submitting {
+                    draft.clear();
+                    *cursor = 0;
+                }
+            }
+            return Vec::new();
+        }
         if let Some(draft) = self.draft_mut() {
             if !draft.submitting {
                 match draft.field {
@@ -2531,6 +3466,13 @@ impl App {
     }
 
     fn field_cursor_move(&mut self, delta: i32) -> Vec<AppCommand> {
+        if let Some(state) = self.session_selector_state_mut() {
+            if let SessionPanelMode::Rename { draft, cursor, .. } = &mut state.mode {
+                let len = draft.chars().count();
+                *cursor = (*cursor as i64 + delta as i64).clamp(0, len as i64) as usize;
+            }
+            return Vec::new();
+        }
         if let Some(draft) = self.draft_mut() {
             let len = match draft.field {
                 NewSessionField::Workspace => draft.workspace.chars().count(),
@@ -2544,6 +3486,12 @@ impl App {
     }
 
     fn field_cursor_home(&mut self) -> Vec<AppCommand> {
+        if let Some(state) = self.session_selector_state_mut() {
+            if let SessionPanelMode::Rename { cursor, .. } = &mut state.mode {
+                *cursor = 0;
+            }
+            return Vec::new();
+        }
         if let Some(draft) = self.draft_mut() {
             draft.field_cursor = 0;
         }
@@ -2551,6 +3499,12 @@ impl App {
     }
 
     fn field_cursor_end(&mut self) -> Vec<AppCommand> {
+        if let Some(state) = self.session_selector_state_mut() {
+            if let SessionPanelMode::Rename { draft, cursor, .. } = &mut state.mode {
+                *cursor = draft.chars().count();
+            }
+            return Vec::new();
+        }
         if let Some(draft) = self.draft_mut() {
             let len = match draft.field {
                 NewSessionField::Workspace => draft.workspace.chars().count(),
@@ -2607,6 +3561,11 @@ impl App {
     }
 
     fn request_session_presentation(&mut self, session_id: &SessionId) -> Option<AppCommand> {
+        if self.sessions.deleted.contains(session_id)
+            || self.sessions.pending_deletes.contains(session_id)
+        {
+            return None;
+        }
         if !self.can_send_requests() {
             return None;
         }
@@ -2630,6 +3589,32 @@ impl App {
         })
     }
 
+    /// Every history request captures the current local gap revision. Normal
+    /// initial loads carry revision zero too, so an in-flight response cannot
+    /// clear a gap that was observed after the request was issued.
+    fn request_history(
+        &mut self,
+        session_id: &SessionId,
+        offset: usize,
+        limit: usize,
+    ) -> AppCommand {
+        let gap_revision = self
+            .sessions
+            .known
+            .get(session_id)
+            .expect("history request requires a known session")
+            .gap_revision;
+        self.request(
+            RequestKind::History {
+                session_id: session_id.clone(),
+                offset,
+                limit,
+                gap_revision: Some(gap_revision),
+            },
+            |id| OutgoingRequest::session_history(id, session_id, Some(offset), Some(limit)),
+        )
+    }
+
     fn has_initialized_session_view(view: &SessionView) -> bool {
         view.info.loaded
             || view.state.is_some()
@@ -2639,6 +3624,11 @@ impl App {
     }
 
     fn activate_existing_session(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
+        if self.sessions.deleted.contains(session_id)
+            || self.sessions.pending_deletes.contains(session_id)
+        {
+            return Vec::new();
+        }
         if self.sessions.active.as_ref() != Some(session_id) {
             ui_actions::cancel_scrollbar_drag(self);
             ui_actions::clear_selection(self);
@@ -2661,18 +3651,18 @@ impl App {
                 }
             }
         }
-        let (fetch, gap_revision) = {
+        let (fetch, reconciling_gap) = {
             let Some(view) = self.sessions.known.get(session_id) else {
                 return commands;
             };
             if view.loading || self.pending_history(session_id) {
-                (false, None)
+                (false, false)
             } else if view.event_gap {
-                (true, Some(view.gap_revision))
+                (true, true)
             } else if !view.transcript.complete {
-                (true, None)
+                (true, false)
             } else {
-                (false, None)
+                (false, false)
             }
         };
         if fetch {
@@ -2684,23 +3674,9 @@ impl App {
                 .unwrap_or(0);
             if let Some(view) = self.sessions.known.get_mut(session_id) {
                 view.loading = true;
+                view.reconcile_inflight = reconciling_gap;
             }
-            commands.push(self.request(
-                RequestKind::History {
-                    session_id: session_id.clone(),
-                    offset,
-                    limit: DEFAULT_HISTORY_LIMIT,
-                    gap_revision,
-                },
-                |id| {
-                    OutgoingRequest::session_history(
-                        id,
-                        session_id,
-                        Some(offset),
-                        Some(DEFAULT_HISTORY_LIMIT),
-                    )
-                },
-            ));
+            commands.push(self.request_history(session_id, offset, DEFAULT_HISTORY_LIMIT));
         }
         commands
     }
@@ -2732,6 +3708,7 @@ impl App {
             | RequestKind::SendTurn { session_id, .. }
             | RequestKind::SteerTurn { session_id, .. }
             | RequestKind::UpdateSession { session_id, .. }
+            | RequestKind::RenameSession { session_id }
             | RequestKind::History { session_id, .. }
             | RequestKind::SessionState { session_id, .. } => Some(session_id),
             RequestKind::SessionPresentation { session_id } => Some(session_id),
@@ -2740,6 +3717,7 @@ impl App {
             | RequestKind::ListModels
             | RequestKind::ListProfiles
             | RequestKind::ListSessions
+            | RequestKind::RefreshSessions { .. }
             | RequestKind::CreateSession { .. }
             | RequestKind::Shutdown => None,
         }
@@ -2825,6 +3803,7 @@ impl App {
     fn mark_history_unconfirmed(view: &mut SessionView) {
         view.loading = false;
         view.reconcile_inflight = false;
+        view.event_gap = true;
         view.transcript.complete = false;
         Self::mark_pending_steers_unconfirmed(view);
     }
@@ -2963,6 +3942,11 @@ impl App {
         if !self.guard_ready() {
             return Vec::new();
         }
+        if self.sessions.deleted.contains(session_id)
+            || self.sessions.pending_deletes.contains(session_id)
+        {
+            return Vec::new();
+        }
         if self.pending_open_or_history(session_id)
             || self
                 .sessions
@@ -2995,19 +3979,127 @@ impl App {
         )]
     }
 
+    fn refresh_sessions(&mut self) -> Vec<AppCommand> {
+        if !self.guard_ready() {
+            return Vec::new();
+        }
+        if self.session_panel_busy() {
+            return Vec::new();
+        }
+        if !self
+            .session_selector_state()
+            .is_some_and(|state| matches!(&state.mode, SessionPanelMode::Browse))
+        {
+            return Vec::new();
+        }
+        if self
+            .pending_requests
+            .values()
+            .any(|request| matches!(request, RequestKind::RefreshSessions { .. }))
+        {
+            return Vec::new();
+        }
+        let selected_session_id = self.selected_session_id();
+        if let Some(state) = self.session_selector_state_mut() {
+            state.error = None;
+        }
+        vec![self.request(
+            RequestKind::RefreshSessions {
+                selected_session_id,
+            },
+            OutgoingRequest::list_sessions,
+        )]
+    }
+
     fn close_session(&mut self, session_id: &SessionId, confirm: bool) -> Vec<AppCommand> {
         if !self.guard_ready() {
             return Vec::new();
         }
-        let (is_blocked, has_unsaved, is_running) = match self.sessions.known.get(session_id) {
-            Some(view) => (
-                view.is_blocked(),
-                view.unsaved_loop.is_some(),
-                view.is_running(),
-            ),
-            None => (false, false, false),
-        };
-        if (is_blocked || has_unsaved || is_running) && !confirm {
+        if self.pending_requests.values().any(|request| {
+            matches!(
+                request,
+                RequestKind::CloseSession { session_id: pending }
+                    | RequestKind::CloseVerifyState { session_id: pending }
+                    if pending == session_id
+            )
+        }) {
+            return Vec::new();
+        }
+        match self.session_loaded(session_id) {
+            Some(true) => {}
+            Some(false) => {
+                self.notice(NoticeLevel::Info, "Session is already closed.");
+                return Vec::new();
+            }
+            None => {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("Session {session_id} is not available for closing."),
+                );
+                return Vec::new();
+            }
+        }
+        if self
+            .sessions
+            .known
+            .get(session_id)
+            .is_some_and(|view| view.event_gap)
+        {
+            if let Some(state) = self.session_selector_state_mut() {
+                if state.selected_session_id.as_deref() == Some(session_id.as_str()) {
+                    state.error =
+                        Some("cannot close while history reconciliation is incomplete".to_owned());
+                }
+            }
+            self.notice(
+                NoticeLevel::Warning,
+                format!(
+                    "Cannot close session {session_id} until history reconciliation completes."
+                ),
+            );
+            return Vec::new();
+        }
+        let history_pending = self.pending_history(session_id);
+        let history_incomplete = self.session_loaded(session_id) == Some(true)
+            && (history_pending
+                || self
+                    .sessions
+                    .known
+                    .get(session_id)
+                    .is_some_and(|view| view.loading || view.reconcile_inflight));
+        if history_incomplete {
+            if let Some(state) = self.session_selector_state_mut() {
+                if state.selected_session_id.as_deref() == Some(session_id.as_str()) {
+                    state.error = Some("cannot close while history is incomplete".to_owned());
+                }
+            }
+            self.notice(
+                NoticeLevel::Warning,
+                format!("Cannot close session {session_id} until history completes."),
+            );
+            return Vec::new();
+        }
+        if matches!(
+            self.session_action_safety(session_id),
+            SessionActionSafety::Unknown
+        ) {
+            return self.report_unknown_session_state(session_id, "close");
+        }
+        let (is_blocked, has_unsaved, has_unconfirmed, is_active) =
+            match self.sessions.known.get(session_id) {
+                Some(view) => (
+                    view.is_blocked(),
+                    view.unsaved_loop.is_some(),
+                    view.result_unconfirmed,
+                    view.live.is_some()
+                        || view
+                            .state
+                            .as_ref()
+                            .is_some_and(|state| state.status != SessionStatusWire::Idle),
+                ),
+                None => (false, false, false, false),
+            };
+        if (is_blocked || has_unsaved || has_unconfirmed || is_active) && !confirm {
             self.notice(
                 NoticeLevel::Warning,
                 format!(
@@ -3048,22 +4140,58 @@ impl App {
         commands
     }
 
+    fn mark_session_closed(&mut self, session_id: &SessionId) {
+        self.sessions.closed.insert(session_id.clone());
+        self.invalidate_session_state_requests(session_id);
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            view.closing = false;
+            view.close_verification_unknown = false;
+            view.info.loaded = false;
+        }
+        if let Some(info) = self
+            .sessions
+            .known
+            .get(session_id)
+            .map(|view| view.info.clone())
+        {
+            self.upsert_session_list(info);
+        }
+        self.retire_reopened_session(session_id);
+        if self.sessions.active.as_deref() == Some(session_id.as_str()) {
+            ui_actions::cancel_scrollbar_drag(self);
+            ui_actions::clear_selection(self);
+            self.sessions.active = None;
+        }
+    }
+
     fn on_close_session_response(
         &mut self,
         session_id: &SessionId,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
+        if self.sessions.deleted.contains(session_id) {
+            return Vec::new();
+        }
         match response.parse_close() {
             Ok(_) => {
-                if let Some(view) = self.sessions.known.get_mut(session_id) {
-                    view.closing = false;
-                    view.info.loaded = false;
-                }
-                self.retire_reopened_session(session_id);
-                if self.sessions.active.as_deref() == Some(session_id.as_str()) {
-                    ui_actions::cancel_scrollbar_drag(self);
-                    ui_actions::clear_selection(self);
-                    self.sessions.active = None;
+                self.mark_session_closed(session_id);
+                if let Dock::SessionSelector(state) = &mut self.dock {
+                    if state.selected_session_id.as_deref() == Some(session_id.as_str()) {
+                        match &state.mode {
+                            SessionPanelMode::ConfirmCloseForDelete => {
+                                state.mode = SessionPanelMode::ConfirmDelete {
+                                    choice: SessionConfirmChoice::Cancel,
+                                    submitting: false,
+                                };
+                                state.error = None;
+                            }
+                            SessionPanelMode::ConfirmClose => {
+                                state.mode = SessionPanelMode::Browse;
+                                state.error = None;
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 self.notice(NoticeLevel::Info, format!("Session {session_id} closed."));
                 Vec::new()
@@ -3071,6 +4199,7 @@ impl App {
             Err(RpcResponseError::Agent(_error)) => {
                 // MIG-146: close returns error, perform a single read check of session state.
                 // Do not retry indefinitely.
+                self.invalidate_session_state_requests(session_id);
                 vec![self.request(
                     RequestKind::CloseVerifyState {
                         session_id: session_id.clone(),
@@ -3079,9 +4208,7 @@ impl App {
                 )]
             }
             Err(error) => {
-                if let Some(view) = self.sessions.known.get_mut(session_id) {
-                    view.closing = false;
-                }
+                self.mark_close_verification_unknown(session_id);
                 self.notice(
                     NoticeLevel::Error,
                     format!("Failed to close session {session_id}: {error}"),
@@ -3096,11 +4223,15 @@ impl App {
         session_id: &SessionId,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
-        if let Some(view) = self.sessions.known.get_mut(session_id) {
-            view.closing = false;
+        if self.sessions.deleted.contains(session_id) {
+            return Vec::new();
         }
         match response.parse_session_state() {
-            Ok(state) => {
+            Ok(state) if state.session_id == *session_id => {
+                self.apply_session_state(&state, None, false);
+                if let Some(view) = self.sessions.known.get_mut(session_id) {
+                    view.closing = false;
+                }
                 self.notice(
                     NoticeLevel::Warning,
                     format!(
@@ -3109,30 +4240,56 @@ impl App {
                     ),
                 );
             }
+            Ok(_) => {
+                self.mark_close_verification_unknown(session_id);
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!(
+                        "Session {session_id} close verification returned another session; state is unknown"
+                    ),
+                );
+            }
             Err(RpcResponseError::Agent(error))
                 if error.code == crate::protocol::SESSION_NOT_LOADED =>
             {
-                if let Some(view) = self.sessions.known.get_mut(session_id) {
-                    view.info.loaded = false;
-                    view.closing = false;
-                }
-                if self.sessions.active.as_deref() == Some(session_id.as_str()) {
-                    ui_actions::cancel_scrollbar_drag(self);
-                    ui_actions::clear_selection(self);
-                    self.sessions.active = None;
+                self.mark_session_closed(session_id);
+                if let Dock::SessionSelector(state) = &mut self.dock {
+                    if state.selected_session_id.as_deref() == Some(session_id.as_str()) {
+                        match &state.mode {
+                            SessionPanelMode::ConfirmCloseForDelete => {
+                                state.mode = SessionPanelMode::ConfirmDelete {
+                                    choice: SessionConfirmChoice::Cancel,
+                                    submitting: false,
+                                };
+                                state.error = None;
+                            }
+                            SessionPanelMode::ConfirmClose => {
+                                state.mode = SessionPanelMode::Browse;
+                                state.error = None;
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 self.notice(
                     NoticeLevel::Info,
-                    format!("Session {session_id} verified unmounted/closed."),
+                    format!("Session {session_id} was confirmed closed."),
                 );
             }
             Err(error) => {
+                self.mark_close_verification_unknown(session_id);
                 self.notice(
                     NoticeLevel::Warning,
                     format!(
                         "Session {session_id} close verification is unknown; result/state retained: {error}"
                     ),
                 );
+                if let Dock::SessionSelector(state) = &mut self.dock {
+                    if state.selected_session_id.as_deref() == Some(session_id.as_str()) {
+                        state.mode = SessionPanelMode::Browse;
+                        state.error = Some(error.to_string());
+                    }
+                }
             }
         }
         Vec::new()
@@ -3140,6 +4297,14 @@ impl App {
 
     fn delete_session(&mut self, session_id: &SessionId, confirm: bool) -> Vec<AppCommand> {
         if !self.guard_ready() {
+            return Vec::new();
+        }
+        if self.sessions.deleted.contains(session_id)
+            || self.sessions.pending_deletes.contains(session_id)
+            || self.pending_requests.values().any(|request| {
+                matches!(request, RequestKind::DeleteSession { session_id: pending } if pending == session_id)
+            })
+        {
             return Vec::new();
         }
         if !confirm {
@@ -3151,9 +4316,45 @@ impl App {
             );
             return Vec::new();
         }
+        let Some(loaded) = self.session_loaded(session_id) else {
+            self.notice(
+                NoticeLevel::Warning,
+                format!("Session {session_id} is not available for deletion."),
+            );
+            return Vec::new();
+        };
+        if !matches!(
+            self.session_action_safety(session_id),
+            SessionActionSafety::Safe
+        ) {
+            if matches!(
+                self.session_action_safety(session_id),
+                SessionActionSafety::Unknown
+            ) {
+                return self.report_unknown_session_state(session_id, "delete");
+            }
+            self.notice(
+                NoticeLevel::Warning,
+                format!("Session {session_id} is busy or its result is unconfirmed; deletion is blocked."),
+            );
+            return Vec::new();
+        }
+        if loaded {
+            if let Dock::SessionSelector(state) = &mut self.dock {
+                if state.selected_session_id.as_deref() == Some(session_id.as_str()) {
+                    state.mode = SessionPanelMode::ConfirmCloseForDelete;
+                }
+            }
+            self.notice(
+                NoticeLevel::Warning,
+                format!("Close session {session_id} before deleting it."),
+            );
+            return Vec::new();
+        }
         if self.sessions.active.as_deref() == Some(session_id.as_str()) {
             ui_actions::cancel_scrollbar_drag(self);
         }
+        self.sessions.pending_deletes.insert(session_id.clone());
         vec![self.request(
             RequestKind::DeleteSession {
                 session_id: session_id.clone(),
@@ -3167,8 +4368,20 @@ impl App {
         session_id: &SessionId,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
+        if self.sessions.deleted.contains(session_id) {
+            return Vec::new();
+        }
         match response.parse_delete() {
             Ok(_) => {
+                self.pending_requests.retain(|_, request| {
+                    Self::request_session_id(request) != Some(session_id.as_str())
+                });
+                self.mouse_down = None;
+                self.panel_click = None;
+                self.sessions.pending_deletes.remove(session_id);
+                self.sessions.deleted.insert(session_id.clone());
+                self.sessions.closed.remove(session_id);
+                self.sessions.title_overrides.remove(session_id);
                 self.sessions.known.remove(session_id);
                 self.sessions.list.retain(|s| &s.session_id != session_id);
                 if self.sessions.active.as_deref() == Some(session_id.as_str()) {
@@ -3176,10 +4389,29 @@ impl App {
                     ui_actions::clear_selection(self);
                     self.sessions.active = None;
                 }
+                if let Dock::SessionSelector(state) = &mut self.dock {
+                    if state.selected_session_id.as_deref() == Some(session_id.as_str()) {
+                        state.mode = SessionPanelMode::Browse;
+                        state.error = None;
+                    }
+                }
+                self.reconcile_session_selection(true);
                 self.notice(NoticeLevel::Info, format!("Session {session_id} deleted."));
                 Vec::new()
             }
             Err(error) => {
+                self.sessions.pending_deletes.remove(session_id);
+                if let Dock::SessionSelector(state) = &mut self.dock {
+                    if state.selected_session_id.as_deref() == Some(session_id.as_str()) {
+                        if matches!(&state.mode, SessionPanelMode::ConfirmDelete { .. }) {
+                            state.mode = SessionPanelMode::ConfirmDelete {
+                                choice: SessionConfirmChoice::Cancel,
+                                submitting: false,
+                            };
+                        }
+                        state.error = Some(error.to_string());
+                    }
+                }
                 self.notice(
                     NoticeLevel::Error,
                     format!("Failed to delete session {session_id}: {error}"),
@@ -3195,6 +4427,11 @@ impl App {
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
         if !self.can_send_requests() {
+            return Vec::new();
+        }
+        if self.sessions.deleted.contains(&session_id)
+            || self.sessions.pending_deletes.contains(&session_id)
+        {
             return Vec::new();
         }
         let session = match response.parse_session() {
@@ -3214,6 +4451,7 @@ impl App {
             );
             return Vec::new();
         }
+        self.sessions.closed.remove(&session_id);
         let mut commands = Vec::new();
         match self.sessions.known.get_mut(&session_id) {
             Some(view) => {
@@ -3245,18 +4483,18 @@ impl App {
             commands.push(command);
         }
 
-        let (fetch, gap_revision) = {
+        let (fetch, reconciling_gap) = {
             let Some(view) = self.sessions.known.get(&session_id) else {
                 return commands;
             };
             if view.loading {
-                (false, None)
+                (false, false)
             } else if view.event_gap {
-                (true, Some(view.gap_revision))
+                (true, true)
             } else if !view.transcript.complete {
-                (true, None)
+                (true, false)
             } else {
-                (false, None)
+                (false, false)
             }
         };
         if fetch {
@@ -3268,18 +4506,136 @@ impl App {
                 .unwrap_or(0);
             if let Some(view) = self.sessions.known.get_mut(&session_id) {
                 view.loading = true;
+                view.reconcile_inflight = reconciling_gap;
             }
-            commands.push(self.request(
-                RequestKind::History {
-                    session_id: session_id.clone(),
-                    offset,
-                    limit: 20,
-                    gap_revision,
-                },
-                |id| OutgoingRequest::session_history(id, &session_id, Some(offset), Some(20)),
-            ));
+            commands.push(self.request_history(&session_id, offset, 20));
         }
         commands
+    }
+
+    fn on_refresh_sessions_response(&mut self, response: &RpcResponse) -> Vec<AppCommand> {
+        let result = match response.parse_sessions() {
+            Ok(result) => result,
+            Err(error) => {
+                if let Some(state) = self.session_selector_state_mut() {
+                    state.error = Some(format!("refresh failed: {error}"));
+                }
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("session list refresh failed: {error}"),
+                );
+                return Vec::new();
+            }
+        };
+        let rename_pending: std::collections::HashSet<SessionId> = self
+            .pending_requests
+            .values()
+            .filter_map(|kind| match kind {
+                RequestKind::RenameSession { session_id } => Some(session_id.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut visible = Vec::with_capacity(result.sessions.len());
+        for mut session in result.sessions {
+            let session_id = session.session_id.clone();
+            if self.sessions.pending_deletes.contains(&session_id)
+                || self.sessions.deleted.contains(&session_id)
+            {
+                continue;
+            }
+            if self.sessions.closed.contains(&session_id) {
+                session.loaded = false;
+            }
+            if let Some(title) = self.sessions.title_overrides.get(&session_id) {
+                session.title = title.clone();
+            }
+            if !rename_pending.contains(&session_id) {
+                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    view.info = session.clone();
+                    if !session.loaded {
+                        view.latest_state_query = None;
+                    }
+                } else {
+                    self.sessions
+                        .known
+                        .insert(session_id.clone(), SessionView::new(session.clone()));
+                }
+            }
+            visible.push(session);
+        }
+        self.sessions.list = visible;
+        self.sessions.title_overrides.clear();
+        self.reconcile_session_selection(true);
+        if let Some(state) = self.session_selector_state_mut() {
+            state.error = None;
+        }
+        Vec::new()
+    }
+
+    fn on_rename_session_response(
+        &mut self,
+        session_id: SessionId,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
+        if self.sessions.deleted.contains(&session_id)
+            || self.sessions.pending_deletes.contains(&session_id)
+        {
+            return Vec::new();
+        }
+        let parsed = response.parse_session_rename();
+        let session = match parsed {
+            Ok(result) => result.session,
+            Err(error) => {
+                if let Dock::SessionSelector(state) = &mut self.dock {
+                    if state.selected_session_id.as_deref() == Some(session_id.as_str()) {
+                        if let SessionPanelMode::Rename { submitting, .. } = &mut state.mode {
+                            *submitting = false;
+                        }
+                        state.error = Some(error.to_string());
+                    }
+                }
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("session.rename failed for {session_id}: {error}"),
+                );
+                return Vec::new();
+            }
+        };
+        if session.session_id != session_id {
+            let error =
+                format!("session.rename response does not match requested session {session_id}");
+            if let Dock::SessionSelector(state) = &mut self.dock {
+                if state.selected_session_id.as_deref() == Some(session_id.as_str()) {
+                    if let SessionPanelMode::Rename { submitting, .. } = &mut state.mode {
+                        *submitting = false;
+                    }
+                    state.error = Some(error.clone());
+                }
+            }
+            self.notice(NoticeLevel::Warning, error);
+            return Vec::new();
+        }
+        if let Some(view) = self.sessions.known.get_mut(&session_id) {
+            view.info = session.clone();
+        } else {
+            self.sessions
+                .known
+                .insert(session_id.clone(), SessionView::new(session.clone()));
+        }
+        self.sessions
+            .title_overrides
+            .insert(session_id.clone(), session.title.clone());
+        self.upsert_session_list(session);
+        if let Dock::SessionSelector(state) = &mut self.dock {
+            if state.selected_session_id.as_deref() == Some(session_id.as_str())
+                && matches!(&state.mode, SessionPanelMode::Rename { .. })
+            {
+                state.mode = SessionPanelMode::Browse;
+                state.error = None;
+            }
+        }
+        self.notice(NoticeLevel::Info, format!("Session {session_id} renamed."));
+        Vec::new()
     }
 
     fn on_create_response(&mut self, draft_id: u64, response: &RpcResponse) -> Vec<AppCommand> {
@@ -3318,6 +4674,11 @@ impl App {
         previous_retired_loop: Option<TurnRef>,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
+        if self.sessions.deleted.contains(&session_id)
+            || self.sessions.pending_deletes.contains(&session_id)
+        {
+            return Vec::new();
+        }
         let parsed = response.parse_session();
         if let Err(error) = &parsed {
             if let Some(retired_loop) = previous_retired_loop.clone() {
@@ -3332,7 +4693,6 @@ impl App {
                 _ => format!("session.open failed: {error}"),
             };
             if let Dock::SessionSelector(state) = &mut self.dock {
-                state.submitting = false;
                 state.error = Some(message);
             } else {
                 self.notice(NoticeLevel::Error, message);
@@ -3351,7 +4711,6 @@ impl App {
             let message =
                 format!("session.open response does not match requested session {session_id}");
             if let Dock::SessionSelector(state) = &mut self.dock {
-                state.submitting = false;
                 state.error = Some(message);
             } else {
                 self.notice(NoticeLevel::Error, message);
@@ -3364,12 +4723,13 @@ impl App {
         if let Some(view) = self.sessions.known.get_mut(&session_id) {
             // Rebuild from history offset 0; never compare the new total with
             // the old local projection.
+            let preserving_gap = view.event_gap;
             view.transcript.clear_blocks();
             view.loading = false;
-            view.event_gap = false;
-            view.reconcile_inflight = false;
+            view.reconcile_inflight = preserving_gap;
             view.needs_post_wait_history = false;
             view.closing = false;
+            view.close_verification_unknown = false;
             view.live = None;
             view.unsaved_loop = None;
             view.last_result = None;
@@ -3386,8 +4746,10 @@ impl App {
             view.completed_steers.clear();
             view.result_unconfirmed = false;
         }
+        let opened_id = session_id.clone();
         let commands = self.on_session_response(session_id, response);
-        if matches!(&self.dock, Dock::SessionSelector(state) if state.submitting) {
+        if matches!(&self.dock, Dock::SessionSelector(state) if state.selected_session_id.as_deref() == Some(opened_id.as_str()) && matches!(&state.mode, SessionPanelMode::Browse))
+        {
             self.dock = Dock::Composer;
         }
         commands
@@ -3399,6 +4761,11 @@ impl App {
         query: u64,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
+        if self.sessions.deleted.contains(session_id)
+            || self.sessions.pending_deletes.contains(session_id)
+        {
+            return Vec::new();
+        }
         let Some(view) = self.sessions.known.get(session_id) else {
             return Vec::new();
         };
@@ -3413,6 +4780,7 @@ impl App {
                 self.apply_session_state(&state, None, false)
             }
             Ok(_) => {
+                self.mark_close_verification_unknown(session_id);
                 self.notice(
                     NoticeLevel::Warning,
                     format!("state response does not match requested session {session_id}"),
@@ -3420,6 +4788,7 @@ impl App {
                 Vec::new()
             }
             Err(error) => {
+                self.mark_close_verification_unknown(session_id);
                 self.notice(
                     NoticeLevel::Warning,
                     format!("failed to fetch state for {session_id}: {error}"),
@@ -3434,6 +4803,11 @@ impl App {
         session_id: &SessionId,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
+        if self.sessions.deleted.contains(session_id)
+            || self.sessions.pending_deletes.contains(session_id)
+        {
+            return Vec::new();
+        }
         let parsed = response.parse_session_presentation();
         // Captured before the refresh closure so the receipt can be reconciled
         // after the view borrow is released (dropped-event recovery).
@@ -3492,6 +4866,11 @@ impl App {
         event_loop_id: Option<&String>,
         from_event: bool,
     ) -> Vec<AppCommand> {
+        if self.sessions.deleted.contains(&state.session_id)
+            || self.sessions.pending_deletes.contains(&state.session_id)
+        {
+            return Vec::new();
+        }
         let show_unsupported = {
             let Some(view) = self.sessions.known.get_mut(&state.session_id) else {
                 return Vec::new();
@@ -3580,6 +4959,7 @@ impl App {
                 view.live = None;
             }
             view.state = Some(state.clone());
+            view.close_verification_unknown = false;
             !was_waiting && state.status == SessionStatusWire::WaitingForInput
         };
         if show_unsupported {
@@ -3595,6 +4975,11 @@ impl App {
         gap_revision: Option<u64>,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
+        if self.sessions.deleted.contains(session_id)
+            || self.sessions.pending_deletes.contains(session_id)
+        {
+            return Vec::new();
+        }
         let page = match response.parse_history() {
             Ok(page) => page,
             Err(error) => {
@@ -3619,6 +5004,11 @@ impl App {
         page: &HistoryPageWire,
     ) -> Vec<AppCommand> {
         if !self.can_send_requests() {
+            return Vec::new();
+        }
+        if self.sessions.deleted.contains(session_id)
+            || self.sessions.pending_deletes.contains(session_id)
+        {
             return Vec::new();
         }
 
@@ -3796,10 +5186,15 @@ impl App {
                     view.live.is_none()
                 };
 
-                let gap_rev_matches = gap_revision
-                    .is_some_and(|revision| revision == view.gap_revision)
-                    || (gap_revision.is_none()
-                        && view.transcript.loaded_count == view.transcript.total);
+                let gap_rev_matches =
+                    gap_revision.is_some_and(|revision| revision == view.gap_revision);
+                let needs_gap_reconcile = view.unsaved_loop.is_none()
+                    && view.event_gap
+                    && !gap_rev_matches
+                    && view
+                        .live
+                        .as_ref()
+                        .is_none_or(|live| live.last_result.is_some());
 
                 if view.unsaved_loop.is_none()
                     && view.event_gap
@@ -3809,7 +5204,6 @@ impl App {
                     view.event_gap = false;
                 }
 
-                let _reconciling = view.reconcile_inflight;
                 view.reconcile_inflight = false;
 
                 // Mark steer states based on history
@@ -3913,7 +5307,17 @@ impl App {
                     }
                 }
 
-                if view.needs_post_wait_history {
+                if needs_gap_reconcile {
+                    // A dropped event advanced the fence while this page was
+                    // in flight. Keep the merged page, but fetch the tail
+                    // again under the newer revision before releasing it.
+                    view.needs_post_wait_history = false;
+                    view.loading = true;
+                    view.reconcile_inflight = true;
+                    NextChain::Reconcile {
+                        offset: view.transcript.loaded_count,
+                    }
+                } else if view.needs_post_wait_history {
                     // Scenario B: We had an in-flight history when turn.wait completed.
                     // Now that history has completed, if the loop is not yet contained in history,
                     // we perform exactly ONE post-wait history fetch.
@@ -3923,7 +5327,6 @@ impl App {
                         view.reconcile_inflight = true;
                         NextChain::Reconcile {
                             offset: view.transcript.loaded_count,
-                            gap_revision: Some(view.gap_revision),
                         }
                     } else {
                         NextChain::Done
@@ -3943,27 +5346,9 @@ impl App {
         };
 
         match next {
-            NextChain::Page { offset } => vec![self.request(
-                RequestKind::History {
-                    session_id: session_id.clone(),
-                    offset,
-                    limit: 20,
-                    gap_revision,
-                },
-                |id| OutgoingRequest::session_history(id, session_id, Some(offset), Some(20)),
-            )],
-            NextChain::Reconcile {
-                offset,
-                gap_revision,
-            } => vec![self.request(
-                RequestKind::History {
-                    session_id: session_id.clone(),
-                    offset,
-                    limit: 20,
-                    gap_revision,
-                },
-                |id| OutgoingRequest::session_history(id, session_id, Some(offset), Some(20)),
-            )],
+            NextChain::Page { offset } | NextChain::Reconcile { offset } => {
+                vec![self.request_history(session_id, offset, 20)]
+            }
             NextChain::LoopNotContained(loop_id) => {
                 self.notice(
                     NoticeLevel::Warning,
@@ -4504,7 +5889,7 @@ impl App {
         }
         let mut commands = vec![self.request_session_state(&turn.session_id)];
         let pending_history = self.pending_history(&turn.session_id);
-        let (fetch, gap_revision) = {
+        let fetch = {
             let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
                 return commands;
             };
@@ -4512,11 +5897,11 @@ impl App {
                 // If a history fetch is already in flight, flag that a post-wait
                 // reconcile is required once the in-flight fetch completes (spec scenario B).
                 view.needs_post_wait_history = true;
-                (false, None)
+                false
             } else {
                 view.loading = true;
                 view.reconcile_inflight = true;
-                (true, Some(view.gap_revision))
+                true
             }
         };
         if fetch {
@@ -4526,15 +5911,7 @@ impl App {
                 .get(&turn.session_id)
                 .map(|view| view.transcript.loaded_count)
                 .unwrap_or(0);
-            commands.push(self.request(
-                RequestKind::History {
-                    session_id: turn.session_id.clone(),
-                    offset,
-                    limit: 20,
-                    gap_revision,
-                },
-                |id| OutgoingRequest::session_history(id, &turn.session_id, Some(offset), Some(20)),
-            ));
+            commands.push(self.request_history(&turn.session_id, offset, 20));
         }
         commands
     }
@@ -4907,6 +6284,11 @@ impl App {
                 return Vec::new();
             }
         };
+        if Self::request_session_id(&kind)
+            .is_some_and(|session_id| self.sessions.deleted.contains(session_id))
+        {
+            return Vec::new();
+        }
         let mut commands = Vec::new();
         match kind {
             RequestKind::SendTurn {
@@ -5004,24 +6386,32 @@ impl App {
                 self.notice(NoticeLevel::Warning, format!("turn cancel failed: {error}"));
             }
             RequestKind::CloseSession { session_id } => {
-                if let Some(view) = self.sessions.known.get_mut(&session_id) {
-                    view.closing = false;
-                }
+                self.mark_close_verification_unknown(&session_id);
                 self.notice(
                     NoticeLevel::Warning,
                     format!("session.close failed to send for {session_id}: {error}"),
                 );
             }
             RequestKind::CloseVerifyState { session_id } => {
-                if let Some(view) = self.sessions.known.get_mut(&session_id) {
-                    view.closing = false;
-                }
+                self.mark_close_verification_unknown(&session_id);
                 self.notice(
                     NoticeLevel::Warning,
                     format!("close verification failed to send for {session_id}: {error}"),
                 );
             }
             RequestKind::DeleteSession { session_id } => {
+                self.sessions.pending_deletes.remove(&session_id);
+                if let Dock::SessionSelector(state) = &mut self.dock {
+                    if state.selected_session_id.as_deref() == Some(session_id.as_str()) {
+                        if matches!(&state.mode, SessionPanelMode::ConfirmDelete { .. }) {
+                            state.mode = SessionPanelMode::ConfirmDelete {
+                                choice: SessionConfirmChoice::Cancel,
+                                submitting: false,
+                            };
+                        }
+                        state.error = Some(error.to_string());
+                    }
+                }
                 self.notice(
                     NoticeLevel::Warning,
                     format!("session.delete failed to send for {session_id}: {error}"),
@@ -5052,6 +6442,20 @@ impl App {
                     state.error = Some(error.to_string());
                 }
             }
+            RequestKind::RenameSession { session_id } => {
+                if let Dock::SessionSelector(state) = &mut self.dock {
+                    if state.selected_session_id.as_deref() == Some(session_id.as_str()) {
+                        if let SessionPanelMode::Rename { submitting, .. } = &mut state.mode {
+                            *submitting = false;
+                        }
+                        state.error = Some(error.to_string());
+                    }
+                }
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("session.rename failed for {session_id}: {error}"),
+                );
+            }
             RequestKind::History { session_id, .. } => {
                 if let Some(view) = self.sessions.known.get_mut(&session_id) {
                     Self::mark_history_unconfirmed(view);
@@ -5075,6 +6479,15 @@ impl App {
                         self.connection_terminated(&format!("bootstrap request failed: {error}")),
                     );
                 }
+            }
+            RequestKind::RefreshSessions { .. } => {
+                if let Dock::SessionSelector(state) = &mut self.dock {
+                    state.error = Some(format!("refresh failed: {error}"));
+                }
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("session list refresh failed: {error}"),
+                );
             }
             RequestKind::CreateSession { draft } => {
                 if let Some(draft_state) = self.draft_matching(draft) {
@@ -5218,6 +6631,16 @@ impl App {
                 }
             }
         }
+        if let Dock::SessionSelector(state) = &mut self.dock {
+            if let SessionPanelMode::Rename { submitting, .. } = &mut state.mode {
+                if *submitting {
+                    *submitting = false;
+                    state.error = Some(
+                        "rename outcome is unknown; reread the session before retrying".to_owned(),
+                    );
+                }
+            }
+        }
         self.connection = ConnectionState::Failed(reason.to_owned());
         self.notice(NoticeLevel::Error, reason.to_owned());
         if unconfirmed {
@@ -5244,6 +6667,11 @@ impl App {
                 return Vec::new();
             }
         };
+        if Self::request_session_id(&kind)
+            .is_some_and(|session_id| self.sessions.deleted.contains(session_id))
+        {
+            return Vec::new();
+        }
         if self.connection == ConnectionState::ShuttingDown
             && !matches!(
                 kind,
@@ -5294,8 +6722,16 @@ impl App {
             },
             RequestKind::ListSessions => match response.parse_sessions() {
                 Ok(result) => {
-                    self.sessions.list = result.sessions.clone();
-                    for session in result.sessions {
+                    let sessions: Vec<_> = result
+                        .sessions
+                        .into_iter()
+                        .filter(|session| {
+                            !self.sessions.deleted.contains(&session.session_id)
+                                && !self.sessions.pending_deletes.contains(&session.session_id)
+                        })
+                        .collect();
+                    self.sessions.list = sessions.clone();
+                    for session in sessions {
                         let session_id = session.session_id.clone();
                         self.sessions
                             .known
@@ -5307,6 +6743,7 @@ impl App {
                 }
                 Err(error) => self.bootstrap_failure(METHOD_LIST_SESSIONS, error),
             },
+            RequestKind::RefreshSessions { .. } => self.on_refresh_sessions_response(&response),
             RequestKind::CreateSession { draft } => self.on_create_response(draft, &response),
             RequestKind::OpenSession {
                 session_id,
@@ -5350,6 +6787,9 @@ impl App {
                 model,
                 reasoning,
             } => self.on_update_session_response(session_id, loop_id, model, reasoning, &response),
+            RequestKind::RenameSession { session_id } => {
+                self.on_rename_session_response(session_id, &response)
+            }
             RequestKind::CloseSession { session_id } => {
                 self.on_close_session_response(&session_id, &response)
             }
@@ -5380,6 +6820,40 @@ impl App {
     }
 
     fn on_agent_event(&mut self, event: AgentEventWire) -> Vec<AppCommand> {
+        let event_session_id = match &event {
+            AgentEventWire::SessionOpened { data } => Some(data.meta.session_id.as_str()),
+            AgentEventWire::SessionClosed { data } => Some(data.meta.session_id.as_str()),
+            AgentEventWire::SessionState { data } => Some(data.meta.session_id.as_str()),
+            AgentEventWire::TurnStarted { data } => Some(data.meta.session_id.as_str()),
+            AgentEventWire::RequestStarted { data } => Some(data.meta.session_id.as_str()),
+            AgentEventWire::RequestUsage { data } => Some(data.meta.session_id.as_str()),
+            AgentEventWire::SteerProgress { data } => Some(data.meta.session_id.as_str()),
+            AgentEventWire::OutputDelta { data } => Some(data.meta.session_id.as_str()),
+            AgentEventWire::ToolStarted { data } => Some(data.meta.session_id.as_str()),
+            AgentEventWire::ToolPresentation { data } => Some(data.meta.session_id.as_str()),
+            AgentEventWire::ToolProgress { data } => Some(data.meta.session_id.as_str()),
+            AgentEventWire::ToolFinished { data } => Some(data.meta.session_id.as_str()),
+            AgentEventWire::InteractionRequested { data } => Some(data.meta.session_id.as_str()),
+            AgentEventWire::InteractionResolved { data } => Some(data.meta.session_id.as_str()),
+            AgentEventWire::TurnFinished { data } => Some(data.meta.session_id.as_str()),
+            AgentEventWire::Unknown => None,
+        };
+        if event_session_id.is_some_and(|session_id| {
+            self.sessions.deleted.contains(session_id)
+                || self.sessions.pending_deletes.contains(session_id)
+        }) {
+            return Vec::new();
+        }
+        if let AgentEventWire::SessionOpened { data } = &event {
+            if self.sessions.deleted.contains(&data.session.session_id)
+                || self
+                    .sessions
+                    .pending_deletes
+                    .contains(&data.session.session_id)
+            {
+                return Vec::new();
+            }
+        }
         let gap_session = match &event {
             AgentEventWire::SessionOpened { data } => {
                 (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
@@ -5579,6 +7053,11 @@ impl App {
         if !self.can_send_requests() {
             return Vec::new();
         }
+        if self.sessions.deleted.contains(session_id)
+            || self.sessions.pending_deletes.contains(session_id)
+        {
+            return Vec::new();
+        }
         let Some(view) = self.sessions.known.get(session_id) else {
             return Vec::new();
         };
@@ -5590,31 +7069,20 @@ impl App {
             return Vec::new();
         }
         let offset = view.transcript.loaded_count;
-        let gap_revision = view.gap_revision;
         if let Some(view) = self.sessions.known.get_mut(session_id) {
             view.loading = true;
             view.reconcile_inflight = true;
         }
-        vec![self.request(
-            RequestKind::History {
-                session_id: session_id.clone(),
-                offset,
-                limit: DEFAULT_HISTORY_LIMIT,
-                gap_revision: Some(gap_revision),
-            },
-            |id| {
-                OutgoingRequest::session_history(
-                    id,
-                    session_id,
-                    Some(offset),
-                    Some(DEFAULT_HISTORY_LIMIT),
-                )
-            },
-        )]
+        vec![self.request_history(session_id, offset, DEFAULT_HISTORY_LIMIT)]
     }
 
     fn mark_gap(&mut self, meta: &EventMetaWire) {
         if meta.dropped_before == 0 {
+            return;
+        }
+        if self.sessions.deleted.contains(&meta.session_id)
+            || self.sessions.pending_deletes.contains(&meta.session_id)
+        {
             return;
         }
         if let Some(view) = self.sessions.known.get_mut(&meta.session_id) {
@@ -6921,7 +8389,7 @@ mod tests {
                 session_id: "ses_1".into(),
                 offset: 2,
                 limit: 20,
-                gap_revision: None,
+                gap_revision: Some(0),
             })
         );
         assert!(app.sessions.known["ses_1"].loading);

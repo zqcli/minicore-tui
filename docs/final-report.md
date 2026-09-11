@@ -22,6 +22,27 @@ The [0.2.1 package](release-0.2.1.md), Rail gates below, and **0.2.0** migration
 evidence are historical; their counts and cross-platform checks are not
 relabeled as new runs. Agent/Runtime protocol compatibility is unchanged.
 
+## Session Management
+
+Session management now shares dock-panel geometry with all selectors, New
+Session, Help and Logs. Session-specific actions provide open, new, refresh,
+rename, close and explicit default-Cancel permanent deletion. Selection and
+responses retain stable Session IDs; unknown lifecycle state, incomplete history
+and retained unsafe results block destructive shortcuts. History requests capture
+the gap revision at issuance, and deleted-session tombstones reject late replies.
+Rename uses the separately committed Agent `session.rename` API and updates the
+UI only after its complete ACK. Runtime, dependencies and package versions remain
+unchanged.
+
+The parent independently rebuilt a fresh remote source mirror: stable and Rust
+1.85.0 each passed **460 tests with 18 default ignored**; the 17 real-Agent E2E
+cases then passed explicitly. Agent passed **318 tests with 2 ignored** on both
+toolchains. Stable strict Clippy, format checks and warning-denied rustdoc passed.
+MSRV Clippy's pre-existing diagnostics are not claimed as fixed. Earlier review
+stages are retained under `verification/stage3-session-panel/` and
+`verification/stage4-session-panel/`; current counts are in [testing.md](testing.md).
+Native acceptance follows these source checks; no hosted CI or push is implied.
+
 ## Rail Follow-Up Status
 
 The source tree also contains the Rail Stage 0–7 follow-up described
@@ -40,7 +61,7 @@ product parity.
   editor surface, User/Thinking/Assistant/Tool presentation, stable section
   ranges, per-section fold state, order-safe Tool result fallback, timestamp
   formatting, mouse folding, anchored selection/copy, clipboard feedback,
-  scrollbar preview/commit, native paste projection, slash completion, native
+  scrollbar live body preview/release commit, native paste projection, slash completion, native
   Editor click cases, RAIL-14 click arbitration with **real link geometry**
   (link/overlay clicks never fold; inline-code/bold links are links, plain
   text is not), and a word-selection model locked to the **real pinned Pi

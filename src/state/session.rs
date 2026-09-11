@@ -43,6 +43,18 @@ pub struct SessionsState {
     /// The newest `session.list` snapshot, augmented with sessions opened or
     /// created after bootstrap.
     pub list: Vec<SessionInfo>,
+    /// Delete requests that have not received a response. Refresh results do
+    /// not re-add these IDs while their outcome is pending.
+    pub pending_deletes: HashSet<SessionId>,
+    /// IDs removed by a successful delete. A later stale session.list cannot
+    /// resurrect them in this TUI process.
+    pub deleted: HashSet<SessionId>,
+    /// A successful close acknowledged by this TUI process. A stale session
+    /// list cannot mark the session loaded again until a later open ACK.
+    pub closed: HashSet<SessionId>,
+    /// Metadata acknowledged by a local mutation. A stale session.list
+    /// response cannot roll an acknowledged rename back to its old title.
+    pub title_overrides: HashMap<SessionId, Option<String>>,
 }
 
 /// Per-session UI state.
@@ -90,7 +102,8 @@ pub struct SessionView {
     pub scroll: ScrollState,
     /// A history chain is being fetched page by page.
     pub loading: bool,
-    /// `dropped_before > 0` was observed on the event stream.
+    /// Durable history is unconfirmed after a dropped event or history
+    /// failure; destructive lifecycle actions must wait for aligned history.
     pub event_gap: bool,
     /// A history chain driven by a finished turn is being fetched; the
     /// live turn is removed when it completes.
@@ -100,6 +113,10 @@ pub struct SessionView {
     pub needs_post_wait_history: bool,
     /// Whether an explicit session.close is currently pending.
     pub closing: bool,
+    /// The last close attempt ended without an authoritative unload proof or
+    /// current state snapshot. Lifecycle actions must reread state before
+    /// relying on the retained SessionInfo/state projection.
+    pub close_verification_unknown: bool,
     /// Retained steer completion notices across loop boundaries.
     pub completed_steers: Vec<CompletedSteerNotice>,
     /// Locally admitted, not-yet-sent steering instructions. Lives outside
@@ -154,6 +171,7 @@ impl SessionView {
             reconcile_inflight: false,
             needs_post_wait_history: false,
             closing: false,
+            close_verification_unknown: false,
             completed_steers: Vec::new(),
             steer_queue: Vec::new(),
             applied_steers: Vec::new(),

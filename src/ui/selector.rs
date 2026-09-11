@@ -4,23 +4,137 @@
 //! state lives in the dock, and item filtering reuses the same helpers as
 //! `App::update` so both phases always agree.
 
+use std::ops::Range;
 use std::time::SystemTime;
 
 use ratatui::Frame;
-use ratatui::layout::{Margin, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::markdown::{column_width, line_width};
 use crate::protocol::{ModelInfo, ProfileInfo, Reasoning, SessionInfo};
 use crate::state::selection::{
-    filtered_models, filtered_profiles, filtered_sessions, parse_rfc3339, reasoning_description,
-    reasoning_label, supported_reasoning,
+    SelectorKind, SelectorState, SessionConfirmChoice, SessionPanelAction, SessionPanelMode,
+    SessionSelectorState, filtered_models, filtered_profiles, filtered_sessions, parse_rfc3339,
+    reasoning_description, reasoning_label, supported_reasoning,
 };
 use crate::theme::Theme;
 use crate::ui::layout;
+use crate::ui::panel::{self, PanelSpec};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SelectorHit {
+    pub kind: SelectorKind,
+    pub index: usize,
+    pub key: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SessionActionHit {
+    pub action: SessionPanelAction,
+    pub rect: Rect,
+}
+
+pub(crate) fn catalog_panel_layout(
+    area: Rect,
+    app: &App,
+    state: &SelectorState,
+) -> panel::PanelLayout {
+    let header_rows = match state.kind {
+        SelectorKind::Model => 1,
+        SelectorKind::Reasoning => 1 + u16::from(app.new_session().is_some()),
+        SelectorKind::Profile | SelectorKind::Session => 0,
+    };
+    let query = !matches!(state.kind, SelectorKind::Reasoning | SelectorKind::Session);
+    panel::layout(
+        area,
+        PanelSpec::new(header_rows + u16::from(state.error.is_some()), query, 1),
+    )
+}
+
+pub(crate) fn catalog_visible_window(app: &App, area: Rect, state: &SelectorState) -> Range<usize> {
+    let heights = match state.kind {
+        SelectorKind::Model => vec![1; filtered_models(&app.catalogs.models, &state.query).len()],
+        SelectorKind::Profile => {
+            vec![1; filtered_profiles(&app.catalogs.profiles, &state.query).len()]
+        }
+        SelectorKind::Reasoning => {
+            let model = app
+                .new_session()
+                .map(|draft| draft.model.clone())
+                .or_else(|| state.model_context.clone())
+                .or_else(|| app.active_view().map(|view| view.info.model.clone()))
+                .unwrap_or_default();
+            vec![1; supported_reasoning(&app.catalogs.models, &model).len()]
+        }
+        SelectorKind::Session => Vec::new(),
+    };
+    panel::visible_window(
+        &heights,
+        state.cursor,
+        catalog_panel_layout(area, app, state).content.height as usize,
+    )
+}
+
+pub(crate) fn selector_item_at(
+    app: &App,
+    area: Rect,
+    state: &SelectorState,
+    column: u16,
+    row: u16,
+) -> Option<SelectorHit> {
+    let geometry = catalog_panel_layout(area, app, state);
+    if column < geometry.content.x || column >= geometry.content.right() {
+        return None;
+    }
+    let local_row = geometry.content_row(row)?;
+    let (keys, count) = match state.kind {
+        SelectorKind::Model => {
+            let items = filtered_models(&app.catalogs.models, &state.query);
+            (
+                items.iter().map(|item| item.id.clone()).collect::<Vec<_>>(),
+                items.len(),
+            )
+        }
+        SelectorKind::Profile => {
+            let items = filtered_profiles(&app.catalogs.profiles, &state.query);
+            (
+                items.iter().map(|item| item.id.clone()).collect::<Vec<_>>(),
+                items.len(),
+            )
+        }
+        SelectorKind::Reasoning => {
+            let model = app
+                .new_session()
+                .map(|draft| draft.model.clone())
+                .or_else(|| state.model_context.clone())
+                .or_else(|| app.active_view().map(|view| view.info.model.clone()))
+                .unwrap_or_default();
+            let items = supported_reasoning(&app.catalogs.models, &model);
+            (
+                items
+                    .iter()
+                    .map(|level| reasoning_label(*level).to_owned())
+                    .collect::<Vec<_>>(),
+                items.len(),
+            )
+        }
+        SelectorKind::Session => return None,
+    };
+    if count == 0 {
+        return None;
+    }
+    let visible = catalog_visible_window(app, area, state);
+    let index = visible.start + local_row;
+    (index < visible.end).then(|| SelectorHit {
+        kind: state.kind,
+        index,
+        key: keys[index].clone(),
+    })
+}
 
 /// Renders whichever selector the dock is showing; the new-session form and
 /// the composer are rendered by their own modules.
@@ -78,19 +192,21 @@ pub fn render_model(
             )]
         })
         .collect();
+    let geometry = catalog_panel_layout(area, app, state);
     shell(
         frame,
-        area,
+        geometry,
         theme,
         "Select model",
         header,
         Some(&state.query),
         vec![1; items.len()],
         lines,
-        state.cursor,
+        Some(state.cursor),
         items.len(),
         "No matching items",
         state.error.as_deref(),
+        None,
     );
 }
 
@@ -134,19 +250,21 @@ pub fn render_reasoning(
         .iter()
         .map(|level| vec![reasoning_line(theme, *level, width)])
         .collect();
+    let geometry = catalog_panel_layout(area, app, state);
     shell(
         frame,
-        area,
+        geometry,
         theme,
         "Select reasoning",
         header,
         None,
         vec![1; levels.len()],
         lines,
-        state.cursor,
+        Some(state.cursor),
         levels.len(),
         "No supported reasoning for this model",
         state.error.as_deref(),
+        None,
     );
 }
 
@@ -163,19 +281,21 @@ pub fn render_profile(
         .iter()
         .map(|profile| vec![profile_line(theme, profile, width)])
         .collect();
+    let geometry = catalog_panel_layout(area, app, state);
     shell(
         frame,
-        area,
+        geometry,
         theme,
         "Select profile",
         Vec::new(),
         Some(&state.query),
         vec![1; items.len()],
         lines,
-        state.cursor,
+        Some(state.cursor),
         items.len(),
         "No matching items",
         state.error.as_deref(),
+        None,
     );
 }
 
@@ -184,29 +304,395 @@ pub fn render_session(
     area: Rect,
     app: &App,
     theme: &Theme,
-    state: &crate::state::selection::SelectorState,
+    state: &SessionSelectorState,
 ) {
-    let items = filtered_sessions(&app.sessions.list, &state.query);
-    let wide = area.width >= 70;
-    let width = inner_width(area);
-    let mut lines = Vec::with_capacity(items.len());
-    for info in &items {
-        lines.push(session_lines(app, theme, info, wide, width));
-    }
-    shell(
-        frame,
-        area,
-        theme,
-        "Select session",
-        Vec::new(),
-        Some(&state.query),
-        vec![2; items.len()],
-        lines,
-        state.cursor,
-        items.len(),
-        "No matching sessions",
-        state.error.as_deref(),
+    let geometry = session_panel_layout(area, state);
+    panel::render_frame(frame, geometry, theme);
+    frame.render_widget(
+        Paragraph::new(vec![Line::from(Span::styled(
+            "Select session",
+            Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+        ))]),
+        geometry.title,
     );
+    if let Some(error) = state.error.as_deref() {
+        frame.render_widget(
+            Paragraph::new(vec![Line::from(Span::styled(
+                format!("⚠ {error}"),
+                Style::new().fg(theme.error),
+            ))]),
+            geometry.header,
+        );
+    }
+
+    match &state.mode {
+        SessionPanelMode::Browse => {
+            let items = session_items(app, state);
+            let wide = area.width >= 70;
+            let width = geometry.content.width as usize;
+            let lines = items
+                .iter()
+                .map(|info| session_lines(app, theme, info, wide, width))
+                .collect::<Vec<_>>();
+            let selected = selected_session_index(state, &items);
+            let footer = session_footer(theme, app, state, &items, selected, geometry);
+            let _ = shell(
+                frame,
+                geometry,
+                theme,
+                "Select session",
+                Vec::new(),
+                Some(&state.query),
+                session_item_heights(wide, items.len()),
+                lines,
+                selected,
+                items.len(),
+                "No matching sessions",
+                None,
+                Some(footer.lines),
+            );
+        }
+        SessionPanelMode::Rename {
+            draft,
+            cursor,
+            submitting,
+        } => {
+            let target = session_target(app, state);
+            let mut lines = vec![Line::from(Span::styled(
+                format!(
+                    "Rename {} [{}]",
+                    target
+                        .as_ref()
+                        .map(title_or_short_id)
+                        .unwrap_or_else(|| "session".to_owned()),
+                    target
+                        .as_ref()
+                        .map(short_id)
+                        .unwrap_or_else(|| "unknown".to_owned())
+                ),
+                Style::new().fg(theme.text),
+            ))];
+            let value = if *submitting {
+                format!("Title: {draft}  (saving…)")
+            } else {
+                format!("Title: {draft}")
+            };
+            lines.push(Line::from(Span::styled(value, Style::new().fg(theme.text))));
+            lines.push(Line::from(Span::styled(
+                "Enter saves · Esc cancels",
+                Style::new().fg(theme.dim),
+            )));
+            render_form_lines(frame, geometry.content, lines);
+            frame.render_widget(
+                Paragraph::new(vec![Line::from(Span::styled(
+                    "Enter Save · Esc Cancel",
+                    Style::new().fg(theme.dim),
+                ))]),
+                geometry.footer,
+            );
+            if !*submitting && geometry.content.height > 1 {
+                let prefix = "Title: ";
+                let x = geometry.content.x
+                    + column_width(prefix) as u16
+                    + column_width(&draft.chars().take(*cursor).collect::<String>()) as u16;
+                if x < geometry.content.right() {
+                    if let Some(cell) = frame
+                        .buffer_mut()
+                        .cell_mut((x, geometry.content.y.saturating_add(1)))
+                    {
+                        cell.set_fg(theme.page_bg);
+                        cell.set_bg(theme.text);
+                    }
+                }
+            }
+        }
+        SessionPanelMode::ConfirmClose | SessionPanelMode::ConfirmCloseForDelete => {
+            let target = session_target(app, state);
+            let title = if matches!(&state.mode, SessionPanelMode::ConfirmCloseForDelete) {
+                "Close before deleting?"
+            } else {
+                "Close this session?"
+            };
+            let mut lines = vec![Line::from(Span::styled(
+                title,
+                Style::new().fg(theme.warning).add_modifier(Modifier::BOLD),
+            ))];
+            lines.push(Line::from(Span::styled(
+                target
+                    .as_ref()
+                    .map(|info| format!("{} [{}]", title_or_short_id(info), short_id(info)))
+                    .unwrap_or_else(|| "unknown session".to_owned()),
+                Style::new().fg(theme.text),
+            )));
+            lines.push(Line::from(Span::styled(
+                if matches!(&state.mode, SessionPanelMode::ConfirmCloseForDelete) {
+                    "A second confirmation is required before permanent deletion."
+                } else {
+                    "The session must be idle before it can be closed."
+                },
+                Style::new().fg(theme.muted),
+            )));
+            render_form_lines(frame, geometry.content, lines);
+            frame.render_widget(
+                Paragraph::new(vec![Line::from(Span::styled(
+                    "Enter Close · Esc Cancel",
+                    Style::new().fg(theme.dim),
+                ))]),
+                geometry.footer,
+            );
+        }
+        SessionPanelMode::ConfirmDelete { choice, submitting } => {
+            let target = session_target(app, state);
+            let mut lines = vec![Line::from(Span::styled(
+                "Permanently delete this session?",
+                Style::new().fg(theme.error).add_modifier(Modifier::BOLD),
+            ))];
+            lines.push(Line::from(Span::styled(
+                target
+                    .as_ref()
+                    .map(|info| format!("{} [{}]", title_or_short_id(info), short_id(info)))
+                    .unwrap_or_else(|| "unknown session".to_owned()),
+                Style::new().fg(theme.text),
+            )));
+            lines.push(Line::from(Span::styled(
+                "This cannot be undone.",
+                Style::new().fg(theme.warning),
+            )));
+            lines.push(render_choice_buttons(theme, geometry, *choice, *submitting));
+            render_form_lines(frame, geometry.content, lines);
+            frame.render_widget(
+                Paragraph::new(vec![Line::from(Span::styled(
+                    "Tab / ← → choose · Enter activates · Esc Cancel",
+                    Style::new().fg(theme.dim),
+                ))]),
+                geometry.footer,
+            );
+        }
+    }
+}
+
+fn render_form_lines(frame: &mut Frame, area: Rect, mut lines: Vec<Line<'static>>) {
+    let height = area.height as usize;
+    lines.truncate(height);
+    while lines.len() < height {
+        lines.push(Line::default());
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn session_items<'a>(app: &'a App, state: &SessionSelectorState) -> Vec<&'a SessionInfo> {
+    filtered_sessions(&app.sessions.list, &state.query)
+        .into_iter()
+        .filter(|info| {
+            !app.sessions.pending_deletes.contains(&info.session_id)
+                && !app.sessions.deleted.contains(&info.session_id)
+        })
+        .collect()
+}
+
+fn selected_session_index(state: &SessionSelectorState, items: &[&SessionInfo]) -> Option<usize> {
+    state
+        .selected_session_id
+        .as_deref()
+        .and_then(|selected| items.iter().position(|info| info.session_id == selected))
+}
+
+fn session_target(app: &App, state: &SessionSelectorState) -> Option<SessionInfo> {
+    let id = state.selected_session_id.as_deref()?;
+    app.sessions
+        .known
+        .get(id)
+        .map(|view| view.info.clone())
+        .or_else(|| {
+            app.sessions
+                .list
+                .iter()
+                .find(|info| info.session_id == id)
+                .cloned()
+        })
+}
+
+fn session_item_heights(wide: bool, count: usize) -> Vec<usize> {
+    vec![usize::from(wide) + 1; count]
+}
+
+/// Geometry used by both the session renderer and its mouse hit-test path.
+pub(crate) fn session_panel_layout(area: Rect, state: &SessionSelectorState) -> panel::PanelLayout {
+    let browse = matches!(&state.mode, SessionPanelMode::Browse);
+    panel::layout(
+        area,
+        PanelSpec::new(
+            u16::from(state.error.is_some()),
+            browse,
+            if browse { 2 } else { 1 },
+        ),
+    )
+}
+
+/// Resolves a pointer in the session content region to a stable session ID.
+pub(crate) fn session_item_at(
+    app: &App,
+    area: Rect,
+    state: &SessionSelectorState,
+    column: u16,
+    row: u16,
+) -> Option<String> {
+    if !matches!(&state.mode, SessionPanelMode::Browse) {
+        return None;
+    }
+    let geometry = session_panel_layout(area, state);
+    let local_row = geometry.content_row(row)?;
+    if column < geometry.content.x || column >= geometry.content.right() {
+        return None;
+    }
+    let items = session_items(app, state);
+    let selected = selected_session_index(state, &items);
+    let wide = area.width >= 70;
+    let visible = panel::visible_window(
+        &session_item_heights(wide, items.len()),
+        selected.unwrap_or(0),
+        geometry.content.height as usize,
+    );
+    let height = usize::from(wide) + 1;
+    let index = visible.start + local_row / height;
+    (index < visible.end).then(|| items[index].session_id.clone())
+}
+
+fn session_footer(
+    theme: &Theme,
+    _app: &App,
+    _state: &SessionSelectorState,
+    _items: &[&SessionInfo],
+    _selected: Option<usize>,
+    panel: panel::PanelLayout,
+) -> SessionFooter {
+    let rows = [
+        [
+            (SessionPanelAction::Open, "Enter Open"),
+            (SessionPanelAction::New, "Ctrl+N New"),
+            (SessionPanelAction::Refresh, "F5 Refresh"),
+        ],
+        [
+            (SessionPanelAction::Rename, "F2 Rename"),
+            (SessionPanelAction::Close, "Ctrl+W Close"),
+            (SessionPanelAction::Delete, "Del Delete"),
+        ],
+    ];
+    let mut lines = Vec::new();
+    let mut hits = Vec::new();
+    for (row, actions) in rows.into_iter().enumerate() {
+        let (line, row_hits) = action_row(theme, panel, row, actions);
+        lines.push(line);
+        hits.extend(row_hits);
+    }
+    SessionFooter { lines, hits }
+}
+
+#[derive(Debug, Clone)]
+struct SessionFooter {
+    lines: Vec<Line<'static>>,
+    hits: Vec<SessionActionHit>,
+}
+
+fn action_row(
+    theme: &Theme,
+    panel: panel::PanelLayout,
+    row: usize,
+    actions: [(SessionPanelAction, &'static str); 3],
+) -> (Line<'static>, Vec<SessionActionHit>) {
+    let mut spans = Vec::new();
+    let mut hits = Vec::new();
+    let mut x = panel.footer.x;
+    for (index, (action, label)) in actions.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(" · ", Style::new().fg(theme.dim)));
+            x = x.saturating_add(3);
+        }
+        let label_width = column_width(label) as u16;
+        spans.push(Span::styled(label, Style::new().fg(theme.accent)));
+        let width = label_width.min(panel.footer.right().saturating_sub(x));
+        if width > 0 && panel.footer.y.saturating_add(row as u16) < panel.footer.bottom() {
+            hits.push(SessionActionHit {
+                action,
+                rect: Rect::new(x, panel.footer.y.saturating_add(row as u16), width, 1),
+            });
+        }
+        x = x.saturating_add(label_width);
+    }
+    (Line::from(spans), hits)
+}
+
+fn render_choice_buttons(
+    theme: &Theme,
+    panel: panel::PanelLayout,
+    choice: SessionConfirmChoice,
+    submitting: bool,
+) -> Line<'static> {
+    let cancel = "[ Cancel ]";
+    let delete = if submitting {
+        "[ Deleting… ]"
+    } else {
+        "[ Delete ]"
+    };
+    let cancel_style = if choice == SessionConfirmChoice::Cancel {
+        Style::new().fg(theme.page_bg).bg(theme.text)
+    } else {
+        Style::new().fg(theme.text).bg(theme.selected_bg)
+    };
+    let delete_style = if choice == SessionConfirmChoice::Confirm {
+        Style::new().fg(theme.page_bg).bg(theme.error)
+    } else {
+        Style::new().fg(theme.text).bg(theme.selected_bg)
+    };
+    let _ = panel;
+    Line::from(vec![
+        Span::styled(cancel, cancel_style),
+        Span::raw("  "),
+        Span::styled(delete, delete_style),
+    ])
+}
+
+pub(crate) fn session_action_at(
+    app: &App,
+    area: Rect,
+    state: &SessionSelectorState,
+    column: u16,
+    row: u16,
+) -> Option<SessionPanelAction> {
+    let panel = session_panel_layout(area, state);
+    match &state.mode {
+        SessionPanelMode::Browse => {
+            let items = session_items(app, state);
+            let selected = selected_session_index(state, &items);
+            session_footer(&Theme::dark(), app, state, &items, selected, panel)
+                .hits
+                .into_iter()
+                .find(|hit| hit.rect.contains((column, row).into()))
+                .map(|hit| hit.action)
+        }
+        SessionPanelMode::ConfirmDelete { .. } => {
+            let button_row = panel.content.y.saturating_add(3);
+            if row != button_row {
+                return None;
+            }
+            let cancel_width = column_width("[ Cancel ]") as u16;
+            let cancel = Rect::new(panel.content.x, button_row, cancel_width, 1);
+            let delete_x = panel
+                .content
+                .x
+                .saturating_add(cancel_width)
+                .saturating_add(2);
+            let delete = Rect::new(delete_x, button_row, column_width("[ Delete ]") as u16, 1);
+            if cancel.contains((column, row).into()) {
+                Some(SessionPanelAction::Cancel)
+            } else if delete.contains((column, row).into()) {
+                Some(SessionPanelAction::ConfirmDelete)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 /// The usable row width inside the panel's 1-cell rounded border.
@@ -325,7 +811,11 @@ fn session_lines(
         )
     };
     let line2 = Line::from(Span::styled(line2_text, Style::new().fg(theme.muted)));
-    vec![line1, line2]
+    if wide {
+        vec![line1, line2]
+    } else {
+        vec![line1]
+    }
 }
 
 /// ● loaded, ◉ running, ◌ finishing, ! blocked, ○ known-but-unloaded,
@@ -356,6 +846,10 @@ fn title_or_short_id(info: &SessionInfo) -> String {
     }
 }
 
+fn short_id(info: &SessionInfo) -> String {
+    info.session_id.chars().take(8).collect()
+}
+
 /// The shared panel shell: accent rounded border, title, header rows,
 /// optional search row, item rows (first row gets the `→`/`  ` prefix,
 /// selected rows get the selected background), empty text, error line, and
@@ -364,77 +858,91 @@ fn title_or_short_id(info: &SessionInfo) -> String {
 #[allow(clippy::too_many_arguments)]
 fn shell(
     frame: &mut Frame,
-    area: Rect,
+    geometry: panel::PanelLayout,
     theme: &Theme,
     title: &str,
     header: Vec<Line<'static>>,
     search: Option<&str>,
     heights: Vec<usize>,
     item_lines: Vec<Vec<Line<'static>>>,
-    cursor: usize,
+    cursor: Option<usize>,
     count: usize,
     empty: &str,
     error: Option<&str>,
-) {
-    frame.render_widget(
-        Block::bordered().border_style(Style::new().fg(theme.border_accent)),
-        area,
-    );
-    let inner = area.inner(Margin::new(1, 1));
-    let width = inner.width as usize;
+    footer: Option<Vec<Line<'static>>>,
+) -> panel::PanelLayout {
+    panel::render_frame(frame, geometry, theme);
+    let width = geometry.content.width as usize;
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(Span::styled(
-        title.to_owned(),
-        Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
-    )));
-    lines.extend(header);
+    frame.render_widget(
+        Paragraph::new(vec![Line::from(Span::styled(
+            title.to_owned(),
+            Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+        ))]),
+        geometry.title,
+    );
+    let mut header_lines = header;
     if let Some(error) = error {
-        lines.push(Line::from(Span::styled(
+        header_lines.push(Line::from(Span::styled(
             format!("⚠ {error}"),
             Style::new().fg(theme.error),
         )));
     }
+    frame.render_widget(Paragraph::new(header_lines), geometry.header);
     if let Some(query) = search {
-        lines.push(Line::from(vec![
-            Span::styled("> ", Style::new().fg(theme.accent)),
-            Span::styled(query.to_owned(), Style::new().fg(theme.text)),
-        ]));
+        frame.render_widget(
+            Paragraph::new(vec![Line::from(vec![
+                Span::styled("> ", Style::new().fg(theme.accent)),
+                Span::styled(query.to_owned(), Style::new().fg(theme.text)),
+            ])]),
+            geometry.query.unwrap_or_default(),
+        );
     }
 
-    let avail = inner.height as usize;
-    let cap = avail.saturating_sub(lines.len() + 1); // + the counter row
+    let cap = geometry.content.height as usize;
+    let mut content_lines: Vec<Line<'static>> = Vec::new();
     if count == 0 {
-        lines.push(Line::from(Span::styled(
+        content_lines.push(Line::from(Span::styled(
             empty.to_owned(),
             Style::new().fg(theme.muted),
         )));
     } else {
-        let (start, end) = visible_window(&heights, cursor, cap);
-        for (index, item_rows) in item_lines.iter().enumerate().take(end).skip(start) {
-            let selected = index == cursor;
+        let visible = panel::visible_window(&heights, cursor.unwrap_or(0), cap);
+        for (index, item_rows) in item_lines
+            .iter()
+            .enumerate()
+            .take(visible.end)
+            .skip(visible.start)
+        {
+            let selected = cursor == Some(index);
             for (row, line) in item_rows.iter().enumerate() {
                 let mut line = line.clone();
                 if row == 0 {
                     line = prefixed(line, selected, theme);
                 }
-                lines.push(highlight(line, selected, theme, width));
+                content_lines.push(highlight(line, selected, theme, width));
             }
         }
     }
-    let shown = if count == 0 {
-        0
-    } else {
-        cursor.min(count - 1) + 1
-    };
-    lines.push(Line::from(Span::styled(
-        format!("({shown}/{count})"),
-        Style::new().fg(theme.dim),
-    )));
-    while lines.len() < avail {
-        lines.push(Line::default());
+    while content_lines.len() < cap {
+        content_lines.push(Line::default());
     }
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(content_lines), geometry.content);
+    let shown = cursor.map_or(0, |cursor| {
+        if count == 0 {
+            0
+        } else {
+            cursor.min(count - 1) + 1
+        }
+    });
+    let footer = footer.unwrap_or_else(|| {
+        vec![Line::from(Span::styled(
+            format!("({shown}/{count})"),
+            Style::new().fg(theme.dim),
+        ))]
+    });
+    frame.render_widget(Paragraph::new(footer), geometry.footer);
+    geometry
 }
 
 /// Trims trailing content so a line fits `width` display cells without
@@ -513,43 +1021,6 @@ fn sides(left: &str, right: &str, width: usize, theme: &Theme) -> Line<'static> 
         Span::styled(" ".repeat(gap), Style::new()),
         Span::styled(right.to_owned(), Style::new().fg(theme.muted)),
     ])
-}
-
-/// The item window that keeps `cursor` visible inside `cap` rows, expanding
-/// upward as far as the budget allows.
-fn visible_window(heights: &[usize], cursor: usize, cap: usize) -> (usize, usize) {
-    let n = heights.len();
-    if n == 0 || cap == 0 {
-        return (0, 0);
-    }
-    let cursor = cursor.min(n - 1);
-    let mut start = cursor;
-    loop {
-        let end = fit_rows(heights, start, cap);
-        if start == 0 {
-            return (start, end);
-        }
-        let prev = start - 1;
-        if rows_in(heights, prev, end) <= cap {
-            start = prev;
-        } else {
-            return (start, end);
-        }
-    }
-}
-
-fn fit_rows(heights: &[usize], start: usize, cap: usize) -> usize {
-    let mut rows = 0;
-    let mut index = start;
-    while index < heights.len() && rows + heights[index] <= cap {
-        rows += heights[index];
-        index += 1;
-    }
-    index
-}
-
-fn rows_in(heights: &[usize], start: usize, end: usize) -> usize {
-    heights[start..end.min(heights.len())].iter().sum()
 }
 
 // ---- relative age ------------------------------------------------------

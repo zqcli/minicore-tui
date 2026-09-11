@@ -11,7 +11,9 @@ use serde_json::{Value, json};
 use minicore_tui::app::{App, ConnectionState, RequestKind};
 use minicore_tui::command::AppCommand;
 use minicore_tui::event::{AppEvent, RpcEvent};
-use minicore_tui::protocol::{IncomingFrame, OutgoingRequest, RpcNotification, RpcResponse};
+use minicore_tui::protocol::{
+    IncomingFrame, OutgoingRequest, RpcNotification, RpcResponse, SessionStatusWire,
+};
 use minicore_tui::state::tool::ToolStatus;
 use minicore_tui::state::turn::{PendingSteerState, SteerQueueState};
 use minicore_tui::state::{AssistantPart, TranscriptBlock};
@@ -2529,7 +2531,32 @@ fn session_close_and_delete_command_lifecycle() {
     driver.respond(close_req, json!({"ok": true}));
     assert_eq!(driver.app.sessions.active, None);
 
-    // /delete confirm deletes the session from known and list
+    // A blocked state remains unsafe even after close; direct deletion is
+    // refused until the state is known to be idle.
+    driver.step(AppEvent::DeleteSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    assert!(driver.queue.iter().all(|r| r.method != "session.delete"));
+    assert!(
+        driver
+            .app
+            .notices()
+            .iter()
+            .any(|notice| notice.text.contains("busy or its result is unconfirmed"))
+    );
+
+    // Once the retained state is idle, the closed session can be deleted.
+    driver
+        .app
+        .sessions
+        .known
+        .get_mut("ses_1")
+        .unwrap()
+        .state
+        .as_mut()
+        .unwrap()
+        .status = minicore_tui::protocol::SessionStatusWire::Idle;
     driver.step(AppEvent::DeleteSession {
         session_id: "ses_1".into(),
         confirm: true,
@@ -3466,6 +3493,10 @@ fn close_verification_internal_or_malformed_retains_loaded_state() {
     let view = &driver.app.sessions.known["ses_1"];
     assert!(!view.closing);
     assert!(view.info.loaded, "internal error does not prove unloaded");
+    assert!(
+        view.state.is_none(),
+        "unknown close verification must not retain idle as a destructive-action permit"
+    );
     assert!(driver.app.sessions.active.as_deref() == Some("ses_1"));
     assert!(
         driver
@@ -3474,6 +3505,23 @@ fn close_verification_internal_or_malformed_retains_loaded_state() {
             .iter()
             .any(|notice| notice.text.contains("close verification is unknown"))
     );
+
+    // An unknown close outcome may not reuse the retained idle snapshot as
+    // permission to issue another close. The next explicit confirmation must
+    // perform a fresh state read first.
+    driver.step(AppEvent::CloseSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    let recheck = driver.request("session.state");
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "session.close"),
+        "unknown close outcome must not send close before the recheck"
+    );
+    driver.respond(recheck, state("ses_1", "idle", Value::Null));
 
     driver.step(AppEvent::CloseSession {
         session_id: "ses_1".into(),
@@ -3490,6 +3538,617 @@ fn close_verification_internal_or_malformed_retains_loaded_state() {
     let view = &driver.app.sessions.known["ses_1"];
     assert!(view.info.loaded, "malformed state does not prove unloaded");
     assert!(driver.app.sessions.active.as_deref() == Some("ses_1"));
+}
+
+#[test]
+fn close_verification_running_state_is_written_without_cancelling_the_turn() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+
+    driver.step(AppEvent::SubmitTurn {
+        session_id: "ses_1".into(),
+        text: "hello".into(),
+    });
+    let send = driver.request("turn.send");
+    driver.respond(
+        send,
+        json!({"turn": {"session_id": "ses_1", "loop_id": "loop_1"}}),
+    );
+    let _wait = driver.request("turn.wait");
+
+    driver.step(AppEvent::CloseSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    let close = driver.request("session.close");
+    driver.respond_error(
+        close,
+        minicore_tui::protocol::INTERNAL_ERROR,
+        "busy closing",
+    );
+    let verify = driver.request("session.state");
+    driver.respond(
+        verify,
+        state(
+            "ses_1",
+            "running",
+            json!({
+                "loop_id": "loop_1",
+                "status": "running_model",
+                "request_index": 0,
+                "config_revision": 0,
+                "model": "deep",
+                "pending_interaction": null
+            }),
+        ),
+    );
+
+    let view = &driver.app.sessions.known["ses_1"];
+    assert_eq!(
+        view.state.as_ref().unwrap().status,
+        SessionStatusWire::Running
+    );
+    assert!(view.info.loaded);
+    assert!(
+        view.live.is_some(),
+        "running state must not cancel the live turn"
+    );
+    assert_eq!(driver.app.sessions.active.as_deref(), Some("ses_1"));
+    assert!(!view.closing);
+
+    // The state read is authoritative for the local projection. A running
+    // session remains protected by the normal non-confirmed safety guard.
+    driver.step(AppEvent::CloseSession {
+        session_id: "ses_1".into(),
+        confirm: false,
+    });
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "session.close"),
+        "running state must block an unconfirmed close"
+    );
+    assert!(driver.app.sessions.known["ses_1"].live.is_some());
+    assert_eq!(driver.app.sessions.active.as_deref(), Some("ses_1"));
+}
+
+#[test]
+fn close_verification_blocked_state_remains_unsafe_for_delete() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+
+    driver.step(AppEvent::CloseSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    let close = driver.request("session.close");
+    driver.respond_error(
+        close,
+        minicore_tui::protocol::INTERNAL_ERROR,
+        "close failed",
+    );
+    let verify = driver.request("session.state");
+    driver.respond(verify, state("ses_1", "blocked", Value::Null));
+
+    let view = &driver.app.sessions.known["ses_1"];
+    assert!(view.is_blocked());
+    assert!(view.info.loaded);
+    assert!(!view.closing);
+    driver.step(AppEvent::DeleteSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "session.delete")
+    );
+    assert!(!driver.app.sessions.deleted.contains("ses_1"));
+}
+
+#[test]
+fn close_verification_transport_failure_requires_a_fresh_state_read() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+
+    driver.step(AppEvent::CloseSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    let close = driver.request("session.close");
+    driver.respond_error(
+        close,
+        minicore_tui::protocol::INTERNAL_ERROR,
+        "close failed",
+    );
+    let verify = driver.request("session.state");
+    driver.step(AppEvent::RpcSendFailed {
+        id: verify.id,
+        error: minicore_tui::rpc::RpcError::Closed,
+    });
+
+    driver.step(AppEvent::CloseSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    let recheck = driver.request("session.state");
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "session.close"),
+        "transport-unknown close must not reuse the old idle state"
+    );
+    driver.respond(recheck, state("ses_1", "idle", Value::Null));
+}
+
+#[test]
+fn event_gap_blocks_close_and_delete_for_loaded_and_closed_sessions() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+    driver
+        .app
+        .sessions
+        .known
+        .get_mut("ses_1")
+        .unwrap()
+        .event_gap = true;
+
+    driver.step(AppEvent::CloseSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    driver.step(AppEvent::DeleteSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    assert!(driver.queue.iter().all(|request| {
+        request.method != "session.close" && request.method != "session.delete"
+    }));
+
+    driver
+        .app
+        .sessions
+        .known
+        .get_mut("ses_1")
+        .unwrap()
+        .event_gap = false;
+    driver.step(AppEvent::CloseSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    let close = driver.request("session.close");
+    driver.respond(close, json!({"ok": true}));
+    driver
+        .app
+        .sessions
+        .known
+        .get_mut("ses_1")
+        .unwrap()
+        .event_gap = true;
+
+    driver.step(AppEvent::DeleteSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "session.delete")
+    );
+}
+
+#[test]
+fn history_failure_clear_and_reopen_keep_destructive_actions_guarded() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+
+    // Start an incomplete history read, then fail it. The view must remain
+    // incomplete and unsafe for lifecycle actions.
+    driver
+        .app
+        .sessions
+        .known
+        .get_mut("ses_1")
+        .unwrap()
+        .transcript
+        .complete = false;
+    driver.step(AppEvent::OpenSession {
+        session_id: "ses_1".into(),
+    });
+    driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
+    let failed_history = driver.request("session.history");
+    assert_eq!(
+        driver.app.pending_requests.get(&failed_history.id),
+        Some(&minicore_tui::app::RequestKind::History {
+            session_id: "ses_1".into(),
+            offset: 0,
+            limit: 20,
+            gap_revision: Some(0),
+        })
+    );
+    let failed_revision = driver.app.sessions.known["ses_1"].gap_revision;
+    driver.respond_error(
+        failed_history,
+        minicore_tui::protocol::INTERNAL_ERROR,
+        "history unavailable",
+    );
+    let view = &driver.app.sessions.known["ses_1"];
+    assert!(view.event_gap);
+    assert!(!view.transcript.complete);
+    assert!(!view.loading);
+
+    // `/clear` starts a new history read but must not erase the safety fence.
+    submit_command(&mut driver, "/clear");
+    let clear_history = driver.request("session.history");
+    assert_eq!(
+        driver.app.pending_requests.get(&clear_history.id),
+        Some(&minicore_tui::app::RequestKind::History {
+            session_id: "ses_1".into(),
+            offset: 0,
+            limit: 20,
+            gap_revision: Some(failed_revision),
+        })
+    );
+    let view = &driver.app.sessions.known["ses_1"];
+    assert!(view.event_gap);
+    assert!(!view.transcript.complete);
+    assert!(view.loading);
+
+    driver.step(AppEvent::CloseSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    driver.step(AppEvent::DeleteSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    assert!(driver.queue.iter().all(|request| {
+        request.method != "session.close" && request.method != "session.delete"
+    }));
+
+    // A complete response aligned with the current gap revision releases the
+    // guard. Closing may then succeed, and the now-unloaded catalog entry may
+    // be deleted without needing a fabricated local transcript state.
+    driver.respond(clear_history, history(Vec::new(), None, 0));
+    let view = &driver.app.sessions.known["ses_1"];
+    assert!(!view.event_gap);
+    assert!(view.transcript.complete);
+    assert!(!view.loading);
+
+    driver.step(AppEvent::CloseSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    let close = driver.request("session.close");
+    driver.respond(close, json!({"ok": true}));
+    driver.step(AppEvent::DeleteSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    let delete = driver.request("session.delete");
+    driver.respond(delete, json!({"ok": true}));
+
+    // Reopening an already closed view must retain an existing gap and carry
+    // its revision into the new history request.
+    let mut reopen = Driver::new();
+    bootstrap(&mut reopen);
+    open_idle(&mut reopen, "ses_1");
+    reopen.step(AppEvent::CloseSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    let close = reopen.request("session.close");
+    reopen.respond(close, json!({"ok": true}));
+    let reopen_revision = 7;
+    {
+        let view = reopen.app.sessions.known.get_mut("ses_1").unwrap();
+        view.event_gap = true;
+        view.gap_revision = reopen_revision;
+    }
+    reopen.step(AppEvent::OpenSession {
+        session_id: "ses_1".into(),
+    });
+    let open = reopen.request("session.open");
+    reopen.respond(open, json!({"session": session("ses_1")}));
+    let history = reopen.request("session.history");
+    assert_eq!(
+        reopen.app.pending_requests.get(&history.id),
+        Some(&minicore_tui::app::RequestKind::History {
+            session_id: "ses_1".into(),
+            offset: 0,
+            limit: 20,
+            gap_revision: Some(reopen_revision),
+        })
+    );
+    assert!(reopen.app.sessions.known["ses_1"].event_gap);
+    assert!(!reopen.app.sessions.known["ses_1"].transcript.complete);
+}
+
+#[test]
+fn inflight_history_gap_reconciles_new_revision_before_lifecycle_actions() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    driver.step(AppEvent::OpenSession {
+        session_id: "ses_1".into(),
+    });
+    let open = driver.request("session.open");
+    driver.respond(open, json!({"session": session("ses_1")}));
+    driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
+    let initial_history = driver.request("session.history");
+    assert_eq!(
+        driver.app.pending_requests.get(&initial_history.id),
+        Some(&RequestKind::History {
+            session_id: "ses_1".into(),
+            offset: 0,
+            limit: 20,
+            gap_revision: Some(0),
+        })
+    );
+
+    // A dropped lifecycle event arrives while the initial history request is
+    // still in flight. The event marks a new revision but cannot start a
+    // second request over the current one.
+    driver.step(agent_event(json!({
+        "type": "session_state",
+        "data": {
+            "state": state("ses_1", "idle", Value::Null),
+            "meta": {
+                "session_id": "ses_1",
+                "loop_id": null,
+                "dropped_before": 1
+            }
+        }
+    })));
+    assert!(driver.app.sessions.known["ses_1"].event_gap);
+    assert_eq!(driver.app.sessions.known["ses_1"].gap_revision, 1);
+    assert!(driver.queue.iter().all(|request| {
+        request.method != "session.close" && request.method != "session.delete"
+    }));
+
+    // The old response may still merge its history, but it must not authorize
+    // lifecycle actions or clear the newer gap. It must schedule a fresh read
+    // carrying the current revision.
+    driver.respond(initial_history, history(Vec::new(), None, 0));
+    driver.step(AppEvent::CloseSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    driver.step(AppEvent::DeleteSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    assert!(driver.queue.iter().all(|request| {
+        request.method != "session.close" && request.method != "session.delete"
+    }));
+    let retry = driver.request("session.history");
+    assert_eq!(
+        driver.app.pending_requests.get(&retry.id),
+        Some(&RequestKind::History {
+            session_id: "ses_1".into(),
+            offset: 0,
+            limit: 20,
+            gap_revision: Some(1),
+        })
+    );
+    assert!(driver.app.sessions.known["ses_1"].event_gap);
+    assert!(driver.app.sessions.known["ses_1"].loading);
+    assert!(driver.app.sessions.known["ses_1"].reconcile_inflight);
+
+    // Only the complete response for the new revision releases the fence.
+    driver.respond(retry, history(Vec::new(), None, 0));
+    let view = &driver.app.sessions.known["ses_1"];
+    assert!(!view.event_gap);
+    assert!(view.transcript.complete);
+    assert!(!view.loading);
+    assert!(!view.reconcile_inflight);
+
+    driver.step(AppEvent::CloseSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    let close = driver.request("session.close");
+    driver.respond(close, json!({"ok": true}));
+    driver.step(AppEvent::DeleteSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    let delete = driver.request("session.delete");
+    driver.respond(delete, json!({"ok": true}));
+    assert!(driver.app.sessions.deleted.contains("ses_1"));
+}
+
+#[test]
+fn legacy_none_history_reply_cannot_release_a_new_event_gap() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    driver.step(AppEvent::OpenSession {
+        session_id: "ses_1".into(),
+    });
+    let open = driver.request("session.open");
+    driver.respond(open, json!({"session": session("ses_1")}));
+    driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
+    let old_history = driver.request("session.history");
+
+    // Model a request created by the pre-revision protocol: its response has
+    // no captured revision. This must remain unsafe after a newer gap.
+    if let Some(RequestKind::History { gap_revision, .. }) =
+        driver.app.pending_requests.get_mut(&old_history.id)
+    {
+        *gap_revision = None;
+    }
+    driver.step(agent_event(json!({
+        "type": "session_state",
+        "data": {
+            "state": state("ses_1", "idle", Value::Null),
+            "meta": {
+                "session_id": "ses_1",
+                "loop_id": null,
+                "dropped_before": 1
+            }
+        }
+    })));
+    driver.respond(old_history, history(Vec::new(), None, 0));
+
+    assert!(driver.app.sessions.known["ses_1"].event_gap);
+    let retry = driver.request("session.history");
+    assert_eq!(
+        driver.app.pending_requests.get(&retry.id),
+        Some(&RequestKind::History {
+            session_id: "ses_1".into(),
+            offset: 0,
+            limit: 20,
+            gap_revision: Some(1),
+        })
+    );
+}
+
+#[test]
+fn deleted_session_id_rejects_late_lifecycle_responses_and_events() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+
+    driver.step(AppEvent::CloseSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    let close = driver.request("session.close");
+    driver.respond(close, json!({"ok": true}));
+    driver.step(AppEvent::DeleteSession {
+        session_id: "ses_1".into(),
+        confirm: true,
+    });
+    let delete = driver.request("session.delete");
+
+    for (request_id, kind) in [
+        (
+            minicore_tui::protocol::RequestId(80_010),
+            minicore_tui::app::RequestKind::OpenSession {
+                session_id: "ses_1".into(),
+                previous_retired_loop: None,
+            },
+        ),
+        (
+            minicore_tui::protocol::RequestId(80_011),
+            minicore_tui::app::RequestKind::RenameSession {
+                session_id: "ses_1".into(),
+            },
+        ),
+        (
+            minicore_tui::protocol::RequestId(80_012),
+            minicore_tui::app::RequestKind::SessionState {
+                session_id: "ses_1".into(),
+                query: 80,
+            },
+        ),
+        (
+            minicore_tui::protocol::RequestId(80_013),
+            minicore_tui::app::RequestKind::History {
+                session_id: "ses_1".into(),
+                offset: 0,
+                limit: 100,
+                gap_revision: None,
+            },
+        ),
+    ] {
+        driver.app.pending_requests.insert(request_id, kind);
+    }
+    driver.respond(delete, json!({"ok": true}));
+    assert!(driver.app.sessions.deleted.contains("ses_1"));
+    assert!(!driver.app.sessions.known.contains_key("ses_1"));
+    assert_eq!(driver.app.sessions.active, None);
+    for request_id in [80_010, 80_011, 80_012, 80_013] {
+        assert!(
+            !driver
+                .app
+                .pending_requests
+                .contains_key(&minicore_tui::protocol::RequestId(request_id)),
+            "delete must retire lifecycle request {request_id}"
+        );
+    }
+
+    let late_open_id = minicore_tui::protocol::RequestId(80_001);
+    driver.app.pending_requests.insert(
+        late_open_id,
+        minicore_tui::app::RequestKind::OpenSession {
+            session_id: "ses_1".into(),
+            previous_retired_loop: None,
+        },
+    );
+    driver.respond(
+        minicore_tui::protocol::OutgoingRequest::session_open(late_open_id, "ses_1"),
+        json!({"session": session("ses_1")}),
+    );
+
+    let late_rename_id = minicore_tui::protocol::RequestId(80_002);
+    driver.app.pending_requests.insert(
+        late_rename_id,
+        minicore_tui::app::RequestKind::RenameSession {
+            session_id: "ses_1".into(),
+        },
+    );
+    driver.respond(
+        minicore_tui::protocol::OutgoingRequest::session_rename(late_rename_id, "ses_1", "late"),
+        json!({"session": session("ses_1")}),
+    );
+
+    let late_state_id = minicore_tui::protocol::RequestId(80_003);
+    driver.app.pending_requests.insert(
+        late_state_id,
+        minicore_tui::app::RequestKind::SessionState {
+            session_id: "ses_1".into(),
+            query: 99,
+        },
+    );
+    driver.respond(
+        minicore_tui::protocol::OutgoingRequest::session_state(late_state_id, "ses_1"),
+        state("ses_1", "idle", Value::Null),
+    );
+
+    let late_history_id = minicore_tui::protocol::RequestId(80_004);
+    driver.app.pending_requests.insert(
+        late_history_id,
+        minicore_tui::app::RequestKind::History {
+            session_id: "ses_1".into(),
+            offset: 0,
+            limit: 100,
+            gap_revision: None,
+        },
+    );
+    driver.respond(
+        minicore_tui::protocol::OutgoingRequest::session_history(
+            late_history_id,
+            "ses_1",
+            Some(0),
+            Some(100),
+        ),
+        history(Vec::new(), None, 0),
+    );
+
+    driver.step(agent_event(json!({
+        "type": "session_opened",
+        "data": {
+            "session": session("ses_1"),
+            "meta": {"session_id": "ses_1", "loop_id": null, "dropped_before": 0}
+        }
+    })));
+
+    assert!(driver.app.sessions.deleted.contains("ses_1"));
+    assert!(!driver.app.sessions.known.contains_key("ses_1"));
+    assert_eq!(driver.app.sessions.active, None);
+    assert!(
+        driver.queue.is_empty(),
+        "late lifecycle inputs must not emit RPCs"
+    );
 }
 
 #[test]

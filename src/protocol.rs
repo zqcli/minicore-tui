@@ -22,6 +22,7 @@ pub const METHOD_SESSION_CLOSE: &str = "session.close";
 pub const METHOD_SESSION_DELETE: &str = "session.delete";
 pub const METHOD_SESSION_STATE: &str = "session.state";
 pub const METHOD_SESSION_UPDATE: &str = "session.update";
+pub const METHOD_SESSION_RENAME: &str = "session.rename";
 pub const METHOD_SESSION_HISTORY: &str = "session.history";
 pub const METHOD_SESSION_PRESENTATION: &str = "session.presentation";
 pub const METHOD_GET_HISTORY: &str = METHOD_SESSION_HISTORY;
@@ -164,6 +165,18 @@ impl OutgoingRequest {
         )
     }
 
+    pub fn session_rename(id: RequestId, session_id: &str, title: &str) -> Self {
+        Self::new(
+            id,
+            METHOD_SESSION_RENAME,
+            serde_json::to_value(SessionRenameParams {
+                session_id: session_id.to_owned(),
+                title: title.to_owned(),
+            })
+            .expect("session.rename params serialize"),
+        )
+    }
+
     pub fn get_history(id: RequestId, session_id: &str, offset: usize, limit: usize) -> Self {
         Self::new(
             id,
@@ -301,6 +314,9 @@ impl RpcResponse {
         self.result_as()
     }
     pub fn parse_session_update(&self) -> Result<SessionUpdateResult, RpcResponseError> {
+        self.result_as()
+    }
+    pub fn parse_session_rename(&self) -> Result<SessionResult, RpcResponseError> {
         self.result_as()
     }
     pub fn parse_close(&self) -> Result<OkResultWire, RpcResponseError> {
@@ -832,6 +848,11 @@ pub struct SessionUpdateParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<Reasoning>,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SessionRenameParams {
+    pub session_id: String,
+    pub title: String,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SessionResult {
     pub session: SessionInfo,
@@ -1284,6 +1305,25 @@ mod tests {
         assert_eq!(
             value,
             json!({"jsonrpc":"2.0","id":1,"method":"agent.ping","params":{}})
+        );
+    }
+
+    #[test]
+    fn rename_request_has_the_documented_shape() {
+        let value = serde_json::to_value(OutgoingRequest::session_rename(
+            RequestId(2),
+            "ses_1",
+            "新标题",
+        ))
+        .unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "jsonrpc":"2.0",
+                "id":2,
+                "method":"session.rename",
+                "params":{"session_id":"ses_1","title":"新标题"}
+            })
         );
     }
     #[test]

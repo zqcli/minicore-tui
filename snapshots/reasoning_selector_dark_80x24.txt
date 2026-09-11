@@ -15,10 +15,10 @@
  │  low  Light reasoning                                                       │
  │  medium  Moderate reasoning                                                 │
  │→ high  Deep reasoning                                                       │
+ │                                                                             │
+ │                                                                             │
+ │                                                                             │
+ │                                                                             │
  │(4/4)                                                                        │
- │                                                                             │
- │                                                                             │
- │                                                                             │
- │                                                                             │
  └─────────────────────────────────────────────────────────────────────────────┘
  ● ready

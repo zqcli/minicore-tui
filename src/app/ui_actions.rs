@@ -8,7 +8,7 @@ use unicode_width::UnicodeWidthStr;
 use super::{App, AppCommand, EditorCursor, LastClick, MousePress, MouseTarget, ScrollbarDrag};
 use crate::command::ClipboardText;
 use crate::state::composer::MAX_COMPOSER_BYTES;
-use crate::state::selection::Dock;
+use crate::state::selection::{Dock, NewSessionField};
 use crate::state::session::SessionView;
 use crate::state::tool::ToolKey;
 use crate::state::transcript::TranscriptBlock;
@@ -205,10 +205,27 @@ impl App {
             | Dock::ModelSelector(_)
             | Dock::ReasoningSelector(_)
             | Dock::ProfileSelector(_) => {
-                if self.selector_state().is_some_and(|state| state.submitting) {
+                if matches!(
+                    &self.dock,
+                    Dock::SessionSelector(state)
+                        if matches!(&state.mode, crate::state::selection::SessionPanelMode::Rename { .. })
+                ) {
+                    self.field_insert(&normalized.replace('\n', ""));
                     return Vec::new();
                 }
-                if let Some(state) = self.selector_state_mut() {
+                if self.selector_state().is_some_and(|state| state.submitting)
+                    || matches!(
+                        &self.dock,
+                        Dock::SessionSelector(state)
+                            if !matches!(&state.mode, crate::state::selection::SessionPanelMode::Browse)
+                    )
+                {
+                    return Vec::new();
+                }
+                if let Dock::SessionSelector(state) = &mut self.dock {
+                    state.query.push_str(&normalized.replace('\n', ""));
+                    self.reconcile_session_selection(false);
+                } else if let Some(state) = self.selector_state_mut() {
                     state.query.push_str(&normalized.replace('\n', ""));
                     state.cursor = 0;
                 }
@@ -305,7 +322,8 @@ impl App {
             MouseEventKind::ScrollUp => {
                 self.clear_selection();
                 self.cancel_scrollbar_drag();
-                if self.selector_state().is_some() {
+                self.panel_click = None;
+                if self.selector_state().is_some() || self.session_selector_state().is_some() {
                     self.apply_action(super::Action::SelectorMove(-1))
                 } else {
                     self.apply_action(super::Action::ScrollRows(-3))
@@ -314,7 +332,8 @@ impl App {
             MouseEventKind::ScrollDown => {
                 self.clear_selection();
                 self.cancel_scrollbar_drag();
-                if self.selector_state().is_some() {
+                self.panel_click = None;
+                if self.selector_state().is_some() || self.session_selector_state().is_some() {
                     self.apply_action(super::Action::SelectorMove(1))
                 } else {
                     self.apply_action(super::Action::ScrollRows(3))
@@ -323,7 +342,132 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 self.mouse_pressed_on_link = false;
                 self.cancel_scrollbar_drag();
+                if self.session_selector_state().is_some() {
+                    if self.session_panel_busy() {
+                        self.panel_click = None;
+                        self.clear_selection();
+                        return Vec::new();
+                    }
+                    let area = ratatui::layout::Rect {
+                        x: 0,
+                        y: 0,
+                        width: self.terminal_size.0,
+                        height: self.terminal_size.1,
+                    };
+                    let panel_area = crate::ui::layout::screen_layout(self, area).panel;
+                    let action = self.session_selector_state().and_then(|state| {
+                        crate::ui::selector::session_action_at(
+                            self,
+                            panel_area,
+                            state,
+                            mouse.column,
+                            mouse.row,
+                        )
+                    });
+                    if let Some(action) = action {
+                        self.mouse_down = Some(MousePress {
+                            target: MouseTarget::SessionAction(action),
+                            column: mouse.column,
+                            row: mouse.row,
+                        });
+                        self.clear_selection();
+                        return Vec::new();
+                    }
+                    let selected = self.session_selector_state().and_then(|state| {
+                        crate::ui::selector::session_item_at(
+                            self,
+                            panel_area,
+                            state,
+                            mouse.column,
+                            mouse.row,
+                        )
+                    });
+                    if let Some(session_id) = selected {
+                        let click_count = self.panel_click_count(&session_id);
+                        if let Some(state) = self.session_selector_state_mut() {
+                            state.selected_session_id = Some(session_id.clone());
+                        }
+                        self.mouse_down = Some(MousePress {
+                            target: MouseTarget::SessionSelector {
+                                session_id,
+                                click_count,
+                            },
+                            column: mouse.column,
+                            row: mouse.row,
+                        });
+                    } else {
+                        self.panel_click = None;
+                        self.clear_selection();
+                    }
+                    return Vec::new();
+                }
                 if self.selector_state().is_some() {
+                    if self.selector_state().is_some_and(|state| state.submitting) {
+                        self.selector_click = None;
+                        self.clear_selection();
+                        return Vec::new();
+                    }
+                    let area = ratatui::layout::Rect {
+                        x: 0,
+                        y: 0,
+                        width: self.terminal_size.0,
+                        height: self.terminal_size.1,
+                    };
+                    let hit = self.selector_state().and_then(|state| {
+                        crate::ui::selector::selector_item_at(
+                            self,
+                            crate::ui::layout::screen_layout(self, area).panel,
+                            state,
+                            mouse.column,
+                            mouse.row,
+                        )
+                    });
+                    if let Some(hit) = hit {
+                        let click_count = self.selector_click_count(hit.kind, &hit.key);
+                        if let Some(state) = self.selector_state_mut() {
+                            state.cursor = hit.index;
+                        }
+                        self.mouse_down = Some(MousePress {
+                            target: MouseTarget::Selector {
+                                kind: hit.kind,
+                                key: hit.key,
+                                click_count,
+                            },
+                            column: mouse.column,
+                            row: mouse.row,
+                        });
+                    } else {
+                        self.selector_click = None;
+                        self.clear_selection();
+                    }
+                    return Vec::new();
+                }
+                if matches!(self.dock, Dock::NewSession(_)) {
+                    let area = ratatui::layout::Rect {
+                        x: 0,
+                        y: 0,
+                        width: self.terminal_size.0,
+                        height: self.terminal_size.1,
+                    };
+                    let panel_area = crate::ui::layout::screen_layout(self, area).panel;
+                    let field = self.new_session().and_then(|draft| {
+                        crate::ui::new_session::field_at(panel_area, draft, mouse.column, mouse.row)
+                    });
+                    if let Some((field, cursor)) = field {
+                        if let Dock::NewSession(draft) = &mut self.dock {
+                            if !draft.submitting {
+                                draft.field = field;
+                                if let Some(cursor) = cursor {
+                                    draft.field_cursor = cursor;
+                                }
+                            }
+                        }
+                        self.mouse_down = Some(MousePress {
+                            target: MouseTarget::NewSessionField(field),
+                            column: mouse.column,
+                            row: mouse.row,
+                        });
+                    }
                     self.clear_selection();
                     return Vec::new();
                 }
@@ -495,6 +639,113 @@ impl App {
                                 .is_some_and(|selection| !selection.dragged)
                         {
                             self.toggle_section_at(mouse.column, mouse.row);
+                        }
+                    }
+                    Some(MousePress {
+                        target:
+                            MouseTarget::SessionSelector {
+                                session_id,
+                                click_count,
+                            },
+                        column,
+                        row,
+                    }) => {
+                        if column == mouse.column && row == mouse.row && click_count >= 2 {
+                            let area = ratatui::layout::Rect {
+                                x: 0,
+                                y: 0,
+                                width: self.terminal_size.0,
+                                height: self.terminal_size.1,
+                            };
+                            let current_target = self.session_selector_state().and_then(|state| {
+                                crate::ui::selector::session_item_at(
+                                    self,
+                                    crate::ui::layout::screen_layout(self, area).panel,
+                                    state,
+                                    mouse.column,
+                                    mouse.row,
+                                )
+                            });
+                            if current_target.as_deref() != Some(session_id.as_str()) {
+                                self.panel_click = None;
+                                return Vec::new();
+                            }
+                            if let Some(state) = self.session_selector_state_mut() {
+                                state.selected_session_id = Some(session_id);
+                            }
+                            return self.confirm_session_selector();
+                        }
+                    }
+                    Some(MousePress {
+                        target:
+                            MouseTarget::Selector {
+                                kind,
+                                key,
+                                click_count,
+                            },
+                        column,
+                        row,
+                    }) => {
+                        if column == mouse.column && row == mouse.row && click_count >= 2 {
+                            let area = ratatui::layout::Rect {
+                                x: 0,
+                                y: 0,
+                                width: self.terminal_size.0,
+                                height: self.terminal_size.1,
+                            };
+                            let current = self.selector_state().and_then(|state| {
+                                crate::ui::selector::selector_item_at(
+                                    self,
+                                    crate::ui::layout::screen_layout(self, area).panel,
+                                    state,
+                                    mouse.column,
+                                    mouse.row,
+                                )
+                            });
+                            if current
+                                .as_ref()
+                                .is_some_and(|hit| hit.kind == kind && hit.key == key)
+                            {
+                                return self.confirm_dock();
+                            }
+                        }
+                    }
+                    Some(MousePress {
+                        target: MouseTarget::SessionAction(action),
+                        column,
+                        row,
+                    }) => {
+                        if column == mouse.column && row == mouse.row {
+                            let area = ratatui::layout::Rect {
+                                x: 0,
+                                y: 0,
+                                width: self.terminal_size.0,
+                                height: self.terminal_size.1,
+                            };
+                            let current = self.session_selector_state().and_then(|state| {
+                                crate::ui::selector::session_action_at(
+                                    self,
+                                    crate::ui::layout::screen_layout(self, area).panel,
+                                    state,
+                                    mouse.column,
+                                    mouse.row,
+                                )
+                            });
+                            if current == Some(action) {
+                                return self.session_panel_action(action);
+                            }
+                        }
+                    }
+                    Some(MousePress {
+                        target: MouseTarget::NewSessionField(field),
+                        column,
+                        row,
+                    }) => {
+                        if column == mouse.column
+                            && row == mouse.row
+                            && field == NewSessionField::Create
+                        {
+                            return self.confirm_dock();
                         }
                     }
                     Some(MousePress {
@@ -770,6 +1021,10 @@ impl App {
                 self.update_conversation_selection(point);
                 Vec::new()
             }
+            MouseTarget::SessionSelector { .. }
+            | MouseTarget::Selector { .. }
+            | MouseTarget::SessionAction(_)
+            | MouseTarget::NewSessionField(_) => Vec::new(),
             MouseTarget::Editor => {
                 let Some(point) = self.composer_point_at(column, row) else {
                     return Vec::new();

@@ -20,6 +20,7 @@ pub mod help;
 pub mod layout;
 pub mod logs;
 pub mod new_session;
+pub mod panel;
 pub mod rail;
 pub mod reasoning;
 pub mod scrollbar;
