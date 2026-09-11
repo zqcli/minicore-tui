@@ -1,0 +1,16 @@
+ ▎Detailing scope 
+ ▎Analyzing constraints 
+ 
+ ▎ bash                                                    █
+ ▎ bash                                                    █
+                                                           █
+ Steering (accepted): steer-alpha 
+ Steering: steer-beta 
+ ⌥↑ edit next queued message 
+ 
+ ⠸ Running bash… 
+ ▎                                                          
+ ▎                                                          
+ ▎                                                          
+ ▎                                                          
+ ▸ workspace · verify a · h… ↑10 ↓12 R0 W0 · usage ? · ctx ?

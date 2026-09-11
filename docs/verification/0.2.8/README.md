@@ -1,5 +1,9 @@
 # TUI 0.2.8 / Agent 0.3.3 Paired Verification
 
+Historical version-update baseline, before the same-version Session-management
+follow-up. The original counts and artifacts below are not the current feature
+acceptance; see [Session Management Acceptance](../session-management/README.md).
+
 All compilation occurred on the authorized Linux builder in
 `/root/minicore-release-028-033.Fm9vbA`, reusing owned Cargo caches and the
 macOS SDK/LLVM 19 toolchain. No local compilation, real provider access, user

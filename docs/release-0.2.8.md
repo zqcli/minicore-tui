@@ -1,5 +1,10 @@
 # MiniCore TUI 0.2.8
 
+This is the historical version-update baseline, before the same-version
+[Session-management follow-up](verification/session-management/README.md).
+The follow-up has separate commits, tests and installed artifacts, and has not
+been pushed. Statements below concern only the original paired release.
+
 Paired version update with MiniCore Agent 0.3.3. The Rail UI and performance work
 was committed as `c06f3d3`; this patch updates the package version, lockfile,
 eleven startup-version snapshots and current release documentation.
@@ -21,5 +26,5 @@ files are retained during installation, and user processes are not restarted.
 
 See [verification/0.2.8](verification/0.2.8/README.md) for paired release checks.
 The [0.2.7 performance results](release-0.2.7.md) remain historical measurements;
-this version bump does not claim another performance improvement. Source changes
-are pushed on `dev` without creating a release tag.
+this version bump does not claim another performance improvement. The original
+paired-release source changes were pushed on `dev` without creating a release tag.

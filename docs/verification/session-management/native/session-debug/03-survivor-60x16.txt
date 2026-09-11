@@ -1,0 +1,16 @@
+ 
+ 
+ 
+ 
+ 
+                                                      
+ Session ses_ed73e5bcf1f6264a7bf220b599b4f660 deleted.      
+ ┌─────────────────────────────────────────────────────────┐
+ │Select session                                           │
+ │>                                                        │
+ │→ Native Survivor                                     now│
+ │                                                         │
+ │Enter Open · Ctrl+N New · F5 Refresh                     │
+ │F2 Rename · Ctrl+W Close · Del Delete                    │
+ └─────────────────────────────────────────────────────────┘
+ ▸ workspace · verify a · high · ● ready               ctx ?

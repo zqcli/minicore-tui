@@ -1,0 +1,73 @@
+panel-cancel-filter-fix E2E
+Fri Sep 11 05:17:51 AM UTC 2026
+source-before
+977bdce14d8776a5e4d537608017dd266a9e8b89d49fae1a77f9afb0d027ed8f  src/app.rs
+76bb4fe2251db9ac0aa8a1abdf0bdde05fb9b9b65a1bafa1634ee37b7dc8588b  src/ui/component_tests.rs
+06667863506c96cfcdc6e45921c5a3fc4ca850aa330d988ccfe7c67a49c125f9  docs/testing.md
+caad603e17a4f3aa90b66b1b7313b029fa6d087ebc016d25ada38a83d46f5a2f  tests/agent_e2e.rs
+5666ff82804b88e8a98221a7f3a78aa736d53db2c946b605f04d8c150b8d3a33  Cargo.toml
+40a638f2ef3b3192ee1731796c77a6dcf018d95f66f817ef191eb3b6182e01de  Cargo.lock
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.16s
+     Running tests/agent_e2e.rs (target/debug/deps/agent_e2e-d7bcab485dbe30d7)
+
+running 17 tests
+test e2e_fifo_duplicate_texts_are_paced_and_both_persist ... ok
+test e2e_fifo_steers_are_paced_until_receipt ... ok
+test e2e_live_request_usage_shows_during_loop_and_persisted_total_replaces_it ... ok
+test e2e_max_reasoning_ships_literal_max_and_provider_body_carries_it ... ok
+test e2e_reasoning_summary_item_boundaries_survive_to_the_tui ... ok
+test e2e_scenario_a_discovery ... ok
+test e2e_scenario_b_basic_turn ... ok
+test e2e_scenario_c_tool_execution ... ok
+test e2e_scenario_d_steer_turn ... ok
+test e2e_scenario_e2_update_single_request_then_next_turn ... ok
+test e2e_scenario_e_same_loop_update ... ok
+test e2e_scenario_f_shutdown_cancels_active_wait ... ok
+test e2e_session_panel_rename_and_delete_against_current_agent ... ok
+test e2e_stress_second_tool_expansion_survives_background_generation ... ok
+test e2e_stress_session_switch_preserves_tool_fold ... ok
+test e2e_stress_six_loops_ten_requests_no_repeated_final_text ... ok
+test e2e_two_consecutive_steers_both_reach_the_provider ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.92s
+
+stable_status=0
+source-after-stable
+977bdce14d8776a5e4d537608017dd266a9e8b89d49fae1a77f9afb0d027ed8f  src/app.rs
+76bb4fe2251db9ac0aa8a1abdf0bdde05fb9b9b65a1bafa1634ee37b7dc8588b  src/ui/component_tests.rs
+06667863506c96cfcdc6e45921c5a3fc4ca850aa330d988ccfe7c67a49c125f9  docs/testing.md
+caad603e17a4f3aa90b66b1b7313b029fa6d087ebc016d25ada38a83d46f5a2f  tests/agent_e2e.rs
+5666ff82804b88e8a98221a7f3a78aa736d53db2c946b605f04d8c150b8d3a33  Cargo.toml
+40a638f2ef3b3192ee1731796c77a6dcf018d95f66f817ef191eb3b6182e01de  Cargo.lock
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.15s
+     Running tests/agent_e2e.rs (target/debug/deps/agent_e2e-b64e871d51c7da77)
+
+running 17 tests
+test e2e_fifo_duplicate_texts_are_paced_and_both_persist ... ok
+test e2e_fifo_steers_are_paced_until_receipt ... ok
+test e2e_live_request_usage_shows_during_loop_and_persisted_total_replaces_it ... ok
+test e2e_max_reasoning_ships_literal_max_and_provider_body_carries_it ... ok
+test e2e_reasoning_summary_item_boundaries_survive_to_the_tui ... ok
+test e2e_scenario_a_discovery ... ok
+test e2e_scenario_b_basic_turn ... ok
+test e2e_scenario_c_tool_execution ... ok
+test e2e_scenario_d_steer_turn ... ok
+test e2e_scenario_e2_update_single_request_then_next_turn ... ok
+test e2e_scenario_e_same_loop_update ... ok
+test e2e_scenario_f_shutdown_cancels_active_wait ... ok
+test e2e_session_panel_rename_and_delete_against_current_agent ... ok
+test e2e_stress_second_tool_expansion_survives_background_generation ... ok
+test e2e_stress_session_switch_preserves_tool_fold ... ok
+test e2e_stress_six_loops_ten_requests_no_repeated_final_text ... ok
+test e2e_two_consecutive_steers_both_reach_the_provider ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.92s
+
+msrv_status=0
+source-after-msrv
+977bdce14d8776a5e4d537608017dd266a9e8b89d49fae1a77f9afb0d027ed8f  src/app.rs
+76bb4fe2251db9ac0aa8a1abdf0bdde05fb9b9b65a1bafa1634ee37b7dc8588b  src/ui/component_tests.rs
+06667863506c96cfcdc6e45921c5a3fc4ca850aa330d988ccfe7c67a49c125f9  docs/testing.md
+caad603e17a4f3aa90b66b1b7313b029fa6d087ebc016d25ada38a83d46f5a2f  tests/agent_e2e.rs
+5666ff82804b88e8a98221a7f3a78aa736d53db2c946b605f04d8c150b8d3a33  Cargo.toml
+40a638f2ef3b3192ee1731796c77a6dcf018d95f66f817ef191eb3b6182e01de  Cargo.lock

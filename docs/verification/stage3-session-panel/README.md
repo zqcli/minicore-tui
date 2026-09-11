@@ -1,5 +1,12 @@
 # Stage 3 Session Panel Verification
 
+**Historical checkpoint, not final acceptance.** Subsequent review and native
+verification found stale close-state, event-gap, late-response resurrection and
+filtered-selection gaps in the claims below. Those PASS labels describe the
+then-selected tests, not proof of the whole safety requirement. The fixes,
+nonzero regressions and current verdict are in
+[Session Management Acceptance](../session-management/README.md).
+
 This report records the Stage 2 review follow-up for the shared TUI. The Agent
 source and its dependencies were not modified. The TUI↔Agent boundary remains
 opaque to the TUI; prompt/config ownership stays in the Agent.

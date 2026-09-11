@@ -1,0 +1,35 @@
+{
+  "profile": "debug",
+  "window_id": 70714,
+  "evidence_dir": "/var/folders/zw/gcpf3t91243dhn6z3bb278s00000gn/T/minicore-session-native-4kpzf6d3/evidence",
+  "tui_sha256": "5e3639f460338f1a3d83b182be6bf951c63bf3b1bca21a33e028983ba18dcd1f",
+  "agent_sha256": "d328dc45d3753a85df6ff43c7b464179d264bf15a5a21e2386b40455130c40e6",
+  "pixel_screenshots": "UNVERIFIED; actual iTerm2 screen text/input only",
+  "status": "FAIL",
+  "error": "60x16 confirmation controls",
+  "checks": [
+    "relative prompt path resolves outside cwd and startup snapshot survives file edit",
+    "mouse rename works during a live request; delete does not cancel or close it"
+  ],
+  "requests": [
+    {
+      "number": 0,
+      "model": "verify-a",
+      "file_prompt_present": true,
+      "changed_prompt_absent": true
+    },
+    {
+      "number": 1,
+      "model": "verify-a",
+      "file_prompt_present": true,
+      "changed_prompt_absent": true
+    }
+  ]
+}
+Traceback (most recent call last):
+  File "/tmp/minicore-session-panels.M0rGv9/native_session.py", line 184, in <module>
+    wait(has('Permanently delete', '[ Cancel ]', '[ Delete ]', 'Renamed During'), '60x16 confirmation controls')
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/minicore-session-panels.M0rGv9/native_session.py", line 115, in wait
+    raise AssertionError(label)
+AssertionError: 60x16 confirmation controls

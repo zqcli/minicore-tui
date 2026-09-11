@@ -1,0 +1,16 @@
+ 
+ 
+ 
+ 
+ 
+ Session ses_24a1d7b90fee1a6a47b7d6b4193cb129 closed. 
+ ┌─────────────────────────────────────────────────────────┐
+ │Select session                                           │
+ │Permanently delete this session?                         │
+ │Renamed During Work 中文 [ses_24a1]                      │
+ │This cannot be undone.                                   │
+ │[ Cancel ]  [ Delete ]                                   │
+ │                                                         │
+ │Tab / ← → choose · Enter activates · Esc Cancel          │
+ └─────────────────────────────────────────────────────────┘
+ ▸ workspace · verify a · high · ● ready               ctx ?

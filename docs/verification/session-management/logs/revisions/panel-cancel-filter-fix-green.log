@@ -1,0 +1,34 @@
+panel-cancel-filter-fix GREEN
+Fri Sep 11 05:14:48 AM UTC 2026
+977bdce14d8776a5e4d537608017dd266a9e8b89d49fae1a77f9afb0d027ed8f  src/app.rs
+f8b1d1b80c34bb1357ab7dfed58e2a231dfedf18e517ed7d94b815f9bca5f41d  src/ui/component_tests.rs
+   Compiling minicore-tui v0.2.8 (/root/minicore-session-panels.H0sLzv/source/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 8.12s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::component_tests::session_panel_cancel_reconciles_after_frozen_target_updates ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 352 filtered out; finished in 0.00s
+
+cancel_status=0
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::component_tests::session_rename_dialog_freezes_target_and_reconciles_before_footer_actions ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 352 filtered out; finished in 0.00s
+
+rename_status=0
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::component_tests::session_rename_ack_clears_hidden_target_when_query_has_no_matches ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 352 filtered out; finished in 0.00s
+
+nomatch_status=0
+977bdce14d8776a5e4d537608017dd266a9e8b89d49fae1a77f9afb0d027ed8f  src/app.rs
+f8b1d1b80c34bb1357ab7dfed58e2a231dfedf18e517ed7d94b815f9bca5f41d  src/ui/component_tests.rs

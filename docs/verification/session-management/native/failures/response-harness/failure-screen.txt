@@ -1,0 +1,32 @@
+ ▎                                                                                                  
+ ▎ check startup prompt snapshot                                                                    
+ ▎ 11:35 AM · 9/11/2026                                                                             
+ ▎                                                                                                  
+ 
+  ✗ Turn failed: invalid_model_response: invalid_provider_response · persisted · requests: 1 · tool 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+ ▎                                                                                                  
+ ▎                                                                                                  
+ ▎                                                                                                  
+ ▎                                                                                                  
+ ▸ workspace · verify a · high · ● ready · 0m                                                  ctx ?

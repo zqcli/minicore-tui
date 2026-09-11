@@ -1,0 +1,950 @@
+{
+  "terminal": "iTerm2 3.6.11",
+  "window_id": 70721,
+  "evidence_dir": "/var/folders/zw/gcpf3t91243dhn6z3bb278s00000gn/T/minicore-stream-smooth-iterm-rorcoh28/evidence",
+  "expect_fixed": true,
+  "tui_sha256": "11408c7d5a557d99feb4bdbe3160d4133467dedededb499e037990e95932cb6d",
+  "agent_sha256": "aee24246491bdb13ffb95dff4fccc95895800e5f19b67c51c815132540385642",
+  "pixel_screenshots": "UNVERIFIED; protected iTerm windows, no screenshot attempt or replacement",
+  "agent_version": "0.3.3",
+  "live_tool_click_collapses": true,
+  "cpu_dimensions": "220, 53",
+  "idle_cpu": {
+    "start_epoch_ms": 1789105322639,
+    "end_epoch_ms": 1789105324647,
+    "wall_seconds": 2.007,
+    "tui_cpu_seconds": 0.0,
+    "agent_cpu_seconds": 0.0,
+    "tui_cpu_percent_one_core": 0.0
+  },
+  "busy_cpu": [
+    {
+      "start_epoch_ms": 1789105325593,
+      "end_epoch_ms": 1789105333597,
+      "wall_seconds": 8.004,
+      "tui_cpu_seconds": 0.27,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 3.373
+    },
+    {
+      "start_epoch_ms": 1789105333613,
+      "end_epoch_ms": 1789105341616,
+      "wall_seconds": 8.003,
+      "tui_cpu_seconds": 0.26,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 3.249
+    },
+    {
+      "start_epoch_ms": 1789105341632,
+      "end_epoch_ms": 1789105349638,
+      "wall_seconds": 8.006,
+      "tui_cpu_seconds": 0.27,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 3.373
+    }
+  ],
+  "held_spinner": {
+    "samples": [
+      {
+        "at": 1789105349788,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789105349808,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789105349828,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105349848,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789105349871,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789105349893,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105349914,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105349939,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105349960,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105349982,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105350001,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789105350027,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789105350048,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789105350068,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789105350092,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789105350113,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789105350136,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789105350159,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789105350182,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789105350201,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789105350227,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789105350254,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105350277,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789105350301,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789105350322,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789105350347,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789105350371,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789105350396,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789105350418,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789105350444,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789105350468,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789105350493,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789105350515,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789105350540,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105350570,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789105350593,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789105350617,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789105350641,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789105350668,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789105350693,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789105350717,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789105350743,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789105350764,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789105350786,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789105350810,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789105350832,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789105350857,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789105350880,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789105350900,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105350923,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105350945,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789105350968,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105350988,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105351013,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105351036,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105351061,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789105351082,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789105351104,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789105351125,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789105351150,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789105351173,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789105351197,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789105351216,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789105351242,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789105351264,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789105351286,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789105351309,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789105351333,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105351356,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105351382,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789105351404,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789105351429,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789105351450,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789105351474,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789105351498,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789105351522,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789105351544,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789105351564,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789105351588,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789105351607,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789105351632,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105351656,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105351678,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105351702,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105351726,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789105351748,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789105351770,
+        "glyph": "\u2827"
+      }
+    ],
+    "changes": 40,
+    "duration_ms": 1982
+  },
+  "flood_spinner": {
+    "samples": [
+      {
+        "at": 1789105352232,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789105352256,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789105352277,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789105352302,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789105352323,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789105352344,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105352368,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789105352390,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789105352410,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105352433,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789105352453,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789105352476,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789105352497,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789105352518,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789105352538,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789105352559,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789105352581,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789105352605,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789105352626,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789105352650,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789105352672,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789105352694,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105352718,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105352740,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789105352764,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789105352789,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789105352814,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105352836,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105352860,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789105352888,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789105352915,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789105352939,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789105352965,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789105352990,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789105353013,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789105353035,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789105353059,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105353081,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789105353103,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789105353129,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105353150,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105353171,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789105353192,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789105353214,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789105353235,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789105353258,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789105353282,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789105353306,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789105353329,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789105353352,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789105353377,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789105353400,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789105353421,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105353438,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789105353460,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789105353480,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105353505,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105353527,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105353549,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789105353574,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789105353598,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789105353623,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789105353643,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789105353667,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789105353688,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789105353709,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789105353730,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789105353752,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789105353775,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789105353801,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105353828,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105353849,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105353872,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105353893,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789105353918,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789105353940,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789105353963,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789105353986,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789105354009,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789105354031,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789105354057,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789105354080,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789105354103,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789105354126,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105354150,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105354172,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105354195,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789105354220,
+        "glyph": "\u2834"
+      }
+    ],
+    "changes": 40,
+    "duration_ms": 1988
+  },
+  "scroll_cpu": [
+    {
+      "start_epoch_ms": 1789105356046,
+      "end_epoch_ms": 1789105364053,
+      "wall_seconds": 8.007,
+      "tui_cpu_seconds": 0.25,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 3.122,
+      "injected_events": 200
+    },
+    {
+      "start_epoch_ms": 1789105364069,
+      "end_epoch_ms": 1789105372074,
+      "wall_seconds": 8.005,
+      "tui_cpu_seconds": 0.26,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 3.248,
+      "injected_events": 200
+    },
+    {
+      "start_epoch_ms": 1789105372090,
+      "end_epoch_ms": 1789105380092,
+      "wall_seconds": 8.002,
+      "tui_cpu_seconds": 0.26,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 3.249,
+      "injected_events": 200
+    }
+  ],
+  "scroll_800_cpu_seconds": 1.04,
+  "scroll_800_wall_seconds": 33.01,
+  "scroll_input": {
+    "events": 800,
+    "period_seconds": 0.04,
+    "reverse_every_events": 80,
+    "injection_wall_seconds": 31.962,
+    "measurements": "absolute 25Hz deadlines; 3 x 8 seconds after 0.5s settle; event timestamps recorded; sample separately"
+  },
+  "hover_200_input_seconds": 0.595,
+  "hover_200_cpu_seconds": 0.0,
+  "wheel_100_visible_seconds": 0.589,
+  "wheel_100_cpu_seconds": 0.0,
+  "drag_body_follows_before_release": true,
+  "stationary_drag_cpu": {
+    "start_epoch_ms": 1789105392655,
+    "end_epoch_ms": 1789105394662,
+    "wall_seconds": 2.006,
+    "tui_cpu_seconds": 0.0,
+    "agent_cpu_seconds": 0.0,
+    "tui_cpu_percent_one_core": 0.0
+  },
+  "drag_cpu": [
+    {
+      "start_epoch_ms": 1789105395186,
+      "end_epoch_ms": 1789105403194,
+      "wall_seconds": 8.008,
+      "tui_cpu_seconds": 0.12,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 1.499,
+      "injected_events": 200
+    },
+    {
+      "start_epoch_ms": 1789105403211,
+      "end_epoch_ms": 1789105411220,
+      "wall_seconds": 8.009,
+      "tui_cpu_seconds": 0.11,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 1.373,
+      "injected_events": 200
+    },
+    {
+      "start_epoch_ms": 1789105411237,
+      "end_epoch_ms": 1789105419237,
+      "wall_seconds": 8.0,
+      "tui_cpu_seconds": 0.12,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 1.5,
+      "injected_events": 200
+    }
+  ],
+  "drag_distinct_windows_including_scrollbar": 10,
+  "drag_distinct_body_windows": 9,
+  "status": "PASS",
+  "checks": [
+    "same-part tokens concatenate; distinct summary parts without raw newlines occupy three native rows",
+    "two rapid steers appear in dock queue above Working, with a blank gap, not as User cards",
+    "Option+Up withdraws unsent beta; resubmission keeps both entries and changes only local identity",
+    "request alpha excludes beta; request beta follows alpha answer; both history entries appear exactly once",
+    "existing immediate-footer max selection remains intact without another user turn",
+    "idle and held request 2s controls, changing Working display, owned-process CPU only; input remains responsive",
+    "800 paced bidirectional wheel events; continuous-scroll CPU measured for 3x8s; input drain marker and tail confirmed",
+    "long history: 200 hover events preserve responsive input; 100 wheel events scroll; scrollbar drag reaches beginning",
+    "native TUI exits zero and restores its shell"
+  ],
+  "captures": [
+    {
+      "name": "01-thinking-part-boundaries",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "01b-live-tool-click",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "02-two-queued-steers",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "03-queued-60x16",
+      "dimensions": "60, 16"
+    },
+    {
+      "name": "04-alpha-applied-beta-queued",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "05-both-completed",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "06-footer-max",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "07-long-history-tail",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "08-cpu-idle-wide",
+      "dimensions": "220, 53"
+    },
+    {
+      "name": "09-cpu-busy-wide",
+      "dimensions": "220, 53"
+    },
+    {
+      "name": "10-continuous-scroll-wide",
+      "dimensions": "220, 53"
+    },
+    {
+      "name": "08-long-history-scrolled",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "09a-drag-before-release",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "09-long-history-drag-top",
+      "dimensions": "100, 32"
+    }
+  ],
+  "requests": [
+    {
+      "model": "verify-a",
+      "effort": "high",
+      "alpha": false,
+      "beta": false,
+      "alpha_answer": false
+    },
+    {
+      "model": "verify-a",
+      "effort": "high",
+      "alpha": true,
+      "beta": false,
+      "alpha_answer": false
+    },
+    {
+      "model": "verify-a",
+      "effort": "high",
+      "alpha": true,
+      "beta": true,
+      "alpha_answer": true
+    },
+    {
+      "model": "verify-a",
+      "effort": "max",
+      "alpha": true,
+      "beta": true,
+      "alpha_answer": true
+    },
+    {
+      "model": "verify-a",
+      "effort": "max",
+      "alpha": true,
+      "beta": true,
+      "alpha_answer": true,
+      "flood_deltas": 248
+    }
+  ],
+  "tui_version": "minicore-tui 0.2.8",
+  "note": "Native iTerm2 screen text and input + real Agent/loopback. No user config or Store; no external provider."
+}

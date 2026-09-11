@@ -1,0 +1,53 @@
+rename-filter-fix RED
+Fri Sep 11 04:45:54 AM UTC 2026
+source
+96af60de8ae4f837be70c1b4f24adca73bb4eeb9b044f740473fb497304e472d  src/app.rs
+6d9950cbda684d18d8b8f3e0b13d944a4f5e7744da7751a90f4a4771846d6b6a  src/ui/component_tests.rs
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.12s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::component_tests::session_rename_dialog_freezes_target_and_reconciles_before_footer_actions ... FAILED
+
+failures:
+
+---- ui::component_tests::session_rename_dialog_freezes_target_and_reconciles_before_footer_actions stdout ----
+
+thread 'ui::component_tests::session_rename_dialog_freezes_target_and_reconciles_before_footer_actions' (3841238) panicked at src/ui/component_tests.rs:2856:5:
+assertion `left == right` failed: a refresh must not retarget the Rename dialog
+  left: Some("ses_beta")
+ right: Some("ses_alpha")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ui::component_tests::session_rename_dialog_freezes_target_and_reconciles_before_footer_actions
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 351 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
+first_status=101
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::component_tests::session_rename_ack_clears_hidden_target_when_query_has_no_matches ... FAILED
+
+failures:
+
+---- ui::component_tests::session_rename_ack_clears_hidden_target_when_query_has_no_matches stdout ----
+
+thread 'ui::component_tests::session_rename_ack_clears_hidden_target_when_query_has_no_matches' (3841251) panicked at src/ui/component_tests.rs:3060:5:
+assertion `left == right` failed: after ACK Browse must clear a selection with no filtered matches
+  left: Some("ses_alpha")
+ right: None
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ui::component_tests::session_rename_ack_clears_hidden_target_when_query_has_no_matches
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 351 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
+second_status=101

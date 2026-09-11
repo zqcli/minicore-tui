@@ -1,0 +1,32 @@
+ ▎                                                                                                  
+ ▎ check startup prompt snapshot                                                                    
+ ▎ 1:37 PM · 9/11/2026                                                                              
+ ▎                                                                                                  
+ 
+  PROMPT_FILE_OK                               
+ 
+ ▎                                                                                                  
+ ▎ hold while renaming                                                                              
+ ▎ 1:37 PM · 9/11/2026                                                                              
+ ▎                                                                                                  
+ 
+ 
+ 
+ 
+ ⠹ Working 
+ Cannot delete session ses_ed73e5bcf1f6264a7bf220b599b4f660: it is busy or unsafe.                  
+ ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │Select session                                                                                   │
+ │⚠ cannot delete: session is busy or unsafe                                                       │
+ │>                                                                                                │
+ │→ Renamed During Work 中文                                                  verify-a · high   now│
+ │  ◉ /private/var/folders/zw/gcpf3t91243dhn6z3bb278s00000gn/T/minicore-session-native-kymfwfq5/wor│
+ │                                                                                                 │
+ │                                                                                                 │
+ │                                                                                                 │
+ │                                                                                                 │
+ │                                                                                                 │
+ │Enter Open · Ctrl+N New · F5 Refresh                                                             │
+ │F2 Rename · Ctrl+W Close · Del Delete                                                            │
+ └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ▸ workspace · verify a · high · ● working                           ↑10 ↓12 R0 W0 · usage ? · ctx ?

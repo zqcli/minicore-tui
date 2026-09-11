@@ -1,5 +1,11 @@
 # Stage 4 Session Panel Verification
 
+**Historical checkpoint, not final acceptance.** Later stages tightened
+history-gap request revisions, and native verification found filtered-selection
+and dialog-target gaps. Current results and installation evidence are in
+[Session Management Acceptance](../session-management/README.md); counts and
+claims below are retained as stage-local history.
+
 This report records the Session-panel safety and coverage follow-up. Only the
 TUI was changed in Stage 4. The Agent, prompt-file implementation, RPC
 versions, dependencies, `Cargo.toml`, and `Cargo.lock` were not changed.

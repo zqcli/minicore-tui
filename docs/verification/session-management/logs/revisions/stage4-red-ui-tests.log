@@ -1,0 +1,42 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.12s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::component_tests::generic_selector_mouse_selects_and_confirms_the_hit_item ... FAILED
+
+failures:
+
+failures:
+    ui::component_tests::generic_selector_mouse_selects_and_confirms_the_hit_item
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 347 filtered out; finished in 0.00s
+
+
+thread 'ui::component_tests::generic_selector_mouse_selects_and_confirms_the_hit_item' (3629756) panicked at src/ui/component_tests.rs:2176:10:
+double click confirms the selected model
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: test failed, to rerun pass `--lib`
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.10s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::component_tests::session_footer_mouse_refresh_uses_the_action_hit_rect ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 347 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::component_tests::help_and_logs_body_paging_does_not_scroll_the_transcript ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 347 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::component_tests::short_panels_page_down_moves_help_logs_and_session_selector ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 347 filtered out; finished in 0.00s
+

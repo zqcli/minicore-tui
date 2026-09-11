@@ -1,0 +1,32 @@
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+ 
+                                               
+ 
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+ 
+            
+ 
+ 
+           
+ Cannot delete session ses_a8422138f2cd4a52f46fc7d3da0279e2: it is busy or unsafe.                  
+ ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │Select session                                                                                   │
+ │> Renamed During Work                                                                            │
+ │→ Renamed During Work 中文                                                  verify-a · high   now│
+ │  ● /private/var/folders/zw/gcpf3t91243dhn6z3bb278s00000gn/T/minicore-session-native-ik45pa51/wor│
+ │                                                                                                 │
+ │                                                                                                 │
+ │                                                                                                 │
+ │                                                                                                 │
+ │                                                                                                 │
+ │                                                                                                 │
+ │Enter Open · Ctrl+N New · F5 Refresh                                                             │
+ │F2 Rename · Ctrl+W Close · Del Delete                                                            │
+ └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ▸ workspace · verify a · high · ● ready                                                       ctx ?

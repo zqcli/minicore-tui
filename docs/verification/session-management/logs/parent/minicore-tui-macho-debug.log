@@ -1,0 +1,9 @@
+signature_dataoff=9883632 datasize=77360 signature_end=9960992 file_size=9960992
+ncmds=17 sizeofcmds=2224 load_end=2256 first_text_offset=18640 gap=16384
+minos=11.0
+/tmp/minicore-session-panels.M0rGv9/final-artifacts/minicore-tui-debug: Mach-O 64-bit executable x86_64
+UUID: 4C4C440D-5555-3144-A156-5EC3E00BEBAA (x86_64) /tmp/minicore-session-panels.M0rGv9/final-artifacts/minicore-tui-debug
+nm=passed size=passed dwarfdump=passed
+/tmp/minicore-session-panels.M0rGv9/final-artifacts/minicore-tui-debug: valid on disk
+/tmp/minicore-session-panels.M0rGv9/final-artifacts/minicore-tui-debug: satisfies its Designated Requirement
+codesign=valid

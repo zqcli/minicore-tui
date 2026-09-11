@@ -1,0 +1,16 @@
+ 
+ 
+ 
+ 
+ 
+ Session ses_a8422138f2cd4a52f46fc7d3da0279e2 closed. 
+ ┌─────────────────────────────────────────────────────────┐
+ │Select session                                           │
+ │Permanently delete this session?                         │
+ │Renamed During Work 中文 [ses_a842]                      │
+ │This cannot be undone.                                   │
+ │[ Cancel ]  [ Delete ]                                   │
+ │                                                         │
+ │Tab / ← → choose · Enter activates · Esc Cancel          │
+ └─────────────────────────────────────────────────────────┘
+ ▸ workspace · verify a · high · ● ready               ctx ?

@@ -1,0 +1,19 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-session-panels.H0sLzv/source/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 10.42s
+     Running tests/app_flow.rs (target/debug/deps/app_flow-500745b34c71f2c8)
+
+running 1 test
+
+thread 'close_verification_running_state_is_written_without_cancelling_the_turn' (3624338) panicked at tests/app_flow.rs:3585:5:
+assertion failed: !view.closing
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test close_verification_running_state_is_written_without_cancelling_the_turn ... FAILED
+
+failures:
+
+failures:
+    close_verification_running_state_is_written_without_cancelling_the_turn
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 65 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test app_flow`

@@ -13,7 +13,9 @@ The paired **TUI 0.2.8 / Agent 0.3.3** release is documented in
 matches the preceding local builds; version-bearing snapshots were updated.
 No local compilation is used for this release.
 
-The Session-panel verification follow-ups are recorded in
+Final source/native checks and installation are recorded in
+[verification/session-management/README.md](verification/session-management/README.md).
+The historical Session-panel verification follow-ups are recorded in
 [verification/stage3-session-panel/README.md](verification/stage3-session-panel/README.md)
 and [verification/stage4-session-panel/README.md](verification/stage4-session-panel/README.md).
 The current query-filtered Session-selector rename-safety run reports **464

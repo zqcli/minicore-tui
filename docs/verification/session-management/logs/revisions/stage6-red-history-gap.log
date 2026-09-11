@@ -1,0 +1,52 @@
+stage6 RED: current history gap race
+Fri Sep 11 02:58:38 AM UTC 2026
+--- inflight_history_gap_reconciles_new_revision_before_lifecycle_actions ---
+   Compiling minicore-tui v0.2.8 (/root/minicore-session-panels.H0sLzv/source/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 10.86s
+     Running tests/app_flow.rs (target/debug/deps/app_flow-500745b34c71f2c8)
+
+running 1 test
+test inflight_history_gap_reconciles_new_revision_before_lifecycle_actions ... FAILED
+
+failures:
+
+---- inflight_history_gap_reconciles_new_revision_before_lifecycle_actions stdout ----
+
+thread 'inflight_history_gap_reconciles_new_revision_before_lifecycle_actions' (3748991) panicked at tests/app_flow.rs:3887:5:
+assertion `left == right` failed
+  left: Some(History { session_id: "ses_1", offset: 0, limit: 20, gap_revision: None })
+ right: Some(History { session_id: "ses_1", offset: 0, limit: 20, gap_revision: Some(0) })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    inflight_history_gap_reconciles_new_revision_before_lifecycle_actions
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 69 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test app_flow`
+status=101
+--- legacy_none_history_reply_cannot_release_a_new_event_gap ---
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.11s
+     Running tests/app_flow.rs (target/debug/deps/app_flow-500745b34c71f2c8)
+
+running 1 test
+test legacy_none_history_reply_cannot_release_a_new_event_gap ... FAILED
+
+failures:
+
+---- legacy_none_history_reply_cannot_release_a_new_event_gap stdout ----
+
+thread 'legacy_none_history_reply_cannot_release_a_new_event_gap' (3749004) panicked at tests/app_flow.rs:4001:5:
+assertion failed: driver.app.sessions.known["ses_1"].event_gap
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    legacy_none_history_reply_cannot_release_a_new_event_gap
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 69 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test app_flow`
+status=101
+RED_expected_failures=1

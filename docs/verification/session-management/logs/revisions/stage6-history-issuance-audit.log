@@ -1,0 +1,316 @@
+--- RequestKind::History occurrences ---
+3586-    fn pending_history(&self, session_id: &SessionId) -> bool {
+3587-        self.pending_requests.values().any(|kind| {
+3588:            matches!(kind, RequestKind::History { session_id: pending, .. } if pending == session_id)
+3589-        })
+3590-    }
+--
+3593-    /// initial loads carry revision zero too, so an in-flight response cannot
+3594-    /// clear a gap that was observed after the request was issued.
+3595:    fn request_history(
+3596-        &mut self,
+3597-        session_id: &SessionId,
+--
+3606-            .gap_revision;
+3607-        self.request(
+3608:            RequestKind::History {
+3609-                session_id: session_id.clone(),
+3610-                offset,
+--
+3695-            ) || matches!(
+3696-                kind,
+3697:                RequestKind::History { session_id: pending, .. } if pending == session_id
+3698-            )
+3699-        })
+--
+3710-            | RequestKind::UpdateSession { session_id, .. }
+3711-            | RequestKind::RenameSession { session_id }
+3712:            | RequestKind::History { session_id, .. }
+3713-            | RequestKind::SessionState { session_id, .. } => Some(session_id),
+3714-            RequestKind::SessionPresentation { session_id } => Some(session_id),
+--
+5127-
+5128-            let next = if let Some(next_offset) = page.next_offset {
+5129:                NextChain::Page {
+5130-                    offset: next_offset,
+5131-                }
+--
+5315-                    view.loading = true;
+5316-                    view.reconcile_inflight = true;
+5317:                    NextChain::Reconcile {
+5318-                        offset: view.transcript.loaded_count,
+5319-                    }
+--
+5326-                        view.loading = true;
+5327-                        view.reconcile_inflight = true;
+5328:                        NextChain::Reconcile {
+5329-                            offset: view.transcript.loaded_count,
+5330-                        }
+--
+5347-
+5348-        match next {
+5349:            NextChain::Page { offset } | NextChain::Reconcile { offset } => {
+5350-                vec![self.request_history(session_id, offset, 20)]
+5351-            }
+--
+6457-                );
+6458-            }
+6459:            RequestKind::History { session_id, .. } => {
+6460-                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+6461-                    Self::mark_history_unconfirmed(view);
+--
+6756-                self.on_session_presentation_response(&session_id, &response)
+6757-            }
+6758:            RequestKind::History {
+6759-                session_id,
+6760-                offset,
+--
+8386-        assert_eq!(
+8387-            app.pending_requests.get(&requests[0].id),
+8388:            Some(&RequestKind::History {
+8389-                session_id: "ses_1".into(),
+8390-                offset: 2,
+--- direct history builders ---
+src/app.rs:3614:            |id| OutgoingRequest::session_history(id, session_id, Some(offset), Some(limit)),
+--- sorted source file list ---
+snapshots/chat_dark_80x24.txt
+snapshots/chat_light_80x24.txt
+snapshots/cjk_80x24.txt
+snapshots/close_user_dark_80x24.txt
+snapshots/close_user_light_120x40.txt
+snapshots/empty_dark_80x24.txt
+snapshots/empty_light_80x24.txt
+snapshots/empty_model_search_dark_80x24.txt
+snapshots/finishing_dark_80x24.txt
+snapshots/finishing_light_120x40.txt
+snapshots/help_dark_80x24.txt
+snapshots/help_light_120x40.txt
+snapshots/logs_dark_80x24.txt
+snapshots/model_selector_dark_80x24.txt
+snapshots/model_selector_light_120x40.txt
+snapshots/multiline_composer_dark_80x24.txt
+snapshots/narrow_model_selector_dark_60x16.txt
+snapshots/new_output_marker_dark_80x24.txt
+snapshots/new_session_dark_80x24.txt
+snapshots/new_session_light_120x40.txt
+snapshots/pending_model_dark_60x16.txt
+snapshots/pending_model_dark_80x24.txt
+snapshots/pending_model_light_120x40.txt
+snapshots/profile_selector_dark_80x24.txt
+snapshots/reasoning_hidden_80x24.txt
+snapshots/reasoning_selector_dark_80x24.txt
+snapshots/running_gap_80x24.txt
+snapshots/scroll_top_80x24.txt
+snapshots/search_query_dark_80x24.txt
+snapshots/session_selector_dark_80x24.txt
+snapshots/session_selector_light_120x40.txt
+snapshots/shutdown_cancel_result_dark_80x24.txt
+snapshots/small_50x10.txt
+snapshots/steering_dark_160x50.txt
+snapshots/steering_dark_60x16.txt
+snapshots/steering_dark_80x24.txt
+snapshots/steering_light_120x40.txt
+snapshots/store_error_dark_60x16.txt
+snapshots/store_error_dark_80x24.txt
+snapshots/store_error_light_120x40.txt
+snapshots/tools_80x24.txt
+snapshots/unknown_cancel_result_dark_80x24.txt
+snapshots/unsaved_gap_dark_160x50.txt
+snapshots/unsaved_gap_dark_60x16.txt
+snapshots/unsaved_gap_dark_80x24.txt
+snapshots/unsaved_gap_light_120x40.txt
+snapshots/wide_120x40.txt
+src/app.rs
+src/app/ui_actions.rs
+src/args.rs
+src/clipboard.rs
+src/command.rs
+src/error.rs
+src/event.rs
+src/keymap.rs
+src/lib.rs
+src/main.rs
+src/markdown.rs
+src/mod.rs
+src/protocol.rs
+src/rpc.rs
+src/selection.rs
+src/selector.rs
+src/session.rs
+src/state/catalog.rs
+src/state/composer.rs
+src/state/mod.rs
+src/state/selection.rs
+src/state/session.rs
+src/state/tool.rs
+src/state/transcript.rs
+src/state/turn.rs
+src/state/view.rs
+src/terminal.rs
+src/terminal/writer_tests.rs
+src/theme.rs
+src/ui/assistant.rs
+src/ui/component_tests.rs
+src/ui/composer.rs
+src/ui/editor_layout.rs
+src/ui/error.rs
+src/ui/footer.rs
+src/ui/header.rs
+src/ui/help.rs
+src/ui/layout.rs
+src/ui/logs.rs
+src/ui/mod.rs
+src/ui/new_session.rs
+src/ui/panel.rs
+src/ui/rail.rs
+src/ui/reasoning.rs
+src/ui/render_cache_tests.rs
+src/ui/scrollbar.rs
+src/ui/section_gap_tests.rs
+src/ui/selector.rs
+src/ui/settings_footer_steer_tests.rs
+src/ui/snapshots.rs
+src/ui/status.rs
+src/ui/steer_queue.rs
+src/ui/testapp.rs
+src/ui/tool.rs
+src/ui/transcript.rs
+src/ui/user.rs
+tests/agent_e2e.rs
+tests/agent_process.rs
+tests/app_flow.rs
+tests/fixtures/protocol/history-page.json
+tests/fixtures/protocol/model-list.json
+tests/fixtures/protocol/output-delta.json
+tests/fixtures/protocol/profile-list.json
+tests/fixtures/protocol/rpc-error.json
+tests/fixtures/protocol/session-create.json
+tests/fixtures/protocol/session-list.json
+tests/fixtures/protocol/session-state.json
+tests/fixtures/protocol/tool-finished.json
+tests/fixtures/protocol/tool-started.json
+tests/fixtures/protocol/transcript-page.json
+tests/fixtures/protocol/turn-wait.json
+tests/fixtures/rail/editor/cjk-emoji.json
+tests/fixtures/rail/editor/cjk.json
+tests/fixtures/rail/editor-click/ascii-middle.json
+tests/fixtures/rail/editor-click/wide-grapheme.json
+tests/fixtures/rail/editor-click/wrapped-uppercase.json
+tests/fixtures/rail/editor/cursor-mid-13line.json
+tests/fixtures/rail/editor/empty.json
+tests/fixtures/rail/editor/four-lines.json
+tests/fixtures/rail/editor/long-soft-wrap.json
+tests/fixtures/rail/editor/narrow-60x16.json
+tests/fixtures/rail/editor/one-line-centered.json
+tests/fixtures/rail/editor/one-line.json
+tests/fixtures/rail/editor/thirteen-lines.json
+tests/fixtures/rail/editor/wide-120x40.json
+tests/fixtures/rail/footer/context-69-99.json
+tests/fixtures/rail/footer/context-70.json
+tests/fixtures/rail/footer/context-unknown.json
+tests/fixtures/rail/footer/cost-0dot0049.json
+tests/fixtures/rail/footer/cost-1dot5.json
+tests/fixtures/rail/footer/duration.json
+tests/fixtures/rail/footer/layout.json
+tests/fixtures/rail/footer/model-short.json
+tests/fixtures/rail/footer/narrow-100.json
+tests/fixtures/rail/footer/narrow-40.json
+tests/fixtures/rail/footer/narrow-60.json
+tests/fixtures/rail/footer/numbers.json
+tests/fixtures/rail/footer/queued.json
+tests/fixtures/rail/footer/ready.json
+tests/fixtures/rail/footer/selection-copied.json
+tests/fixtures/rail/footer/subscription-no-cost.json
+tests/fixtures/rail/footer/working.json
+tests/fixtures/rail/markdown/bold-italic.json
+tests/fixtures/rail/markdown/cjk.json
+tests/fixtures/rail/markdown/cjk-markdown.json
+tests/fixtures/rail/markdown/codeblock-ansi.json
+tests/fixtures/rail/markdown/codeblock.json
+tests/fixtures/rail/markdown/emoji.json
+tests/fixtures/rail/markdown/heading.json
+tests/fixtures/rail/markdown/hr.json
+tests/fixtures/rail/markdown/inline-code.json
+tests/fixtures/rail/markdown/link.json
+tests/fixtures/rail/markdown/list.json
+tests/fixtures/rail/markdown/long-wrap.json
+tests/fixtures/rail/markdown/nested-list.json
+tests/fixtures/rail/markdown/padding-x1.json
+tests/fixtures/rail/markdown/padding-y1.json
+tests/fixtures/rail/markdown/plain.json
+tests/fixtures/rail/markdown/quote.json
+tests/fixtures/rail/markdown/strikethrough.json
+tests/fixtures/rail/paste/eleven-lines-marker-cursor.json
+tests/fixtures/rail/paste/eleven-lines-marker.json
+tests/fixtures/rail/paste/single-line-inline.json
+tests/fixtures/rail/paste/ten-lines-inline.json
+tests/fixtures/rail/paste/thousand-chars-inline.json
+tests/fixtures/rail/paste/thousand-one-chars-marker.json
+tests/fixtures/rail/paste/thresholds.json
+tests/fixtures/rail/PROVENANCE.json
+tests/fixtures/rail/scrollbar/geometry.json
+tests/fixtures/rail/scrollbar/thumb-bottom.json
+tests/fixtures/rail/scrollbar/thumb-mid.json
+tests/fixtures/rail/scrollbar/thumb-top.json
+tests/fixtures/rail/slash/enter-keeps-skill-command.json
+tests/fixtures/rail/slash/enter-no-list-submits.json
+tests/fixtures/rail/slash/popup-rows.json
+tests/fixtures/rail/surface/editor-blank-padding-1of4.json
+tests/fixtures/rail/surface/editor-content.json
+tests/fixtures/rail/surface/editor.json
+tests/fixtures/rail/surface/editor-window-13-of-12.json
+tests/fixtures/rail/surface/geometry.json
+tests/fixtures/rail/surface/section-thinking.json
+tests/fixtures/rail/surface/section-user.json
+tests/fixtures/rail/surface/thinking-content.json
+tests/fixtures/rail/surface/thinking-empty.json
+tests/fixtures/rail/surface/tool-cancelled.json
+tests/fixtures/rail/surface/tool-error.json
+tests/fixtures/rail/surface/tool-pending.json
+tests/fixtures/rail/surface/tool-success.json
+tests/fixtures/rail/surface/user-content.json
+tests/fixtures/rail/surface/user-empty.json
+tests/fixtures/rail/thinking/hint.json
+tests/fixtures/rail/thinking/lines-10-collapsed.json
+tests/fixtures/rail/thinking/lines-10-expanded.json
+tests/fixtures/rail/thinking/lines-2-full.json
+tests/fixtures/rail/thinking/lines-3-full.json
+tests/fixtures/rail/thinking/lines-4-collapsed.json
+tests/fixtures/rail/thinking/lines-4-expanded.json
+tests/fixtures/rail/thinking/long-wrap-lines-5.json
+tests/fixtures/rail/thinking/manual-expand-kept.json
+tests/fixtures/rail/thinking/merged-parts.json
+tests/fixtures/rail/tool/accounting.json
+tests/fixtures/rail/tool/expanded-50-rows.json
+tests/fixtures/rail/tool/model-tool-output-19.json
+tests/fixtures/rail/tool/model-tool-output-20.json
+tests/fixtures/rail/tool/model-tool-output-21.json
+tests/fixtures/rail/tool/model-tool-simple-bash.json
+tests/fixtures/rail/tool/model-tool-simple-read.json
+tests/fixtures/rail/tool/model-tool-simple-write.json
+tests/fixtures/rail/tool/reference-bash-mode-output-18.json
+tests/fixtures/rail/tool/reference-bash-mode-output-19.json
+tests/fixtures/rail/tool/reference-bash-mode-output-20.json
+tests/fixtures/rail/tool/reference-bash-mode-output-21.json
+tests/fixtures/rail/tool/reference-bash-mode-output-68.json
+tests/fixtures/rail/tool/simple-generic-tool.json
+tests/fixtures/rail/tool/simple-read-range.json
+tests/fixtures/rail/tool/simple-reference-bash-mode-command.json
+tests/fixtures/rail/tool/simple-write-forced-collapse.json
+tests/fixtures/rail/tool/state-cancelled-as-pending.json
+tests/fixtures/rail/tool/state-error.json
+tests/fixtures/rail/tool/state-pending.json
+tests/fixtures/rail/tool/state-success.json
+tests/fixtures/rail/user/registry.json
+tests/fixtures/rail/user/surface-basic.json
+tests/fixtures/rail/user/surface-duplicate-text.json
+tests/fixtures/rail/user/surface-markdown.json
+tests/fixtures/rail/user/timestamp-format.json
+tests/fixtures/word_oracle.json
+tests/protocol.rs
+tests/rail_fixtures.rs
+tests/render_snapshots.rs
+tests/rpc_io.rs
+tests/terminal_restore.rs
+tests/word_oracle.rs
+Cargo.lock

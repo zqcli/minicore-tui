@@ -1,0 +1,32 @@
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+                       
+ ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │Agent logs                                                                                       │
+ │Captured stderr (newest first)                                                                   │
+ │                                                                                                 │
+ │2026-09-11T05:37:19.762418Z  INFO session deleted session_id=ses_ed73e5bcf1f6264a7bf220b599b4f660│
+ │2026-09-11T05:37:16.041188Z  INFO session closed session_id=ses_ed73e5bcf1f6264a7bf220b599b4f660 │
+ │2026-09-11T05:37:12.348607Z  INFO session created session_id=ses_a98cd8a542163ef04b57777e51a6138c│
+ │2026-09-11T05:37:07.530942Z  INFO turn submitted session_id=ses_ed73e5bcf1f6264a7bf220b599b4f660 │
+ │2026-09-11T05:37:07.105427Z  INFO turn submitted session_id=ses_ed73e5bcf1f6264a7bf220b599b4f660 │
+ │2026-09-11T05:37:06.704948Z  INFO session created session_id=ses_ed73e5bcf1f6264a7bf220b599b4f660│
+ │2026-09-11T05:37:06.286072Z  INFO agent open success                                             │
+ │2026-09-11T05:37:06.283853Z  INFO agent startup                                                  │
+ │                                                                                                 │
+ │                                                                                                 │
+ │                                                                                                 │
+ │                                                                                                 │
+ │                                                                                                 │
+ │Esc closes this panel                                                                            │
+ └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ▸ workspace · verify b · max · ● ready                                                        ctx ?

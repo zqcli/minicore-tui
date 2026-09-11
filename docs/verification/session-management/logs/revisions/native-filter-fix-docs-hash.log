@@ -1,0 +1,22 @@
+native-filter-fix DOCS-HASH
+Fri Sep 11 04:13:07 AM UTC 2026
+source-before
+96af60de8ae4f837be70c1b4f24adca73bb4eeb9b044f740473fb497304e472d  src/app.rs
+8971ffdd70441885c85a9ec8c89b8976f478f1814532b8e61e27c820f68db66e  src/ui/component_tests.rs
+7f58acc204d38cd1f0d893265682325fd7795b65a61de6c3826964cdf64dc96f  docs/testing.md
+5666ff82804b88e8a98221a7f3a78aa736d53db2c946b605f04d8c150b8d3a33  Cargo.toml
+40a638f2ef3b3192ee1731796c77a6dcf018d95f66f817ef191eb3b6182e01de  Cargo.lock
+ Documenting minicore-tui v0.2.8 (/root/minicore-session-panels.H0sLzv/source/minicore-tui)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.67s
+   Generated /root/minicore-session-panels.H0sLzv/source/minicore-tui/target/doc/minicore_tui/index.html
+rustdoc_stable_status=0
+ Documenting minicore-tui v0.2.8 (/root/minicore-session-panels.H0sLzv/source/minicore-tui)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.61s
+   Generated /root/minicore-session-panels.H0sLzv/source/minicore-tui/target/doc/minicore_tui/index.html
+rustdoc_msrv_status=0
+source-after
+96af60de8ae4f837be70c1b4f24adca73bb4eeb9b044f740473fb497304e472d  src/app.rs
+8971ffdd70441885c85a9ec8c89b8976f478f1814532b8e61e27c820f68db66e  src/ui/component_tests.rs
+7f58acc204d38cd1f0d893265682325fd7795b65a61de6c3826964cdf64dc96f  docs/testing.md
+5666ff82804b88e8a98221a7f3a78aa736d53db2c946b605f04d8c150b8d3a33  Cargo.toml
+40a638f2ef3b3192ee1731796c77a6dcf018d95f66f817ef191eb3b6182e01de  Cargo.lock

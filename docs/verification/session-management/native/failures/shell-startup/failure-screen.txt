@@ -1,0 +1,27 @@
+Last login: Fri Sep 11 01:02:27 on ttys008 
+/bin/sh -c 'cd /var/folders/zw/gcpf3t91243dhn6z3bb278s00000gn/T/minicore-session-native-idfyd450/workspace && env MINICORE_NATIVE_SESSION_KEY=placeholder /tmp/minicore-session-panels.M0rGv9/final-artifacts/minicore-tui-debug --agent-bin /tmp/minicore-session-panels.M0rGv9/final-artifacts/minicore-agent-debug --agent-config /var/folders/zw/gcpf3t91243dhn6z3bb278s00000gn/T/minicore-session-native-idfyd450/config/agent.toml --workspace /var/folders/zw/gcpf3t91243dhn6z3bb278s00000gn/T/minicore-session-native-idfyd450/workspace --theme dark; rc=$?; printf "\nSESSION_NATIVE_EXIT=%s\n" "$rc"' 
+[oh-my-zsh] Would you like to update? [Y/n]  
+[oh-my-zsh] You can update manually by running `omz update` 
+➜  ~ bin/sh -c 'cd /var/folders/zw/gcpf3t91243dhn6z3bb278s00000gn/T/minicore-session-native-idfyd450
+/workspace && env MINICORE_NATIVE_SESSION_KEY=placeholder /tmp/minicore-session-panels.M0rGv9/final-
+artifacts/minicore-tui-debug --agent-bin /tmp/minicore-session-panels.M0rGv9/final-artifacts/minicor
+e-agent-debug --agent-config /var/folders/zw/gcpf3t91243dhn6z3bb278s00000gn/T/minicore-session-nativ
+e-idfyd450/config/agent.toml --workspace /var/folders/zw/gcpf3t91243dhn6z3bb278s00000gn/T/minicore-s
+ession-native-idfyd450/workspace --theme dark; rc=$?; printf "\nSESSION_NATIVE_EXIT=%s\n" "$rc"' 
+zsh: no such file or directory: bin/sh 
+➜  ~  
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 

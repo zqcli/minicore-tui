@@ -1,0 +1,26 @@
+native-filter-fix RED
+Fri Sep 11 04:07:02 AM UTC 2026
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.14s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::component_tests::session_selector_query_refresh_and_footer_actions_keep_filtered_target ... FAILED
+
+failures:
+
+---- ui::component_tests::session_selector_query_refresh_and_footer_actions_keep_filtered_target stdout ----
+
+thread 'ui::component_tests::session_selector_query_refresh_and_footer_actions_keep_filtered_target' (3817456) panicked at src/ui/component_tests.rs:2645:5:
+assertion `left == right` failed: typing a query must move selection into the filtered list
+  left: Some("ses_survivor")
+ right: Some("ses_original")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ui::component_tests::session_selector_query_refresh_and_footer_actions_keep_filtered_target
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 349 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
+status=101

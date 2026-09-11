@@ -1,0 +1,101 @@
+rename-filter-fix QUALITY FINAL
+Fri Sep 11 04:56:24 AM UTC 2026
+source-before
+3b68c835f9a9dc2e49943feb4270456cae764f3bae905ec84a2875ee736c46d9  src/app.rs
+dd715eef9217567af1d3b0a6beb5c811a8fb3bfac71e4929d36711f205484a75  src/ui/component_tests.rs
+da4f3b36fb8e5b9acd626326a7e9faaa5bbdda943d2926d7405e0a05fdb707c8  docs/testing.md
+5666ff82804b88e8a98221a7f3a78aa736d53db2c946b605f04d8c150b8d3a33  Cargo.toml
+40a638f2ef3b3192ee1731796c77a6dcf018d95f66f817ef191eb3b6182e01de  Cargo.lock
+fmt_stable_status=0
+fmt_msrv_status=0
+    Checking minicore-tui v0.2.8 (/root/minicore-session-panels.H0sLzv/source/minicore-tui)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 4.31s
+clippy_stable_status=0
+    Checking minicore-tui v0.2.8 (/root/minicore-session-panels.H0sLzv/source/minicore-tui)
+error: this boolean expression can be simplified
+   --> src/ui/editor_layout.rs:283:16
+    |
+283 |               if !next_is_whitespace
+    |  ________________^
+284 | |                 && (current_is_whitespace
+285 | |                     || (!current_is_whitespace
+286 | |                         && (segment_is_cjk(segment) || segment_is_cjk(next))))
+    | |______________________________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#nonminimal_bool
+    = note: `-D clippy::nonminimal-bool` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::nonminimal_bool)]`
+help: try
+    |
+283 |             if !(next_is_whitespace || !current_is_whitespace && !segment_is_cjk(segment) && !segment_is_cjk(next))
+    |                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+283 |             if (segment_is_cjk(next) || segment_is_cjk(segment) || current_is_whitespace) && !next_is_whitespace
+    |                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+error: this boolean expression can be simplified
+   --> src/ui/editor_layout.rs:284:20
+    |
+284 |                   && (current_is_whitespace
+    |  ____________________^
+285 | |                     || (!current_is_whitespace
+286 | |                         && (segment_is_cjk(segment) || segment_is_cjk(next))))
+    | |______________________________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#nonminimal_bool
+help: try
+    |
+284 |                 && !(!current_is_whitespace && !segment_is_cjk(segment) && !segment_is_cjk(next))
+    |                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+284 |                 && current_is_whitespace || segment_is_cjk(segment) || segment_is_cjk(next)
+    |                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+error: the following explicit lifetimes could be elided: 'a
+   --> src/ui/rail.rs:177:14
+    |
+177 | fn fit_spans<'a>(spans: Vec<Span<'a>>, width: usize) -> Vec<Span<'static>> {
+    |              ^^                  ^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_lifetimes
+    = note: `-D clippy::needless-lifetimes` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_lifetimes)]`
+help: elide the lifetimes
+    |
+177 - fn fit_spans<'a>(spans: Vec<Span<'a>>, width: usize) -> Vec<Span<'static>> {
+177 + fn fit_spans(spans: Vec<Span<'_>>, width: usize) -> Vec<Span<'static>> {
+    |
+
+error: could not compile `minicore-tui` (lib) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: called `is_some()` after searching an `Iterator` with `find`
+   --> src/markdown.rs:817:13
+    |
+817 | /             lines[0]
+818 | |                 .spans
+819 | |                 .iter()
+820 | |                 .scan(0usize, |cursor, span| {
+...   |
+830 | |                 })
+831 | |                 .is_some()
+    | |__________________________^
+    |
+    = help: this is more succinctly expressed by calling `any()`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#search_is_some
+    = note: `-D clippy::search-is-some` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::search_is_some)]`
+
+error: could not compile `minicore-tui` (lib test) due to 4 previous errors
+clippy_msrv_status=101
+ Documenting minicore-tui v0.2.8 (/root/minicore-session-panels.H0sLzv/source/minicore-tui)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.61s
+   Generated /root/minicore-session-panels.H0sLzv/source/minicore-tui/target/doc/minicore_tui/index.html
+rustdoc_stable_status=0
+ Documenting minicore-tui v0.2.8 (/root/minicore-session-panels.H0sLzv/source/minicore-tui)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.60s
+   Generated /root/minicore-session-panels.H0sLzv/source/minicore-tui/target/doc/minicore_tui/index.html
+rustdoc_msrv_status=0
+source-after
+3b68c835f9a9dc2e49943feb4270456cae764f3bae905ec84a2875ee736c46d9  src/app.rs
+dd715eef9217567af1d3b0a6beb5c811a8fb3bfac71e4929d36711f205484a75  src/ui/component_tests.rs
+da4f3b36fb8e5b9acd626326a7e9faaa5bbdda943d2926d7405e0a05fdb707c8  docs/testing.md
+5666ff82804b88e8a98221a7f3a78aa736d53db2c946b605f04d8c150b8d3a33  Cargo.toml
+40a638f2ef3b3192ee1731796c77a6dcf018d95f66f817ef191eb3b6182e01de  Cargo.lock

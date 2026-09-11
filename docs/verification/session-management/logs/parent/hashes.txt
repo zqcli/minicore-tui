@@ -1,0 +1,5 @@
+84c85c768f17741ac69e49e81da1c7b2dd92d7c4eed360a51d43e337c86d0bc8  /root/minicore-session-panels.H0sLzv/native-final/artifacts/minicore-agent-debug
+1e7bff4e063c47a42663b1a509d63247e34891a194bc041054cbd4aa2513cb57  /root/minicore-session-panels.H0sLzv/native-final/artifacts/minicore-tui-debug
+aee24246491bdb13ffb95dff4fccc95895800e5f19b67c51c815132540385642  /root/minicore-session-panels.H0sLzv/native-final/artifacts/minicore-agent-release
+11408c7d5a557d99feb4bdbe3160d4133467dedededb499e037990e95932cb6d  /root/minicore-session-panels.H0sLzv/native-final/artifacts/minicore-tui-release
+21b2b24e83731364d5e6c3b31987cf1dbe96c3ffd163b3224487ea7d06cfb0c3  /root/minicore-session-panels.H0sLzv/native-final/artifacts/terminal-restore

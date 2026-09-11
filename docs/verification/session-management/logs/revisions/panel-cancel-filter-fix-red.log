@@ -1,0 +1,29 @@
+panel-cancel-filter-fix RED
+Fri Sep 11 05:11:49 AM UTC 2026
+3b68c835f9a9dc2e49943feb4270456cae764f3bae905ec84a2875ee736c46d9  src/app.rs
+aaf53be0a32f8e2e4a8cb06dc75d56cfd3867e76e403c4842d96849100faefc8  src/ui/component_tests.rs
+   Compiling minicore-tui v0.2.8 (/root/minicore-session-panels.H0sLzv/source/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 8.48s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::component_tests::session_panel_cancel_reconciles_after_frozen_target_updates ... FAILED
+
+failures:
+
+---- ui::component_tests::session_panel_cancel_reconciles_after_frozen_target_updates stdout ----
+
+thread 'ui::component_tests::session_panel_cancel_reconciles_after_frozen_target_updates' (3859955) panicked at src/ui/component_tests.rs:3250:5:
+assertion `left == right` failed: Esc must reconcile Browse selection after Rename cancellation
+  left: Some("ses_alpha")
+ right: Some("ses_beta")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ui::component_tests::session_panel_cancel_reconciles_after_frozen_target_updates
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 352 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
+status=101

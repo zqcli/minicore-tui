@@ -1,0 +1,16 @@
+ 
+ 
+ 
+ 
+ 
+ Session ses_ed73e5bcf1f6264a7bf220b599b4f660 closed. 
+ ┌─────────────────────────────────────────────────────────┐
+ │Select session                                           │
+ │Permanently delete this session?                         │
+ │Renamed During Work 中文 [ses_ed73]                      │
+ │This cannot be undone.                                   │
+ │[ Cancel ]  [ Delete ]                                   │
+ │                                                         │
+ │Tab / ← → choose · Enter activates · Esc Cancel          │
+ └─────────────────────────────────────────────────────────┘
+ ▸ workspace · verify a · high · ● ready               ctx ?

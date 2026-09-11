@@ -35,13 +35,19 @@ UI only after its complete ACK. Runtime, dependencies and package versions remai
 unchanged.
 
 The parent independently rebuilt a fresh remote source mirror: stable and Rust
-1.85.0 each passed **460 tests with 18 default ignored**; the 17 real-Agent E2E
+1.85.0 each passed **464 tests with 18 default ignored**; the 17 real-Agent E2E
 cases then passed explicitly. Agent passed **318 tests with 2 ignored** on both
 toolchains. Stable strict Clippy, format checks and warning-denied rustdoc passed.
 MSRV Clippy's pre-existing diagnostics are not claimed as fixed. Earlier review
 stages are retained under `verification/stage3-session-panel/` and
 `verification/stage4-session-panel/`; current counts are in [testing.md](testing.md).
-Native acceptance follows these source checks; no hosted CI or push is implied.
+Final [native acceptance and installation](verification/session-management/README.md)
+passed for both Debug and Release, including file-prompt snapshots, filtered
+Session targets, default-Cancel deletion, the existing streaming/FIFO workflow,
+and real-PTY normal/panic restoration. The native run found a hidden-selection
+bug; its fixes and original failing evidence are retained. Accepted binaries
+and Debug symbols are installed with old executable inodes preserved. User
+processes were not restarted; no hosted CI, push or pixel-parity claim is implied.
 
 ## Rail Follow-Up Status
 

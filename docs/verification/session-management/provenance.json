@@ -1,0 +1,34 @@
+{
+  "tui_commit": "cc7675728fdc87754a495cec7db889a1a5074ada",
+  "agent_commit": "22ecb3df5fe20ddc8fa37c7fb74aa0cc21f6e416",
+  "runtime_revision": "6cd2bdbc634437dea925495c61c7eb0be10ba171",
+  "tui_git_archive_sha256": "2023ed37a562c60a336b57189f8de1323fe3c311ca8b304a7bf9a01458d65277",
+  "agent_git_archive_sha256": "a4e3ded8d0baabab15d7c512b93afe49f7975e198f662f8773ddddefe9e65ff0",
+  "remote_build_root": "/root/minicore-session-panels.H0sLzv/native-final",
+  "local_evidence_root": "/tmp/minicore-session-panels.M0rGv9",
+  "rust_macos": "1.98.0",
+  "llvm": "19",
+  "sdk": "26.2",
+  "target": "x86_64-apple-darwin",
+  "minimum_os_metadata": "11.0",
+  "artifacts_sha256": {
+    "minicore-agent-debug": "84c85c768f17741ac69e49e81da1c7b2dd92d7c4eed360a51d43e337c86d0bc8",
+    "minicore-agent-release": "aee24246491bdb13ffb95dff4fccc95895800e5f19b67c51c815132540385642",
+    "minicore-tui-debug": "1e7bff4e063c47a42663b1a509d63247e34891a194bc041054cbd4aa2513cb57",
+    "minicore-tui-release": "11408c7d5a557d99feb4bdbe3160d4133467dedededb499e037990e95932cb6d",
+    "terminal-restore": "21b2b24e83731364d5e6c3b31987cf1dbe96c3ffd163b3224487ea7d06cfb0c3"
+  },
+  "debug_dsym_uuid": {
+    "minicore-agent": "4C4C441C-5555-3144-A180-DED71724829D",
+    "minicore-tui": "4C4C440D-5555-3144-A156-5EC3E00BEBAA"
+  },
+  "native_session": {"debug": "PASS", "release": "PASS"},
+  "native_streaming": {"debug": "PASS", "release": "PASS"},
+  "real_tty": {"normal_exit": 0, "panic_exit": 101, "stty_unchanged": true},
+  "installation": "byte-compared; previous inodes and debug symbols preserved",
+  "user_processes_restarted": false,
+  "local_rust_compilation": false,
+  "push_performed": false,
+  "new_hosted_ci": false,
+  "pixel_screenshots": "UNVERIFIED"
+}
