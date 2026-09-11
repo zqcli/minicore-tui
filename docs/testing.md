@@ -16,12 +16,12 @@ No local compilation is used for this release.
 The Session-panel verification follow-ups are recorded in
 [verification/stage3-session-panel/README.md](verification/stage3-session-panel/README.md)
 and [verification/stage4-session-panel/README.md](verification/stage4-session-panel/README.md).
-The current Stage 6 history-safety run reports **460 passed, 0 failed, 18
-ignored** on both stable and Rust 1.85 with Cargo's default test-thread
-behavior; the 17 ignored real-Agent E2E tests then passed serially on both
-toolchains. Stable strict Clippy and stable/MSRV rustdoc and rustfmt remain
-part of the remote quality gates. MSRV strict Clippy still reports only the
-pre-existing diagnostics in unmodified files.
+The current query-filtered Session-selector safety run reports **461 passed, 0
+failed, 18 ignored** on both stable and Rust 1.85 with Cargo's default
+test-thread behavior; the 17 ignored real-Agent E2E tests then passed serially
+on both toolchains. Stable strict Clippy and stable/MSRV rustdoc and rustfmt
+remain part of the remote quality gates. MSRV strict Clippy still reports only
+the pre-existing diagnostics in unmodified files.
 
 For the preceding **TUI 0.2.7 / Agent 0.3.2**, see
 [verification/0.2.7/README.md](verification/0.2.7/README.md). All compilation was

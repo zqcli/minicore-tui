@@ -1030,21 +1030,20 @@ impl App {
         })
     }
 
-    /// Reconciles only invalid identities. Filtering and reordering never
-    /// silently retargets an existing selection.
+    /// Reconciles the selection against the current lifecycle-visible query
+    /// result, choosing its first item when requested.
     fn reconcile_session_selection(&mut self, choose_first_when_empty: bool) {
         let (query, selected) = self
             .session_selector_state()
             .map(|state| (state.query.clone(), state.selected_session_id.clone()))
             .unwrap_or_default();
+        let filtered = self.filtered_session_items(&query);
         let next = match selected {
-            Some(id) if self.session_is_visible(&id) => Some(id),
-            Some(_) => None,
-            None if choose_first_when_empty => self
-                .filtered_session_items(&query)
-                .first()
-                .map(|session| session.session_id.clone()),
-            None => None,
+            Some(id) if filtered.iter().any(|session| session.session_id == id) => Some(id),
+            _ if choose_first_when_empty => {
+                filtered.first().map(|session| session.session_id.clone())
+            }
+            _ => None,
         };
         if let Some(state) = self.session_selector_state_mut() {
             state.selected_session_id = next;

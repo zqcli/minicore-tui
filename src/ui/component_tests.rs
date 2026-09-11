@@ -2547,6 +2547,220 @@ fn session_selector_refresh_preserves_selected_id_after_reorder() {
 }
 
 #[test]
+fn session_selector_query_refresh_and_footer_actions_keep_filtered_target() {
+    let sessions = || {
+        vec![
+            json!({
+                "session_id": "ses_original",
+                "title": "Renamed During Work 中文",
+                "profile": "coding",
+                "workspace": "/work/original",
+                "model": "deep",
+                "reasoning": "high",
+                "loaded": true,
+                "created_at": "2027-01-15T07:54:00Z",
+                "updated_at": "2027-01-15T07:56:00Z"
+            }),
+            json!({
+                "session_id": "ses_survivor",
+                "title": "Native Survivor",
+                "profile": "coding",
+                "workspace": "/work/survivor",
+                "model": "deep",
+                "reasoning": "high",
+                "loaded": true,
+                "created_at": "2027-01-15T07:55:00Z",
+                "updated_at": "2027-01-15T07:55:00Z"
+            }),
+        ]
+    };
+    let make_app = || {
+        let (models, profiles, _) = testapp::standard_catalog();
+        let session_list = sessions();
+        let mut app =
+            testapp::ready_catalog(ThemeKind::Dark, models, profiles, session_list.clone());
+        for session_id in ["ses_original", "ses_survivor"] {
+            app.sessions.known.get_mut(session_id).unwrap().state =
+                Some(crate::protocol::SessionStateWire {
+                    session_id: session_id.to_owned(),
+                    status: crate::protocol::SessionStatusWire::Idle,
+                    active_loop: None,
+                    block_reason: None,
+                });
+        }
+        app.sessions.active = Some("ses_survivor".to_owned());
+        testapp::open_session_selector(&mut app, session_list);
+        app.update(AppEvent::TerminalSize {
+            width: 80,
+            height: 24,
+        });
+        app
+    };
+    let selected = |app: &App| match &app.dock {
+        crate::state::selection::Dock::SessionSelector(state) => state.selected_session_id.clone(),
+        _ => None,
+    };
+    let key = |code| {
+        AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+            code,
+            KeyModifiers::empty(),
+        )))
+    };
+    let mouse = |column, row, kind| {
+        AppEvent::Terminal(CrosstermEvent::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        }))
+    };
+    let footer_point = |app: &App, action| {
+        let state = match &app.dock {
+            crate::state::selection::Dock::SessionSelector(state) => state,
+            dock => panic!("unexpected dock: {dock:?}"),
+        };
+        let screen = layout::screen_layout(app, Rect::new(0, 0, 80, 24));
+        let panel = selector::session_panel_layout(screen.panel, state);
+        (panel.footer.x..panel.footer.right())
+            .flat_map(|column| {
+                (panel.footer.y..panel.footer.bottom()).map(move |row| (column, row))
+            })
+            .find(|&(column, row)| {
+                selector::session_action_at(app, screen.panel, state, column, row) == Some(action)
+            })
+            .expect("session footer action is hit-testable")
+    };
+
+    let mut app = make_app();
+    for character in "Renamed During Work".chars() {
+        app.update(key(KeyCode::Char(character)));
+    }
+    assert_eq!(
+        selected(&app).as_deref(),
+        Some("ses_original"),
+        "typing a query must move selection into the filtered list"
+    );
+    let refresh = testapp::take_requests(app.update(key(KeyCode::F(5))))
+        .into_iter()
+        .find(|request| request.method == "session.list")
+        .expect("F5 refresh request");
+    testapp::respond(
+        &mut app,
+        &refresh,
+        json!({"sessions": [sessions()[1].clone(), sessions()[0].clone()]}),
+    );
+    assert_eq!(
+        selected(&app).as_deref(),
+        Some("ses_original"),
+        "refresh reordering must preserve the visible stable ID"
+    );
+
+    let (close_column, close_row) =
+        footer_point(&app, crate::state::selection::SessionPanelAction::Close);
+    app.update(mouse(
+        close_column,
+        close_row,
+        MouseEventKind::Down(MouseButton::Left),
+    ));
+    assert!(
+        testapp::take_requests(app.update(mouse(
+            close_column,
+            close_row,
+            MouseEventKind::Up(MouseButton::Left),
+        )))
+        .is_empty()
+    );
+    assert!(matches!(
+        &app.dock,
+        crate::state::selection::Dock::SessionSelector(state)
+            if matches!(
+                &state.mode,
+                crate::state::selection::SessionPanelMode::ConfirmClose
+            ) && state.selected_session_id.as_deref() == Some("ses_original")
+    ));
+    let close_screen = text(&draw(&app, 80, 24));
+    assert!(close_screen.contains("Renamed During Work"));
+    assert!(!close_screen.contains("Native Survivor"));
+    let close = testapp::take_requests(app.update(key(KeyCode::Enter)))
+        .into_iter()
+        .find(|request| request.method == "session.close")
+        .expect("close targets the filtered session");
+    assert_eq!(close.params["session_id"], "ses_original");
+    testapp::respond(&mut app, &close, json!({"ok": true}));
+
+    let (delete_column, delete_row) =
+        footer_point(&app, crate::state::selection::SessionPanelAction::Delete);
+    app.update(mouse(
+        delete_column,
+        delete_row,
+        MouseEventKind::Down(MouseButton::Left),
+    ));
+    assert!(
+        testapp::take_requests(app.update(mouse(
+            delete_column,
+            delete_row,
+            MouseEventKind::Up(MouseButton::Left),
+        )))
+        .is_empty()
+    );
+    let delete_screen = text(&draw(&app, 80, 24));
+    assert!(delete_screen.contains("Renamed During Work"));
+    assert!(!delete_screen.contains("Native Survivor"));
+    app.update(key(KeyCode::Tab));
+    let delete = testapp::take_requests(app.update(key(KeyCode::Enter)))
+        .into_iter()
+        .find(|request| request.method == "session.delete")
+        .expect("delete targets the filtered session");
+    assert_eq!(delete.params["session_id"], "ses_original");
+
+    let mut no_match = make_app();
+    for character in "no matching session".chars() {
+        no_match.update(key(KeyCode::Char(character)));
+    }
+    assert_eq!(
+        selected(&no_match),
+        None,
+        "a query with no matches must clear the stable selection"
+    );
+    let (close_column, close_row) = footer_point(
+        &no_match,
+        crate::state::selection::SessionPanelAction::Close,
+    );
+    no_match.update(mouse(
+        close_column,
+        close_row,
+        MouseEventKind::Down(MouseButton::Left),
+    ));
+    assert!(
+        testapp::take_requests(no_match.update(mouse(
+            close_column,
+            close_row,
+            MouseEventKind::Up(MouseButton::Left),
+        )))
+        .is_empty(),
+        "no selected session must not emit close RPC"
+    );
+    let (delete_column, delete_row) = footer_point(
+        &no_match,
+        crate::state::selection::SessionPanelAction::Delete,
+    );
+    no_match.update(mouse(
+        delete_column,
+        delete_row,
+        MouseEventKind::Down(MouseButton::Left),
+    ));
+    assert!(
+        testapp::take_requests(no_match.update(mouse(
+            delete_column,
+            delete_row,
+            MouseEventKind::Up(MouseButton::Left),
+        )))
+        .is_empty(),
+        "no selected session must not emit delete RPC"
+    );
+}
+
+#[test]
 fn session_delete_requires_close_then_second_confirmation_and_tombstones_id() {
     let (models, profiles, sessions) = testapp::standard_catalog();
     let mut app = testapp::ready_catalog(ThemeKind::Dark, models, profiles, sessions.clone());
