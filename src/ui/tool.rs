@@ -48,6 +48,7 @@ pub fn durable_with_display(
                 width.saturating_sub(rail::SURFACE_CONTENT_START + 2).max(1),
             )
         });
+    let summary = durable_summary(block);
     let mut out = vec![Line::default()];
     if expanded {
         expanded_rows(
@@ -57,6 +58,7 @@ pub fn durable_with_display(
             &block.name,
             detail,
             display,
+            summary.as_deref(),
             block.result.as_deref(),
             &mut out,
         );
@@ -68,6 +70,7 @@ pub fn durable_with_display(
             &block.name,
             detail,
             hidden,
+            summary.as_deref(),
         ));
     }
     out.push(Line::default());
@@ -108,14 +111,29 @@ pub fn live_with_display(
                 width.saturating_sub(rail::SURFACE_CONTENT_START + 2).max(1),
             )
         });
+    let summary = live_summary(tool);
     let mut out = vec![Line::default()];
     if tool.expanded {
         expanded_rows(
-            theme, width, colors, &tool.name, detail, display, result, &mut out,
+            theme,
+            width,
+            colors,
+            &tool.name,
+            detail,
+            display,
+            summary.as_deref(),
+            result,
+            &mut out,
         );
     } else {
         out.extend(simple_rows(
-            theme, width, colors, &tool.name, detail, hidden,
+            theme,
+            width,
+            colors,
+            &tool.name,
+            detail,
+            hidden,
+            summary.as_deref(),
         ));
     }
     out.push(Line::default());
@@ -140,6 +158,7 @@ fn expanded_rows(
     name: &str,
     detail: &str,
     display: Option<&ToolDisplayWire>,
+    summary: Option<&str>,
     result: Option<&str>,
     out: &mut Vec<Line<'static>>,
 ) {
@@ -154,14 +173,12 @@ fn expanded_rows(
                 .add_modifier(Modifier::BOLD),
         )),
     ));
+    let detail = rail::collapsed_simple_line(detail);
     out.push(rail::surface_row(
         width,
         colors,
         rail::SURFACE_CONTENT_START,
-        Line::from(Span::styled(
-            rail::collapsed_simple_line(detail),
-            Style::new().fg(theme.tool_output),
-        )),
+        Line::from(Span::styled(detail, Style::new().fg(theme.tool_output))),
     ));
     if let Some(input) = display.and_then(|display| display.expanded_input.as_deref()) {
         for line in input.split('\n') {
@@ -172,6 +189,8 @@ fn expanded_rows(
         for line in result.split('\n') {
             push_wrapped_row(theme, width, colors, line, "  ", out);
         }
+    } else if let Some(summary) = summary {
+        push_wrapped_row(theme, width, colors, summary, "  ", out);
     }
 }
 
@@ -182,9 +201,17 @@ fn simple_rows(
     title: &str,
     detail: &str,
     hidden: usize,
+    summary: Option<&str>,
 ) -> Vec<Line<'static>> {
     let title = rail::collapsed_simple_line(title);
-    let detail = rail::collapsed_simple_line(detail);
+    let detail = match summary {
+        Some(summary) => format!(
+            "{} · {}",
+            rail::collapsed_simple_line(summary),
+            rail::collapsed_simple_line(detail),
+        ),
+        None => rail::collapsed_simple_line(detail),
+    };
     let mut hint = vec![Span::styled(
         format!("... ({hidden} more lines, "),
         Style::new().fg(theme.tool_muted),
@@ -207,6 +234,55 @@ fn simple_rows(
     .into_iter()
     .map(|line| rail::surface_row(width, colors, rail::SURFACE_CONTENT_START, line))
     .collect()
+}
+
+fn durable_summary(block: &ToolBlock) -> Option<String> {
+    if let Some(status) = block.live_status {
+        return status_summary(status, block.result.as_deref());
+    }
+    outcome_summary(block.outcome, block.result.as_deref())
+}
+
+fn live_summary(tool: &LiveTool) -> Option<String> {
+    status_summary(tool.status, tool.result.as_deref())
+}
+
+fn outcome_summary(outcome: Option<ToolOutcomeWire>, result: Option<&str>) -> Option<String> {
+    match outcome {
+        Some(ToolOutcomeWire::Failed) => Some(failure_summary("failed", result)),
+        Some(ToolOutcomeWire::Denied) => Some(failure_summary("denied", result)),
+        Some(ToolOutcomeWire::Cancelled) => Some(cancelled_summary()),
+        Some(ToolOutcomeWire::Unknown) => Some("outcome unknown: unconfirmed".to_owned()),
+        Some(ToolOutcomeWire::Success | ToolOutcomeWire::InputProvided) | None => None,
+    }
+}
+
+fn status_summary(status: ToolStatus, result: Option<&str>) -> Option<String> {
+    match status {
+        ToolStatus::Failed => Some(failure_summary("failed", result)),
+        ToolStatus::Denied => Some(failure_summary("denied", result)),
+        ToolStatus::Cancelled => Some(cancelled_summary()),
+        ToolStatus::Pending | ToolStatus::Running | ToolStatus::Succeeded => None,
+    }
+}
+
+fn failure_summary(label: &str, result: Option<&str>) -> String {
+    format!(
+        "{label}: {}",
+        result_summary(result).unwrap_or_else(|| "unknown".to_owned())
+    )
+}
+
+fn cancelled_summary() -> String {
+    "cancelled".to_owned()
+}
+
+fn result_summary(result: Option<&str>) -> Option<String> {
+    let line = result?.lines().find(|line| !line.trim().is_empty())?;
+    let sample: String = line.chars().take(160).collect();
+    let collapsed = rail::collapsed_simple_line(&sample);
+    let clipped = rail::clip_cells(&collapsed, 120);
+    (!clipped.is_empty()).then_some(clipped)
 }
 
 fn durable_state(block: &ToolBlock) -> ToolSurfaceState {

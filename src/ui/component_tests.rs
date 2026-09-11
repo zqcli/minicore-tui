@@ -1054,6 +1054,175 @@ fn durable_tool_fold_override_is_honored_by_the_prepared_transcript() {
 }
 
 #[test]
+fn failed_tool_cards_keep_status_summary_hint_and_error_body() {
+    let theme = Theme::dark();
+    let display = crate::protocol::ToolDisplayWire {
+        detail: "$ run command".to_owned(),
+        expanded_input: Some("input body".to_owned()),
+        input_line_count: Some(1),
+        hidden_line_count: Some(2),
+        truncated: false,
+    };
+    let collapsed = tool::durable_with_display(
+        &theme,
+        &ToolBlock {
+            index: None,
+            loop_id: "loop".to_owned(),
+            request_index: 0,
+            tool_call_id: "call".to_owned(),
+            name: "bash".to_owned(),
+            result: Some("permission denied\nprivate diagnostic".to_owned()),
+            outcome: Some(crate::protocol::ToolOutcomeWire::Failed),
+            live_status: None,
+            progress: None,
+            expanded: false,
+        },
+        80,
+        false,
+        Some(&display),
+    );
+    let collapsed_text = collapsed
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(collapsed_text.contains("failed: permission denied"));
+    assert!(collapsed_text.contains("ctrl+o to expand"));
+    assert!(!collapsed_text.contains("private diagnostic"));
+
+    let expanded = tool::durable_with_display(
+        &theme,
+        &ToolBlock {
+            expanded: true,
+            result: Some("permission denied\nprivate diagnostic".to_owned()),
+            outcome: Some(crate::protocol::ToolOutcomeWire::Failed),
+            ..ToolBlock {
+                index: None,
+                loop_id: "loop".to_owned(),
+                request_index: 0,
+                tool_call_id: "call".to_owned(),
+                name: "bash".to_owned(),
+                result: None,
+                outcome: None,
+                live_status: None,
+                progress: None,
+                expanded: false,
+            }
+        },
+        80,
+        false,
+        Some(&display),
+    );
+    let expanded_text = expanded
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(expanded_text.contains("input body"));
+    assert!(expanded_text.contains("permission denied"));
+    assert!(expanded_text.contains("private diagnostic"));
+    assert!(!expanded_text.contains("ctrl+o to expand"));
+
+    let denied = tool::durable(
+        &theme,
+        &ToolBlock {
+            index: None,
+            loop_id: "loop".to_owned(),
+            request_index: 0,
+            tool_call_id: "denied".to_owned(),
+            name: "write".to_owned(),
+            result: Some("not allowed".to_owned()),
+            outcome: Some(crate::protocol::ToolOutcomeWire::Denied),
+            live_status: None,
+            progress: None,
+            expanded: false,
+        },
+        80,
+        false,
+    );
+    assert!(
+        denied
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n")
+            .contains("denied: not allowed")
+    );
+
+    let cancelled = tool::live(
+        &theme,
+        &LiveTool {
+            tool_call_id: "cancelled".to_owned(),
+            name: "read".to_owned(),
+            status: ToolStatus::Cancelled,
+            progress: None,
+            display: None,
+            result: Some("cancellation detail".to_owned()),
+            result_truncated: false,
+            expanded: false,
+        },
+        80,
+    );
+    let cancelled_text = cancelled
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(cancelled_text.contains("cancelled"));
+    assert!(!cancelled_text.contains("cancellation detail"));
+
+    let long_result = "x".repeat(400);
+    let long_text = tool::durable(
+        &theme,
+        &ToolBlock {
+            index: None,
+            loop_id: "loop".to_owned(),
+            request_index: 0,
+            tool_call_id: "long".to_owned(),
+            name: "bash".to_owned(),
+            result: Some(long_result),
+            outcome: Some(crate::protocol::ToolOutcomeWire::Failed),
+            live_status: None,
+            progress: None,
+            expanded: false,
+        },
+        80,
+        false,
+    )
+    .iter()
+    .map(line_text)
+    .collect::<Vec<_>>()
+    .join("\n");
+    assert!(!long_text.contains(&"x".repeat(121)));
+
+    let unknown = tool::durable(
+        &theme,
+        &ToolBlock {
+            index: None,
+            loop_id: "loop".to_owned(),
+            request_index: 0,
+            tool_call_id: "unknown".to_owned(),
+            name: "read".to_owned(),
+            result: None,
+            outcome: Some(crate::protocol::ToolOutcomeWire::Unknown),
+            live_status: None,
+            progress: None,
+            expanded: true,
+        },
+        80,
+        false,
+    );
+    assert!(
+        unknown
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n")
+            .contains("outcome unknown: unconfirmed")
+    );
+}
+
+#[test]
 fn cancelled_calls_use_the_dedicated_surface_in_live_and_durable_cards() {
     let theme = Theme::dark();
     // The same card identity takes the dedicated cancelled surface both while

@@ -7,6 +7,7 @@ use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers}
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 use serde_json::{Value, json};
+use unicode_width::UnicodeWidthStr;
 
 use minicore_tui::app::{App, ConnectionState, RequestKind};
 use minicore_tui::command::AppCommand;
@@ -21,6 +22,7 @@ use minicore_tui::state::{AssistantPart, TranscriptBlock};
 struct Driver {
     app: App,
     queue: VecDeque<OutgoingRequest>,
+    copies: Vec<String>,
     exited: bool,
 }
 
@@ -29,6 +31,7 @@ impl Driver {
         Self {
             app: App::new(PathBuf::from("/workspace")),
             queue: VecDeque::new(),
+            copies: Vec::new(),
             exited: false,
         }
     }
@@ -51,7 +54,7 @@ impl Driver {
                 }
                 AppCommand::Rpc(request) => self.queue.push_back(request),
                 AppCommand::KillChild => {}
-                AppCommand::CopySelection(_) => {}
+                AppCommand::CopySelection(text) => self.copies.push(text.as_str().to_owned()),
                 AppCommand::Exit => self.exited = true,
             }
         }
@@ -4309,6 +4312,289 @@ fn shutdown_send_turn_in_flight_response_registers_wait() {
     // Turn.wait must be immediately registered and dispatched
     let wait_req = driver.request("turn.wait");
     assert_eq!(wait_req.method, "turn.wait");
+}
+
+#[test]
+fn failed_tool_survives_live_finished_wait_and_history_with_folded_geometry() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+
+    driver.step(AppEvent::SubmitTurn {
+        session_id: "ses_1".into(),
+        text: "run the failing tool".into(),
+    });
+    let send = driver.request("turn.send");
+    driver.respond(
+        send,
+        json!({"turn": {"session_id": "ses_1", "loop_id": "loop_failed_tool"}}),
+    );
+    let wait = driver.request("turn.wait");
+    driver.step(agent_event(json!({
+        "type": "turn_started",
+        "data": {
+            "turn": {"session_id": "ses_1", "loop_id": "loop_failed_tool"},
+            "meta": {"session_id": "ses_1", "loop_id": "loop_failed_tool", "dropped_before": 0}
+        }
+    })));
+    request_started(&mut driver, "loop_failed_tool", 0);
+    driver.step(agent_event(json!({
+        "type": "tool_started",
+        "data": {
+            "turn": {"session_id": "ses_1", "loop_id": "loop_failed_tool"},
+            "request_index": 0,
+            "tool_call_id": "call_failed",
+            "tool_name": "bash",
+            "meta": {"session_id": "ses_1", "loop_id": "loop_failed_tool", "dropped_before": 0}
+        }
+    })));
+    driver.step(agent_event(json!({
+        "type": "tool_presentation",
+        "data": {
+            "turn": {"session_id": "ses_1", "loop_id": "loop_failed_tool"},
+            "request_index": 0,
+            "tool_call_id": "call_failed",
+            "tool_name": "bash",
+            "display": {
+                "detail": "$ failing command",
+                "hidden_line_count": 20
+            },
+            "meta": {"session_id": "ses_1", "loop_id": "loop_failed_tool", "dropped_before": 0}
+        }
+    })));
+    let error_body = "tool execution failed".to_owned();
+    driver.step(agent_event(json!({
+        "type": "tool_finished",
+        "data": {
+            "turn": {"session_id": "ses_1", "loop_id": "loop_failed_tool"},
+            "request_index": 0,
+            "tool_call_id": "call_failed",
+            "result": {
+                "outcome": "failed",
+                "content_bytes": error_body.len(),
+                "content": error_body,
+                "content_truncated": false
+            },
+            "meta": {"session_id": "ses_1", "loop_id": "loop_failed_tool", "dropped_before": 0}
+        }
+    })));
+
+    let collapsed = transcript_lines(&driver.app);
+    let collapsed_text = collapsed
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(collapsed_text.contains("failed: tool execution failed"));
+    assert!(collapsed_text.contains("ctrl+o to expand"));
+
+    let prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 100);
+    let tool_section = prepared
+        .sections
+        .iter()
+        .find(|section| {
+            section.id.kind == minicore_tui::state::view::SectionKind::Tool
+                && section.id.loop_id.as_deref() == Some("loop_failed_tool")
+                && section.id.tool_call_id.as_deref() == Some("call_failed")
+                && section.id.history_index.is_none()
+        })
+        .expect("failed live tool section");
+    let screen = minicore_tui::ui::layout::screen_layout(
+        &driver.app,
+        ratatui::layout::Rect::new(0, 0, 100, 24),
+    );
+    let offset = prepared
+        .total_rows()
+        .saturating_sub(screen.transcript.height as usize);
+    let row = screen.transcript.y + (tool_section.rows.start - offset) as u16;
+    let column = screen.content.x + tool_section.content_columns.start as u16;
+    let mouse = |kind| {
+        AppEvent::Terminal(CrosstermEvent::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        }))
+    };
+    driver.step(mouse(crossterm::event::MouseEventKind::Down(
+        crossterm::event::MouseButton::Left,
+    )));
+    driver.step(mouse(crossterm::event::MouseEventKind::Up(
+        crossterm::event::MouseButton::Left,
+    )));
+
+    let expanded = transcript_lines(&driver.app);
+    let expanded_text = expanded
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(expanded_text.contains("tool execution failed"));
+    assert!(!expanded_text.contains("ctrl+o to expand"));
+    assert_eq!(
+        driver.app.sessions.known["ses_1"].tool_folds[&minicore_tui::state::tool::ToolKey::new(
+            "ses_1",
+            "loop_failed_tool",
+            0,
+            "call_failed",
+        )],
+        minicore_tui::state::view::FoldOverride::Expanded
+    );
+
+    driver.respond(
+        wait,
+        json!({
+            "turn": {"session_id": "ses_1", "loop_id": "loop_failed_tool"},
+            "outcome": {"type": "completed"},
+            "usage": {},
+            "requests": 1,
+            "tool_rounds": 1,
+            "final_config_revision": 0,
+            "persistence": "persisted"
+        }),
+    );
+    driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
+    driver.respond_method(
+        "session.history",
+        history(
+            vec![
+                user(0, "loop_failed_tool", "run the failing tool"),
+                json!({
+                    "index": 1,
+                    "item": {"type": "assistant", "data": {
+                        "loop_id": "loop_failed_tool", "request_index": 0,
+                        "model": "deep", "reasoning_level": "high", "text": "",
+                        "reasoning": "", "tool_calls": [{
+                            "tool_call_id": "call_failed", "name": "bash", "call_index": 0
+                        }], "usage": {}, "finish_reason": "tool_calls"
+                    }}
+                }),
+                json!({
+                    "index": 2,
+                    "item": {"type": "tool_result", "data": {
+                        "loop_id": "loop_failed_tool", "request_index": 0,
+                        "tool_call_id": "call_failed", "tool_name": "bash",
+                        "outcome": "failed", "content": "tool failed",
+                        "content_truncated": false
+                    }}
+                }),
+            ],
+            None,
+            3,
+        ),
+    );
+
+    let view = &driver.app.sessions.known["ses_1"];
+    assert!(view.live.is_none());
+    let durable = transcript_lines(&driver.app);
+    let durable_text = durable.iter().map(line_text).collect::<Vec<_>>().join("\n");
+    assert!(durable_text.contains("tool failed"));
+
+    let final_prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 100);
+    let durable_tool = final_prepared
+        .sections
+        .iter()
+        .find(|section| {
+            section.id.kind == minicore_tui::state::view::SectionKind::Tool
+                && section.id.loop_id.as_deref() == Some("loop_failed_tool")
+                && section.id.tool_call_id.as_deref() == Some("call_failed")
+                && section.id.history_index == Some(1)
+        })
+        .expect("final durable failed tool section");
+    assert!(!durable_tool.folded);
+    let body_copy = final_prepared
+        .copy_ranges
+        .iter()
+        .find(|range| {
+            range.row >= durable_tool.rows.start
+                && range.row < durable_tool.rows.end
+                && range.text.contains("tool failed")
+        })
+        .expect("final durable failed result is copy-visible");
+    let section_copy = final_prepared
+        .copy_ranges
+        .iter()
+        .filter(|range| range.row >= durable_tool.rows.start && range.row < durable_tool.rows.end)
+        .map(|range| range.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(section_copy.contains("tool failed"));
+    assert!(!section_copy.contains("ctrl+o to expand"));
+
+    let hit_section = final_prepared
+        .section_at(durable_tool.rows.start, durable_tool.content_columns.start)
+        .expect("final durable tool row must hit its prepared section");
+    assert_eq!(hit_section.id, durable_tool.id);
+    driver.step(AppEvent::ConversationPrepared(final_prepared.clone()));
+
+    let final_screen = minicore_tui::ui::layout::screen_layout(
+        &driver.app,
+        ratatui::layout::Rect::new(0, 0, 100, 24),
+    );
+    let final_offset = final_prepared
+        .total_rows()
+        .saturating_sub(final_screen.transcript.height as usize);
+    assert!(
+        body_copy.row >= final_offset,
+        "final result row must be visible"
+    );
+    let body_row = final_screen.transcript.y + (body_copy.row - final_offset) as u16;
+    let body_start = final_screen.content.x + body_copy.columns.start as u16;
+    let body_end =
+        body_start + UnicodeWidthStr::width(body_copy.text.as_str()).saturating_sub(1) as u16;
+    let final_mouse = |kind, column, row| {
+        AppEvent::Terminal(CrosstermEvent::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        }))
+    };
+    driver.step(final_mouse(
+        crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        body_start,
+        body_row,
+    ));
+    driver.step(final_mouse(
+        crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left),
+        body_end,
+        body_row,
+    ));
+    assert!(
+        driver
+            .copies
+            .last()
+            .is_some_and(|copy| copy.contains("tool failed")),
+        "final durable result must copy through the App path: {:?}",
+        driver.copies
+    );
+
+    let hit_row = final_screen.transcript.y + (durable_tool.rows.start - final_offset) as u16;
+    let hit_column = final_screen.content.x + durable_tool.content_columns.start as u16;
+    driver.step(final_mouse(
+        crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        hit_column,
+        hit_row,
+    ));
+    driver.step(final_mouse(
+        crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left),
+        hit_column,
+        hit_row,
+    ));
+    let key =
+        minicore_tui::state::tool::ToolKey::new("ses_1", "loop_failed_tool", 0, "call_failed");
+    assert_eq!(
+        driver.app.sessions.known["ses_1"].tool_folds.get(&key),
+        Some(&minicore_tui::state::view::FoldOverride::Collapsed)
+    );
+    let final_collapsed = transcript_lines(&driver.app);
+    let final_collapsed_text = final_collapsed
+        .iter()
+        .map(line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(final_collapsed_text.contains("failed: tool failed"));
+    assert!(final_collapsed_text.contains("ctrl+o to expand"));
 }
 
 #[test]
