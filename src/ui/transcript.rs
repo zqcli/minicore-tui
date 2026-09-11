@@ -63,6 +63,9 @@ pub fn prepare_conversation(app: &App, width: u16) -> PreparedConversation {
         width as usize,
         durable.as_ref().map_or(&[], |d| d.lines.as_slice()),
         durable.as_ref().map_or(&[], |d| d.link_cells.as_slice()),
+        durable
+            .as_ref()
+            .and_then(|d| d.sections.last().map(|section| section.id.kind)),
         Some(&mut live_sections),
     );
     let mut conversation = PreparedConversation {
@@ -320,6 +323,13 @@ fn build_durable_prepared(
         if section.is_empty() {
             continue;
         }
+        let id = section_id(&view.info.session_id, block, ordinal as u32);
+        append_user_gap(
+            &mut lines,
+            &mut link_cells,
+            sections.last().map(|section| section.id.kind),
+            id.kind,
+        );
         let before = lines.len();
         layout::append_section(&mut lines, section);
         let after = lines.len();
@@ -329,7 +339,7 @@ fn build_durable_prepared(
             link_cells.push(Vec::new());
         }
         sections.push(SectionRange {
-            id: section_id(&view.info.session_id, block, ordinal as u32),
+            id,
             rows: before..after,
             content_columns: content_columns_for(block, width),
             collapsible: matches!(block, TranscriptBlock::Tool(_)),
@@ -378,6 +388,12 @@ fn append_prepared_section(
     if section.is_empty() {
         return;
     }
+    append_user_gap(
+        lines,
+        link_cells,
+        sections.last().map(|section| section.id.kind),
+        id.kind,
+    );
     let before = lines.len();
     layout::append_section(lines, section);
     let after = lines.len();
@@ -405,6 +421,22 @@ fn append_prepared_section(
             text,
             decorative,
         });
+    }
+}
+
+fn needs_user_gap(previous: Option<SectionKind>, current: SectionKind) -> bool {
+    previous == Some(SectionKind::User) && current == SectionKind::User
+}
+
+fn append_user_gap(
+    lines: &mut Vec<Line<'static>>,
+    link_cells: &mut Vec<LinkRow>,
+    previous: Option<SectionKind>,
+    current: SectionKind,
+) {
+    if needs_user_gap(previous, current) {
+        lines.push(Line::default());
+        link_cells.push(Vec::new());
     }
 }
 
@@ -794,6 +826,7 @@ fn all_lines_with_durable(
     width: usize,
     durable: &[Line<'static>],
     durable_links: &[LinkRow],
+    durable_last_kind: Option<SectionKind>,
     live_sections: Option<&mut Vec<SectionRange>>,
 ) -> (Vec<Line<'static>>, Vec<LinkRow>) {
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -812,6 +845,7 @@ fn all_lines_with_durable(
                 .iter()
                 .cloned(),
         );
+        let mut live_previous_kind = durable_last_kind;
 
         // Warning for unsaved loop if persistence failed (spec 30.5)
         if let Some(unsaved) = &view.unsaved_loop {
@@ -854,6 +888,7 @@ fn all_lines_with_durable(
             }
             banner_lines.push(Line::default());
             layout::append_section(&mut lines, banner_lines);
+            live_previous_kind = Some(SectionKind::Notice);
             while link_rows.len() < lines.len() {
                 link_rows.push(Vec::new());
             }
@@ -882,6 +917,7 @@ fn all_lines_with_durable(
                 Line::default(),
             ];
             layout::append_section(&mut lines, steer_lines);
+            live_previous_kind = Some(SectionKind::Notice);
             while link_rows.len() < lines.len() {
                 link_rows.push(Vec::new());
             }
@@ -894,6 +930,7 @@ fn all_lines_with_durable(
                 live,
                 width,
                 app.reasoning_visible,
+                live_previous_kind,
                 &mut lines,
                 live_sections,
             );
@@ -1006,6 +1043,7 @@ impl LiveRenderContext<'_> {
         append_live_section(
             out,
             ranges,
+            None,
             SectionId {
                 session_id: self.session_id.to_owned(),
                 loop_id: Some(self.loop_id.to_owned()),
@@ -1044,6 +1082,7 @@ impl LiveRenderContext<'_> {
         append_live_section(
             out,
             ranges,
+            None,
             SectionId {
                 session_id: self.session_id.to_owned(),
                 loop_id: Some(self.loop_id.to_owned()),
@@ -1074,7 +1113,7 @@ impl LiveRenderContext<'_> {
             tool,
             self.width,
         );
-        append_live_section(out, ranges, id, lines, self.width, true, folded);
+        append_live_section(out, ranges, None, id, lines, self.width, true, folded);
     }
 }
 
@@ -1117,12 +1156,14 @@ fn live_tool_render(
 }
 
 /// The live loop tail: supports multi-request loops, live tools, and pending steers.
+#[allow(clippy::too_many_arguments)]
 fn live_section(
     theme: &Theme,
     view: &SessionView,
     live: &crate::state::turn::LiveLoop,
     width: usize,
     reasoning_visible: bool,
+    previous_kind: Option<SectionKind>,
     out: &mut Vec<Line<'static>>,
     ranges: Option<&mut Vec<SectionRange>>,
 ) {
@@ -1225,6 +1266,7 @@ fn live_section(
         append_live_section(
             out,
             &mut ranges,
+            previous_kind,
             SectionId {
                 session_id: session_id.clone(),
                 loop_id: Some(loop_id.clone()),
@@ -1252,6 +1294,7 @@ fn live_section(
         append_live_section(
             out,
             &mut ranges,
+            None,
             SectionId {
                 session_id: session_id.clone(),
                 loop_id: Some(loop_id.clone()),
@@ -1277,9 +1320,11 @@ fn live_section(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_live_section(
     out: &mut Vec<Line<'static>>,
     ranges: &mut Option<&mut Vec<SectionRange>>,
+    previous_kind: Option<SectionKind>,
     id: SectionId,
     lines: Vec<Line<'static>>,
     width: usize,
@@ -1288,6 +1333,13 @@ fn append_live_section(
 ) {
     if lines.is_empty() {
         return;
+    }
+    let previous_kind = ranges
+        .as_deref()
+        .and_then(|ranges| ranges.last().map(|section| section.id.kind))
+        .or(previous_kind);
+    if needs_user_gap(previous_kind, id.kind) {
+        out.push(Line::default());
     }
     let before = out.len();
     layout::append_section(out, lines);

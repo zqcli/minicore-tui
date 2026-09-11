@@ -4,14 +4,19 @@
 use std::path::PathBuf;
 
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
 use serde_json::json;
 
 use crate::app::{App, ConnectionState};
 use crate::event::{AppEvent, RpcEvent};
 use crate::markdown::{parse_count, reset_parse_count};
-use crate::protocol::{IncomingFrame, RpcNotification, UsageWire};
+use crate::protocol::{IncomingFrame, RpcNotification, TurnRef, UsageWire};
 use crate::state::session::SessionView;
 use crate::state::transcript::{AssistantBlock, AssistantPart, ToolBlock, TranscriptBlock};
+use crate::state::turn::{
+    AppliedSteer, LiveLoop, LocalSubmissionId, PendingSteer, PendingSteerState,
+};
+use crate::state::view::{ConversationSelection, SelectionGranularity, SelectionPoint};
 use crate::theme::ThemeKind;
 use crate::ui::transcript::{prepare_conversation, visible_rows};
 
@@ -591,4 +596,149 @@ fn ordinary_editor_input_reuses_prepared_rows() {
             pointer
         );
     }
+}
+
+fn user_gap_app(second_kind: &str) -> App {
+    crate::ui::testapp::open_with(
+        ThemeKind::Dark,
+        "ses_1",
+        None,
+        "high",
+        vec![
+            crate::ui::testapp::user_entry(0, "loop_1", "first prompt"),
+            json!({
+                "index": 1,
+                "item": {"type": "user", "data": {
+                    "loop_id": "loop_2", "kind": second_kind, "text": "second message"
+                }}
+            }),
+        ],
+    )
+}
+
+fn add_live(view: &mut SessionView, local_id: u64) {
+    view.live = Some(LiveLoop::new(
+        LocalSubmissionId(local_id),
+        "second message".to_owned(),
+    ));
+    view.live.as_mut().unwrap().reference = Some(TurnRef {
+        session_id: "ses_1".to_owned(),
+        loop_id: "loop_2".to_owned(),
+    });
+    view.transcript.invalidate();
+}
+
+fn assert_user_gap(app: &App, expected: &str) {
+    let prepared = prepare_conversation(app, WIDTH);
+    let users: Vec<_> = prepared
+        .sections
+        .iter()
+        .filter(|section| section.id.kind == crate::state::view::SectionKind::User)
+        .collect();
+    assert_eq!(users.len(), 2);
+    let gap = users[1].rows.start.saturating_sub(users[0].rows.end);
+    assert_eq!(gap, 1, "one transparent User separator");
+    let gap_row = users[0].rows.end;
+    assert!(prepared.lines[gap_row].spans.is_empty());
+    assert_eq!(prepared.link_cells.len(), prepared.lines.len());
+    assert!(prepared.link_cells[gap_row].is_empty());
+    assert!(prepared.sections.iter().all(|s| !s.rows.contains(&gap_row)));
+    assert!(
+        prepared
+            .section_at(gap_row, users[0].content_columns.start)
+            .is_none()
+    );
+    assert!(prepared.copy_ranges.iter().all(|r| r.row != gap_row));
+
+    let selection = ConversationSelection {
+        session_id: "ses_1".to_owned(),
+        anchor: SelectionPoint {
+            row: users[0].rows.start + 1,
+            column: users[0].content_columns.start,
+            section_id: Some(users[0].id.clone()),
+            section_row: 1,
+        },
+        focus: SelectionPoint {
+            row: users[1].rows.start + 1,
+            column: users[1].content_columns.end.saturating_sub(1),
+            section_id: Some(users[1].id.clone()),
+            section_row: 1,
+        },
+        granularity: SelectionGranularity::Character,
+        dragged: true,
+    };
+    let copied = crate::ui::transcript::selection_text(&prepared, &selection);
+    assert!(copied.contains("first prompt") && copied.contains(expected));
+    assert!(!copied.contains("\n\n"));
+
+    let screen = crate::ui::layout::screen_layout(app, Rect::new(0, 0, WIDTH + 1, HEIGHT));
+    let position = crate::ui::transcript::scroll_position(
+        app,
+        prepared.total_rows(),
+        screen.transcript.height as usize,
+    );
+    assert!(gap_row >= position.offset && gap_row < position.offset + position.visible_rows);
+    let rows = crate::ui::component_tests::buffer_lines(&crate::ui::component_tests::draw(
+        app,
+        WIDTH + 1,
+        HEIGHT,
+    ));
+    assert!(
+        rows[screen.transcript.y as usize + gap_row - position.offset][1..]
+            .trim()
+            .is_empty()
+    );
+}
+
+#[test]
+fn consecutive_user_cards_keep_one_transparent_gap_across_all_user_paths() {
+    for kind in ["prompt", "steering"] {
+        assert_user_gap(&user_gap_app(kind), "second message");
+    }
+
+    let mut live = user_gap_app("prompt");
+    let view = live.sessions.known.get_mut("ses_1").unwrap();
+    view.transcript.blocks.pop();
+    add_live(view, 1);
+    view.applied_steers.push(AppliedSteer {
+        local_id: 1,
+        text: "second steering".to_owned(),
+        accepted_at: None,
+        request_index: 0,
+    });
+    assert_user_gap(&live, "second steering");
+
+    let mut queued = user_gap_app("prompt");
+    let view = queued.sessions.known.get_mut("ses_1").unwrap();
+    add_live(view, 2);
+    view.live
+        .as_mut()
+        .unwrap()
+        .pending_steers
+        .push(PendingSteer {
+            local_id: 2,
+            text: "queued steering".to_owned(),
+            state: PendingSteerState::Queued,
+            accepted_at: None,
+            steer_index: None,
+        });
+    assert_user_gap(&queued, "second message");
+    let prepared = prepare_conversation(&queued, WIDTH);
+    assert_eq!(
+        prepared
+            .sections
+            .iter()
+            .filter(|section| section.id.kind == crate::state::view::SectionKind::User)
+            .count(),
+        2
+    );
+    let rows = crate::ui::component_tests::buffer_lines(&crate::ui::component_tests::draw(
+        &queued,
+        WIDTH + 1,
+        HEIGHT,
+    ));
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Steering (accepted): queued steering"))
+    );
 }
