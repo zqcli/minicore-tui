@@ -58,6 +58,8 @@ const MAX_NOTICES: usize = 32;
 
 /// How long a transient notice stays before `Tick` removes it (spec 33.2).
 const NOTICE_TTL: Duration = Duration::from_secs(5);
+/// Normal busy-spinner cadence: ten frames per second.
+const SPINNER_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Maximum time allowed for the orderly `agent.shutdown` sequence.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -305,6 +307,9 @@ pub struct App {
     pub selection: Option<ConversationSelection>,
     /// Monotonic deadline for the one-row `selection copied` footer state.
     selection_copied_until: Option<Instant>,
+    /// Independent monotonic deadline for the next spinner frame. Other Tick
+    /// sources (selection and notice expiry) must not advance the spinner.
+    spinner_next_due: Option<Instant>,
     /// Notice lifetime; a field so tests can shorten/past-expire it.
     pub notice_ttl: Duration,
     /// The new-session draft while a model/reasoning/profile selector sits
@@ -417,6 +422,7 @@ impl App {
             prepared_conversation: None,
             selection: None,
             selection_copied_until: None,
+            spinner_next_due: None,
             notice_ttl: NOTICE_TTL,
             draft: None,
             shutdown_sent: false,
@@ -462,20 +468,42 @@ impl App {
         (self.monotonic_now)()
     }
 
+    fn spinner_active(&self) -> bool {
+        self.sessions.known.values().any(|view| {
+            view.live.is_some()
+                || view
+                    .state
+                    .as_ref()
+                    .is_some_and(|state| state.status != SessionStatusWire::Idle)
+        })
+    }
+
+    fn sync_spinner_deadline(&mut self) {
+        if self.spinner_active() {
+            if self.spinner_next_due.is_none() {
+                self.spinner_next_due = Some(
+                    self.instant_now()
+                        .checked_add(SPINNER_INTERVAL)
+                        .expect("spinner deadline is representable"),
+                );
+            }
+        } else {
+            self.spinner_next_due = None;
+        }
+    }
+
     /// Whether the app currently needs a visual tick. The main loop sleeps
     /// until the earliest of the spinner cadence, transient-notice expiry,
     /// and the double-Ctrl+C window; `None` means idle and no timer is armed.
     pub fn next_tick(&self) -> Option<Duration> {
         let now = self.instant_now();
         let mut earliest: Option<Duration> = None;
-        if self.sessions.known.values().any(|view| {
-            view.live.is_some()
-                || view
-                    .state
-                    .as_ref()
-                    .is_some_and(|state| state.status != SessionStatusWire::Idle)
-        }) {
-            earliest = Some(Duration::from_millis(33));
+        if self.spinner_active() {
+            let remaining = self
+                .spinner_next_due
+                .map(|deadline| deadline.saturating_duration_since(now))
+                .unwrap_or(SPINNER_INTERVAL);
+            earliest = Some(remaining);
         }
         for notice in &self.notices {
             if !notice.sticky {
@@ -584,6 +612,7 @@ impl App {
     /// The single state-mutation entry point. Returns the side effects the
     /// main loop must execute; commands are never executed here.
     pub fn update(&mut self, event: AppEvent) -> Vec<AppCommand> {
+        self.sync_spinner_deadline();
         if matches!(&event, AppEvent::Rendered) {
             self.dirty = false;
             return Vec::new();
@@ -673,7 +702,18 @@ impl App {
             AppEvent::RpcSendFailed { id, error } => self.on_send_failed(id, error),
             AppEvent::ShutdownRequested => self.request_shutdown(),
             AppEvent::Tick => {
-                self.frame_count = self.frame_count.wrapping_add(1);
+                let now = self.instant_now();
+                if self.spinner_active()
+                    && self
+                        .spinner_next_due
+                        .is_some_and(|deadline| deadline <= now)
+                {
+                    self.frame_count = self.frame_count.wrapping_add(1);
+                    self.spinner_next_due = Some(
+                        now.checked_add(SPINNER_INTERVAL)
+                            .expect("spinner deadline is representable"),
+                    );
+                }
                 if self.ctrl_c_at.is_some_and(|pressed| {
                     self.instant_now().saturating_duration_since(pressed) >= DOUBLE_CTRL_C_WINDOW
                 }) {
@@ -812,6 +852,7 @@ impl App {
         // per session (or a fresh-turn fallback once a finished loop settles).
         let advance = self.advance_steer_queues();
         commands.extend(advance);
+        self.sync_spinner_deadline();
         commands
     }
 
@@ -9089,6 +9130,77 @@ mod tests {
     }
 
     #[test]
+    fn spinner_cadence_uses_monotonic_elapsed_not_tick_count() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let elapsed = Arc::new(AtomicU64::new(0));
+        let clock = Arc::clone(&elapsed);
+        let base = Instant::now();
+        let mut app = App::with_monotonic_clock(PathBuf::from("/project"), move || {
+            base + Duration::from_millis(clock.load(Ordering::Relaxed))
+        });
+        let mut view = SessionView::new(
+            serde_json::from_value(session_info("ses_spinner")).expect("session fixture parses"),
+        );
+        view.live = Some(LiveLoop::new(
+            LocalSubmissionId(1),
+            "spinner test".to_owned(),
+        ));
+        app.sessions.known.insert("ses_spinner".to_owned(), view);
+        app.sessions.active = Some("ses_spinner".to_owned());
+        app.update(AppEvent::ClipboardResult {
+            success: false,
+            error: Some("arm spinner".to_owned()),
+        });
+
+        assert_eq!(app.next_tick(), Some(Duration::from_millis(100)));
+        for millis in [0, 10, 20, 40, 60, 80, 99] {
+            elapsed.store(millis, Ordering::Relaxed);
+            app.update(AppEvent::Tick);
+            app.update(AppEvent::Rpc(RpcEvent::AgentLogLine(
+                "rpc traffic".to_owned(),
+            )));
+            app.update(AppEvent::ClipboardResult {
+                success: false,
+                error: Some("notice traffic".to_owned()),
+            });
+            assert_eq!(
+                app.frame_count, 0,
+                "repeated Tick/RPC/notice traffic must not accelerate the spinner"
+            );
+        }
+        assert_eq!(
+            app.next_tick(),
+            Some(Duration::from_millis(1)),
+            "next_tick must expose the remaining spinner cadence"
+        );
+
+        elapsed.store(100, Ordering::Relaxed);
+        app.update(AppEvent::Tick);
+        assert_eq!(app.frame_count, 1);
+        for _ in 0..10 {
+            app.update(AppEvent::Tick);
+        }
+        assert_eq!(
+            app.frame_count, 1,
+            "multiple Tick events at one monotonic instant must advance once"
+        );
+
+        elapsed.store(200, Ordering::Relaxed);
+        app.update(AppEvent::Tick);
+        assert_eq!(app.frame_count, 2);
+
+        for millis in 300..=1_000 {
+            elapsed.store(millis, Ordering::Relaxed);
+            app.update(AppEvent::Tick);
+        }
+        assert_eq!(
+            app.frame_count, 10,
+            "the ten-frame spinner must advance at about 100ms per frame"
+        );
+    }
+
+    #[test]
     fn busy_spinner_does_not_advance_selection_drag_before_its_50ms_deadline() {
         use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -9128,30 +9240,46 @@ mod tests {
         ));
         let before = app.active_view().unwrap().scroll.offset;
 
-        assert_eq!(app.next_tick(), Some(Duration::from_millis(33)));
+        assert_eq!(app.next_tick(), Some(Duration::from_millis(50)));
         elapsed.store(33, Ordering::Relaxed);
         assert_eq!(
             app.next_tick(),
             Some(Duration::from_millis(17)),
-            "busy spinner must expose the remaining selection deadline"
+            "selection must retain its independent 50ms deadline"
         );
         app.update(AppEvent::Tick);
         assert_eq!(
             app.active_view().unwrap().scroll.offset,
             before,
-            "33ms spinner tick must not auto-scroll a selection"
+            "an early spinner/selection tick must not auto-scroll a selection"
+        );
+        assert_eq!(
+            app.frame_count, 0,
+            "an early timer tick must not advance the spinner"
         );
 
         elapsed.store(50, Ordering::Relaxed);
         app.update(AppEvent::Tick);
         let after = app.active_view().unwrap().scroll.offset;
         assert!(after > before, "selection auto-scroll fires at 50ms");
+        assert_eq!(app.frame_count, 0, "selection must not advance the spinner");
         elapsed.store(60, Ordering::Relaxed);
         app.update(AppEvent::Tick);
         assert_eq!(
             app.active_view().unwrap().scroll.offset,
             after,
             "selection auto-scroll must not run again before the next 50ms deadline"
+        );
+        assert_eq!(
+            app.frame_count, 0,
+            "selection cadence must not accelerate the spinner"
+        );
+
+        elapsed.store(100, Ordering::Relaxed);
+        app.update(AppEvent::Tick);
+        assert_eq!(
+            app.frame_count, 1,
+            "the spinner advances at its 100ms deadline"
         );
     }
 

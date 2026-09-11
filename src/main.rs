@@ -663,7 +663,7 @@ mod tests {
         }
         assert_eq!(
             tick_at,
-            Some(33),
+            Some(100),
             "continuous non-Tick events must not reset the active absolute deadline"
         );
         assert_eq!(app.frame_count, 1);
