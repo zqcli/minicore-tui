@@ -1,0 +1,4 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui)
+   Compiling render-analysis v0.0.0 (/root/minicore-tui-stream-smooth.z2MHSJ/perf)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 17.42s
+     Running `/root/minicore-tui-027-RXdxEP/target-linux/debug/render-analysis`

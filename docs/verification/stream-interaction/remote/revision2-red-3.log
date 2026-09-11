@@ -1,0 +1,19 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+   Compiling minicore-tui v0.2.8 (/root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui)
+error[E0624]: method `conversation_point` is private
+    --> src/app.rs:7674:17
+     |
+7674 |             app.conversation_point(column, marker_row).is_none(),
+     |                 ^^^^^^^^^^^^^^^^^^ private method
+     |
+    ::: src/app/ui_actions.rs:771:5
+     |
+ 771 |     fn conversation_point(&self, column: u16, row: u16) -> Option<SelectionPoint> {
+     |     ----------------------------------------------------------------------------- private method defined here
+
+For more information about this error, try `rustc --explain E0624`.
+error: could not compile `minicore-tui` (lib test) due to 1 previous error

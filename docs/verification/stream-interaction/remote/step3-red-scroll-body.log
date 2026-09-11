@@ -1,0 +1,19 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 7.11s
+     Running unittests src/lib.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+
+thread 'ui::component_tests::scrollbar_drag_body_follows_before_release' (3130763) panicked at src/ui/component_tests.rs:1480:5:
+the transcript body must follow the pending scrollbar offset before release
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test ui::component_tests::scrollbar_drag_body_follows_before_release ... FAILED
+
+failures:
+
+failures:
+    ui::component_tests::scrollbar_drag_body_follows_before_release
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 321 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

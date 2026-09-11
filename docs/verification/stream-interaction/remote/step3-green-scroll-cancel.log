@@ -1,0 +1,12 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 4.31s
+     Running unittests src/lib.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 4 tests
+test app::tests::scrollbar_drag_cancels_when_switching_sessions ... ok
+test app::tests::scrollbar_drag_cancels_before_tail_scroll_and_late_release ... ok
+test ui::component_tests::scrollbar_drag_body_follows_before_release ... ok
+test app::tests::scrollbar_drag_requires_release_and_cancels_on_focus_or_resize ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 320 filtered out; finished in 0.00s
+

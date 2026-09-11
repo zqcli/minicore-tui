@@ -1,0 +1,19 @@
+{
+  "status": "PASS",
+  "all_stdio_tty": true,
+  "results": [
+    {
+      "mode": "normal",
+      "exit": 0,
+      "stty_unchanged": true,
+      "unflushed_frame_absent": true
+    },
+    {
+      "mode": "panic",
+      "exit": 101,
+      "stty_unchanged": true,
+      "unflushed_frame_absent": true
+    }
+  ],
+  "compiled": "remote x86_64 macOS Rust 1.98.0, Clang/LLD 19"
+}

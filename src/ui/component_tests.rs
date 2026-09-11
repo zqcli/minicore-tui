@@ -125,6 +125,156 @@ fn prepared_tool_sections_keep_full_identity_and_mouse_toggle_uses_the_same_rang
 }
 
 #[test]
+fn live_tool_mouse_click_collapses_the_running_card() {
+    let mut app = testapp::live_turn(ThemeKind::Dark);
+    app.update(AppEvent::TerminalSize {
+        width: 80,
+        height: 24,
+    });
+
+    let prepared = transcript::prepare_conversation(&app, 79);
+    let live_tool = prepared
+        .sections
+        .iter()
+        .find(|section| {
+            section.id.kind == crate::state::view::SectionKind::Tool
+                && section.id.loop_id.as_deref() == Some("loop_live")
+                && section.id.tool_call_id.as_deref() == Some("c1")
+                && section.id.history_index.is_none()
+        })
+        .expect("running live Tool section");
+    let screen = layout::screen_layout(&app, Rect::new(0, 0, 80, 24));
+    let offset = prepared
+        .total_rows()
+        .saturating_sub(screen.transcript.height as usize);
+    assert!(live_tool.rows.start >= offset, "live Tool must be visible");
+    let row = screen.transcript.y + (live_tool.rows.start - offset) as u16;
+    let column = screen.content.x + live_tool.content_columns.start as u16;
+    let mouse = |kind| {
+        AppEvent::Terminal(CrosstermEvent::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }))
+    };
+
+    app.update(mouse(MouseEventKind::Down(MouseButton::Left)));
+    app.update(mouse(MouseEventKind::Up(MouseButton::Left)));
+
+    let key = crate::state::tool::ToolKey::new("ses_1", "loop_live", 0, "c1");
+    assert_eq!(
+        app.active_view().unwrap().tool_folds.get(&key),
+        Some(&crate::state::view::FoldOverride::Collapsed),
+        "a plain click on a running live Tool must record a per-tool collapse"
+    );
+    let folded = transcript::prepare_conversation(&app, 79)
+        .sections
+        .into_iter()
+        .find(|section| section.id == live_tool.id)
+        .is_some_and(|section| section.folded);
+    assert!(
+        folded,
+        "the running live Tool must render folded after the click"
+    );
+}
+
+#[test]
+fn stale_live_tool_loop_cannot_toggle_the_current_card() {
+    let mut app = testapp::live_turn(ThemeKind::Dark);
+    let before = app
+        .active_view()
+        .and_then(|view| view.live.as_ref())
+        .and_then(|live| live.requests.first())
+        .and_then(|request| request.tools.first())
+        .map(|tool| tool.expanded)
+        .expect("live Tool fixture");
+    app.sessions
+        .known
+        .get_mut("ses_1")
+        .unwrap()
+        .live
+        .as_mut()
+        .unwrap()
+        .reference = Some(crate::protocol::TurnRef {
+        session_id: "ses_1".to_owned(),
+        loop_id: "loop_new".to_owned(),
+    });
+    app.update(AppEvent::ToggleTool {
+        session_id: "ses_1".to_owned(),
+        loop_id: "loop_old".to_owned(),
+        request_index: 0,
+        tool_call_id: "c1".to_owned(),
+    });
+    let view = app.active_view().unwrap();
+    assert_eq!(
+        view.live
+            .as_ref()
+            .and_then(|live| live.requests.first())
+            .and_then(|request| request.tools.first())
+            .map(|tool| tool.expanded),
+        Some(before),
+        "an old loop event must not mutate the current live Tool"
+    );
+    assert!(
+        view.tool_folds.is_empty(),
+        "an old loop event must not create a fold override"
+    );
+}
+
+#[test]
+fn stale_durable_tool_toggle_cannot_mutate_the_current_live_card() {
+    let mut app = testapp::live_turn(ThemeKind::Dark);
+    let view = app.sessions.known.get_mut("ses_1").unwrap();
+    view.live.as_mut().unwrap().reference = Some(crate::protocol::TurnRef {
+        session_id: "ses_1".to_owned(),
+        loop_id: "loop_new".to_owned(),
+    });
+    view.live
+        .as_mut()
+        .unwrap()
+        .requests
+        .first_mut()
+        .unwrap()
+        .tools
+        .first_mut()
+        .unwrap()
+        .expanded = true;
+    view.transcript
+        .blocks
+        .push(TranscriptBlock::Tool(ToolBlock {
+            index: Some(99),
+            loop_id: "loop_old".to_owned(),
+            request_index: 0,
+            tool_call_id: "c1".to_owned(),
+            name: "read".to_owned(),
+            result: None,
+            outcome: None,
+            live_status: None,
+            progress: None,
+            expanded: true,
+        }));
+
+    app.update(AppEvent::ToggleTool {
+        session_id: "ses_1".to_owned(),
+        loop_id: "loop_old".to_owned(),
+        request_index: 0,
+        tool_call_id: "c1".to_owned(),
+    });
+    assert_eq!(
+        app.active_view()
+            .unwrap()
+            .live
+            .as_ref()
+            .and_then(|live| live.requests.first())
+            .and_then(|request| request.tools.first())
+            .map(|tool| tool.expanded),
+        Some(true),
+        "a stale durable Tool with the same call id must not mutate the new live loop"
+    );
+}
+
+#[test]
 fn prepared_section_ids_survive_tool_result_updates() {
     let mut app = testapp::tools(ThemeKind::Dark);
     let before: Vec<_> = transcript::prepare_conversation(&app, 79)
@@ -1389,7 +1539,7 @@ fn conversation_drag_copies_across_blocks_without_the_rail_or_padding() {
 }
 
 #[test]
-fn scrollbar_drag_previews_without_committing_until_release() {
+fn scrollbar_drag_body_follows_before_release() {
     let mut app = testapp::tools(ThemeKind::Dark);
     app.update(AppEvent::TerminalSize {
         width: 80,
@@ -1417,20 +1567,29 @@ fn scrollbar_drag_previews_without_committing_until_release() {
         MouseEventKind::Down(MouseButton::Left),
         geometry.thumb_top,
     ));
-    let preview_row = geometry.track_top + geometry.max_thumb_start / 2;
+    let preview_row = geometry.track_top;
     app.update(down(MouseEventKind::Drag(MouseButton::Left), preview_row));
-    assert!(app.scrollbar_preview_offset("ses_1").is_some());
+    let pending = app
+        .scrollbar_preview_offset("ses_1")
+        .expect("pending offset");
+    assert_eq!(pending, 0);
     assert_eq!(app.active_view().unwrap().scroll.offset, view_offset_before);
     assert_eq!(
         app.active_view().unwrap().scroll.follow_tail,
         view_follow_before
+    );
+    assert!(
+        buffer_lines(&draw(&app, 80, 24))
+            .iter()
+            .any(|row| row.contains("line 00")),
+        "the transcript body must follow the pending scrollbar offset before release"
     );
 
     app.update(down(MouseEventKind::Up(MouseButton::Left), preview_row));
     assert!(app.scrollbar_preview_offset("ses_1").is_none());
     let view = app.active_view().unwrap();
     assert!(!view.scroll.follow_tail);
-    assert!(view.scroll.offset > 0);
+    assert_eq!(view.scroll.offset, pending);
 }
 
 #[test]

@@ -1,0 +1,148 @@
+Diff in /root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui/src/app/ui_actions.rs:923:
+         let prepared = self.conversation_for_input(screen.content.width);
+         let total = prepared.total_rows();
+         let visible = crate::ui::transcript::visible_rows(self, total, screen.transcript.height);
+-        let current = crate::ui::transcript::scroll_position(
+-            self,
+-            total,
+-            screen.transcript.height as usize,
+-        )
+-        .offset;
++        let current =
++            crate::ui::transcript::scroll_position(self, total, screen.transcript.height as usize)
++                .offset;
+         let Some(geometry) =
+             crate::ui::scrollbar::geometry(screen.transcript, total, visible.max(1), current)
+         else {
+Diff in /root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui/src/app/ui_actions.rs:943:
+         let Some(session_id) = self.sessions.active.clone() else {
+             return false;
+         };
+-        let marker = self
+-            .active_view()
+-            .is_some_and(|view| !view.scroll.follow_tail && total > screen.transcript.height as usize);
++        let marker = self.active_view().is_some_and(|view| {
++            !view.scroll.follow_tail && total > screen.transcript.height as usize
++        });
+         self.scrollbar_drag = Some(ScrollbarDrag {
+             session_id,
+             grab_offset: row as usize - geometry.thumb_top,
+Diff in /root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui/src/app.rs:826:
+             .map(|drag| drag.pending_offset)
+     }
+ 
+-    pub(crate) fn scrollbar_drag_preview(
+-        &self,
+-        session_id: &str,
+-    ) -> Option<(usize, usize, bool)> {
++    pub(crate) fn scrollbar_drag_preview(&self, session_id: &str) -> Option<(usize, usize, bool)> {
+         self.scrollbar_drag
+             .as_ref()
+             .filter(|drag| drag.session_id == session_id)
+Diff in /root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui/src/app.rs:7802:
+         }))
+         .unwrap();
+         let mut second = crate::state::session::SessionView::new(info);
+-        second.state = Some(serde_json::from_value(serde_json::json!({
+-            "session_id": "ses_2",
+-            "status": "idle",
+-            "active_loop": null,
+-            "block_reason": null
+-        }))
+-        .unwrap());
++        second.state = Some(
++            serde_json::from_value(serde_json::json!({
++                "session_id": "ses_2",
++                "status": "idle",
++                "active_loop": null,
++                "block_reason": null
++            }))
++            .unwrap(),
++        );
+         app.sessions.known.insert("ses_2".to_owned(), second);
+ 
+         app.update(AppEvent::OpenSession {
+Diff in /root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui/src/ui/component_tests.rs:173:
+         .into_iter()
+         .find(|section| section.id == live_tool.id)
+         .is_some_and(|section| section.folded);
+-    assert!(folded, "the running live Tool must render folded after the click");
++    assert!(
++        folded,
++        "the running live Tool must render folded after the click"
++    );
+ }
+ 
+ #[test]
+Diff in /root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui/src/ui/transcript.rs:137:
+             marker: false,
+         };
+     };
+-    if let Some((pending, visible_rows, marker)) =
+-        app.scrollbar_drag_preview(&view.info.session_id)
++    if let Some((pending, visible_rows, marker)) = app.scrollbar_drag_preview(&view.info.session_id)
+     {
+         let visible_rows = visible_rows.min(height).min(total);
+         return ScrollPosition {
+Diff in /root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui/src/ui/transcript.rs:764:
+                 .as_deref()
+                 .map(|result| tool::result_line_count(Some(result)))
+         });
+-    resolve_tool_expanded(
+-        view,
+-        key,
+-        tool.expanded,
+-        &tool.name,
+-        hidden_line_count,
+-    )
++    resolve_tool_expanded(view, key, tool.expanded, &tool.name, hidden_line_count)
+ }
+ 
+ pub(crate) fn resolve_tool_expanded(
+Diff in /root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui/src/main.rs:124:
+             return None;
+         };
+         let requested_deadline = now + requested;
+-        let deadline = self
+-            .deadline
+-            .map_or(requested_deadline, |deadline| deadline.min(requested_deadline));
++        let deadline = self.deadline.map_or(requested_deadline, |deadline| {
++            deadline.min(requested_deadline)
++        });
+         self.deadline = Some(deadline);
+         Some(deadline.saturating_duration_since(now))
+     }
+Diff in /root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui/src/main.rs:618:
+ 
+     #[test]
+     fn active_tick_deadline_survives_continuous_non_tick_events() {
+-        use std::sync::atomic::{AtomicU64, Ordering};
+         use std::sync::Arc;
++        use std::sync::atomic::{AtomicU64, Ordering};
+ 
+         let elapsed = Arc::new(AtomicU64::new(0));
+         let clock_elapsed = Arc::clone(&elapsed);
+Diff in /root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui/src/main.rs:626:
+         let base = Instant::now();
+-        let mut app = App::with_monotonic_clock(std::path::PathBuf::from("/synthetic"), move || {
+-            base + Duration::from_millis(clock_elapsed.load(Ordering::Relaxed))
+-        });
++        let mut app =
++            App::with_monotonic_clock(std::path::PathBuf::from("/synthetic"), move || {
++                base + Duration::from_millis(clock_elapsed.load(Ordering::Relaxed))
++            });
+         let info: minicore_tui::protocol::SessionInfo = serde_json::from_value(serde_json::json!({
+             "session_id": "ses_tick",
+             "title": null,
+Diff in /root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui/src/main.rs:679:
+             None,
+             "idle must disarm the tick timer"
+         );
+-        assert_eq!(app.frame_count, 1, "idle traffic must not refresh the spinner");
++        assert_eq!(
++            app.frame_count, 1,
++            "idle traffic must not refresh the spinner"
++        );
+     }
+ 
+     #[test]

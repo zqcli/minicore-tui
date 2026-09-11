@@ -1,0 +1,949 @@
+{
+  "terminal": "iTerm2 3.6.11",
+  "window_id": 70612,
+  "evidence_dir": "/var/folders/zw/gcpf3t91243dhn6z3bb278s00000gn/T/minicore-stream-smooth-iterm-lt5wm88k/evidence",
+  "expect_fixed": true,
+  "tui_sha256": "665b00243f8435e7780255248149193b7ef2b1a757495534fa94ff178bb3a0c5",
+  "agent_sha256": "6bc756105b8abad15c24e43249e07e320d382c1341a5f90ac45a28396989d788",
+  "pixel_screenshots": "UNVERIFIED; protected iTerm windows, no screenshot attempt or replacement",
+  "agent_version": "0.3.3",
+  "live_tool_click_collapses": true,
+  "cpu_dimensions": "220, 53",
+  "idle_cpu": {
+    "start_epoch_ms": 1789059638261,
+    "end_epoch_ms": 1789059640264,
+    "wall_seconds": 2.003,
+    "tui_cpu_seconds": 0.0,
+    "agent_cpu_seconds": 0.0,
+    "tui_cpu_percent_one_core": 0.0
+  },
+  "busy_cpu": [
+    {
+      "start_epoch_ms": 1789059641206,
+      "end_epoch_ms": 1789059649212,
+      "wall_seconds": 8.006,
+      "tui_cpu_seconds": 0.28,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 3.497
+    },
+    {
+      "start_epoch_ms": 1789059649227,
+      "end_epoch_ms": 1789059657236,
+      "wall_seconds": 8.009,
+      "tui_cpu_seconds": 0.28,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 3.496
+    },
+    {
+      "start_epoch_ms": 1789059657251,
+      "end_epoch_ms": 1789059665260,
+      "wall_seconds": 8.009,
+      "tui_cpu_seconds": 0.28,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 3.496
+    }
+  ],
+  "held_spinner": {
+    "samples": [
+      {
+        "at": 1789059665403,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059665426,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059665447,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059665471,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059665493,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059665518,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059665539,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789059665561,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059665584,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059665606,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789059665626,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789059665652,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789059665675,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789059665696,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789059665718,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789059665747,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059665770,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059665796,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789059665820,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059665845,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059665868,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789059665888,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789059665913,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789059665936,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059665959,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789059665984,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789059666010,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789059666030,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789059666052,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789059666078,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789059666102,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059666127,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059666150,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059666170,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059666193,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059666217,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059666241,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059666264,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059666288,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059666314,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059666339,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789059666362,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789059666388,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789059666412,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789059666431,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789059666453,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789059666474,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059666495,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789059666519,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789059666539,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059666562,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059666583,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059666608,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789059666630,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789059666651,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789059666673,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789059666692,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789059666713,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789059666734,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789059666758,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789059666778,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789059666800,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789059666822,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059666847,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059666873,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789059666898,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059666921,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789059666945,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789059666972,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789059666996,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059667020,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059667041,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059667065,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059667085,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789059667109,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789059667129,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789059667153,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789059667177,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059667200,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059667225,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789059667245,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059667267,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059667294,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789059667319,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789059667340,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789059667360,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789059667380,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789059667404,
+        "glyph": "\u2807"
+      }
+    ],
+    "changes": 41,
+    "duration_ms": 2001
+  },
+  "flood_spinner": {
+    "samples": [
+      {
+        "at": 1789059667863,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789059667886,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789059667908,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059667931,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059667953,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059667975,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059667994,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059668018,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059668043,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059668065,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789059668091,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059668119,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789059668142,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789059668165,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789059668187,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789059668212,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789059668234,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789059668254,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789059668279,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789059668301,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789059668327,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789059668350,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789059668370,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789059668394,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789059668417,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789059668443,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059668467,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059668490,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789059668513,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789059668536,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789059668559,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789059668582,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789059668606,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789059668630,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059668652,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059668673,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059668698,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059668721,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789059668746,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789059668769,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789059668794,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059668816,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059668841,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789059668861,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789059668886,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789059668909,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789059668934,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789059668955,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789059668978,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789059668997,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789059669019,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789059669049,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059669070,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789059669089,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789059669112,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789059669135,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789059669155,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789059669180,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789059669206,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059669230,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059669253,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059669272,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789059669293,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789059669315,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789059669336,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789059669356,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059669377,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059669399,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059669421,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789059669444,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789059669466,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789059669492,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789059669512,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059669535,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059669558,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059669579,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789059669600,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789059669626,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789059669649,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789059669672,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789059669701,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789059669725,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789059669747,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789059669775,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789059669796,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789059669818,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789059669841,
+        "glyph": "\u2826"
+      }
+    ],
+    "changes": 36,
+    "duration_ms": 1978
+  },
+  "scroll_cpu": [
+    {
+      "start_epoch_ms": 1789059671674,
+      "end_epoch_ms": 1789059679681,
+      "wall_seconds": 8.007,
+      "tui_cpu_seconds": 0.27,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 3.372,
+      "injected_events": 200
+    },
+    {
+      "start_epoch_ms": 1789059679697,
+      "end_epoch_ms": 1789059687697,
+      "wall_seconds": 8.0,
+      "tui_cpu_seconds": 0.28,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 3.5,
+      "injected_events": 200
+    },
+    {
+      "start_epoch_ms": 1789059687713,
+      "end_epoch_ms": 1789059695715,
+      "wall_seconds": 8.002,
+      "tui_cpu_seconds": 0.28,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 3.499,
+      "injected_events": 200
+    }
+  ],
+  "scroll_800_cpu_seconds": 1.11,
+  "scroll_800_wall_seconds": 32.984,
+  "scroll_input": {
+    "events": 800,
+    "period_seconds": 0.04,
+    "reverse_every_events": 80,
+    "injection_wall_seconds": 31.968,
+    "measurements": "absolute 25Hz deadlines; 3 x 8 seconds after 0.5s settle; event timestamps recorded; sample separately"
+  },
+  "hover_200_input_seconds": 0.574,
+  "hover_200_cpu_seconds": 0.01,
+  "wheel_100_visible_seconds": 0.552,
+  "wheel_100_cpu_seconds": 0.0,
+  "drag_body_follows_before_release": true,
+  "stationary_drag_cpu": {
+    "start_epoch_ms": 1789059708069,
+    "end_epoch_ms": 1789059710070,
+    "wall_seconds": 2.001,
+    "tui_cpu_seconds": 0.0,
+    "agent_cpu_seconds": 0.0,
+    "tui_cpu_percent_one_core": 0.0
+  },
+  "drag_cpu": [
+    {
+      "start_epoch_ms": 1789059710588,
+      "end_epoch_ms": 1789059718597,
+      "wall_seconds": 8.008,
+      "tui_cpu_seconds": 0.12,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 1.498,
+      "injected_events": 200
+    },
+    {
+      "start_epoch_ms": 1789059718612,
+      "end_epoch_ms": 1789059726618,
+      "wall_seconds": 8.006,
+      "tui_cpu_seconds": 0.13,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 1.624,
+      "injected_events": 201
+    },
+    {
+      "start_epoch_ms": 1789059726633,
+      "end_epoch_ms": 1789059734642,
+      "wall_seconds": 8.009,
+      "tui_cpu_seconds": 0.12,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 1.498,
+      "injected_events": 200
+    }
+  ],
+  "drag_distinct_body_windows": 9,
+  "status": "PASS",
+  "checks": [
+    "same-part tokens concatenate; distinct summary parts without raw newlines occupy three native rows",
+    "two rapid steers appear in dock queue above Working, with a blank gap, not as User cards",
+    "Option+Up withdraws unsent beta; resubmission keeps both entries and changes only local identity",
+    "request alpha excludes beta; request beta follows alpha answer; both history entries appear exactly once",
+    "existing immediate-footer max selection remains intact without another user turn",
+    "idle and held request 2s controls, changing Working display, owned-process CPU only; input remains responsive",
+    "800 paced bidirectional wheel events; continuous-scroll CPU measured for 3x8s; input drain marker and tail confirmed",
+    "long history: 200 hover events preserve responsive input; 100 wheel events scroll; scrollbar drag reaches beginning",
+    "native TUI exits zero and restores its shell"
+  ],
+  "captures": [
+    {
+      "name": "01-thinking-part-boundaries",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "01b-live-tool-click",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "02-two-queued-steers",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "03-queued-60x16",
+      "dimensions": "60, 16"
+    },
+    {
+      "name": "04-alpha-applied-beta-queued",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "05-both-completed",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "06-footer-max",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "07-long-history-tail",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "08-cpu-idle-wide",
+      "dimensions": "220, 53"
+    },
+    {
+      "name": "09-cpu-busy-wide",
+      "dimensions": "220, 53"
+    },
+    {
+      "name": "10-continuous-scroll-wide",
+      "dimensions": "220, 53"
+    },
+    {
+      "name": "08-long-history-scrolled",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "09a-drag-before-release",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "09-long-history-drag-top",
+      "dimensions": "100, 32"
+    }
+  ],
+  "requests": [
+    {
+      "model": "verify-a",
+      "effort": "high",
+      "alpha": false,
+      "beta": false,
+      "alpha_answer": false
+    },
+    {
+      "model": "verify-a",
+      "effort": "high",
+      "alpha": true,
+      "beta": false,
+      "alpha_answer": false
+    },
+    {
+      "model": "verify-a",
+      "effort": "high",
+      "alpha": true,
+      "beta": true,
+      "alpha_answer": true
+    },
+    {
+      "model": "verify-a",
+      "effort": "max",
+      "alpha": true,
+      "beta": true,
+      "alpha_answer": true
+    },
+    {
+      "model": "verify-a",
+      "effort": "max",
+      "alpha": true,
+      "beta": true,
+      "alpha_answer": true,
+      "flood_deltas": 246
+    }
+  ],
+  "tui_version": "minicore-tui 0.2.8",
+  "note": "Native iTerm2 screen text and input + real Agent/loopback. No user config or Store; no external provider."
+}

@@ -1,0 +1,43 @@
+{
+  "terminal": "iTerm2 3.6.11",
+  "window_id": 70606,
+  "evidence_dir": "/var/folders/zw/gcpf3t91243dhn6z3bb278s00000gn/T/minicore-stream-smooth-iterm-akfk7u09/evidence",
+  "expect_fixed": false,
+  "tui_sha256": "6b043417e4806079f46e26177b513e934eee9592c4bef8171fc902d4b0162330",
+  "agent_sha256": "6bc756105b8abad15c24e43249e07e320d382c1341a5f90ac45a28396989d788",
+  "pixel_screenshots": "UNVERIFIED; protected iTerm windows, no screenshot attempt or replacement",
+  "agent_version": "0.3.3",
+  "status": "FAIL",
+  "error": "",
+  "checks": [
+    "same-part tokens concatenate; distinct summary parts without raw newlines occupy three native rows"
+  ],
+  "captures": [
+    {
+      "name": "01-thinking-part-boundaries",
+      "dimensions": "100, 32"
+    }
+  ],
+  "requests": [
+    {
+      "model": "verify-a",
+      "effort": "high",
+      "alpha": false,
+      "beta": false,
+      "alpha_answer": false
+    },
+    {
+      "model": "verify-a",
+      "effort": "high",
+      "alpha": false,
+      "beta": false,
+      "alpha_answer": false
+    }
+  ],
+  "tui_version": "minicore-tui 0.2.8",
+  "note": "Native iTerm2 screen text and input + real Agent/loopback. No user config or Store; no external provider."
+}
+Traceback (most recent call last):
+  File "/tmp/minicore-tui-stream-smooth.EmJatp/native_driver.py", line 228, in <module>
+    tool_row = next(i + 1 for i, row in enumerate(text.splitlines()) if row.strip() == 'bash')
+StopIteration

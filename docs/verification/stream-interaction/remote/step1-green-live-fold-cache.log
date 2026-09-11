@@ -1,0 +1,9 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 8.11s
+     Running unittests src/lib.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::component_tests::live_tool_mouse_click_collapses_the_running_card ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 321 filtered out; finished in 0.00s
+

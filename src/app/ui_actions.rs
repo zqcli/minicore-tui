@@ -1,5 +1,5 @@
 use std::ops::Range;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use unicode_segmentation::UnicodeSegmentation;
@@ -23,6 +23,7 @@ pub(super) struct SelectionDrag {
     pub(super) column: u16,
     pub(super) row: u16,
     pub(super) initial: Option<(SelectionPoint, SelectionPoint)>,
+    pub(super) next_deadline: Instant,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -404,6 +405,27 @@ impl App {
                                 .then(|| (selection.anchor.clone(), selection.focus.clone()))
                         })
                     });
+                let now = self.instant_now();
+                let direction = self.selection_drag_direction(mouse.row);
+                let next_deadline = match self.selection_drag.as_ref() {
+                    None => {
+                        if direction == 0 {
+                            now
+                        } else {
+                            now + Duration::from_millis(50)
+                        }
+                    }
+                    Some(drag) => {
+                        let previous_direction = self.selection_drag_direction(drag.row);
+                        if direction == 0 {
+                            now
+                        } else if direction != previous_direction {
+                            now + Duration::from_millis(50)
+                        } else {
+                            drag.next_deadline
+                        }
+                    }
+                };
                 self.selection_drag = selecting
                     .then(|| self.sessions.active.clone())
                     .flatten()
@@ -412,6 +434,7 @@ impl App {
                         column: mouse.column,
                         row: mouse.row,
                         initial,
+                        next_deadline,
                     });
                 self.drag_mouse(mouse.column, mouse.row)
             }
@@ -450,6 +473,7 @@ impl App {
                                 column: mouse.column,
                                 row: mouse.row,
                                 initial,
+                                next_deadline: self.instant_now() + Duration::from_millis(50),
                             });
                             if let Some(point) = self.conversation_point(mouse.column, mouse.row) {
                                 self.update_conversation_selection(point);
@@ -510,10 +534,15 @@ impl App {
     /// tick commits at most one row and then resolves the new focus point
     /// through the same prepared geometry used by ordinary drag events.
     pub(super) fn auto_scroll_selection(&mut self) {
-        let Some((drag_session_id, drag_column, drag_row)) = self
-            .selection_drag
-            .as_ref()
-            .map(|drag| (drag.session_id.clone(), drag.column, drag.row))
+        let Some((drag_session_id, drag_column, drag_row, drag_next_deadline)) =
+            self.selection_drag.as_ref().map(|drag| {
+                (
+                    drag.session_id.clone(),
+                    drag.column,
+                    drag.row,
+                    drag.next_deadline,
+                )
+            })
         else {
             return;
         };
@@ -532,6 +561,10 @@ impl App {
         );
         let direction = self.selection_drag_direction(drag_row);
         if direction == 0 {
+            return;
+        }
+        let now = self.instant_now();
+        if now < drag_next_deadline {
             return;
         }
         let (total, visible) = self.viewport;
@@ -568,6 +601,9 @@ impl App {
         if before_scroll == after_scroll {
             self.selection_drag = None;
             return;
+        }
+        if let Some(drag) = self.selection_drag.as_mut() {
+            drag.next_deadline = now + Duration::from_millis(50);
         }
 
         let marker = self.active_view().is_some_and(|view| {
@@ -782,18 +818,12 @@ impl App {
         let prepared = self.conversation_for_input(screen.content.width);
         let total = prepared.total_rows();
         let height = screen.transcript.height as usize;
-        let marker = self
-            .active_view()
-            .is_some_and(|view| !view.scroll.follow_tail && total > height);
-        let budget = height.saturating_sub(usize::from(marker));
-        let offset = self.active_view().map_or(0, |view| {
-            if marker {
-                view.scroll.offset.min(total.saturating_sub(budget))
-            } else {
-                total.saturating_sub(height)
-            }
-        });
-        let logical_row = offset.saturating_add(row.saturating_sub(screen.transcript.y) as usize);
+        let position = crate::ui::transcript::scroll_position(self, total, height);
+        let local_row = row.saturating_sub(screen.transcript.y) as usize;
+        if local_row >= position.visible_rows {
+            return None;
+        }
+        let logical_row = position.offset.saturating_add(local_row);
         let relative_column = column.saturating_sub(screen.content.x) as usize;
         let section = prepared.section_at(logical_row, relative_column)?;
         Some(SelectionPoint {
@@ -858,17 +888,12 @@ impl App {
         let prepared = self.conversation_for_input(width);
         let total = prepared.total_rows();
         let height = screen.transcript.height as usize;
-        let Some(view) = self.active_view() else {
+        let position = crate::ui::transcript::scroll_position(self, total, height);
+        let local_row = row.saturating_sub(screen.transcript.y) as usize;
+        if local_row >= position.visible_rows {
             return false;
-        };
-        let marker = !view.scroll.follow_tail && total > height;
-        let budget = height.saturating_sub(usize::from(marker));
-        let offset = if marker {
-            view.scroll.offset.min(total.saturating_sub(budget))
-        } else {
-            total.saturating_sub(height)
-        };
-        let logical_row = offset.saturating_add(row.saturating_sub(screen.transcript.y) as usize);
+        }
+        let logical_row = position.offset.saturating_add(local_row);
         if logical_row >= prepared.lines.len() {
             return false;
         }
@@ -942,13 +967,9 @@ impl App {
         let prepared = self.conversation_for_input(screen.content.width);
         let total = prepared.total_rows();
         let visible = crate::ui::transcript::visible_rows(self, total, screen.transcript.height);
-        let current = self.active_view().map_or(0, |view| {
-            if view.scroll.follow_tail {
-                total.saturating_sub(visible)
-            } else {
-                view.scroll.offset
-            }
-        });
+        let current =
+            crate::ui::transcript::scroll_position(self, total, screen.transcript.height as usize)
+                .offset;
         let Some(geometry) =
             crate::ui::scrollbar::geometry(screen.transcript, total, visible.max(1), current)
         else {
@@ -963,23 +984,22 @@ impl App {
         let Some(session_id) = self.sessions.active.clone() else {
             return false;
         };
-        let now = self.instant_now();
-        let thumb_top = crate::ui::scrollbar::thumb_top_for_scroll(geometry, current);
+        let marker = self.active_view().is_some_and(|view| {
+            !view.scroll.follow_tail && total > screen.transcript.height as usize
+        });
         self.scrollbar_drag = Some(ScrollbarDrag {
             session_id,
             grab_offset: row as usize - geometry.thumb_top,
             pending_offset: current,
             pending_row: row,
-            animation_from: thumb_top,
-            animation_to: thumb_top,
-            animation_started_at: now,
+            visible_rows: visible,
+            marker,
             geometry,
         });
         true
     }
 
     pub(super) fn update_scrollbar_drag(&mut self, row: u16) {
-        let now = self.instant_now();
         let pending_offset = self.scrollbar_drag.as_ref().map(|drag| {
             crate::ui::scrollbar::scroll_top_at(drag.geometry, row as usize, drag.grab_offset)
         });
@@ -989,20 +1009,62 @@ impl App {
         let Some(drag) = self.scrollbar_drag.as_mut() else {
             return;
         };
-        let current_thumb = animated_thumb_top(drag, now);
-        let target_thumb =
-            crate::ui::scrollbar::thumb_top_for_scroll(drag.geometry, pending_offset);
         drag.pending_offset = pending_offset;
         drag.pending_row = row;
-        drag.animation_from = current_thumb;
-        drag.animation_to = target_thumb;
-        drag.animation_started_at = now;
     }
 
     pub(super) fn finish_scrollbar_drag(&mut self, row: u16) {
         let Some(mut drag) = self.scrollbar_drag.take() else {
             return;
         };
+        let area = ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: self.terminal_size.0,
+            height: self.terminal_size.1,
+        };
+        let screen = crate::ui::layout::screen_layout(self, area);
+        let Some(active_session) = self.sessions.active.as_deref() else {
+            self.mouse_down = None;
+            return;
+        };
+        if active_session != drag.session_id {
+            self.mouse_down = None;
+            return;
+        }
+        let prepared = self.conversation_for_input(screen.content.width);
+        let total = prepared.total_rows();
+        let height = screen.transcript.height as usize;
+        let marker = self
+            .active_view()
+            .is_some_and(|view| !view.scroll.follow_tail && total > height);
+        let visible = if marker {
+            height.saturating_sub(1)
+        } else {
+            height
+        }
+        .min(total);
+        let current = self.active_view().map_or(0, |view| {
+            let max_offset = total.saturating_sub(visible.max(1));
+            if view.scroll.follow_tail {
+                max_offset
+            } else {
+                view.scroll.offset.min(max_offset)
+            }
+        });
+        let Some(current_geometry) =
+            crate::ui::scrollbar::geometry(screen.transcript, total, visible.max(1), current)
+        else {
+            self.mouse_down = None;
+            return;
+        };
+        let same_geometry = visible == drag.visible_rows
+            && marker == drag.marker
+            && current_geometry == drag.geometry;
+        if !same_geometry {
+            self.mouse_down = None;
+            return;
+        }
         drag.pending_offset =
             crate::ui::scrollbar::scroll_top_at(drag.geometry, row as usize, drag.grab_offset);
         if let Some(view) = self.sessions.known.get_mut(&drag.session_id) {
@@ -1020,17 +1082,6 @@ impl App {
     pub(super) fn cancel_scrollbar_drag(&mut self) {
         self.scrollbar_drag = None;
         self.mouse_down = None;
-    }
-
-    pub(crate) fn scrollbar_preview_thumb_top(
-        &self,
-        session_id: &str,
-        geometry: crate::ui::scrollbar::ScrollbarGeometry,
-    ) -> Option<usize> {
-        self.scrollbar_drag
-            .as_ref()
-            .filter(|drag| drag.session_id == session_id)
-            .map(|drag| animated_thumb_top_for_geometry(drag, geometry, self.instant_now()))
     }
 
     fn move_composer_cursor(&mut self, column: u16, row: u16) -> bool {
@@ -1148,17 +1199,12 @@ impl App {
         let prepared = self.conversation_for_input(screen.content.width);
         let total = prepared.total_rows();
         let height = screen.transcript.height as usize;
-        let Some(view) = self.active_view() else {
+        let position = crate::ui::transcript::scroll_position(self, total, height);
+        let local_row = row.saturating_sub(screen.transcript.y) as usize;
+        if local_row >= position.visible_rows {
             return;
-        };
-        let marker = !view.scroll.follow_tail && total > height;
-        let budget = height.saturating_sub(usize::from(marker));
-        let offset = if marker {
-            view.scroll.offset.min(total.saturating_sub(budget))
-        } else {
-            total.saturating_sub(height)
-        };
-        let logical_row = offset.saturating_add(row.saturating_sub(screen.transcript.y) as usize);
+        }
+        let logical_row = position.offset.saturating_add(local_row);
         let relative_column = column.saturating_sub(screen.content.x) as usize;
         let Some(section) = prepared.section_at(logical_row, relative_column) else {
             return;
@@ -1166,6 +1212,7 @@ impl App {
         if !section.collapsible {
             return;
         }
+        let live_only = section.id.history_index.is_none();
         let id = section.id.clone();
         match id.kind {
             crate::state::view::SectionKind::Tool => {
@@ -1177,21 +1224,9 @@ impl App {
                     if let Some(view) = self.active_session_mut() {
                         let session_id = view.info.session_id.clone();
                         let key = ToolKey::new(&session_id, loop_id, request_index, tool_call_id);
-                        let current = view
-                            .transcript
-                            .blocks
-                            .iter()
-                            .find_map(|block| match block {
-                                TranscriptBlock::Tool(tool)
-                                    if tool.loop_id == loop_id
-                                        && tool.request_index == request_index
-                                        && tool.tool_call_id == tool_call_id =>
-                                {
-                                    Some(crate::ui::transcript::effective_tool_expanded(view, tool))
-                                }
-                                _ => None,
-                            })
-                            .unwrap_or(false);
+                        let Some(current) = current_tool_expanded(view, &key) else {
+                            return;
+                        };
                         let expanded = !current;
                         view.tool_folds.insert(
                             key,
@@ -1202,9 +1237,11 @@ impl App {
                             },
                         );
                         view.scroll.follow_tail = false;
-                        view.scroll.offset = offset;
+                        view.scroll.offset = position.offset;
                         view.scroll.new_content = false;
-                        view.transcript.invalidate();
+                        if !live_only {
+                            view.transcript.invalidate();
+                        }
                     }
                 }
             }
@@ -1228,7 +1265,7 @@ impl App {
                             },
                         );
                         view.scroll.follow_tail = false;
-                        view.scroll.offset = offset;
+                        view.scroll.offset = position.offset;
                         view.scroll.new_content = false;
                         view.transcript.invalidate();
                     }
@@ -1239,36 +1276,9 @@ impl App {
             | crate::state::view::SectionKind::Summary
             | crate::state::view::SectionKind::Notice => {}
         }
-    }
-}
-
-fn animated_thumb_top(drag: &ScrollbarDrag, now: std::time::Instant) -> usize {
-    let elapsed = now
-        .saturating_duration_since(drag.animation_started_at)
-        .min(crate::ui::scrollbar::DRAG_ANIMATION);
-    let progress = elapsed.as_millis() as usize;
-    let duration = crate::ui::scrollbar::DRAG_ANIMATION.as_millis() as usize;
-    if duration == 0 || progress >= duration {
-        return drag.animation_to;
-    }
-    interpolate(drag.animation_from, drag.animation_to, progress, duration)
-}
-
-fn animated_thumb_top_for_geometry(
-    drag: &ScrollbarDrag,
-    geometry: crate::ui::scrollbar::ScrollbarGeometry,
-    now: std::time::Instant,
-) -> usize {
-    let top = animated_thumb_top(drag, now);
-    let relative = top.saturating_sub(drag.geometry.track_top);
-    geometry.track_top + relative.min(geometry.max_thumb_start)
-}
-
-fn interpolate(from: usize, to: usize, progress: usize, duration: usize) -> usize {
-    if from <= to {
-        from.saturating_add((to - from) * progress / duration)
-    } else {
-        from.saturating_sub((from - to) * progress / duration)
+        if live_only {
+            self.prepared_conversation = None;
+        }
     }
 }
 
@@ -1556,25 +1566,44 @@ pub(super) fn toggle_tool(
         return;
     };
     let key = ToolKey::new(session_id, loop_id, request_index, tool_call_id);
-    let current = view.transcript.blocks.iter().find_map(|block| match block {
-        TranscriptBlock::Tool(tool)
-            if tool.loop_id == loop_id
-                && tool.request_index == request_index
-                && tool.tool_call_id == tool_call_id =>
-        {
-            Some(crate::ui::transcript::effective_tool_expanded(view, tool))
-        }
-        _ => None,
-    });
-    let Some(current) = current else {
+    let Some(current) = current_tool_expanded(view, &key) else {
         return;
     };
+    let has_durable_tool = view.transcript.blocks.iter().any(|block| {
+        matches!(
+            block,
+            TranscriptBlock::Tool(tool)
+                if tool.loop_id == loop_id
+                    && tool.request_index == request_index
+                    && tool.tool_call_id == tool_call_id
+        )
+    });
     let expanded = !current;
     for block in &mut view.transcript.blocks {
         if let TranscriptBlock::Tool(tool) = block {
             if tool.loop_id == loop_id
                 && tool.request_index == request_index
                 && tool.tool_call_id == tool_call_id
+            {
+                tool.expanded = expanded;
+            }
+        }
+    }
+    if let Some(live) = view.live.as_mut() {
+        let matches_key = live.reference.as_ref().is_some_and(|reference| {
+            reference.session_id == key.session_id && reference.loop_id == key.loop_id
+        });
+        if matches_key {
+            if let Some(tool) = live
+                .requests
+                .iter_mut()
+                .find(|request| request.request_index == request_index)
+                .and_then(|request| {
+                    request
+                        .tools
+                        .iter_mut()
+                        .find(|tool| tool.tool_call_id == tool_call_id)
+                })
             {
                 tool.expanded = expanded;
             }
@@ -1588,7 +1617,45 @@ pub(super) fn toggle_tool(
             FoldOverride::Collapsed
         },
     );
-    view.transcript.invalidate();
+    if has_durable_tool {
+        view.transcript.invalidate();
+    } else {
+        app.prepared_conversation = None;
+    }
+}
+
+fn current_tool_expanded(view: &SessionView, key: &ToolKey) -> Option<bool> {
+    if key.session_id != view.info.session_id {
+        return None;
+    }
+    if let Some(expanded) = view.transcript.blocks.iter().find_map(|block| match block {
+        TranscriptBlock::Tool(tool)
+            if tool.loop_id == key.loop_id
+                && tool.request_index == key.request_index
+                && tool.tool_call_id == key.tool_call_id =>
+        {
+            Some(crate::ui::transcript::effective_tool_expanded(view, tool))
+        }
+        _ => None,
+    }) {
+        return Some(expanded);
+    }
+
+    let live = view.live.as_ref()?;
+    let reference = live.reference.as_ref()?;
+    if reference.session_id != key.session_id || reference.loop_id != key.loop_id {
+        return None;
+    }
+    live.requests
+        .iter()
+        .find(|request| request.request_index == key.request_index)
+        .and_then(|request| {
+            request
+                .tools
+                .iter()
+                .find(|tool| tool.tool_call_id == key.tool_call_id)
+        })
+        .map(|tool| crate::ui::transcript::effective_live_tool_expanded(view, key, tool))
 }
 
 pub(super) fn toggle_reasoning_section(

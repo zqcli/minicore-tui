@@ -1,0 +1,39 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [optimized + debuginfo] target(s) in 16.46s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 6 tests
+test terminal::writer_tests::discard_prevents_ratatui_drop_from_flushing_a_stale_frame ... ok
+test app::steer_receipt_tests::stale_steer_progress_after_loop_switch_is_ignored ... ok
+test ui::component_tests::stale_durable_tool_toggle_cannot_mutate_the_current_live_card ... FAILED
+test ui::component_tests::stale_live_tool_loop_cannot_toggle_the_current_card ... FAILED
+test ui::render_cache_tests::theme_width_and_visibility_reject_stale_cache ... ok
+test ui::settings_footer_steer_tests::persisted_steer_removes_provisional_and_stale_queued ... ok
+
+failures:
+
+---- ui::component_tests::stale_durable_tool_toggle_cannot_mutate_the_current_live_card stdout ----
+
+thread 'ui::component_tests::stale_durable_tool_toggle_cannot_mutate_the_current_live_card' (3180828) panicked at src/ui/component_tests.rs:262:5:
+assertion `left == right` failed: a stale durable Tool with the same call id must not mutate the new live loop
+  left: Some(false)
+ right: Some(true)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- ui::component_tests::stale_live_tool_loop_cannot_toggle_the_current_card stdout ----
+
+thread 'ui::component_tests::stale_live_tool_loop_cannot_toggle_the_current_card' (3180829) panicked at src/ui/component_tests.rs:219:5:
+an old loop event must not create a fold override
+
+
+failures:
+    ui::component_tests::stale_durable_tool_toggle_cannot_mutate_the_current_live_card
+    ui::component_tests::stale_live_tool_loop_cannot_toggle_the_current_card
+
+test result: FAILED. 4 passed; 2 failed; 0 ignored; 0 measured; 326 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

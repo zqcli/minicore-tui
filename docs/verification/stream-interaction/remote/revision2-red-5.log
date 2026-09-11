@@ -1,0 +1,28 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [optimized + debuginfo] target(s) in 16.41s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test app::tests::idle_scrollbar_drag_does_not_arm_a_tick_but_still_renders_pending_content ... FAILED
+
+failures:
+
+---- app::tests::idle_scrollbar_drag_does_not_arm_a_tick_but_still_renders_pending_content stdout ----
+
+thread 'app::tests::idle_scrollbar_drag_does_not_arm_a_tick_but_still_renders_pending_content' (3180819) panicked at src/app.rs:8117:9:
+assertion `left == right` failed: an idle held drag must not arm a timer
+  left: Some(33ms)
+ right: None
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    app::tests::idle_scrollbar_drag_does_not_arm_a_tick_but_still_renders_pending_content
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 331 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

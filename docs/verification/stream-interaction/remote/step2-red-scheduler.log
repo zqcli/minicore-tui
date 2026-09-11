@@ -1,0 +1,8 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 12.77s
+     Running unittests src/main.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-c879d79f4ee2b2cb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s
+

@@ -1,0 +1,12 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.16s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 2 tests
+test app::tests::marker_row_is_not_a_conversation_link_or_fold_target ... ok
+test app::tests::marker_row_cannot_toggle_a_tool_section ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 330 filtered out; finished in 0.00s
+

@@ -1,0 +1,3478 @@
+{
+  "applied": false,
+  "roots": [
+    {
+      "root": "/root/minicore-tui-027-RXdxEP/target-linux",
+      "candidate_files": 19819,
+      "candidate_bytes": 8093276333,
+      "preserved_binaries": 185
+    },
+    {
+      "root": "/root/minicore-tui-027-RXdxEP/target-msrv",
+      "candidate_files": 8602,
+      "candidate_bytes": 3130029232,
+      "preserved_binaries": 137
+    },
+    {
+      "root": "/root/minicore-tui-027-RXdxEP/target-macos",
+      "candidate_files": 10751,
+      "candidate_bytes": 2621611222,
+      "preserved_binaries": 119
+    },
+    {
+      "root": "/root/minicore-tui-027-RXdxEP/target-macos-llvm",
+      "candidate_files": 14690,
+      "candidate_bytes": 4617467739,
+      "preserved_binaries": 195
+    },
+    {
+      "root": "/root/minicore-tui-027-RXdxEP/target-macos-opt1",
+      "candidate_files": 2529,
+      "candidate_bytes": 1105910689,
+      "preserved_binaries": 52
+    }
+  ],
+  "preserved_binaries": [
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/libc-09314212c550b1c8/build_script_build-09314212c550b1c8",
+      "sha256": "1386a1772720bd03db6a4f50f1dd9f502b10a937ca8eb1333734408811ffcbf4",
+      "bytes": 4171392
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/libc-09314212c550b1c8/build-script-build",
+      "sha256": "1386a1772720bd03db6a4f50f1dd9f502b10a937ca8eb1333734408811ffcbf4",
+      "bytes": 4171392
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/parking_lot_core-2f12acfd2f6685b6/build_script_build-2f12acfd2f6685b6",
+      "sha256": "350e3a66451a7ca673ae7dd13cbfb43570535f4f21d0dbe1a41deeb1ae29cf79",
+      "bytes": 4358264
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/parking_lot_core-2f12acfd2f6685b6/build-script-build",
+      "sha256": "350e3a66451a7ca673ae7dd13cbfb43570535f4f21d0dbe1a41deeb1ae29cf79",
+      "bytes": 4358264
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/quote-ae1792d2b8e7b2ad/build_script_build-ae1792d2b8e7b2ad",
+      "sha256": "3d85814dcd87ea42dbd45ac659213a46ac0b3717873548ebaba89c3fc45d012f",
+      "bytes": 4421568
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/quote-ae1792d2b8e7b2ad/build-script-build",
+      "sha256": "3d85814dcd87ea42dbd45ac659213a46ac0b3717873548ebaba89c3fc45d012f",
+      "bytes": 4421568
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/zmij-da74f3e9e587404c/build_script_build-da74f3e9e587404c",
+      "sha256": "b8a7689a882477f75d41099656545afd0cf7f3a78179b79cf42f55e3f9631c78",
+      "bytes": 4098192
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/zmij-da74f3e9e587404c/build-script-build",
+      "sha256": "b8a7689a882477f75d41099656545afd0cf7f3a78179b79cf42f55e3f9631c78",
+      "bytes": 4098192
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/rustls-fc6eeeefae6f26fc/build_script_build-fc6eeeefae6f26fc",
+      "sha256": "a2795ccba674f301128701e6fb1a6d25145f1cd40dba0cbe773f214ed416e50a",
+      "bytes": 4347544
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/rustls-fc6eeeefae6f26fc/build-script-build",
+      "sha256": "a2795ccba674f301128701e6fb1a6d25145f1cd40dba0cbe773f214ed416e50a",
+      "bytes": 4347544
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/zmij-37c7a7b83a60607f/build_script_build-37c7a7b83a60607f",
+      "sha256": "90de9003aa62da71cbbb22e5466a2638199148b272270833633861afc3d95d4c",
+      "bytes": 4470624
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/zmij-37c7a7b83a60607f/build-script-build",
+      "sha256": "90de9003aa62da71cbbb22e5466a2638199148b272270833633861afc3d95d4c",
+      "bytes": 4470624
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/serde-047fb28ec31c7b7d/build_script_build-047fb28ec31c7b7d",
+      "sha256": "499670944583c4f8815501463aaf629259991c4fad9a57470a8bee8f3d8ff36b",
+      "bytes": 4497056
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/serde-047fb28ec31c7b7d/build-script-build",
+      "sha256": "499670944583c4f8815501463aaf629259991c4fad9a57470a8bee8f3d8ff36b",
+      "bytes": 4497056
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/serde_core-3cfebf73c7488ee9/build_script_build-3cfebf73c7488ee9",
+      "sha256": "bbf88d75ece9d7cd10362d75530aa4d99d78323df746feda6bbd53894360f76f",
+      "bytes": 4442232
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/serde_core-3cfebf73c7488ee9/build-script-build",
+      "sha256": "bbf88d75ece9d7cd10362d75530aa4d99d78323df746feda6bbd53894360f76f",
+      "bytes": 4442232
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/thiserror-b1616fa922246467/build_script_build-b1616fa922246467",
+      "sha256": "ca980508d34a4d46b9c73ef3e1fcdbccc79d08669dfd4f51d0b046753b4c7b9a",
+      "bytes": 4547456
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/thiserror-b1616fa922246467/build-script-build",
+      "sha256": "ca980508d34a4d46b9c73ef3e1fcdbccc79d08669dfd4f51d0b046753b4c7b9a",
+      "bytes": 4547456
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/pulldown-cmark-7c24e86edd8b039f/build_script_build-7c24e86edd8b039f",
+      "sha256": "c26b2902877391036522f6d49dd881da1e0ab59db1a26ea4ece86a9ff9514d49",
+      "bytes": 4346720
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/pulldown-cmark-7c24e86edd8b039f/build-script-build",
+      "sha256": "c26b2902877391036522f6d49dd881da1e0ab59db1a26ea4ece86a9ff9514d49",
+      "bytes": 4346720
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/proc-macro2-40e1e5b5938eb54b/build_script_build-40e1e5b5938eb54b",
+      "sha256": "e0e09ca86afb6ac9a343ed46b164ea317a35cf295e523c55d86b4afece2bd9fe",
+      "bytes": 4150128
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/proc-macro2-40e1e5b5938eb54b/build-script-build",
+      "sha256": "e0e09ca86afb6ac9a343ed46b164ea317a35cf295e523c55d86b4afece2bd9fe",
+      "bytes": 4150128
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/thiserror-a821c8960f9b7493/build_script_build-a821c8960f9b7493",
+      "sha256": "396849cb1d8f0085e2ee5b6d84d6100d602a6c935d60a7cac5b204028ac9f5ef",
+      "bytes": 4170328
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/thiserror-a821c8960f9b7493/build-script-build",
+      "sha256": "396849cb1d8f0085e2ee5b6d84d6100d602a6c935d60a7cac5b204028ac9f5ef",
+      "bytes": 4170328
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/serde-ff4848378508d6be/build-script-build",
+      "sha256": "ac0f0488daf08b03b2f8b87d7bf192ccebf302e40f24ac4676790c9f4f74ae93",
+      "bytes": 4441344
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/serde-ff4848378508d6be/build_script_build-ff4848378508d6be",
+      "sha256": "ac0f0488daf08b03b2f8b87d7bf192ccebf302e40f24ac4676790c9f4f74ae93",
+      "bytes": 4441344
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/icu_locale_data-9301e25e61000e68/build_script_build-9301e25e61000e68",
+      "sha256": "5e2bcaf18eec0018c13129b17fecf7b7c3b8fb20724ec1c9f36d35074fa65f20",
+      "bytes": 4354944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/icu_locale_data-9301e25e61000e68/build-script-build",
+      "sha256": "5e2bcaf18eec0018c13129b17fecf7b7c3b8fb20724ec1c9f36d35074fa65f20",
+      "bytes": 4354944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/icu_properties_data-5aa94ace3dcb2314/build_script_build-5aa94ace3dcb2314",
+      "sha256": "6b6b8c70fcae8962daaceaaa8b2fb69f768f9b946a29f1063303be90dd3bde45",
+      "bytes": 4354944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/icu_properties_data-5aa94ace3dcb2314/build-script-build",
+      "sha256": "6b6b8c70fcae8962daaceaaa8b2fb69f768f9b946a29f1063303be90dd3bde45",
+      "bytes": 4354944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/rustls-db8ccf39f9038d6b/build_script_build-db8ccf39f9038d6b",
+      "sha256": "be9cc2421535ec4c3780657f7fa5db7fb6f95eda0605caeb51f9309e8ba28db1",
+      "bytes": 3965184
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/rustls-db8ccf39f9038d6b/build-script-build",
+      "sha256": "be9cc2421535ec4c3780657f7fa5db7fb6f95eda0605caeb51f9309e8ba28db1",
+      "bytes": 3965184
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/zmij-47e10ce3e9793d6e/build_script_build-47e10ce3e9793d6e",
+      "sha256": "ded90d8d6a331ae362380508097ce37bc802db7610af5cbd962c4d54ed1f9b9e",
+      "bytes": 4425840
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/zmij-47e10ce3e9793d6e/build-script-build",
+      "sha256": "ded90d8d6a331ae362380508097ce37bc802db7610af5cbd962c4d54ed1f9b9e",
+      "bytes": 4425840
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/signal-hook-ec8fd60fb31ca998/build_script_build-ec8fd60fb31ca998",
+      "sha256": "f665c9b5ee9807d95249060b31ca04d269ead77ef44c31248d2e66148fa976be",
+      "bytes": 4346720
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/signal-hook-ec8fd60fb31ca998/build-script-build",
+      "sha256": "f665c9b5ee9807d95249060b31ca04d269ead77ef44c31248d2e66148fa976be",
+      "bytes": 4346720
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/libc-19124a20af635abc/build_script_build-19124a20af635abc",
+      "sha256": "b2386552a37f07b0b91cbe419c4820a8353305af02bdadca9fac815b54a1c350",
+      "bytes": 4549736
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/libc-19124a20af635abc/build-script-build",
+      "sha256": "b2386552a37f07b0b91cbe419c4820a8353305af02bdadca9fac815b54a1c350",
+      "bytes": 4549736
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/instability-e29b7214041654c1/build-script-build",
+      "sha256": "f41721d174fecbd7d891b47f8964d6a3291ec38356bdb6def7b1a204aac15952",
+      "bytes": 4353896
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/instability-e29b7214041654c1/build_script_build-e29b7214041654c1",
+      "sha256": "f41721d174fecbd7d891b47f8964d6a3291ec38356bdb6def7b1a204aac15952",
+      "bytes": 4353896
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/serde_core-f2ae637853f690ee/build_script_build-f2ae637853f690ee",
+      "sha256": "73142f9880534eb66bf34b1e0d2f5b442d95cfafe5f28073f55e33640138b7e7",
+      "bytes": 4499880
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/serde_core-f2ae637853f690ee/build-script-build",
+      "sha256": "73142f9880534eb66bf34b1e0d2f5b442d95cfafe5f28073f55e33640138b7e7",
+      "bytes": 4499880
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/serde_json-988b689f2b918c88/build-script-build",
+      "sha256": "44e3d56d3e3f5e79952e71499af05747136e08d74e0f9b2a5e43820427110774",
+      "bytes": 4355640
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/serde_json-988b689f2b918c88/build_script_build-988b689f2b918c88",
+      "sha256": "44e3d56d3e3f5e79952e71499af05747136e08d74e0f9b2a5e43820427110774",
+      "bytes": 4355640
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/ring-c21406fa7c316f72/build_script_build-c21406fa7c316f72",
+      "sha256": "a56dd15f684d30b93960c38a8b084cfafd69a56c6d5880869acb5da10bce5831",
+      "bytes": 5894056
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/ring-c21406fa7c316f72/build-script-build",
+      "sha256": "a56dd15f684d30b93960c38a8b084cfafd69a56c6d5880869acb5da10bce5831",
+      "bytes": 5894056
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/rustix-e94f2165965d5031/build_script_build-e94f2165965d5031",
+      "sha256": "a4473f1e3a438cbc1356abc94e0452df593627a9cf549eea00e944ad566acec5",
+      "bytes": 4451816
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/rustix-e94f2165965d5031/build-script-build",
+      "sha256": "a4473f1e3a438cbc1356abc94e0452df593627a9cf549eea00e944ad566acec5",
+      "bytes": 4451816
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/quote-ff82b0dca036a282/build_script_build-ff82b0dca036a282",
+      "sha256": "23eacabbcb0be9d34941cb54acf70369df2fc73cac6d2028c6591c22526834cc",
+      "bytes": 4088072
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/quote-ff82b0dca036a282/build-script-build",
+      "sha256": "23eacabbcb0be9d34941cb54acf70369df2fc73cac6d2028c6591c22526834cc",
+      "bytes": 4088072
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/serde_json-2c0a994303fe8e5c/build_script_build-2c0a994303fe8e5c",
+      "sha256": "91e6bb5e653da2521864cff1bccd560e34104ae9c2b63fa6b309eaa72efdb74d",
+      "bytes": 4359240
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/serde_json-2c0a994303fe8e5c/build-script-build",
+      "sha256": "91e6bb5e653da2521864cff1bccd560e34104ae9c2b63fa6b309eaa72efdb74d",
+      "bytes": 4359240
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/thiserror-05d834d1d5134b3d/build_script_build-05d834d1d5134b3d",
+      "sha256": "af73dd06e644631a325eae2e7a6e6f212cce7d5626b3557f1377937383e89152",
+      "bytes": 4471328
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/thiserror-05d834d1d5134b3d/build-script-build",
+      "sha256": "af73dd06e644631a325eae2e7a6e6f212cce7d5626b3557f1377937383e89152",
+      "bytes": 4471328
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/libm-ca3905a96900eea9/build_script_build-ca3905a96900eea9",
+      "sha256": "41d7e4970d66c779230f995104887bdf272c8c99f40ffdf5b9c812017db589c8",
+      "bytes": 4391976
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/libm-ca3905a96900eea9/build-script-build",
+      "sha256": "41d7e4970d66c779230f995104887bdf272c8c99f40ffdf5b9c812017db589c8",
+      "bytes": 4391976
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/serde-80ffa617eca8fd12/build_script_build-80ffa617eca8fd12",
+      "sha256": "32a6cb90143cabb1980d5714f0f54759965036419d5da1dc9b8228b40694d1cc",
+      "bytes": 4122464
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/serde-80ffa617eca8fd12/build-script-build",
+      "sha256": "32a6cb90143cabb1980d5714f0f54759965036419d5da1dc9b8228b40694d1cc",
+      "bytes": 4122464
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/getrandom-2d29b886237ce098/build_script_build-2d29b886237ce098",
+      "sha256": "9fbbd095b5a49bed319465d9a6fd1ab8ef59be411fe3b3b0d81ff30f63e1cb64",
+      "bytes": 4508184
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/getrandom-2d29b886237ce098/build-script-build",
+      "sha256": "9fbbd095b5a49bed319465d9a6fd1ab8ef59be411fe3b3b0d81ff30f63e1cb64",
+      "bytes": 4508184
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/httparse-052f35d69ef80cf8/build_script_build-052f35d69ef80cf8",
+      "sha256": "4bb3ff3f518a177d1b5d9634e2ce4f0f5531b27e275e328b8412ac23b5a17c6c",
+      "bytes": 4525744
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/httparse-052f35d69ef80cf8/build-script-build",
+      "sha256": "4bb3ff3f518a177d1b5d9634e2ce4f0f5531b27e275e328b8412ac23b5a17c6c",
+      "bytes": 4525744
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/icu_normalizer_data-cc8abda025d260cc/build_script_build-cc8abda025d260cc",
+      "sha256": "5a419917c0898f9e8bed9ddff38ddebd5727cf0976a6773eabd337552ea22541",
+      "bytes": 4354944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/icu_normalizer_data-cc8abda025d260cc/build-script-build",
+      "sha256": "5a419917c0898f9e8bed9ddff38ddebd5727cf0976a6773eabd337552ea22541",
+      "bytes": 4354944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/icu_segmenter_data-f0caa4821e903443/build-script-build",
+      "sha256": "400a91d63c9c0f9b4312a04e1b5e863e25a3ce0cece35d6c1a9b512e5b4e4a5a",
+      "bytes": 4354944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/icu_segmenter_data-f0caa4821e903443/build_script_build-f0caa4821e903443",
+      "sha256": "400a91d63c9c0f9b4312a04e1b5e863e25a3ce0cece35d6c1a9b512e5b4e4a5a",
+      "bytes": 4354944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/rustversion-2d08dfa3b721143c/build-script-build",
+      "sha256": "0024cbab7b4a6b4d258b881bf59440391d3086a79766eb376671d3ec9e95a3f9",
+      "bytes": 4463928
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/rustversion-2d08dfa3b721143c/build_script_build-2d08dfa3b721143c",
+      "sha256": "0024cbab7b4a6b4d258b881bf59440391d3086a79766eb376671d3ec9e95a3f9",
+      "bytes": 4463928
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/icu_properties_data-f9b06ae72535caa7/build_script_build-f9b06ae72535caa7",
+      "sha256": "f8edf8091106af0822197d0475eccb9ac5afcdc4507830693b98b6c456fc4aca",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/icu_properties_data-f9b06ae72535caa7/build-script-build",
+      "sha256": "f8edf8091106af0822197d0475eccb9ac5afcdc4507830693b98b6c456fc4aca",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/icu_properties_data-328c9e575586bef7/build_script_build-328c9e575586bef7",
+      "sha256": "b2140d6aa326fd0b99f3497adcff305a8d9752d3bc5db27e9a57f0ed66470b18",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/icu_properties_data-328c9e575586bef7/build-script-build",
+      "sha256": "b2140d6aa326fd0b99f3497adcff305a8d9752d3bc5db27e9a57f0ed66470b18",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/proc-macro2-ef1bc186c2961205/build_script_build-ef1bc186c2961205",
+      "sha256": "19032cd9211a748113c92aab3a19ccc2d1339617b6abdc8ca24e9e47447a2b6c",
+      "bytes": 4455344
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/proc-macro2-ef1bc186c2961205/build-script-build",
+      "sha256": "19032cd9211a748113c92aab3a19ccc2d1339617b6abdc8ca24e9e47447a2b6c",
+      "bytes": 4455344
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/icu_normalizer_data-7fa05c0e338d0e43/build-script-build",
+      "sha256": "b46945de8c962efd78c43abde67890bc747932ebecc27cc7374c53c8045b5ec0",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/icu_normalizer_data-7fa05c0e338d0e43/build_script_build-7fa05c0e338d0e43",
+      "sha256": "b46945de8c962efd78c43abde67890bc747932ebecc27cc7374c53c8045b5ec0",
+      "bytes": 4358632
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/icu_normalizer_data-9cbf8a21df549c51/build_script_build-9cbf8a21df549c51",
+      "sha256": "cadd83157ac6a0246b9acf78bfa97811b5257fdf5bc92859a854a14936881fd5",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/icu_normalizer_data-9cbf8a21df549c51/build-script-build",
+      "sha256": "cadd83157ac6a0246b9acf78bfa97811b5257fdf5bc92859a854a14936881fd5",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/libc-1b03c591a98b3718/build_script_build-1b03c591a98b3718",
+      "sha256": "0ab86a7c356e799da34d2edf1a18b19041b1b3794545c5d843c74bd1547f07f9",
+      "bytes": 4464600
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/libc-1b03c591a98b3718/build-script-build",
+      "sha256": "0ab86a7c356e799da34d2edf1a18b19041b1b3794545c5d843c74bd1547f07f9",
+      "bytes": 4464600
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/proc-macro2-7d0ed4e509752a35/build-script-build",
+      "sha256": "aa979b864f4a4e98456574706c62de6fdedc12b62faa891b7a790664bb286aef",
+      "bytes": 4524120
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/proc-macro2-7d0ed4e509752a35/build_script_build-7d0ed4e509752a35",
+      "sha256": "aa979b864f4a4e98456574706c62de6fdedc12b62faa891b7a790664bb286aef",
+      "bytes": 4524120
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/paste-76beb5d98b6f664f/build_script_build-76beb5d98b6f664f",
+      "sha256": "bc0fed08e1785a521dbe580ede7b6409423bd220429ffd3d3685e0bc365f3137",
+      "bytes": 4421504
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/paste-76beb5d98b6f664f/build-script-build",
+      "sha256": "bc0fed08e1785a521dbe580ede7b6409423bd220429ffd3d3685e0bc365f3137",
+      "bytes": 4421504
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/serde_json-8d2d36732f4d5387/build_script_build-8d2d36732f4d5387",
+      "sha256": "507830cae9d77fdb298531db1e4fcb091ef61071bbdabe1248b220921601717b",
+      "bytes": 3976184
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/serde_json-8d2d36732f4d5387/build-script-build",
+      "sha256": "507830cae9d77fdb298531db1e4fcb091ef61071bbdabe1248b220921601717b",
+      "bytes": 3976184
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/ring-1e464ce2c45e1997/build-script-build",
+      "sha256": "78eaaafa22b21994bd0571ef22e3111821ff516bb58a8314257da070057df30c",
+      "bytes": 5378440
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/ring-1e464ce2c45e1997/build_script_build-1e464ce2c45e1997",
+      "sha256": "78eaaafa22b21994bd0571ef22e3111821ff516bb58a8314257da070057df30c",
+      "bytes": 5378440
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/httparse-d6075e317b971b2e/build_script_build-d6075e317b971b2e",
+      "sha256": "1b8e91d5a243fcb96f926020d506c321da87e90318d22138ac697afe574a195a",
+      "bytes": 4151096
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/httparse-d6075e317b971b2e/build-script-build",
+      "sha256": "1b8e91d5a243fcb96f926020d506c321da87e90318d22138ac697afe574a195a",
+      "bytes": 4151096
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/getrandom-e262d4548f849d00/build_script_build-e262d4548f849d00",
+      "sha256": "13d275d1d4204e833faab4afcf86bd6a61a99ea485642f636d118e7deb3d9d15",
+      "bytes": 4129568
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/getrandom-e262d4548f849d00/build-script-build",
+      "sha256": "13d275d1d4204e833faab4afcf86bd6a61a99ea485642f636d118e7deb3d9d15",
+      "bytes": 4129568
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/serde_core-899581865f4b9050/build_script_build-899581865f4b9050",
+      "sha256": "585fe85ff86e83785615765be160d81a9c7420ba9a21f7bbae167ddf5269ff39",
+      "bytes": 4127208
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/serde_core-899581865f4b9050/build-script-build",
+      "sha256": "585fe85ff86e83785615765be160d81a9c7420ba9a21f7bbae167ddf5269ff39",
+      "bytes": 4127208
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/quote-6dff9724e4e81362/build_script_build-6dff9724e4e81362",
+      "sha256": "c4388fe4ef6d4f7938f9432bf020c7bcfa81dc7c9ecc2522d8574507ff044430",
+      "bytes": 4465072
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/build/quote-6dff9724e4e81362/build-script-build",
+      "sha256": "c4388fe4ef6d4f7938f9432bf020c7bcfa81dc7c9ecc2522d8574507ff044430",
+      "bytes": 4465072
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/startup_errors-db4484a00506f4a9",
+      "sha256": "e652ccde4cf47df7bfb89eacb523034705335abd3a750a0fe4e8096bd9eacc1e",
+      "bytes": 92155616
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libtokio_macros-d53c15de4fc1f0dd.so",
+      "sha256": "c72bafae54d8fc9de4e9ff643bc943d90ddff2fbb339a8d9d62f02cdef9d7aa8",
+      "bytes": 8061824
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-c879d79f4ee2b2cb",
+      "sha256": "eee540e3ea495bdc2c6bdc28bdabfdc8ea15cafec075909ad04df90c79ef9936",
+      "bytes": 70024616
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libtracing_attributes-b5c176eca2ff51f8.so",
+      "sha256": "45f949259173143f33096d34379453145dc9e85f15dd4d3ac760818d96981593",
+      "bytes": 8775632
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/word_oracle-70f6555dbc43afd7",
+      "sha256": "cf3d53e40dfaa47eb6fb1c01d99151b80cf7e085cbcf07db25059e5817e1d578",
+      "bytes": 64515736
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-380d174dd8e2f14d",
+      "sha256": "6cad839d881fbc90fe0bd3240eb40b6d9ac85e36700deaaa7494faa52c591fb6",
+      "bytes": 70024368
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libthiserror_impl-ed357a82ca1c24ec.so",
+      "sha256": "ece9570a6a287cf4d81f9995b0399d89cf7797ec8b74a9f16e392ebe94550c68",
+      "bytes": 8544152
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libyoke_derive-367cd2bd307744ea.so",
+      "sha256": "4403b85e66cfd927e01b4eebfe06cbc1dae833732a814b933878f254ef6e4964",
+      "bytes": 8636640
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/rpc_io-d2c860d2ba8f41e8",
+      "sha256": "a4922d4915a48fc0b9092fda31068e4381ccb2c21a9002c6e770cd1a578c6238",
+      "bytes": 63135128
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libzerofrom_derive-48bbd9c13a77a7d5.so",
+      "sha256": "85aeaf81c5a7df27901988fa4b4e8b309fca10e2101f0ba31a2e563aec31e7b6",
+      "bytes": 8922288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_agent-1a03d26e6758fdba",
+      "sha256": "683f149d68310748554fed2ed4805f9c6e6dd47bde50e7ac361f692897d7e3a1",
+      "bytes": 115807216
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libzerofrom_derive-dfdcec59d6a238c8.so",
+      "sha256": "1fc96787da76f4e26de1ca796e67a62b43dfabc4f3c195eb162b664d86a385b2",
+      "bytes": 8850184
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_agent-8eee20f203a69d1e",
+      "sha256": "b1d6202782fba392ca1237ba827d5938fbb94386680d60fe50761d4219efe8ef",
+      "bytes": 6992728
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-8c0778ddab55e6ee",
+      "sha256": "92488a8e026214f7043ac260e83625c64e35e976997ecf9ff5f967a48e45c504",
+      "bytes": 69714824
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/rpc_io-0de7130f021ffc0d",
+      "sha256": "82f591fa9b1ba630edff1ae194007f9b573d453726fd34b8cf048190eabc4b48",
+      "bytes": 63135416
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_agent-b0bccf8727e203b6",
+      "sha256": "77351a0f11d4c7e7c4580eac8b98c5276adb3f62ed95e3976621d9727975cfe8",
+      "bytes": 175476720
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/agent_process-bed70cb9e7bccd80",
+      "sha256": "eafea93b1c7e56ef5fecf5b8477d0630c8e2f164c0c1acd20f91c96a5386f18b",
+      "bytes": 7528264
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/openai_rpc_process-a873a199f5f74e7f",
+      "sha256": "96ec220c39d32ab89160b8d24e0aac7c3787dd46f37db05fe3d7dd0b41770cab",
+      "bytes": 77360760
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libthiserror_impl-f5016ba1ac3bcf6d.so",
+      "sha256": "0bf823142e2420cecf15ce3018f37617f1d5a539ffb59840f9dd2dbc713fbe1a",
+      "bytes": 8684232
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_agent-e45fa09e419ee5f3",
+      "sha256": "bbabc82e66090c7696c80578b6f248bebae02c16f3ea5d3a44d00dc669939c35",
+      "bytes": 142297560
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/tui_rpc_flow-d8285a18b699a72f",
+      "sha256": "19be90a557d0b7e2cfef354c23a4224850e027fd19311321cb9080cb2079035c",
+      "bytes": 103845704
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/render_snapshots-5837ae2326579f13",
+      "sha256": "924aeeec4b3c56a8abeb885f2d05a2398b2d6133fe0b453bce9f4b3458f9a87c",
+      "bytes": 66053192
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_agent-6e7b16712e6c7bbf",
+      "sha256": "f2534d5f43ce81679337d5e78618b137470820d1aa28e80cee3e226fb15943a0",
+      "bytes": 7593808
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libdarling_macro-38956ffc6d69ba44.so",
+      "sha256": "8383fc4935a5f7eae9912a130c827fbfc1cf48683e36230d102b3f4507868aeb",
+      "bytes": 9224880
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/app_flow-1a05f9ddf192a920",
+      "sha256": "284e891f57c20ed75168b60b1d46ee8f7d21f7c46e5c364dbc158318ef10384e",
+      "bytes": 68912512
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/agent_e2e-742428f0ab05d6ae",
+      "sha256": "22c7c3fba7004b3d73fc492145ce4801011ae2e71b48775a45270b8394086acb",
+      "bytes": 75140824
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/agent_e2e-d7bcab485dbe30d7",
+      "sha256": "ba1d74ff68309ca6f44db4536aff43d2afbf419b111d0f1d2af53c248fe7f236",
+      "bytes": 74354568
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-c0db238cdca620a1",
+      "sha256": "6bd06d6e0a7a1eb9f4ed5e5b34adc107ced4d0c546d5247752496da50a59aba0",
+      "bytes": 84731200
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-8df30e0887ed8c68",
+      "sha256": "b5ff7891e23953b2e8dd7cd10874a9b1c0ae10a62972c79de4aa18e734410010",
+      "bytes": 69517768
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/rpc_stdio-4c9ba613afd7e3c2",
+      "sha256": "5a550725c7dec08add41249c457888d32689da64b60b60fc465a77f8bf0fab89",
+      "bytes": 69330760
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/librustversion-5f430faa79b16625.so",
+      "sha256": "9303f8ed8028d99509164a655e6c2ce1ab17289f8d7a877e5bc33cc98f7269ce",
+      "bytes": 5454384
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libzerovec_derive-282ac03a1c72e3a6.so",
+      "sha256": "8e6f0688e518533993ff8e001d6c576776043d54448f97cb1358c801e75b57b8",
+      "bytes": 8330552
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/agent_e2e-4427bf570cb440ec",
+      "sha256": "c0ca3b0c3ab5daac3b326d48186524d403015b7a758c454121f07a27e4d62065",
+      "bytes": 74358200
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/app_flow-ffadc9a8f885be53",
+      "sha256": "f2f08d75e177cb83f550a094607bb9db27d8e03d9cbd624657ceba253908b462",
+      "bytes": 73914832
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libstrum_macros-c43cdab01277b9ec.so",
+      "sha256": "a2d18da61e49ec724c22790a3f8e200cdf3df992f5c0189894058b79e2f23a05",
+      "bytes": 8865848
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-41daef67e6d48117",
+      "sha256": "c1dfa38707e733edcc224a2d696f08979aa6c9d506422e4ad3dd7a00416cca24",
+      "bytes": 84731576
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/rpc_stdio-31413e7eabe6f7c6",
+      "sha256": "d7b436a5b1349bdd6b96a37c45e04e4f8f64d2b544380d3cab9520f1821b3bf7",
+      "bytes": 92514056
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/word_oracle-fad5e194ebbf9baa",
+      "sha256": "92e9f7a0512d812bd44b2cb81a02f0e867198bfe4378e032e96e78b569f34fb6",
+      "bytes": 64515728
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libserde_derive-2222dcd9cc505602.so",
+      "sha256": "3c171dc6be6d0a5975a746b739ef91604fd92269e4d05b2af966220c96bdeac8",
+      "bytes": 9406064
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_agent-cc4c2b5fd3f0792d",
+      "sha256": "2ce86aa03b17aab6690bbdf4971d570d01de4b060b7d458268ad4c1f21d7c01b",
+      "bytes": 135497184
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/word_oracle-6604d5713bdd9226",
+      "sha256": "25ac06a9ee2d33eab003ee4503661a8c8588b83a5314e94c201a59c8bff50f33",
+      "bytes": 59815920
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/rpc_io-1954ad6b01add01c",
+      "sha256": "a0ac0a23978224fc6f6de36a2b3b6d3c978660575323813247c1f10262b0f06e",
+      "bytes": 59742072
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libfutures_macro-b5492f4e9f40dde0.so",
+      "sha256": "85cc1edb393b0e682724f938d2db5fa7381c2ecdefffbf16793f94f0ba52662e",
+      "bytes": 8012320
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-1e6baba6fdebb07a",
+      "sha256": "2d4009a971c55025362e26a071735fde792253b44e8bb5ffc17c7c1f439b4a69",
+      "bytes": 78994192
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libzerovec_derive-3212de27759fb781.so",
+      "sha256": "30e3dab7ddd956f5643a0f2c24751515cc03cdfcf067837af883ad1ff17e9b5f",
+      "bytes": 8751576
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/rpc_soak-ba5e37ff8e618163",
+      "sha256": "48598934839130b3d240facb5b5c45929ae0f95f1abf8a8f1ff851a1bc4fddef",
+      "bytes": 76905064
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/terminal_restore-2e8820478cf2f826",
+      "sha256": "ba44dcac3e86f20f84263b9494d2372feabddd6bf9a4a960ab4b699c9ca13c78",
+      "bytes": 62515288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libzerofrom_derive-3a4d23d5b36d2ca9.so",
+      "sha256": "ff4b9922d3d9980bb6fd5cc2499e63ac328c77577ca1785b351814b1b5e7cfaf",
+      "bytes": 9526696
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-26c3bbd3ca19d3b9",
+      "sha256": "9e639ffc90439c9bf9c7fe7a3764a47fe41876900f711ebd036e38350930129c",
+      "bytes": 69122584
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/openai_rpc_process-12dc14e8250b5def",
+      "sha256": "d252380ec141ee7b6443f2d50bd6c89c907ea696caf260e2a5fa6bdd1f45e644",
+      "bytes": 102538576
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/rail_fixtures-341160548d60ca8a",
+      "sha256": "2b7862dbd287027abe5f3cce5191380fb5cff846bbd811ab8ba07a7b07472575",
+      "bytes": 68087064
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/protocol-3f8b3579d80855f8",
+      "sha256": "ea24b4db252bcad34cf1279e612bfef91cfdeb4078bdf6666f174b3eae71cd15",
+      "bytes": 63564792
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_agent-72540c055c94a6e0",
+      "sha256": "669039cb7190cd0c78aa6c01aacd4be916c3bd842a74ea4e59cced9fef43f71f",
+      "bytes": 134955688
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/startup_errors-ff1e4fc8de31cc10",
+      "sha256": "7cc743f354bdc1de588f56dba619dfc061a3347c54a622280cbcaa8fb718f5ad",
+      "bytes": 68975160
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/agent_process-853afd03a63bef89",
+      "sha256": "d9ae79f071a2b3246517db38a27f8381d2376d2d032c12e502b8024a2f1306a8",
+      "bytes": 7844312
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libyoke_derive-50144caf197ce3d3.so",
+      "sha256": "dcb8860ae30e3dc56a5e325a013345daa4556c970969ff3ae56a17b38629c4e7",
+      "bytes": 9149216
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/terminal_restore-959f166ff0a7637e",
+      "sha256": "bbb8b98efcf6e0702476e90f8cf9c427d6b0fb7b67e2f664affb300c942b23b3",
+      "bytes": 57629320
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libserde_derive-8643e101b88cb90a.so",
+      "sha256": "8c5e3b2895e648de8c934b81b63c4b0c83245c7715ada2da70395fb962419a35",
+      "bytes": 9870576
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libinstability-7a8118ebde3edc4c.so",
+      "sha256": "8a20c03b1755351d769a9a9658576a49760e832bc98ba0afdb3e286a60a6d2b9",
+      "bytes": 8326648
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/app_flow-500745b34c71f2c8",
+      "sha256": "29b7b1f5888d9ab132ebe902094d5d67ed5706a07cb7c2df6a41a0fe989f7b5c",
+      "bytes": 73915032
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/skeleton-2da78c716fce4133",
+      "sha256": "a5d760b0de0f7a464795000197e3e154363e33eb123aea579c294f2cd7294737",
+      "bytes": 71836888
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libtokio_macros-9aab0b34c84274fd.so",
+      "sha256": "d547d7cee040763954f23140b10cfa7079a8a960099aa778cdd433245097ee50",
+      "bytes": 8178040
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libdisplaydoc-f7ce3cd5bce52f3f.so",
+      "sha256": "17d6eb27767984c32ed2721750448c7d810af404c11031f75fe4615046911df0",
+      "bytes": 8128680
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libpaste-eab7546bfe6b89f8.so",
+      "sha256": "a5f3b4fc7e25b226a33bda3ac5a4c85273bb6594b5afbf8bf20c508dd44d11ce",
+      "bytes": 5429912
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/agent_process-d2af17a891ce320b",
+      "sha256": "798aa09f836677cbeb0eeaa7c91389a16f9d317c481c7416b6f1e006ee4c8196",
+      "bytes": 7844352
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/rail_fixtures-e56cad7cbeea0d3c",
+      "sha256": "068d8a58a54177fa4117e0d8e3049c14ff23a1e12b8e2580064f2cc7b31435a6",
+      "bytes": 70395568
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libthiserror_impl-9458ebdf4ab16962.so",
+      "sha256": "eae3ff16884d59dd31c31d05378f70add6bf35a43db72f9a5bfd53765df1cfad",
+      "bytes": 8864432
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libserde_derive-a89823497ecfb131.so",
+      "sha256": "d32c79c910a1b924707e5e6d57b744d5fbe1f963a18cb18aec109f8b2b8f27f8",
+      "bytes": 9208096
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libindoc-13fb1d4959636e64.so",
+      "sha256": "46306ca9cd2101866adb3749df6f92445bcd8d013180b748a4e728e92686727c",
+      "bytes": 5382960
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/terminal_restore-ca6fea6dd8a58b4f",
+      "sha256": "c5c928aca47a0259b877a1a8ba0e8c60cee5c173a53ff10df6ee085d08be05d2",
+      "bytes": 62515504
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libyoke_derive-0e04992efe9070be.so",
+      "sha256": "9a4f8387c12b21d500e0de993508cffd44e25209d59a4bc206d6f3db6d340ab8",
+      "bytes": 8643672
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/protocol-fb0855e1b564cf19",
+      "sha256": "2b9da6a0de7ae8abbac755f64397875c8ec0fdcad15a8318f7b5696bb43d9766",
+      "bytes": 60545344
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/rail_fixtures-1bfe59ef6e813041",
+      "sha256": "eebff2847cf635d33a0d2a49fe6b8f4ea7aa11cded09b39e917a610a18402032",
+      "bytes": 70395328
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/skeleton-bd8e4ef698bac738",
+      "sha256": "0d88d45f1bd20caf61512cb3ef5c99fea3d08dbe5e8483f31050e42af0adc132",
+      "bytes": 95569840
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libfutures_macro-44aab2495864de42.so",
+      "sha256": "e468adff4ef3f9c2e91825f08f594fdbc402ba9aa55a50edade252b777682ab5",
+      "bytes": 7722840
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/rpc_soak-076b37d8a355d602",
+      "sha256": "9b91aa7b482d153b9500fbd65ab9169a50dc64c6ef087fe3a0e224e718fe7adc",
+      "bytes": 101961888
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/protocol-e23463f39e86df3b",
+      "sha256": "802b27f5b93b7d96fab1f74683e5069c5655d912b148a899e1a92d0a9387a751",
+      "bytes": 63564440
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/tui_rpc_flow-6681b1acb4466e45",
+      "sha256": "b53f4880ac8051878cd058fac6a2ddd9f5034a0720bb28dc777d8eb487e3a21d",
+      "bytes": 78200560
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libdisplaydoc-c75dda58f9b48605.so",
+      "sha256": "93600a64721219b5a522dede373d7b710ea6924b1410089a618a59d2ddacc6a4",
+      "bytes": 7993904
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-1434d24e52372f0e",
+      "sha256": "8b4bacb6e17ca3706543dcf089a113ebbe28cd66e1d5377459e541d143406be9",
+      "bytes": 69714680
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-c1892d515ec785bc",
+      "sha256": "093ef547e2020d6285480663cb4f12a1c30d3343794067d73175c928974c9f2e",
+      "bytes": 78931464
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libtracing_attributes-dd89f51f7f268213.so",
+      "sha256": "0728502d180365afd305c5ded7fb17278fdbc7c243e6e155788d2f14e10194b3",
+      "bytes": 9220336
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libdisplaydoc-42a4aaa0bff0a159.so",
+      "sha256": "dce24ac5c53f4390fd5954975697699603e5e7bd002418460f60b4ead078f9bf",
+      "bytes": 8460904
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libzerovec_derive-4b284451b929876e.so",
+      "sha256": "8887df2ebdc53dfb16b5f3c1a76e1e36c592cc7f3f3951b374208d3ca930bd7e",
+      "bytes": 8446472
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/render_snapshots-76efcf4ad0a14952",
+      "sha256": "3d3208113e1211c243bb2816842ca7151660fc88dd1d212fa916b7323e019241",
+      "bytes": 68253672
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/render_snapshots-9e5780bfe587d8b7",
+      "sha256": "ec90d4e7afe54aa444c971a41ea98ae068b64b94ded62237d07247588b7c3a6e",
+      "bytes": 68254016
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/libtokio_macros-bd1b525e01c11e3b.so",
+      "sha256": "24f7c6ccbed19c4b498294fe595f40d0512f1e90d942d66a7a97a44c53876501",
+      "bytes": 8357032
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/minicore-tui",
+      "sha256": "92488a8e026214f7043ac260e83625c64e35e976997ecf9ff5f967a48e45c504",
+      "bytes": 69714824
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/minicore-agent",
+      "sha256": "2ce86aa03b17aab6690bbdf4971d570d01de4b060b7d458268ad4c1f21d7c01b",
+      "bytes": 135497184
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/libc-09314212c550b1c8/build_script_build-09314212c550b1c8",
+      "sha256": "1386a1772720bd03db6a4f50f1dd9f502b10a937ca8eb1333734408811ffcbf4",
+      "bytes": 4171392
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/libc-09314212c550b1c8/build-script-build",
+      "sha256": "1386a1772720bd03db6a4f50f1dd9f502b10a937ca8eb1333734408811ffcbf4",
+      "bytes": 4171392
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/icu_segmenter_data-31b820fc258a9b75/build-script-build",
+      "sha256": "0fecdb838619d6032fea29ab582fd5e7ed1d19570953c5a1aec8148220ec65dc",
+      "bytes": 3974776
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/icu_segmenter_data-31b820fc258a9b75/build_script_build-31b820fc258a9b75",
+      "sha256": "0fecdb838619d6032fea29ab582fd5e7ed1d19570953c5a1aec8148220ec65dc",
+      "bytes": 3974776
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/zmij-da74f3e9e587404c/build_script_build-da74f3e9e587404c",
+      "sha256": "b8a7689a882477f75d41099656545afd0cf7f3a78179b79cf42f55e3f9631c78",
+      "bytes": 4098192
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/zmij-da74f3e9e587404c/build-script-build",
+      "sha256": "b8a7689a882477f75d41099656545afd0cf7f3a78179b79cf42f55e3f9631c78",
+      "bytes": 4098192
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/parking_lot_core-407898cc0bbdeb3f/build_script_build-407898cc0bbdeb3f",
+      "sha256": "cb75c6f1cab6c4868bad117c8391ff51403ce0d14055fbe69b810a7845009c4a",
+      "bytes": 3979224
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/parking_lot_core-407898cc0bbdeb3f/build-script-build",
+      "sha256": "cb75c6f1cab6c4868bad117c8391ff51403ce0d14055fbe69b810a7845009c4a",
+      "bytes": 3979224
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/zmij-8e8900c79877d556/build_script_build-8e8900c79877d556",
+      "sha256": "723fcec3c2b328ebb1e57adc42f849f216f873b74590d37de08da48667685a5f",
+      "bytes": 4056784
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/zmij-8e8900c79877d556/build-script-build",
+      "sha256": "723fcec3c2b328ebb1e57adc42f849f216f873b74590d37de08da48667685a5f",
+      "bytes": 4056784
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/proc-macro2-40e1e5b5938eb54b/build_script_build-40e1e5b5938eb54b",
+      "sha256": "e0e09ca86afb6ac9a343ed46b164ea317a35cf295e523c55d86b4afece2bd9fe",
+      "bytes": 4150128
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/proc-macro2-40e1e5b5938eb54b/build-script-build",
+      "sha256": "e0e09ca86afb6ac9a343ed46b164ea317a35cf295e523c55d86b4afece2bd9fe",
+      "bytes": 4150128
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/thiserror-a821c8960f9b7493/build_script_build-a821c8960f9b7493",
+      "sha256": "396849cb1d8f0085e2ee5b6d84d6100d602a6c935d60a7cac5b204028ac9f5ef",
+      "bytes": 4170328
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/thiserror-a821c8960f9b7493/build-script-build",
+      "sha256": "396849cb1d8f0085e2ee5b6d84d6100d602a6c935d60a7cac5b204028ac9f5ef",
+      "bytes": 4170328
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/pulldown-cmark-1d2f455fc00c0c40/build_script_build-1d2f455fc00c0c40",
+      "sha256": "f8d86b427961e3471b31e96238d8ce4675ef9e6f3f6b48b094cd9f127779b7ff",
+      "bytes": 3964816
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/pulldown-cmark-1d2f455fc00c0c40/build-script-build",
+      "sha256": "f8d86b427961e3471b31e96238d8ce4675ef9e6f3f6b48b094cd9f127779b7ff",
+      "bytes": 3964816
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/thiserror-dc6a85f88519ebdb/build_script_build-dc6a85f88519ebdb",
+      "sha256": "d183a32e184757763927162768de6c809c72263fd09ed6184bf96462acb5dc91",
+      "bytes": 4097080
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/thiserror-dc6a85f88519ebdb/build-script-build",
+      "sha256": "d183a32e184757763927162768de6c809c72263fd09ed6184bf96462acb5dc91",
+      "bytes": 4097080
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/serde_json-6d594a78f8dafc21/build_script_build-6d594a78f8dafc21",
+      "sha256": "2132c2d91d9591c605e7e14879c78c22ec73173a9b25b03d9a3713b2b1d389fa",
+      "bytes": 3974808
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/serde_json-6d594a78f8dafc21/build-script-build",
+      "sha256": "2132c2d91d9591c605e7e14879c78c22ec73173a9b25b03d9a3713b2b1d389fa",
+      "bytes": 3974808
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/serde-dcedb904156d4796/build_script_build-dcedb904156d4796",
+      "sha256": "2851a68d79b36d09bbd97f037b52a3ad52f743b8abdff96ee6aa990c956944a4",
+      "bytes": 4061400
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/serde-dcedb904156d4796/build-script-build",
+      "sha256": "2851a68d79b36d09bbd97f037b52a3ad52f743b8abdff96ee6aa990c956944a4",
+      "bytes": 4061400
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/rustls-db8ccf39f9038d6b/build_script_build-db8ccf39f9038d6b",
+      "sha256": "be9cc2421535ec4c3780657f7fa5db7fb6f95eda0605caeb51f9309e8ba28db1",
+      "bytes": 3965184
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/rustls-db8ccf39f9038d6b/build-script-build",
+      "sha256": "be9cc2421535ec4c3780657f7fa5db7fb6f95eda0605caeb51f9309e8ba28db1",
+      "bytes": 3965184
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/quote-2283346090168ed2/build_script_build-2283346090168ed2",
+      "sha256": "0c2d24674669d0882aa31e1c5bd7799436a70a3a5d1224e3fde1389794a3d7e0",
+      "bytes": 4051416
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/quote-2283346090168ed2/build-script-build",
+      "sha256": "0c2d24674669d0882aa31e1c5bd7799436a70a3a5d1224e3fde1389794a3d7e0",
+      "bytes": 4051416
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/proc-macro2-bdd37089e68d580d/build_script_build-bdd37089e68d580d",
+      "sha256": "a971ce87c35da679bbdc0064f7d232eee2427524355a0e79bf2a206376875c46",
+      "bytes": 4094816
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/proc-macro2-bdd37089e68d580d/build-script-build",
+      "sha256": "a971ce87c35da679bbdc0064f7d232eee2427524355a0e79bf2a206376875c46",
+      "bytes": 4094816
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/rustix-a63911c6831f8635/build_script_build-a63911c6831f8635",
+      "sha256": "28b4c240d6094214960935ba2ef84f5696b73ba702f9027dcb8b114baa59f0ba",
+      "bytes": 4081312
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/rustix-a63911c6831f8635/build-script-build",
+      "sha256": "28b4c240d6094214960935ba2ef84f5696b73ba702f9027dcb8b114baa59f0ba",
+      "bytes": 4081312
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/libc-79aac0b88473263c/build_script_build-79aac0b88473263c",
+      "sha256": "9da92d7fa3805c6f95b0fdd154efd2d6466563dfab0dae438718230221d11a91",
+      "bytes": 4083168
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/libc-79aac0b88473263c/build-script-build",
+      "sha256": "9da92d7fa3805c6f95b0fdd154efd2d6466563dfab0dae438718230221d11a91",
+      "bytes": 4083168
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/quote-ff82b0dca036a282/build_script_build-ff82b0dca036a282",
+      "sha256": "23eacabbcb0be9d34941cb54acf70369df2fc73cac6d2028c6591c22526834cc",
+      "bytes": 4088072
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/quote-ff82b0dca036a282/build-script-build",
+      "sha256": "23eacabbcb0be9d34941cb54acf70369df2fc73cac6d2028c6591c22526834cc",
+      "bytes": 4088072
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/instability-48406767e67f3668/build_script_build-48406767e67f3668",
+      "sha256": "8a5cf81e5af715c7321f7e0779812fc71f87ae96827d92723e1558df54f8e62f",
+      "bytes": 3974560
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/instability-48406767e67f3668/build-script-build",
+      "sha256": "8a5cf81e5af715c7321f7e0779812fc71f87ae96827d92723e1558df54f8e62f",
+      "bytes": 3974560
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/serde-80ffa617eca8fd12/build_script_build-80ffa617eca8fd12",
+      "sha256": "32a6cb90143cabb1980d5714f0f54759965036419d5da1dc9b8228b40694d1cc",
+      "bytes": 4122464
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/serde-80ffa617eca8fd12/build-script-build",
+      "sha256": "32a6cb90143cabb1980d5714f0f54759965036419d5da1dc9b8228b40694d1cc",
+      "bytes": 4122464
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/serde_core-602f36af0fea6872/build_script_build-602f36af0fea6872",
+      "sha256": "f751a509626c04a12971bb9712169d3908c58bcaae1258dac4520ae062a1034b",
+      "bytes": 4069576
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/serde_core-602f36af0fea6872/build-script-build",
+      "sha256": "f751a509626c04a12971bb9712169d3908c58bcaae1258dac4520ae062a1034b",
+      "bytes": 4069576
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/signal-hook-2bf87cd206bc1993/build_script_build-2bf87cd206bc1993",
+      "sha256": "111a5e8a666770eda7c6859845ef0cb0895ab797ed4c0dcf38bb3c6c12d4d97f",
+      "bytes": 3964816
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/signal-hook-2bf87cd206bc1993/build-script-build",
+      "sha256": "111a5e8a666770eda7c6859845ef0cb0895ab797ed4c0dcf38bb3c6c12d4d97f",
+      "bytes": 3964816
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/icu_properties_data-328c9e575586bef7/build_script_build-328c9e575586bef7",
+      "sha256": "b2140d6aa326fd0b99f3497adcff305a8d9752d3bc5db27e9a57f0ed66470b18",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/icu_properties_data-328c9e575586bef7/build-script-build",
+      "sha256": "b2140d6aa326fd0b99f3497adcff305a8d9752d3bc5db27e9a57f0ed66470b18",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/libm-dcd2be522fa55f22/build_script_build-dcd2be522fa55f22",
+      "sha256": "addaa65395ef692cac6d480bc28115ca660a7eff6043593532a30b1527f400b5",
+      "bytes": 4013656
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/libm-dcd2be522fa55f22/build-script-build",
+      "sha256": "addaa65395ef692cac6d480bc28115ca660a7eff6043593532a30b1527f400b5",
+      "bytes": 4013656
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/icu_normalizer_data-9cbf8a21df549c51/build_script_build-9cbf8a21df549c51",
+      "sha256": "cadd83157ac6a0246b9acf78bfa97811b5257fdf5bc92859a854a14936881fd5",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/icu_normalizer_data-9cbf8a21df549c51/build-script-build",
+      "sha256": "cadd83157ac6a0246b9acf78bfa97811b5257fdf5bc92859a854a14936881fd5",
+      "bytes": 3976432
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/icu_normalizer_data-82616c2e52301c7a/build_script_build-82616c2e52301c7a",
+      "sha256": "e639cd24e98cc44b922e272d84249676eac1e3fa7b80b07339104eb3b2cc2c8c",
+      "bytes": 3974776
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/icu_normalizer_data-82616c2e52301c7a/build-script-build",
+      "sha256": "e639cd24e98cc44b922e272d84249676eac1e3fa7b80b07339104eb3b2cc2c8c",
+      "bytes": 3974776
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/rustversion-4b5dfd38d16ed4d5/build_script_build-4b5dfd38d16ed4d5",
+      "sha256": "a82364bb326d9ab1f5c497211d3339fbdffc67b81f85aa3108b7af6711f2f94a",
+      "bytes": 4086592
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/rustversion-4b5dfd38d16ed4d5/build-script-build",
+      "sha256": "a82364bb326d9ab1f5c497211d3339fbdffc67b81f85aa3108b7af6711f2f94a",
+      "bytes": 4086592
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/paste-ee53642ba387204a/build_script_build-ee53642ba387204a",
+      "sha256": "7da1a7bd4a59ac63167418fcfba4bebc59e0b602fbdc44d357ee00e4476fdc0b",
+      "bytes": 4051440
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/paste-ee53642ba387204a/build-script-build",
+      "sha256": "7da1a7bd4a59ac63167418fcfba4bebc59e0b602fbdc44d357ee00e4476fdc0b",
+      "bytes": 4051440
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/icu_locale_data-c4bad8ab965b92c8/build_script_build-c4bad8ab965b92c8",
+      "sha256": "c8f2140054fdf57598b36fe1e25a85f56d9f12c4109f516fc04647751b77b092",
+      "bytes": 3974776
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/icu_locale_data-c4bad8ab965b92c8/build-script-build",
+      "sha256": "c8f2140054fdf57598b36fe1e25a85f56d9f12c4109f516fc04647751b77b092",
+      "bytes": 3974776
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/serde_json-8d2d36732f4d5387/build_script_build-8d2d36732f4d5387",
+      "sha256": "507830cae9d77fdb298531db1e4fcb091ef61071bbdabe1248b220921601717b",
+      "bytes": 3976184
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/serde_json-8d2d36732f4d5387/build-script-build",
+      "sha256": "507830cae9d77fdb298531db1e4fcb091ef61071bbdabe1248b220921601717b",
+      "bytes": 3976184
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/ring-1e464ce2c45e1997/build-script-build",
+      "sha256": "78eaaafa22b21994bd0571ef22e3111821ff516bb58a8314257da070057df30c",
+      "bytes": 5378440
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/ring-1e464ce2c45e1997/build_script_build-1e464ce2c45e1997",
+      "sha256": "78eaaafa22b21994bd0571ef22e3111821ff516bb58a8314257da070057df30c",
+      "bytes": 5378440
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/httparse-d6075e317b971b2e/build_script_build-d6075e317b971b2e",
+      "sha256": "1b8e91d5a243fcb96f926020d506c321da87e90318d22138ac697afe574a195a",
+      "bytes": 4151096
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/httparse-d6075e317b971b2e/build-script-build",
+      "sha256": "1b8e91d5a243fcb96f926020d506c321da87e90318d22138ac697afe574a195a",
+      "bytes": 4151096
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/getrandom-e262d4548f849d00/build_script_build-e262d4548f849d00",
+      "sha256": "13d275d1d4204e833faab4afcf86bd6a61a99ea485642f636d118e7deb3d9d15",
+      "bytes": 4129568
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/getrandom-e262d4548f849d00/build-script-build",
+      "sha256": "13d275d1d4204e833faab4afcf86bd6a61a99ea485642f636d118e7deb3d9d15",
+      "bytes": 4129568
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/serde_core-899581865f4b9050/build_script_build-899581865f4b9050",
+      "sha256": "585fe85ff86e83785615765be160d81a9c7420ba9a21f7bbae167ddf5269ff39",
+      "bytes": 4127208
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/serde_core-899581865f4b9050/build-script-build",
+      "sha256": "585fe85ff86e83785615765be160d81a9c7420ba9a21f7bbae167ddf5269ff39",
+      "bytes": 4127208
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/icu_properties_data-b9c773a4d2cc3ce7/build_script_build-b9c773a4d2cc3ce7",
+      "sha256": "077052d7853891d2edad951f11560d9fdaa94573b30b4ad31dae8c925944581a",
+      "bytes": 3974776
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/build/icu_properties_data-b9c773a4d2cc3ce7/build-script-build",
+      "sha256": "077052d7853891d2edad951f11560d9fdaa94573b30b4ad31dae8c925944581a",
+      "bytes": 3974776
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/agent_process-acc193e4d026d973",
+      "sha256": "98971e83e647e1cb963f9a8a7009279152702f1843d774dac1d03354f5865eac",
+      "bytes": 7309360
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/minicore_tui-355814f233626aea",
+      "sha256": "19a9be1814229c85186acbda8e17e4dc4b5cdf9c8a78167b3a060d0e4b99d7b2",
+      "bytes": 72590904
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/render_snapshots-4f483c132db6eb67",
+      "sha256": "6a3650051bbed05de4dc3e8f434e90361c56c0683181aad7447731282ea8ce73",
+      "bytes": 66954760
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libtokio_macros-d53c15de4fc1f0dd.so",
+      "sha256": "c72bafae54d8fc9de4e9ff643bc943d90ddff2fbb339a8d9d62f02cdef9d7aa8",
+      "bytes": 8061824
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/word_oracle-29877fa7f3d59cca",
+      "sha256": "0a7fb2394f02efa4d7f738ab16123b559e07cc2dda85890feb67e7ce8dc76d55",
+      "bytes": 63188224
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libtracing_attributes-b5c176eca2ff51f8.so",
+      "sha256": "45f949259173143f33096d34379453145dc9e85f15dd4d3ac760818d96981593",
+      "bytes": 8775632
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libzerovec_derive-81be3b5fbdb68784.so",
+      "sha256": "94dd118ed23e796127ddf01fce916d1423bc30f2ed58494b79115d154974a0c1",
+      "bytes": 7999960
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libthiserror_impl-ed357a82ca1c24ec.so",
+      "sha256": "ece9570a6a287cf4d81f9995b0399d89cf7797ec8b74a9f16e392ebe94550c68",
+      "bytes": 8544152
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/word_oracle-b87ad2e57326ea0e",
+      "sha256": "c0f6a8f89c87b49148ea556a7f42b80fb53ea4e030e0426bad188b7022a0c7ea",
+      "bytes": 63183952
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/agent_e2e-c2a3f00027a2571f",
+      "sha256": "f2957be20d8c7b46c3b55c070ab17465b3cd4e76553ab78aa85b0176fef99c9c",
+      "bytes": 72773944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libtokio_macros-e7d2fe1ce3ddafcc.so",
+      "sha256": "26eeb04997c59b21241263abb2f72f80051444e4797ed986018cdc6e93817055",
+      "bytes": 7928072
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libzerofrom_derive-48bbd9c13a77a7d5.so",
+      "sha256": "85aeaf81c5a7df27901988fa4b4e8b309fca10e2101f0ba31a2e563aec31e7b6",
+      "bytes": 8922288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/minicore_agent-1a03d26e6758fdba",
+      "sha256": "b46811b3f5e75afcbaa17d9ff6d00c5d577d21ae8cb5783b0a9ef7a9cfe45fd0",
+      "bytes": 115998440
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/rail_fixtures-70506fda20a97c9d",
+      "sha256": "03b0ceb22587953c6775d8eb8445abcfd0a310fa4e9ab1eafe35a65d650a5a15",
+      "bytes": 69064120
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libzerofrom_derive-c173604fb5645adf.so",
+      "sha256": "513e613404fff917e3d7bdc6b3a4f163e28729ccd6dc47cbf593464b3de4b933",
+      "bytes": 8432936
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/terminal_restore-da4f963dc67a4037",
+      "sha256": "2e32348a2f5068dba15836db7b75bc57ec00112c9345df294246204a476b0801",
+      "bytes": 61185288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libinstability-3337fdcacc951465.so",
+      "sha256": "c068f27c5b2ff2da80b45571038d43550008df1af3cf8d871c4daf2697e3ac8c",
+      "bytes": 7909648
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/minicore_agent-8eee20f203a69d1e",
+      "sha256": "b1d6202782fba392ca1237ba827d5938fbb94386680d60fe50761d4219efe8ef",
+      "bytes": 6992728
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libpaste-b65fb693b83103f1.so",
+      "sha256": "ba4b3b25e0f3acefc2b0955a2c4c196555d7949d01cd6361f7a70803cd6f0744",
+      "bytes": 5443896
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/rail_fixtures-a9b7a1b5bedc0274",
+      "sha256": "2f5ed9b5d0fc29725c29e8e138bcb14bb17d81ad673542636664def72498b0df",
+      "bytes": 69059472
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/openai_rpc_process-a873a199f5f74e7f",
+      "sha256": "49ed3d14feb0a4f1981ff6d5bf6339fad1c6a11c4cd3291599e2c87d8ec235a5",
+      "bytes": 77612424
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/minicore_agent-e45fa09e419ee5f3",
+      "sha256": "92baaec3e02e6fce730b8ed2d503f03040a76a89bd319c0de1d0689d049aaa39",
+      "bytes": 142247400
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libthiserror_impl-5b49013e39a141b3.so",
+      "sha256": "fdb89b84b3697464db7d504c1e59bd79c2bef2bf6049d8a1420f8cc09f2d0d2f",
+      "bytes": 8238752
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libindoc-24666fe648aa6bd0.so",
+      "sha256": "893f4043b513dad38b3b9ebb17bd1dfe111ed11aa968b425e832268115260b09",
+      "bytes": 5388464
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/protocol-b3b167f9ff214c53",
+      "sha256": "b477ce891a74e4519927975e8f4986841be72b38d75453813e7c4e0ad56e7d79",
+      "bytes": 55950592
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/render_snapshots-b42f1f21b85b5e54",
+      "sha256": "6152710c9a2cd6d0c814f2d3068f35a5964d6743d51247f133be1e7edd5598c8",
+      "bytes": 66959344
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/word_oracle-07ebdfc75a592ec7",
+      "sha256": "e933cad0f3f19da555b201ff913df04d13060c005152bee8ceae9f95e5f8b299",
+      "bytes": 55653360
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/terminal_restore-a23a0cb867b6ec75",
+      "sha256": "e9540da0bf18bd3b99ccb85900e467a1ef988a4fed8ff4beac88f0a3d50337db",
+      "bytes": 61189784
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/rpc_stdio-4c9ba613afd7e3c2",
+      "sha256": "41b60de8fc8da7072a8b00183783d012d7f080ec936158c26842d907211eea00",
+      "bytes": 69582448
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/minicore_tui-7175e3b87b7594e7",
+      "sha256": "6d16c905839e428c3d0e75d1fed719efd90c5340e0e26e640db0baccaf6ff889",
+      "bytes": 64369272
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/agent_e2e-b64e871d51c7da77",
+      "sha256": "1d60064f8fb33f3b4a6bd307b3aa60486ac1360ae4169c30ddcfb90d73230047",
+      "bytes": 72778896
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/render_snapshots-6060428a97847a0e",
+      "sha256": "e19c4924b8ca34159467a08b18217a61cedba12c89018b6c4349dc72a1970d18",
+      "bytes": 61298056
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/minicore_tui-92616655ec4f033e",
+      "sha256": "e2d3ff35f6d9a7b8fa6f14dadfb7f674ff36c5b4e195c43e552ae65288cf383a",
+      "bytes": 83108120
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libserde_derive-2222dcd9cc505602.so",
+      "sha256": "3c171dc6be6d0a5975a746b739ef91604fd92269e4d05b2af966220c96bdeac8",
+      "bytes": 9406064
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libyoke_derive-677d4fe7cb004660.so",
+      "sha256": "565f7fd47cbd1bef856dbd1a2f54167cef5f0c522e7e9288f9f16d3db88d63a0",
+      "bytes": 8198904
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libserde_derive-dc1ca676dead0ed5.so",
+      "sha256": "d8535533fdced0cfe2997facfa7fa5eef5c0b9f20be1efab3cf89afab5a25421",
+      "bytes": 8658224
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/rpc_soak-ba5e37ff8e618163",
+      "sha256": "8bb4190b2c7bdcc7cc1698221b83d639b0e86ceade3f5bb671c01b260124061d",
+      "bytes": 77156632
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libdisplaydoc-aec1f851895384fd.so",
+      "sha256": "2a7f85d697215fc5e2e7e3c81010ce75dc573a2af3686d93fa440088d89e828f",
+      "bytes": 7662520
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/librustversion-e2f015801d180844.so",
+      "sha256": "db62663de30c1aa9f5f5d11fa2cf5bb455fbcb91df5c7a0e17d616d760235f56",
+      "bytes": 5455424
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/minicore_tui-a0e7d7ef4b75504a",
+      "sha256": "3637cf79e0371fed9de16f70cf2c1e5ea45e6499acfe560d51117125abff8525",
+      "bytes": 68373696
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/startup_errors-ff1e4fc8de31cc10",
+      "sha256": "9d16741ec161c433b00757ef74667d5bc409c53f8f6d263f714a1ae9c7d1bf43",
+      "bytes": 69226848
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/agent_process-529695789164c79d",
+      "sha256": "e14cee6586379f02207e4cfae36e04e838be7110b99bb6f22d5b772ba8de1908",
+      "bytes": 7065520
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/agent_e2e-e5887c2023c98faa",
+      "sha256": "693f23129edb109ef61ce04f68de0562359cf7c3e7d9fcbc66e98eccf167e9d5",
+      "bytes": 69162576
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/minicore_tui-436bb86aa7082e3f",
+      "sha256": "22712895cf1adbd3b948e937b86ed3eb533d5900657aa8fee8ba738b4c5a3288",
+      "bytes": 68369048
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/rpc_io-630bec1b208f9cb0",
+      "sha256": "76669a2b208498fb4ad5904a2200871a90272a7590b4bf4adbf6a69c8d5399ec",
+      "bytes": 61812712
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/skeleton-2da78c716fce4133",
+      "sha256": "19c1d4cd0728ba41b547ef42a2203569d8b84093fccd3ce69abcdab550a0faf8",
+      "bytes": 72088584
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libdisplaydoc-f7ce3cd5bce52f3f.so",
+      "sha256": "17d6eb27767984c32ed2721750448c7d810af404c11031f75fe4615046911df0",
+      "bytes": 8128680
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/app_flow-42a1cf3a303744b3",
+      "sha256": "aa608cc51f9f44b4b513fcbe28b18d34857235d574162caa78da281ac2786a7f",
+      "bytes": 72119832
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/minicore_tui-af634386f1131f0b",
+      "sha256": "f03d1b5dcb9bce04d732473314cdc3a362fc9d55283db6ee7520dcc58aba2084",
+      "bytes": 83106680
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libyoke_derive-0e04992efe9070be.so",
+      "sha256": "9a4f8387c12b21d500e0de993508cffd44e25209d59a4bc206d6f3db6d340ab8",
+      "bytes": 8643672
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/rpc_io-d7479124dc0f0782",
+      "sha256": "6342a8bfcf65aa84264f86c453162e3a5b993d391c3cc9c1a1ecd1ce008f7dbc",
+      "bytes": 61808392
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/minicore_tui-568c058fbfd7dff2",
+      "sha256": "d91db42beff187e6f8d62d932a69d59303e9823fd71b20b2a5fb0b591952b9dd",
+      "bytes": 68683120
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libfutures_macro-44aab2495864de42.so",
+      "sha256": "e468adff4ef3f9c2e91825f08f594fdbc402ba9aa55a50edade252b777682ab5",
+      "bytes": 7722840
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/terminal_restore-bec74f9299505f93",
+      "sha256": "4df53d273b771e743b53a81bdc45a04aed12e57a93599c8e8d051621db503ca3",
+      "bytes": 53457496
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/tui_rpc_flow-6681b1acb4466e45",
+      "sha256": "9ca65d838cba2568aff80853cd0c4eb48e7c43220734d56a4f0673287e57ae89",
+      "bytes": 78452224
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libdarling_macro-793591668bdcc4c1.so",
+      "sha256": "f5f4deca6487ae549f9f2d74e08e510bc6537b08ee052eca1287fcf9212fa8d9",
+      "bytes": 8740384
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/minicore_tui-e2639d00cafe0ffd",
+      "sha256": "3038986412d558730e9430b2da7688f7d352e08aa2adaf82a6fab2bb3d7146fa",
+      "bytes": 63944800
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/rail_fixtures-d9a213f455f0c03a",
+      "sha256": "dbd1b0d83ca036707b71bba6e229e4fe0953dce12750bc213da2d4b8fed65945",
+      "bytes": 63073192
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/rpc_io-ba2700f9c46836e2",
+      "sha256": "9b488607b088a42c6ccaf701ae2aa1a378fc4d2a0c372b1c349b47716741eebc",
+      "bytes": 55211320
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/app_flow-c4a766e779c3a2d1",
+      "sha256": "60f4628687e0d73ebae7fff717e7e6d3c550022d75045872d7fa51bdb49b5836",
+      "bytes": 72111384
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/protocol-dc56f3be71031c1d",
+      "sha256": "dea369dccfa6c0ed13d74353a47b5aa4a3d9261a56c7ed4540c99da5a85ccf83",
+      "bytes": 62232240
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libzerovec_derive-4b284451b929876e.so",
+      "sha256": "8887df2ebdc53dfb16b5f3c1a76e1e36c592cc7f3f3951b374208d3ca930bd7e",
+      "bytes": 8446472
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/minicore_tui-5d1188e7148f4338",
+      "sha256": "cbf870e2a9ba6e295d15d1ff8111148460e21cdac43cfe31e0b67df56d3639b9",
+      "bytes": 68678576
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/app_flow-a9d08eb33d95cebf",
+      "sha256": "eaac7b313bf8c0690ab24d1917b3b0ca94ddafae91ca81d8962a49823243e678",
+      "bytes": 63784968
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/protocol-2e8ed7094ff13a12",
+      "sha256": "896a3ec66726f70c45685230c6b79dc167551552a31e00ad1de25303c5018316",
+      "bytes": 62227840
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/agent_process-55309027d38f1d42",
+      "sha256": "2441eedb4c72fb408cefb5980e5e6c944cac61ed7549ff42130c67c7e7b99d2b",
+      "bytes": 7309392
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/deps/libstrum_macros-8df82597ccf65ff0.so",
+      "sha256": "c237f8db3152aa7855e68d59158c81b83714412185a4cca11da49504c380e446",
+      "bytes": 8467328
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/minicore-tui",
+      "sha256": "3637cf79e0371fed9de16f70cf2c1e5ea45e6499acfe560d51117125abff8525",
+      "bytes": 68373696
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/minicore-agent",
+      "sha256": "b46811b3f5e75afcbaa17d9ff6d00c5d577d21ae8cb5783b0a9ef7a9cfe45fd0",
+      "bytes": 115998440
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/rustversion-13b47500ef9e4910/build_script_build-13b47500ef9e4910",
+      "sha256": "fe80367504fc0a4ccb3a17c17c92890af39db427667736beb6afc99b999a893b",
+      "bytes": 4949096
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/rustversion-13b47500ef9e4910/build-script-build",
+      "sha256": "fe80367504fc0a4ccb3a17c17c92890af39db427667736beb6afc99b999a893b",
+      "bytes": 4949096
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/icu_normalizer_data-8f7e90ba84fc81ad/build_script_build-8f7e90ba84fc81ad",
+      "sha256": "e0f2688461be667d85f0aac42445cbe55721640e632a9f210dac5c1e36d94a43",
+      "bytes": 4518648
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/icu_normalizer_data-8f7e90ba84fc81ad/build-script-build",
+      "sha256": "e0f2688461be667d85f0aac42445cbe55721640e632a9f210dac5c1e36d94a43",
+      "bytes": 4518648
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/signal-hook-d0b26dc53d3c5cd1/build_script_build-d0b26dc53d3c5cd1",
+      "sha256": "44c99d910f46c5bbee073dda5f143d16bab86300f4417fe0d908dbe4952509f0",
+      "bytes": 4504288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/signal-hook-d0b26dc53d3c5cd1/build-script-build",
+      "sha256": "44c99d910f46c5bbee073dda5f143d16bab86300f4417fe0d908dbe4952509f0",
+      "bytes": 4504288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/proc-macro2-49b9ad2fd2dbc46d/build_script_build-49b9ad2fd2dbc46d",
+      "sha256": "b7b4a798e811548c25af3c0178fd2d46a88f0a79ada243bb3cbc5d5ce6e778fe",
+      "bytes": 4875280
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/proc-macro2-49b9ad2fd2dbc46d/build-script-build",
+      "sha256": "b7b4a798e811548c25af3c0178fd2d46a88f0a79ada243bb3cbc5d5ce6e778fe",
+      "bytes": 4875280
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/serde_core-77ffafb6b05a575f/build_script_build-77ffafb6b05a575f",
+      "sha256": "01259728d63f846541e20b63f352a94ea3480f0b6bd2728fa85b7826ee21dab9",
+      "bytes": 4903944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/serde_core-77ffafb6b05a575f/build-script-build",
+      "sha256": "01259728d63f846541e20b63f352a94ea3480f0b6bd2728fa85b7826ee21dab9",
+      "bytes": 4903944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/pulldown-cmark-277eac32b601faa1/build_script_build-277eac32b601faa1",
+      "sha256": "84b9bd642316bfea4de1ad0563a4459184b1c8f9f3c9b673e9c2976ea2db388f",
+      "bytes": 4504280
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/pulldown-cmark-277eac32b601faa1/build-script-build",
+      "sha256": "84b9bd642316bfea4de1ad0563a4459184b1c8f9f3c9b673e9c2976ea2db388f",
+      "bytes": 4504280
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/icu_locale_data-d873f750e90e4298/build_script_build-d873f750e90e4298",
+      "sha256": "b12a3907a50aa6a1d3e29ae3329e0c50a19c46b3a5fee76002b642f4cddea8d1",
+      "bytes": 4518640
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/icu_locale_data-d873f750e90e4298/build-script-build",
+      "sha256": "b12a3907a50aa6a1d3e29ae3329e0c50a19c46b3a5fee76002b642f4cddea8d1",
+      "bytes": 4518640
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/icu_properties_data-30c0fc6e6cb3039d/build_script_build-30c0fc6e6cb3039d",
+      "sha256": "b38025365c5cf133362cc644f55f5314909efd554b5830adf90a49f5fd94ea3e",
+      "bytes": 4518648
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/icu_properties_data-30c0fc6e6cb3039d/build-script-build",
+      "sha256": "b38025365c5cf133362cc644f55f5314909efd554b5830adf90a49f5fd94ea3e",
+      "bytes": 4518648
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/instability-103fe596e916e51d/build_script_build-103fe596e916e51d",
+      "sha256": "e045799ba44e17fd5c984b68a9735cd4c6b8bf2684f8d57bece8fae47a82873a",
+      "bytes": 4511544
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/instability-103fe596e916e51d/build-script-build",
+      "sha256": "e045799ba44e17fd5c984b68a9735cd4c6b8bf2684f8d57bece8fae47a82873a",
+      "bytes": 4511544
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/paste-9529849f5928f912/build_script_build-9529849f5928f912",
+      "sha256": "5d38b8c973770485a0be094aff02dcaf040520796afc1d0f5fe866b9431933fd",
+      "bytes": 4754008
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/paste-9529849f5928f912/build-script-build",
+      "sha256": "5d38b8c973770485a0be094aff02dcaf040520796afc1d0f5fe866b9431933fd",
+      "bytes": 4754008
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/rustix-9f87b63986bd973b/build_script_build-9f87b63986bd973b",
+      "sha256": "76c0f66145ad94ca9ec5990cd707d496922481e31ba8065c7ac0942b851b76d0",
+      "bytes": 4968920
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/rustix-9f87b63986bd973b/build-script-build",
+      "sha256": "76c0f66145ad94ca9ec5990cd707d496922481e31ba8065c7ac0942b851b76d0",
+      "bytes": 4968920
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/serde-2dc9498301c51055/build_script_build-2dc9498301c51055",
+      "sha256": "806168a4b69dfb137f266a0ad250525876129453e13c83f009021a86dfdc583e",
+      "bytes": 4892864
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/serde-2dc9498301c51055/build-script-build",
+      "sha256": "806168a4b69dfb137f266a0ad250525876129453e13c83f009021a86dfdc583e",
+      "bytes": 4892864
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/thiserror-3bd2b16f84eb8dd0/build-script-build",
+      "sha256": "b08e24363d3790f70a79fccc374c110062db5d6cefe1c831c4057cb2de6f31aa",
+      "bytes": 5016112
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/thiserror-3bd2b16f84eb8dd0/build_script_build-3bd2b16f84eb8dd0",
+      "sha256": "b08e24363d3790f70a79fccc374c110062db5d6cefe1c831c4057cb2de6f31aa",
+      "bytes": 5016112
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/serde_json-2bf3f7548c1ac3ab/build_script_build-2bf3f7548c1ac3ab",
+      "sha256": "d8c5962b05e2d182570de50fb02e520d19bb8a926ae9642a0fcea3b9cb568197",
+      "bytes": 4528032
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/serde_json-2bf3f7548c1ac3ab/build-script-build",
+      "sha256": "d8c5962b05e2d182570de50fb02e520d19bb8a926ae9642a0fcea3b9cb568197",
+      "bytes": 4528032
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/zmij-b022f948a8ff01c5/build_script_build-b022f948a8ff01c5",
+      "sha256": "e1cea3465b320ac846e6acc465aae20cda865a1ccdf50ca83f0ac4b0b303aee9",
+      "bytes": 4762288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/zmij-b022f948a8ff01c5/build-script-build",
+      "sha256": "e1cea3465b320ac846e6acc465aae20cda865a1ccdf50ca83f0ac4b0b303aee9",
+      "bytes": 4762288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/libc-810deb50a5355ce7/build_script_build-810deb50a5355ce7",
+      "sha256": "387e66eaec183a70b321904680c0b4c4ef8a006108087a706917df299bccb653",
+      "bytes": 5125656
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/libc-810deb50a5355ce7/build-script-build",
+      "sha256": "387e66eaec183a70b321904680c0b4c4ef8a006108087a706917df299bccb653",
+      "bytes": 5125656
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/libm-ba1a234a057a6fcf/build-script-build",
+      "sha256": "e4081ee0e829f9ecb0a776a90be14a5e2251414ec987412ce2d93c54fedb6435",
+      "bytes": 4774008
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/libm-ba1a234a057a6fcf/build_script_build-ba1a234a057a6fcf",
+      "sha256": "e4081ee0e829f9ecb0a776a90be14a5e2251414ec987412ce2d93c54fedb6435",
+      "bytes": 4774008
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/parking_lot_core-229cd8c7ec008983/build_script_build-229cd8c7ec008983",
+      "sha256": "6cc191db09999a1decac16705cadb0addbe1d2a918e56f290068f647c818f3ed",
+      "bytes": 4548104
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/parking_lot_core-229cd8c7ec008983/build-script-build",
+      "sha256": "6cc191db09999a1decac16705cadb0addbe1d2a918e56f290068f647c818f3ed",
+      "bytes": 4548104
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/icu_segmenter_data-eb003ac35d7ebdf1/build_script_build-eb003ac35d7ebdf1",
+      "sha256": "750750c8b936d7492b2f52ce4ad242541454df8ca2c089ba388c6c93e562cce3",
+      "bytes": 4518648
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/icu_segmenter_data-eb003ac35d7ebdf1/build-script-build",
+      "sha256": "750750c8b936d7492b2f52ce4ad242541454df8ca2c089ba388c6c93e562cce3",
+      "bytes": 4518648
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/quote-2253495af43116d4/build_script_build-2253495af43116d4",
+      "sha256": "d1ba0ce1c54b47be1cef68d57875b75d23b88c25d2c0bdf1a4aa12df50e49af7",
+      "bytes": 4756984
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/build/quote-2253495af43116d4/build-script-build",
+      "sha256": "d1ba0ce1c54b47be1cef68d57875b75d23b88c25d2c0bdf1a4aa12df50e49af7",
+      "bytes": 4756984
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/deps/libstrum_macros-aff53d47ed52171e.so",
+      "sha256": "fcf9bf51c803db0996c4b6f0d339c8ad66a7b7beaa4b416247e1fcf907b38483",
+      "bytes": 42907808
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/deps/libtokio_macros-43ec859942be9814.so",
+      "sha256": "7061140f396cad1b49030628f1da7b4f12050d4842094a71bfcad4ba11bf654c",
+      "bytes": 37111568
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/deps/librustversion-cce28bf39cd7333e.so",
+      "sha256": "221d1abe606b3081e6c5141aa838ae3e37d0cd37fac17dc983e3c467e3ee852f",
+      "bytes": 6654536
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/deps/libzerofrom_derive-a6b1476563f8f946.so",
+      "sha256": "7c453ada8ba7496d9aaca06077b482ee82006a3afed65a3be47410c3dfe94279",
+      "bytes": 49609088
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/deps/libdarling_macro-207a5d7716c3822f.so",
+      "sha256": "64b47b8b2c15131efe526f4b00b40502417035abfda8b926d81e1407703dfa63",
+      "bytes": 48636552
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/deps/libthiserror_impl-b0d03726064cae56.so",
+      "sha256": "a9dd3445bff08e4c8343004e998a2e733216c5448fddd680bb9c1bd2f83bd804",
+      "bytes": 42248776
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/deps/libdisplaydoc-5c502285054f5fe2.so",
+      "sha256": "8c69d0097646d6b04b77bc0d1b10ee76cbdccb511fff9eebd7f0ad9310a3fde7",
+      "bytes": 35405384
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/deps/libinstability-bc61f2a2969123e6.so",
+      "sha256": "d64e2a82b186382b4f6995e99c737e13c220bdcfc8fe18682d923257545f3053",
+      "bytes": 50553680
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/deps/libserde_derive-a1497fbcee5e058d.so",
+      "sha256": "a1569995e5de210a6f810e2b52afe9a4a149f264d48b019dba95eec104f72bee",
+      "bytes": 44620808
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/deps/libyoke_derive-11b61986bb8e0f2a.so",
+      "sha256": "a93f9bcc74bfe9a068b8c6063fbe789d94ddab41513f6fbc45073c4fac7b3f72",
+      "bytes": 47709672
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/deps/libpaste-46c69c0e4c9bb21b.so",
+      "sha256": "1c802d226b83adbe7b8b918e21b77000e1ac659cf90e2714ffba0694f33ec567",
+      "bytes": 6594288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/deps/libindoc-0ece8aaa4cf75314.so",
+      "sha256": "9e64ec56766ba19a70eae2faa6ee4923c1742cf0634a5578a865f3fec5bba90d",
+      "bytes": 6230384
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/deps/libzerovec_derive-56bdf8ca8a4988f9.so",
+      "sha256": "f0fd91afad38eee0710af16524f3c96fbe366d0215788b90a37dbb4c2380c838",
+      "bytes": 36186128
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/paste-118598b4c14da6e8/build_script_build-118598b4c14da6e8",
+      "sha256": "7fb283574cff751793e37f28febfb5354226a2858a2b9ec5fa3d29bd413a8d63",
+      "bytes": 558464
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/paste-118598b4c14da6e8/build-script-build",
+      "sha256": "7fb283574cff751793e37f28febfb5354226a2858a2b9ec5fa3d29bd413a8d63",
+      "bytes": 558464
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/quote-2aa49504af5105fb/build-script-build",
+      "sha256": "6d15ce29d8a23edb259bdfa479deae51242207e7912d966339594646219c3846",
+      "bytes": 558040
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/quote-2aa49504af5105fb/build_script_build-2aa49504af5105fb",
+      "sha256": "6d15ce29d8a23edb259bdfa479deae51242207e7912d966339594646219c3846",
+      "bytes": 558040
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/instability-f69ddc024ebb263c/build-script-build",
+      "sha256": "628d66a5b3f21186c63511f6df6e9af9a1cdeeb80a2a4260c79d353d0aa240e5",
+      "bytes": 459200
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/instability-f69ddc024ebb263c/build_script_build-f69ddc024ebb263c",
+      "sha256": "628d66a5b3f21186c63511f6df6e9af9a1cdeeb80a2a4260c79d353d0aa240e5",
+      "bytes": 459200
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/libm-08523d55cd641304/build_script_build-08523d55cd641304",
+      "sha256": "7de991f216cc45977b67c4c0c6a9b99bc86f110925df7247d0b65690f709f78c",
+      "bytes": 547720
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/libm-08523d55cd641304/build-script-build",
+      "sha256": "7de991f216cc45977b67c4c0c6a9b99bc86f110925df7247d0b65690f709f78c",
+      "bytes": 547720
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/serde_json-9c8b7397eabde849/build_script_build-9c8b7397eabde849",
+      "sha256": "2ef205617edff228b3b9cd454fa2d7fab87798abd96e7ccba7025ce25f865da8",
+      "bytes": 463600
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/serde_json-9c8b7397eabde849/build-script-build",
+      "sha256": "2ef205617edff228b3b9cd454fa2d7fab87798abd96e7ccba7025ce25f865da8",
+      "bytes": 463600
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/proc-macro2-3546b55fed253d31/build_script_build-3546b55fed253d31",
+      "sha256": "c423cd02d158fedd6c415d13f1d047c77fbb2bfa0dbc0388511577afafc311df",
+      "bytes": 616736
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/proc-macro2-3546b55fed253d31/build-script-build",
+      "sha256": "c423cd02d158fedd6c415d13f1d047c77fbb2bfa0dbc0388511577afafc311df",
+      "bytes": 616736
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/parking_lot_core-1c95b6cefdb977f5/build_script_build-1c95b6cefdb977f5",
+      "sha256": "5736a0ab4506c40872e4954cabae7452611f53042723d4eaf22065a32fdf9aaa",
+      "bytes": 485824
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/parking_lot_core-1c95b6cefdb977f5/build-script-build",
+      "sha256": "5736a0ab4506c40872e4954cabae7452611f53042723d4eaf22065a32fdf9aaa",
+      "bytes": 485824
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/rustversion-d8da5690c71923bf/build-script-build",
+      "sha256": "8a779350623d54cac66468081c8ea3bd2b346f9168a195b7ff8034a9b9c6a632",
+      "bytes": 618944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/rustversion-d8da5690c71923bf/build_script_build-d8da5690c71923bf",
+      "sha256": "8a779350623d54cac66468081c8ea3bd2b346f9168a195b7ff8034a9b9c6a632",
+      "bytes": 618944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/rustix-622c8a6605ecfa7f/build_script_build-622c8a6605ecfa7f",
+      "sha256": "0d768bbe99ee6ef6af2fcc143daefba43410a746d8f3a9aca35edf8e8a7c0f50",
+      "bytes": 611968
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/rustix-622c8a6605ecfa7f/build-script-build",
+      "sha256": "0d768bbe99ee6ef6af2fcc143daefba43410a746d8f3a9aca35edf8e8a7c0f50",
+      "bytes": 611968
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/signal-hook-9a9194af457c9de4/build_script_build-9a9194af457c9de4",
+      "sha256": "8eaaf79ef0f4b55bde16c047847742c590b8655c345f65a3f7f3d542a6983a79",
+      "bytes": 451792
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/signal-hook-9a9194af457c9de4/build-script-build",
+      "sha256": "8eaaf79ef0f4b55bde16c047847742c590b8655c345f65a3f7f3d542a6983a79",
+      "bytes": 451792
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/icu_locale_data-014713b2a772d67b/build_script_build-014713b2a772d67b",
+      "sha256": "a21d8ae634872066e0b61bbc9e6e106c2b96c293e9baea0d4ccdb97116bbd638",
+      "bytes": 463200
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/icu_locale_data-014713b2a772d67b/build-script-build",
+      "sha256": "a21d8ae634872066e0b61bbc9e6e106c2b96c293e9baea0d4ccdb97116bbd638",
+      "bytes": 463200
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/serde-b0e1dbeb55ff2e87/build_script_build-b0e1dbeb55ff2e87",
+      "sha256": "55793be1eb36e7c2b45138528c64aeb18b1ee7470d0f311a7a9ee4c2fa399b43",
+      "bytes": 585136
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/serde-b0e1dbeb55ff2e87/build-script-build",
+      "sha256": "55793be1eb36e7c2b45138528c64aeb18b1ee7470d0f311a7a9ee4c2fa399b43",
+      "bytes": 585136
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/pulldown-cmark-22afb1e645efeee4/build_script_build-22afb1e645efeee4",
+      "sha256": "bbf5b80e8edfe2bb850e2bcd3c02c94669bcf707485e0f17317931c689efa1cc",
+      "bytes": 451928
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/pulldown-cmark-22afb1e645efeee4/build-script-build",
+      "sha256": "bbf5b80e8edfe2bb850e2bcd3c02c94669bcf707485e0f17317931c689efa1cc",
+      "bytes": 451928
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/thiserror-777dc779e855a141/build_script_build-777dc779e855a141",
+      "sha256": "62aaf9dc13d1fca2b26331c097aec17beed0edd552bebe4cfb362be1eb778e21",
+      "bytes": 635024
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/thiserror-777dc779e855a141/build-script-build",
+      "sha256": "62aaf9dc13d1fca2b26331c097aec17beed0edd552bebe4cfb362be1eb778e21",
+      "bytes": 635024
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/icu_segmenter_data-a2228fe66d035d5f/build_script_build-a2228fe66d035d5f",
+      "sha256": "07a97cbbe6b3bcf8e5a10963b5d5f7f0b4bd2885acf6429102295650077249b8",
+      "bytes": 463200
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/icu_segmenter_data-a2228fe66d035d5f/build-script-build",
+      "sha256": "07a97cbbe6b3bcf8e5a10963b5d5f7f0b4bd2885acf6429102295650077249b8",
+      "bytes": 463200
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/zmij-d83044cd0b8b63ae/build_script_build-d83044cd0b8b63ae",
+      "sha256": "163188de039afc404db3ca4715d3d7279f2aa563c2b7873a7bb4515e64b15006",
+      "bytes": 563096
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/zmij-d83044cd0b8b63ae/build-script-build",
+      "sha256": "163188de039afc404db3ca4715d3d7279f2aa563c2b7873a7bb4515e64b15006",
+      "bytes": 563096
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/libc-f32b401ac58889df/build_script_build-f32b401ac58889df",
+      "sha256": "2ee93079aebc15610be8df78c1e31304baf1af2b4af4742d0db5659a444cc908",
+      "bytes": 633832
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/libc-f32b401ac58889df/build-script-build",
+      "sha256": "2ee93079aebc15610be8df78c1e31304baf1af2b4af4742d0db5659a444cc908",
+      "bytes": 633832
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/serde_core-14220079c8e1a32e/build_script_build-14220079c8e1a32e",
+      "sha256": "c9b2c84a437c1d9e9b4a78a58278b8cf53d5ecc44248370215bfbde5874247ed",
+      "bytes": 587944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/build/serde_core-14220079c8e1a32e/build-script-build",
+      "sha256": "c9b2c84a437c1d9e9b4a78a58278b8cf53d5ecc44248370215bfbde5874247ed",
+      "bytes": 587944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/deps/libzerofrom_derive-654e4264b9f1ffbe.so",
+      "sha256": "8e59876eb5ab6acb2045d72b911742980b8cc7665a8d9e8077dd06bd31dee23d",
+      "bytes": 4546088
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/deps/libindoc-b01f4b59e5f5897f.so",
+      "sha256": "3637813622b0533d88a0a330f1cf5b0fc5b964463368bc53d2f6feb757305256",
+      "bytes": 673056
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/deps/libthiserror_impl-2b47df9f7a6f9745.so",
+      "sha256": "bc00a3cec93ee61e7dd25e686ed69e646b004c29c31d96823b8c7d8ed4e30745",
+      "bytes": 3931984
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/deps/libserde_derive-fc72ce4ccaf893f4.so",
+      "sha256": "cb1b1e42264de5b1f5070793de86dfaac5c1faed12519d246804d442705d1145",
+      "bytes": 4931496
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/deps/libdisplaydoc-bedf5a9a0a53bf74.so",
+      "sha256": "85e6ed89e3d8525d9040935038f07814b69464c4a5612a20afe2252c19c17ab3",
+      "bytes": 3530336
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/deps/libinstability-901a1758043fc2dd.so",
+      "sha256": "92131d7ca9eeb772a2cd0446c4ddd9be35122f4132ff210952ca34b9f7462157",
+      "bytes": 3558368
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/deps/libyoke_derive-ed3eb9b68656dcbf.so",
+      "sha256": "990187dcfcaf986ce098ce12f1251c773e0384e8e25b13861ddb883b8f0034bc",
+      "bytes": 4176288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/deps/libzerovec_derive-8393772bd0afac58.so",
+      "sha256": "d32ed40ecb9e632404e6d8942e939c5ce0d915afaba554054ee47a47fa7dc642",
+      "bytes": 3824432
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/deps/libpaste-8f841e89c42b5076.so",
+      "sha256": "e69524ad1beab7da513a6ea0ecf0f0e849e6cc64799c050c89c0871981cf261d",
+      "bytes": 732224
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/deps/libdarling_macro-fb65b30b0748df4c.so",
+      "sha256": "64fe46d9dd33b0c7c1832b87efb49b04bc3fb5175c87b8e73d2f43514853eb4c",
+      "bytes": 4765056
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/deps/librustversion-b0641713d50f2756.so",
+      "sha256": "8a3732581b73aed438369c7fb75ae48f7ea7e6b6bfdbdf7e0962333744aca2c6",
+      "bytes": 791504
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/deps/libstrum_macros-ae38814bf201100b.so",
+      "sha256": "e8cb071de1a3571da5f543dc3470cf3df0c9445d5e11a28f886785f1006835a5",
+      "bytes": 4563248
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/deps/libtokio_macros-c4d2667a81f4a5d5.so",
+      "sha256": "ff78c1ad48acd33d4d43fa8d99b7b6d9885afacafef0a36ca05c57d14cabd412",
+      "bytes": 3431768
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/x86_64-apple-darwin/debug/deps/minicore_tui-9b0b1f7c98557a3b",
+      "sha256": "3cf5cc89b2659a73d8961bd9708217127f3963e5664561fbe250cc466e63ec3f",
+      "bytes": 16369939
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/x86_64-apple-darwin/debug/deps/protocol-0aa4363667cce86c",
+      "sha256": "313f348a7be6eaa13804155a0b69c37cc150b9845291062fcbddf2d88782d24e",
+      "bytes": 5114285
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/x86_64-apple-darwin/debug/deps/rpc_io-78e4b964f506d00b",
+      "sha256": "876e3f83029c8c5bbaab5ea79f0a5bb6039e9bcab6196e7d60ac747ee7fbbf81",
+      "bytes": 4646793
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/x86_64-apple-darwin/debug/deps/agent_process-edeb3bd82fef0127",
+      "sha256": "32cf4e33e88a58f6678f7bd6ec59646b91f124e8be99b8d150711eb663e39963",
+      "bytes": 958176
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/x86_64-apple-darwin/debug/deps/minicore_tui-e90cf82df95778b4",
+      "sha256": "12cdd71c5ed3b66a9b92d1ca0d00bbd1613b033871d1a5e8dd6fc391ca4c56a5",
+      "bytes": 14258424
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/x86_64-apple-darwin/debug/deps/render_snapshots-d291339492e4d9c7",
+      "sha256": "5b9aa5b4a41215eb0093d126af4e871cc6f912040a9a23bf34929936f7851c75",
+      "bytes": 11103965
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/x86_64-apple-darwin/debug/deps/word_oracle-68498b2df0140b9d",
+      "sha256": "4f88e65175b31a5ebc53c2bf0f25b727cd97e94d60aeafb84b157a59e5fda05a",
+      "bytes": 4224918
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/x86_64-apple-darwin/debug/deps/terminal_restore-caf2eeb0b961161c",
+      "sha256": "d7b244f96ef30c36b16273238a460bb6fce4000410c5630557751cd8e1677cae",
+      "bytes": 1853942
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/x86_64-apple-darwin/debug/deps/agent_e2e-0286dce31bd48f5e",
+      "sha256": "4eeb95f8cc3afefdb617e60d90e13cf15c266406aafbe5d29f41197f0e8ae46c",
+      "bytes": 14772793
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/x86_64-apple-darwin/debug/deps/rail_fixtures-31950eedf5b20c8b",
+      "sha256": "bd0145df75e10566e0f6fedbb1015e1a20f3035df667bd905c5a6013d3427f1a",
+      "bytes": 11732764
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/x86_64-apple-darwin/debug/deps/app_flow-38608324832d38d5",
+      "sha256": "5591535b7237a04c4a2b4dcf729136d6c05f0bd0390d807ba10346a813a8525e",
+      "bytes": 12966814
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/x86_64-apple-darwin/debug/deps/minicore_tui-ecbf157e75dbacb3",
+      "sha256": "0bd079f1b8845596924416195a3ba533164572ee3664cdaefe96f521ae28b7c2",
+      "bytes": 14283042
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/x86_64-apple-darwin/debug/deps/minicore_tui-1b8085456b2cfda6",
+      "sha256": "cbb4becb9d4289a6fff860d841f71d4593effcf36360172663d3792f2b88e35c",
+      "bytes": 13538498
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/x86_64-apple-darwin/debug/deps/minicore_tui-d740711f7aea13be",
+      "sha256": "d9507995842d4793cf222fca891d1d4d69ac7497e93bfbae9c45a7efd68401ba",
+      "bytes": 14282867
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/x86_64-apple-darwin/debug/minicore-tui",
+      "sha256": "0bd079f1b8845596924416195a3ba533164572ee3664cdaefe96f521ae28b7c2",
+      "bytes": 14283042
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/x86_64-apple-darwin/release/deps/minicore_tui-97b03d5008a0e52c",
+      "sha256": "f0d2cbc60accde257f0694054779f8f3c06a1b55693c9726a0c8e1d1fcff4645",
+      "bytes": 6684608
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/x86_64-apple-darwin/release/minicore-tui",
+      "sha256": "f0d2cbc60accde257f0694054779f8f3c06a1b55693c9726a0c8e1d1fcff4645",
+      "bytes": 6684608
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/icu_normalizer_data-7b750701d730213b/build_script_build-7b750701d730213b",
+      "sha256": "d3ae39ebbf1423661535bdc492934c76b465d731a75c3e5ae7849cb2cf15abef",
+      "bytes": 4523800
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/icu_normalizer_data-7b750701d730213b/build-script-build",
+      "sha256": "d3ae39ebbf1423661535bdc492934c76b465d731a75c3e5ae7849cb2cf15abef",
+      "bytes": 4523800
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/libc-140422329088a3c0/build_script_build-140422329088a3c0",
+      "sha256": "34a199766bd7bff4e2b0c7e782e26aac4d7be37fc6355ccec8bd93a762030969",
+      "bytes": 5089840
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/libc-140422329088a3c0/build-script-build",
+      "sha256": "34a199766bd7bff4e2b0c7e782e26aac4d7be37fc6355ccec8bd93a762030969",
+      "bytes": 5089840
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/rustversion-13b47500ef9e4910/build_script_build-13b47500ef9e4910",
+      "sha256": "fe80367504fc0a4ccb3a17c17c92890af39db427667736beb6afc99b999a893b",
+      "bytes": 4949096
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/rustversion-13b47500ef9e4910/build-script-build",
+      "sha256": "fe80367504fc0a4ccb3a17c17c92890af39db427667736beb6afc99b999a893b",
+      "bytes": 4949096
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/icu_normalizer_data-8f7e90ba84fc81ad/build_script_build-8f7e90ba84fc81ad",
+      "sha256": "e0f2688461be667d85f0aac42445cbe55721640e632a9f210dac5c1e36d94a43",
+      "bytes": 4518648
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/icu_normalizer_data-8f7e90ba84fc81ad/build-script-build",
+      "sha256": "e0f2688461be667d85f0aac42445cbe55721640e632a9f210dac5c1e36d94a43",
+      "bytes": 4518648
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/signal-hook-d0b26dc53d3c5cd1/build_script_build-d0b26dc53d3c5cd1",
+      "sha256": "44c99d910f46c5bbee073dda5f143d16bab86300f4417fe0d908dbe4952509f0",
+      "bytes": 4504288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/signal-hook-d0b26dc53d3c5cd1/build-script-build",
+      "sha256": "44c99d910f46c5bbee073dda5f143d16bab86300f4417fe0d908dbe4952509f0",
+      "bytes": 4504288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/proc-macro2-49b9ad2fd2dbc46d/build_script_build-49b9ad2fd2dbc46d",
+      "sha256": "b7b4a798e811548c25af3c0178fd2d46a88f0a79ada243bb3cbc5d5ce6e778fe",
+      "bytes": 4875280
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/proc-macro2-49b9ad2fd2dbc46d/build-script-build",
+      "sha256": "b7b4a798e811548c25af3c0178fd2d46a88f0a79ada243bb3cbc5d5ce6e778fe",
+      "bytes": 4875280
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/quote-53a208424db1e1d7/build-script-build",
+      "sha256": "6a915d818aa9817806c9e9c27ab1e1876a5111be54b6b9877defff6f058805de",
+      "bytes": 4809664
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/quote-53a208424db1e1d7/build_script_build-53a208424db1e1d7",
+      "sha256": "6a915d818aa9817806c9e9c27ab1e1876a5111be54b6b9877defff6f058805de",
+      "bytes": 4809664
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/httparse-f2191f3bc755b0c7/build_script_build-f2191f3bc755b0c7",
+      "sha256": "b79f29815a575b87ab366c91e949a28aab651b2a84db4a1b195709d93f53d9f8",
+      "bytes": 5015376
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/httparse-f2191f3bc755b0c7/build-script-build",
+      "sha256": "b79f29815a575b87ab366c91e949a28aab651b2a84db4a1b195709d93f53d9f8",
+      "bytes": 5015376
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/zmij-5e4b739506ce1fa0/build_script_build-5e4b739506ce1fa0",
+      "sha256": "cfcd8e086d2c89c77cedbefa175b9d729dde4108ac4c22458003cdd4365c0634",
+      "bytes": 4818528
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/zmij-5e4b739506ce1fa0/build-script-build",
+      "sha256": "cfcd8e086d2c89c77cedbefa175b9d729dde4108ac4c22458003cdd4365c0634",
+      "bytes": 4818528
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/rustls-b27555a1a58e05fe/build_script_build-b27555a1a58e05fe",
+      "sha256": "ad0649a6d7d5b0fd787f6b3d80636e64f4d6e52fa600edcc8929ed1507886577",
+      "bytes": 4506192
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/rustls-b27555a1a58e05fe/build-script-build",
+      "sha256": "ad0649a6d7d5b0fd787f6b3d80636e64f4d6e52fa600edcc8929ed1507886577",
+      "bytes": 4506192
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/serde_json-2bddfa072642257e/build_script_build-2bddfa072642257e",
+      "sha256": "d7410068b1e9921a969092d6947119faba06f03a19ee35c00a37c2af439d314b",
+      "bytes": 4528288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/serde_json-2bddfa072642257e/build-script-build",
+      "sha256": "d7410068b1e9921a969092d6947119faba06f03a19ee35c00a37c2af439d314b",
+      "bytes": 4528288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/getrandom-d4d8cb9de8a1b804/build_script_build-d4d8cb9de8a1b804",
+      "sha256": "519e45ceac190d8b072580cf4054d38a933bd633f4e5c643efa7f243bbc47f2e",
+      "bytes": 4970664
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/getrandom-d4d8cb9de8a1b804/build-script-build",
+      "sha256": "519e45ceac190d8b072580cf4054d38a933bd633f4e5c643efa7f243bbc47f2e",
+      "bytes": 4970664
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/serde_core-5907a28699f21185/build_script_build-5907a28699f21185",
+      "sha256": "9032338cdc3ddd34e230f5cc976b3f33f9f2f1ba58b3f6bb7e747bde81014697",
+      "bytes": 4932264
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/serde_core-5907a28699f21185/build-script-build",
+      "sha256": "9032338cdc3ddd34e230f5cc976b3f33f9f2f1ba58b3f6bb7e747bde81014697",
+      "bytes": 4932264
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/icu_properties_data-faf1521d7d295bee/build_script_build-faf1521d7d295bee",
+      "sha256": "c9a2d7700ca0b3ab38872b30b37ef000d89f243da559860160bc990c58545eb1",
+      "bytes": 4523800
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/icu_properties_data-faf1521d7d295bee/build-script-build",
+      "sha256": "c9a2d7700ca0b3ab38872b30b37ef000d89f243da559860160bc990c58545eb1",
+      "bytes": 4523800
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/serde_core-77ffafb6b05a575f/build_script_build-77ffafb6b05a575f",
+      "sha256": "01259728d63f846541e20b63f352a94ea3480f0b6bd2728fa85b7826ee21dab9",
+      "bytes": 4903944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/serde_core-77ffafb6b05a575f/build-script-build",
+      "sha256": "01259728d63f846541e20b63f352a94ea3480f0b6bd2728fa85b7826ee21dab9",
+      "bytes": 4903944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/pulldown-cmark-277eac32b601faa1/build_script_build-277eac32b601faa1",
+      "sha256": "84b9bd642316bfea4de1ad0563a4459184b1c8f9f3c9b673e9c2976ea2db388f",
+      "bytes": 4504280
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/pulldown-cmark-277eac32b601faa1/build-script-build",
+      "sha256": "84b9bd642316bfea4de1ad0563a4459184b1c8f9f3c9b673e9c2976ea2db388f",
+      "bytes": 4504280
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/icu_locale_data-d873f750e90e4298/build_script_build-d873f750e90e4298",
+      "sha256": "b12a3907a50aa6a1d3e29ae3329e0c50a19c46b3a5fee76002b642f4cddea8d1",
+      "bytes": 4518640
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/icu_locale_data-d873f750e90e4298/build-script-build",
+      "sha256": "b12a3907a50aa6a1d3e29ae3329e0c50a19c46b3a5fee76002b642f4cddea8d1",
+      "bytes": 4518640
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/icu_properties_data-30c0fc6e6cb3039d/build_script_build-30c0fc6e6cb3039d",
+      "sha256": "b38025365c5cf133362cc644f55f5314909efd554b5830adf90a49f5fd94ea3e",
+      "bytes": 4518648
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/icu_properties_data-30c0fc6e6cb3039d/build-script-build",
+      "sha256": "b38025365c5cf133362cc644f55f5314909efd554b5830adf90a49f5fd94ea3e",
+      "bytes": 4518648
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/instability-103fe596e916e51d/build_script_build-103fe596e916e51d",
+      "sha256": "e045799ba44e17fd5c984b68a9735cd4c6b8bf2684f8d57bece8fae47a82873a",
+      "bytes": 4511544
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/instability-103fe596e916e51d/build-script-build",
+      "sha256": "e045799ba44e17fd5c984b68a9735cd4c6b8bf2684f8d57bece8fae47a82873a",
+      "bytes": 4511544
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/paste-9529849f5928f912/build_script_build-9529849f5928f912",
+      "sha256": "5d38b8c973770485a0be094aff02dcaf040520796afc1d0f5fe866b9431933fd",
+      "bytes": 4754008
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/paste-9529849f5928f912/build-script-build",
+      "sha256": "5d38b8c973770485a0be094aff02dcaf040520796afc1d0f5fe866b9431933fd",
+      "bytes": 4754008
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/rustix-9f87b63986bd973b/build_script_build-9f87b63986bd973b",
+      "sha256": "76c0f66145ad94ca9ec5990cd707d496922481e31ba8065c7ac0942b851b76d0",
+      "bytes": 4968920
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/rustix-9f87b63986bd973b/build-script-build",
+      "sha256": "76c0f66145ad94ca9ec5990cd707d496922481e31ba8065c7ac0942b851b76d0",
+      "bytes": 4968920
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/ring-ac5a1a9dd5f82876/build_script_build-ac5a1a9dd5f82876",
+      "sha256": "168c2e744b7d8c415048717857916f7033038bfc2e227aa1e39672eee2b5efad",
+      "bytes": 9558840
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/ring-ac5a1a9dd5f82876/build-script-build",
+      "sha256": "168c2e744b7d8c415048717857916f7033038bfc2e227aa1e39672eee2b5efad",
+      "bytes": 9558840
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/serde-2dc9498301c51055/build_script_build-2dc9498301c51055",
+      "sha256": "806168a4b69dfb137f266a0ad250525876129453e13c83f009021a86dfdc583e",
+      "bytes": 4892864
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/serde-2dc9498301c51055/build-script-build",
+      "sha256": "806168a4b69dfb137f266a0ad250525876129453e13c83f009021a86dfdc583e",
+      "bytes": 4892864
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/proc-macro2-6955ed29c3acce69/build_script_build-6955ed29c3acce69",
+      "sha256": "a15cc7ac7bf17f1f60b7795e9ad9db9a3a70778be9d24345f9b1f379fcdc25f1",
+      "bytes": 4924208
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/proc-macro2-6955ed29c3acce69/build-script-build",
+      "sha256": "a15cc7ac7bf17f1f60b7795e9ad9db9a3a70778be9d24345f9b1f379fcdc25f1",
+      "bytes": 4924208
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/thiserror-3bd2b16f84eb8dd0/build-script-build",
+      "sha256": "b08e24363d3790f70a79fccc374c110062db5d6cefe1c831c4057cb2de6f31aa",
+      "bytes": 5016112
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/thiserror-3bd2b16f84eb8dd0/build_script_build-3bd2b16f84eb8dd0",
+      "sha256": "b08e24363d3790f70a79fccc374c110062db5d6cefe1c831c4057cb2de6f31aa",
+      "bytes": 5016112
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/serde_json-2bf3f7548c1ac3ab/build_script_build-2bf3f7548c1ac3ab",
+      "sha256": "d8c5962b05e2d182570de50fb02e520d19bb8a926ae9642a0fcea3b9cb568197",
+      "bytes": 4528032
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/serde_json-2bf3f7548c1ac3ab/build-script-build",
+      "sha256": "d8c5962b05e2d182570de50fb02e520d19bb8a926ae9642a0fcea3b9cb568197",
+      "bytes": 4528032
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/thiserror-3324efddeaa1f4f4/build_script_build-3324efddeaa1f4f4",
+      "sha256": "330b11fb765ee0bd33b899200b9916648a27cc4bfb61976eb6665ce36fea14c9",
+      "bytes": 5037680
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/thiserror-3324efddeaa1f4f4/build-script-build",
+      "sha256": "330b11fb765ee0bd33b899200b9916648a27cc4bfb61976eb6665ce36fea14c9",
+      "bytes": 5037680
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/serde-25ca8eb8df73f715/build_script_build-25ca8eb8df73f715",
+      "sha256": "9b1a7d1544562361bd5a6d3880501803cec062ab3f0de7fcd0fc4899458b255d",
+      "bytes": 4926424
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/serde-25ca8eb8df73f715/build-script-build",
+      "sha256": "9b1a7d1544562361bd5a6d3880501803cec062ab3f0de7fcd0fc4899458b255d",
+      "bytes": 4926424
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/zmij-b022f948a8ff01c5/build_script_build-b022f948a8ff01c5",
+      "sha256": "e1cea3465b320ac846e6acc465aae20cda865a1ccdf50ca83f0ac4b0b303aee9",
+      "bytes": 4762288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/zmij-b022f948a8ff01c5/build-script-build",
+      "sha256": "e1cea3465b320ac846e6acc465aae20cda865a1ccdf50ca83f0ac4b0b303aee9",
+      "bytes": 4762288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/libc-810deb50a5355ce7/build_script_build-810deb50a5355ce7",
+      "sha256": "387e66eaec183a70b321904680c0b4c4ef8a006108087a706917df299bccb653",
+      "bytes": 5125656
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/libc-810deb50a5355ce7/build-script-build",
+      "sha256": "387e66eaec183a70b321904680c0b4c4ef8a006108087a706917df299bccb653",
+      "bytes": 5125656
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/libm-ba1a234a057a6fcf/build-script-build",
+      "sha256": "e4081ee0e829f9ecb0a776a90be14a5e2251414ec987412ce2d93c54fedb6435",
+      "bytes": 4774008
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/libm-ba1a234a057a6fcf/build_script_build-ba1a234a057a6fcf",
+      "sha256": "e4081ee0e829f9ecb0a776a90be14a5e2251414ec987412ce2d93c54fedb6435",
+      "bytes": 4774008
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/parking_lot_core-229cd8c7ec008983/build_script_build-229cd8c7ec008983",
+      "sha256": "6cc191db09999a1decac16705cadb0addbe1d2a918e56f290068f647c818f3ed",
+      "bytes": 4548104
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/parking_lot_core-229cd8c7ec008983/build-script-build",
+      "sha256": "6cc191db09999a1decac16705cadb0addbe1d2a918e56f290068f647c818f3ed",
+      "bytes": 4548104
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/icu_segmenter_data-eb003ac35d7ebdf1/build_script_build-eb003ac35d7ebdf1",
+      "sha256": "750750c8b936d7492b2f52ce4ad242541454df8ca2c089ba388c6c93e562cce3",
+      "bytes": 4518648
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/icu_segmenter_data-eb003ac35d7ebdf1/build-script-build",
+      "sha256": "750750c8b936d7492b2f52ce4ad242541454df8ca2c089ba388c6c93e562cce3",
+      "bytes": 4518648
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/quote-2253495af43116d4/build_script_build-2253495af43116d4",
+      "sha256": "d1ba0ce1c54b47be1cef68d57875b75d23b88c25d2c0bdf1a4aa12df50e49af7",
+      "bytes": 4756984
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/build/quote-2253495af43116d4/build-script-build",
+      "sha256": "d1ba0ce1c54b47be1cef68d57875b75d23b88c25d2c0bdf1a4aa12df50e49af7",
+      "bytes": 4756984
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libstrum_macros-aff53d47ed52171e.so",
+      "sha256": "14554eda2b884e71125a58300e1701c97359ac6bf77dda5c064ced051bfc284f",
+      "bytes": 42907808
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libtokio_macros-43ec859942be9814.so",
+      "sha256": "7061140f396cad1b49030628f1da7b4f12050d4842094a71bfcad4ba11bf654c",
+      "bytes": 37111568
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libzerovec_derive-f53fb3f995234257.so",
+      "sha256": "43d62d021b2adc6b002d041895030b5de8cb3ebff6b7bbcad66f44fec0cdcaae",
+      "bytes": 16703784
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/librustversion-cce28bf39cd7333e.so",
+      "sha256": "2bab251220ceb3d256d9364e3df563551b4562f69f36d5de65a841230a23586c",
+      "bytes": 6654536
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libfutures_macro-ecd374f3d61f50e7.so",
+      "sha256": "837189ed9d87515a18325f4de3079230c3ad28071eb2f91cecb56157d62b429e",
+      "bytes": 15416824
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libzerofrom_derive-a6b1476563f8f946.so",
+      "sha256": "7c453ada8ba7496d9aaca06077b482ee82006a3afed65a3be47410c3dfe94279",
+      "bytes": 49609088
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libserde_derive-d043b81c29a40b2a.so",
+      "sha256": "5578fa9bab998167b3a182431cf186e58c650b748c7627d2136182752e7ac846",
+      "bytes": 20830192
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libdarling_macro-207a5d7716c3822f.so",
+      "sha256": "64b47b8b2c15131efe526f4b00b40502417035abfda8b926d81e1407703dfa63",
+      "bytes": 48636552
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libtracing_attributes-ffe474225dada159.so",
+      "sha256": "c2ab48b718b6d394d78d56d9685cca188d9727deba570180d70882bf98236726",
+      "bytes": 18546144
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libthiserror_impl-b0d03726064cae56.so",
+      "sha256": "a9dd3445bff08e4c8343004e998a2e733216c5448fddd680bb9c1bd2f83bd804",
+      "bytes": 42248776
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libzerofrom_derive-4f7a89b74ec240cc.so",
+      "sha256": "38f249f5009858338556740240f7d3ba6e423b9ac683fecacc303c72f3ce1361",
+      "bytes": 20679936
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libthiserror_impl-834af57d323dfa10.so",
+      "sha256": "6200a207e8e38612912aa484e6d948a14cfd7e4ea27f6cacf607311df1dc88a1",
+      "bytes": 18500080
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libtokio_macros-c1b5e3af3249764f.so",
+      "sha256": "3f668002e7f638ec5dd43a8276d821725f7e1abfa983fe9446acb72ce7c3123a",
+      "bytes": 15858032
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libdisplaydoc-5c502285054f5fe2.so",
+      "sha256": "8c69d0097646d6b04b77bc0d1b10ee76cbdccb511fff9eebd7f0ad9310a3fde7",
+      "bytes": 35405384
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libyoke_derive-a4e8c5be925c99ec.so",
+      "sha256": "1ad5ee1790d64d5b39295205570858f39ce9713d887f766144046df364632635",
+      "bytes": 19715864
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libdisplaydoc-95a8bc0bd3028ac3.so",
+      "sha256": "725e3ab8e1abdeaf63cffefd9934f041991ff97f6f4f9bf8df35deef026472f1",
+      "bytes": 16712264
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libinstability-bc61f2a2969123e6.so",
+      "sha256": "d64e2a82b186382b4f6995e99c737e13c220bdcfc8fe18682d923257545f3053",
+      "bytes": 50553680
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libserde_derive-a1497fbcee5e058d.so",
+      "sha256": "a1569995e5de210a6f810e2b52afe9a4a149f264d48b019dba95eec104f72bee",
+      "bytes": 44620808
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libyoke_derive-11b61986bb8e0f2a.so",
+      "sha256": "a93f9bcc74bfe9a068b8c6063fbe789d94ddab41513f6fbc45073c4fac7b3f72",
+      "bytes": 47709672
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libpaste-46c69c0e4c9bb21b.so",
+      "sha256": "1c802d226b83adbe7b8b918e21b77000e1ac659cf90e2714ffba0694f33ec567",
+      "bytes": 6594288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libindoc-0ece8aaa4cf75314.so",
+      "sha256": "9e64ec56766ba19a70eae2faa6ee4923c1742cf0634a5578a865f3fec5bba90d",
+      "bytes": 6230384
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/deps/libzerovec_derive-56bdf8ca8a4988f9.so",
+      "sha256": "f0fd91afad38eee0710af16524f3c96fbe366d0215788b90a37dbb4c2380c838",
+      "bytes": 36186128
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/paste-118598b4c14da6e8/build_script_build-118598b4c14da6e8",
+      "sha256": "7fb283574cff751793e37f28febfb5354226a2858a2b9ec5fa3d29bd413a8d63",
+      "bytes": 558464
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/paste-118598b4c14da6e8/build-script-build",
+      "sha256": "7fb283574cff751793e37f28febfb5354226a2858a2b9ec5fa3d29bd413a8d63",
+      "bytes": 558464
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/quote-2aa49504af5105fb/build-script-build",
+      "sha256": "6d15ce29d8a23edb259bdfa479deae51242207e7912d966339594646219c3846",
+      "bytes": 558040
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/quote-2aa49504af5105fb/build_script_build-2aa49504af5105fb",
+      "sha256": "6d15ce29d8a23edb259bdfa479deae51242207e7912d966339594646219c3846",
+      "bytes": 558040
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/icu_properties_data-025e5cee782efb78/build_script_build-025e5cee782efb78",
+      "sha256": "77f25f75a9b590422a605ed57daf80eb81f3896b13ae746ba12f58d24f0e342b",
+      "bytes": 463200
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/icu_properties_data-025e5cee782efb78/build-script-build",
+      "sha256": "77f25f75a9b590422a605ed57daf80eb81f3896b13ae746ba12f58d24f0e342b",
+      "bytes": 463200
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/instability-f69ddc024ebb263c/build-script-build",
+      "sha256": "628d66a5b3f21186c63511f6df6e9af9a1cdeeb80a2a4260c79d353d0aa240e5",
+      "bytes": 459200
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/instability-f69ddc024ebb263c/build_script_build-f69ddc024ebb263c",
+      "sha256": "628d66a5b3f21186c63511f6df6e9af9a1cdeeb80a2a4260c79d353d0aa240e5",
+      "bytes": 459200
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/libm-08523d55cd641304/build_script_build-08523d55cd641304",
+      "sha256": "7de991f216cc45977b67c4c0c6a9b99bc86f110925df7247d0b65690f709f78c",
+      "bytes": 547720
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/libm-08523d55cd641304/build-script-build",
+      "sha256": "7de991f216cc45977b67c4c0c6a9b99bc86f110925df7247d0b65690f709f78c",
+      "bytes": 547720
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/ring-fa8f1b8ce7670754/build_script_build-fa8f1b8ce7670754",
+      "sha256": "5ef7138ced31e75450f3f9d037bc04cff66f9aceda764a1156b20f249215f6e9",
+      "bytes": 1928864
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/ring-fa8f1b8ce7670754/build-script-build",
+      "sha256": "5ef7138ced31e75450f3f9d037bc04cff66f9aceda764a1156b20f249215f6e9",
+      "bytes": 1928864
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/rustls-6d1e54882d1b7806/build_script_build-6d1e54882d1b7806",
+      "sha256": "ce4472ac9130f68ab88cc859643516014b578ecb41a988f73520f622dcd0ef55",
+      "bytes": 451792
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/rustls-6d1e54882d1b7806/build-script-build",
+      "sha256": "ce4472ac9130f68ab88cc859643516014b578ecb41a988f73520f622dcd0ef55",
+      "bytes": 451792
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/serde_json-9c8b7397eabde849/build_script_build-9c8b7397eabde849",
+      "sha256": "2ef205617edff228b3b9cd454fa2d7fab87798abd96e7ccba7025ce25f865da8",
+      "bytes": 463600
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/serde_json-9c8b7397eabde849/build-script-build",
+      "sha256": "2ef205617edff228b3b9cd454fa2d7fab87798abd96e7ccba7025ce25f865da8",
+      "bytes": 463600
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/libc-727d7a671073f00c/build_script_build-727d7a671073f00c",
+      "sha256": "29ebd49f3d4a2467ee54c23651cadc6b9d96fae315aafdd4f6d7d6a2d5b403f1",
+      "bytes": 633848
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/libc-727d7a671073f00c/build-script-build",
+      "sha256": "29ebd49f3d4a2467ee54c23651cadc6b9d96fae315aafdd4f6d7d6a2d5b403f1",
+      "bytes": 633848
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/proc-macro2-3546b55fed253d31/build_script_build-3546b55fed253d31",
+      "sha256": "c423cd02d158fedd6c415d13f1d047c77fbb2bfa0dbc0388511577afafc311df",
+      "bytes": 616736
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/proc-macro2-3546b55fed253d31/build-script-build",
+      "sha256": "c423cd02d158fedd6c415d13f1d047c77fbb2bfa0dbc0388511577afafc311df",
+      "bytes": 616736
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/parking_lot_core-1c95b6cefdb977f5/build_script_build-1c95b6cefdb977f5",
+      "sha256": "5736a0ab4506c40872e4954cabae7452611f53042723d4eaf22065a32fdf9aaa",
+      "bytes": 485824
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/parking_lot_core-1c95b6cefdb977f5/build-script-build",
+      "sha256": "5736a0ab4506c40872e4954cabae7452611f53042723d4eaf22065a32fdf9aaa",
+      "bytes": 485824
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/rustversion-d8da5690c71923bf/build-script-build",
+      "sha256": "8a779350623d54cac66468081c8ea3bd2b346f9168a195b7ff8034a9b9c6a632",
+      "bytes": 618944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/rustversion-d8da5690c71923bf/build_script_build-d8da5690c71923bf",
+      "sha256": "8a779350623d54cac66468081c8ea3bd2b346f9168a195b7ff8034a9b9c6a632",
+      "bytes": 618944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/icu_normalizer_data-d865ea3e3bd11271/build_script_build-d865ea3e3bd11271",
+      "sha256": "84e51fde48c4684396eb9dda8e6065afc8e08dbbe6ee0097d222001f7b3be4da",
+      "bytes": 463200
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/icu_normalizer_data-d865ea3e3bd11271/build-script-build",
+      "sha256": "84e51fde48c4684396eb9dda8e6065afc8e08dbbe6ee0097d222001f7b3be4da",
+      "bytes": 463200
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/rustix-622c8a6605ecfa7f/build_script_build-622c8a6605ecfa7f",
+      "sha256": "0d768bbe99ee6ef6af2fcc143daefba43410a746d8f3a9aca35edf8e8a7c0f50",
+      "bytes": 611968
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/rustix-622c8a6605ecfa7f/build-script-build",
+      "sha256": "0d768bbe99ee6ef6af2fcc143daefba43410a746d8f3a9aca35edf8e8a7c0f50",
+      "bytes": 611968
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/signal-hook-9a9194af457c9de4/build_script_build-9a9194af457c9de4",
+      "sha256": "8eaaf79ef0f4b55bde16c047847742c590b8655c345f65a3f7f3d542a6983a79",
+      "bytes": 451792
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/signal-hook-9a9194af457c9de4/build-script-build",
+      "sha256": "8eaaf79ef0f4b55bde16c047847742c590b8655c345f65a3f7f3d542a6983a79",
+      "bytes": 451792
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/icu_locale_data-014713b2a772d67b/build_script_build-014713b2a772d67b",
+      "sha256": "a21d8ae634872066e0b61bbc9e6e106c2b96c293e9baea0d4ccdb97116bbd638",
+      "bytes": 463200
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/icu_locale_data-014713b2a772d67b/build-script-build",
+      "sha256": "a21d8ae634872066e0b61bbc9e6e106c2b96c293e9baea0d4ccdb97116bbd638",
+      "bytes": 463200
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/getrandom-96d9d96ff1c7b8ee/build_script_build-96d9d96ff1c7b8ee",
+      "sha256": "2e7a1b8d0684bc065aeb8ac4ca6f123e077fab95c787ea74af707115ab942747",
+      "bytes": 594496
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/getrandom-96d9d96ff1c7b8ee/build-script-build",
+      "sha256": "2e7a1b8d0684bc065aeb8ac4ca6f123e077fab95c787ea74af707115ab942747",
+      "bytes": 594496
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/serde-b0e1dbeb55ff2e87/build_script_build-b0e1dbeb55ff2e87",
+      "sha256": "55793be1eb36e7c2b45138528c64aeb18b1ee7470d0f311a7a9ee4c2fa399b43",
+      "bytes": 585136
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/serde-b0e1dbeb55ff2e87/build-script-build",
+      "sha256": "55793be1eb36e7c2b45138528c64aeb18b1ee7470d0f311a7a9ee4c2fa399b43",
+      "bytes": 585136
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/pulldown-cmark-22afb1e645efeee4/build_script_build-22afb1e645efeee4",
+      "sha256": "bbf5b80e8edfe2bb850e2bcd3c02c94669bcf707485e0f17317931c689efa1cc",
+      "bytes": 451928
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/pulldown-cmark-22afb1e645efeee4/build-script-build",
+      "sha256": "bbf5b80e8edfe2bb850e2bcd3c02c94669bcf707485e0f17317931c689efa1cc",
+      "bytes": 451928
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/thiserror-777dc779e855a141/build_script_build-777dc779e855a141",
+      "sha256": "62aaf9dc13d1fca2b26331c097aec17beed0edd552bebe4cfb362be1eb778e21",
+      "bytes": 635024
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/thiserror-777dc779e855a141/build-script-build",
+      "sha256": "62aaf9dc13d1fca2b26331c097aec17beed0edd552bebe4cfb362be1eb778e21",
+      "bytes": 635024
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/icu_segmenter_data-a2228fe66d035d5f/build_script_build-a2228fe66d035d5f",
+      "sha256": "07a97cbbe6b3bcf8e5a10963b5d5f7f0b4bd2885acf6429102295650077249b8",
+      "bytes": 463200
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/icu_segmenter_data-a2228fe66d035d5f/build-script-build",
+      "sha256": "07a97cbbe6b3bcf8e5a10963b5d5f7f0b4bd2885acf6429102295650077249b8",
+      "bytes": 463200
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/httparse-4a3402784612a596/build_script_build-4a3402784612a596",
+      "sha256": "a944c32d34658f4752066926fa8ad22ef92fbc472e23a4fabb69b6e0f1ee1074",
+      "bytes": 613360
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/httparse-4a3402784612a596/build-script-build",
+      "sha256": "a944c32d34658f4752066926fa8ad22ef92fbc472e23a4fabb69b6e0f1ee1074",
+      "bytes": 613360
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/zmij-d83044cd0b8b63ae/build_script_build-d83044cd0b8b63ae",
+      "sha256": "163188de039afc404db3ca4715d3d7279f2aa563c2b7873a7bb4515e64b15006",
+      "bytes": 563096
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/zmij-d83044cd0b8b63ae/build-script-build",
+      "sha256": "163188de039afc404db3ca4715d3d7279f2aa563c2b7873a7bb4515e64b15006",
+      "bytes": 563096
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/libc-f32b401ac58889df/build_script_build-f32b401ac58889df",
+      "sha256": "2ee93079aebc15610be8df78c1e31304baf1af2b4af4742d0db5659a444cc908",
+      "bytes": 633832
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/libc-f32b401ac58889df/build-script-build",
+      "sha256": "2ee93079aebc15610be8df78c1e31304baf1af2b4af4742d0db5659a444cc908",
+      "bytes": 633832
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/serde_core-14220079c8e1a32e/build_script_build-14220079c8e1a32e",
+      "sha256": "c9b2c84a437c1d9e9b4a78a58278b8cf53d5ecc44248370215bfbde5874247ed",
+      "bytes": 587944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/build/serde_core-14220079c8e1a32e/build-script-build",
+      "sha256": "c9b2c84a437c1d9e9b4a78a58278b8cf53d5ecc44248370215bfbde5874247ed",
+      "bytes": 587944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/deps/libzerofrom_derive-654e4264b9f1ffbe.so",
+      "sha256": "8e59876eb5ab6acb2045d72b911742980b8cc7665a8d9e8077dd06bd31dee23d",
+      "bytes": 4546088
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/deps/libindoc-b01f4b59e5f5897f.so",
+      "sha256": "3637813622b0533d88a0a330f1cf5b0fc5b964463368bc53d2f6feb757305256",
+      "bytes": 673056
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/deps/libthiserror_impl-2b47df9f7a6f9745.so",
+      "sha256": "bc00a3cec93ee61e7dd25e686ed69e646b004c29c31d96823b8c7d8ed4e30745",
+      "bytes": 3931984
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/deps/libserde_derive-fc72ce4ccaf893f4.so",
+      "sha256": "cb1b1e42264de5b1f5070793de86dfaac5c1faed12519d246804d442705d1145",
+      "bytes": 4931496
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/deps/libdisplaydoc-bedf5a9a0a53bf74.so",
+      "sha256": "85e6ed89e3d8525d9040935038f07814b69464c4a5612a20afe2252c19c17ab3",
+      "bytes": 3530336
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/deps/libinstability-901a1758043fc2dd.so",
+      "sha256": "92131d7ca9eeb772a2cd0446c4ddd9be35122f4132ff210952ca34b9f7462157",
+      "bytes": 3558368
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/deps/libyoke_derive-ed3eb9b68656dcbf.so",
+      "sha256": "990187dcfcaf986ce098ce12f1251c773e0384e8e25b13861ddb883b8f0034bc",
+      "bytes": 4176288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/deps/libzerofrom_derive-688afe0128072a67.so",
+      "sha256": "0d6b63af127d7354b3101bc236b2c000a911683a3a7892b881635dc80a82f5ff",
+      "bytes": 4546192
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/deps/libtracing_attributes-73fca563c353a881.so",
+      "sha256": "5303d867d8846fbc61ff9bc3b5eb7dc66922ad60ab8340299491f96b9f49bbb2",
+      "bytes": 4283712
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/deps/libfutures_macro-7571ea1091b12596.so",
+      "sha256": "19ef9e3fb6c6ba96a332a0aaad1c5e445cbcde8601f543176349e99dd10d0cc3",
+      "bytes": 3094336
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/deps/libzerovec_derive-8393772bd0afac58.so",
+      "sha256": "d32ed40ecb9e632404e6d8942e939c5ce0d915afaba554054ee47a47fa7dc642",
+      "bytes": 3824432
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/deps/libpaste-8f841e89c42b5076.so",
+      "sha256": "e69524ad1beab7da513a6ea0ecf0f0e849e6cc64799c050c89c0871981cf261d",
+      "bytes": 732224
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/deps/libyoke_derive-a13e3a3c9dbe69ed.so",
+      "sha256": "b419463be0931e3791e1a8de8fd54294062a11e6f641815d694cafb51532d4b5",
+      "bytes": 4176416
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/deps/libdarling_macro-fb65b30b0748df4c.so",
+      "sha256": "64fe46d9dd33b0c7c1832b87efb49b04bc3fb5175c87b8e73d2f43514853eb4c",
+      "bytes": 4765056
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/deps/librustversion-b0641713d50f2756.so",
+      "sha256": "22b03a0a3360df904de5c8c5c4ad5717d6bd140deff37368a6f17d684d0d8aa6",
+      "bytes": 791504
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/deps/libstrum_macros-ae38814bf201100b.so",
+      "sha256": "509f7577915cca5f162f139a6ff1266dd60159a4d690ecb94d592d2004f2cf49",
+      "bytes": 4563248
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/deps/libtokio_macros-c4d2667a81f4a5d5.so",
+      "sha256": "ff78c1ad48acd33d4d43fa8d99b7b6d9885afacafef0a36ca05c57d14cabd412",
+      "bytes": 3431768
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/minicore_tui-9b0b1f7c98557a3b",
+      "sha256": "8d143eb40385b0f7a9a4be01661a4ed0c00015c3b1005187e3b5925420e35e4f",
+      "bytes": 20183408
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/minicore_agent-06483aa145721e93",
+      "sha256": "8e136238e245d96ea8e1546338887880850cf46fbaabb7721398cfe65cc3214f",
+      "bytes": 48282544
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/protocol-0aa4363667cce86c",
+      "sha256": "88b915726340f7f8a27b8f99006e713c374b7309775a350938d074bb8e288f20",
+      "bytes": 6189968
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/rpc_io-78e4b964f506d00b",
+      "sha256": "0ecb3e044f19813dfcb356797e353b9c8db9ec3f39b7acf49572535181f1cf9e",
+      "bytes": 5639424
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/agent_process-edeb3bd82fef0127",
+      "sha256": "3c9d712a67b100e38846d7b9e8d0a7d4c9dd1af5d65739d20434ee30b602fd55",
+      "bytes": 1093888
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/minicore_tui-146428a37d4b497e",
+      "sha256": "55fcae84f309448926212dd12d0f88af950045f1e0d97546543fda782d4fd638",
+      "bytes": 9788816
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/minicore_tui-e90cf82df95778b4",
+      "sha256": "3548462a1b5155967e16b3373b520633ec2728375f788a2940cd365e7542b7e5",
+      "bytes": 17308496
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/terminal_restore-49d132d76b122490",
+      "sha256": "473123563f3d48ed423443ba69f678b6c787050837e0c0e8f3df7fe010f82d6e",
+      "bytes": 1637520
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/terminal_restore-e8ae3e40d1db2b0e",
+      "sha256": "c7c29fac13ec0dbfaa9e17401eccdbebf9192d2a6a1b83571a9c0cdc0dce0353",
+      "bytes": 1637920
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/render_snapshots-d291339492e4d9c7",
+      "sha256": "83b088d84f9305ad9e990a6949bc4c474ea5cd5b9523f7b5d909407a7a0aa73c",
+      "bytes": 13152048
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/render_snapshots-59c2c2d7e2fb840b",
+      "sha256": "bd664d808db73b3fd12f56996c0a1bd8f244138cb647683cfc63fe6f49812358",
+      "bytes": 7963008
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/minicore_tui-e4e3c693d960916c",
+      "sha256": "497f63f4585fc45a24bdf0f5598248e253a059164c424896ee1ab0f736668785",
+      "bytes": 12108624
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/rpc_io-d5d6fce02d3c5ba6",
+      "sha256": "ecf5628dafd0fe19e2f9dec42e8082fd036133e7dfa5643fe941e86d5b64f03b",
+      "bytes": 3036816
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/word_oracle-68498b2df0140b9d",
+      "sha256": "7591be8d519f86480b203f76990dd627730ed0c1e4d5e5a15936a73faf172b94",
+      "bytes": 4343760
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/minicore_tui-d83c77637be10e14",
+      "sha256": "08ed8be4c0fe1ee7a63f586cba4837165d6e8644214fb78df3ecb8b285264dba",
+      "bytes": 9791616
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/app_flow-b06a82e255c48c51",
+      "sha256": "f6063c298cad369a355fd9f6ac1e2ed955b04045b361f0a27dfc6e4e8e1689cb",
+      "bytes": 9161936
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/minicore_tui-a484e0d772f11f31",
+      "sha256": "e968e11bdef648fa80a98307e76e19ca2a81545f4d4dd69636f39d49b5b3aecb",
+      "bytes": 9503280
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/terminal_restore-caf2eeb0b961161c",
+      "sha256": "7a1941e980acd9e62f2251b40256343234f4a409171baea85bc99de67c2e13f1",
+      "bytes": 1971280
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/word_oracle-7159dbecbe2bae24",
+      "sha256": "9c282f25c3cb4e6241de7ae1f2626022c3295e7ee533cb30c11a433f11f41894",
+      "bytes": 3977584
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/agent_e2e-0286dce31bd48f5e",
+      "sha256": "d4567dc48f58aeb3466d6afada318689e30edeeb4bb531efbe074640952d222b",
+      "bytes": 17915472
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/rail_fixtures-31950eedf5b20c8b",
+      "sha256": "1c2b72bf5dc5a067c8bff7742191096e5a0fc65a2972da2ace6c3b78f265efb8",
+      "bytes": 13955056
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/protocol-890f50051b520056",
+      "sha256": "b936abfb9e91d747420f90b976345be691acc5536b66dac351f12992e0d19e4d",
+      "bytes": 3084752
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/app_flow-38608324832d38d5",
+      "sha256": "c3ece659ecb4afd75b1c291c1f51483c970ceae911cc2bb4c2238638827ee144",
+      "bytes": 15451312
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/agent_process-2604be706ff517d5",
+      "sha256": "c737a19bf80ae225004dfbc74624ae637ac05f903e5b9e0387adcd39dbdb103b",
+      "bytes": 861904
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/minicore_tui-ecbf157e75dbacb3",
+      "sha256": "d83e126fabc327c3f48ea131fd5ea63d3bdb559d407088bbeabf8c82e872bd06",
+      "bytes": 17343776
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/minicore_tui-1dd3804729c88c65",
+      "sha256": "d440463bab67229e7912903d9152db33cfd95248099e84dc6d9a8ec9a818dfb9",
+      "bytes": 9790288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/agent_e2e-59e74caf38b7d328",
+      "sha256": "1ecf3e03da5d585b9b9efc784dc1adce6a5929f900df7202c75d29d85806bac6",
+      "bytes": 10132432
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/rail_fixtures-af658535643def46",
+      "sha256": "b3a37f643cd5c8650f04e5df716007b38d30f84ce28fdb5bf395625f1b3c272a",
+      "bytes": 8260144
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/minicore_tui-1b8085456b2cfda6",
+      "sha256": "a4471b4f3ffe988d5a53a9808a089a67ec4e4465e3429a81d99b442f845a546b",
+      "bytes": 16333920
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/minicore_tui-d740711f7aea13be",
+      "sha256": "f814dfdae6f85de34e3877991380c4df34289b805d79a048b0504389906efbcc",
+      "bytes": 17343936
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/deps/minicore_tui-9b21d664fa282632",
+      "sha256": "4a309259abf3d36bdddc6a9a0c9019c04104d403b1079400e53148a4610dfd1c",
+      "bytes": 9791632
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/minicore-tui",
+      "sha256": "4a309259abf3d36bdddc6a9a0c9019c04104d403b1079400e53148a4610dfd1c",
+      "bytes": 9791632
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/minicore-agent",
+      "sha256": "8e136238e245d96ea8e1546338887880850cf46fbaabb7721398cfe65cc3214f",
+      "bytes": 48282544
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/release/deps/minicore_tui-97b03d5008a0e52c",
+      "sha256": "a3b23dac99a0e998f7406b108dd89aca90a93e7cd8560558406b4d142048fdd9",
+      "bytes": 6736192
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/release/deps/minicore_tui-0c079abdf8b38857",
+      "sha256": "0ad2c2f23cf784757c8a1f78c31f4ea227daf6ac5f5fc8434e0276ef475e179a",
+      "bytes": 6733952
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/release/deps/minicore_agent-2054a42747a13bd6",
+      "sha256": "aead2cab5598fbf98d5070dbc5cf6fdcd7268be1b88b00caf4df143be6afc6a6",
+      "bytes": 9671104
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/release/minicore-tui",
+      "sha256": "0ad2c2f23cf784757c8a1f78c31f4ea227daf6ac5f5fc8434e0276ef475e179a",
+      "bytes": 6733952
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/release/minicore-agent",
+      "sha256": "aead2cab5598fbf98d5070dbc5cf6fdcd7268be1b88b00caf4df143be6afc6a6",
+      "bytes": 9671104
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/rustversion-13b47500ef9e4910/build_script_build-13b47500ef9e4910",
+      "sha256": "fe80367504fc0a4ccb3a17c17c92890af39db427667736beb6afc99b999a893b",
+      "bytes": 4949096
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/rustversion-13b47500ef9e4910/build-script-build",
+      "sha256": "fe80367504fc0a4ccb3a17c17c92890af39db427667736beb6afc99b999a893b",
+      "bytes": 4949096
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/signal-hook-d0b26dc53d3c5cd1/build_script_build-d0b26dc53d3c5cd1",
+      "sha256": "44c99d910f46c5bbee073dda5f143d16bab86300f4417fe0d908dbe4952509f0",
+      "bytes": 4504288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/signal-hook-d0b26dc53d3c5cd1/build-script-build",
+      "sha256": "44c99d910f46c5bbee073dda5f143d16bab86300f4417fe0d908dbe4952509f0",
+      "bytes": 4504288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/proc-macro2-49b9ad2fd2dbc46d/build_script_build-49b9ad2fd2dbc46d",
+      "sha256": "b7b4a798e811548c25af3c0178fd2d46a88f0a79ada243bb3cbc5d5ce6e778fe",
+      "bytes": 4875280
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/proc-macro2-49b9ad2fd2dbc46d/build-script-build",
+      "sha256": "b7b4a798e811548c25af3c0178fd2d46a88f0a79ada243bb3cbc5d5ce6e778fe",
+      "bytes": 4875280
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/serde_core-77ffafb6b05a575f/build_script_build-77ffafb6b05a575f",
+      "sha256": "01259728d63f846541e20b63f352a94ea3480f0b6bd2728fa85b7826ee21dab9",
+      "bytes": 4903944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/serde_core-77ffafb6b05a575f/build-script-build",
+      "sha256": "01259728d63f846541e20b63f352a94ea3480f0b6bd2728fa85b7826ee21dab9",
+      "bytes": 4903944
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/pulldown-cmark-277eac32b601faa1/build_script_build-277eac32b601faa1",
+      "sha256": "84b9bd642316bfea4de1ad0563a4459184b1c8f9f3c9b673e9c2976ea2db388f",
+      "bytes": 4504280
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/pulldown-cmark-277eac32b601faa1/build-script-build",
+      "sha256": "84b9bd642316bfea4de1ad0563a4459184b1c8f9f3c9b673e9c2976ea2db388f",
+      "bytes": 4504280
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/icu_locale_data-d873f750e90e4298/build_script_build-d873f750e90e4298",
+      "sha256": "b12a3907a50aa6a1d3e29ae3329e0c50a19c46b3a5fee76002b642f4cddea8d1",
+      "bytes": 4518640
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/icu_locale_data-d873f750e90e4298/build-script-build",
+      "sha256": "b12a3907a50aa6a1d3e29ae3329e0c50a19c46b3a5fee76002b642f4cddea8d1",
+      "bytes": 4518640
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/instability-103fe596e916e51d/build_script_build-103fe596e916e51d",
+      "sha256": "e045799ba44e17fd5c984b68a9735cd4c6b8bf2684f8d57bece8fae47a82873a",
+      "bytes": 4511544
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/instability-103fe596e916e51d/build-script-build",
+      "sha256": "e045799ba44e17fd5c984b68a9735cd4c6b8bf2684f8d57bece8fae47a82873a",
+      "bytes": 4511544
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/paste-9529849f5928f912/build_script_build-9529849f5928f912",
+      "sha256": "5d38b8c973770485a0be094aff02dcaf040520796afc1d0f5fe866b9431933fd",
+      "bytes": 4754008
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/paste-9529849f5928f912/build-script-build",
+      "sha256": "5d38b8c973770485a0be094aff02dcaf040520796afc1d0f5fe866b9431933fd",
+      "bytes": 4754008
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/rustix-9f87b63986bd973b/build_script_build-9f87b63986bd973b",
+      "sha256": "76c0f66145ad94ca9ec5990cd707d496922481e31ba8065c7ac0942b851b76d0",
+      "bytes": 4968920
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/rustix-9f87b63986bd973b/build-script-build",
+      "sha256": "76c0f66145ad94ca9ec5990cd707d496922481e31ba8065c7ac0942b851b76d0",
+      "bytes": 4968920
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/serde-2dc9498301c51055/build_script_build-2dc9498301c51055",
+      "sha256": "806168a4b69dfb137f266a0ad250525876129453e13c83f009021a86dfdc583e",
+      "bytes": 4892864
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/serde-2dc9498301c51055/build-script-build",
+      "sha256": "806168a4b69dfb137f266a0ad250525876129453e13c83f009021a86dfdc583e",
+      "bytes": 4892864
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/thiserror-3bd2b16f84eb8dd0/build-script-build",
+      "sha256": "b08e24363d3790f70a79fccc374c110062db5d6cefe1c831c4057cb2de6f31aa",
+      "bytes": 5016112
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/thiserror-3bd2b16f84eb8dd0/build_script_build-3bd2b16f84eb8dd0",
+      "sha256": "b08e24363d3790f70a79fccc374c110062db5d6cefe1c831c4057cb2de6f31aa",
+      "bytes": 5016112
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/serde_json-2bf3f7548c1ac3ab/build_script_build-2bf3f7548c1ac3ab",
+      "sha256": "d8c5962b05e2d182570de50fb02e520d19bb8a926ae9642a0fcea3b9cb568197",
+      "bytes": 4528032
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/serde_json-2bf3f7548c1ac3ab/build-script-build",
+      "sha256": "d8c5962b05e2d182570de50fb02e520d19bb8a926ae9642a0fcea3b9cb568197",
+      "bytes": 4528032
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/zmij-b022f948a8ff01c5/build_script_build-b022f948a8ff01c5",
+      "sha256": "e1cea3465b320ac846e6acc465aae20cda865a1ccdf50ca83f0ac4b0b303aee9",
+      "bytes": 4762288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/zmij-b022f948a8ff01c5/build-script-build",
+      "sha256": "e1cea3465b320ac846e6acc465aae20cda865a1ccdf50ca83f0ac4b0b303aee9",
+      "bytes": 4762288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/libc-810deb50a5355ce7/build_script_build-810deb50a5355ce7",
+      "sha256": "387e66eaec183a70b321904680c0b4c4ef8a006108087a706917df299bccb653",
+      "bytes": 5125656
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/libc-810deb50a5355ce7/build-script-build",
+      "sha256": "387e66eaec183a70b321904680c0b4c4ef8a006108087a706917df299bccb653",
+      "bytes": 5125656
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/libm-ba1a234a057a6fcf/build-script-build",
+      "sha256": "e4081ee0e829f9ecb0a776a90be14a5e2251414ec987412ce2d93c54fedb6435",
+      "bytes": 4774008
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/libm-ba1a234a057a6fcf/build_script_build-ba1a234a057a6fcf",
+      "sha256": "e4081ee0e829f9ecb0a776a90be14a5e2251414ec987412ce2d93c54fedb6435",
+      "bytes": 4774008
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/parking_lot_core-229cd8c7ec008983/build_script_build-229cd8c7ec008983",
+      "sha256": "6cc191db09999a1decac16705cadb0addbe1d2a918e56f290068f647c818f3ed",
+      "bytes": 4548104
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/parking_lot_core-229cd8c7ec008983/build-script-build",
+      "sha256": "6cc191db09999a1decac16705cadb0addbe1d2a918e56f290068f647c818f3ed",
+      "bytes": 4548104
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/icu_segmenter_data-eb003ac35d7ebdf1/build_script_build-eb003ac35d7ebdf1",
+      "sha256": "750750c8b936d7492b2f52ce4ad242541454df8ca2c089ba388c6c93e562cce3",
+      "bytes": 4518648
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/icu_segmenter_data-eb003ac35d7ebdf1/build-script-build",
+      "sha256": "750750c8b936d7492b2f52ce4ad242541454df8ca2c089ba388c6c93e562cce3",
+      "bytes": 4518648
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/quote-2253495af43116d4/build_script_build-2253495af43116d4",
+      "sha256": "d1ba0ce1c54b47be1cef68d57875b75d23b88c25d2c0bdf1a4aa12df50e49af7",
+      "bytes": 4756984
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/build/quote-2253495af43116d4/build-script-build",
+      "sha256": "d1ba0ce1c54b47be1cef68d57875b75d23b88c25d2c0bdf1a4aa12df50e49af7",
+      "bytes": 4756984
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/deps/libstrum_macros-aff53d47ed52171e.so",
+      "sha256": "e543a2037d402a2112d0fd53f221184484f7ac50134fab8047ae8d7c618fbe52",
+      "bytes": 42907808
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/deps/libtokio_macros-43ec859942be9814.so",
+      "sha256": "7061140f396cad1b49030628f1da7b4f12050d4842094a71bfcad4ba11bf654c",
+      "bytes": 37111568
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/deps/librustversion-cce28bf39cd7333e.so",
+      "sha256": "014c56d7e274908fb0fcc8fb142802c52bdbc9f0c68ba54684a081cb00854882",
+      "bytes": 6654536
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/deps/libzerofrom_derive-a6b1476563f8f946.so",
+      "sha256": "7c453ada8ba7496d9aaca06077b482ee82006a3afed65a3be47410c3dfe94279",
+      "bytes": 49609088
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/deps/libdarling_macro-207a5d7716c3822f.so",
+      "sha256": "64b47b8b2c15131efe526f4b00b40502417035abfda8b926d81e1407703dfa63",
+      "bytes": 48636552
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/deps/libthiserror_impl-b0d03726064cae56.so",
+      "sha256": "a9dd3445bff08e4c8343004e998a2e733216c5448fddd680bb9c1bd2f83bd804",
+      "bytes": 42248776
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/deps/libdisplaydoc-5c502285054f5fe2.so",
+      "sha256": "8c69d0097646d6b04b77bc0d1b10ee76cbdccb511fff9eebd7f0ad9310a3fde7",
+      "bytes": 35405384
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/deps/libinstability-bc61f2a2969123e6.so",
+      "sha256": "d64e2a82b186382b4f6995e99c737e13c220bdcfc8fe18682d923257545f3053",
+      "bytes": 50553680
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/deps/libserde_derive-a1497fbcee5e058d.so",
+      "sha256": "a1569995e5de210a6f810e2b52afe9a4a149f264d48b019dba95eec104f72bee",
+      "bytes": 44620808
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/deps/libyoke_derive-11b61986bb8e0f2a.so",
+      "sha256": "a93f9bcc74bfe9a068b8c6063fbe789d94ddab41513f6fbc45073c4fac7b3f72",
+      "bytes": 47709672
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/deps/libpaste-46c69c0e4c9bb21b.so",
+      "sha256": "1c802d226b83adbe7b8b918e21b77000e1ac659cf90e2714ffba0694f33ec567",
+      "bytes": 6594288
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/deps/libindoc-0ece8aaa4cf75314.so",
+      "sha256": "9e64ec56766ba19a70eae2faa6ee4923c1742cf0634a5578a865f3fec5bba90d",
+      "bytes": 6230384
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/deps/libzerovec_derive-56bdf8ca8a4988f9.so",
+      "sha256": "f0fd91afad38eee0710af16524f3c96fbe366d0215788b90a37dbb4c2380c838",
+      "bytes": 36186128
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/x86_64-apple-darwin/debug/deps/minicore_tui-aa5c3ddc91862b55",
+      "sha256": "33df69c9c9a819a01f35e29e7ac81adbcbcea7c0a0841f0ea6ea104e2aa8655e",
+      "bytes": 9772272
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/x86_64-apple-darwin/debug/deps/minicore_tui-146428a37d4b497e",
+      "sha256": "51229e4802de0a68bec0af311b481cdfc3f4c76f27e69c72ec02a57905b68c7b",
+      "bytes": 9788752
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/x86_64-apple-darwin/debug/minicore-tui",
+      "sha256": "51229e4802de0a68bec0af311b481cdfc3f4c76f27e69c72ec02a57905b68c7b",
+      "bytes": 9788752
+    }
+  ],
+  "deleted_files": 0
+}

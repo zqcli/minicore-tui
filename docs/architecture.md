@@ -148,8 +148,23 @@ visible graphemes on each draw, even without Paragraph wrapping. Debug builds
 optimize dependencies at level 2 and, since 0.2.7, this package at level 1 to also
 optimize locally instantiated generic terminal/ANSI code. Debug information and
 assertions remain, with the usual optimized-code stepping/variable tradeoffs.
-There is no new Cell cache or change to the 30 FPS render budget and 100 ms busy
-tick. Large live snapshots still copy history rows.
+There is no Cell cache. The render budget remains 30 FPS; busy animation now
+requests a 33 ms tick with an absolute deadline that unrelated events cannot
+postpone. Idle disarms the tick timer, and selection auto-scroll retains its own
+50 ms deadline. Large live snapshots still copy history rows.
+
+Live and durable Tool clicks resolve the same full Tool identity and expansion
+policy. Live-only folds discard the combined snapshot without invalidating the
+durable Markdown cache; overrides survive presentation and history reconciliation.
+
+Scrollbar dragging projects its pending offset into the same `ScrollPosition`
+used by body painting, thumb placement and hit testing. The body follows before
+release; release commits only if current geometry still matches. The visible-row
+budget and marker are frozen during a drag, then resume normal layout on release.
+Resize, real viewport changes, focus/session changes, wheel and explicit scroll
+commands cancel the drag. Unrelated RPC/repreparation does not. A stationary drag
+needs no animation timer, and marker rows cannot select or activate hidden content.
+See [stream interaction verification](verification/stream-interaction/README.md).
 
 ## Markdown
 

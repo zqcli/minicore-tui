@@ -1,0 +1,33 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [optimized + debuginfo] target(s) in 16.44s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 2 tests
+test app::tests::marker_row_is_not_a_conversation_link_or_fold_target ... FAILED
+test app::tests::marker_row_cannot_toggle_a_tool_section ... FAILED
+
+failures:
+
+---- app::tests::marker_row_is_not_a_conversation_link_or_fold_target stdout ----
+
+thread 'app::tests::marker_row_is_not_a_conversation_link_or_fold_target' (3180823) panicked at src/app.rs:7673:9:
+the marker row is not a markdown link cell
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- app::tests::marker_row_cannot_toggle_a_tool_section stdout ----
+
+thread 'app::tests::marker_row_cannot_toggle_a_tool_section' (3180822) panicked at src/app.rs:7744:9:
+assertion failed: app.selection.is_none()
+
+
+failures:
+    app::tests::marker_row_cannot_toggle_a_tool_section
+    app::tests::marker_row_is_not_a_conversation_link_or_fold_target
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 330 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

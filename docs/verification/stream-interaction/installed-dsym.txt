@@ -1,0 +1,2 @@
+UUID: 4C4C4468-5555-3144-A141-41C71040F0CB (x86_64) target/debug/minicore-tui
+UUID: 4C4C4468-5555-3144-A141-41C71040F0CB (x86_64) target/debug/minicore-tui.dSYM/Contents/Resources/DWARF/minicore-tui

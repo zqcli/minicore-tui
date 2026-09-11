@@ -115,16 +115,58 @@ pub fn prepare_conversation(app: &App, width: u16) -> PreparedConversation {
 }
 
 /// Returns the transcript content rows available in `height`.
-pub fn visible_rows(app: &App, total_lines: usize, height: u16) -> usize {
-    let budget = height as usize;
-    if budget == 0 {
-        return 0;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ScrollPosition {
+    pub offset: usize,
+    pub visible_rows: usize,
+    pub marker: bool,
+}
+
+pub(crate) fn scroll_position(app: &App, total: usize, height: usize) -> ScrollPosition {
+    if height == 0 {
+        return ScrollPosition {
+            offset: 0,
+            visible_rows: 0,
+            marker: false,
+        };
     }
-    if is_scrolled_away(app, total_lines, budget) {
-        budget.saturating_sub(1).min(total_lines)
+    let Some(view) = app.active_view() else {
+        return ScrollPosition {
+            offset: total.saturating_sub(height),
+            visible_rows: total.min(height),
+            marker: false,
+        };
+    };
+    if let Some((pending, visible_rows, marker)) = app.scrollbar_drag_preview(&view.info.session_id)
+    {
+        let visible_rows = visible_rows.min(height).min(total);
+        return ScrollPosition {
+            offset: pending.min(total.saturating_sub(visible_rows.max(1))),
+            visible_rows,
+            marker: marker && total > height,
+        };
+    }
+    let marker = !view.scroll.follow_tail && total > height;
+    let visible_rows = if marker {
+        height.saturating_sub(1)
     } else {
-        budget.min(total_lines)
+        height
+    };
+    let max_offset = total.saturating_sub(visible_rows.max(1));
+    let offset = if view.scroll.follow_tail {
+        max_offset
+    } else {
+        view.scroll.offset.min(max_offset)
+    };
+    ScrollPosition {
+        offset,
+        visible_rows: visible_rows.min(total),
+        marker,
     }
+}
+
+pub fn visible_rows(app: &App, total_lines: usize, height: u16) -> usize {
+    scroll_position(app, total_lines, height as usize).visible_rows
 }
 
 /// Pure measure for the main loop: the wrapped transcript line count at `width`.
@@ -707,6 +749,23 @@ pub(crate) fn effective_tool_expanded(view: &SessionView, tool: &ToolBlock) -> b
     )
 }
 
+pub(crate) fn effective_live_tool_expanded(
+    view: &SessionView,
+    key: &crate::state::tool::ToolKey,
+    tool: &crate::state::tool::LiveTool,
+) -> bool {
+    let hidden_line_count = view
+        .tool_presentations
+        .get(key)
+        .and_then(|presentation| presentation.display.hidden_line_count)
+        .or_else(|| {
+            tool.result
+                .as_deref()
+                .map(|result| tool::result_line_count(Some(result)))
+        });
+    resolve_tool_expanded(view, key, tool.expanded, &tool.name, hidden_line_count)
+}
+
 pub(crate) fn resolve_tool_expanded(
     view: &SessionView,
     key: &crate::state::tool::ToolKey,
@@ -1038,21 +1097,7 @@ fn live_tool_render(
         .get(&tool_key)
         .map(|presentation| &presentation.display);
     let mut render_tool = tool.clone();
-    let hidden_line_count = display
-        .and_then(|display| display.hidden_line_count)
-        .or_else(|| {
-            render_tool
-                .result
-                .as_deref()
-                .map(|result| tool::result_line_count(Some(result)))
-        });
-    render_tool.expanded = resolve_tool_expanded(
-        view,
-        &tool_key,
-        render_tool.expanded,
-        &render_tool.name,
-        hidden_line_count,
-    );
+    render_tool.expanded = effective_live_tool_expanded(view, &tool_key, &render_tool);
     (
         SectionId {
             session_id: view.info.session_id.clone(),
@@ -1290,22 +1335,10 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
         }
     };
     let total = prepared.lines.len();
-    let (offset, marker) = if is_scrolled_away(app, total, height) {
-        let visible = height.saturating_sub(1);
-        let offset = app
-            .active_view()
-            .map(|view| view.scroll.offset)
-            .unwrap_or(0);
-        let max_offset = total.saturating_sub(visible);
-        (offset.min(max_offset), true)
-    } else {
-        (total.saturating_sub(height), false)
-    };
-    let budget = if marker {
-        height.saturating_sub(1)
-    } else {
-        height
-    };
+    let position = scroll_position(app, total, height);
+    let offset = position.offset;
+    let marker = position.marker;
+    let budget = position.visible_rows;
     let slice: Vec<Line<'static>> = apply_selection(
         prepared
             .lines
@@ -1336,14 +1369,9 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
         };
         render_marker(frame, marker_area, app, theme);
     }
-    if let Some(view) = app.active_view() {
-        let visible = crate::ui::transcript::visible_rows(app, total, area.height);
-        let geometry = crate::ui::scrollbar::geometry(area, total, visible, offset);
-        let thumb_top = geometry
-            .and_then(|geometry| app.scrollbar_preview_thumb_top(&view.info.session_id, geometry));
-        crate::ui::scrollbar::render_with_thumb(
-            frame, area, total, visible, offset, theme, thumb_top,
-        );
+    if app.active_view().is_some() {
+        let visible = position.visible_rows;
+        crate::ui::scrollbar::render(frame, area, total, visible, offset, theme);
     }
 }
 
@@ -1362,16 +1390,4 @@ fn render_marker(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
         Style::new().fg(theme.dim).bg(theme.page_bg),
     );
     frame.render_widget(ratatui::widgets::Paragraph::new(line), area);
-}
-
-fn is_scrolled_away(app: &App, total: usize, height: usize) -> bool {
-    let Some(view) = app.active_view() else {
-        return false;
-    };
-    if view.scroll.follow_tail || total <= height {
-        return false;
-    }
-    let visible = height.saturating_sub(1);
-    let max_offset = total.saturating_sub(visible);
-    view.scroll.offset < max_offset
 }

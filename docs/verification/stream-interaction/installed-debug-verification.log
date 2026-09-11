@@ -1,0 +1,9 @@
+signature_dataoff=9714864 datasize=76048 signature_end=9790912 file_size=9790912
+ncmds=17 sizeofcmds=2224 load_end=2256 first_text_offset=18640 gap=16384
+minos=11.0
+target/debug/minicore-tui: Mach-O 64-bit executable x86_64
+UUID: 4C4C4468-5555-3144-A141-41C71040F0CB (x86_64) target/debug/minicore-tui
+nm=passed size=passed dwarfdump=passed
+target/debug/minicore-tui: valid on disk
+target/debug/minicore-tui: satisfies its Designated Requirement
+codesign=valid

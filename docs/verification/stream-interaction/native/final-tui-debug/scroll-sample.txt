@@ -1,0 +1,585 @@
+Analysis of sampling final-tui-debug (pid 84410) every 1 millisecond
+Process:         final-tui-debug [84410]
+Path:            /private/tmp/*/final-tui-debug
+Load Address:    0x103052000
+Identifier:      final-tui-debug
+Version:         ???
+Code Type:       X86-64
+Platform:        macOS
+Parent Process:  bash [84409]
+Target Type:     live task
+
+Date/Time:       2026-09-11 01:01:35.771 +0800
+Launch Time:     2026-09-11 01:00:25.317 +0800
+OS Version:      macOS 15.7.3 (24G419)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         23.4M
+Physical footprint (peak):  23.4M
+Idle exit:                  untracked
+----
+
+Call graph:
+    2689 Thread_35103052   DispatchQueue_1: com.apple.main-thread  (serial)
+    + 2689 start  (in dyld) + 3056  [0x7ff806990530]
+    +   2689 main  (in final-tui-debug) + 44  [0x10305bdec]
+    +     2689 _RNvNtCskZC1eJQ4Z1r_3std2rt19lang_start_internal  (in final-tui-debug) + 875  [0x1032b7ffb]  rt.rs:171
+    +       2689 _RNCINvNtCskZC1eJQ4Z1r_3std2rt10lang_startNtNtB6_7process8ExitCodeE0CshGG9jK9yfUd_12minicore_tui.llvm.8663618671678389372  (in final-tui-debug) + 12  [0x10306060c]  rt.rs:206
+    +         2689 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceFENtNtB6_7process8ExitCodeB19_ECshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 6  [0x10305d726]  backtrace.rs:166
+    +           2689 _RNvCshGG9jK9yfUd_12minicore_tui4main  (in final-tui-debug) + 135  [0x10305bc47]  main.rs:89
+    +             2689 _RINvMNtNtCskjUvu4PH1w_5tokio7runtime7runtimeNtB3_7Runtime8block_onNCNvCshGG9jK9yfUd_12minicore_tui4main0EB16_  (in final-tui-debug) + 159  [0x10305e65f]  runtime.rs:341
+    +               2689 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCINvMNtNtB6_9scheduler12multi_threadNtB1a_11MultiThread8block_onINtNtCsl7QZrza34zr_4core3pin3PinINtNtCsleUFRS6CW9P_5alloc5boxed3BoxNCNvCshGG9jK9yfUd_12minicore_tui4main0EEE0NtNtCskZC1eJQ4Z1r_3std7process8ExitCodeEB3g_  (in final-tui-debug) + 99  [0x10305c5b3]  runtime.rs:65
+    +                 2484 _RINvMs2_NtNtCskjUvu4PH1w_5tokio7runtime4parkNtB6_16CachedParkThread8block_onINtNtCsl7QZrza34zr_4core3pin3PinINtNtCsleUFRS6CW9P_5alloc5boxed3BoxNCNvCshGG9jK9yfUd_12minicore_tui4main0EEEB2l_  (in final-tui-debug) + 198  [0x103067386]  park.rs:288
+    +                 ! 2484 _RNvMs_NtNtCskjUvu4PH1w_5tokio7runtime4parkNtB4_5Inner4park.llvm.3906970673295854527  (in final-tui-debug) + 142  [0x10320974e]  park.rs:111
+    +                 !   2484 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in final-tui-debug) + 76  [0x10320827c]  condvar.rs:128
+    +                 !     2484 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                 !       2484 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    +                 205 _RINvMs2_NtNtCskjUvu4PH1w_5tokio7runtime4parkNtB6_16CachedParkThread8block_onINtNtCsl7QZrza34zr_4core3pin3PinINtNtCsleUFRS6CW9P_5alloc5boxed3BoxNCNvCshGG9jK9yfUd_12minicore_tui4main0EEEB2l_  (in final-tui-debug) + 164  [0x103067364]  park.rs:284
+    +                   177 _RNCNvCshGG9jK9yfUd_12minicore_tui4main0B3_.llvm.18414197606743307801  (in final-tui-debug) + 9093  [0x103066505]  main.rs:85
+    +                   : 105 _RINvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB5_8TerminalINtNtNtB9_7backend9crossterm16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE4drawNCNCNvCshGG9jK9yfUd_12minicore_tui14run_fullscreen0s1_0EB3A_  (in final-tui-debug) + 151  [0x103056b87]  terminal.rs:308
+    +                   : | 105 _RNvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB4_8TerminalINtNtNtB8_7backend9crossterm16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE11show_cursorB1Q_  (in final-tui-debug) + 57  [0x1030864f9]  terminal.rs:434
+    +                   : |   105 _RNvMs_NtNtNtCskZC1eJQ4Z1r_3std2io8buffered9bufwriterINtB4_9BufWriterNtNtB8_5stdio6StdoutE9flush_bufCsiTgl4Uj1L8w_12minicore_tui  (in final-tui-debug) + 106  [0x1030fd82a]  bufwriter.rs:249
+    +                   : |     105 _RNvXsd_NtNtCskZC1eJQ4Z1r_3std2io5stdioNtB5_6StdoutNtB7_5Write5write  (in final-tui-debug) + 43  [0x1032c2e0b]  stdio.rs:790
+    +                   : |       105 _RNvXsh_NtNtCskZC1eJQ4Z1r_3std2io5stdioNtB5_10StdoutLockNtB7_5Write5write  (in final-tui-debug) + 528  [0x1032c3290]  stdio.rs:848
+    +                   : |         105 _RNvMs_NtNtNtCskZC1eJQ4Z1r_3std2io8buffered9bufwriterINtB4_9BufWriterNtNtB8_5stdio9StdoutRawE10write_coldBa_  (in final-tui-debug) + 135  [0x1032af6f7]  bufwriter.rs:386
+    +                   : |           105 write  (in libsystem_kernel.dylib) + 10  [0x7ff806cf6966]
+    +                   : 51 _RINvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB5_8TerminalINtNtNtB9_7backend9crossterm16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE4drawNCNCNvCshGG9jK9yfUd_12minicore_tui14run_fullscreen0s1_0EB3A_  (in final-tui-debug) + 128  [0x103056b70]  terminal.rs:308
+    +                   : | 30 _RNvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB4_8TerminalINtNtNtB8_7backend9crossterm16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE5flushCshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 132  [0x103056ee4]  terminal.rs:205
+    +                   : | + 14 _RINvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB6_16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB8_7Backend4drawINtNtNtCsleUFRS6CW9P_5alloc3vec9into_iter8IntoIterTttRNtNtNtBa_6buffer4cell4CellEEECshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 1235  [0x10305c413]  crossterm.rs:190
+    +                   : | + ! 12 _RINvXs_NtCs1p8YcskkrDG_9crossterm7commandINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutENtB5_16QueueableCommand5queueINtNtB7_5style5PrintReEEBI_  (in final-tui-debug) + 14  [0x10307f70e]  command.rs:132
+    +                   : | + ! : 10 _RINvNtCs1p8YcskkrDG_9crossterm7command18write_command_ansiINtNtB4_5style5PrintReEINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEB1m_  (in final-tui-debug) + 86  [0x10310b7c6]  command.rs:277
+    +                   : | + ! : | 6 _RNvNtCsl7QZrza34zr_4core3fmt5write  (in final-tui-debug) + 359  [0x1032d3947]  mod.rs:0
+    +                   : | + ! : | + 4 _RNvXNvNtCs1p8YcskkrDG_9crossterm7command18write_command_ansiINtB2_7AdapterQINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtNtCsl7QZrza34zr_4core3fmt5Write9write_strB1g_  (in final-tui-debug) + 18  [0x10310b9c2]  command.rs:264
+    +                   : | + ! : | + ! 1 _RNvXs_NtCsiTgl4Uj1L8w_12minicore_tui8terminalINtB4_14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutENtB17_5Write9write_allB6_  (in final-tui-debug) + 0  [0x10307f8d0]  terminal.rs:53
+    +                   : | + ! : | + ! 1 _RNvXs_NtCsiTgl4Uj1L8w_12minicore_tui8terminalINtB4_14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutENtB17_5Write9write_allB6_  (in final-tui-debug) + 77  [0x10307f91d]  terminal.rs:57
+    +                   : | + ! : | + ! : 1 _platform_memmove$VARIANT$Haswell  (in libsystem_platform.dylib) + 198  [0x7ff806d6ba06]
+    +                   : | + ! : | + ! 1 _RNvXs_NtCsiTgl4Uj1L8w_12minicore_tui8terminalINtB4_14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutENtB17_5Write9write_allB6_  (in final-tui-debug) + 48  [0x10307f900]  terminal.rs:57
+    +                   : | + ! : | + ! 1 _RNvXs_NtCsiTgl4Uj1L8w_12minicore_tui8terminalINtB4_14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutENtB17_5Write9write_allB6_  (in final-tui-debug) + 91  [0x10307f92b]  terminal.rs:58
+    +                   : | + ! : | + 1 _RNvMsa_NtCsl7QZrza34zr_4core3fmtNtB5_9Formatter3pad  (in final-tui-debug) + 775  [0x1032d2e67]  mod.rs:0
+    +                   : | + ! : | + 1 _RNvXs1i_NtCsl7QZrza34zr_4core3fmtReNtB6_7Display3fmtCscZk6roKJLWX_14rustc_demangle  (in final-tui-debug) + 10  [0x1032cd776]
+    +                   : | + ! : | 3 _RNvNtCsl7QZrza34zr_4core3fmt5write  (in final-tui-debug) + 351,370  [0x1032d393f,0x1032d3952]  mod.rs:0
+    +                   : | + ! : | 1 _RNvNtCsl7QZrza34zr_4core3fmt5write  (in final-tui-debug) + 17  [0x1032d37f1]  mod.rs:1631
+    +                   : | + ! : 2 _RINvNtCs1p8YcskkrDG_9crossterm7command18write_command_ansiINtNtB4_5style5PrintReEINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEB1m_  (in final-tui-debug) + 92,96  [0x10310b7cc,0x10310b7d0]  command.rs:278
+    +                   : | + ! 2 _RINvXs_NtCs1p8YcskkrDG_9crossterm7commandINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutENtB5_16QueueableCommand5queueINtNtB7_5style5PrintReEEBI_  (in final-tui-debug) + 29,36  [0x10307f71d,0x10307f724]  command.rs:134
+    +                   : | + 7 _RINvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB6_16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB8_7Backend4drawINtNtNtCsleUFRS6CW9P_5alloc3vec9into_iter8IntoIterTttRNtNtNtBa_6buffer4cell4CellEEECshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 226  [0x10305c022]  crossterm.rs:164
+    +                   : | + ! 7 _RINvXs_NtCs1p8YcskkrDG_9crossterm7commandINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutENtB5_16QueueableCommand5queueNtNtB7_6cursor6MoveToEBI_  (in final-tui-debug) + 14  [0x10307f73e]  command.rs:132
+    +                   : | + !   7 _RINvNtCs1p8YcskkrDG_9crossterm7command18write_command_ansiNtNtB4_6cursor6MoveToINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEB1k_  (in final-tui-debug) + 122  [0x10310b8fa]  command.rs:277
+    +                   : | + !     5 _RNvNtCsl7QZrza34zr_4core3fmt5write  (in final-tui-debug) + 359  [0x1032d3947]  mod.rs:0
+    +                   : | + !     : 3 _RNvXs3_NtNtNtCsl7QZrza34zr_4core3fmt3num3imptNtB9_7Display3fmt  (in final-tui-debug) + 11,125,...  [0x1032da78b,0x1032da7fd,...]  num.rs:143
+    +                   : | + !     : 2 _RNvXs3_NtNtNtCsl7QZrza34zr_4core3fmt3num3imptNtB9_7Display3fmt  (in final-tui-debug) + 232  [0x1032da868]  num.rs:143
+    +                   : | + !     :   1 _RNvMsa_NtCsl7QZrza34zr_4core3fmtNtB5_9Formatter12pad_integral  (in final-tui-debug) + 142  [0x1032d1a0e]  mod.rs:1858
+    +                   : | + !     :   + 1 _RNvNvMsa_NtCsl7QZrza34zr_4core3fmtNtB7_9Formatter12pad_integral12write_prefix  (in final-tui-debug) + 17  [0x1032d89d1]  mod.rs:1847
+    +                   : | + !     :   1 _RNvXNvNtCs1p8YcskkrDG_9crossterm7command18write_command_ansiINtB2_7AdapterQINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtNtCsl7QZrza34zr_4core3fmt5Write9write_strB1g_  (in final-tui-debug) + 18  [0x10310b9c2]  command.rs:264
+    +                   : | + !     :     1 _RNvXs_NtCsiTgl4Uj1L8w_12minicore_tui8terminalINtB4_14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutENtB17_5Write9write_allB6_  (in final-tui-debug) + 77  [0x10307f91d]  terminal.rs:57
+    +                   : | + !     :       1 _platform_memmove$VARIANT$Haswell  (in libsystem_platform.dylib) + 198  [0x7ff806d6ba06]
+    +                   : | + !     1 _RNvNtCsl7QZrza34zr_4core3fmt5write  (in final-tui-debug) + 351  [0x1032d393f]  mod.rs:0
+    +                   : | + !     1 _RNvNtCsl7QZrza34zr_4core3fmt5write  (in final-tui-debug) + 120  [0x1032d3858]  mod.rs:1665
+    +                   : | + !       1 _RNvXNvNtCs1p8YcskkrDG_9crossterm7command18write_command_ansiINtB2_7AdapterQINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtNtCsl7QZrza34zr_4core3fmt5Write9write_strB1g_  (in final-tui-debug) + 18  [0x10310b9c2]  command.rs:264
+    +                   : | + !         1 _RNvXs_NtCsiTgl4Uj1L8w_12minicore_tui8terminalINtB4_14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutENtB17_5Write9write_allB6_  (in final-tui-debug) + 77  [0x10307f91d]  terminal.rs:57
+    +                   : | + !           1 DYLD-STUB$$memcpy  (in final-tui-debug) + 0  [0x1032dbc86]
+    +                   : | + 3 _RINvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB6_16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB8_7Backend4drawINtNtNtCsleUFRS6CW9P_5alloc3vec9into_iter8IntoIterTttRNtNtNtBa_6buffer4cell4CellEEECshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 1143  [0x10305c3b7]  crossterm.rs:176
+    +                   : | + ! 3 _RINvNtCs1p8YcskkrDG_9crossterm7command18write_command_ansiNtNtB4_5style9SetColorsINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEECshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 49  [0x10305fbd1]  command.rs:277
+    +                   : | + !   3 _RINvXs1_NtCs1p8YcskkrDG_9crossterm5styleNtB6_9SetColorsNtNtB8_7command7Command10write_ansiINtNvBT_18write_command_ansi7AdapterQINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEECshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 205  [0x10306140d]  style.rs:0
+    +                   : | + !     3 _RNvNtCsl7QZrza34zr_4core3fmt5write  (in final-tui-debug) + 359  [0x1032d3947]  mod.rs:0
+    +                   : | + !       3 _RNvXs_NtNtNtCs1p8YcskkrDG_9crossterm5style5types7coloredNtB4_7ColoredNtNtCsl7QZrza34zr_4core3fmt7Display3fmt  (in final-tui-debug) + 453  [0x103275405]  colored.rs:0
+    +                   : | + !         3 _RNvNtCsl7QZrza34zr_4core3fmt5write  (in final-tui-debug) + 359  [0x1032d3947]  mod.rs:0
+    +                   : | + !           2 _RNvXNtNtNtCsl7QZrza34zr_4core3fmt3num3imphNtB6_7Display3fmt  (in final-tui-debug) + 139  [0x1032d928b]  num.rs:143
+    +                   : | + !           : 2 _RNvXNvNtCs1p8YcskkrDG_9crossterm7command18write_command_ansiINtB2_7AdapterQINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtNtCsl7QZrza34zr_4core3fmt5Write9write_strB1g_  (in final-tui-debug) + 18  [0x10310b9c2]  command.rs:264
+    +                   : | + !           :   1 _RNvXs_NtCsiTgl4Uj1L8w_12minicore_tui8terminalINtB4_14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutENtB17_5Write9write_allB6_  (in final-tui-debug) + 0  [0x10307f8d0]  terminal.rs:53
+    +                   : | + !           :   1 _RNvXs_NtCsiTgl4Uj1L8w_12minicore_tui8terminalINtB4_14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutENtB17_5Write9write_allB6_  (in final-tui-debug) + 77  [0x10307f91d]  terminal.rs:57
+    +                   : | + !           :     1 _platform_memmove$VARIANT$Haswell  (in libsystem_platform.dylib) + 202  [0x7ff806d6ba0a]
+    +                   : | + !           1 _RNvXNtNtNtCsl7QZrza34zr_4core3fmt3num3imphNtB6_7Display3fmt  (in final-tui-debug) + 43  [0x1032d922b]  num.rs:143
+    +                   : | + 1 _RINvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB6_16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB8_7Backend4drawINtNtNtCsleUFRS6CW9P_5alloc3vec9into_iter8IntoIterTttRNtNtNtBa_6buffer4cell4CellEEECshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 127  [0x10305bfbf]  crossterm.rs:161
+    +                   : | + 1 _RINvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB6_16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB8_7Backend4drawINtNtNtCsleUFRS6CW9P_5alloc3vec9into_iter8IntoIterTttRNtNtNtBa_6buffer4cell4CellEEECshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 588  [0x10305c18c]  crossterm.rs:172
+    +                   : | + ! 1 _RINvNtCs1p8YcskkrDG_9crossterm7command18write_command_ansiNtNtB4_5style12SetAttributeQINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEECshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 85  [0x10305f905]  command.rs:277
+    +                   : | + !   1 _RNvNtCsl7QZrza34zr_4core3fmt5write  (in final-tui-debug) + 359  [0x1032d3947]  mod.rs:0
+    +                   : | + !     1 _RNvMsa_NtCsl7QZrza34zr_4core3fmtNtB5_9Formatter3pad  (in final-tui-debug) + 0  [0x1032d2b60]  mod.rs:1910
+    +                   : | + 1 _RINvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB6_16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB8_7Backend4drawINtNtNtCsleUFRS6CW9P_5alloc3vec9into_iter8IntoIterTttRNtNtNtBa_6buffer4cell4CellEEECshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 794  [0x10305c25a]  crossterm.rs:172
+    +                   : | + 1 _RINvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB6_16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB8_7Backend4drawINtNtNtCsleUFRS6CW9P_5alloc3vec9into_iter8IntoIterTttRNtNtNtBa_6buffer4cell4CellEEECshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 1223  [0x10305c407]  crossterm.rs:190
+    +                   : | + ! 1 _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer4cellNtB2_4Cell6symbol  (in final-tui-debug) + 38  [0x10325fc96]  cell.rs:61
+    +                   : | + 1 _RINvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB6_16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB8_7Backend4drawINtNtNtCsleUFRS6CW9P_5alloc3vec9into_iter8IntoIterTttRNtNtNtBa_6buffer4cell4CellEEECshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 1335  [0x10305c477]  crossterm.rs:191
+    +                   : | + ! 1 free_medium  (in libsystem_malloc.dylib) + 2699  [0x7ff806b46e5b]
+    +                   : | + !   1 mvm_madvise_free  (in libsystem_malloc.dylib) + 13  [0x7ff806b48791]
+    +                   : | + !     1 mvm_madvise_free_plat  (in libsystem_malloc.dylib) + 90  [0x7ff806b5a1a0]
+    +                   : | + !       1 <deduplicated_symbol>  (in libsystem_malloc.dylib) + 9  [0x7ff806b5a12c]
+    +                   : | + !         1 madvise  (in libsystem_kernel.dylib) + 10  [0x7ff806cf5e5a]
+    +                   : | + 1 _RINvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB6_16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB8_7Backend4drawINtNtNtCsleUFRS6CW9P_5alloc3vec9into_iter8IntoIterTttRNtNtNtBa_6buffer4cell4CellEEECshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 1244  [0x10305c41c]  macros.rs:0
+    +                   : | 21 _RNvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB4_8TerminalINtNtNtB8_7backend9crossterm16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE5flushCshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 55  [0x103056e97]  terminal.rs:201
+    +                   : |   5 _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB2_6Buffer4diff  (in final-tui-debug) + 777  [0x103254049]  buffer.rs:504
+    +                   : |   ! 2 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in final-tui-debug) + 53  [0x103253215]  double_ended.rs:360
+    +                   : |   ! : 1 _RNvNtCs5ZHaQAd8SSY_13unicode_width6tables12lookup_width  (in final-tui-debug) + 20  [0x103254494]  tables.rs:140
+    +                   : |   ! : 1 _RNvNtCs5ZHaQAd8SSY_13unicode_width6tables12lookup_width  (in final-tui-debug) + 54  [0x1032544b6]  tables.rs:145
+    +                   : |   ! 1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in final-tui-debug) + 0  [0x1032531e0]  double_ended.rs:353
+    +                   : |   ! 1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in final-tui-debug) + 199  [0x1032532a7]  double_ended.rs:359
+    +                   : |   ! 1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in final-tui-debug) + 2437  [0x103253b65]  double_ended.rs:363
+    +                   : |   4 _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB2_6Buffer4diff  (in final-tui-debug) + 280  [0x103253e58]  buffer.rs:497
+    +                   : |   ! 2 _RNvXs9_Csh2trU3uFyeP_11compact_strNtB5_13CompactStringNtNtCsl7QZrza34zr_4core3cmp9PartialEq2eqCs6DgKIVn6Azl_7ratatui  (in final-tui-debug) + 136  [0x10325fd58]  lib.rs:2068
+    +                   : |   ! : 2 _platform_memcmp$VARIANT$Base  (in libsystem_platform.dylib) + 298,312  [0x7ff806d721aa,0x7ff806d721b8]
+    +                   : |   ! 1 _RNvXs9_Csh2trU3uFyeP_11compact_strNtB5_13CompactStringNtNtCsl7QZrza34zr_4core3cmp9PartialEq2eqCs6DgKIVn6Azl_7ratatui  (in final-tui-debug) + 0  [0x10325fcd0]  lib.rs:2067
+    +                   : |   ! 1 _RNvXs9_Csh2trU3uFyeP_11compact_strNtB5_13CompactStringNtNtCsl7QZrza34zr_4core3cmp9PartialEq2eqCs6DgKIVn6Azl_7ratatui  (in final-tui-debug) + 26  [0x10325fcea]  lib.rs:2068
+    +                   : |   4 _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB2_6Buffer4diff  (in final-tui-debug) + 630  [0x103253fb6]  buffer.rs:502
+    +                   : |   ! 2 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in final-tui-debug) + 0  [0x1032531e0]  double_ended.rs:353
+    +                   : |   ! 1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in final-tui-debug) + 85  [0x103253235]  double_ended.rs:359
+    +                   : |   ! 1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in final-tui-debug) + 2384  [0x103253b30]  double_ended.rs:360
+    +                   : |   2 _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB2_6Buffer4diff  (in final-tui-debug) + 509  [0x103253f3d]  buffer.rs:499
+    +                   : |   ! 2 _RNvMs4_NtCsleUFRS6CW9P_5alloc7raw_vecINtB5_6RawVecTttRNtNtNtCs6DgKIVn6Azl_7ratatui6buffer4cell4CellEE8grow_oneBW_  (in final-tui-debug) + 60  [0x10325c96c]  mod.rs:188
+    +                   : |   !   2 _RNvMs5_NtCsleUFRS6CW9P_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs6DgKIVn6Azl_7ratatui.llvm.9322168582441095887  (in final-tui-debug) + 196  [0x10325ca64]  mod.rs:557
+    +                   : |   !     2 _realloc  (in libsystem_malloc.dylib) + 315  [0x7ff806b724d4]
+    +                   : |   !       2 _malloc_zone_realloc  (in libsystem_malloc.dylib) + 105  [0x7ff806b71e17]
+    +                   : |   !         1 szone_realloc  (in libsystem_malloc.dylib) + 63  [0x7ff806b429b1]
+    +                   : |   !         : 1 szone_good_size  (in libsystem_malloc.dylib) + 68  [0x7ff806b42d56]
+    +                   : |   !         1 szone_realloc  (in libsystem_malloc.dylib) + 822  [0x7ff806b42ca8]
+    +                   : |   !           1 _platform_memmove$VARIANT$Haswell  (in libsystem_platform.dylib) + 41  [0x7ff806d6b969]
+    +                   : |   2 _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB2_6Buffer4diff  (in final-tui-debug) + 559,573  [0x103253f6f,0x103253f7d]  buffer.rs:502
+    +                   : |   2 _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB2_6Buffer4diff  (in final-tui-debug) + 795  [0x10325405b]  buffer.rs:505
+    +                   : |   1 _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB2_6Buffer4diff  (in final-tui-debug) + 259  [0x103253e43]  buffer.rs:497
+    +                   : |   1 _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB2_6Buffer4diff  (in final-tui-debug) + 470  [0x103253f16]  buffer.rs:498
+    +                   : |     1 _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB2_6Buffer6pos_of  (in final-tui-debug) + 37  [0x103254255]  buffer.rs:313
+    +                   : 17 _RINvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB5_8TerminalINtNtNtB9_7backend9crossterm16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE4drawNCNCNvCshGG9jK9yfUd_12minicore_tui14run_fullscreen0s1_0EB3A_  (in final-tui-debug) + 105  [0x103056b59]  terminal.rs:308
+    +                   : | 14 _RNvNtCsiTgl4Uj1L8w_12minicore_tui2ui6render  (in final-tui-debug) + 1316  [0x1030fb274]  mod.rs:90
+    +                   : | + 14 _RNvNtNtCsiTgl4Uj1L8w_12minicore_tui2ui10transcript6render  (in final-tui-debug) + 1201  [0x10307c9a1]  transcript.rs:1361
+    +                   : | +   13 _RNvXs_NtNtCs6DgKIVn6Azl_7ratatui7widgets9paragraphNtB4_9ParagraphNtB6_6Widget6render  (in final-tui-debug) + 15  [0x10324d2af]  paragraph.rs:420
+    +                   : | +   ! 8 _RNvXs0_NtNtCs6DgKIVn6Azl_7ratatui7widgets9paragraphNtB5_9ParagraphNtB7_9WidgetRef10render_ref  (in final-tui-debug) + 351  [0x10324cb1f]  paragraph.rs:429
+    +                   : | +   ! : 5 _RNvXs1_NtNtCs6DgKIVn6Azl_7ratatui7widgets6reflowINtB5_13LineTruncatorINtNtNtNtCsl7QZrza34zr_4core4iter8adapters3map3MapINtNtNtB1e_5slice4iter4IterNtNtNtB9_4text4line4LineENCNvMs1_NtB7_9paragraphNtB2R_9Paragraph16render_paragraph0EINtNtB1a_7flatten7FlatMapIB1U_NtNtB2o_4span4SpanEIB16_INtNtB1a_6filter6FilterNtNtCsbRA72J3LoxY_20unicode_segmentation8grapheme9GraphemesNCINvMs_B4c_B4a_16styled_graphemesNtNtB9_5style5StyleE0ENCB5U_s_0ENCINvMs_B2m_B2k_16styled_graphemesB6q_E0EENtB5_12LineComposer9next_lineB9_  (in final-tui-debug) + 488  [0x10324feb8]  reflow.rs:287
+    +                   : | +   ! : | 4 _RNvXs2_NtCsbRA72J3LoxY_20unicode_segmentation8graphemeNtB5_9GraphemesNtNtNtNtCsl7QZrza34zr_4core4iter6traits8iterator8Iterator4next  (in final-tui-debug) + 1706,1871,...  [0x10325082a,0x1032508cf,...]  grapheme.rs:120
+    +                   : | +   ! : | 1 _RNvXs2_NtCsbRA72J3LoxY_20unicode_segmentation8graphemeNtB5_9GraphemesNtNtNtNtCsl7QZrza34zr_4core4iter6traits8iterator8Iterator4next  (in final-tui-debug) + 2405  [0x103250ae5]  grapheme.rs:120
+    +                   : | +   ! : |   1 _RNvMs4_NtCsbRA72J3LoxY_20unicode_segmentation8graphemeNtB5_14GraphemeCursor12handle_emoji  (in final-tui-debug) + 255  [0x10324f78f]  grapheme.rs:552
+    +                   : | +   ! : 2 _RNvXs1_NtNtCs6DgKIVn6Azl_7ratatui7widgets6reflowINtB5_13LineTruncatorINtNtNtNtCsl7QZrza34zr_4core4iter8adapters3map3MapINtNtNtB1e_5slice4iter4IterNtNtNtB9_4text4line4LineENCNvMs1_NtB7_9paragraphNtB2R_9Paragraph16render_paragraph0EINtNtB1a_7flatten7FlatMapIB1U_NtNtB2o_4span4SpanEIB16_INtNtB1a_6filter6FilterNtNtCsbRA72J3LoxY_20unicode_segmentation8grapheme9GraphemesNCINvMs_B4c_B4a_16styled_graphemesNtNtB9_5style5StyleE0ENCB5U_s_0ENCINvMs_B2m_B2k_16styled_graphemesB6q_E0EENtB5_12LineComposer9next_lineB9_  (in final-tui-debug) + 907  [0x10325005b]  reflow.rs:311
+    +                   : | +   ! : | 1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in final-tui-debug) + 2384  [0x10324f4e0]  double_ended.rs:360
+    +                   : | +   ! : | 1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in final-tui-debug) + 2437  [0x10324f515]  double_ended.rs:363
+    +                   : | +   ! : 1 _RNvXs1_NtNtCs6DgKIVn6Azl_7ratatui7widgets6reflowINtB5_13LineTruncatorINtNtNtNtCsl7QZrza34zr_4core4iter8adapters3map3MapINtNtNtB1e_5slice4iter4IterNtNtNtB9_4text4line4LineENCNvMs1_NtB7_9paragraphNtB2R_9Paragraph16render_paragraph0EINtNtB1a_7flatten7FlatMapIB1U_NtNtB2o_4span4SpanEIB16_INtNtB1a_6filter6FilterNtNtCsbRA72J3LoxY_20unicode_segmentation8grapheme9GraphemesNCINvMs_B4c_B4a_16styled_graphemesNtNtB9_5style5StyleE0ENCB5U_s_0ENCINvMs_B2m_B2k_16styled_graphemesB6q_E0EENtB5_12LineComposer9next_lineB9_  (in final-tui-debug) + 757  [0x10324ffc5]  reflow.rs:289
+    +                   : | +   ! :   1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in final-tui-debug) + 2389  [0x10324f4e5]  double_ended.rs:360
+    +                   : | +   ! :     1 _RNvNtCs5ZHaQAd8SSY_13unicode_width6tables12lookup_width  (in final-tui-debug) + 54  [0x10324fa06]  tables.rs:145
+    +                   : | +   ! 2 _RNvXs0_NtNtCs6DgKIVn6Azl_7ratatui7widgets9paragraphNtB5_9ParagraphNtB7_9WidgetRef10render_ref  (in final-tui-debug) + 825  [0x10324ccf9]  paragraph.rs:429
+    +                   : | +   ! : 2 _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer4cellNtB2_4Cell10set_symbol  (in final-tui-debug) + 103  [0x10325f647]  cell.rs:66
+    +                   : | +   ! 1 _RNvXs0_NtNtCs6DgKIVn6Azl_7ratatui7widgets9paragraphNtB5_9ParagraphNtB7_9WidgetRef10render_ref  (in final-tui-debug) + 147  [0x10324ca53]  paragraph.rs:429
+    +                   : | +   ! : 1 _RINvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB3_6Buffer9set_styleNtNtB7_5style5StyleEB7_  (in final-tui-debug) + 424  [0x103253098]  buffer.rs:405
+    +                   : | +   ! 1 _RNvXs0_NtNtCs6DgKIVn6Azl_7ratatui7widgets9paragraphNtB5_9ParagraphNtB7_9WidgetRef10render_ref  (in final-tui-debug) + 587  [0x10324cc0b]  paragraph.rs:429
+    +                   : | +   ! : 1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in final-tui-debug) + 60  [0x10324bd6c]  double_ended.rs:360
+    +                   : | +   ! 1 _RNvXs0_NtNtCs6DgKIVn6Azl_7ratatui7widgets9paragraphNtB5_9ParagraphNtB7_9WidgetRef10render_ref  (in final-tui-debug) + 817  [0x10324ccf1]  paragraph.rs:429
+    +                   : | +   1 _RINvNtCsl7QZrza34zr_4core3ptr9drop_glueNtNtNtCs6DgKIVn6Azl_7ratatui7widgets9paragraph9ParagraphEBH_  (in final-tui-debug) + 226  [0x10324bc02]  mod.rs:823
+    +                   : | +     1 _free  (in libsystem_malloc.dylib) + 27  [0x7ff806b72370]
+    +                   : | 2 _RNvNtCsiTgl4Uj1L8w_12minicore_tui2ui6render  (in final-tui-debug) + 1809  [0x1030fb461]  mod.rs:102
+    +                   : | + 2 _RNvNtNtCsiTgl4Uj1L8w_12minicore_tui2ui8composer6render  (in final-tui-debug) + 1602  [0x10316e952]  composer.rs:27
+    +                   : | +   2 _RNvXs_NtNtCs6DgKIVn6Azl_7ratatui7widgets9paragraphNtB4_9ParagraphNtB6_6Widget6render  (in final-tui-debug) + 15  [0x10324d2af]  paragraph.rs:420
+    +                   : | +     2 _RNvXs0_NtNtCs6DgKIVn6Azl_7ratatui7widgets9paragraphNtB5_9ParagraphNtB7_9WidgetRef10render_ref  (in final-tui-debug) + 351  [0x10324cb1f]  paragraph.rs:429
+    +                   : | +       2 _RNvXs1_NtNtCs6DgKIVn6Azl_7ratatui7widgets6reflowINtB5_13LineTruncatorINtNtNtNtCsl7QZrza34zr_4core4iter8adapters3map3MapINtNtNtB1e_5slice4iter4IterNtNtNtB9_4text4line4LineENCNvMs1_NtB7_9paragraphNtB2R_9Paragraph16render_paragraph0EINtNtB1a_7flatten7FlatMapIB1U_NtNtB2o_4span4SpanEIB16_INtNtB1a_6filter6FilterNtNtCsbRA72J3LoxY_20unicode_segmentation8grapheme9GraphemesNCINvMs_B4c_B4a_16styled_graphemesNtNtB9_5style5StyleE0ENCB5U_s_0ENCINvMs_B2m_B2k_16styled_graphemesB6q_E0EENtB5_12LineComposer9next_lineB9_  (in final-tui-debug) + 488  [0x10324feb8]  reflow.rs:287
+    +                   : | +         2 _RNvXs2_NtCsbRA72J3LoxY_20unicode_segmentation8graphemeNtB5_9GraphemesNtNtNtNtCsl7QZrza34zr_4core4iter6traits8iterator8Iterator4next  (in final-tui-debug) + 1725,1821  [0x10325083d,0x10325089d]  grapheme.rs:120
+    +                   : | 1 _RNvNtCsiTgl4Uj1L8w_12minicore_tui2ui6render  (in final-tui-debug) + 1611  [0x1030fb39b]  mod.rs:111
+    +                   : |   1 _RNvNtNtCsiTgl4Uj1L8w_12minicore_tui2ui6footer6render  (in final-tui-debug) + 425  [0x103114f09]  footer.rs:62
+    +                   : |     1 _RNvXs_Cs5ZHaQAd8SSY_13unicode_widtheNtB4_15UnicodeWidthStr5width.llvm.9512027367507041217  (in final-tui-debug) + 58  [0x10310a85a]  lib.rs:250
+    +                   : 2 _RINvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB5_8TerminalINtNtNtB9_7backend9crossterm16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE4drawNCNCNvCshGG9jK9yfUd_12minicore_tui14run_fullscreen0s1_0EB3A_  (in final-tui-debug) + 284  [0x103056c0c]  terminal.rs:308
+    +                   : | 2 _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB2_6Buffer5reset  (in final-tui-debug) + 36,65  [0x1032541b4,0x1032541d1]  buffer.rs:425
+    +                   : 1 _RINvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB5_8TerminalINtNtNtB9_7backend9crossterm16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE4drawNCNCNvCshGG9jK9yfUd_12minicore_tui14run_fullscreen0s1_0EB3A_  (in final-tui-debug) + 34  [0x103056b12]  terminal.rs:308
+    +                   : | 1 _RNvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB4_8TerminalINtNtNtB8_7backend9crossterm16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE10autoresizeCshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 50  [0x103056d22]  terminal.rs:246
+    +                   : |   1 _RNvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB5_16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB7_7Backend4sizeB1g_  (in final-tui-debug) + 21  [0x103067cd5]  crossterm.rs:254
+    +                   : |     1 _RNvNtNtNtCs1p8YcskkrDG_9crossterm8terminal3sys4unix4size  (in final-tui-debug) + 25  [0x10327ded9]  unix.rs:98
+    +                   : |       1 _RNvNtNtNtCs1p8YcskkrDG_9crossterm8terminal3sys4unix11window_size  (in final-tui-debug) + 69  [0x10327d795]  unix.rs:85
+    +                   : |         1 _RNvMsj_NtCskZC1eJQ4Z1r_3std2fsNtB5_11OpenOptions5__open  (in final-tui-debug) + 136  [0x1032b6dd8]  fs.rs:1889
+    +                   : |           1 _RNvMsi_NtNtNtCskZC1eJQ4Z1r_3std3sys2fs4unixNtB5_4File6open_c  (in final-tui-debug) + 257  [0x1032b4b91]  unix.rs:1390
+    +                   : |             1 open  (in libsystem_kernel.dylib) + 202  [0x7ff806cfd313]
+    +                   : |               1 __open  (in libsystem_kernel.dylib) + 10  [0x7ff806cf4316]
+    +                   : 1 _RINvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB5_8TerminalINtNtNtB9_7backend9crossterm16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE4drawNCNCNvCshGG9jK9yfUd_12minicore_tui14run_fullscreen0s1_0EB3A_  (in final-tui-debug) + 175  [0x103056b9f]  terminal.rs:308
+    +                   :   1 _RNvXsd_NtNtCskZC1eJQ4Z1r_3std2io5stdioNtB5_6StdoutNtB7_5Write5flush  (in final-tui-debug) + 21  [0x1032c2dd5]  stdio.rs:800
+    +                   :     1 _RNvXse_NtNtCskZC1eJQ4Z1r_3std2io5stdioRNtB5_6StdoutNtB7_5Write5flush  (in final-tui-debug) + 45  [0x1032c2f0d]  stdio.rs:826
+    +                   :       1 _RNvMs_NtNtNtCskZC1eJQ4Z1r_3std2io8buffered9bufwriterINtB4_9BufWriterNtNtB8_5stdio9StdoutRawE9flush_bufBa_  (in final-tui-debug) + 148  [0x1032af894]  bufwriter.rs:249
+    +                   :         1 write  (in libsystem_kernel.dylib) + 10  [0x7ff806cf6966]
+    +                   16 _RNCNvCshGG9jK9yfUd_12minicore_tui4main0B3_.llvm.18414197606743307801  (in final-tui-debug) + 7247  [0x103065dcf]  main.rs:85
+    +                   : 11 _RINvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB5_8TerminalINtNtNtB9_7backend9crossterm16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE4drawNCNCNvCshGG9jK9yfUd_12minicore_tui14run_fullscreen0s0_0EB3A_  (in final-tui-debug) + 151  [0x103056987]  terminal.rs:308
+    +                   : | 11 _RNvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB4_8TerminalINtNtNtB8_7backend9crossterm16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE11show_cursorB1Q_  (in final-tui-debug) + 57  [0x1030864f9]  terminal.rs:434
+    +                   : |   11 _RNvMs_NtNtNtCskZC1eJQ4Z1r_3std2io8buffered9bufwriterINtB4_9BufWriterNtNtB8_5stdio6StdoutE9flush_bufCsiTgl4Uj1L8w_12minicore_tui  (in final-tui-debug) + 106  [0x1030fd82a]  bufwriter.rs:249
+    +                   : |     11 _RNvXsd_NtNtCskZC1eJQ4Z1r_3std2io5stdioNtB5_6StdoutNtB7_5Write5write  (in final-tui-debug) + 43  [0x1032c2e0b]  stdio.rs:790
+    +                   : |       11 _RNvXsh_NtNtCskZC1eJQ4Z1r_3std2io5stdioNtB5_10StdoutLockNtB7_5Write5write  (in final-tui-debug) + 528  [0x1032c3290]  stdio.rs:848
+    +                   : |         11 _RNvMs_NtNtNtCskZC1eJQ4Z1r_3std2io8buffered9bufwriterINtB4_9BufWriterNtNtB8_5stdio9StdoutRawE10write_coldBa_  (in final-tui-debug) + 135  [0x1032af6f7]  bufwriter.rs:386
+    +                   : |           11 write  (in libsystem_kernel.dylib) + 10  [0x7ff806cf6966]
+    +                   : 3 _RINvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB5_8TerminalINtNtNtB9_7backend9crossterm16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE4drawNCNCNvCshGG9jK9yfUd_12minicore_tui14run_fullscreen0s0_0EB3A_  (in final-tui-debug) + 128  [0x103056970]  terminal.rs:308
+    +                   : | 2 _RNvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB4_8TerminalINtNtNtB8_7backend9crossterm16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE5flushCshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 132  [0x103056ee4]  terminal.rs:205
+    +                   : | + 1 _RINvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB6_16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB8_7Backend4drawINtNtNtCsleUFRS6CW9P_5alloc3vec9into_iter8IntoIterTttRNtNtNtBa_6buffer4cell4CellEEECshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 239  [0x10305c02f]  crossterm.rs:167
+    +                   : | + 1 _RINvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB6_16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB8_7Backend4drawINtNtNtCsleUFRS6CW9P_5alloc3vec9into_iter8IntoIterTttRNtNtNtBa_6buffer4cell4CellEEECshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 1143  [0x10305c3b7]  crossterm.rs:176
+    +                   : | +   1 _RINvNtCs1p8YcskkrDG_9crossterm7command18write_command_ansiNtNtB4_5style9SetColorsINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEECshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 49  [0x10305fbd1]  command.rs:277
+    +                   : | +     1 _RINvXs1_NtCs1p8YcskkrDG_9crossterm5styleNtB6_9SetColorsNtNtB8_7command7Command10write_ansiINtNvBT_18write_command_ansi7AdapterQINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEECshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 205  [0x10306140d]  style.rs:0
+    +                   : | +       1 _RNvNtCsl7QZrza34zr_4core3fmt5write  (in final-tui-debug) + 359  [0x1032d3947]  mod.rs:0
+    +                   : | +         1 _RNvXs_NtNtNtCs1p8YcskkrDG_9crossterm5style5types7coloredNtB4_7ColoredNtNtCsl7QZrza34zr_4core3fmt7Display3fmt  (in final-tui-debug) + 453  [0x103275405]  colored.rs:0
+    +                   : | +           1 _RNvNtCsl7QZrza34zr_4core3fmt5write  (in final-tui-debug) + 120  [0x1032d3858]  mod.rs:1665
+    +                   : | +             1 _RNvXNvNtCs1p8YcskkrDG_9crossterm7command18write_command_ansiINtB2_7AdapterQINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtNtCsl7QZrza34zr_4core3fmt5Write9write_strB1g_  (in final-tui-debug) + 18  [0x10310b9c2]  command.rs:264
+    +                   : | +               1 _RNvXs_NtCsiTgl4Uj1L8w_12minicore_tui8terminalINtB4_14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutENtB17_5Write9write_allB6_  (in final-tui-debug) + 77  [0x10307f91d]  terminal.rs:57
+    +                   : | +                 1 _platform_memmove$VARIANT$Haswell  (in libsystem_platform.dylib) + 198  [0x7ff806d6ba06]
+    +                   : | 1 _RNvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB4_8TerminalINtNtNtB8_7backend9crossterm16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE5flushCshGG9jK9yfUd_12minicore_tui  (in final-tui-debug) + 55  [0x103056e97]  terminal.rs:201
+    +                   : |   1 _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB2_6Buffer4diff  (in final-tui-debug) + 712  [0x103254008]  buffer.rs:504
+    +                   : |     1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in final-tui-debug) + 2384  [0x103253b30]  double_ended.rs:360
+    +                   : 2 _RINvMs_NtNtCs6DgKIVn6Azl_7ratatui8terminal8terminalINtB5_8TerminalINtNtNtB9_7backend9crossterm16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEEE4drawNCNCNvCshGG9jK9yfUd_12minicore_tui14run_fullscreen0s0_0EB3A_  (in final-tui-debug) + 105  [0x103056959]  terminal.rs:308
+    +                   :   2 _RNvNtCsiTgl4Uj1L8w_12minicore_tui2ui6render  (in final-tui-debug) + 1316  [0x1030fb274]  mod.rs:90
+    +                   :     2 _RNvNtNtCsiTgl4Uj1L8w_12minicore_tui2ui10transcript6render  (in final-tui-debug) + 1201  [0x10307c9a1]  transcript.rs:1361
+    +                   :       1 _RINvNtCsl7QZrza34zr_4core3ptr9drop_glueNtNtNtCs6DgKIVn6Azl_7ratatui7widgets9paragraph9ParagraphEBH_  (in final-tui-debug) + 226  [0x10324bc02]  mod.rs:823
+    +                   :       + 1 free_tiny  (in libsystem_malloc.dylib) + 143  [0x7ff806b43496]
+    +                   :       1 _RNvXs_NtNtCs6DgKIVn6Azl_7ratatui7widgets9paragraphNtB4_9ParagraphNtB6_6Widget6render  (in final-tui-debug) + 15  [0x10324d2af]  paragraph.rs:420
+    +                   :         1 _RNvXs0_NtNtCs6DgKIVn6Azl_7ratatui7widgets9paragraphNtB5_9ParagraphNtB7_9WidgetRef10render_ref  (in final-tui-debug) + 351  [0x10324cb1f]  paragraph.rs:429
+    +                   :           1 _RNvXs1_NtNtCs6DgKIVn6Azl_7ratatui7widgets6reflowINtB5_13LineTruncatorINtNtNtNtCsl7QZrza34zr_4core4iter8adapters3map3MapINtNtNtB1e_5slice4iter4IterNtNtNtB9_4text4line4LineENCNvMs1_NtB7_9paragraphNtB2R_9Paragraph16render_paragraph0EINtNtB1a_7flatten7FlatMapIB1U_NtNtB2o_4span4SpanEIB16_INtNtB1a_6filter6FilterNtNtCsbRA72J3LoxY_20unicode_segmentation8grapheme9GraphemesNCINvMs_B4c_B4a_16styled_graphemesNtNtB9_5style5StyleE0ENCB5U_s_0ENCINvMs_B2m_B2k_16styled_graphemesB6q_E0EENtB5_12LineComposer9next_lineB9_  (in final-tui-debug) + 800  [0x10324fff0]  reflow.rs:293
+    +                   :             1 _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in final-tui-debug) + 14  [0x10324eb9e]  double_ended.rs:359
+    +                   5 _RNCNvCshGG9jK9yfUd_12minicore_tui4main0B3_.llvm.18414197606743307801  (in final-tui-debug) + 8979  [0x103066493]  main.rs:85
+    +                   : 5 _RNvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB5_16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB7_7Backend4sizeB1g_  (in final-tui-debug) + 21  [0x103067cd5]  crossterm.rs:254
+    +                   :   5 _RNvNtNtNtCs1p8YcskkrDG_9crossterm8terminal3sys4unix4size  (in final-tui-debug) + 25  [0x10327ded9]  unix.rs:98
+    +                   :     4 _RNvNtNtNtCs1p8YcskkrDG_9crossterm8terminal3sys4unix11window_size  (in final-tui-debug) + 69  [0x10327d795]  unix.rs:85
+    +                   :     | 4 _RNvMsj_NtCskZC1eJQ4Z1r_3std2fsNtB5_11OpenOptions5__open  (in final-tui-debug) + 136  [0x1032b6dd8]  fs.rs:1889
+    +                   :     |   4 _RNvMsi_NtNtNtCskZC1eJQ4Z1r_3std3sys2fs4unixNtB5_4File6open_c  (in final-tui-debug) + 257  [0x1032b4b91]  unix.rs:1390
+    +                   :     |     4 open  (in libsystem_kernel.dylib) + 202  [0x7ff806cfd313]
+    +                   :     |       4 __open  (in libsystem_kernel.dylib) + 10  [0x7ff806cf4316]
+    +                   :     1 _RNvNtNtNtCs1p8YcskkrDG_9crossterm8terminal3sys4unix11window_size  (in final-tui-debug) + 209  [0x10327d821]  unix.rs:94
+    +                   :       1 __close_nocancel  (in libsystem_kernel.dylib) + 10  [0x7ff806cf4f9a]
+    +                   4 _RNCNvCshGG9jK9yfUd_12minicore_tui4main0B3_.llvm.18414197606743307801  (in final-tui-debug) + 5150  [0x10306559e]  main.rs:85
+    +                   : 4 _RNvXs0_NtNtCsl7QZrza34zr_4core6future7poll_fnINtB5_6PollFnNCNCNvCshGG9jK9yfUd_12minicore_tui14run_fullscreen0s2_0ENtNtB7_6future6Future4pollB10_  (in final-tui-debug) + 647  [0x10305ced7]  poll_fn.rs:151
+    +                   :   3 _RNvXs0_NtNtCs1p8YcskkrDG_9crossterm5event6streamNtB5_11EventStreamNtNtCscawXhDtNOym_12futures_core6stream6Stream9poll_next  (in final-tui-debug) + 42  [0x10327f55a]  stream.rs:105
+    +                   :   | 3 _RINvNtCs1p8YcskkrDG_9crossterm5event13poll_internalNtNtB2_6filter11EventFilterEB4_  (in final-tui-debug) + 122  [0x10327455a]  event.rs:270
+    +                   :   |   3 _RINvMs_NtNtCs1p8YcskkrDG_9crossterm5event4readNtB5_19InternalEventReader4pollNtNtB7_6filter11EventFilterEB9_  (in final-tui-debug) + 279  [0x10327f9b7]  read.rs:65
+    +                   :   |     2 _RNvXs_NtNtNtNtCs1p8YcskkrDG_9crossterm5event6source4unix3mioNtB4_23UnixInternalEventSourceNtB8_11EventSource8try_read  (in final-tui-debug) + 227  [0x10327c203]  mio.rs:76
+    +                   :   |     + 2 _RNvMNtNtNtCsj32O19rI2t2_3mio3sys4unix8selectorNtB2_8Selector6select  (in final-tui-debug) + 100  [0x1032883b4]  mod.rs:8
+    +                   :   |     +   2 kevent  (in libsystem_kernel.dylib) + 10  [0x7ff806cf8822]
+    +                   :   |     1 _RNvXs_NtNtNtNtCs1p8YcskkrDG_9crossterm5event6source4unix3mioNtB4_23UnixInternalEventSourceNtB8_11EventSource8try_read  (in final-tui-debug) + 6  [0x10327c126]  mio.rs:68
+    +                   :   1 _RNvXs0_NtNtCs1p8YcskkrDG_9crossterm5event6streamNtB5_11EventStreamNtNtCscawXhDtNOym_12futures_core6stream6Stream9poll_next  (in final-tui-debug) + 275  [0x10327f643]  stream.rs:126
+    +                   :     1 _RNvMs2_NtNtCskZC1eJQ4Z1r_3std4sync4mpmcINtB5_6SenderNtNtNtCs1p8YcskkrDG_9crossterm5event6stream4TaskE4sendBU_  (in final-tui-debug) + 144  [0x1032740c0]  mod.rs:396
+    +                   :       1 _RNvMs_NtNtNtCskZC1eJQ4Z1r_3std4sync4mpmc5arrayINtB4_7ChannelNtNtNtCs1p8YcskkrDG_9crossterm5event6stream4TaskE4sendB12_  (in final-tui-debug) + 1055  [0x10326eb6f]  array.rs:328
+    +                   :         1 _RNvMs0_NtNtNtCskZC1eJQ4Z1r_3std4sync4mpmc5wakerNtB5_9SyncWaker6notify  (in final-tui-debug) + 240  [0x10326dda0]  waker.rs:175
+    +                   :           1 _dispatch_semaphore_signal_slow  (in libdispatch.dylib) + 39  [0x7ff806b8c03c]
+    +                   :             1 _dispatch_sema4_signal  (in libdispatch.dylib) + 21  [0x7ff806b8bc54]
+    +                   :               1 semaphore_signal_trap  (in libsystem_kernel.dylib) + 10  [0x7ff806cf3aa2]
+    +                   1 _RNCNvCshGG9jK9yfUd_12minicore_tui4main0B3_.llvm.18414197606743307801  (in final-tui-debug) + 4089  [0x103065179]  main.rs:85
+    +                   : 1 _RNvXs0_NtNtCs6DgKIVn6Azl_7ratatui7backend9crosstermINtB5_16CrosstermBackendINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtB7_7Backend4sizeB1g_  (in final-tui-debug) + 21  [0x103067cd5]  crossterm.rs:254
+    +                   :   1 _RNvNtNtNtCs1p8YcskkrDG_9crossterm8terminal3sys4unix4size  (in final-tui-debug) + 25  [0x10327ded9]  unix.rs:98
+    +                   :     1 _RNvNtNtNtCs1p8YcskkrDG_9crossterm8terminal3sys4unix11window_size  (in final-tui-debug) + 209  [0x10327d821]  unix.rs:94
+    +                   :       1 __close_nocancel  (in libsystem_kernel.dylib) + 10  [0x7ff806cf4f9a]
+    +                   1 _RNCNvCshGG9jK9yfUd_12minicore_tui4main0B3_.llvm.18414197606743307801  (in final-tui-debug) + 5216  [0x1030655e0]  main.rs:85
+    +                   : 1 _platform_memmove$VARIANT$Haswell  (in libsystem_platform.dylib) + 352  [0x7ff806d6baa0]
+    +                   1 _RNCNvCshGG9jK9yfUd_12minicore_tui4main0B3_.llvm.18414197606743307801  (in final-tui-debug) + 6411  [0x103065a8b]  main.rs:85
+    2689 Thread_35103053: tokio-rt-worker
+    + 2689 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2689 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2689 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in final-tui-debug) + 375  [0x1032bff87]  unix.rs:123
+    +       2689 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in final-tui-debug) + 215  [0x103221be7]  function.rs:250
+    +         2689 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in final-tui-debug) + 130  [0x103205822]  backtrace.rs:166
+    +           2689 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in final-tui-debug) + 510  [0x1031fec6e]  pool.rs:518
+    +             2689 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in final-tui-debug) + 16  [0x103212ca0]  mod.rs:565
+    +               2689 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in final-tui-debug) + 201  [0x1031fa3b9]  harness.rs:155
+    +                 2689 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in final-tui-debug) + 59  [0x10320643b]  task.rs:42
+    +                   2689 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in final-tui-debug) + 192  [0x10320e460]  worker.rs:548
+    +                     2689 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in final-tui-debug) + 250  [0x1032219ba]  runtime.rs:65
+    +                       2689 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in final-tui-debug) + 56  [0x10321f788]  scoped.rs:40
+    +                         2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in final-tui-debug) + 1776  [0x10320d9d0]  worker.rs:614
+    +                           2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in final-tui-debug) + 636  [0x10320d15c]  worker.rs:887
+    +                             2689 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in final-tui-debug) + 420  [0x103212a94]  park.rs:203
+    +                               2689 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in final-tui-debug) + 76  [0x10320827c]  condvar.rs:128
+    +                                 2689 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2689 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2689 Thread_35103054: tokio-rt-worker
+    + 2689 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2689 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2689 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in final-tui-debug) + 375  [0x1032bff87]  unix.rs:123
+    +       2689 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in final-tui-debug) + 215  [0x103221be7]  function.rs:250
+    +         2689 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in final-tui-debug) + 130  [0x103205822]  backtrace.rs:166
+    +           2689 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in final-tui-debug) + 510  [0x1031fec6e]  pool.rs:518
+    +             2689 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in final-tui-debug) + 16  [0x103212ca0]  mod.rs:565
+    +               2689 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in final-tui-debug) + 201  [0x1031fa3b9]  harness.rs:155
+    +                 2689 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in final-tui-debug) + 59  [0x10320643b]  task.rs:42
+    +                   2689 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in final-tui-debug) + 192  [0x10320e460]  worker.rs:548
+    +                     2689 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in final-tui-debug) + 250  [0x1032219ba]  runtime.rs:65
+    +                       2689 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in final-tui-debug) + 56  [0x10321f788]  scoped.rs:40
+    +                         2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in final-tui-debug) + 1776  [0x10320d9d0]  worker.rs:614
+    +                           2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in final-tui-debug) + 636  [0x10320d15c]  worker.rs:887
+    +                             2689 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in final-tui-debug) + 420  [0x103212a94]  park.rs:203
+    +                               2689 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in final-tui-debug) + 76  [0x10320827c]  condvar.rs:128
+    +                                 2689 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2689 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2689 Thread_35103055: tokio-rt-worker
+    + 2689 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2689 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2689 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in final-tui-debug) + 375  [0x1032bff87]  unix.rs:123
+    +       2689 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in final-tui-debug) + 215  [0x103221be7]  function.rs:250
+    +         2689 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in final-tui-debug) + 130  [0x103205822]  backtrace.rs:166
+    +           2689 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in final-tui-debug) + 510  [0x1031fec6e]  pool.rs:518
+    +             2689 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in final-tui-debug) + 16  [0x103212ca0]  mod.rs:565
+    +               2689 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in final-tui-debug) + 201  [0x1031fa3b9]  harness.rs:155
+    +                 2689 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in final-tui-debug) + 59  [0x10320643b]  task.rs:42
+    +                   2689 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in final-tui-debug) + 192  [0x10320e460]  worker.rs:548
+    +                     2689 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in final-tui-debug) + 250  [0x1032219ba]  runtime.rs:65
+    +                       2689 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in final-tui-debug) + 56  [0x10321f788]  scoped.rs:40
+    +                         2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in final-tui-debug) + 1776  [0x10320d9d0]  worker.rs:614
+    +                           2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in final-tui-debug) + 283  [0x10320cffb]  worker.rs:887
+    +                             2689 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner11park_driver.llvm.6315534270510162444  (in final-tui-debug) + 160  [0x103212830]  park.rs:265
+    +                               2689 _RNvMNtNtCskjUvu4PH1w_5tokio7runtime4timeNtB2_6Driver13park_internal.llvm.6315534270510162444  (in final-tui-debug) + 595  [0x1032112c3]  mod.rs:0
+    +                                 2689 _RNvMNtNtNtCskjUvu4PH1w_5tokio7runtime2io6driverNtB2_6Driver4turn.llvm.6315534270510162444  (in final-tui-debug) + 304  [0x1032119c0]  driver.rs:188
+    +                                   2689 _RNvMNtNtNtCsj32O19rI2t2_3mio3sys4unix8selectorNtB2_8Selector6select  (in final-tui-debug) + 100  [0x1032883b4]  mod.rs:8
+    +                                     2689 kevent  (in libsystem_kernel.dylib) + 10  [0x7ff806cf8822]
+    2689 Thread_35103056: tokio-rt-worker
+    + 2689 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2689 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2689 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in final-tui-debug) + 375  [0x1032bff87]  unix.rs:123
+    +       2689 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in final-tui-debug) + 215  [0x103221be7]  function.rs:250
+    +         2689 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in final-tui-debug) + 130  [0x103205822]  backtrace.rs:166
+    +           2689 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in final-tui-debug) + 510  [0x1031fec6e]  pool.rs:518
+    +             2689 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in final-tui-debug) + 16  [0x103212ca0]  mod.rs:565
+    +               2689 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in final-tui-debug) + 201  [0x1031fa3b9]  harness.rs:155
+    +                 2689 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in final-tui-debug) + 59  [0x10320643b]  task.rs:42
+    +                   2689 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in final-tui-debug) + 192  [0x10320e460]  worker.rs:548
+    +                     2689 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in final-tui-debug) + 250  [0x1032219ba]  runtime.rs:65
+    +                       2689 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in final-tui-debug) + 56  [0x10321f788]  scoped.rs:40
+    +                         2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in final-tui-debug) + 1776  [0x10320d9d0]  worker.rs:614
+    +                           2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in final-tui-debug) + 636  [0x10320d15c]  worker.rs:887
+    +                             2689 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in final-tui-debug) + 420  [0x103212a94]  park.rs:203
+    +                               2689 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in final-tui-debug) + 76  [0x10320827c]  condvar.rs:128
+    +                                 2689 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2689 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2689 Thread_35103057: tokio-rt-worker
+    + 2689 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2689 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2689 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in final-tui-debug) + 375  [0x1032bff87]  unix.rs:123
+    +       2689 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in final-tui-debug) + 215  [0x103221be7]  function.rs:250
+    +         2689 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in final-tui-debug) + 130  [0x103205822]  backtrace.rs:166
+    +           2689 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in final-tui-debug) + 510  [0x1031fec6e]  pool.rs:518
+    +             2689 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in final-tui-debug) + 16  [0x103212ca0]  mod.rs:565
+    +               2689 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in final-tui-debug) + 201  [0x1031fa3b9]  harness.rs:155
+    +                 2689 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in final-tui-debug) + 59  [0x10320643b]  task.rs:42
+    +                   2689 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in final-tui-debug) + 192  [0x10320e460]  worker.rs:548
+    +                     2689 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in final-tui-debug) + 250  [0x1032219ba]  runtime.rs:65
+    +                       2689 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in final-tui-debug) + 56  [0x10321f788]  scoped.rs:40
+    +                         2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in final-tui-debug) + 1776  [0x10320d9d0]  worker.rs:614
+    +                           2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in final-tui-debug) + 636  [0x10320d15c]  worker.rs:887
+    +                             2689 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in final-tui-debug) + 420  [0x103212a94]  park.rs:203
+    +                               2689 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in final-tui-debug) + 76  [0x10320827c]  condvar.rs:128
+    +                                 2689 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2689 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2689 Thread_35103058: tokio-rt-worker
+    + 2689 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2689 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2689 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in final-tui-debug) + 375  [0x1032bff87]  unix.rs:123
+    +       2689 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in final-tui-debug) + 215  [0x103221be7]  function.rs:250
+    +         2689 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in final-tui-debug) + 130  [0x103205822]  backtrace.rs:166
+    +           2689 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in final-tui-debug) + 510  [0x1031fec6e]  pool.rs:518
+    +             2689 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in final-tui-debug) + 16  [0x103212ca0]  mod.rs:565
+    +               2689 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in final-tui-debug) + 201  [0x1031fa3b9]  harness.rs:155
+    +                 2689 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in final-tui-debug) + 59  [0x10320643b]  task.rs:42
+    +                   2689 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in final-tui-debug) + 192  [0x10320e460]  worker.rs:548
+    +                     2689 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in final-tui-debug) + 250  [0x1032219ba]  runtime.rs:65
+    +                       2689 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in final-tui-debug) + 56  [0x10321f788]  scoped.rs:40
+    +                         2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in final-tui-debug) + 1776  [0x10320d9d0]  worker.rs:614
+    +                           2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in final-tui-debug) + 636  [0x10320d15c]  worker.rs:887
+    +                             2689 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in final-tui-debug) + 420  [0x103212a94]  park.rs:203
+    +                               2689 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in final-tui-debug) + 76  [0x10320827c]  condvar.rs:128
+    +                                 2689 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2689 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2689 Thread_35103059: tokio-rt-worker
+    + 2689 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2689 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2689 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in final-tui-debug) + 375  [0x1032bff87]  unix.rs:123
+    +       2689 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in final-tui-debug) + 215  [0x103221be7]  function.rs:250
+    +         2689 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in final-tui-debug) + 130  [0x103205822]  backtrace.rs:166
+    +           2689 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in final-tui-debug) + 510  [0x1031fec6e]  pool.rs:518
+    +             2689 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in final-tui-debug) + 16  [0x103212ca0]  mod.rs:565
+    +               2689 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in final-tui-debug) + 201  [0x1031fa3b9]  harness.rs:155
+    +                 2689 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in final-tui-debug) + 59  [0x10320643b]  task.rs:42
+    +                   2689 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in final-tui-debug) + 192  [0x10320e460]  worker.rs:548
+    +                     2689 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in final-tui-debug) + 250  [0x1032219ba]  runtime.rs:65
+    +                       2689 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in final-tui-debug) + 56  [0x10321f788]  scoped.rs:40
+    +                         2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in final-tui-debug) + 1776  [0x10320d9d0]  worker.rs:614
+    +                           2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in final-tui-debug) + 636  [0x10320d15c]  worker.rs:887
+    +                             2689 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in final-tui-debug) + 420  [0x103212a94]  park.rs:203
+    +                               2689 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in final-tui-debug) + 76  [0x10320827c]  condvar.rs:128
+    +                                 2689 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2689 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2689 Thread_35103060: tokio-rt-worker
+    + 2689 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2689 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2689 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in final-tui-debug) + 375  [0x1032bff87]  unix.rs:123
+    +       2689 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in final-tui-debug) + 215  [0x103221be7]  function.rs:250
+    +         2689 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in final-tui-debug) + 130  [0x103205822]  backtrace.rs:166
+    +           2689 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in final-tui-debug) + 510  [0x1031fec6e]  pool.rs:518
+    +             2689 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in final-tui-debug) + 16  [0x103212ca0]  mod.rs:565
+    +               2689 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in final-tui-debug) + 201  [0x1031fa3b9]  harness.rs:155
+    +                 2689 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in final-tui-debug) + 59  [0x10320643b]  task.rs:42
+    +                   2689 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in final-tui-debug) + 192  [0x10320e460]  worker.rs:548
+    +                     2689 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in final-tui-debug) + 250  [0x1032219ba]  runtime.rs:65
+    +                       2689 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in final-tui-debug) + 56  [0x10321f788]  scoped.rs:40
+    +                         2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in final-tui-debug) + 1776  [0x10320d9d0]  worker.rs:614
+    +                           2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in final-tui-debug) + 636  [0x10320d15c]  worker.rs:887
+    +                             2689 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in final-tui-debug) + 420  [0x103212a94]  park.rs:203
+    +                               2689 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in final-tui-debug) + 76  [0x10320827c]  condvar.rs:128
+    +                                 2689 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2689 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2689 Thread_35103061: tokio-rt-worker
+    + 2689 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2689 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2689 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in final-tui-debug) + 375  [0x1032bff87]  unix.rs:123
+    +       2689 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in final-tui-debug) + 215  [0x103221be7]  function.rs:250
+    +         2689 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in final-tui-debug) + 130  [0x103205822]  backtrace.rs:166
+    +           2689 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in final-tui-debug) + 510  [0x1031fec6e]  pool.rs:518
+    +             2689 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in final-tui-debug) + 16  [0x103212ca0]  mod.rs:565
+    +               2689 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in final-tui-debug) + 201  [0x1031fa3b9]  harness.rs:155
+    +                 2689 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in final-tui-debug) + 59  [0x10320643b]  task.rs:42
+    +                   2689 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in final-tui-debug) + 192  [0x10320e460]  worker.rs:548
+    +                     2689 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in final-tui-debug) + 250  [0x1032219ba]  runtime.rs:65
+    +                       2689 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in final-tui-debug) + 56  [0x10321f788]  scoped.rs:40
+    +                         2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in final-tui-debug) + 1776  [0x10320d9d0]  worker.rs:614
+    +                           2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in final-tui-debug) + 636  [0x10320d15c]  worker.rs:887
+    +                             2689 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in final-tui-debug) + 420  [0x103212a94]  park.rs:203
+    +                               2689 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in final-tui-debug) + 76  [0x10320827c]  condvar.rs:128
+    +                                 2689 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2689 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2689 Thread_35103062: tokio-rt-worker
+    + 2689 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2689 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2689 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in final-tui-debug) + 375  [0x1032bff87]  unix.rs:123
+    +       2689 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in final-tui-debug) + 215  [0x103221be7]  function.rs:250
+    +         2689 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in final-tui-debug) + 130  [0x103205822]  backtrace.rs:166
+    +           2689 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in final-tui-debug) + 510  [0x1031fec6e]  pool.rs:518
+    +             2689 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in final-tui-debug) + 16  [0x103212ca0]  mod.rs:565
+    +               2689 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in final-tui-debug) + 201  [0x1031fa3b9]  harness.rs:155
+    +                 2689 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in final-tui-debug) + 59  [0x10320643b]  task.rs:42
+    +                   2689 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in final-tui-debug) + 192  [0x10320e460]  worker.rs:548
+    +                     2689 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in final-tui-debug) + 250  [0x1032219ba]  runtime.rs:65
+    +                       2689 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in final-tui-debug) + 56  [0x10321f788]  scoped.rs:40
+    +                         2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in final-tui-debug) + 1776  [0x10320d9d0]  worker.rs:614
+    +                           2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in final-tui-debug) + 636  [0x10320d15c]  worker.rs:887
+    +                             2689 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in final-tui-debug) + 420  [0x103212a94]  park.rs:203
+    +                               2689 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in final-tui-debug) + 76  [0x10320827c]  condvar.rs:128
+    +                                 2689 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2689 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2689 Thread_35103063: tokio-rt-worker
+    + 2689 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2689 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2689 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in final-tui-debug) + 375  [0x1032bff87]  unix.rs:123
+    +       2689 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in final-tui-debug) + 215  [0x103221be7]  function.rs:250
+    +         2689 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in final-tui-debug) + 130  [0x103205822]  backtrace.rs:166
+    +           2689 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in final-tui-debug) + 510  [0x1031fec6e]  pool.rs:518
+    +             2689 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in final-tui-debug) + 16  [0x103212ca0]  mod.rs:565
+    +               2689 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in final-tui-debug) + 201  [0x1031fa3b9]  harness.rs:155
+    +                 2689 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in final-tui-debug) + 59  [0x10320643b]  task.rs:42
+    +                   2689 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in final-tui-debug) + 192  [0x10320e460]  worker.rs:548
+    +                     2689 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in final-tui-debug) + 250  [0x1032219ba]  runtime.rs:65
+    +                       2689 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in final-tui-debug) + 56  [0x10321f788]  scoped.rs:40
+    +                         2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in final-tui-debug) + 1776  [0x10320d9d0]  worker.rs:614
+    +                           2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in final-tui-debug) + 636  [0x10320d15c]  worker.rs:887
+    +                             2689 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in final-tui-debug) + 420  [0x103212a94]  park.rs:203
+    +                               2689 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in final-tui-debug) + 76  [0x10320827c]  condvar.rs:128
+    +                                 2689 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2689 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2689 Thread_35103064: tokio-rt-worker
+    + 2689 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+    +   2689 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+    +     2689 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in final-tui-debug) + 375  [0x1032bff87]  unix.rs:123
+    +       2689 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in final-tui-debug) + 215  [0x103221be7]  function.rs:250
+    +         2689 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in final-tui-debug) + 130  [0x103205822]  backtrace.rs:166
+    +           2689 _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in final-tui-debug) + 510  [0x1031fec6e]  pool.rs:518
+    +             2689 _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in final-tui-debug) + 16  [0x103212ca0]  mod.rs:565
+    +               2689 _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in final-tui-debug) + 201  [0x1031fa3b9]  harness.rs:155
+    +                 2689 _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in final-tui-debug) + 59  [0x10320643b]  task.rs:42
+    +                   2689 _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in final-tui-debug) + 192  [0x10320e460]  worker.rs:548
+    +                     2689 _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in final-tui-debug) + 250  [0x1032219ba]  runtime.rs:65
+    +                       2689 _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in final-tui-debug) + 56  [0x10321f788]  scoped.rs:40
+    +                         2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in final-tui-debug) + 1776  [0x10320d9d0]  worker.rs:614
+    +                           2689 _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in final-tui-debug) + 636  [0x10320d15c]  worker.rs:887
+    +                             2689 _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in final-tui-debug) + 420  [0x103212a94]  park.rs:203
+    +                               2689 _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in final-tui-debug) + 76  [0x10320827c]  condvar.rs:128
+    +                                 2689 _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+    +                                   2689 __psynch_cvwait  (in libsystem_kernel.dylib) + 10  [0x7ff806cf66f6]
+    2689 Thread_35103066
+      2689 thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+        2689 _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+          2689 _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in final-tui-debug) + 375  [0x1032bff87]  unix.rs:123
+            2689 _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvXNtNtCs1p8YcskkrDG_9crossterm5event6streamNtB18_11EventStreamNtNtCsl7QZrza34zr_4core7default7Default7default0uEs_0INtNtNtB2a_3ops8function6FnOnceuE9call_once6vtableB1c_  (in final-tui-debug) + 119  [0x103273f77]  function.rs:250
+              2501 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvXNtNtCs1p8YcskkrDG_9crossterm5event6streamNtB1c_11EventStreamNtNtCsl7QZrza34zr_4core7default7Default7default0uEB1g_  (in final-tui-debug) + 267  [0x103276f6b]  backtrace.rs:166
+              ! 2501 _RINvMs_NtNtCs1p8YcskkrDG_9crossterm5event4readNtB5_19InternalEventReader4pollNtNtB7_6filter11EventFilterEB9_  (in final-tui-debug) + 279  [0x10327f9b7]  read.rs:65
+              !   2500 _RNvXs_NtNtNtNtCs1p8YcskkrDG_9crossterm5event6source4unix3mioNtB4_23UnixInternalEventSourceNtB8_11EventSource8try_read  (in final-tui-debug) + 227  [0x10327c203]  mio.rs:76
+              !   : 2500 _RNvMNtNtNtCsj32O19rI2t2_3mio3sys4unix8selectorNtB2_8Selector6select  (in final-tui-debug) + 100  [0x1032883b4]  mod.rs:8
+              !   :   2500 kevent  (in libsystem_kernel.dylib) + 10  [0x7ff806cf8822]
+              !   1 _RNvXs_NtNtNtNtCs1p8YcskkrDG_9crossterm5event6source4unix3mioNtB4_23UnixInternalEventSourceNtB8_11EventSource8try_read  (in final-tui-debug) + 36  [0x10327c144]  mio.rs:69
+              188 _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvXNtNtCs1p8YcskkrDG_9crossterm5event6streamNtB1c_11EventStreamNtNtCsl7QZrza34zr_4core7default7Default7default0uEB1g_  (in final-tui-debug) + 129  [0x103276ee1]  backtrace.rs:166
+                188 _RNvMs_NtNtNtCskZC1eJQ4Z1r_3std4sync4mpmc5arrayINtB4_7ChannelNtNtNtCs1p8YcskkrDG_9crossterm5event6stream4TaskE4recvB12_  (in final-tui-debug) + 771  [0x10326e533]  array.rs:390
+                  188 _RNCNvMs_NtNtNtCskZC1eJQ4Z1r_3std4sync4mpmc5arrayINtB6_7ChannelNtNtNtCs1p8YcskkrDG_9crossterm5event6stream4TaskE4recvs_0B14_  (in final-tui-debug) + 152  [0x10326d5c8]  array.rs:402
+                    188 _RNvMs_NtNtCskZC1eJQ4Z1r_3std6thread6threadNtB4_6Thread4park  (in final-tui-debug) + 48  [0x1032ac2c0]  thread.rs:121
+                      188 _dispatch_semaphore_wait_slow  (in libdispatch.dylib) + 98  [0x7ff806b8c0c6]
+                        188 _dispatch_sema4_wait  (in libdispatch.dylib) + 16  [0x7ff806b8bc8f]
+                          188 semaphore_wait_trap  (in libsystem_kernel.dylib) + 10  [0x7ff806cf3ac6]
+
+Total number in stack (recursive counted multiple, when >=5):
+        13       _RNvNvMs0_NtNtNtCskZC1eJQ4Z1r_3std3sys6thread4unixNtB7_6Thread3new12thread_start  (in final-tui-debug) + 375  [0x1032bff87]  unix.rs:123
+        13       _pthread_start  (in libsystem_pthread.dylib) + 115  [0x7ff806d35e05]
+        13       thread_start  (in libsystem_pthread.dylib) + 15  [0x7ff806d31857]
+        12       _RINvMNtNtNtCskZC1eJQ4Z1r_3std4sync6poison7condvarNtB3_7Condvar4waituECskjUvu4PH1w_5tokio  (in final-tui-debug) + 76  [0x10320827c]  condvar.rs:128
+        12       _RINvMNtNtNtCskjUvu4PH1w_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCNCNvNtNtB14_12multi_thread6worker3run00uEB9_  (in final-tui-debug) + 56  [0x10321f788]  scoped.rs:40
+        12       _RINvNtNtCskZC1eJQ4Z1r_3std3sys9backtrace28___rust_begin_short_backtraceNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1f_7Spawner12spawn_thread0uEB1l_  (in final-tui-debug) + 130  [0x103205822]  backtrace.rs:166
+        12       _RINvNtNtNtCskjUvu4PH1w_5tokio7runtime7context7runtime13enter_runtimeNCNvNtNtNtB6_9scheduler12multi_thread6worker3run0uEB8_  (in final-tui-debug) + 250  [0x1032219ba]  runtime.rs:65
+        12       _RNSNvYNCINvNtNtCskZC1eJQ4Z1r_3std6thread9lifecycle15spawn_uncheckedNCNvMs4_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB1b_7Spawner12spawn_thread0uEs_0INtNtNtCsl7QZrza34zr_4core3ops8function6FnOnceuE9call_once6vtableB1h_  (in final-tui-debug) + 215  [0x103221be7]  function.rs:250
+        12       _RNvMs0_NtNtNtCskjUvu4PH1w_5tokio7runtime4task7harnessINtB5_7HarnessINtNtNtB9_8blocking4task12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1K_6Launch6launch0ENtNtB18_8schedule16BlockingScheduleE4pollBb_  (in final-tui-debug) + 201  [0x1031fa3b9]  harness.rs:155
+        12       _RNvMs5_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4poolNtB5_5Inner3run  (in final-tui-debug) + 510  [0x1031fec6e]  pool.rs:518
+        12       _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context3run  (in final-tui-debug) + 1776  [0x10320d9d0]  worker.rs:614
+        12       _RNvMsc_NtNtCskjUvu4PH1w_5tokio7runtime4taskINtB5_11UnownedTaskNtNtNtB7_8blocking8schedule16BlockingScheduleE3runB9_  (in final-tui-debug) + 16  [0x103212ca0]  mod.rs:565
+        12       _RNvNtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6worker3run  (in final-tui-debug) + 192  [0x10320e460]  worker.rs:548
+        12       _RNvXs0_NtNtNtCskjUvu4PH1w_5tokio7runtime8blocking4taskINtB5_12BlockingTaskNCNvMNtNtNtB9_9scheduler12multi_thread6workerNtB1f_6Launch6launch0ENtNtNtCsl7QZrza34zr_4core6future6future6Future4pollBb_  (in final-tui-debug) + 59  [0x10320643b]  task.rs:42
+        12       __psynch_cvwait  (in libsystem_kernel.dylib) + 0  [0x7ff806cf66ec]
+        12       _pthread_cond_wait  (in libsystem_pthread.dylib) + 988  [0x7ff806d362ae]
+        11       _RNvMs1_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread4parkNtB5_5Inner12park_condvar.llvm.6315534270510162444  (in final-tui-debug) + 420  [0x103212a94]  park.rs:203
+        11       _RNvMs_NtNtNtNtCskjUvu4PH1w_5tokio7runtime9scheduler12multi_thread6workerNtB4_7Context13park_internal  (in final-tui-debug) + 636  [0x10320d15c]  worker.rs:887
+        6       _RNvNtCsl7QZrza34zr_4core3fmt5write  (in final-tui-debug) + 359  [0x1032d3947]  mod.rs:0
+        6       _platform_memmove$VARIANT$Haswell  (in libsystem_platform.dylib) + 0  [0x7ff806d6b940]
+        5       _RNvXNvNtCs1p8YcskkrDG_9crossterm7command18write_command_ansiINtB2_7AdapterQINtNtCsiTgl4Uj1L8w_12minicore_tui8terminal14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutEENtNtCsl7QZrza34zr_4core3fmt5Write9write_strB1g_  (in final-tui-debug) + 18  [0x10310b9c2]  command.rs:264
+        5       _RNvXs_NtCsiTgl4Uj1L8w_12minicore_tui8terminalINtB4_14TerminalWriterNtNtNtCskZC1eJQ4Z1r_3std2io5stdio6StdoutENtB17_5Write9write_allB6_  (in final-tui-debug) + 77  [0x10307f91d]  terminal.rs:57
+
+Sort by top of stack, same collapsed (when >= 5):
+        __psynch_cvwait  (in libsystem_kernel.dylib)        32063
+        kevent  (in libsystem_kernel.dylib)        5191
+        semaphore_wait_trap  (in libsystem_kernel.dylib)        188
+        write  (in libsystem_kernel.dylib)        117
+        _RINvYNtNtNtCsl7QZrza34zr_4core3str4iter5CharsNtNtNtNtB9_4iter6traits12double_ended19DoubleEndedIterator5rfoldTjNtNtCs5ZHaQAd8SSY_13unicode_width6tables9WidthInfoENCNvB1N_9str_width0ECs6DgKIVn6Azl_7ratatui  (in final-tui-debug)        12
+        _RNvXs2_NtCsbRA72J3LoxY_20unicode_segmentation8graphemeNtB5_9GraphemesNtNtNtNtCsl7QZrza34zr_4core4iter6traits8iterator8Iterator4next  (in final-tui-debug)        6
+        _platform_memmove$VARIANT$Haswell  (in libsystem_platform.dylib)        6
+        _RNvMNtNtCs6DgKIVn6Azl_7ratatui6buffer6bufferNtB2_6Buffer4diff  (in final-tui-debug)        5
+        _RNvNtCsl7QZrza34zr_4core3fmt5write  (in final-tui-debug)        5
+        __open  (in libsystem_kernel.dylib)        5
+
+Binary Images:
+       0x103052000 -        0x1035d4e37 +final-tui-debug (???) <4C4C4468-5555-3144-A141-41C71040F0CB> /tmp/*/final-tui-debug
+    0x7ff806944000 -     0x7ff80698905b  libobjc.A.dylib (940.4) <087DB838-675B-3BC5-B554-DAD42196C77A> /usr/lib/libobjc.A.dylib
+    0x7ff80698a000 -     0x7ff806a246c7  dyld (1.0.0 - 1286.10) <1A622D74-549F-3F53-BD70-412BD11345E8> /usr/lib/dyld
+    0x7ff806a25000 -     0x7ff806a286d8  libsystem_blocks.dylib (96) <17F8CB93-59F9-324C-93ED-A5A03A0A7C58> /usr/lib/system/libsystem_blocks.dylib
+    0x7ff806a29000 -     0x7ff806a6fbd5  libxpc.dylib (2894.140.12.700.1) <C2D833C5-89AF-3DAE-AE71-AF61769CAB0C> /usr/lib/system/libxpc.dylib
+    0x7ff806a70000 -     0x7ff806a8a805  libsystem_trace.dylib (1643.120.5) <8775DCD9-CE39-3A08-9631-0A4C93E335D9> /usr/lib/system/libsystem_trace.dylib
+    0x7ff806a8b000 -     0x7ff806b3d14f  libcorecrypto.dylib (1736.140.2) <55A104DF-190B-30D9-9481-016D3497FBA2> /usr/lib/system/libcorecrypto.dylib
+    0x7ff806b3e000 -     0x7ff806b8889f  libsystem_malloc.dylib (715.140.5) <B26A86B5-A181-367C-89EA-D1ED5545EF77> /usr/lib/system/libsystem_malloc.dylib
+    0x7ff806b89000 -     0x7ff806bd0339  libdispatch.dylib (1521.140.2) <6CA6112A-70C8-39A2-8CFA-DA2139709D3C> /usr/lib/system/libdispatch.dylib
+    0x7ff806bd1000 -     0x7ff806bd3b0f  libsystem_featureflags.dylib (97) <E0A31BA9-C76D-3218-8B70-5D6B4028082B> /usr/lib/system/libsystem_featureflags.dylib
+    0x7ff806bd4000 -     0x7ff806c5cb27  libsystem_c.dylib (1698.140.3.700.2) <0251DD0C-67BC-3A58-A477-5E34D4D54F3E> /usr/lib/system/libsystem_c.dylib
+    0x7ff806c5d000 -     0x7ff806cdbfff  libc++.1.dylib (1900.181) <1BA8415D-93C3-301F-80AA-C2D396C32DD7> /usr/lib/libc++.1.dylib
+    0x7ff806cdc000 -     0x7ff806cf2fff  libc++abi.dylib (1900.181) <67A06E4F-032A-344F-8F4F-D77A2B8C7EEA> /usr/lib/libc++abi.dylib
+    0x7ff806cf3000 -     0x7ff806d2fb6f  libsystem_kernel.dylib (11417.140.69.705.2) <DF27EB28-275E-3046-A421-655EA736BE57> /usr/lib/system/libsystem_kernel.dylib
+    0x7ff806d30000 -     0x7ff806d3bfd7  libsystem_pthread.dylib (536.0.0.701.1) <A031F066-4DAA-3801-9155-88106D874835> /usr/lib/system/libsystem_pthread.dylib
+    0x7ff806d3c000 -     0x7ff806d6a7c7  libdyld.dylib (1286.10) <C68A8513-2993-3F6F-A271-4074E26FF392> /usr/lib/system/libdyld.dylib
+    0x7ff806d6b000 -     0x7ff806d7493f  libsystem_platform.dylib (349.140.6) <78C9DCC0-2FBA-3BE4-A1DD-DA618362AE68> /usr/lib/system/libsystem_platform.dylib
+    0x7ff806d75000 -     0x7ff806da3477  libsystem_info.dylib (597.0.0.701.2) <CD7C41C5-CE28-3129-9B0E-B8D126B2A0C5> /usr/lib/system/libsystem_info.dylib
+    0x7ff80a399000 -     0x7ff80a3a371f  libsystem_darwin.dylib (1698.140.3.700.2) <96D36E47-C1BD-3DA0-BAF4-FAD8DF276A08> /usr/lib/system/libsystem_darwin.dylib
+    0x7ff80a7d6000 -     0x7ff80a7e70db  libsystem_notify.dylib (342) <4244B485-A96B-350F-94BE-4DFFE7C97F93> /usr/lib/system/libsystem_notify.dylib
+    0x7ff80c8d9000 -     0x7ff80c8f236f  libsystem_networkextension.dylib (2063.140.6) <C4D49367-9833-30AD-95FF-C6F28811A6EA> /usr/lib/system/libsystem_networkextension.dylib
+    0x7ff80c969000 -     0x7ff80c98013b  libsystem_asl.dylib (402) <C9CEFBC7-AB24-3D71-8CC3-4F6C103ACD63> /usr/lib/system/libsystem_asl.dylib
+    0x7ff80e719000 -     0x7ff80e720c57  libsystem_symptoms.dylib (2022.140.4) <5058A6B6-664F-38C7-B224-FF58D757CCA1> /usr/lib/system/libsystem_symptoms.dylib
+    0x7ff812154000 -     0x7ff812182a33  libsystem_containermanager.dylib (689.100.6.700.1) <58031C10-98CA-3CB1-82B5-52172EB003CF> /usr/lib/system/libsystem_containermanager.dylib
+    0x7ff813404000 -     0x7ff8134078df  libsystem_configuration.dylib (1351.140.5.700.1) <C9A0E3A0-375D-3D16-81EB-C5F9B4789F22> /usr/lib/system/libsystem_configuration.dylib
+    0x7ff813408000 -     0x7ff81340e697  libsystem_sandbox.dylib (2401.140.15.700.3) <23238A76-3554-3EF9-93A5-D2DE566C6CAC> /usr/lib/system/libsystem_sandbox.dylib
+    0x7ff81453a000 -     0x7ff81453cbfb  libquarantine.dylib (181.120.2) <5C677B12-B313-3281-A65F-16FE27EDFB8B> /usr/lib/system/libquarantine.dylib
+    0x7ff814dd0000 -     0x7ff814dd68df  libsystem_coreservices.dylib (178.6.6) <3C717B49-880D-3348-83AF-44A3E4D2991B> /usr/lib/system/libsystem_coreservices.dylib
+    0x7ff81519b000 -     0x7ff81520843f  libsystem_m.dylib (3291.100.4) <C9D04FC0-05AA-3F79-B684-E1429049BF9B> /usr/lib/system/libsystem_m.dylib
+    0x7ff815209000 -     0x7ff815209b9b  libcharset.1.dylib (109.100.2) <D6FD4D65-2A96-3791-A0B4-2E8AB307B1D8> /usr/lib/libcharset.1.dylib
+    0x7ff81520a000 -     0x7ff81520d5c7  libmacho.dylib (1024.3) <DC79A644-E79E-3F74-AF02-E4EC6970ECA3> /usr/lib/system/libmacho.dylib
+    0x7ff815225000 -     0x7ff81523133f  libcommonCrypto.dylib (600035) <4DC97572-8957-3E35-91D6-B871A2D97B18> /usr/lib/system/libcommonCrypto.dylib
+    0x7ff815232000 -     0x7ff81523a6ef  libunwind.dylib (1900.125) <BC907228-2952-3EE1-98FA-55191C0B9DA7> /usr/lib/system/libunwind.dylib
+    0x7ff815243000 -     0x7ff81524e4af  libcopyfile.dylib (224) <5887775F-4C7E-35EF-B0E3-604B313D46F3> /usr/lib/system/libcopyfile.dylib
+    0x7ff81524f000 -     0x7ff8152569cf  libcompiler_rt.dylib (103.3) <D2ED00EF-50D8-3C85-9F87-657F2F40C72E> /usr/lib/system/libcompiler_rt.dylib
+    0x7ff815257000 -     0x7ff81525b76b  libsystem_collections.dylib (1698.140.3.700.2) <FBC61848-54B1-3855-A8D4-870EDD772AFE> /usr/lib/system/libsystem_collections.dylib
+    0x7ff81525c000 -     0x7ff81525eef7  libsystem_secinit.dylib (153.140.2) <44080C2A-259C-3E2E-B260-BBFAA381A9CB> /usr/lib/system/libsystem_secinit.dylib
+    0x7ff81525f000 -     0x7ff815261727  libremovefile.dylib (81) <B97DBF02-2EA5-36FC-8891-424EC4D8BA67> /usr/lib/system/libremovefile.dylib
+    0x7ff815262000 -     0x7ff815262b47  libkeymgr.dylib (31) <D324A0E6-D224-35C7-87CD-D5DAF27170D5> /usr/lib/system/libkeymgr.dylib
+    0x7ff815263000 -     0x7ff81526b557  libsystem_dnssd.dylib (2600.140.3) <726339C0-DE67-327E-825A-89F33EEAB679> /usr/lib/system/libsystem_dnssd.dylib
+    0x7ff81526c000 -     0x7ff815271003  libcache.dylib (95) <AD3F4A9E-4CF4-33CC-9D6B-093E3B4BAC01> /usr/lib/system/libcache.dylib
+    0x7ff815272000 -     0x7ff815273a8b  libSystem.B.dylib (1351) <38338C6F-32BA-3913-99EF-3276EB69F2B4> /usr/lib/libSystem.B.dylib
+    0x7ff8152ae000 -     0x7ff8152b4a47  libiconv.2.dylib (109.100.2) <7F0A7FA9-606C-3C82-8FBE-07BECE3AB7DC> /usr/lib/libiconv.2.dylib
+    0x7ffd14b44000 -     0x7ffd14b4b707  libRosetta.dylib (349) <A2D5AB2A-02FB-3E33-8433-D16A5CF209CA> /usr/lib/libRosetta.dylib
+    0x7ffd160ea000 -     0x7ffd160ee023  libsystem_darwindirectory.dylib (122) <F4366BE9-16AB-31D4-BE97-084DFDB6E361> /usr/lib/system/libsystem_darwindirectory.dylib
+    0x7ffd160ef000 -     0x7ffd160f6323  libsystem_eligibility.dylib (181.140.5) <42555080-4741-388A-B027-929D18CFB59F> /usr/lib/system/libsystem_eligibility.dylib
+    0x7ffd160f7000 -     0x7ffd160fc27f  libsystem_sanitizers.dylib (19) <BAD83526-183F-36D0-8A0A-FFCE14D32BB6> /usr/lib/system/libsystem_sanitizers.dylib

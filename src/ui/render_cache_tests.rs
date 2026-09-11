@@ -11,7 +11,7 @@ use crate::event::{AppEvent, RpcEvent};
 use crate::markdown::{parse_count, reset_parse_count};
 use crate::protocol::{IncomingFrame, RpcNotification, UsageWire};
 use crate::state::session::SessionView;
-use crate::state::transcript::{AssistantBlock, AssistantPart, TranscriptBlock};
+use crate::state::transcript::{AssistantBlock, AssistantPart, ToolBlock, TranscriptBlock};
 use crate::theme::ThemeKind;
 use crate::ui::transcript::{prepare_conversation, visible_rows};
 
@@ -275,6 +275,67 @@ fn viewport_duplicate_is_idempotent_and_does_not_cancel_drag() {
 }
 
 #[test]
+fn unrelated_rpc_reprepare_keeps_scrollbar_drag_until_release() {
+    let mut app = make_test_app(5);
+    let prepared = prepare_conversation(&app, WIDTH);
+    let total = prepared.total_rows();
+    let area = ratatui::layout::Rect::new(0, 0, WIDTH + 1, HEIGHT);
+    let screen = crate::ui::layout::screen_layout(&app, area);
+    let visible = visible_rows(&app, total, screen.transcript.height);
+    let geometry =
+        crate::ui::scrollbar::geometry(screen.transcript, total, visible, total - visible)
+            .expect("overflowing transcript has a scrollbar");
+
+    app.update(AppEvent::Terminal(crossterm::event::Event::Mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: geometry.column as u16,
+            row: geometry.thumb_top as u16,
+            modifiers: KeyModifiers::empty(),
+        },
+    )));
+    assert!(app.scrollbar_preview_offset("ses_test").is_some());
+
+    app.update(AppEvent::Rpc(RpcEvent::AgentLogLine(
+        "unrelated stderr".to_owned(),
+    )));
+    assert!(app.prepared_conversation(WIDTH).is_none());
+    let reparsed = prepare_conversation(&app, WIDTH);
+    app.update(AppEvent::ConversationPrepared(reparsed));
+    app.update(AppEvent::Viewport {
+        total_lines: total,
+        visible_rows: visible,
+    });
+    assert!(
+        app.scrollbar_preview_offset("ses_test").is_some(),
+        "an unrelated RPC reprepare and identical viewport must not cancel drag"
+    );
+
+    let target_row = geometry.track_top + geometry.max_thumb_start / 2;
+    app.update(AppEvent::Terminal(crossterm::event::Event::Mouse(
+        MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: geometry.column as u16,
+            row: target_row as u16,
+            modifiers: KeyModifiers::empty(),
+        },
+    )));
+    let pending = app
+        .scrollbar_preview_offset("ses_test")
+        .expect("drag remains active after reprepare");
+    app.update(AppEvent::Terminal(crossterm::event::Event::Mouse(
+        MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: geometry.column as u16,
+            row: target_row as u16,
+            modifiers: KeyModifiers::empty(),
+        },
+    )));
+    assert!(app.scrollbar_preview_offset("ses_test").is_none());
+    assert_eq!(app.active_view().unwrap().scroll.offset, pending);
+}
+
+#[test]
 fn cached_render_and_mouse_hit_testing_do_not_parse_history() {
     let mut app = make_test_app(50);
     reset_parse_count();
@@ -357,6 +418,160 @@ fn tool_presentation_refresh_invalidates_already_durable_tool_rows() {
             .lines
             .iter()
             .any(|line| line.to_string().contains("UPDATED_PRESENTATION"))
+    );
+}
+
+#[test]
+fn live_tool_fold_survives_presentation_finish_wait_and_history_replacement() {
+    let mut app = super::testapp::live_turn(ThemeKind::Dark);
+    for request in &mut app
+        .sessions
+        .known
+        .get_mut("ses_1")
+        .unwrap()
+        .live
+        .as_mut()
+        .unwrap()
+        .requests
+    {
+        request.reasoning_text.clear();
+        request
+            .parts
+            .retain(|part| !matches!(part, crate::state::turn::LivePart::Reasoning(_)));
+    }
+    {
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        view.transcript
+            .blocks
+            .push(TranscriptBlock::Assistant(AssistantBlock {
+                index: 0,
+                loop_id: "old_loop".to_owned(),
+                request_index: 0,
+                model: "deep".to_owned(),
+                reasoning_level: crate::protocol::Reasoning::High,
+                parts: vec![AssistantPart::Text("cached **history**".to_owned())],
+                tool_calls: vec![],
+                usage: UsageWire::default(),
+                finish_reason: "stop".to_owned(),
+                terminal_error: None,
+            }));
+        view.transcript.complete = true;
+        view.transcript.invalidate();
+    }
+    let prepared = prepare_conversation(&app, WIDTH);
+    app.update(AppEvent::ConversationPrepared(prepared));
+
+    let key = crate::state::tool::ToolKey::new("ses_1", "loop_live", 0, "c1");
+    app.update(AppEvent::ToggleTool {
+        session_id: "ses_1".to_owned(),
+        loop_id: "loop_live".to_owned(),
+        request_index: 0,
+        tool_call_id: "c1".to_owned(),
+    });
+    assert_eq!(
+        app.active_view().unwrap().tool_folds.get(&key),
+        Some(&crate::state::view::FoldOverride::Collapsed)
+    );
+    let folded = prepare_conversation(&app, WIDTH);
+    app.update(AppEvent::ConversationPrepared(folded));
+    reset_parse_count();
+
+    let presentation = serde_json::from_value(json!({
+        "type": "tool_presentation",
+        "data": {
+            "turn": {"session_id": "ses_1", "loop_id": "loop_live"},
+            "request_index": 0,
+            "tool_call_id": "c1",
+            "tool_name": "read",
+            "display": {
+                "detail": "LIVE_PRESENTATION",
+                "expanded_input": "input",
+                "truncated": false
+            },
+            "meta": {"session_id": "ses_1", "dropped_before": 0}
+        }
+    }))
+    .unwrap();
+    app.update(AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Notification(
+        RpcNotification::AgentEvent(presentation),
+    ))));
+    let prepared = prepare_conversation(&app, WIDTH);
+    app.update(AppEvent::ConversationPrepared(prepared));
+    reset_parse_count();
+    let _prepared = prepare_conversation(&app, WIDTH);
+    assert_eq!(
+        parse_count(),
+        0,
+        "repreparing after live presentation must reuse the cached durable markdown"
+    );
+
+    {
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        let live = view.live.as_mut().unwrap();
+        live.waiting = true;
+        live.last_result = Some(crate::protocol::TurnResultViewWire {
+            turn: crate::protocol::TurnRef {
+                session_id: "ses_1".to_owned(),
+                loop_id: "loop_live".to_owned(),
+            },
+            outcome: crate::protocol::LoopOutcomeWire::Completed,
+            persistence: crate::protocol::TurnPersistenceWire::Persisted,
+            usage: UsageWire::default(),
+            requests: 1,
+            tool_rounds: 1,
+            final_config_revision: 0,
+            accepted_at: None,
+        });
+        view.live = None;
+        view.transcript
+            .blocks
+            .push(TranscriptBlock::Tool(ToolBlock {
+                index: Some(1),
+                loop_id: "loop_live".to_owned(),
+                request_index: 0,
+                tool_call_id: "c1".to_owned(),
+                name: "read".to_owned(),
+                result: Some("history result".to_owned()),
+                outcome: Some(crate::protocol::ToolOutcomeWire::Success),
+                live_status: Some(crate::state::tool::ToolStatus::Succeeded),
+                progress: None,
+                expanded: true,
+            }));
+        view.transcript.complete = true;
+        view.transcript.invalidate();
+        let history_tool = view
+            .transcript
+            .blocks
+            .iter()
+            .find_map(|block| match block {
+                TranscriptBlock::Tool(tool) if tool.loop_id == "loop_live" => Some(tool),
+                _ => None,
+            })
+            .expect("history Tool replacement");
+        assert!(
+            !crate::ui::transcript::effective_tool_expanded(view, history_tool),
+            "history Tool replacement resolves the existing fold override"
+        );
+    }
+    let prepared = prepare_conversation(&app, WIDTH);
+    let section = prepared
+        .sections
+        .iter()
+        .find(|section| {
+            section.id.kind == crate::state::view::SectionKind::Tool
+                && section.id.loop_id.as_deref() == Some("loop_live")
+                && section.id.request_index == Some(0)
+                && section.id.tool_call_id.as_deref() == Some("c1")
+        })
+        .expect("history replacement keeps the loop identity");
+    assert!(
+        section.folded,
+        "the live fold override survives history replacement: section={section:?}, folds={:?}",
+        app.active_view().unwrap().tool_folds
+    );
+    assert_eq!(
+        app.active_view().unwrap().tool_folds.get(&key),
+        Some(&crate::state::view::FoldOverride::Collapsed)
     );
 }
 

@@ -1,0 +1,19 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 10.71s
+     Running unittests src/main.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-c879d79f4ee2b2cb)
+
+running 11 tests
+test tests::idle_has_no_render_deadline_and_busy_clamps_at_30_fps ... ok
+test tests::active_tick_deadline_survives_continuous_non_tick_events ... ok
+test tests::forced_shutdown_timeout_report_keeps_unknown_and_known_failure_facts ... ok
+test tests::rpc_batch_is_bounded_and_yields_before_a_render_interval ... ok
+test tests::rpc_channel_end_disables_polling_but_keeps_failed_overlay_interactive ... ok
+test tests::rpc_channel_end_exits_a_normal_shutdown ... ok
+test tests::prepare_frame_reuses_layout_and_reports_real_geometry ... ok
+test tests::small_terminal_skips_hidden_conversation_preparation ... ok
+test tests::shutdown_timeout_command_uses_the_app_latched_deadline ... ok
+test tests::forced_shutdown_drains_gated_stderr_before_reporting ... ok
+test tests::signal_listener_installs_once_and_recv_stays_pending ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+

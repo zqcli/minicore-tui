@@ -32,9 +32,6 @@ use minicore_tui::ui;
 
 /// Maximum draw rate (spec 7): 30 FPS.
 const RENDER_INTERVAL: Duration = Duration::from_millis(33);
-/// Cut-off timer when no tick source is armed; the select stays idle on the
-/// RPC/terminal arms instead of busy-looping.
-const IDLE_POLL: Duration = Duration::from_secs(3600);
 /// Maximum number of already-buffered RPC events handled in one select turn.
 const RPC_BATCH_LIMIT: usize = 64;
 /// Maximum time spent applying one buffered RPC batch before returning to the
@@ -115,6 +112,43 @@ enum Selected {
     Render,
 }
 
+#[derive(Default)]
+struct TickDeadline {
+    deadline: Option<Instant>,
+}
+
+impl TickDeadline {
+    fn arm(&mut self, requested: Option<Duration>, now: Instant) -> Option<Duration> {
+        let Some(requested) = requested else {
+            self.deadline = None;
+            return None;
+        };
+        let requested_deadline = now + requested;
+        let deadline = self.deadline.map_or(requested_deadline, |deadline| {
+            deadline.min(requested_deadline)
+        });
+        self.deadline = Some(deadline);
+        Some(deadline.saturating_duration_since(now))
+    }
+
+    fn fired(&mut self) {
+        self.deadline = None;
+    }
+
+    fn is_due(&self, now: Instant) -> bool {
+        self.deadline.is_some_and(|deadline| deadline <= now)
+    }
+}
+
+fn dispatch_due_tick(app: &mut App, deadline: &mut TickDeadline, now: Instant) -> bool {
+    if !deadline.is_due(now) {
+        return false;
+    }
+    deadline.fired();
+    app.update(AppEvent::Tick);
+    true
+}
+
 /// Drives the app until `AppCommand::Exit` (the agent is gone) or a fatal
 /// shutdown timeout. App state is only ever changed through `App::update`;
 /// this function owns the terminal, the RPC process and the timers.
@@ -158,6 +192,7 @@ async fn run_fullscreen(
     let mut last_render = Instant::now();
     let mut rpc_open = true;
     let mut rpc_cooldown_until: Option<Instant> = None;
+    let mut tick_deadline = TickDeadline::default();
 
     loop {
         // Measured geometry flows back through `AppEvent::Viewport`; the
@@ -174,7 +209,7 @@ async fn run_fullscreen(
             return Err(force_kill_and_report(process, &mut app).await);
         }
         let shutdown_deadline = app.shutdown_remaining();
-        let tick_deadline = app.next_tick().unwrap_or(IDLE_POLL);
+        let tick_sleep = tick_deadline.arm(app.next_tick(), Instant::now());
         let render_deadline = render_deadline(app.dirty, last_render.elapsed());
         let rpc_cooldown =
             rpc_cooldown_until.map(|deadline| deadline.saturating_duration_since(Instant::now()));
@@ -194,7 +229,7 @@ async fn run_fullscreen(
                 None => Selected::TerminalEof,
             },
             () = shutdown_signal(&mut signals), if !signal_fired => Selected::Signal,
-            () = tokio::time::sleep(tick_deadline) => Selected::Tick,
+            () = sleep_or_pending(tick_sleep) => Selected::Tick,
             () = sleep_or_pending(render_deadline) => Selected::Render,
         };
 
@@ -249,7 +284,7 @@ async fn run_fullscreen(
                 }
             }
             Selected::Tick => {
-                app.update(AppEvent::Tick);
+                dispatch_due_tick(&mut app, &mut tick_deadline, Instant::now());
             }
             Selected::Render => {
                 let size = terminal.size()?;
@@ -262,6 +297,11 @@ async fn run_fullscreen(
         if exit {
             return Ok(());
         }
+
+        // A ready RPC or terminal arm may win the select after the tick timer
+        // has elapsed. Consume that overdue deadline before arming another
+        // wait, so continuous non-Tick traffic cannot postpone animation.
+        dispatch_due_tick(&mut app, &mut tick_deadline, Instant::now());
 
         // Render when state changed and the 30 FPS budget allows it; the
         // Rendered event clears the dirty flag so idle frames never draw.
@@ -573,6 +613,76 @@ mod tests {
         assert_eq!(
             render_deadline(true, RENDER_INTERVAL + Duration::from_secs(1)),
             Some(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn active_tick_deadline_survives_continuous_non_tick_events() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let elapsed = Arc::new(AtomicU64::new(0));
+        let clock_elapsed = Arc::clone(&elapsed);
+        let base = Instant::now();
+        let mut app =
+            App::with_monotonic_clock(std::path::PathBuf::from("/synthetic"), move || {
+                base + Duration::from_millis(clock_elapsed.load(Ordering::Relaxed))
+            });
+        let info: minicore_tui::protocol::SessionInfo = serde_json::from_value(serde_json::json!({
+            "session_id": "ses_tick",
+            "title": null,
+            "profile": "coding",
+            "workspace": "/synthetic",
+            "model": "deep",
+            "reasoning": "high",
+            "loaded": true,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap();
+        let mut view = minicore_tui::state::session::SessionView::new(info);
+        view.live = Some(minicore_tui::state::turn::LiveLoop::new(
+            minicore_tui::state::turn::LocalSubmissionId(1),
+            "tick test".to_owned(),
+        ));
+        app.sessions.known.insert("ses_tick".to_owned(), view);
+        app.sessions.active = Some("ses_tick".to_owned());
+
+        let mut scheduler = TickDeadline::default();
+        let mut tick_at = None;
+        for millis in 0..=120 {
+            elapsed.store(millis, Ordering::Relaxed);
+            let now = base + Duration::from_millis(millis);
+            let requested = app.next_tick().expect("live App must arm a tick");
+            scheduler.arm(Some(requested), now);
+            app.update(AppEvent::Rpc(RpcEvent::AgentLogLine("non-tick".to_owned())));
+            if dispatch_due_tick(&mut app, &mut scheduler, now) {
+                tick_at = Some(millis);
+                break;
+            }
+        }
+        assert_eq!(
+            tick_at,
+            Some(33),
+            "continuous non-Tick events must not reset the active absolute deadline"
+        );
+        assert_eq!(app.frame_count, 1);
+
+        app.sessions
+            .known
+            .get_mut("ses_tick")
+            .expect("tick session")
+            .live = None;
+        elapsed.store(40, Ordering::Relaxed);
+        app.update(AppEvent::Rpc(RpcEvent::AgentLogLine("idle".to_owned())));
+        assert_eq!(
+            scheduler.arm(app.next_tick(), base + Duration::from_millis(40)),
+            None,
+            "idle must disarm the tick timer"
+        );
+        assert_eq!(
+            app.frame_count, 1,
+            "idle traffic must not refresh the spinner"
         );
     }
 

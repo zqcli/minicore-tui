@@ -1,0 +1,25 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling minicore-tui v0.2.8 (/root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 16.38s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::render_cache_tests::unrelated_rpc_reprepare_keeps_scrollbar_drag_until_release ... FAILED
+
+failures:
+
+---- ui::render_cache_tests::unrelated_rpc_reprepare_keeps_scrollbar_drag_until_release stdout ----
+
+thread 'ui::render_cache_tests::unrelated_rpc_reprepare_keeps_scrollbar_drag_until_release' (3180816) panicked at src/ui/render_cache_tests.rs:309:5:
+an unrelated RPC reprepare and identical viewport must not cancel drag
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ui::render_cache_tests::unrelated_rpc_reprepare_keeps_scrollbar_drag_until_release
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 331 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

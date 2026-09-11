@@ -9,8 +9,6 @@ use ratatui::layout::Rect;
 
 use crate::theme::Theme;
 
-pub const DRAG_ANIMATION: std::time::Duration = std::time::Duration::from_millis(90);
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScrollbarGeometry {
     pub column: usize,
