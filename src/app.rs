@@ -984,6 +984,7 @@ impl App {
         self.sessions
             .list
             .sort_by(|left, right| left.session_id.cmp(&right.session_id));
+        self.reconcile_session_selection(true);
     }
 
     fn session_is_visible(&self, session_id: &str) -> bool {
@@ -994,6 +995,16 @@ impl App {
                 .list
                 .iter()
                 .any(|session| session.session_id == session_id)
+    }
+
+    fn session_is_filtered_visible(&self, session_id: &str) -> bool {
+        let query = self
+            .session_selector_state()
+            .map(|state| state.query.clone())
+            .unwrap_or_default();
+        self.filtered_session_items(&query)
+            .iter()
+            .any(|session| session.session_id == session_id)
     }
 
     fn filtered_session_items(&self, query: &str) -> Vec<&SessionInfo> {
@@ -1030,13 +1041,18 @@ impl App {
         })
     }
 
-    /// Reconciles the selection against the current lifecycle-visible query
-    /// result, choosing its first item when requested.
+    /// Reconciles Browse selection against the current lifecycle-visible
+    /// query result, choosing its first item when requested. Other panel
+    /// modes retain their stable dialog target.
     fn reconcile_session_selection(&mut self, choose_first_when_empty: bool) {
-        let (query, selected) = self
-            .session_selector_state()
-            .map(|state| (state.query.clone(), state.selected_session_id.clone()))
-            .unwrap_or_default();
+        let Some(state) = self.session_selector_state() else {
+            return;
+        };
+        if !matches!(&state.mode, SessionPanelMode::Browse) {
+            return;
+        }
+        let query = state.query.clone();
+        let selected = state.selected_session_id.clone();
         let filtered = self.filtered_session_items(&query);
         let next = match selected {
             Some(id) if filtered.iter().any(|session| session.session_id == id) => Some(id),
@@ -1542,7 +1558,7 @@ impl App {
         let Some(selected) = selected else {
             return Vec::new();
         };
-        if !self.session_is_visible(&selected) {
+        if !self.session_is_visible(&selected) || !self.session_is_filtered_visible(&selected) {
             self.reconcile_session_selection(true);
             return Vec::new();
         }
@@ -1805,7 +1821,7 @@ impl App {
             self.notice(NoticeLevel::Info, "Select a session before renaming it.");
             return Vec::new();
         };
-        if !self.session_is_visible(&session_id) {
+        if !self.session_is_visible(&session_id) || !self.session_is_filtered_visible(&session_id) {
             self.reconcile_session_selection(true);
             return Vec::new();
         }
@@ -1844,6 +1860,10 @@ impl App {
             self.notice(NoticeLevel::Info, "Select a session before closing it.");
             return Vec::new();
         };
+        if !self.session_is_visible(&session_id) || !self.session_is_filtered_visible(&session_id) {
+            self.reconcile_session_selection(true);
+            return Vec::new();
+        }
         match self.session_loaded(&session_id) {
             Some(true) => {}
             Some(false) => {
@@ -1879,6 +1899,10 @@ impl App {
             self.notice(NoticeLevel::Info, "Select a session before deleting it.");
             return Vec::new();
         };
+        if !self.session_is_visible(&session_id) || !self.session_is_filtered_visible(&session_id) {
+            self.reconcile_session_selection(true);
+            return Vec::new();
+        }
         if self.session_loaded(&session_id).is_none() {
             self.notice(
                 NoticeLevel::Warning,
@@ -1994,6 +2018,7 @@ impl App {
             .session_selector_state()
             .map(|state| state.mode.clone())
             .unwrap_or(SessionPanelMode::Browse);
+        let mut returned_to_browse = false;
         match mode {
             SessionPanelMode::Browse => self.dock = Dock::Composer,
             SessionPanelMode::Rename {
@@ -2004,6 +2029,7 @@ impl App {
                 if let Some(state) = self.session_selector_state_mut() {
                     state.mode = SessionPanelMode::Browse;
                     state.error = None;
+                    returned_to_browse = true;
                 }
             }
             SessionPanelMode::Rename {
@@ -2013,8 +2039,12 @@ impl App {
                 if let Some(state) = self.session_selector_state_mut() {
                     state.mode = SessionPanelMode::Browse;
                     state.error = None;
+                    returned_to_browse = true;
                 }
             }
+        }
+        if returned_to_browse {
+            self.reconcile_session_selection(true);
         }
         Vec::new()
     }
@@ -4192,6 +4222,7 @@ impl App {
                         }
                     }
                 }
+                self.reconcile_session_selection(true);
                 self.notice(NoticeLevel::Info, format!("Session {session_id} closed."));
                 Vec::new()
             }
@@ -4291,6 +4322,7 @@ impl App {
                 }
             }
         }
+        self.reconcile_session_selection(true);
         Vec::new()
     }
 
@@ -4625,13 +4657,18 @@ impl App {
             .title_overrides
             .insert(session_id.clone(), session.title.clone());
         self.upsert_session_list(session);
+        let mut returned_to_browse = false;
         if let Dock::SessionSelector(state) = &mut self.dock {
             if state.selected_session_id.as_deref() == Some(session_id.as_str())
                 && matches!(&state.mode, SessionPanelMode::Rename { .. })
             {
                 state.mode = SessionPanelMode::Browse;
                 state.error = None;
+                returned_to_browse = true;
             }
+        }
+        if returned_to_browse {
+            self.reconcile_session_selection(true);
         }
         self.notice(NoticeLevel::Info, format!("Session {session_id} renamed."));
         Vec::new()

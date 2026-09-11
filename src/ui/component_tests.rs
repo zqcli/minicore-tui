@@ -2414,6 +2414,23 @@ fn session_panel_rename_uses_id_and_waits_for_complete_ack() {
     assert_eq!(request.params["session_id"], "ses_main");
     assert_eq!(request.params["title"], draft);
     assert_eq!(app.sessions.list[0].title, before);
+    app.update(AppEvent::Terminal(CrosstermEvent::Key(
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::empty(),
+        ),
+    )));
+    assert!(matches!(
+        &app.dock,
+        crate::state::selection::Dock::SessionSelector(state)
+            if matches!(
+                &state.mode,
+                crate::state::selection::SessionPanelMode::Rename {
+                    submitting: true,
+                    ..
+                }
+            ) && state.selected_session_id.as_deref() == Some("ses_main")
+    ));
 
     testapp::respond_rpc_error(
         &mut app,
@@ -2758,6 +2775,536 @@ fn session_selector_query_refresh_and_footer_actions_keep_filtered_target() {
         .is_empty(),
         "no selected session must not emit delete RPC"
     );
+}
+
+#[test]
+fn session_rename_dialog_freezes_target_and_reconciles_before_footer_actions() {
+    let sessions = || {
+        vec![
+            json!({
+                "session_id": "ses_alpha",
+                "title": "Original Alpha",
+                "profile": "coding",
+                "workspace": "/work/alpha",
+                "model": "deep",
+                "reasoning": "high",
+                "loaded": true,
+                "created_at": "2027-01-15T07:54:00Z",
+                "updated_at": "2027-01-15T07:56:00Z"
+            }),
+            json!({
+                "session_id": "ses_beta",
+                "title": "Original Beta",
+                "profile": "coding",
+                "workspace": "/work/beta",
+                "model": "deep",
+                "reasoning": "high",
+                "loaded": true,
+                "created_at": "2027-01-15T07:55:00Z",
+                "updated_at": "2027-01-15T07:55:00Z"
+            }),
+        ]
+    };
+    let mut app = {
+        let (models, profiles, _) = testapp::standard_catalog();
+        let session_list = sessions();
+        let mut app =
+            testapp::ready_catalog(ThemeKind::Dark, models, profiles, session_list.clone());
+        for session_id in ["ses_alpha", "ses_beta"] {
+            app.sessions.known.get_mut(session_id).unwrap().state =
+                Some(crate::protocol::SessionStateWire {
+                    session_id: session_id.to_owned(),
+                    status: crate::protocol::SessionStatusWire::Idle,
+                    active_loop: None,
+                    block_reason: None,
+                });
+        }
+        testapp::open_session_selector(&mut app, session_list);
+        app.update(AppEvent::SetSelectorQuery {
+            query: "Original".to_owned(),
+        });
+        app.update(AppEvent::TerminalSize {
+            width: 80,
+            height: 24,
+        });
+        app
+    };
+    let key =
+        |code, modifiers| AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(code, modifiers)));
+    let selected = |app: &App| match &app.dock {
+        crate::state::selection::Dock::SessionSelector(state) => state.selected_session_id.clone(),
+        dock => panic!("unexpected dock: {dock:?}"),
+    };
+    assert_eq!(selected(&app).as_deref(), Some("ses_alpha"));
+
+    let refresh = testapp::take_requests(app.update(key(KeyCode::F(5), KeyModifiers::empty())))
+        .into_iter()
+        .find(|request| request.method == "session.list")
+        .expect("refresh request");
+    app.update(key(KeyCode::F(2), KeyModifiers::empty()));
+    assert!(matches!(
+        &app.dock,
+        crate::state::selection::Dock::SessionSelector(state)
+            if matches!(
+                &state.mode,
+                crate::state::selection::SessionPanelMode::Rename { .. }
+            ) && state.selected_session_id.as_deref() == Some("ses_alpha")
+    ));
+    testapp::respond(
+        &mut app,
+        &refresh,
+        json!({
+            "sessions": [
+                {"session_id":"ses_alpha","title":"Refresh Renamed","profile":"coding","workspace":"/work/alpha","model":"deep","reasoning":"high","loaded":true,"created_at":"2027-01-15T07:54:00Z","updated_at":"2027-01-15T08:01:00Z"},
+                {"session_id":"ses_beta","title":"Original Beta","profile":"coding","workspace":"/work/beta","model":"deep","reasoning":"high","loaded":true,"created_at":"2027-01-15T07:55:00Z","updated_at":"2027-01-15T07:55:00Z"}
+            ]
+        }),
+    );
+    assert_eq!(
+        selected(&app).as_deref(),
+        Some("ses_alpha"),
+        "a refresh must not retarget the Rename dialog"
+    );
+    let event = serde_json::from_value(json!({
+        "type": "session_opened",
+        "data": {
+            "session": {
+                "session_id": "ses_gamma", "title": "Gamma", "profile": "coding",
+                "workspace": "/work/gamma", "model": "deep", "reasoning": "high",
+                "loaded": true, "created_at": "2027-01-15T07:57:00Z",
+                "updated_at": "2027-01-15T08:03:00Z"
+            },
+            "meta": {"session_id": "ses_gamma", "loop_id": null, "dropped_before": 0}
+        }
+    }))
+    .expect("session_opened fixture parses");
+    let event_requests = testapp::take_requests(app.update(AppEvent::Rpc(RpcEvent::Frame(
+        crate::protocol::IncomingFrame::Notification(crate::protocol::RpcNotification::AgentEvent(
+            event,
+        )),
+    ))));
+    if let Some(state_request) = event_requests
+        .iter()
+        .find(|request| request.method == "session.state")
+    {
+        testapp::respond(
+            &mut app,
+            state_request,
+            json!({
+                "session_id": "ses_gamma", "status": "idle",
+                "active_loop": null, "block_reason": null
+            }),
+        );
+    }
+    assert_eq!(
+        selected(&app).as_deref(),
+        Some("ses_alpha"),
+        "a SessionOpened upsert must not retarget the Rename dialog"
+    );
+
+    app.update(key(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    app.update(AppEvent::Terminal(CrosstermEvent::Paste(
+        "Renamed Alpha".to_owned(),
+    )));
+    let rename = testapp::take_requests(app.update(key(KeyCode::Enter, KeyModifiers::empty())))
+        .into_iter()
+        .find(|request| request.method == "session.rename")
+        .expect("rename request");
+    assert_eq!(rename.params["session_id"], "ses_alpha");
+    testapp::respond(
+        &mut app,
+        &rename,
+        json!({
+            "session": {
+                "session_id": "ses_alpha", "title": "Renamed Alpha", "profile": "coding",
+                "workspace": "/work/alpha", "model": "deep", "reasoning": "high",
+                "loaded": true, "created_at": "2027-01-15T07:54:00Z",
+                "updated_at": "2027-01-15T08:02:00Z"
+            }
+        }),
+    );
+    assert_eq!(
+        selected(&app).as_deref(),
+        Some("ses_beta"),
+        "after ACK Browse must select the first remaining filtered session"
+    );
+
+    let footer_point = |app: &App, action| {
+        let state = match &app.dock {
+            crate::state::selection::Dock::SessionSelector(state) => state,
+            dock => panic!("unexpected dock: {dock:?}"),
+        };
+        let screen = layout::screen_layout(app, Rect::new(0, 0, 80, 24));
+        let panel = selector::session_panel_layout(screen.panel, state);
+        (panel.footer.x..panel.footer.right())
+            .flat_map(|column| {
+                (panel.footer.y..panel.footer.bottom()).map(move |row| (column, row))
+            })
+            .find(|&(column, row)| {
+                selector::session_action_at(app, screen.panel, state, column, row) == Some(action)
+            })
+            .expect("session footer action is hit-testable")
+    };
+    let mouse = |column, row, kind| {
+        AppEvent::Terminal(CrosstermEvent::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        }))
+    };
+
+    let (close_column, close_row) =
+        footer_point(&app, crate::state::selection::SessionPanelAction::Close);
+    app.update(mouse(
+        close_column,
+        close_row,
+        MouseEventKind::Down(MouseButton::Left),
+    ));
+    assert!(
+        testapp::take_requests(app.update(mouse(
+            close_column,
+            close_row,
+            MouseEventKind::Up(MouseButton::Left),
+        )))
+        .is_empty()
+    );
+    assert!(matches!(
+        &app.dock,
+        crate::state::selection::Dock::SessionSelector(state)
+            if matches!(
+                &state.mode,
+                crate::state::selection::SessionPanelMode::ConfirmClose
+            ) && state.selected_session_id.as_deref() == Some("ses_beta")
+    ));
+    let close = testapp::take_requests(app.update(key(KeyCode::Enter, KeyModifiers::empty())))
+        .into_iter()
+        .find(|request| request.method == "session.close")
+        .expect("footer Close request");
+    assert_eq!(close.params["session_id"], "ses_beta");
+    testapp::respond(&mut app, &close, json!({"ok": true}));
+
+    let (delete_column, delete_row) =
+        footer_point(&app, crate::state::selection::SessionPanelAction::Delete);
+    app.update(mouse(
+        delete_column,
+        delete_row,
+        MouseEventKind::Down(MouseButton::Left),
+    ));
+    assert!(
+        testapp::take_requests(app.update(mouse(
+            delete_column,
+            delete_row,
+            MouseEventKind::Up(MouseButton::Left),
+        )))
+        .is_empty()
+    );
+    app.update(key(KeyCode::Tab, KeyModifiers::empty()));
+    let delete = testapp::take_requests(app.update(key(KeyCode::Enter, KeyModifiers::empty())))
+        .into_iter()
+        .find(|request| request.method == "session.delete")
+        .expect("footer Delete request");
+    assert_eq!(delete.params["session_id"], "ses_beta");
+}
+
+#[test]
+fn session_rename_ack_clears_hidden_target_when_query_has_no_matches() {
+    let (models, profiles, _) = testapp::standard_catalog();
+    let sessions = vec![
+        json!({
+            "session_id": "ses_alpha",
+            "title": "Original Alpha",
+            "profile": "coding",
+            "workspace": "/work/alpha",
+            "model": "deep",
+            "reasoning": "high",
+            "loaded": true,
+            "created_at": "2027-01-15T07:54:00Z",
+            "updated_at": "2027-01-15T07:56:00Z"
+        }),
+        json!({
+            "session_id": "ses_beta",
+            "title": "Other Beta",
+            "profile": "coding",
+            "workspace": "/work/beta",
+            "model": "deep",
+            "reasoning": "high",
+            "loaded": true,
+            "created_at": "2027-01-15T07:55:00Z",
+            "updated_at": "2027-01-15T07:55:00Z"
+        }),
+    ];
+    let mut app = testapp::ready_catalog(ThemeKind::Dark, models, profiles, sessions.clone());
+    for session_id in ["ses_alpha", "ses_beta"] {
+        app.sessions.known.get_mut(session_id).unwrap().state =
+            Some(crate::protocol::SessionStateWire {
+                session_id: session_id.to_owned(),
+                status: crate::protocol::SessionStatusWire::Idle,
+                active_loop: None,
+                block_reason: None,
+            });
+    }
+    testapp::open_session_selector(&mut app, sessions);
+    app.update(AppEvent::SetSelectorQuery {
+        query: "Original".to_owned(),
+    });
+    app.update(AppEvent::TerminalSize {
+        width: 80,
+        height: 24,
+    });
+    let key =
+        |code, modifiers| AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(code, modifiers)));
+    let selected = |app: &App| match &app.dock {
+        crate::state::selection::Dock::SessionSelector(state) => state.selected_session_id.clone(),
+        dock => panic!("unexpected dock: {dock:?}"),
+    };
+    assert_eq!(selected(&app).as_deref(), Some("ses_alpha"));
+    app.update(key(KeyCode::F(2), KeyModifiers::empty()));
+    app.update(key(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    app.update(AppEvent::Terminal(CrosstermEvent::Paste(
+        "Renamed Alpha".to_owned(),
+    )));
+    let rename = testapp::take_requests(app.update(key(KeyCode::Enter, KeyModifiers::empty())))
+        .into_iter()
+        .find(|request| request.method == "session.rename")
+        .expect("rename request");
+    assert_eq!(rename.params["session_id"], "ses_alpha");
+    testapp::respond(
+        &mut app,
+        &rename,
+        json!({
+            "session": {
+                "session_id": "ses_alpha", "title": "Renamed Alpha", "profile": "coding",
+                "workspace": "/work/alpha", "model": "deep", "reasoning": "high",
+                "loaded": true, "created_at": "2027-01-15T07:54:00Z",
+                "updated_at": "2027-01-15T08:02:00Z"
+            }
+        }),
+    );
+    assert_eq!(
+        selected(&app),
+        None,
+        "after ACK Browse must clear a selection with no filtered matches"
+    );
+
+    let mouse = |column, row, kind| {
+        AppEvent::Terminal(CrosstermEvent::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        }))
+    };
+    let footer_point = |app: &App, action| {
+        let state = match &app.dock {
+            crate::state::selection::Dock::SessionSelector(state) => state,
+            dock => panic!("unexpected dock: {dock:?}"),
+        };
+        let screen = layout::screen_layout(app, Rect::new(0, 0, 80, 24));
+        let panel = selector::session_panel_layout(screen.panel, state);
+        (panel.footer.x..panel.footer.right())
+            .flat_map(|column| {
+                (panel.footer.y..panel.footer.bottom()).map(move |row| (column, row))
+            })
+            .find(|&(column, row)| {
+                selector::session_action_at(app, screen.panel, state, column, row) == Some(action)
+            })
+            .expect("session footer action is hit-testable")
+    };
+    for action in [
+        crate::state::selection::SessionPanelAction::Close,
+        crate::state::selection::SessionPanelAction::Delete,
+    ] {
+        let (column, row) = footer_point(&app, action);
+        app.update(mouse(column, row, MouseEventKind::Down(MouseButton::Left)));
+        assert!(
+            testapp::take_requests(app.update(mouse(
+                column,
+                row,
+                MouseEventKind::Up(MouseButton::Left),
+            )))
+            .is_empty(),
+            "footer action with no selected session must not emit an RPC"
+        );
+    }
+}
+
+#[test]
+fn session_panel_cancel_reconciles_after_frozen_target_updates() {
+    let sessions = |alpha_loaded| {
+        vec![
+            json!({
+                "session_id": "ses_alpha",
+                "title": "Original Alpha",
+                "profile": "coding",
+                "workspace": "/work/alpha",
+                "model": "deep",
+                "reasoning": "high",
+                "loaded": alpha_loaded,
+                "created_at": "2027-01-15T07:54:00Z",
+                "updated_at": "2027-01-15T07:56:00Z"
+            }),
+            json!({
+                "session_id": "ses_beta",
+                "title": "Original Beta",
+                "profile": "coding",
+                "workspace": "/work/beta",
+                "model": "deep",
+                "reasoning": "high",
+                "loaded": false,
+                "created_at": "2027-01-15T07:55:00Z",
+                "updated_at": "2027-01-15T07:55:00Z"
+            }),
+        ]
+    };
+    let setup = |alpha_loaded| {
+        let (models, profiles, _) = testapp::standard_catalog();
+        let session_list = sessions(alpha_loaded);
+        let mut app =
+            testapp::ready_catalog(ThemeKind::Dark, models, profiles, session_list.clone());
+        for session_id in ["ses_alpha", "ses_beta"] {
+            app.sessions.known.get_mut(session_id).unwrap().state =
+                Some(crate::protocol::SessionStateWire {
+                    session_id: session_id.to_owned(),
+                    status: crate::protocol::SessionStatusWire::Idle,
+                    active_loop: None,
+                    block_reason: None,
+                });
+        }
+        testapp::open_session_selector(&mut app, session_list);
+        app.update(AppEvent::SetSelectorQuery {
+            query: "Original".to_owned(),
+        });
+        app.update(AppEvent::TerminalSize {
+            width: 80,
+            height: 24,
+        });
+        app
+    };
+    let key =
+        |code, modifiers| AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(code, modifiers)));
+    let selected = |app: &App| match &app.dock {
+        crate::state::selection::Dock::SessionSelector(state) => state.selected_session_id.clone(),
+        dock => panic!("unexpected dock: {dock:?}"),
+    };
+    let mouse_event = |column, row, kind| {
+        AppEvent::Terminal(CrosstermEvent::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        }))
+    };
+    let cancel = |app: &mut App, mouse_cancel: bool| {
+        if !mouse_cancel {
+            app.update(key(KeyCode::Enter, KeyModifiers::empty()));
+            return;
+        }
+        let state = match &app.dock {
+            crate::state::selection::Dock::SessionSelector(state) => state,
+            dock => panic!("unexpected dock: {dock:?}"),
+        };
+        let screen = layout::screen_layout(app, Rect::new(0, 0, 80, 24));
+        let panel = selector::session_panel_layout(screen.panel, state);
+        let (column, row) = (panel.content.x..panel.content.right())
+            .flat_map(|column| {
+                (panel.content.y..panel.content.bottom()).map(move |row| (column, row))
+            })
+            .find(|&(column, row)| {
+                selector::session_action_at(app, screen.panel, state, column, row)
+                    == Some(crate::state::selection::SessionPanelAction::Cancel)
+            })
+            .expect("ConfirmDelete Cancel button is hit-testable");
+        app.update(mouse_event(
+            column,
+            row,
+            MouseEventKind::Down(MouseButton::Left),
+        ));
+        app.update(mouse_event(
+            column,
+            row,
+            MouseEventKind::Up(MouseButton::Left),
+        ));
+    };
+
+    let mut rename = setup(true);
+    let refresh = testapp::take_requests(rename.update(key(KeyCode::F(5), KeyModifiers::empty())))
+        .into_iter()
+        .find(|request| request.method == "session.list")
+        .expect("refresh request");
+    rename.update(key(KeyCode::F(2), KeyModifiers::empty()));
+    testapp::respond(
+        &mut rename,
+        &refresh,
+        json!({
+            "sessions": [
+                {"session_id":"ses_alpha","title":"Renamed During Edit","profile":"coding","workspace":"/work/alpha","model":"deep","reasoning":"high","loaded":true,"created_at":"2027-01-15T07:54:00Z","updated_at":"2027-01-15T08:01:00Z"},
+                {"session_id":"ses_beta","title":"Original Beta","profile":"coding","workspace":"/work/beta","model":"deep","reasoning":"high","loaded":false,"created_at":"2027-01-15T07:55:00Z","updated_at":"2027-01-15T07:55:00Z"}
+            ]
+        }),
+    );
+    assert_eq!(
+        selected(&rename).as_deref(),
+        Some("ses_alpha"),
+        "refresh must not change the Rename target"
+    );
+    rename.update(key(KeyCode::Esc, KeyModifiers::empty()));
+    assert_eq!(
+        selected(&rename).as_deref(),
+        Some("ses_beta"),
+        "Esc must reconcile Browse selection after Rename cancellation"
+    );
+
+    for mouse_cancel in [false, true] {
+        let mut app = setup(false);
+        app.update(key(KeyCode::Delete, KeyModifiers::empty()));
+        assert!(matches!(
+            &app.dock,
+            crate::state::selection::Dock::SessionSelector(state)
+                if matches!(
+                    &state.mode,
+                    crate::state::selection::SessionPanelMode::ConfirmDelete {
+                        choice: crate::state::selection::SessionConfirmChoice::Cancel,
+                        ..
+                    }
+                ) && state.selected_session_id.as_deref() == Some("ses_alpha")
+        ));
+        let open = testapp::take_requests(app.update(AppEvent::OpenSession {
+            session_id: "ses_alpha".to_owned(),
+        }))
+        .into_iter()
+        .find(|request| request.method == "session.open")
+        .expect("async session update request");
+        testapp::respond(
+            &mut app,
+            &open,
+            json!({
+                "session": {
+                    "session_id": "ses_alpha", "title": "Renamed During Confirm",
+                    "profile": "coding", "workspace": "/work/alpha", "model": "deep",
+                    "reasoning": "high", "loaded": true,
+                    "created_at": "2027-01-15T07:54:00Z",
+                    "updated_at": "2027-01-15T08:02:00Z"
+                }
+            }),
+        );
+        assert_eq!(
+            selected(&app).as_deref(),
+            Some("ses_alpha"),
+            "confirmation target must remain frozen during session sync"
+        );
+        cancel(&mut app, mouse_cancel);
+        assert_eq!(
+            selected(&app).as_deref(),
+            Some("ses_beta"),
+            "cancel must reconcile to the remaining filtered session"
+        );
+        assert!(matches!(
+            &app.dock,
+            crate::state::selection::Dock::SessionSelector(state)
+                if matches!(&state.mode, crate::state::selection::SessionPanelMode::Browse)
+        ));
+    }
 }
 
 #[test]
