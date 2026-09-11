@@ -668,6 +668,7 @@ impl App {
                 self.install_conversation(prepared);
             }
         }
+        let header_visible_before = crate::ui::header::visible(self);
         self.dirty = true;
         let mut commands = match event {
             AppEvent::Bootstrap => self.bootstrap(),
@@ -848,6 +849,9 @@ impl App {
                 Vec::new()
             }
         };
+        if header_visible_before != crate::ui::header::visible(self) {
+            self.prepared_conversation = None;
+        }
         // Central FIFO queue advance: after any event, at most one steer RPC
         // per session (or a fresh-turn fallback once a finished loop settles).
         let advance = self.advance_steer_queues();

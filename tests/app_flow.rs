@@ -4,6 +4,8 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 use serde_json::{Value, json};
@@ -13,11 +15,14 @@ use minicore_tui::app::{App, ConnectionState, RequestKind};
 use minicore_tui::command::AppCommand;
 use minicore_tui::event::{AppEvent, RpcEvent};
 use minicore_tui::protocol::{
-    IncomingFrame, OutgoingRequest, RpcNotification, RpcResponse, SessionStatusWire,
+    IncomingFrame, OutgoingRequest, RpcNotification, RpcResponse, SessionStateWire,
+    SessionStatusWire, TurnRef,
 };
+use minicore_tui::state::selection::Dock;
 use minicore_tui::state::tool::ToolStatus;
-use minicore_tui::state::turn::{PendingSteerState, SteerQueueState};
+use minicore_tui::state::turn::{PendingSteerState, SteerQueueState, UnsavedLoop};
 use minicore_tui::state::{AssistantPart, TranscriptBlock};
+use minicore_tui::ui::{layout, panel};
 
 struct Driver {
     app: App,
@@ -216,6 +221,21 @@ fn line_text(line: &Line<'_>) -> String {
         .collect()
 }
 
+fn rendered_text(app: &App, width: u16, height: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|frame| minicore_tui::ui::render(frame, app))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let width = buffer.area.width as usize;
+    buffer
+        .content()
+        .chunks(width)
+        .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn transcript_lines_at(app: &App, width: usize) -> Vec<Line<'static>> {
     minicore_tui::ui::transcript::all_lines(&app.theme.theme(), app, width)
 }
@@ -352,12 +372,18 @@ fn bootstrap(driver: &mut Driver) {
 }
 
 fn open_idle(driver: &mut Driver, id: &str) {
+    open_idle_with_history(driver, id, Vec::new());
+}
+
+fn open_idle_with_history(driver: &mut Driver, id: &str, items: Vec<Value>) {
     driver.step(AppEvent::OpenSession {
         session_id: id.to_owned(),
     });
     driver.respond_method("session.open", json!({"session": session(id)}));
     driver.respond_method("session.state", state(id, "idle", Value::Null));
-    driver.respond_method("session.history", history(Vec::new(), None, 0));
+    let total = items.len();
+    let history_request = driver.request("session.history");
+    driver.respond(history_request, history(items, None, total));
 }
 
 fn submit_command(driver: &mut Driver, command: &str) {
@@ -371,6 +397,239 @@ fn submit_command(driver: &mut Driver, command: &str) {
         KeyCode::Enter,
         KeyModifiers::empty(),
     ))));
+}
+
+fn assert_startup_header(app: &App, expected: bool) {
+    assert_eq!(
+        rendered_text(app, 80, 24).contains("MINICORE  v0.2.8"),
+        expected
+    );
+}
+
+#[test]
+fn new_session_and_empty_created_session_keep_startup_header() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle_with_history(
+        &mut driver,
+        "ses_1",
+        vec![
+            user(0, "loop_1", "previous prompt"),
+            assistant(1, "loop_1", 0, "deep", "previous answer"),
+        ],
+    );
+
+    let old_screen = rendered_text(&driver.app, 80, 24);
+    assert!(!old_screen.contains("MINICORE  v0.2.8"));
+    assert_eq!(driver.app.sessions.active.as_deref(), Some("ses_1"));
+
+    submit_command(&mut driver, "/new");
+    let form_screen = rendered_text(&driver.app, 120, 40);
+    for expected in [
+        "MINICORE  v0.2.8",
+        "Coding agent TUI",
+        "Open a session — /new, Ctrl+R, or F1 for help",
+        "New session",
+        "previous answer",
+    ] {
+        assert!(
+            form_screen.contains(expected),
+            "new-session screen is missing {expected:?}:\n{form_screen}"
+        );
+    }
+
+    let prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 79);
+    assert_eq!(
+        driver.app.sessions.known["ses_1"].transcript.blocks.len(),
+        2
+    );
+    assert_eq!(
+        prepared
+            .lines
+            .iter()
+            .filter(|line| line_text(line).contains("MINICORE"))
+            .count(),
+        1
+    );
+    assert!(
+        prepared
+            .copy_ranges
+            .iter()
+            .all(|range| !range.text.contains("MINICORE")
+                && !range.text.contains("Coding agent TUI")),
+        "startup header must remain outside model/history copy"
+    );
+
+    let small_screen = rendered_text(&driver.app, 60, 16);
+    assert!(small_screen.contains("New session"));
+    assert!(small_screen.contains("workspace"));
+
+    for _ in 0..5 {
+        driver.step(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+            KeyCode::Tab,
+            KeyModifiers::empty(),
+        ))));
+    }
+    driver.step(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::empty(),
+    ))));
+    let create = driver.request("session.create");
+    driver.respond(create, json!({"session": session("ses_2")}));
+    assert_eq!(driver.app.sessions.active.as_deref(), Some("ses_2"));
+    assert!(
+        !rendered_text(&driver.app, 80, 24).contains("MINICORE  v0.2.8"),
+        "an empty history still loading must not look confirmed empty"
+    );
+
+    driver.respond_method("session.history", history(Vec::new(), None, 0));
+    assert!(
+        !rendered_text(&driver.app, 80, 24).contains("MINICORE  v0.2.8"),
+        "empty history cannot confirm the header while session state is unknown"
+    );
+    driver.respond_method("session.state", state("ses_2", "idle", Value::Null));
+    let empty_screen = rendered_text(&driver.app, 80, 24);
+    for expected in [
+        "MINICORE  v0.2.8",
+        "Coding agent TUI",
+        "Open a session — /new, Ctrl+R, or F1 for help",
+    ] {
+        assert!(
+            empty_screen.contains(expected),
+            "empty created-session screen is missing {expected:?}:\n{empty_screen}"
+        );
+    }
+    let empty_prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 79);
+    assert!(
+        empty_prepared
+            .copy_ranges
+            .iter()
+            .all(|range| !range.text.contains("MINICORE")
+                && !range.text.contains("Coding agent TUI")),
+        "empty-session startup header must remain outside copy payload"
+    );
+    assert_eq!(
+        driver.app.sessions.known["ses_1"].transcript.blocks.len(),
+        2,
+        "creating a session must not alter the prior history"
+    );
+
+    driver.step(AppEvent::SubmitTurn {
+        session_id: "ses_2".to_owned(),
+        text: "pending prompt".to_owned(),
+    });
+    assert!(
+        !rendered_text(&driver.app, 80, 24).contains("MINICORE  v0.2.8"),
+        "a live prompt without output must not make the header flicker back"
+    );
+}
+
+#[test]
+fn confirmed_empty_header_requires_known_idle_and_clean_lifecycle() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+    assert_startup_header(&driver.app, true);
+
+    driver.app.sessions.known.get_mut("ses_1").unwrap().state = None;
+    assert_startup_header(&driver.app, false);
+    driver.app.sessions.known.get_mut("ses_1").unwrap().state = Some(
+        serde_json::from_value::<SessionStateWire>(state("ses_1", "idle", Value::Null)).unwrap(),
+    );
+
+    for fence in [
+        "event_gap",
+        "reconcile_inflight",
+        "needs_post_wait_history",
+        "unsaved_loop",
+        "result_unconfirmed",
+    ] {
+        let view = driver.app.sessions.known.get_mut("ses_1").unwrap();
+        match fence {
+            "event_gap" => view.event_gap = true,
+            "reconcile_inflight" => view.reconcile_inflight = true,
+            "needs_post_wait_history" => view.needs_post_wait_history = true,
+            "unsaved_loop" => {
+                view.unsaved_loop = Some(UnsavedLoop {
+                    turn: TurnRef {
+                        session_id: "ses_1".to_owned(),
+                        loop_id: "loop_unsaved".to_owned(),
+                    },
+                    user_text: "unfinished".to_owned(),
+                    requests: Vec::new(),
+                    result: None,
+                    event_gap: false,
+                });
+            }
+            "result_unconfirmed" => view.result_unconfirmed = true,
+            _ => unreachable!(),
+        }
+        assert_startup_header(&driver.app, false);
+        let view = driver.app.sessions.known.get_mut("ses_1").unwrap();
+        view.event_gap = false;
+        view.reconcile_inflight = false;
+        view.needs_post_wait_history = false;
+        view.unsaved_loop = None;
+        view.result_unconfirmed = false;
+    }
+    assert_startup_header(&driver.app, true);
+}
+
+#[test]
+fn session_footer_new_invalidates_prepared_header_cache() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle_with_history(
+        &mut driver,
+        "ses_1",
+        vec![user(0, "loop_1", "existing history")],
+    );
+    driver.step(AppEvent::OpenSessionSelector);
+    driver.respond_method("session.list", json!({"sessions": [session("ses_1")] }));
+    driver.step(AppEvent::TerminalSize {
+        width: 80,
+        height: 24,
+    });
+
+    let prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 79);
+    driver.step(AppEvent::ConversationPrepared(prepared));
+    assert!(driver.app.prepared_conversation(79).is_some());
+
+    let (has_error, panel_area) = match &driver.app.dock {
+        Dock::SessionSelector(state) => {
+            let screen =
+                layout::screen_layout(&driver.app, ratatui::layout::Rect::new(0, 0, 80, 24));
+            (
+                state.error.is_some(),
+                panel::layout(
+                    screen.panel,
+                    panel::PanelSpec::new(u16::from(state.error.is_some()), true, 2),
+                ),
+            )
+        }
+        dock => panic!("unexpected dock: {dock:?}"),
+    };
+    let column =
+        panel_area.footer.x + unicode_width::UnicodeWidthStr::width("Enter Open") as u16 + 3 + 1;
+    let row = panel_area.footer.y;
+    let mouse = |kind| {
+        AppEvent::Terminal(CrosstermEvent::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        }))
+    };
+    assert!(!has_error);
+    driver.step(mouse(crossterm::event::MouseEventKind::Down(
+        crossterm::event::MouseButton::Left,
+    )));
+    driver.step(mouse(crossterm::event::MouseEventKind::Up(
+        crossterm::event::MouseButton::Left,
+    )));
+    assert!(driver.app.new_session().is_some());
+    assert!(driver.app.prepared_conversation(79).is_none());
+    assert!(rendered_text(&driver.app, 120, 40).contains("MINICORE  v0.2.8"));
 }
 
 #[test]
