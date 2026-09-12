@@ -48,6 +48,7 @@ the reader does not scan ahead for a later line. Agent log lines are capped at
 | Method | Parameters | Result used by the TUI |
 |---|---|---|
 | `agent.ping` | empty | `{"version":"0.3.x"}` |
+| `agent.reload` | empty | exactly `{"ok":true}` |
 | `model.list` | empty | model catalog |
 | `profile.list` | empty | profile catalog |
 | `session.list` | empty | session catalog |
@@ -65,35 +66,46 @@ the reader does not scan ahead for a later line. Agent log lines are capped at
 | `turn.cancel` | exact `TurnRef` | cancellation result |
 | `agent.shutdown` | empty | `{"ok":true}` |
 
-The TUI also understands Agent event notifications for session state/open/
-close, turn start/finish, request start, text/reasoning deltas, and tool lifecycle.
+`agent.reload` is sent with `{}` parameters and accepts only the exact
+successful result shape `{"ok":true}`; malformed, missing, false, or extra
+fields fail closed. A valid `{"ok":false}` reports that configuration was not
+applied. A valid `{"ok":true}` followed by a catalog/state/history refresh
+failure reports that configuration reloaded but the view refresh is
+incomplete or failed. Transport loss after the ACK reports configuration as
+reloaded but leaves view refresh outcome unknown; transport loss before the
+ACK, or a malformed/unknown ACK, reports an unknown reload outcome and does
+not automatically retry. Agent event
+notifications cover session state/open/close, turn start/finish, request
+start, text/reasoning deltas, and tool lifecycle.
 
-## RPC-17 Audit
+## RPC-18 Audit
 
-The complete v0.3 method surface is covered explicitly below. “PASS” means the
-method is represented by the production request/response path and covered by a
-remote final6/Stage 3 flow or protocol test; it does not claim a separate
-real-provider test for every method.
+The complete v0.3 method surface is covered explicitly below. “PASS” describes the recorded
+contract/evidence baseline: the method is represented by the production
+request/response path and was covered by a remote final6/Stage 3 flow or
+protocol test. It is not current post-edit validation and does not claim a
+separate real-provider test for every method.
 
 | # | Method | Request/response evidence | Status |
 |---:|---|---|---|
 | 1 | `agent.ping` | `tests/protocol.rs:ping_builder_matches_json_rpc_shape` | PASS |
-| 2 | `model.list` | bootstrap catalog flow; `tests/protocol.rs:discovery_fixtures_decode_real_agent_shapes` | PASS |
-| 3 | `profile.list` | bootstrap catalog flow; `tests/protocol.rs:discovery_fixtures_decode_real_agent_shapes` | PASS |
-| 4 | `session.list` | bootstrap/session catalog flow; `tests/protocol.rs:discovery_fixtures_decode_real_agent_shapes` | PASS |
-| 5 | `session.create` | `src/app.rs:create_session_activates_and_pages_history` | PASS |
-| 6 | `session.open` | `tests/app_flow.rs:reopen_invalidates_old_wait_persisted_response` | PASS |
-| 7 | `session.close` | `tests/app_flow.rs:close_verification_internal_or_malformed_retains_loaded_state` | PASS |
-| 8 | `session.delete` | `tests/app_flow.rs:session_close_and_delete_command_lifecycle` | PASS |
-| 9 | `session.state` | `tests/protocol.rs:session_state_uses_an_active_loop_object` | PASS |
-| 10 | `session.update` | `tests/app_flow.rs:session_update_is_sent_for_an_active_session` | PASS |
-| 11 | `session.rename` | `src/ui/component_tests.rs:session_panel_rename_uses_id_and_waits_for_complete_ack`; real Agent path: `tests/agent_e2e.rs:e2e_session_panel_rename_and_delete_against_current_agent` | PASS |
-| 12 | `session.history` | `tests/app_flow.rs:history_pages_by_contiguous_item_index_not_render_block_count` | PASS |
-| 13 | `turn.send` | `tests/app_flow.rs:send_response_registers_direct_wait_and_durable_history_replaces_live` | PASS |
-| 14 | `turn.cancel` | `tests/app_flow.rs:slash_cancel_sends_exact_turn_cancel_and_wait_reconciles` | PASS |
-| 15 | `turn.wait` | `tests/protocol.rs:turn_wait_is_a_direct_turn_result_view` | PASS |
-| 16 | `turn.steer` | `tests/app_flow.rs:late_steer_ack_after_complete_history_marks_missing_steer_not_recorded` | PASS |
-| 17 | `agent.shutdown` | `tests/app_flow.rs:shutdown_drains_after_child_exit_until_rpc_channel_ends` | PASS |
+| 2 | `agent.reload` | `/reload` empty-params reducer path; strict `ReloadResult` DTO | PASS |
+| 3 | `model.list` | bootstrap/catalog reload flow; `tests/protocol.rs:discovery_fixtures_decode_real_agent_shapes` | PASS |
+| 4 | `profile.list` | bootstrap/catalog reload flow; `tests/protocol.rs:discovery_fixtures_decode_real_agent_shapes` | PASS |
+| 5 | `session.list` | bootstrap/session catalog reload flow; `tests/protocol.rs:discovery_fixtures_decode_real_agent_shapes` | PASS |
+| 6 | `session.create` | `src/app.rs:create_session_activates_and_pages_history` | PASS |
+| 7 | `session.open` | `tests/app_flow.rs:reopen_invalidates_old_wait_persisted_response` | PASS |
+| 8 | `session.close` | `tests/app_flow.rs:close_verification_internal_or_malformed_retains_loaded_state` | PASS |
+| 9 | `session.delete` | `tests/app_flow.rs:session_close_and_delete_command_lifecycle` | PASS |
+| 10 | `session.state` | `tests/protocol.rs:session_state_uses_an_active_loop_object` | PASS |
+| 11 | `session.update` | `tests/app_flow.rs:session_update_is_sent_for_an_active_session` | PASS |
+| 12 | `session.rename` | `src/ui/component_tests.rs:session_panel_rename_uses_id_and_waits_for_complete_ack`; real Agent path: `tests/agent_e2e.rs:e2e_session_panel_rename_and_delete_against_current_agent` | PASS |
+| 13 | `session.history` | `tests/app_flow.rs:history_pages_by_contiguous_item_index_not_render_block_count` | PASS |
+| 14 | `turn.send` | `tests/app_flow.rs:send_response_registers_direct_wait_and_durable_history_replaces_live` | PASS |
+| 15 | `turn.cancel` | `tests/app_flow.rs:slash_cancel_sends_exact_turn_cancel_and_wait_reconciles` | PASS |
+| 16 | `turn.wait` | `tests/protocol.rs:turn_wait_is_a_direct_turn_result_view` | PASS |
+| 17 | `turn.steer` | `tests/app_flow.rs:late_steer_ack_after_complete_history_marks_missing_steer_not_recorded` | PASS |
+| 18 | `agent.shutdown` | `tests/app_flow.rs:shutdown_drains_after_child_exit_until_rpc_channel_ends` | PASS |
 
 ## Correlation And Ordering
 
@@ -115,13 +127,38 @@ that existing History recovers that loop. Raw history item indexes, not rendered
 tool results patch the matching tool call. Live event order is not used
 to fabricate durable history.
 
+During `agent.reload`, catalog and active-session reads are staged separately
+from the live projection. New submit/steer admission and the automatic steer
+FIFO are paused; composer text and previously admitted queue items remain
+owned by the App. The reload start/end/failure event does not release the FIFO
+in the same reducer pass. Reads issued before reload are fenced as
+`StaleRead`; any retired read or lifecycle ACK that leaves authority uncertain
+clears the old session state and keeps the session's `event_gap`/incomplete-
+history fence. Recovery issues independent fresh `session.state` and
+`session.history` reads. Ordinary pending reads, history loading, and a
+temporarily absent SessionState retain their pre-reload admission behavior.
+Reload-retired reads and lifecycle ACKs set a session-scoped
+`close_verification_unknown` fence; a matching fresh state response clears it
+while the independent history-gap fence remains. The reload-installed state is
+also not Steer authority: the App issues a fresh normal `session.state` read,
+and only a matching `Running` response for the retained `TurnRef` releases the
+Steer fence. Idle notifications and Idle responses cannot release it for the
+retained live loop. Once that loop is completed, persisted, history-settled and
+Idle, the separate queued fresh-turn handoff remains available exactly once.
+After a matching Running pairing, explicit and FIFO `turn.steer` may proceed through an ordinary
+History gap, while `turn.send`, lifecycle mutations, and `session.update`
+remain protected by the gap. History completion alone cannot authorize a
+lifecycle mutation, and a reload failure never treats an old idle snapshot as
+renewed close/delete authority. Lifecycle operations are rejected while
+staging or while another lifecycle request is pending.
+
 Every event carries session metadata and `dropped_before`. A positive
 value marks an event gap. The TUI displays the gap and clears it only after actual History alignment for
 an appropriately confirmed result; failure/unknown retains the marker. It does
 not add event ACK, replay, or reconnect
 protocols. `turn.wait`, `session.state`, and `session.history` are the
-authority. A retained blocked completion may be read once more through the
-explicit App refresh path; there is no polling or automatic retry.
+authority. A retained blocked completion may be read once more through the internal
+exact-turn `turn.wait` path; there is no polling or automatic retry.
 
 ## Wire Projection
 

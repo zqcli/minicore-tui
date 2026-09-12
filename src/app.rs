@@ -4,7 +4,7 @@
 //! allocated inside `update` and registered in `pending_requests` before any
 //! command leaves it, so a response can never beat its registration.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -17,10 +17,11 @@ use crate::keymap::{self, Action, EditorCursor};
 use crate::protocol::{
     AgentEventWire, AssistantDisplayPartWire, DEFAULT_HISTORY_LIMIT, EventMetaWire,
     HistoryItemWire, HistoryPageWire, IncomingFrame, IndexedHistoryItemWire, METHOD_LIST_MODELS,
-    METHOD_LIST_PROFILES, METHOD_LIST_SESSIONS, OutgoingRequest, OutputChannelWire, Reasoning,
-    RequestId, RpcNotification, RpcResponse, RpcResponseError, SessionInfo, SessionStateWire,
-    SessionStatusWire, ToolDisplayWire, ToolOutcomeWire, ToolProgressWire, TurnPersistenceWire,
-    TurnRef, UserMessageKindWire, is_supported_agent_version,
+    METHOD_LIST_PROFILES, METHOD_LIST_SESSIONS, ModelInfo, OutgoingRequest, OutputChannelWire,
+    ProfileInfo, Reasoning, RequestId, RpcNotification, RpcResponse, RpcResponseError, SessionInfo,
+    SessionPresentationWire, SessionStateWire, SessionStatusWire, ToolDisplayWire, ToolOutcomeWire,
+    ToolProgressWire, TurnPersistenceWire, TurnRef, UserMessageKindWire,
+    is_supported_agent_version,
 };
 use crate::rpc::RpcError;
 use crate::state::catalog::CatalogState;
@@ -176,9 +177,24 @@ struct ScrollbarDrag {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequestKind {
     Ping,
+    /// A read request retired by a completed reload. Its response is
+    /// consumed and intentionally ignored.
+    StaleRead,
+    Reload {
+        generation: u64,
+    },
     ListModels,
     ListProfiles,
     ListSessions,
+    ReloadModels {
+        generation: u64,
+    },
+    ReloadProfiles {
+        generation: u64,
+    },
+    ReloadSessions {
+        generation: u64,
+    },
     RefreshSessions {
         selected_session_id: Option<SessionId>,
     },
@@ -193,14 +209,30 @@ pub enum RequestKind {
         session_id: SessionId,
         query: u64,
     },
+    ReloadState {
+        session_id: SessionId,
+        query: u64,
+        generation: u64,
+    },
     SessionPresentation {
         session_id: SessionId,
+    },
+    ReloadPresentation {
+        session_id: SessionId,
+        generation: u64,
     },
     History {
         session_id: SessionId,
         offset: usize,
         limit: usize,
         gap_revision: Option<u64>,
+    },
+    ReloadHistory {
+        session_id: SessionId,
+        offset: usize,
+        limit: usize,
+        gap_revision: u64,
+        generation: u64,
     },
     SendTurn {
         session_id: SessionId,
@@ -338,7 +370,13 @@ pub struct App {
     next_submission: u64,
     next_draft_id: u64,
     next_steer_id: u64,
+    next_reload_generation: u64,
+    /// Lifecycle responses crossing a reload boundary must start from fresh
+    /// session state/history authority.
+    reload_fenced_create_drafts: HashSet<u64>,
+    reload_fenced_open_sessions: HashSet<SessionId>,
     bootstrap: BootstrapProgress,
+    reload: Option<ReloadProgress>,
     /// Guards the single "not ready" notice so a Failed/Starting connection
     /// cannot flood the user; reset when the app becomes Ready again.
     blocked_notice: bool,
@@ -374,11 +412,59 @@ enum NextChain {
     Done,
 }
 
+struct ReloadHistoryStage {
+    items: Vec<IndexedHistoryItemWire>,
+    total: Option<usize>,
+    gap_revision: u64,
+}
+
+struct ReloadProgress {
+    generation: u64,
+    acknowledged: bool,
+    active_session_id: Option<SessionId>,
+    session_reads_started: bool,
+    state_query: Option<u64>,
+    models: Option<Vec<ModelInfo>>,
+    profiles: Option<Vec<ProfileInfo>>,
+    sessions: Option<Vec<SessionInfo>>,
+    state: Option<SessionStateWire>,
+    presentation: Option<SessionPresentationWire>,
+    history: Option<ReloadHistoryStage>,
+    history_complete: bool,
+}
+
+impl ReloadProgress {
+    fn new(generation: u64, active_session_id: Option<SessionId>) -> Self {
+        Self {
+            generation,
+            acknowledged: false,
+            history_complete: active_session_id.is_none(),
+            active_session_id,
+            session_reads_started: false,
+            state_query: None,
+            models: None,
+            profiles: None,
+            sessions: None,
+            state: None,
+            presentation: None,
+            history: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionActionSafety {
     Safe,
     Unknown,
     Busy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionStateSource {
+    Notification,
+    FreshResponse,
+    CloseVerifyResponse,
+    Reload,
 }
 
 impl App {
@@ -436,7 +522,11 @@ impl App {
             next_submission: 0,
             next_draft_id: 0,
             next_steer_id: 0,
+            next_reload_generation: 0,
+            reload_fenced_create_drafts: HashSet::new(),
+            reload_fenced_open_sessions: HashSet::new(),
             bootstrap: BootstrapProgress::default(),
+            reload: None,
             blocked_notice: false,
             monotonic_now: Arc::new(Instant::now),
         }
@@ -613,6 +703,8 @@ impl App {
     /// main loop must execute; commands are never executed here.
     pub fn update(&mut self, event: AppEvent) -> Vec<AppCommand> {
         self.sync_spinner_deadline();
+        let reload_active_before = self.reload.is_some();
+        let reload_event = self.is_reload_event(&event);
         if matches!(&event, AppEvent::Rendered) {
             self.dirty = false;
             return Vec::new();
@@ -698,6 +790,7 @@ impl App {
             } => self.delete_session(&session_id, confirm),
             AppEvent::CancelTurn { session_id } => self.cancel_turn(&session_id),
             AppEvent::RefreshTurn { session_id } => self.refresh_turn(&session_id),
+            AppEvent::Reload => self.reload(),
             AppEvent::Rpc(event) => self.on_rpc_event(event),
             AppEvent::RpcChannelEnded => self.on_rpc_channel_ended(),
             AppEvent::RpcSendFailed { id, error } => self.on_send_failed(id, error),
@@ -854,8 +947,17 @@ impl App {
         }
         // Central FIFO queue advance: after any event, at most one steer RPC
         // per session (or a fresh-turn fallback once a finished loop settles).
-        let advance = self.advance_steer_queues();
-        commands.extend(advance);
+        // Do not advance on the event that starts or finishes a reload: the
+        // reload itself is a barrier for new turn/steer work, and finishing
+        // the staged candidate must not accidentally issue the queued item in
+        // the same reducer pass.
+        let reload_active_after = self.reload.is_some();
+        let should_advance_steer_queue =
+            !(reload_active_before || reload_active_after || reload_event);
+        if should_advance_steer_queue {
+            let advance = self.advance_steer_queues();
+            commands.extend(advance);
+        }
         self.sync_spinner_deadline();
         commands
     }
@@ -1073,10 +1175,14 @@ impl App {
     }
 
     fn session_panel_busy(&self) -> bool {
+        if self.reload.is_some() {
+            return true;
+        }
         self.pending_requests.values().any(|request| {
             matches!(
                 request,
-                RequestKind::OpenSession { .. }
+                RequestKind::CreateSession { .. }
+                    | RequestKind::OpenSession { .. }
                     | RequestKind::RefreshSessions { .. }
                     | RequestKind::RenameSession { .. }
                     | RequestKind::CloseSession { .. }
@@ -1084,6 +1190,67 @@ impl App {
                     | RequestKind::DeleteSession { .. }
             )
         })
+    }
+
+    fn is_lifecycle_request(kind: &RequestKind) -> bool {
+        matches!(
+            kind,
+            RequestKind::CreateSession { .. }
+                | RequestKind::OpenSession { .. }
+                | RequestKind::RenameSession { .. }
+                | RequestKind::CloseSession { .. }
+                | RequestKind::DeleteSession { .. }
+        )
+    }
+
+    fn is_reload_request(kind: &RequestKind) -> bool {
+        matches!(
+            kind,
+            RequestKind::StaleRead
+                | RequestKind::Reload { .. }
+                | RequestKind::ReloadModels { .. }
+                | RequestKind::ReloadProfiles { .. }
+                | RequestKind::ReloadSessions { .. }
+                | RequestKind::ReloadState { .. }
+                | RequestKind::ReloadPresentation { .. }
+                | RequestKind::ReloadHistory { .. }
+        )
+    }
+
+    fn is_reload_event(&self, event: &AppEvent) -> bool {
+        match event {
+            AppEvent::Reload => true,
+            AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Response(response))) => self
+                .pending_requests
+                .get(&response.id)
+                .is_some_and(Self::is_reload_request),
+            AppEvent::RpcSendFailed { id, .. } => self
+                .pending_requests
+                .get(id)
+                .is_some_and(Self::is_reload_request),
+            AppEvent::Rpc(_) => self.reload.is_some(),
+            _ => false,
+        }
+    }
+
+    fn has_pending_lifecycle_request(&self) -> bool {
+        self.pending_requests
+            .values()
+            .any(Self::is_lifecycle_request)
+    }
+
+    fn pending_lifecycle_session_ids(&self) -> HashSet<SessionId> {
+        self.pending_requests
+            .values()
+            .filter_map(|kind| match kind {
+                RequestKind::OpenSession { session_id, .. }
+                | RequestKind::RenameSession { session_id }
+                | RequestKind::CloseSession { session_id }
+                | RequestKind::DeleteSession { session_id } => Some(session_id.clone()),
+                RequestKind::CreateSession { .. } => None,
+                _ => None,
+            })
+            .collect()
     }
 
     /// Reconciles Browse selection against the current lifecycle-visible
@@ -1226,6 +1393,10 @@ impl App {
     /// the selection can never leak into the current session (spec 26.4).
     fn open_selector(&mut self, kind: SelectorKind) -> Vec<AppCommand> {
         if !self.guard_ready() {
+            return Vec::new();
+        }
+        if self.reload.is_some() {
+            self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
             return Vec::new();
         }
         if self.selector_state().is_some_and(|state| state.submitting) {
@@ -1481,6 +1652,10 @@ impl App {
     }
 
     fn confirm_dock(&mut self) -> Vec<AppCommand> {
+        if self.reload.is_some() {
+            self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
+            return Vec::new();
+        }
         enum Target {
             Composer,
             NewSession(NewSessionField),
@@ -1808,6 +1983,7 @@ impl App {
         if let Some(view) = self.sessions.known.get_mut(session_id) {
             view.closing = false;
             view.close_verification_unknown = true;
+            view.steer_state_unconfirmed = true;
             if view
                 .state
                 .as_ref()
@@ -1860,6 +2036,13 @@ impl App {
 
     fn begin_session_rename(&mut self) -> Vec<AppCommand> {
         if !self.guard_ready() {
+            return Vec::new();
+        }
+        if self.reload.is_some() {
+            self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
+            return Vec::new();
+        }
+        if self.has_pending_lifecycle_request() {
             return Vec::new();
         }
         let Some(session_id) = self.selected_session_id() else {
@@ -2095,6 +2278,13 @@ impl App {
     }
 
     fn submit_session_rename(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
+        if self.reload.is_some() {
+            self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
+            return Vec::new();
+        }
+        if self.has_pending_lifecycle_request() {
+            return Vec::new();
+        }
         if self.sessions.deleted.contains(session_id)
             || self.sessions.pending_deletes.contains(session_id)
         {
@@ -2178,6 +2368,15 @@ impl App {
             self.notice(
                 NoticeLevel::Error,
                 "session is blocked; cannot update configuration",
+            );
+            return Vec::new();
+        }
+        if self.active_view().is_some_and(|view| {
+            view.event_gap || view.latest_state_query.is_some() || view.state.is_none()
+        }) {
+            self.notice(
+                NoticeLevel::Warning,
+                "session state is not calibrated; cannot update configuration",
             );
             return Vec::new();
         }
@@ -2314,6 +2513,15 @@ impl App {
             return Vec::new();
         }
         if self.active_view().is_some_and(|view| {
+            view.event_gap || view.latest_state_query.is_some() || view.state.is_none()
+        }) {
+            self.notice(
+                NoticeLevel::Warning,
+                "session state is not calibrated; cannot update configuration",
+            );
+            return Vec::new();
+        }
+        if self.active_view().is_some_and(|view| {
             view.live.as_ref().is_some_and(|live| live.waiting)
                 || view.state.as_ref().is_some_and(|state| {
                     matches!(
@@ -2417,6 +2625,13 @@ impl App {
 
     fn submit_new_session(&mut self) -> Vec<AppCommand> {
         if !self.guard_ready() {
+            return Vec::new();
+        }
+        if self.reload.is_some() {
+            self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
+            return Vec::new();
+        }
+        if self.has_pending_lifecycle_request() {
             return Vec::new();
         }
         let Some(draft) = self.new_session().cloned() else {
@@ -2926,6 +3141,10 @@ impl App {
             );
             return Vec::new();
         }
+        if self.reload.is_some() {
+            self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
+            return Vec::new();
+        }
         if is_slash_command(&text) {
             let commands = self.run_command(&text);
             self.composer.clear();
@@ -3000,6 +3219,13 @@ impl App {
         text: String,
         editor_revision: Option<u64>,
     ) -> Vec<AppCommand> {
+        if self.reload.is_some() {
+            if self.composer.is_empty() {
+                self.composer.set_text(&text);
+            }
+            self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
+            return Vec::new();
+        }
         if !self.can_send_requests() {
             return Vec::new();
         }
@@ -3017,6 +3243,22 @@ impl App {
         let Some(view) = self.sessions.known.get(session_id) else {
             return Vec::new();
         };
+        if view.close_verification_unknown || view.steer_state_unconfirmed {
+            self.notice(
+                NoticeLevel::Warning,
+                "session state/history is not reconciled; cannot steer",
+            );
+            return Vec::new();
+        }
+        if view
+            .live
+            .as_ref()
+            .and_then(|live| live.reference.as_ref())
+            .is_none()
+        {
+            self.notice(NoticeLevel::Warning, "session is not running; cannot steer");
+            return Vec::new();
+        }
         if view.closing {
             self.notice(NoticeLevel::Warning, "session is closing; cannot steer");
             return Vec::new();
@@ -3082,8 +3324,8 @@ impl App {
     /// previous loop completed, persisted, and settled.
     fn advance_steer_queues(&mut self) -> Vec<AppCommand> {
         // Never issue a NEW steer (or fresh-turn) RPC once the connection is
-        // failed or shutting down.
-        if !self.can_send_requests() {
+        // failed, shutting down, or staging a configuration reload.
+        if self.reload.is_some() || !self.can_send_requests() {
             return Vec::new();
         }
         let session_ids: Vec<SessionId> = self.sessions.known.keys().cloned().collect();
@@ -3098,6 +3340,9 @@ impl App {
         let Some(view) = self.sessions.known.get(session_id) else {
             return Vec::new();
         };
+        if view.close_verification_unknown {
+            return Vec::new();
+        }
         if view.steer_queue_paused || view.steer_queue.is_empty() || view.closing {
             return Vec::new();
         }
@@ -3117,6 +3362,9 @@ impl App {
             .and_then(|live| live.reference.as_ref())
             .map(|r| r.loop_id.clone());
         if running {
+            if view.steer_state_unconfirmed {
+                return Vec::new();
+            }
             let Some(loop_id) = loop_id else {
                 return Vec::new();
             };
@@ -3185,9 +3433,13 @@ impl App {
             // persisted, history-settled idle session may start the next
             // queued message as a fresh turn (never after cancel/refusal/
             // error/blocked/unsaved, and never for an old loop).
-            let settled = view.last_result.as_ref().is_some_and(|result| {
-                result.outcome == crate::protocol::LoopOutcomeWire::Completed
-            }) && view.transcript.complete
+            let settled = view.live.is_none()
+                && view.last_result.as_ref().is_some_and(|result| {
+                    result.outcome == crate::protocol::LoopOutcomeWire::Completed
+                        && result.persistence == TurnPersistenceWire::Persisted
+                })
+                && view.transcript.complete
+                && !view.event_gap
                 && !view.is_blocked()
                 && view.unsaved_loop.is_none()
                 && !view.result_unconfirmed
@@ -3302,14 +3554,7 @@ impl App {
             LocalCommand::Help => self.open_dock(Dock::Help),
             LocalCommand::Logs => self.open_dock(Dock::Logs),
             LocalCommand::Cancel => self.cancel_active_turn(),
-            LocalCommand::Refresh => {
-                if let Some(session_id) = self.sessions.active.clone() {
-                    self.refresh_turn(&session_id)
-                } else {
-                    self.notice(NoticeLevel::Warning, "no active session to refresh");
-                    Vec::new()
-                }
-            }
+            LocalCommand::Reload => self.reload(),
             LocalCommand::Quit => self.request_shutdown(),
         }
     }
@@ -3319,6 +3564,10 @@ impl App {
     /// and the command is refused while a turn is running (spec 23.3).
     fn clear_transcript(&mut self) -> Vec<AppCommand> {
         if !self.guard_ready() {
+            return Vec::new();
+        }
+        if self.reload.is_some() {
+            self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
             return Vec::new();
         }
         let Some(active) = self.sessions.active.clone() else {
@@ -3617,6 +3866,11 @@ impl App {
     }
 
     fn request_session_state(&mut self, session_id: &SessionId) -> AppCommand {
+        if self.reload.is_some() {
+            return self.request(RequestKind::StaleRead, |id| {
+                OutgoingRequest::session_state(id, session_id)
+            });
+        }
         let query = self.next_state_query;
         self.next_state_query = self
             .next_state_query
@@ -3640,6 +3894,12 @@ impl App {
         {
             return None;
         }
+        if self.reload.is_some() {
+            if let Some(view) = self.sessions.known.get_mut(session_id) {
+                view.presentation_refresh_pending = true;
+            }
+            return None;
+        }
         if !self.can_send_requests() {
             return None;
         }
@@ -3659,7 +3919,12 @@ impl App {
 
     fn pending_history(&self, session_id: &SessionId) -> bool {
         self.pending_requests.values().any(|kind| {
-            matches!(kind, RequestKind::History { session_id: pending, .. } if pending == session_id)
+            matches!(
+                kind,
+                RequestKind::History { session_id: pending, .. }
+                    | RequestKind::ReloadHistory { session_id: pending, .. }
+                    if pending == session_id
+            )
         })
     }
 
@@ -3672,6 +3937,11 @@ impl App {
         offset: usize,
         limit: usize,
     ) -> AppCommand {
+        if self.reload.is_some() {
+            return self.request(RequestKind::StaleRead, |id| {
+                OutgoingRequest::session_history(id, session_id, Some(offset), Some(limit))
+            });
+        }
         let gap_revision = self
             .sessions
             .known
@@ -3768,7 +4038,9 @@ impl App {
                 RequestKind::OpenSession { session_id: pending, .. } if pending == session_id
             ) || matches!(
                 kind,
-                RequestKind::History { session_id: pending, .. } if pending == session_id
+                RequestKind::History { session_id: pending, .. }
+                    | RequestKind::ReloadHistory { session_id: pending, .. }
+                    if pending == session_id
             )
         })
     }
@@ -3784,9 +4056,17 @@ impl App {
             | RequestKind::UpdateSession { session_id, .. }
             | RequestKind::RenameSession { session_id }
             | RequestKind::History { session_id, .. }
-            | RequestKind::SessionState { session_id, .. } => Some(session_id),
+            | RequestKind::SessionState { session_id, .. }
+            | RequestKind::ReloadState { session_id, .. }
+            | RequestKind::ReloadPresentation { session_id, .. }
+            | RequestKind::ReloadHistory { session_id, .. } => Some(session_id),
             RequestKind::SessionPresentation { session_id } => Some(session_id),
             RequestKind::WaitTurn(turn) | RequestKind::CancelTurn(turn) => Some(&turn.session_id),
+            RequestKind::Reload { .. }
+            | RequestKind::StaleRead
+            | RequestKind::ReloadModels { .. }
+            | RequestKind::ReloadProfiles { .. }
+            | RequestKind::ReloadSessions { .. } => None,
             RequestKind::Ping
             | RequestKind::ListModels
             | RequestKind::ListProfiles
@@ -3795,6 +4075,1261 @@ impl App {
             | RequestKind::CreateSession { .. }
             | RequestKind::Shutdown => None,
         }
+    }
+
+    fn mark_reload_lifecycle_ack(&mut self, kind: &RequestKind) {
+        if self.reload.is_none() {
+            return;
+        }
+        let Some(session_id) = (match kind {
+            RequestKind::OpenSession { session_id, .. }
+            | RequestKind::RenameSession { session_id }
+            | RequestKind::CloseSession { session_id }
+            | RequestKind::DeleteSession { session_id } => Some(session_id.clone()),
+            _ => None,
+        }) else {
+            return;
+        };
+        self.mark_session_uncalibrated(&session_id);
+        if matches!(
+            kind,
+            RequestKind::OpenSession { .. }
+                | RequestKind::CloseSession { .. }
+                | RequestKind::DeleteSession { .. }
+        ) {
+            self.retire_reload_active_session(&session_id);
+        }
+    }
+
+    fn reload_generation(kind: &RequestKind) -> Option<u64> {
+        match kind {
+            RequestKind::Reload { generation }
+            | RequestKind::ReloadModels { generation }
+            | RequestKind::ReloadProfiles { generation }
+            | RequestKind::ReloadSessions { generation }
+            | RequestKind::ReloadState { generation, .. }
+            | RequestKind::ReloadPresentation { generation, .. }
+            | RequestKind::ReloadHistory { generation, .. } => Some(*generation),
+            _ => None,
+        }
+    }
+
+    fn is_reload_fence_read(kind: &RequestKind) -> bool {
+        matches!(
+            kind,
+            RequestKind::ListModels
+                | RequestKind::ListProfiles
+                | RequestKind::ListSessions
+                | RequestKind::RefreshSessions { .. }
+                | RequestKind::SessionState { .. }
+                | RequestKind::SessionPresentation { .. }
+                | RequestKind::CloseVerifyState { .. }
+                | RequestKind::History { .. }
+        )
+    }
+
+    /// Retires read projections that were issued before a reload. Execution
+    /// requests (send/wait/steer/cancel) and lifecycle mutations are left
+    /// intact; a stale read response is consumed without touching App state.
+    fn fence_pending_reload_reads(&mut self) {
+        let ids: Vec<RequestId> = self
+            .pending_requests
+            .iter()
+            .filter_map(|(id, kind)| Self::is_reload_fence_read(kind).then_some(*id))
+            .collect();
+        for id in ids {
+            let Some(kind) = self.pending_requests.remove(&id) else {
+                continue;
+            };
+            match &kind {
+                RequestKind::SessionState { session_id, query } => {
+                    if let Some(view) = self.sessions.known.get_mut(session_id) {
+                        if view.latest_state_query == Some(*query) {
+                            view.latest_state_query = None;
+                        }
+                    }
+                    self.mark_session_uncalibrated(session_id);
+                }
+                RequestKind::SessionPresentation { session_id } => {
+                    if let Some(view) = self.sessions.known.get_mut(session_id) {
+                        view.presentation_pending = false;
+                        view.presentation_refresh_pending = false;
+                    }
+                    self.mark_session_uncalibrated(session_id);
+                }
+                RequestKind::CloseVerifyState { session_id } => {
+                    self.mark_session_uncalibrated(session_id);
+                    self.mark_close_verification_unknown(session_id);
+                }
+                RequestKind::History { session_id, .. } => {
+                    self.mark_session_uncalibrated(session_id);
+                }
+                RequestKind::RefreshSessions {
+                    selected_session_id,
+                } => {
+                    let session_id = selected_session_id
+                        .clone()
+                        .or_else(|| self.sessions.active.clone());
+                    if let Some(session_id) = session_id {
+                        self.mark_session_uncalibrated(&session_id);
+                    }
+                }
+                RequestKind::ListSessions => {
+                    if let Some(session_id) = self.sessions.active.clone() {
+                        self.mark_session_uncalibrated(&session_id);
+                    }
+                }
+                _ => {}
+            }
+            self.pending_requests.insert(id, RequestKind::StaleRead);
+        }
+    }
+
+    /// A dropped event can invalidate a normal state request that was already
+    /// in flight: its response may describe the projection before the gap.
+    /// Retire it as a stale read so gap recovery issues a post-gap authority
+    /// query instead of replacing the current state projection with old data.
+    fn fence_pending_session_state(&mut self, session_id: &SessionId) {
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            view.latest_state_query = None;
+        }
+        let ids: Vec<RequestId> = self
+            .pending_requests
+            .iter()
+            .filter_map(|(id, kind)| {
+                matches!(
+                    kind,
+                    RequestKind::SessionState {
+                        session_id: pending,
+                        ..
+                    }
+                    | RequestKind::CloseVerifyState {
+                        session_id: pending,
+                    } if pending == session_id
+                )
+                .then_some(*id)
+            })
+            .collect();
+        for id in ids {
+            let Some(kind) = self.pending_requests.remove(&id) else {
+                continue;
+            };
+            if matches!(kind, RequestKind::CloseVerifyState { .. }) {
+                self.mark_close_verification_unknown(session_id);
+            }
+            self.pending_requests.insert(id, RequestKind::StaleRead);
+        }
+    }
+
+    fn reload(&mut self) -> Vec<AppCommand> {
+        if !self.guard_ready() {
+            return Vec::new();
+        }
+        if self.reload.is_some() {
+            self.notice(
+                NoticeLevel::Info,
+                "configuration reload is already in progress",
+            );
+            return Vec::new();
+        }
+        let generation = self.next_reload_generation;
+        self.next_reload_generation = self
+            .next_reload_generation
+            .checked_add(1)
+            .expect("reload generations exhausted");
+        for session_id in self.pending_lifecycle_session_ids() {
+            self.mark_session_uncalibrated(&session_id);
+        }
+        self.reload_fenced_create_drafts = self
+            .pending_requests
+            .values()
+            .filter_map(|kind| match kind {
+                RequestKind::CreateSession { draft } => Some(*draft),
+                _ => None,
+            })
+            .collect();
+        self.reload_fenced_open_sessions = self
+            .pending_requests
+            .values()
+            .filter_map(|kind| match kind {
+                RequestKind::OpenSession { session_id, .. } => Some(session_id.clone()),
+                _ => None,
+            })
+            .collect();
+        self.fence_pending_reload_reads();
+        self.prepared_conversation = None;
+        for view in self.sessions.known.values_mut() {
+            view.transcript.render_cache = None;
+        }
+        self.reload = Some(ReloadProgress::new(
+            generation,
+            self.sessions.active.clone(),
+        ));
+        vec![self.request(RequestKind::Reload { generation }, OutgoingRequest::reload)]
+    }
+
+    fn retire_reload_active_session(&mut self, session_id: &SessionId) {
+        let Some(generation) = self
+            .reload
+            .as_ref()
+            .filter(|reload| reload.active_session_id.as_ref() == Some(session_id))
+            .map(|reload| reload.generation)
+        else {
+            return;
+        };
+        let ids: Vec<RequestId> = self
+            .pending_requests
+            .iter()
+            .filter_map(|(id, kind)| {
+                (Self::reload_generation(kind) == Some(generation)
+                    && Self::request_session_id(kind) == Some(session_id.as_str()))
+                .then_some(*id)
+            })
+            .collect();
+        for id in ids {
+            self.pending_requests.insert(id, RequestKind::StaleRead);
+        }
+        if let Some(reload) = self.reload.as_mut() {
+            reload.active_session_id = None;
+            reload.state_query = None;
+            reload.state = None;
+            reload.presentation = None;
+            reload.history = None;
+            reload.history_complete = true;
+        }
+    }
+
+    fn reload_failed(&mut self, generation: u64, message: impl Into<String>) -> Vec<AppCommand> {
+        let Some(reload) = self.reload.as_ref() else {
+            return Vec::new();
+        };
+        if reload.generation != generation {
+            return Vec::new();
+        }
+        let acknowledged = reload.acknowledged;
+        let mark_active = reload.acknowledged
+            || reload.session_reads_started
+            || reload.state.is_some()
+            || reload.history.is_some();
+        let staged_active = reload.active_session_id.clone();
+        let mut sessions_to_mark = self.pending_lifecycle_session_ids();
+        if mark_active {
+            if let Some(session_id) = staged_active {
+                sessions_to_mark.insert(session_id);
+            }
+            if let Some(session_id) = self.sessions.active.clone() {
+                sessions_to_mark.insert(session_id);
+            }
+        }
+        self.fence_pending_reload_reads();
+        for session_id in sessions_to_mark {
+            self.mark_session_uncalibrated(&session_id);
+        }
+        let ids: Vec<RequestId> = self
+            .pending_requests
+            .iter()
+            .filter_map(|(id, kind)| {
+                (Self::reload_generation(kind) == Some(generation)).then_some(*id)
+            })
+            .collect();
+        for id in ids {
+            self.pending_requests.insert(id, RequestKind::StaleRead);
+        }
+        self.reload = None;
+        let detail = message.into();
+        let message = if acknowledged {
+            format!("Agent configuration reloaded; view refresh incomplete or failed: {detail}")
+        } else if detail == "agent.reload returned {ok:false}; configuration was not applied" {
+            detail
+        } else {
+            format!("configuration reload outcome is unknown; no automatic retry: {detail}")
+        };
+        self.notice(NoticeLevel::Warning, message);
+        let reconcile_sessions: Vec<SessionId> = self
+            .sessions
+            .known
+            .iter()
+            .filter_map(|(session_id, view)| {
+                (view.event_gap || view.needs_post_wait_history).then_some(session_id.clone())
+            })
+            .collect();
+        let mut commands = Vec::new();
+        for session_id in reconcile_sessions {
+            commands.extend(self.start_gap_reconcile(&session_id));
+            commands.extend(self.resume_deferred_reconcile(&session_id));
+        }
+        commands
+    }
+
+    fn on_reload_response(&mut self, generation: u64, response: &RpcResponse) -> Vec<AppCommand> {
+        if self
+            .reload
+            .as_ref()
+            .is_none_or(|reload| reload.generation != generation)
+        {
+            return Vec::new();
+        }
+        match response.parse_reload() {
+            Ok(result) if result.ok => {
+                if let Some(reload) = self.reload.as_mut() {
+                    reload.acknowledged = true;
+                }
+                vec![
+                    self.request(
+                        RequestKind::ReloadModels { generation },
+                        OutgoingRequest::list_models,
+                    ),
+                    self.request(
+                        RequestKind::ReloadProfiles { generation },
+                        OutgoingRequest::list_profiles,
+                    ),
+                    self.request(
+                        RequestKind::ReloadSessions { generation },
+                        OutgoingRequest::list_sessions,
+                    ),
+                ]
+            }
+            Ok(_) => self.reload_failed(
+                generation,
+                "agent.reload returned {ok:false}; configuration was not applied",
+            ),
+            Err(error) => self.reload_failed(
+                generation,
+                format!("agent.reload response was not exactly {{ok:true}}: {error}"),
+            ),
+        }
+    }
+
+    fn on_reload_models_response(
+        &mut self,
+        generation: u64,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
+        if self
+            .reload
+            .as_ref()
+            .is_none_or(|reload| reload.generation != generation)
+        {
+            return Vec::new();
+        }
+        match response.parse_models() {
+            Ok(result) => {
+                let mut ids = HashSet::new();
+                if result
+                    .models
+                    .iter()
+                    .any(|model| !ids.insert(model.id.clone()))
+                {
+                    return self.reload_failed(
+                        generation,
+                        "configuration reload returned duplicate model IDs",
+                    );
+                }
+                if let Some(reload) = self.reload.as_mut() {
+                    reload.models = Some(result.models);
+                }
+                self.maybe_finish_reload()
+            }
+            Err(error) => self.reload_failed(
+                generation,
+                format!("configuration reload model catalog failed: {error}"),
+            ),
+        }
+    }
+
+    fn on_reload_profiles_response(
+        &mut self,
+        generation: u64,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
+        if self
+            .reload
+            .as_ref()
+            .is_none_or(|reload| reload.generation != generation)
+        {
+            return Vec::new();
+        }
+        match response.parse_profiles() {
+            Ok(result) => {
+                let mut ids = HashSet::new();
+                if result
+                    .profiles
+                    .iter()
+                    .any(|profile| !ids.insert(profile.id.clone()))
+                {
+                    return self.reload_failed(
+                        generation,
+                        "configuration reload returned duplicate profile IDs",
+                    );
+                }
+                if let Some(reload) = self.reload.as_mut() {
+                    reload.profiles = Some(result.profiles);
+                }
+                self.maybe_finish_reload()
+            }
+            Err(error) => self.reload_failed(
+                generation,
+                format!("configuration reload profile catalog failed: {error}"),
+            ),
+        }
+    }
+
+    fn on_reload_sessions_response(
+        &mut self,
+        generation: u64,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
+        if self
+            .reload
+            .as_ref()
+            .is_none_or(|reload| reload.generation != generation)
+        {
+            return Vec::new();
+        }
+        let result = match response.parse_sessions() {
+            Ok(result) => result,
+            Err(error) => {
+                return self.reload_failed(
+                    generation,
+                    format!("configuration reload session catalog failed: {error}"),
+                );
+            }
+        };
+        let mut ids = HashSet::new();
+        let sessions: Vec<SessionInfo> = result
+            .sessions
+            .into_iter()
+            .filter(|session| {
+                !self.sessions.deleted.contains(&session.session_id)
+                    && !self.sessions.pending_deletes.contains(&session.session_id)
+            })
+            .collect();
+        if sessions
+            .iter()
+            .any(|session| !ids.insert(session.session_id.clone()))
+        {
+            return self.reload_failed(
+                generation,
+                "configuration reload returned duplicate session IDs",
+            );
+        }
+
+        let active_session_id = self.reload.as_ref().and_then(|reload| {
+            reload.active_session_id.clone().filter(|session_id| {
+                !self.sessions.deleted.contains(session_id)
+                    && !self.sessions.pending_deletes.contains(session_id)
+            })
+        });
+        let (active_session_id, start_reads) = {
+            let Some(reload) = self.reload.as_mut() else {
+                return Vec::new();
+            };
+            reload.sessions = Some(sessions.clone());
+            let start_reads = !reload.session_reads_started;
+            reload.session_reads_started = true;
+            if active_session_id.is_none() {
+                reload.active_session_id = None;
+                reload.history_complete = true;
+            }
+            (active_session_id, start_reads)
+        };
+        if !start_reads {
+            return self.maybe_finish_reload();
+        }
+        let Some(session_id) = active_session_id else {
+            return self.maybe_finish_reload();
+        };
+        if !sessions
+            .iter()
+            .any(|session| session.session_id == session_id)
+        {
+            return self.reload_failed(
+                generation,
+                format!("active session {session_id} disappeared during configuration reload"),
+            );
+        }
+
+        let query = self.next_state_query;
+        self.next_state_query = self
+            .next_state_query
+            .checked_add(1)
+            .expect("session state query space exhausted");
+        if let Some(reload) = self.reload.as_mut() {
+            reload.state_query = Some(query);
+        }
+        vec![
+            self.request(
+                RequestKind::ReloadState {
+                    session_id: session_id.clone(),
+                    query,
+                    generation,
+                },
+                |id| OutgoingRequest::session_state(id, &session_id),
+            ),
+            self.request(
+                RequestKind::ReloadPresentation {
+                    session_id: session_id.clone(),
+                    generation,
+                },
+                |id| OutgoingRequest::session_presentation(id, &session_id),
+            ),
+        ]
+    }
+
+    fn on_reload_state_response(
+        &mut self,
+        session_id: SessionId,
+        query: u64,
+        generation: u64,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
+        let valid = self.reload.as_ref().is_some_and(|reload| {
+            reload.generation == generation
+                && reload.active_session_id.as_ref() == Some(&session_id)
+        });
+        if !valid {
+            return Vec::new();
+        }
+        if self.reload.as_ref().and_then(|reload| reload.state_query) != Some(query) {
+            return Vec::new();
+        }
+        match response.parse_session_state() {
+            Ok(state) if state.session_id == session_id => {
+                let state_shape_valid = match state.status {
+                    SessionStatusWire::Idle | SessionStatusWire::Blocked => {
+                        state.active_loop.is_none()
+                    }
+                    SessionStatusWire::Running
+                    | SessionStatusWire::WaitingForInput
+                    | SessionStatusWire::Finishing => state
+                        .active_loop
+                        .as_ref()
+                        .is_some_and(|loop_state| !loop_state.loop_id.is_empty()),
+                };
+                if !state_shape_valid {
+                    return self.reload_failed(
+                        generation,
+                        format!(
+                            "configuration reload state for session {session_id} is inconsistent"
+                        ),
+                    );
+                }
+                let gap_revision = self
+                    .sessions
+                    .known
+                    .get(&session_id)
+                    .map_or(0, |view| view.gap_revision);
+                if let Some(reload) = self.reload.as_mut() {
+                    reload.state = Some(state);
+                    reload.history_complete = false;
+                    reload.history = Some(ReloadHistoryStage {
+                        items: Vec::new(),
+                        total: None,
+                        gap_revision,
+                    });
+                }
+                vec![self.request(
+                    RequestKind::ReloadHistory {
+                        session_id: session_id.clone(),
+                        offset: 0,
+                        limit: DEFAULT_HISTORY_LIMIT,
+                        gap_revision,
+                        generation,
+                    },
+                    |id| {
+                        OutgoingRequest::session_history(
+                            id,
+                            &session_id,
+                            Some(0),
+                            Some(DEFAULT_HISTORY_LIMIT),
+                        )
+                    },
+                )]
+            }
+            Ok(_) => self.reload_failed(
+                generation,
+                format!("configuration reload state response does not match session {session_id}"),
+            ),
+            Err(error) => self.reload_failed(
+                generation,
+                format!("configuration reload state read failed: {error}"),
+            ),
+        }
+    }
+
+    fn on_reload_presentation_response(
+        &mut self,
+        session_id: SessionId,
+        generation: u64,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
+        let valid = self.reload.as_ref().is_some_and(|reload| {
+            reload.generation == generation
+                && reload.active_session_id.as_ref() == Some(&session_id)
+        });
+        if !valid {
+            return Vec::new();
+        }
+        match response.parse_session_presentation() {
+            Ok(presentation) if presentation.session_id == session_id => {
+                if let Some(reload) = self.reload.as_mut() {
+                    reload.presentation = Some(presentation);
+                }
+                self.maybe_finish_reload()
+            }
+            Ok(_) => self.reload_failed(
+                generation,
+                format!(
+                    "configuration reload presentation response does not match session {session_id}"
+                ),
+            ),
+            Err(error) => self.reload_failed(
+                generation,
+                format!("configuration reload presentation read failed: {error}"),
+            ),
+        }
+    }
+
+    fn on_reload_history_response(
+        &mut self,
+        session_id: SessionId,
+        offset: usize,
+        limit: usize,
+        gap_revision: u64,
+        generation: u64,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
+        let valid = self.reload.as_ref().is_some_and(|reload| {
+            reload.generation == generation
+                && reload.active_session_id.as_ref() == Some(&session_id)
+        });
+        if !valid {
+            return Vec::new();
+        }
+        let page = match response.parse_history() {
+            Ok(page) => page,
+            Err(error) => {
+                return self.reload_failed(
+                    generation,
+                    format!("configuration reload history read failed: {error}"),
+                );
+            }
+        };
+        let mut failure = None;
+        let mut next_offset = None;
+        {
+            let Some(reload) = self.reload.as_mut() else {
+                return Vec::new();
+            };
+            if let Some(stage) = reload.history.as_mut() {
+                let expected_offset = stage.items.len();
+                if stage.gap_revision != gap_revision || expected_offset != offset {
+                    failure = Some(format!(
+                        "configuration reload history cursor changed at offset {offset}"
+                    ));
+                } else if page.items.len() > limit {
+                    failure = Some(format!(
+                        "configuration reload history page exceeded its limit at offset {offset}"
+                    ));
+                } else if stage.total.is_some_and(|total| total != page.total) {
+                    failure =
+                        Some("configuration reload history total changed mid-read".to_owned());
+                } else if !page.items.iter().enumerate().all(|(index, item)| {
+                    offset
+                        .checked_add(index)
+                        .is_some_and(|expected| expected == item.index)
+                }) {
+                    failure = Some(format!(
+                        "configuration reload history is not contiguous at offset {offset}"
+                    ));
+                } else if let Some(new_len) = offset.checked_add(page.items.len()) {
+                    let next_valid = match page.next_offset {
+                        Some(next) => next > offset && next == new_len && next <= page.total,
+                        None => new_len == page.total,
+                    };
+                    if !next_valid {
+                        failure = Some(format!(
+                            "configuration reload history did not advance from offset {offset}"
+                        ));
+                    } else {
+                        stage.total = Some(page.total);
+                        stage.items.extend(page.items.iter().cloned());
+                        next_offset = page.next_offset;
+                        if next_offset.is_none() {
+                            reload.history_complete = true;
+                        }
+                    }
+                } else {
+                    failure = Some("configuration reload history offset overflowed".to_owned());
+                }
+            } else {
+                failure =
+                    Some("configuration reload history arrived before its read stage".to_owned());
+            }
+        }
+        if let Some(failure) = failure {
+            return self.reload_failed(generation, failure);
+        }
+        if let Some(next_offset) = next_offset {
+            return vec![self.request(
+                RequestKind::ReloadHistory {
+                    session_id: session_id.clone(),
+                    offset: next_offset,
+                    limit,
+                    gap_revision,
+                    generation,
+                },
+                |id| {
+                    OutgoingRequest::session_history(
+                        id,
+                        &session_id,
+                        Some(next_offset),
+                        Some(limit),
+                    )
+                },
+            )];
+        }
+        self.maybe_finish_reload()
+    }
+
+    fn maybe_finish_reload(&mut self) -> Vec<AppCommand> {
+        let complete = self.reload.as_ref().is_some_and(|reload| {
+            reload.models.is_some()
+                && reload.profiles.is_some()
+                && reload.sessions.is_some()
+                && match reload.active_session_id {
+                    None => true,
+                    Some(_) => {
+                        reload.state.is_some()
+                            && reload.presentation.is_some()
+                            && reload.history_complete
+                    }
+                }
+        });
+        if !complete {
+            return Vec::new();
+        }
+        if let Some(error) = self.reload_catalog_error() {
+            let generation = self
+                .reload
+                .as_ref()
+                .expect("reload is present while validating")
+                .generation;
+            return self.reload_failed(generation, error);
+        }
+        let reload = self.reload.take().expect("reload completion was checked");
+        self.apply_reload(reload)
+    }
+
+    fn reload_catalog_error(&self) -> Option<String> {
+        let reload = self.reload.as_ref()?;
+        let models = reload.models.as_ref()?;
+        let profiles = reload.profiles.as_ref()?;
+        if models.iter().any(|model| {
+            model.id.trim().is_empty()
+                || model.model_ref.trim().is_empty()
+                || model.supported_reasoning.is_empty()
+        }) {
+            return Some("configuration reload returned an invalid model catalog".to_owned());
+        }
+        if profiles
+            .iter()
+            .any(|profile| profile.id.trim().is_empty() || profile.model.trim().is_empty())
+        {
+            return Some("configuration reload returned an invalid profile catalog".to_owned());
+        }
+        for profile in profiles {
+            let Some(model) = models
+                .iter()
+                .find(|model| model.id.as_str() == profile.model.as_str())
+            else {
+                return Some(format!(
+                    "configuration reload profile {} references an unknown model",
+                    profile.id
+                ));
+            };
+            if !model.supported_reasoning.contains(&profile.reasoning) {
+                return Some(format!(
+                    "configuration reload profile {} uses unsupported reasoning",
+                    profile.id
+                ));
+            }
+            if !profile.tools.is_empty() && !model.supports_tools {
+                return Some(format!(
+                    "configuration reload profile {} uses unsupported tools",
+                    profile.id
+                ));
+            }
+        }
+        None
+    }
+
+    fn apply_reload(&mut self, reload: ReloadProgress) -> Vec<AppCommand> {
+        // A turn may have caused a normal read while the staged reload was in
+        // flight. Fence that read before installing the candidate snapshot;
+        // the execution request itself is never touched.
+        self.fence_pending_reload_reads();
+
+        self.catalogs.models = reload.models.expect("complete reload has models");
+        self.catalogs.profiles = reload.profiles.expect("complete reload has profiles");
+        self.catalogs.loaded = true;
+        self.refresh_catalog_seats();
+
+        let rename_pending: HashSet<SessionId> = self
+            .pending_requests
+            .values()
+            .filter_map(|kind| match kind {
+                RequestKind::RenameSession { session_id } => Some(session_id.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut sessions: Vec<SessionInfo> = reload
+            .sessions
+            .expect("complete reload has sessions")
+            .into_iter()
+            .filter(|session| {
+                !self.sessions.deleted.contains(&session.session_id)
+                    && !self.sessions.pending_deletes.contains(&session.session_id)
+            })
+            .collect();
+        for session in &mut sessions {
+            let preserve_info = self
+                .sessions
+                .known
+                .get(&session.session_id)
+                .is_some_and(|view| {
+                    view.config_update.is_some() || view.closing || view.close_verification_unknown
+                });
+            if preserve_info {
+                if let Some(view) = self.sessions.known.get(&session.session_id) {
+                    *session = view.info.clone();
+                }
+            } else if self.sessions.closed.contains(&session.session_id) {
+                session.loaded = false;
+            }
+            if let Some(title) = self.sessions.title_overrides.get(&session.session_id) {
+                session.title = title.clone();
+            }
+        }
+        for session in &sessions {
+            if let Some(view) = self.sessions.known.get_mut(&session.session_id) {
+                view.info = session.clone();
+            } else {
+                self.sessions.known.insert(
+                    session.session_id.clone(),
+                    SessionView::new(session.clone()),
+                );
+            }
+        }
+        let staged_active = reload.active_session_id.clone();
+        if let Some(active) = self.sessions.active.clone() {
+            if Some(active.clone()) != staged_active
+                && !sessions.iter().any(|session| session.session_id == active)
+                && !self.sessions.deleted.contains(&active)
+                && !self.sessions.pending_deletes.contains(&active)
+            {
+                if let Some(view) = self.sessions.known.get(&active) {
+                    sessions.push(view.info.clone());
+                }
+            }
+        }
+        let preserve_title_overrides: HashSet<SessionId> = self
+            .sessions
+            .known
+            .iter()
+            .filter_map(|(session_id, view)| {
+                (view.config_update.is_some() || view.closing).then_some(session_id.clone())
+            })
+            .collect();
+        self.sessions.list = sessions;
+        self.sessions.title_overrides.retain(|session_id, _| {
+            rename_pending.contains(session_id) || preserve_title_overrides.contains(session_id)
+        });
+        self.reconcile_session_selection(true);
+
+        let mut commands = Vec::new();
+        if let Some(session_id) = reload.active_session_id {
+            let state = reload.state.expect("complete reload has active state");
+            let presentation = reload
+                .presentation
+                .expect("complete reload has active presentation");
+            if self.sessions.active.as_ref() == Some(&session_id)
+                && self.sessions.known.contains_key(&session_id)
+            {
+                let history_safe = self.sessions.known.get(&session_id).is_some_and(|view| {
+                    view.info.loaded
+                        && view.live.is_none()
+                        && view.unsaved_loop.is_none()
+                        && !view.result_unconfirmed
+                        && !view.event_gap
+                        && !view.loading
+                        && !view.reconcile_inflight
+                        && !view.closing
+                        && state.status == SessionStatusWire::Idle
+                        && state.active_loop.is_none()
+                        && state.block_reason.is_none()
+                });
+                let install_history = reload
+                    .history
+                    .as_ref()
+                    .filter(|history| {
+                        history_safe
+                            && self
+                                .sessions
+                                .known
+                                .get(&session_id)
+                                .is_some_and(|view| view.gap_revision == history.gap_revision)
+                    })
+                    .map(|history| history.items.clone());
+                self.install_reload_state(&session_id, &state);
+                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    // The reload read is staged evidence, not the normal
+                    // state authority used for Steer. Pair the installed
+                    // projection with a fresh response after the reload
+                    // barrier, including when the staged state is Running.
+                    view.steer_state_unconfirmed = true;
+                }
+                commands.push(self.request_session_state(&session_id));
+                let refresh_presentation_after =
+                    if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                        let refresh = view.presentation_refresh_pending;
+                        view.presentation = Some(presentation);
+                        view.presentation_pending = false;
+                        view.presentation_refresh_pending = false;
+                        if let Some(history) = install_history.as_deref() {
+                            Self::install_reload_history(view, history);
+                            // A staged reload replaces the authority fence only
+                            // after both state and complete History are aligned.
+                            view.close_verification_unknown = false;
+                        }
+                        view.recompute_usage_projection();
+                        refresh
+                    } else {
+                        false
+                    };
+                if refresh_presentation_after {
+                    if let Some(command) = self.request_session_presentation(&session_id) {
+                        commands.push(command);
+                    }
+                }
+            }
+            let reconcile = self.sessions.known.get(&session_id).is_some_and(|view| {
+                view.event_gap
+                    && !view.loading
+                    && !view.reconcile_inflight
+                    && view.live.is_none()
+                    && view.unsaved_loop.is_none()
+            });
+            if reconcile {
+                commands.extend(self.start_gap_reconcile(&session_id));
+            }
+            commands.extend(self.resume_deferred_reconcile(&session_id));
+        }
+        if let Some(active) = self.sessions.active.clone() {
+            if Some(active.clone()) != staged_active {
+                commands.extend(self.reload_active_session_after_catalog(&active));
+            }
+        }
+        let deferred_sessions: Vec<SessionId> = self
+            .sessions
+            .known
+            .iter()
+            .filter_map(|(session_id, view)| {
+                (view.event_gap || view.needs_post_wait_history).then_some(session_id.clone())
+            })
+            .collect();
+        for session_id in deferred_sessions {
+            commands.extend(self.start_gap_reconcile(&session_id));
+            commands.extend(self.resume_deferred_reconcile(&session_id));
+        }
+        self.prepared_conversation = None;
+        self.notice(
+            NoticeLevel::Info,
+            "Agent configuration and read-only state reloaded",
+        );
+        commands
+    }
+
+    fn reload_active_session_after_catalog(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
+        if !self.can_send_requests()
+            || self.sessions.deleted.contains(session_id)
+            || self.sessions.pending_deletes.contains(session_id)
+            || self.sessions.closed.contains(session_id)
+        {
+            return Vec::new();
+        }
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            view.steer_state_unconfirmed = true;
+        }
+        let mut commands = vec![self.request_session_state(session_id)];
+        if let Some(command) = self.request_session_presentation(session_id) {
+            commands.push(command);
+        }
+        let fetch_history = self.sessions.known.get(session_id).is_some_and(|view| {
+            !view.loading
+                && (view.event_gap || !view.transcript.complete)
+                && view.live.is_none()
+                && view.unsaved_loop.is_none()
+        });
+        if fetch_history {
+            let (offset, reconcile_gap) = self
+                .sessions
+                .known
+                .get(session_id)
+                .map(|view| (view.transcript.loaded_count, view.event_gap))
+                .unwrap_or((0, false));
+            if let Some(view) = self.sessions.known.get_mut(session_id) {
+                view.loading = true;
+                view.reconcile_inflight = reconcile_gap;
+            }
+            commands.push(self.request_history(session_id, offset, DEFAULT_HISTORY_LIMIT));
+        }
+        commands
+    }
+
+    fn resume_deferred_reconcile(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
+        if !self.can_send_requests()
+            || self.sessions.deleted.contains(session_id)
+            || self.sessions.closed.contains(session_id)
+        {
+            return Vec::new();
+        }
+        let (offset, state_needed) = {
+            let Some(view) = self.sessions.known.get(session_id) else {
+                return Vec::new();
+            };
+            let terminal_live = view
+                .live
+                .as_ref()
+                .is_some_and(|live| live.waiting && live.last_result.is_some());
+            if !view.needs_post_wait_history
+                || !view.info.loaded
+                || view.closing
+                || view.loading
+                || (view.live.is_some() && !terminal_live)
+                || view.unsaved_loop.is_some()
+                || self.pending_history(session_id)
+            {
+                return Vec::new();
+            }
+            (
+                view.transcript.loaded_count,
+                view.latest_state_query.is_none(),
+            )
+        };
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            view.needs_post_wait_history = false;
+            view.loading = true;
+            view.reconcile_inflight = true;
+        }
+        let mut commands = Vec::new();
+        if state_needed {
+            commands.push(self.request_session_state(session_id));
+        }
+        commands.push(self.request_history(session_id, offset, 20));
+        commands
+    }
+
+    fn install_reload_state(&mut self, session_id: &SessionId, staged: &SessionStateWire) {
+        let preserve_projection = self.sessions.known.get(session_id).is_some_and(|view| {
+            view.live.is_some()
+                || view.unsaved_loop.is_some()
+                || view.result_unconfirmed
+                || view.event_gap
+                || view.closing
+                || view.close_verification_unknown
+        });
+        if preserve_projection {
+            if let Some(view) = self.sessions.known.get_mut(session_id) {
+                Self::merge_reload_state(view, staged);
+            }
+        } else {
+            self.apply_session_state(staged, None, SessionStateSource::Reload);
+        }
+    }
+
+    fn merge_reload_state(view: &mut SessionView, staged: &SessionStateWire) {
+        let mut state = staged.clone();
+        if view.unsaved_loop.is_some() && state.status != SessionStatusWire::Blocked {
+            state.status = SessionStatusWire::Blocked;
+            state.active_loop = None;
+            state.block_reason = Some(crate::protocol::SessionBlockReasonWire::Persistence);
+        }
+        if let Some(reference) = view.live.as_ref().and_then(|live| live.reference.as_ref()) {
+            if state
+                .active_loop
+                .as_ref()
+                .is_some_and(|loop_state| loop_state.loop_id.as_str() != reference.loop_id.as_str())
+                || (state.status != SessionStatusWire::Idle
+                    && state.status != SessionStatusWire::Blocked
+                    && state.active_loop.is_none())
+            {
+                return;
+            }
+            if state.status == SessionStatusWire::Idle
+                && state.active_loop.is_none()
+                && view
+                    .live
+                    .as_ref()
+                    .is_some_and(|live| !live.waiting && live.last_result.is_none())
+            {
+                return;
+            }
+        }
+        if view.live.is_none()
+            && state.status != SessionStatusWire::Idle
+            && state.status != SessionStatusWire::Blocked
+        {
+            if let Some(loop_state) = state.active_loop.as_ref() {
+                let mut live = LiveLoop::new(LocalSubmissionId(u64::MAX), String::new());
+                live.reference = Some(TurnRef {
+                    session_id: state.session_id.clone(),
+                    loop_id: loop_state.loop_id.clone(),
+                });
+                live.event_gap = true;
+                view.live = Some(live);
+                view.event_gap = true;
+            }
+        }
+        view.state = Some(state);
+    }
+
+    fn refresh_catalog_seats(&mut self) {
+        let profile = self
+            .catalogs
+            .next_profile
+            .take()
+            .filter(|id| self.catalogs.profiles.iter().any(|item| &item.id == id))
+            .or_else(|| self.catalogs.profiles.first().map(|item| item.id.clone()));
+        let profile_model = profile.as_ref().and_then(|profile_id| {
+            self.catalogs
+                .profiles
+                .iter()
+                .find(|item| &item.id == profile_id)
+                .map(|item| item.model.clone())
+        });
+        let model = self
+            .catalogs
+            .next_model
+            .take()
+            .and_then(|id| {
+                self.catalogs
+                    .models
+                    .iter()
+                    .find(|item| {
+                        item.id.as_str() == id.as_str() || item.model_ref.as_str() == id.as_str()
+                    })
+                    .map(|item| item.id.clone())
+            })
+            .or_else(|| {
+                profile_model.as_ref().and_then(|id| {
+                    self.catalogs
+                        .models
+                        .iter()
+                        .find(|item| {
+                            item.id.as_str() == id.as_str()
+                                || item.model_ref.as_str() == id.as_str()
+                        })
+                        .map(|item| item.id.clone())
+                })
+            })
+            .or_else(|| self.catalogs.models.first().map(|item| item.id.clone()));
+        let supported =
+            supported_reasoning(&self.catalogs.models, model.as_deref().unwrap_or_default());
+        let reasoning = self
+            .catalogs
+            .next_reasoning
+            .filter(|reasoning| supported.contains(reasoning))
+            .or_else(|| {
+                profile.as_ref().and_then(|profile_id| {
+                    self.catalogs
+                        .profiles
+                        .iter()
+                        .find(|item| &item.id == profile_id)
+                        .map(|item| item.reasoning)
+                        .filter(|reasoning| supported.contains(reasoning))
+                })
+            })
+            .or_else(|| supported.first().copied())
+            .or(Some(Reasoning::Auto));
+        self.catalogs.next_profile = profile;
+        self.catalogs.next_model = model;
+        self.catalogs.next_reasoning = reasoning;
+
+        let profile_id = self.catalogs.next_profile.clone().unwrap_or_default();
+        let model_id = self.catalogs.next_model.clone().unwrap_or_default();
+        let fallback_reasoning = self.catalogs.next_reasoning.unwrap_or(Reasoning::Auto);
+        let supported = supported_reasoning(&self.catalogs.models, &model_id);
+        let draft_reasoning = supported
+            .contains(&fallback_reasoning)
+            .then_some(fallback_reasoning)
+            .or_else(|| supported.first().copied())
+            .unwrap_or(Reasoning::Auto);
+        let profile_model = self
+            .catalogs
+            .profiles
+            .iter()
+            .find(|item| item.id == profile_id)
+            .map(|item| item.model.clone())
+            .unwrap_or_else(|| model_id.clone());
+        let catalog_models = self.catalogs.models.clone();
+        let catalog_profiles = self.catalogs.profiles.clone();
+        if let Some(draft) = self.draft_mut() {
+            if !draft.submitting {
+                if !catalog_profiles.iter().any(|item| item.id == draft.profile) {
+                    draft.profile = profile_id;
+                }
+                if !catalog_models.iter().any(|item| item.id == draft.model) {
+                    draft.model = profile_model;
+                }
+                let draft_supported = supported_reasoning(&catalog_models, &draft.model);
+                if !draft_supported.contains(&draft.reasoning) {
+                    draft.reasoning = draft_supported.first().copied().unwrap_or(draft_reasoning);
+                }
+            }
+        }
+    }
+
+    fn install_reload_history(view: &mut SessionView, items: &[IndexedHistoryItemWire]) {
+        let pending_users: Vec<UserBlock> = view
+            .transcript
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                TranscriptBlock::User(user) if user.pending => Some(user.clone()),
+                _ => None,
+            })
+            .collect();
+        view.transcript.blocks.clear();
+        view.transcript.items.clear();
+        view.transcript.loaded_count = 0;
+        view.transcript.next_offset = None;
+        view.transcript.total = 0;
+        view.transcript.complete = false;
+        view.transcript.render_cache = None;
+        view.user_timestamps.clear();
+        view.tool_presentations.clear();
+        merge_history_items(view, items);
+
+        for pending in pending_users {
+            let matched = view.transcript.blocks.iter().any(|block| {
+                matches!(
+                    block,
+                    TranscriptBlock::User(user)
+                        if !user.pending
+                            && pending.loop_id.is_some()
+                            && user.loop_id == pending.loop_id
+                )
+            });
+            if !matched {
+                view.transcript.blocks.push(TranscriptBlock::User(pending));
+            }
+        }
+        view.transcript.loaded_count = items.len();
+        view.transcript.total = items.len();
+        view.transcript.next_offset = None;
+        view.transcript.complete = true;
+        view.transcript.invalidate();
     }
 
     /// Retires the current loop for event routing without discarding a wait
@@ -3879,7 +5414,24 @@ impl App {
         view.reconcile_inflight = false;
         view.event_gap = true;
         view.transcript.complete = false;
+        if let Some(live) = view.live.as_mut() {
+            live.event_gap = true;
+        }
         Self::mark_pending_steers_unconfirmed(view);
+    }
+
+    fn mark_session_uncalibrated(&mut self, session_id: &SessionId) {
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            let was_uncalibrated = view.event_gap;
+            Self::mark_history_unconfirmed(view);
+            view.latest_state_query = None;
+            view.state = None;
+            view.close_verification_unknown = true;
+            view.steer_state_unconfirmed = true;
+            if !was_uncalibrated {
+                view.gap_revision = view.gap_revision.wrapping_add(1);
+            }
+        }
     }
 
     /// Allocates an id, registers the pending kind, and builds the request
@@ -3975,6 +5527,9 @@ impl App {
         }
         let now = self.instant_now();
         self.shutdown_deadline = Some(now + SHUTDOWN_TIMEOUT);
+        self.reload = None;
+        self.reload_fenced_open_sessions.clear();
+        self.reload_fenced_create_drafts.clear();
         self.connection = ConnectionState::ShuttingDown;
         if self.shutdown_sent {
             return Vec::new();
@@ -4005,6 +5560,13 @@ impl App {
         if !self.guard_ready() {
             return Vec::new();
         }
+        if self.reload.is_some() {
+            self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
+            return Vec::new();
+        }
+        if self.has_pending_lifecycle_request() {
+            return Vec::new();
+        }
         vec![
             self.request(RequestKind::CreateSession { draft: u64::MAX }, |id| {
                 OutgoingRequest::session_create(id, workspace, profile, model, reasoning, title)
@@ -4014,6 +5576,13 @@ impl App {
 
     fn open_session(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
         if !self.guard_ready() {
+            return Vec::new();
+        }
+        if self.reload.is_some() {
+            self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
+            return Vec::new();
+        }
+        if self.has_pending_lifecycle_request() {
             return Vec::new();
         }
         if self.sessions.deleted.contains(session_id)
@@ -4057,6 +5626,13 @@ impl App {
         if !self.guard_ready() {
             return Vec::new();
         }
+        if self.reload.is_some() {
+            self.notice(
+                NoticeLevel::Info,
+                "configuration reload is already refreshing the catalog",
+            );
+            return Vec::new();
+        }
         if self.session_panel_busy() {
             return Vec::new();
         }
@@ -4089,6 +5665,13 @@ impl App {
         if !self.guard_ready() {
             return Vec::new();
         }
+        if self.reload.is_some() {
+            self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
+            return Vec::new();
+        }
+        if self.has_pending_lifecycle_request() {
+            return Vec::new();
+        }
         if self.pending_requests.values().any(|request| {
             matches!(
                 request,
@@ -4112,6 +5695,29 @@ impl App {
                 );
                 return Vec::new();
             }
+        }
+        let (is_blocked, has_unsaved, has_unconfirmed, is_active) =
+            match self.sessions.known.get(session_id) {
+                Some(view) => (
+                    view.is_blocked(),
+                    view.unsaved_loop.is_some(),
+                    view.result_unconfirmed,
+                    view.live.is_some()
+                        || view
+                            .state
+                            .as_ref()
+                            .is_some_and(|state| state.status != SessionStatusWire::Idle),
+                ),
+                None => (false, false, false, false),
+            };
+        if (is_blocked || has_unsaved || has_unconfirmed || is_active) && !confirm {
+            self.notice(
+                NoticeLevel::Warning,
+                format!(
+                    "Session {session_id} has active or unsaved/blocked state. Type '/close confirm' to proceed."
+                ),
+            );
+            return Vec::new();
         }
         if self
             .sessions
@@ -4159,29 +5765,6 @@ impl App {
         ) {
             return self.report_unknown_session_state(session_id, "close");
         }
-        let (is_blocked, has_unsaved, has_unconfirmed, is_active) =
-            match self.sessions.known.get(session_id) {
-                Some(view) => (
-                    view.is_blocked(),
-                    view.unsaved_loop.is_some(),
-                    view.result_unconfirmed,
-                    view.live.is_some()
-                        || view
-                            .state
-                            .as_ref()
-                            .is_some_and(|state| state.status != SessionStatusWire::Idle),
-                ),
-                None => (false, false, false, false),
-            };
-        if (is_blocked || has_unsaved || has_unconfirmed || is_active) && !confirm {
-            self.notice(
-                NoticeLevel::Warning,
-                format!(
-                    "Session {session_id} has active or unsaved/blocked state. Type '/close confirm' to proceed."
-                ),
-            );
-            return Vec::new();
-        }
         if self.sessions.active.as_deref() == Some(session_id.as_str()) {
             ui_actions::cancel_scrollbar_drag(self);
         }
@@ -4220,6 +5803,7 @@ impl App {
         if let Some(view) = self.sessions.known.get_mut(session_id) {
             view.closing = false;
             view.close_verification_unknown = false;
+            view.steer_state_unconfirmed = false;
             view.info.loaded = false;
         }
         if let Some(info) = self
@@ -4235,6 +5819,7 @@ impl App {
             ui_actions::cancel_scrollbar_drag(self);
             ui_actions::clear_selection(self);
             self.sessions.active = None;
+            self.retire_reload_active_session(session_id);
         }
     }
 
@@ -4269,12 +5854,22 @@ impl App {
                 }
                 self.reconcile_session_selection(true);
                 self.notice(NoticeLevel::Info, format!("Session {session_id} closed."));
-                Vec::new()
+                self.maybe_finish_reload()
             }
             Err(RpcResponseError::Agent(_error)) => {
                 // MIG-146: close returns error, perform a single read check of session state.
                 // Do not retry indefinitely.
                 self.invalidate_session_state_requests(session_id);
+                if self.reload.is_some() {
+                    self.mark_close_verification_unknown(session_id);
+                    self.notice(
+                        NoticeLevel::Warning,
+                        format!(
+                            "Session {session_id} close verification is deferred until configuration reload finishes"
+                        ),
+                    );
+                    return self.maybe_finish_reload();
+                }
                 vec![self.request(
                     RequestKind::CloseVerifyState {
                         session_id: session_id.clone(),
@@ -4303,7 +5898,7 @@ impl App {
         }
         match response.parse_session_state() {
             Ok(state) if state.session_id == *session_id => {
-                self.apply_session_state(&state, None, false);
+                self.apply_session_state(&state, None, SessionStateSource::CloseVerifyResponse);
                 if let Some(view) = self.sessions.known.get_mut(session_id) {
                     view.closing = false;
                 }
@@ -4368,11 +5963,18 @@ impl App {
             }
         }
         self.reconcile_session_selection(true);
-        Vec::new()
+        self.maybe_finish_reload()
     }
 
     fn delete_session(&mut self, session_id: &SessionId, confirm: bool) -> Vec<AppCommand> {
         if !self.guard_ready() {
+            return Vec::new();
+        }
+        if self.reload.is_some() {
+            self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
+            return Vec::new();
+        }
+        if self.has_pending_lifecycle_request() {
             return Vec::new();
         }
         if self.sessions.deleted.contains(session_id)
@@ -4464,6 +6066,7 @@ impl App {
                     ui_actions::cancel_scrollbar_drag(self);
                     ui_actions::clear_selection(self);
                     self.sessions.active = None;
+                    self.retire_reload_active_session(session_id);
                 }
                 if let Dock::SessionSelector(state) = &mut self.dock {
                     if state.selected_session_id.as_deref() == Some(session_id.as_str()) {
@@ -4473,7 +6076,7 @@ impl App {
                 }
                 self.reconcile_session_selection(true);
                 self.notice(NoticeLevel::Info, format!("Session {session_id} deleted."));
-                Vec::new()
+                self.maybe_finish_reload()
             }
             Err(error) => {
                 self.sessions.pending_deletes.remove(session_id);
@@ -4553,6 +6156,14 @@ impl App {
         }
         ui_actions::clear_selection(self);
         self.sessions.active = Some(session_id.clone());
+
+        if self.reload.is_some() {
+            // The lifecycle ACK crossed the reload boundary. The response
+            // supplies metadata only; state and history still need fresh
+            // post-reload authority.
+            self.mark_session_uncalibrated(&session_id);
+            return Vec::new();
+        }
 
         commands.push(self.request_session_state(&session_id));
         if let Some(command) = self.request_session_presentation(&session_id) {
@@ -4698,6 +6309,9 @@ impl App {
                 .known
                 .insert(session_id.clone(), SessionView::new(session.clone()));
         }
+        if self.reload.is_some() {
+            self.mark_session_uncalibrated(&session_id);
+        }
         self.sessions
             .title_overrides
             .insert(session_id.clone(), session.title.clone());
@@ -4720,6 +6334,7 @@ impl App {
     }
 
     fn on_create_response(&mut self, draft_id: u64, response: &RpcResponse) -> Vec<AppCommand> {
+        let fenced_create = self.reload_fenced_create_drafts.remove(&draft_id);
         let session = match response.parse_session() {
             Ok(result) => result.session,
             Err(error) => {
@@ -4746,6 +6361,15 @@ impl App {
         if matches!(&self.dock, Dock::NewSession(draft) if draft.draft_id == draft_id) {
             self.dock = Dock::Composer;
         }
+        let during_reload = self.reload.is_some();
+        if (during_reload || fenced_create) && !self.sessions.known.contains_key(&session_id) {
+            self.sessions
+                .known
+                .insert(session_id.clone(), SessionView::new(session.clone()));
+        }
+        if fenced_create && !during_reload {
+            self.mark_session_uncalibrated(&session_id);
+        }
         self.on_session_response(session_id, response)
     }
 
@@ -4755,6 +6379,7 @@ impl App {
         previous_retired_loop: Option<TurnRef>,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
+        let fenced_open = self.reload_fenced_open_sessions.remove(&session_id);
         if self.sessions.deleted.contains(&session_id)
             || self.sessions.pending_deletes.contains(&session_id)
         {
@@ -4810,13 +6435,13 @@ impl App {
             view.reconcile_inflight = preserving_gap;
             view.needs_post_wait_history = false;
             view.closing = false;
-            view.close_verification_unknown = false;
             view.live = None;
             view.unsaved_loop = None;
             view.last_result = None;
             view.usage_projection = crate::state::session::UsageProjection::default();
             view.last_request = None;
             view.config_update = None;
+            view.state = None;
             view.presentation = None;
             view.presentation_pending = false;
             view.presentation_refresh_pending = false;
@@ -4828,10 +6453,24 @@ impl App {
             view.result_unconfirmed = false;
         }
         let opened_id = session_id.clone();
-        let commands = self.on_session_response(session_id, response);
+        let during_reload = self.reload.is_some();
+        if fenced_open && !during_reload {
+            if !self.sessions.known.contains_key(&opened_id) {
+                if let Ok(result) = parsed.as_ref() {
+                    self.sessions
+                        .known
+                        .insert(opened_id.clone(), SessionView::new(result.session.clone()));
+                }
+            }
+            self.mark_session_uncalibrated(&opened_id);
+        }
+        let mut commands = self.on_session_response(session_id, response);
         if matches!(&self.dock, Dock::SessionSelector(state) if state.selected_session_id.as_deref() == Some(opened_id.as_str()) && matches!(&state.mode, SessionPanelMode::Browse))
         {
             self.dock = Dock::Composer;
+        }
+        if self.reload.is_some() {
+            commands.extend(self.maybe_finish_reload());
         }
         commands
     }
@@ -4858,10 +6497,10 @@ impl App {
         }
         match response.parse_session_state() {
             Ok(state) if state.session_id.as_str() == session_id.as_str() => {
-                self.apply_session_state(&state, None, false)
+                self.apply_session_state(&state, None, SessionStateSource::FreshResponse)
             }
             Ok(_) => {
-                self.mark_close_verification_unknown(session_id);
+                self.mark_session_uncalibrated(session_id);
                 self.notice(
                     NoticeLevel::Warning,
                     format!("state response does not match requested session {session_id}"),
@@ -4869,7 +6508,7 @@ impl App {
                 Vec::new()
             }
             Err(error) => {
-                self.mark_close_verification_unknown(session_id);
+                self.mark_session_uncalibrated(session_id);
                 self.notice(
                     NoticeLevel::Warning,
                     format!("failed to fetch state for {session_id}: {error}"),
@@ -4945,8 +6584,9 @@ impl App {
         &mut self,
         state: &SessionStateWire,
         event_loop_id: Option<&String>,
-        from_event: bool,
+        source: SessionStateSource,
     ) -> Vec<AppCommand> {
+        let from_event = source == SessionStateSource::Notification;
         if self.sessions.deleted.contains(&state.session_id)
             || self.sessions.pending_deletes.contains(&state.session_id)
         {
@@ -5040,7 +6680,27 @@ impl App {
                 view.live = None;
             }
             view.state = Some(state.clone());
-            view.close_verification_unknown = false;
+            if source == SessionStateSource::FreshResponse
+                && state.status == SessionStatusWire::Running
+                && state.active_loop.as_ref().is_some_and(|loop_state| {
+                    view.live
+                        .as_ref()
+                        .and_then(|live| live.reference.as_ref())
+                        .is_some_and(|reference| reference.loop_id == loop_state.loop_id)
+                })
+            {
+                // A reload-staged state, an Idle notification, and a fresh
+                // Idle response are not Steer authority. Only a matching
+                // normal state response proving the current TurnRef is still
+                // Running releases this independent fence.
+                view.steer_state_unconfirmed = false;
+            }
+            if matches!(
+                source,
+                SessionStateSource::FreshResponse | SessionStateSource::CloseVerifyResponse
+            ) {
+                view.close_verification_unknown = false;
+            }
             !was_waiting && state.status == SessionStatusWire::WaitingForInput
         };
         if show_unsupported {
@@ -5084,6 +6744,9 @@ impl App {
         gap_revision: Option<u64>,
         page: &HistoryPageWire,
     ) -> Vec<AppCommand> {
+        if self.reload.is_some() {
+            return Vec::new();
+        }
         if !self.can_send_requests() {
             return Vec::new();
         }
@@ -5447,6 +7110,13 @@ impl App {
         if !self.guard_ready() {
             return Vec::new();
         }
+        if self.reload.is_some() {
+            if self.composer.is_empty() {
+                self.composer.set_text(&text);
+            }
+            self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
+            return Vec::new();
+        }
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return Vec::new();
@@ -5479,6 +7149,21 @@ impl App {
             self.notice(
                 NoticeLevel::Error,
                 "session is blocked; resolve or reset before submitting",
+            );
+            return Vec::new();
+        }
+        // A known-invalid state authority or durable history gap blocks a new
+        // turn. A pending normal state read or an incomplete history read
+        // without a gap retains the legacy admission behavior.
+        if self
+            .sessions
+            .known
+            .get(&session_id)
+            .is_some_and(|view| view.event_gap || view.close_verification_unknown)
+        {
+            self.notice(
+                NoticeLevel::Warning,
+                "session state/history is not reconciled; cannot submit a new turn",
             );
             return Vec::new();
         }
@@ -5527,6 +7212,7 @@ impl App {
                 event_gap: false,
                 last_result: None,
             });
+            view.steer_state_unconfirmed = false;
             // A fresh loop resumes the local steer queue: receipts reset, and
             // a paused queue may flow again (the user explicitly started it).
             view.steer_queue_paused = false;
@@ -5638,6 +7324,7 @@ impl App {
             Wait {
                 turn: TurnRef,
                 cancel: bool,
+                first_binding: bool,
             },
             Failed {
                 recovered: Option<String>,
@@ -5684,6 +7371,7 @@ impl App {
                     {
                         Plan::Mismatch
                     } else {
+                        let first_binding = live.reference.is_none();
                         if view
                             .last_result
                             .as_ref()
@@ -5710,6 +7398,7 @@ impl App {
                         Plan::Wait {
                             turn: result.turn,
                             cancel: live.cancel_requested,
+                            first_binding,
                         }
                     }
                 }
@@ -5740,7 +7429,11 @@ impl App {
                         // The started loop owns the text: drop the queue entry
                         // exactly like the accepted-Wait path.
                         view.steer_queue.retain(|item| !item.handoff);
-                        Plan::Wait { turn, cancel }
+                        Plan::Wait {
+                            turn,
+                            cancel,
+                            first_binding: false,
+                        }
                     } else {
                         let recovered = if view.is_blocked() || is_blocked_err {
                             view.live.as_ref().map(|live| live.user_text.clone())
@@ -5757,7 +7450,11 @@ impl App {
             }
         };
         match plan {
-            Plan::Wait { turn, cancel } => {
+            Plan::Wait {
+                turn,
+                cancel,
+                first_binding,
+            } => {
                 if !self.can_send_requests()
                     && !matches!(self.connection, ConnectionState::ShuttingDown)
                 {
@@ -5775,6 +7472,11 @@ impl App {
                     commands.push(self.request(RequestKind::CancelTurn(turn.clone()), |id| {
                         OutgoingRequest::cancel_turn(id, &turn)
                     }));
+                }
+                if let Some(command) =
+                    self.maybe_request_state_after_turn_binding(&turn, first_binding)
+                {
+                    commands.push(command);
                 }
                 commands
             }
@@ -5956,6 +7658,12 @@ impl App {
     }
 
     fn reconcile_after_wait(&mut self, turn: &TurnRef) -> Vec<AppCommand> {
+        if self.reload.is_some() {
+            if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
+                view.needs_post_wait_history = true;
+            }
+            return Vec::new();
+        }
         if !self.can_send_requests() {
             return Vec::new();
         }
@@ -6571,6 +8279,7 @@ impl App {
                 );
             }
             RequestKind::CreateSession { draft } => {
+                self.reload_fenced_create_drafts.remove(&draft);
                 if let Some(draft_state) = self.draft_matching(draft) {
                     draft_state.submitting = false;
                     draft_state.error = Some(format!("failed to send session.create: {error}"));
@@ -6585,6 +8294,7 @@ impl App {
                 session_id,
                 previous_retired_loop,
             } => {
+                self.reload_fenced_open_sessions.remove(&session_id);
                 if let Some(retired_loop) = previous_retired_loop {
                     if let Some(view) = self.sessions.known.get_mut(&session_id) {
                         view.retired_loop = Some(retired_loop);
@@ -6603,9 +8313,7 @@ impl App {
                     .and_then(|view| view.latest_state_query)
                     == Some(query);
                 if current {
-                    if let Some(view) = self.sessions.known.get_mut(&session_id) {
-                        view.latest_state_query = None;
-                    }
+                    self.mark_session_uncalibrated(&session_id);
                     self.notice(
                         NoticeLevel::Warning,
                         format!("state fetch failed for {session_id}: {error}"),
@@ -6622,6 +8330,19 @@ impl App {
                         format!("session presentation request failed for {session_id}: {error}"),
                     );
                 }
+            }
+            RequestKind::StaleRead => {}
+            RequestKind::Reload { generation }
+            | RequestKind::ReloadModels { generation }
+            | RequestKind::ReloadProfiles { generation }
+            | RequestKind::ReloadSessions { generation }
+            | RequestKind::ReloadState { generation, .. }
+            | RequestKind::ReloadPresentation { generation, .. }
+            | RequestKind::ReloadHistory { generation, .. } => {
+                commands.extend(self.reload_failed(
+                    generation,
+                    format!("configuration reload request failed: {error}"),
+                ));
             }
             RequestKind::Shutdown => {
                 self.notice(
@@ -6696,7 +8417,33 @@ impl App {
             return Vec::new();
         }
         let mut unconfirmed = false;
+        let reload_in_progress = self.reload.is_some();
+        let reload_acknowledged = self
+            .reload
+            .as_ref()
+            .is_some_and(|reload| reload.acknowledged);
+        let mut reload_sessions = HashSet::new();
+        if reload_in_progress {
+            reload_sessions = self.pending_lifecycle_session_ids();
+            if let Some(session_id) = self.sessions.active.clone() {
+                reload_sessions.insert(session_id);
+            }
+            if let Some(session_id) = self
+                .reload
+                .as_ref()
+                .and_then(|reload| reload.active_session_id.clone())
+            {
+                reload_sessions.insert(session_id);
+            }
+            self.fence_pending_reload_reads();
+        }
+        self.reload = None;
+        self.reload_fenced_create_drafts.clear();
+        self.reload_fenced_open_sessions.clear();
         self.pending_requests.clear();
+        for session_id in reload_sessions {
+            self.mark_session_uncalibrated(&session_id);
+        }
         for view in self.sessions.known.values_mut() {
             Self::mark_pending_steers_unconfirmed(view);
             // Transport loss pauses the unsent queue: never auto-send or
@@ -6723,7 +8470,18 @@ impl App {
             }
         }
         self.connection = ConnectionState::Failed(reason.to_owned());
-        self.notice(NoticeLevel::Error, reason.to_owned());
+        if reload_in_progress {
+            let text = if reload_acknowledged {
+                format!(
+                    "Agent configuration reloaded; view refresh outcome is unknown; no automatic retry: {reason}"
+                )
+            } else {
+                format!("configuration reload outcome is unknown; no automatic retry: {reason}")
+            };
+            self.notice(NoticeLevel::Error, text);
+        } else {
+            self.notice(NoticeLevel::Error, reason.to_owned());
+        }
         if unconfirmed {
             self.sticky_notice(NoticeLevel::Warning, UNCONFIRMED_RESULT_NOTICE);
         }
@@ -6753,6 +8511,7 @@ impl App {
         {
             return Vec::new();
         }
+        self.mark_reload_lifecycle_ack(&kind);
         if self.connection == ConnectionState::ShuttingDown
             && !matches!(
                 kind,
@@ -6762,6 +8521,8 @@ impl App {
             return Vec::new();
         }
         match kind {
+            RequestKind::StaleRead => Vec::new(),
+            RequestKind::Reload { generation } => self.on_reload_response(generation, &response),
             RequestKind::Ping => {
                 match response.parse_ping() {
                     Ok(pong) => {
@@ -6801,6 +8562,15 @@ impl App {
                 }
                 Err(error) => self.bootstrap_failure(METHOD_LIST_PROFILES, error),
             },
+            RequestKind::ReloadModels { generation } => {
+                self.on_reload_models_response(generation, &response)
+            }
+            RequestKind::ReloadProfiles { generation } => {
+                self.on_reload_profiles_response(generation, &response)
+            }
+            RequestKind::ReloadSessions { generation } => {
+                self.on_reload_sessions_response(generation, &response)
+            }
             RequestKind::ListSessions => match response.parse_sessions() {
                 Ok(result) => {
                     let sessions: Vec<_> = result
@@ -6833,15 +8603,38 @@ impl App {
             RequestKind::SessionState { session_id, query } => {
                 self.on_session_state_response(&session_id, query, &response)
             }
+            RequestKind::ReloadState {
+                session_id,
+                query,
+                generation,
+            } => self.on_reload_state_response(session_id, query, generation, &response),
             RequestKind::SessionPresentation { session_id } => {
                 self.on_session_presentation_response(&session_id, &response)
             }
+            RequestKind::ReloadPresentation {
+                session_id,
+                generation,
+            } => self.on_reload_presentation_response(session_id, generation, &response),
             RequestKind::History {
                 session_id,
                 offset,
                 gap_revision,
                 ..
             } => self.on_history_response(&session_id, offset, gap_revision, &response),
+            RequestKind::ReloadHistory {
+                session_id,
+                offset,
+                limit,
+                gap_revision,
+                generation,
+            } => self.on_reload_history_response(
+                session_id,
+                offset,
+                limit,
+                gap_revision,
+                generation,
+                &response,
+            ),
             RequestKind::SendTurn {
                 session_id,
                 local_submission,
@@ -6900,6 +8693,43 @@ impl App {
         }
     }
 
+    fn loop_event_turn(event: &AgentEventWire) -> Option<TurnRef> {
+        match event {
+            AgentEventWire::TurnStarted { data } => Some(data.turn.clone()),
+            AgentEventWire::RequestStarted { data } => Some(data.turn.clone()),
+            AgentEventWire::OutputDelta { data } => Some(data.turn.clone()),
+            AgentEventWire::ToolStarted { data } => Some(data.turn.clone()),
+            AgentEventWire::ToolPresentation { data } => Some(data.turn.clone()),
+            AgentEventWire::ToolProgress { data } => Some(data.turn.clone()),
+            AgentEventWire::ToolFinished { data } => Some(data.turn.clone()),
+            _ => None,
+        }
+    }
+
+    fn maybe_request_state_after_turn_binding(
+        &mut self,
+        turn: &TurnRef,
+        first_binding: bool,
+    ) -> Option<AppCommand> {
+        if !first_binding || self.reload.is_some() || !self.can_send_requests() {
+            return None;
+        }
+        let should_request = self
+            .sessions
+            .known
+            .get(&turn.session_id)
+            .is_some_and(|view| {
+                view.steer_state_unconfirmed
+                    && view.latest_state_query.is_none()
+                    && view
+                        .live
+                        .as_ref()
+                        .and_then(|live| live.reference.as_ref())
+                        .is_some_and(|reference| reference == turn)
+            });
+        should_request.then(|| self.request_session_state(&turn.session_id))
+    }
+
     fn on_agent_event(&mut self, event: AgentEventWire) -> Vec<AppCommand> {
         let event_session_id = match &event {
             AgentEventWire::SessionOpened { data } => Some(data.meta.session_id.as_str()),
@@ -6935,6 +8765,16 @@ impl App {
                 return Vec::new();
             }
         }
+        let first_binding_turn = Self::loop_event_turn(&event).filter(|turn| {
+            self.sessions
+                .known
+                .get(&turn.session_id)
+                .is_some_and(|view| {
+                    view.live
+                        .as_ref()
+                        .is_some_and(|live| live.reference.is_none())
+                })
+        });
         let gap_session = match &event {
             AgentEventWire::SessionOpened { data } => {
                 (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
@@ -7015,6 +8855,7 @@ impl App {
                     }
                 }
                 if needs_state
+                    && self.reload.is_none()
                     && self.can_send_requests()
                     && self
                         .sessions
@@ -7034,7 +8875,11 @@ impl App {
             }
             AgentEventWire::SessionState { data } => {
                 self.mark_gap(&data.meta);
-                self.apply_session_state(&data.state, data.meta.loop_id.as_ref(), true);
+                self.apply_session_state(
+                    &data.state,
+                    data.meta.loop_id.as_ref(),
+                    SessionStateSource::Notification,
+                );
             }
             AgentEventWire::TurnStarted { data } => {
                 self.mark_gap(&data.meta);
@@ -7124,6 +8969,11 @@ impl App {
             }
             AgentEventWire::Unknown => {}
         }
+        if let Some(turn) = first_binding_turn {
+            if let Some(command) = self.maybe_request_state_after_turn_binding(&turn, true) {
+                commands.push(command);
+            }
+        }
         if let Some(session_id) = gap_session {
             commands.extend(self.start_gap_reconcile(&session_id));
         }
@@ -7131,30 +8981,50 @@ impl App {
     }
 
     fn start_gap_reconcile(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
+        if self.reload.is_some() {
+            return Vec::new();
+        }
         if !self.can_send_requests() {
             return Vec::new();
         }
         if self.sessions.deleted.contains(session_id)
             || self.sessions.pending_deletes.contains(session_id)
+            || self.sessions.closed.contains(session_id)
         {
             return Vec::new();
         }
-        let Some(view) = self.sessions.known.get(session_id) else {
-            return Vec::new();
+        let history_pending = self.pending_history(session_id);
+        let (state_needed, history_needed, offset, defer_history) = {
+            let Some(view) = self.sessions.known.get(session_id) else {
+                return Vec::new();
+            };
+            if !view.event_gap && !view.needs_post_wait_history {
+                return Vec::new();
+            }
+            if view.closing {
+                return Vec::new();
+            }
+            let state_needed = (view.state.is_none() || view.steer_state_unconfirmed)
+                && view.latest_state_query.is_none();
+            (
+                state_needed,
+                !view.loading && !view.reconcile_inflight && !history_pending,
+                view.transcript.loaded_count,
+                view.live.is_some() || view.unsaved_loop.is_some(),
+            )
         };
-        if view.loading
-            || view.reconcile_inflight
-            || view.live.is_some()
-            || view.unsaved_loop.is_some()
-        {
-            return Vec::new();
+        let mut commands = Vec::new();
+        if state_needed {
+            commands.push(self.request_session_state(session_id));
         }
-        let offset = view.transcript.loaded_count;
-        if let Some(view) = self.sessions.known.get_mut(session_id) {
-            view.loading = true;
-            view.reconcile_inflight = true;
+        if history_needed && !defer_history {
+            if let Some(view) = self.sessions.known.get_mut(session_id) {
+                view.loading = true;
+                view.reconcile_inflight = true;
+            }
+            commands.push(self.request_history(session_id, offset, DEFAULT_HISTORY_LIMIT));
         }
-        vec![self.request_history(session_id, offset, DEFAULT_HISTORY_LIMIT)]
+        commands
     }
 
     fn mark_gap(&mut self, meta: &EventMetaWire) {
@@ -7166,6 +9036,7 @@ impl App {
         {
             return;
         }
+        self.fence_pending_session_state(&meta.session_id);
         if let Some(view) = self.sessions.known.get_mut(&meta.session_id) {
             view.event_gap = true;
             view.gap_revision = view.gap_revision.wrapping_add(1);
@@ -8150,6 +10021,22 @@ mod tests {
         })
     }
 
+    fn running_state_json(session_id: &str, loop_id: &str) -> Value {
+        json!({
+            "session_id": session_id,
+            "status": "running",
+            "active_loop": {
+                "loop_id": loop_id,
+                "status": "running_model",
+                "request_index": 0,
+                "config_revision": 0,
+                "model": "deep",
+                "pending_interaction": null
+            },
+            "block_reason": null
+        })
+    }
+
     fn history_page_json(items: Vec<Value>, next_offset: Option<usize>, total: usize) -> Value {
         json!({
             "items": items,
@@ -8361,6 +10248,1793 @@ mod tests {
         let mut app = test_app();
         ready(&mut app);
         assert_eq!(app.connection, ConnectionState::Ready);
+    }
+
+    #[test]
+    fn reload_stages_out_of_order_catalogs_before_installing_them() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        let requests = take_requests(app.update(AppEvent::Reload));
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "agent.reload");
+
+        let requests = take_requests(respond(&mut app, &requests[0], json!({"ok": true})));
+        assert_eq!(requests.len(), 3);
+        let models = requests
+            .iter()
+            .find(|request| request.method == "model.list")
+            .unwrap();
+        let profiles = requests
+            .iter()
+            .find(|request| request.method == "profile.list")
+            .unwrap();
+        let sessions = requests
+            .iter()
+            .find(|request| request.method == "session.list")
+            .unwrap();
+
+        take_requests(respond(
+            &mut app,
+            profiles,
+            json!({
+                "profiles": [{
+                    "id": "p2",
+                    "model": "m2",
+                    "reasoning": "auto",
+                    "tools": []
+                }]
+            }),
+        ));
+        take_requests(respond(
+            &mut app,
+            models,
+            json!({
+                "models": [{
+                    "id": "m2",
+                    "model_ref": "provider/m2",
+                    "context_window": 1000,
+                    "supports_tools": true,
+                    "supported_reasoning": ["auto"]
+                }]
+            }),
+        ));
+        let reads = take_requests(respond(
+            &mut app,
+            sessions,
+            json!({"sessions": [session_info("ses_1")]}),
+        ));
+        let state = reads
+            .iter()
+            .find(|request| request.method == "session.state")
+            .unwrap();
+        let presentation = reads
+            .iter()
+            .find(|request| request.method == "session.presentation")
+            .unwrap();
+        take_requests(respond(
+            &mut app,
+            presentation,
+            json!({"session_id": "ses_1", "context": {"kind": "unknown"}}),
+        ));
+        let history = take_requests(respond(&mut app, state, state_json("ses_1", "idle")));
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].method, "session.history");
+        take_requests(respond(
+            &mut app,
+            &history[0],
+            history_page_json(vec![], None, 0),
+        ));
+
+        assert!(app.reload.is_none());
+        assert_eq!(app.catalogs.models[0].id, "m2");
+        assert_eq!(app.catalogs.profiles[0].id, "p2");
+    }
+
+    #[test]
+    fn reload_does_not_replace_a_live_projection_with_staged_idle_state() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        view.state.as_mut().unwrap().status = SessionStatusWire::Running;
+        view.state.as_mut().unwrap().active_loop = Some(crate::protocol::LoopStateWire {
+            loop_id: "loop_live".to_owned(),
+            status: crate::protocol::LoopStatusWire::RunningModel,
+            request_index: 0,
+            config_revision: 0,
+            model: Some("deep".to_owned()),
+            pending_interaction: None,
+        });
+        let mut live = LiveLoop::new(LocalSubmissionId(1), "live prompt".to_owned());
+        live.reference = Some(make_turn("ses_1", "loop_live"));
+        view.live = Some(live);
+
+        let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
+        let reads = take_requests(respond(&mut app, &reload, json!({"ok": true})));
+        let models = reads
+            .iter()
+            .find(|request| request.method == "model.list")
+            .unwrap();
+        let profiles = reads
+            .iter()
+            .find(|request| request.method == "profile.list")
+            .unwrap();
+        take_requests(respond(&mut app, models, json!({"models": []})));
+        take_requests(respond(&mut app, profiles, json!({"profiles": []})));
+        let sessions = reads
+            .iter()
+            .find(|request| request.method == "session.list")
+            .unwrap();
+        let lists = take_requests(respond(
+            &mut app,
+            sessions,
+            json!({"sessions": [session_info("ses_1")]}),
+        ));
+        let state = lists
+            .iter()
+            .find(|request| request.method == "session.state")
+            .unwrap();
+        let presentation = lists
+            .iter()
+            .find(|request| request.method == "session.presentation")
+            .unwrap();
+        take_requests(respond(&mut app, state, state_json("ses_1", "idle")));
+        let history = app
+            .pending_requests
+            .iter()
+            .find_map(|(id, kind)| matches!(kind, RequestKind::ReloadHistory { .. }).then_some(*id))
+            .unwrap();
+        let history_request = OutgoingRequest::session_history(
+            history,
+            "ses_1",
+            Some(0),
+            Some(DEFAULT_HISTORY_LIMIT),
+        );
+        take_requests(respond(
+            &mut app,
+            presentation,
+            json!({"session_id": "ses_1", "context": {"kind": "unknown"}}),
+        ));
+        take_requests(respond(
+            &mut app,
+            &history_request,
+            history_page_json(vec![], None, 0),
+        ));
+
+        let view = &app.sessions.known["ses_1"];
+        assert!(view.live.is_some());
+        assert_eq!(
+            view.state.as_ref().unwrap().status,
+            SessionStatusWire::Running
+        );
+    }
+
+    #[test]
+    fn reload_reentry_and_failed_ack_leave_the_existing_projection_untouched() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+        let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
+        assert!(take_requests(app.update(AppEvent::Reload)).is_empty());
+        assert!(
+            app.notices()
+                .iter()
+                .any(|notice| { notice.text == "configuration reload is already in progress" })
+        );
+
+        let commands = respond(&mut app, &reload, json!({"ok": false}));
+        assert!(take_requests(commands).is_empty());
+        assert!(app.reload.is_none());
+        assert!(app.notices().iter().any(|notice| {
+            notice.text == "agent.reload returned {ok:false}; configuration was not applied"
+        }));
+        assert!(app.sessions.known["ses_1"].transcript.complete);
+    }
+
+    #[test]
+    fn malformed_reload_ack_reports_unknown_without_retrying_reload() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
+        let commands = respond(&mut app, &reload, json!({"ok": true, "extra": true}));
+
+        assert!(take_requests(commands).is_empty());
+        assert!(app.reload.is_none());
+        assert!(app.notices().iter().any(|notice| {
+            notice
+                .text
+                .contains("configuration reload outcome is unknown; no automatic retry")
+        }));
+        assert!(app.notices().iter().all(|notice| {
+            !notice
+                .text
+                .starts_with("Agent configuration reloaded; view refresh")
+        }));
+    }
+
+    #[test]
+    fn reload_after_ack_reports_refresh_failure_without_claiming_rollback() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
+        let reads = take_requests(respond(&mut app, &reload, json!({"ok": true})));
+        let models = reads
+            .iter()
+            .find(|request| request.method == "model.list")
+            .unwrap();
+        take_requests(respond(&mut app, models, json!({"models": "malformed"})));
+
+        assert!(app.notices().iter().any(|notice| {
+            notice
+                .text
+                .starts_with("Agent configuration reloaded; view refresh incomplete or failed:")
+        }));
+        assert!(
+            !app.notices()
+                .iter()
+                .any(|notice| { notice.text.contains("configuration was not applied") })
+        );
+        assert!(app.sessions.known["ses_1"].event_gap);
+        assert!(app.sessions.known["ses_1"].state.is_none());
+    }
+
+    #[test]
+    fn open_ack_during_reload_creates_an_uncalibrated_view() {
+        let mut app = test_app();
+        ready(&mut app);
+
+        let open = take_requests(app.update(AppEvent::OpenSession {
+            session_id: "ses_1".to_owned(),
+        }))
+        .remove(0);
+        let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
+
+        take_requests(respond(
+            &mut app,
+            &open,
+            json!({"session": session_info("ses_1")}),
+        ));
+        let view = &app.sessions.known["ses_1"];
+        assert!(view.state.is_none());
+        assert!(view.event_gap);
+        assert!(!view.transcript.complete);
+
+        let recovery = take_requests(respond(&mut app, &reload, json!({"ok": false})));
+        assert!(
+            recovery
+                .iter()
+                .any(|request| request.method == "session.state")
+        );
+        assert!(
+            recovery
+                .iter()
+                .any(|request| request.method == "session.history")
+        );
+    }
+
+    #[test]
+    fn late_open_ack_after_reload_failure_starts_recovery_for_the_new_view() {
+        let mut app = test_app();
+        ready(&mut app);
+
+        let open = take_requests(app.update(AppEvent::OpenSession {
+            session_id: "ses_1".to_owned(),
+        }))
+        .remove(0);
+        let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
+        take_requests(respond(&mut app, &reload, json!({"ok": false})));
+
+        let reads = take_requests(respond(
+            &mut app,
+            &open,
+            json!({"session": session_info("ses_1")}),
+        ));
+        let view = &app.sessions.known["ses_1"];
+        assert!(view.state.is_none());
+        assert!(view.event_gap);
+        assert!(!view.transcript.complete);
+        assert!(
+            reads
+                .iter()
+                .any(|request| request.method == "session.state")
+        );
+        assert!(
+            reads
+                .iter()
+                .any(|request| request.method == "session.history")
+        );
+    }
+
+    #[test]
+    fn reload_fences_a_pending_normal_state_read_as_stale() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+        let state = match app.request_session_state(&"ses_1".to_owned()) {
+            AppCommand::Rpc(request) => request,
+            _ => unreachable!(),
+        };
+        assert!(matches!(
+            app.pending_requests.get(&state.id),
+            Some(RequestKind::SessionState { .. })
+        ));
+
+        let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
+        assert_eq!(
+            app.pending_requests.get(&state.id),
+            Some(&RequestKind::StaleRead)
+        );
+        let recovery = take_requests(respond(&mut app, &reload, json!({"ok": false})));
+        // The pre-reload response arrives after recovery has begun and is
+        // still fenced as a stale read.
+        respond(&mut app, &state, state_json("ses_1", "running"));
+        assert!(app.sessions.known["ses_1"].state.is_none());
+        assert!(app.sessions.known["ses_1"].event_gap);
+        assert!(
+            recovery
+                .iter()
+                .any(|request| request.method == "session.state")
+        );
+        assert!(
+            recovery
+                .iter()
+                .any(|request| request.method == "session.history")
+        );
+    }
+
+    #[test]
+    fn failed_state_read_drops_old_authority_and_blocks_submission() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        let state = match app.request_session_state(&"ses_1".to_owned()) {
+            AppCommand::Rpc(request) => request,
+            _ => unreachable!(),
+        };
+        take_requests(respond(&mut app, &state, json!({"malformed": true})));
+
+        let view = &app.sessions.known["ses_1"];
+        assert!(view.state.is_none());
+        assert!(view.event_gap);
+        assert!(!view.transcript.complete);
+        assert!(view.close_verification_unknown);
+        assert!(
+            take_requests(app.update(AppEvent::SubmitTurn {
+                session_id: "ses_1".to_owned(),
+                text: "must remain blocked".to_owned(),
+            }))
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn state_send_failure_drops_old_authority_and_blocks_submission() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        let state = match app.request_session_state(&"ses_1".to_owned()) {
+            AppCommand::Rpc(request) => request,
+            _ => unreachable!(),
+        };
+        take_requests(app.update(AppEvent::RpcSendFailed {
+            id: state.id,
+            error: crate::rpc::RpcError::RequestTooLarge {
+                actual_bytes: 2,
+                max_bytes: 1,
+            },
+        }));
+
+        let view = &app.sessions.known["ses_1"];
+        assert!(view.state.is_none());
+        assert!(view.event_gap);
+        assert!(!view.transcript.complete);
+        assert!(
+            take_requests(app.update(AppEvent::SubmitTurn {
+                session_id: "ses_1".to_owned(),
+                text: "must remain blocked".to_owned(),
+            }))
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn reload_does_not_advance_steer_queue_or_consume_new_input() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        {
+            let view = app.sessions.known.get_mut("ses_1").unwrap();
+            let state = view.state.as_mut().unwrap();
+            state.status = SessionStatusWire::Running;
+            state.active_loop = Some(crate::protocol::LoopStateWire {
+                loop_id: "loop_live".to_owned(),
+                status: crate::protocol::LoopStatusWire::RunningModel,
+                request_index: 0,
+                config_revision: 0,
+                model: Some("deep".to_owned()),
+                pending_interaction: None,
+            });
+            let mut live = LiveLoop::new(LocalSubmissionId(1), "prompt".to_owned());
+            live.reference = Some(make_turn("ses_1", "loop_live"));
+            view.live = Some(live);
+            view.steer_queue.push(crate::state::turn::SteerQueueItem {
+                local_id: 10,
+                text: "already authorized".to_owned(),
+                state: SteerQueueState::Unsent,
+                editor_revision: None,
+                handoff: false,
+            });
+        }
+        app.composer.set_text("typed during reload");
+
+        let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
+        assert!(take_requests(app.submit_composer()).is_empty());
+        assert!(
+            take_requests(app.update(AppEvent::SteerTurn {
+                session_id: "ses_1".to_owned(),
+                text: "new steer".to_owned(),
+            }))
+            .is_empty()
+        );
+        assert_eq!(app.composer.content(), "typed during reload");
+        assert_eq!(app.sessions.known["ses_1"].steer_queue.len(), 1);
+
+        let reads = take_requests(respond(&mut app, &reload, json!({"ok": true})));
+        let models = reads
+            .iter()
+            .find(|request| request.method == "model.list")
+            .unwrap();
+        let profiles = reads
+            .iter()
+            .find(|request| request.method == "profile.list")
+            .unwrap();
+        let sessions = reads
+            .iter()
+            .find(|request| request.method == "session.list")
+            .unwrap();
+        take_requests(respond(&mut app, models, json!({"models": []})));
+        take_requests(respond(&mut app, profiles, json!({"profiles": []})));
+        let active_reads = take_requests(respond(
+            &mut app,
+            sessions,
+            json!({"sessions": [session_info("ses_1")]}),
+        ));
+        let state = active_reads
+            .iter()
+            .find(|request| request.method == "session.state")
+            .unwrap();
+        let presentation = active_reads
+            .iter()
+            .find(|request| request.method == "session.presentation")
+            .unwrap();
+        take_requests(respond(
+            &mut app,
+            presentation,
+            json!({"session_id": "ses_1", "context": {"kind": "unknown"}}),
+        ));
+        let history = take_requests(respond(
+            &mut app,
+            state,
+            running_state_json("ses_1", "loop_live"),
+        ));
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].method, "session.history");
+
+        let after_reload = take_requests(respond(
+            &mut app,
+            &history[0],
+            history_page_json(vec![], None, 0),
+        ));
+        assert!(
+            after_reload
+                .iter()
+                .all(|request| request.method != "turn.send" && request.method != "turn.steer")
+        );
+        assert!(app.reload.is_none());
+        assert_eq!(app.composer.content(), "typed during reload");
+        assert_eq!(app.sessions.known["ses_1"].steer_queue.len(), 1);
+        assert!(app.sessions.known["ses_1"].steer_state_unconfirmed);
+
+        let post_reload_state = app
+            .pending_requests
+            .iter()
+            .find_map(|(id, kind)| matches!(kind, RequestKind::SessionState { .. }).then_some(*id))
+            .map(|id| OutgoingRequest::session_state(id, "ses_1"))
+            .expect("reload requests a fresh normal state read");
+        let after_state = take_requests(respond(
+            &mut app,
+            &post_reload_state,
+            running_state_json("ses_1", "loop_live"),
+        ));
+        assert_eq!(after_state.len(), 1);
+        assert_eq!(after_state[0].method, "turn.steer");
+        assert!(!app.sessions.known["ses_1"].steer_state_unconfirmed);
+
+        // The reload completion and staged reads do not release the deferred
+        // FIFO advance; the fresh normal Running response does.
+        let next = take_requests(app.update(AppEvent::Tick));
+        assert!(next.is_empty());
+    }
+
+    #[test]
+    fn reload_retired_history_keeps_gap_and_blocks_submit_until_reconciled() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        let old_history = match app.request_history(&"ses_1".to_owned(), 0, DEFAULT_HISTORY_LIMIT) {
+            AppCommand::Rpc(request) => request,
+            _ => unreachable!(),
+        };
+        if let Some(view) = app.sessions.known.get_mut("ses_1") {
+            view.loading = true;
+            view.reconcile_inflight = true;
+        }
+        let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
+        assert_eq!(
+            app.pending_requests.get(&old_history.id),
+            Some(&RequestKind::StaleRead)
+        );
+        assert!(app.sessions.known["ses_1"].event_gap);
+        assert!(!app.sessions.known["ses_1"].transcript.complete);
+
+        app.composer.set_text("must remain available");
+        assert!(take_requests(app.submit_composer()).is_empty());
+        assert!(
+            take_requests(app.update(AppEvent::SubmitTurn {
+                session_id: "ses_1".to_owned(),
+                text: "direct prompt".to_owned(),
+            }))
+            .is_empty()
+        );
+        assert!(
+            take_requests(app.update(AppEvent::CloseSession {
+                session_id: "ses_1".to_owned(),
+                confirm: true,
+            }))
+            .is_empty()
+        );
+        assert!(
+            take_requests(app.update(AppEvent::DeleteSession {
+                session_id: "ses_1".to_owned(),
+                confirm: true,
+            }))
+            .is_empty()
+        );
+        assert_eq!(app.composer.content(), "must remain available");
+
+        // The retired response is consumed as stale and cannot clear the
+        // authoritative gap before the reload outcome is known.
+        take_requests(respond(
+            &mut app,
+            &old_history,
+            history_page_json(vec![], None, 0),
+        ));
+        let failure = take_requests(respond(&mut app, &reload, json!({"ok": false})));
+        assert!(
+            failure
+                .iter()
+                .all(|request| request.method != "turn.send" && request.method != "turn.steer")
+        );
+        assert!(app.reload.is_none());
+        assert!(app.sessions.known["ses_1"].event_gap);
+        assert!(!app.sessions.known["ses_1"].transcript.complete);
+
+        assert!(
+            take_requests(app.update(AppEvent::SubmitTurn {
+                session_id: "ses_1".to_owned(),
+                text: "still blocked".to_owned(),
+            }))
+            .is_empty()
+        );
+        assert!(
+            take_requests(app.update(AppEvent::CloseSession {
+                session_id: "ses_1".to_owned(),
+                confirm: true,
+            }))
+            .is_empty()
+        );
+        assert!(
+            take_requests(app.update(AppEvent::DeleteSession {
+                session_id: "ses_1".to_owned(),
+                confirm: true,
+            }))
+            .is_empty()
+        );
+
+        let recovery_state = app
+            .pending_requests
+            .iter()
+            .find_map(|(id, kind)| matches!(kind, RequestKind::SessionState { .. }).then_some(*id))
+            .map(|id| OutgoingRequest::session_state(id, "ses_1"))
+            .expect("reload failure starts a fresh state reconciliation");
+        let retry = app
+            .pending_requests
+            .iter()
+            .find_map(|(id, kind)| matches!(kind, RequestKind::History { .. }).then_some(*id))
+            .map(|id| OutgoingRequest::session_history(id, "ses_1", Some(0), Some(20)))
+            .expect("reload failure starts a fresh history reconciliation");
+        take_requests(respond(
+            &mut app,
+            &retry,
+            history_page_json(vec![], None, 0),
+        ));
+        assert!(!app.sessions.known["ses_1"].event_gap);
+        assert!(app.sessions.known["ses_1"].transcript.complete);
+        assert!(app.sessions.known["ses_1"].state.is_none());
+        assert_eq!(
+            app.session_action_safety(&"ses_1".to_owned()),
+            SessionActionSafety::Unknown
+        );
+        assert!(
+            take_requests(app.update(AppEvent::SubmitTurn {
+                session_id: "ses_1".to_owned(),
+                text: "still blocked without state".to_owned(),
+            }))
+            .is_empty()
+        );
+
+        take_requests(respond(
+            &mut app,
+            &recovery_state,
+            json!({"malformed": true}),
+        ));
+        assert!(app.sessions.known["ses_1"].state.is_none());
+        assert!(app.sessions.known["ses_1"].close_verification_unknown);
+        assert!(
+            take_requests(app.update(AppEvent::SubmitTurn {
+                session_id: "ses_1".to_owned(),
+                text: "still blocked after state failure".to_owned(),
+            }))
+            .is_empty()
+        );
+
+        let running_state = match app.request_session_state(&"ses_1".to_owned()) {
+            AppCommand::Rpc(request) => request,
+            _ => unreachable!(),
+        };
+        take_requests(respond(
+            &mut app,
+            &running_state,
+            running_state_json("ses_1", "loop_placeholder"),
+        ));
+        assert_eq!(
+            app.sessions.known["ses_1"].state.as_ref().unwrap().status,
+            SessionStatusWire::Running
+        );
+        assert!(
+            take_requests(app.update(AppEvent::SubmitTurn {
+                session_id: "ses_1".to_owned(),
+                text: "still blocked while running".to_owned(),
+            }))
+            .is_empty()
+        );
+        assert_eq!(
+            app.session_action_safety(&"ses_1".to_owned()),
+            SessionActionSafety::Busy
+        );
+
+        let fresh_state = match app.request_session_state(&"ses_1".to_owned()) {
+            AppCommand::Rpc(request) => request,
+            _ => unreachable!(),
+        };
+        take_requests(respond(&mut app, &fresh_state, state_json("ses_1", "idle")));
+        let history = take_requests(app.start_gap_reconcile(&"ses_1".to_owned()));
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].method, "session.history");
+        take_requests(respond(
+            &mut app,
+            &history[0],
+            history_page_json(vec![], None, 0),
+        ));
+        assert!(!app.sessions.known["ses_1"].event_gap);
+        assert!(app.sessions.known["ses_1"].transcript.complete);
+        assert!(!app.pending_history(&"ses_1".to_owned()));
+        let send = take_requests(app.update(AppEvent::SubmitTurn {
+            session_id: "ses_1".to_owned(),
+            text: "now calibrated".to_owned(),
+        }));
+        assert_eq!(send.len(), 1);
+        assert_eq!(send[0].method, "turn.send");
+    }
+
+    #[test]
+    fn reload_recovery_idle_event_does_not_release_pending_state_fence() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        let old_history = match app.request_history(&"ses_1".to_owned(), 0, DEFAULT_HISTORY_LIMIT) {
+            AppCommand::Rpc(request) => request,
+            _ => unreachable!(),
+        };
+        let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
+        assert_eq!(
+            app.pending_requests.get(&old_history.id),
+            Some(&RequestKind::StaleRead)
+        );
+
+        let recovery = take_requests(respond(&mut app, &reload, json!({"ok": false})));
+        let state = recovery
+            .iter()
+            .find(|request| request.method == "session.state")
+            .cloned()
+            .expect("reload failure starts state recovery");
+        let history = recovery
+            .iter()
+            .find(|request| request.method == "session.history")
+            .cloned()
+            .expect("reload failure starts history recovery");
+
+        take_requests(app.update(event(wire_event(json!({
+            "type": "session_state",
+            "data": {
+                "state": state_json("ses_1", "idle"),
+                "meta": meta_json("ses_1", 0)
+            }
+        })))));
+        assert!(
+            app.pending_requests
+                .values()
+                .any(|kind| matches!(kind, RequestKind::SessionState { .. }))
+        );
+
+        take_requests(respond(
+            &mut app,
+            &history,
+            history_page_json(Vec::new(), None, 0),
+        ));
+        assert!(!app.sessions.known["ses_1"].event_gap);
+        assert!(app.sessions.known["ses_1"].transcript.complete);
+        assert!(
+            app.pending_requests
+                .values()
+                .any(|kind| matches!(kind, RequestKind::SessionState { .. }))
+        );
+
+        let close = take_requests(app.update(AppEvent::CloseSession {
+            session_id: "ses_1".to_owned(),
+            confirm: true,
+        }));
+        assert!(
+            close
+                .iter()
+                .all(|request| request.method != "session.close"
+                    && request.method != "session.delete")
+        );
+        let delete = take_requests(app.update(AppEvent::DeleteSession {
+            session_id: "ses_1".to_owned(),
+            confirm: true,
+        }));
+        assert!(
+            delete
+                .iter()
+                .all(|request| request.method != "session.close"
+                    && request.method != "session.delete")
+        );
+        assert!(
+            take_requests(app.update(AppEvent::SubmitTurn {
+                session_id: "ses_1".to_owned(),
+                text: "blocked until fresh state response".to_owned(),
+            }))
+            .is_empty()
+        );
+
+        take_requests(respond(&mut app, &state, state_json("ses_1", "idle")));
+        let send = take_requests(app.update(AppEvent::SubmitTurn {
+            session_id: "ses_1".to_owned(),
+            text: "allowed after fresh state response".to_owned(),
+        }));
+        assert_eq!(send.len(), 1);
+        assert_eq!(send[0].method, "turn.send");
+    }
+
+    #[test]
+    fn reload_recovery_state_before_history_keeps_history_gap_fenced() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        let old_history = match app.request_history(&"ses_1".to_owned(), 0, DEFAULT_HISTORY_LIMIT) {
+            AppCommand::Rpc(request) => request,
+            _ => unreachable!(),
+        };
+        let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
+        assert_eq!(
+            app.pending_requests.get(&old_history.id),
+            Some(&RequestKind::StaleRead)
+        );
+        let recovery = take_requests(respond(&mut app, &reload, json!({"ok": false})));
+        let state = recovery
+            .iter()
+            .find(|request| request.method == "session.state")
+            .cloned()
+            .expect("reload failure starts state recovery");
+        let history = recovery
+            .iter()
+            .find(|request| request.method == "session.history")
+            .cloned()
+            .expect("reload failure starts history recovery");
+
+        take_requests(respond(&mut app, &state, state_json("ses_1", "idle")));
+        assert!(app.sessions.known["ses_1"].event_gap);
+        assert!(
+            app.pending_requests
+                .values()
+                .any(|kind| matches!(kind, RequestKind::History { .. }))
+        );
+        let before_history = take_requests(app.update(AppEvent::SubmitTurn {
+            session_id: "ses_1".to_owned(),
+            text: "blocked while history gap remains".to_owned(),
+        }));
+        assert!(
+            before_history
+                .iter()
+                .all(|request| request.method != "turn.send")
+        );
+
+        take_requests(respond(
+            &mut app,
+            &history,
+            history_page_json(Vec::new(), None, 0),
+        ));
+        assert!(!app.sessions.known["ses_1"].event_gap);
+        assert!(app.sessions.known["ses_1"].transcript.complete);
+        let send = take_requests(app.update(AppEvent::SubmitTurn {
+            session_id: "ses_1".to_owned(),
+            text: "allowed after history recovery".to_owned(),
+        }));
+        assert_eq!(send.len(), 1);
+        assert_eq!(send[0].method, "turn.send");
+    }
+
+    #[test]
+    fn reload_running_loop_steers_through_history_gap_after_fresh_state() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        {
+            let view = app.sessions.known.get_mut("ses_1").unwrap();
+            let state = view.state.as_mut().unwrap();
+            state.status = SessionStatusWire::Running;
+            state.active_loop = Some(crate::protocol::LoopStateWire {
+                loop_id: "loop_live".to_owned(),
+                status: crate::protocol::LoopStatusWire::RunningModel,
+                request_index: 0,
+                config_revision: 0,
+                model: Some("deep".to_owned()),
+                pending_interaction: None,
+            });
+            let mut live = LiveLoop::new(LocalSubmissionId(1), "prompt".to_owned());
+            live.reference = Some(make_turn("ses_1", "loop_live"));
+            live.event_gap = true;
+            view.live = Some(live);
+            view.event_gap = true;
+            view.transcript.complete = false;
+            view.steer_queue.push(crate::state::turn::SteerQueueItem {
+                local_id: 10,
+                text: "steer through history gap".to_owned(),
+                state: SteerQueueState::Unsent,
+                editor_revision: None,
+                handoff: false,
+            });
+        }
+
+        let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
+        let reads = take_requests(respond(&mut app, &reload, json!({"ok": true})));
+        let models = reads
+            .iter()
+            .find(|request| request.method == "model.list")
+            .unwrap();
+        let profiles = reads
+            .iter()
+            .find(|request| request.method == "profile.list")
+            .unwrap();
+        let sessions = reads
+            .iter()
+            .find(|request| request.method == "session.list")
+            .unwrap();
+        take_requests(respond(&mut app, models, json!({"models": []})));
+        take_requests(respond(&mut app, profiles, json!({"profiles": []})));
+        let active_reads = take_requests(respond(
+            &mut app,
+            sessions,
+            json!({"sessions": [session_info("ses_1")]}),
+        ));
+        let staged_state = active_reads
+            .iter()
+            .find(|request| request.method == "session.state")
+            .unwrap();
+        let presentation = active_reads
+            .iter()
+            .find(|request| request.method == "session.presentation")
+            .unwrap();
+        take_requests(respond(
+            &mut app,
+            presentation,
+            json!({"session_id": "ses_1", "context": {"kind": "unknown"}}),
+        ));
+        let history = take_requests(respond(
+            &mut app,
+            staged_state,
+            running_state_json("ses_1", "loop_live"),
+        ));
+        assert_eq!(history.len(), 1);
+        take_requests(respond(
+            &mut app,
+            &history[0],
+            history_page_json(Vec::new(), None, 0),
+        ));
+
+        assert!(app.sessions.known["ses_1"].event_gap);
+        assert!(app.sessions.known["ses_1"].steer_state_unconfirmed);
+        let fresh_state = app
+            .pending_requests
+            .iter()
+            .find_map(|(id, kind)| matches!(kind, RequestKind::SessionState { .. }).then_some(*id))
+            .map(|id| OutgoingRequest::session_state(id, "ses_1"))
+            .expect("reload requests fresh normal state authority");
+        let steer = take_requests(respond(
+            &mut app,
+            &fresh_state,
+            running_state_json("ses_1", "loop_live"),
+        ));
+        assert_eq!(steer.len(), 1);
+        assert_eq!(steer[0].method, "turn.steer");
+        assert_eq!(steer[0].params["loop_id"], "loop_live");
+        assert!(app.sessions.known["ses_1"].event_gap);
+        assert!(!app.sessions.known["ses_1"].steer_state_unconfirmed);
+    }
+
+    #[test]
+    fn pending_send_reload_recalibrates_after_turn_reference_binding() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        let send = take_requests(app.update(AppEvent::SubmitTurn {
+            session_id: "ses_1".to_owned(),
+            text: "original user input".to_owned(),
+        }));
+        assert_eq!(send.len(), 1);
+        let send = send.into_iter().next().unwrap();
+        assert_eq!(send.method, "turn.send");
+        assert!(matches!(
+            app.pending_request_kind(send.id),
+            Some(RequestKind::SendTurn { .. })
+        ));
+        assert!(
+            app.sessions.known["ses_1"]
+                .live
+                .as_ref()
+                .is_some_and(|live| live.reference.is_none())
+        );
+
+        let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
+        let reads = take_requests(respond(&mut app, &reload, json!({"ok": true})));
+        let models = reads
+            .iter()
+            .find(|request| request.method == "model.list")
+            .unwrap();
+        let profiles = reads
+            .iter()
+            .find(|request| request.method == "profile.list")
+            .unwrap();
+        let sessions = reads
+            .iter()
+            .find(|request| request.method == "session.list")
+            .unwrap();
+        take_requests(respond(&mut app, models, json!({"models": []})));
+        take_requests(respond(&mut app, profiles, json!({"profiles": []})));
+        let active_reads = take_requests(respond(
+            &mut app,
+            sessions,
+            json!({"sessions": [session_info("ses_1")]}),
+        ));
+        let staged_state = active_reads
+            .iter()
+            .find(|request| request.method == "session.state")
+            .unwrap();
+        let presentation = active_reads
+            .iter()
+            .find(|request| request.method == "session.presentation")
+            .unwrap();
+        take_requests(respond(
+            &mut app,
+            presentation,
+            json!({"session_id": "ses_1", "context": {"kind": "unknown"}}),
+        ));
+        let history = take_requests(respond(
+            &mut app,
+            staged_state,
+            running_state_json("ses_1", "loop_after_reload"),
+        ));
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].method, "session.history");
+        let after_reload = take_requests(respond(
+            &mut app,
+            &history[0],
+            history_page_json(Vec::new(), None, 0),
+        ));
+        let fresh_state = after_reload
+            .iter()
+            .find(|request| request.method == "session.state")
+            .cloned()
+            .expect("reload schedules one normal state read");
+        assert_eq!(
+            after_reload
+                .iter()
+                .filter(|request| request.method == "session.state")
+                .count(),
+            1
+        );
+        assert!(app.reload.is_none());
+        assert!(app.sessions.known["ses_1"].steer_state_unconfirmed);
+        assert!(app.pending_request_kind(send.id).is_some());
+
+        let before_ack = take_requests(respond(
+            &mut app,
+            &fresh_state,
+            running_state_json("ses_1", "loop_after_reload"),
+        ));
+        assert!(
+            before_ack
+                .iter()
+                .all(|request| request.method != "turn.send" && request.method != "turn.steer")
+        );
+        assert!(app.sessions.known["ses_1"].steer_state_unconfirmed);
+        assert!(
+            app.sessions.known["ses_1"]
+                .live
+                .as_ref()
+                .is_some_and(|live| live.reference.is_none())
+        );
+
+        let after_send_ack = take_requests(respond(
+            &mut app,
+            &send,
+            json!({"turn": turn_ref_json("ses_1", "loop_after_reload")}),
+        ));
+        assert_eq!(
+            after_send_ack
+                .iter()
+                .filter(|request| request.method == "session.state")
+                .count(),
+            1
+        );
+        assert_eq!(
+            after_send_ack
+                .iter()
+                .filter(|request| request.method == "turn.wait")
+                .count(),
+            1
+        );
+        assert!(
+            after_send_ack
+                .iter()
+                .all(|request| request.method != "turn.send")
+        );
+        assert!(
+            app.sessions.known["ses_1"]
+                .live
+                .as_ref()
+                .is_some_and(|live| live
+                    .reference
+                    .as_ref()
+                    .is_some_and(|turn| { turn.loop_id == "loop_after_reload" }))
+        );
+        assert!(app.sessions.known["ses_1"].steer_state_unconfirmed);
+
+        let post_ack_state = after_send_ack
+            .iter()
+            .find(|request| request.method == "session.state")
+            .unwrap();
+        let after_state = take_requests(respond(
+            &mut app,
+            post_ack_state,
+            running_state_json("ses_1", "loop_after_reload"),
+        ));
+        assert!(
+            after_state
+                .iter()
+                .all(|request| request.method != "turn.send")
+        );
+        assert!(!app.sessions.known["ses_1"].steer_state_unconfirmed);
+
+        let steer = take_requests(app.update(AppEvent::SteerTurn {
+            session_id: "ses_1".to_owned(),
+            text: "after reload authority".to_owned(),
+        }));
+        assert_eq!(steer.len(), 1);
+        assert_eq!(steer[0].method, "turn.steer");
+        assert_eq!(steer[0].params["loop_id"], "loop_after_reload");
+        assert!(steer.iter().all(|request| request.method != "turn.send"));
+    }
+
+    #[test]
+    fn reload_queued_steer_waits_for_settled_idle_before_fresh_turn_handoff() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        let send = take_requests(app.update(AppEvent::SubmitTurn {
+            session_id: "ses_1".to_owned(),
+            text: "original user input".to_owned(),
+        }));
+        assert_eq!(send.len(), 1);
+        let send = send[0].clone();
+        assert_eq!(send.method, "turn.send");
+        {
+            let view = app.sessions.known.get_mut("ses_1").unwrap();
+            view.steer_queue.push(crate::state::turn::SteerQueueItem {
+                local_id: 20,
+                text: "queued B".to_owned(),
+                state: SteerQueueState::Unsent,
+                editor_revision: None,
+                handoff: false,
+            });
+        }
+
+        let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
+        let reads = take_requests(respond(&mut app, &reload, json!({"ok": true})));
+        let models = reads
+            .iter()
+            .find(|request| request.method == "model.list")
+            .unwrap();
+        let profiles = reads
+            .iter()
+            .find(|request| request.method == "profile.list")
+            .unwrap();
+        let sessions = reads
+            .iter()
+            .find(|request| request.method == "session.list")
+            .unwrap();
+        take_requests(respond(&mut app, models, json!({"models": []})));
+        take_requests(respond(&mut app, profiles, json!({"profiles": []})));
+        let active_reads = take_requests(respond(
+            &mut app,
+            sessions,
+            json!({"sessions": [session_info("ses_1")]}),
+        ));
+        let staged_state = active_reads
+            .iter()
+            .find(|request| request.method == "session.state")
+            .unwrap();
+        let presentation = active_reads
+            .iter()
+            .find(|request| request.method == "session.presentation")
+            .unwrap();
+        take_requests(respond(
+            &mut app,
+            presentation,
+            json!({"session_id": "ses_1", "context": {"kind": "unknown"}}),
+        ));
+        let staged_history = take_requests(respond(
+            &mut app,
+            staged_state,
+            running_state_json("ses_1", "loop_a"),
+        ));
+        assert_eq!(staged_history.len(), 1);
+        let staged_history = staged_history[0].clone();
+        let after_reload = take_requests(respond(
+            &mut app,
+            &staged_history,
+            history_page_json(Vec::new(), None, 0),
+        ));
+        let reload_state = after_reload
+            .iter()
+            .find(|request| request.method == "session.state")
+            .cloned()
+            .expect("reload schedules a normal state read");
+        assert!(app.sessions.known["ses_1"].steer_state_unconfirmed);
+
+        let before_ack = take_requests(respond(
+            &mut app,
+            &reload_state,
+            state_json("ses_1", "idle"),
+        ));
+        assert!(
+            before_ack
+                .iter()
+                .all(|request| request.method != "turn.send" && request.method != "turn.steer")
+        );
+        assert!(app.sessions.known["ses_1"].steer_state_unconfirmed);
+
+        let after_ack = take_requests(respond(
+            &mut app,
+            &send,
+            json!({"turn": turn_ref_json("ses_1", "loop_a")}),
+        ));
+        assert!(
+            after_ack
+                .iter()
+                .all(|request| request.method != "turn.send" && request.method != "turn.steer")
+        );
+        let wait = after_ack
+            .iter()
+            .find(|request| request.method == "turn.wait")
+            .cloned()
+            .expect("late A send ACK registers one wait");
+        let binding_state = after_ack
+            .iter()
+            .find(|request| request.method == "session.state")
+            .cloned()
+            .expect("first A reference binding requests one fresh state");
+        assert!(app.sessions.known["ses_1"].steer_state_unconfirmed);
+
+        let after_binding_state = take_requests(respond(
+            &mut app,
+            &binding_state,
+            state_json("ses_1", "idle"),
+        ));
+        assert!(
+            after_binding_state
+                .iter()
+                .all(|request| request.method != "turn.send" && request.method != "turn.steer")
+        );
+        assert!(app.sessions.known["ses_1"].steer_state_unconfirmed);
+
+        let after_wait = take_requests(respond(
+            &mut app,
+            &wait,
+            json!({
+                "turn": turn_ref_json("ses_1", "loop_a"),
+                "outcome": {"type": "completed"},
+                "usage": {},
+                "requests": 1,
+                "tool_rounds": 0,
+                "final_config_revision": 0,
+                "persistence": "persisted"
+            }),
+        ));
+        assert!(
+            after_wait
+                .iter()
+                .all(|request| request.method != "turn.send" && request.method != "turn.steer")
+        );
+        let wait_state = after_wait
+            .iter()
+            .find(|request| request.method == "session.state")
+            .cloned()
+            .expect("A completion requests one fresh idle state");
+        let history = after_wait
+            .iter()
+            .find(|request| request.method == "session.history")
+            .cloned()
+            .expect("A completion requests terminal history");
+        assert!(
+            app.sessions.known["ses_1"]
+                .live
+                .as_ref()
+                .is_some_and(|live| { live.waiting && live.last_result.is_some() })
+        );
+        assert_eq!(app.sessions.known["ses_1"].steer_queue.len(), 1);
+        assert!(app.sessions.known["ses_1"].steer_state_unconfirmed);
+
+        let before_history =
+            take_requests(respond(&mut app, &wait_state, state_json("ses_1", "idle")));
+        assert!(
+            before_history
+                .iter()
+                .all(|request| request.method != "turn.send" && request.method != "turn.steer")
+        );
+        assert!(app.sessions.known["ses_1"].steer_state_unconfirmed);
+
+        let after_history = take_requests(respond(
+            &mut app,
+            &history,
+            history_page_json(
+                vec![
+                    user_item(0, "loop_a", "original user input"),
+                    assistant_item(1, "loop_a", "A completed"),
+                ],
+                None,
+                2,
+            ),
+        ));
+        assert_eq!(
+            after_history
+                .iter()
+                .filter(|request| request.method == "turn.send")
+                .count(),
+            1
+        );
+        let fresh_turn = after_history
+            .iter()
+            .find(|request| request.method == "turn.send")
+            .cloned()
+            .expect("settled A hands off queued B once");
+        assert_eq!(fresh_turn.params["text"], "queued B");
+        assert!(
+            after_history
+                .iter()
+                .all(|request| request.method != "turn.steer")
+        );
+        assert!(!app.sessions.known["ses_1"].steer_state_unconfirmed);
+
+        let after_b_ack = take_requests(respond(
+            &mut app,
+            &fresh_turn,
+            json!({"turn": turn_ref_json("ses_1", "loop_b")}),
+        ));
+        assert_eq!(
+            after_b_ack
+                .iter()
+                .filter(|request| request.method == "turn.wait")
+                .count(),
+            1
+        );
+        assert!(
+            after_b_ack
+                .iter()
+                .all(|request| request.method != "turn.send" && request.method != "turn.steer")
+        );
+        assert_eq!(
+            take_requests(app.update(AppEvent::Tick))
+                .iter()
+                .filter(|request| request.method == "turn.send" || request.method == "turn.steer")
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn idle_state_evidence_does_not_release_steer_authority_fence() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        {
+            let view = app.sessions.known.get_mut("ses_1").unwrap();
+            let state = view.state.as_mut().unwrap();
+            state.status = SessionStatusWire::Running;
+            state.active_loop = Some(crate::protocol::LoopStateWire {
+                loop_id: "loop_live".to_owned(),
+                status: crate::protocol::LoopStatusWire::RunningModel,
+                request_index: 0,
+                config_revision: 0,
+                model: Some("deep".to_owned()),
+                pending_interaction: None,
+            });
+            let mut live = LiveLoop::new(LocalSubmissionId(1), "prompt".to_owned());
+            live.reference = Some(make_turn("ses_1", "loop_live"));
+            view.live = Some(live);
+            view.event_gap = true;
+            view.steer_state_unconfirmed = true;
+        }
+
+        take_requests(app.update(event(wire_event(json!({
+            "type": "session_state",
+            "data": {
+                "state": state_json("ses_1", "idle"),
+                "meta": meta_json("ses_1", 0)
+            }
+        })))));
+        assert!(app.sessions.known["ses_1"].steer_state_unconfirmed);
+        assert!(
+            take_requests(app.update(AppEvent::SteerTurn {
+                session_id: "ses_1".to_owned(),
+                text: "must wait for Running authority".to_owned(),
+            }))
+            .is_empty()
+        );
+
+        let idle_state = match app.request_session_state(&"ses_1".to_owned()) {
+            AppCommand::Rpc(request) => request,
+            _ => unreachable!(),
+        };
+        take_requests(respond(&mut app, &idle_state, state_json("ses_1", "idle")));
+        assert!(app.sessions.known["ses_1"].steer_state_unconfirmed);
+        assert!(
+            take_requests(app.update(AppEvent::SteerTurn {
+                session_id: "ses_1".to_owned(),
+                text: "still must wait".to_owned(),
+            }))
+            .is_empty()
+        );
+
+        let running_state = match app.request_session_state(&"ses_1".to_owned()) {
+            AppCommand::Rpc(request) => request,
+            _ => unreachable!(),
+        };
+        take_requests(respond(
+            &mut app,
+            &running_state,
+            running_state_json("ses_1", "loop_live"),
+        ));
+        assert!(!app.sessions.known["ses_1"].steer_state_unconfirmed);
+        let steer = take_requests(app.update(AppEvent::SteerTurn {
+            session_id: "ses_1".to_owned(),
+            text: "now authorized".to_owned(),
+        }));
+        assert_eq!(steer.len(), 1);
+        assert_eq!(steer[0].method, "turn.steer");
+        assert_eq!(steer[0].params["loop_id"], "loop_live");
+        assert!(app.sessions.known["ses_1"].event_gap);
+    }
+
+    #[test]
+    fn close_verify_failure_idle_event_does_not_authorize_repeat_close() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        let close = take_requests(app.update(AppEvent::CloseSession {
+            session_id: "ses_1".to_owned(),
+            confirm: true,
+        }))
+        .remove(0);
+        let verify = take_requests(respond_error(
+            &mut app,
+            &close,
+            crate::protocol::INTERNAL_ERROR,
+            "close failed",
+        ))
+        .into_iter()
+        .find(|request| request.method == "session.state")
+        .expect("close failure starts one verification read");
+        take_requests(respond_error(
+            &mut app,
+            &verify,
+            crate::protocol::INTERNAL_ERROR,
+            "verification unavailable",
+        ));
+
+        take_requests(app.update(event(wire_event(json!({
+            "type": "session_state",
+            "data": {
+                "state": state_json("ses_1", "idle"),
+                "meta": meta_json("ses_1", 0)
+            }
+        })))));
+
+        let retry = take_requests(app.update(AppEvent::CloseSession {
+            session_id: "ses_1".to_owned(),
+            confirm: true,
+        }));
+        assert!(
+            retry
+                .iter()
+                .all(|request| request.method != "session.close")
+        );
+        assert_eq!(
+            retry
+                .iter()
+                .filter(|request| request.method == "session.state")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn dropped_close_verification_enters_guarded_unknown_and_recovers() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        let close = take_requests(app.update(AppEvent::CloseSession {
+            session_id: "ses_1".to_owned(),
+            confirm: true,
+        }))
+        .remove(0);
+        let verify = take_requests(respond_error(
+            &mut app,
+            &close,
+            crate::protocol::INTERNAL_ERROR,
+            "close failed",
+        ))
+        .into_iter()
+        .find(|request| request.method == "session.state")
+        .expect("close failure starts one verification read");
+        assert!(app.sessions.known["ses_1"].closing);
+
+        let recovery = take_requests(app.update(event(wire_event(json!({
+            "type": "session_state",
+            "data": {
+                "state": state_json("ses_1", "idle"),
+                "meta": meta_json("ses_1", 1)
+            }
+        })))));
+        assert!(!app.sessions.known["ses_1"].closing);
+        assert!(app.sessions.known["ses_1"].close_verification_unknown);
+        assert!(
+            recovery
+                .iter()
+                .any(|request| request.method == "session.state")
+        );
+        assert!(
+            recovery
+                .iter()
+                .any(|request| request.method == "session.history")
+        );
+        assert!(
+            recovery
+                .iter()
+                .all(|request| request.method != "session.close")
+        );
+
+        let late = take_requests(respond(&mut app, &verify, state_json("ses_1", "idle")));
+        assert!(late.iter().all(|request| request.method != "session.close"));
+        assert!(!app.sessions.known["ses_1"].closing);
+        assert!(app.sessions.known["ses_1"].close_verification_unknown);
+        let blocked = take_requests(app.update(AppEvent::CloseSession {
+            session_id: "ses_1".to_owned(),
+            confirm: true,
+        }));
+        assert!(
+            blocked
+                .iter()
+                .all(|request| request.method != "session.close")
+        );
+
+        let recovery_state = recovery
+            .iter()
+            .find(|request| request.method == "session.state")
+            .unwrap()
+            .clone();
+        let recovery_history = recovery
+            .iter()
+            .find(|request| request.method == "session.history")
+            .unwrap()
+            .clone();
+        take_requests(respond(
+            &mut app,
+            &recovery_state,
+            state_json("ses_1", "idle"),
+        ));
+        take_requests(respond(
+            &mut app,
+            &recovery_history,
+            history_page_json(Vec::new(), None, 0),
+        ));
+        assert!(!app.sessions.known["ses_1"].event_gap);
+        assert!(app.sessions.known["ses_1"].transcript.complete);
+        assert!(!app.sessions.known["ses_1"].close_verification_unknown);
+
+        let retry = take_requests(app.update(AppEvent::CloseSession {
+            session_id: "ses_1".to_owned(),
+            confirm: true,
+        }));
+        assert_eq!(
+            retry
+                .iter()
+                .filter(|request| request.method == "session.close")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn reload_late_lifecycle_ack_keeps_gap_and_starts_recovery() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        let rename = match app.request(
+            RequestKind::RenameSession {
+                session_id: "ses_1".to_owned(),
+            },
+            |id| OutgoingRequest::session_rename(id, "ses_1", "renamed"),
+        ) {
+            AppCommand::Rpc(request) => request,
+            _ => unreachable!(),
+        };
+        let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
+        assert!(app.sessions.known["ses_1"].event_gap);
+        assert!(
+            take_requests(app.update(AppEvent::CloseSession {
+                session_id: "ses_1".to_owned(),
+                confirm: true,
+            }))
+            .is_empty()
+        );
+        assert!(
+            take_requests(app.update(AppEvent::DeleteSession {
+                session_id: "ses_1".to_owned(),
+                confirm: true,
+            }))
+            .is_empty()
+        );
+
+        take_requests(respond(
+            &mut app,
+            &rename,
+            json!({"session": session_info("ses_1")}),
+        ));
+        assert!(app.sessions.known["ses_1"].event_gap);
+
+        let reads = take_requests(respond(&mut app, &reload, json!({"ok": true})));
+        let models = reads
+            .iter()
+            .find(|request| request.method == "model.list")
+            .unwrap();
+        let profiles = reads
+            .iter()
+            .find(|request| request.method == "profile.list")
+            .unwrap();
+        let sessions = reads
+            .iter()
+            .find(|request| request.method == "session.list")
+            .unwrap();
+        take_requests(respond(&mut app, models, json!({"models": []})));
+        take_requests(respond(&mut app, profiles, json!({"profiles": []})));
+        let active_reads = take_requests(respond(
+            &mut app,
+            sessions,
+            json!({"sessions": [session_info("ses_1")]}),
+        ));
+        let state = active_reads
+            .iter()
+            .find(|request| request.method == "session.state")
+            .unwrap();
+        let presentation = active_reads
+            .iter()
+            .find(|request| request.method == "session.presentation")
+            .unwrap();
+        take_requests(respond(
+            &mut app,
+            presentation,
+            json!({"session_id": "ses_1", "context": {"kind": "unknown"}}),
+        ));
+        let history = take_requests(respond(&mut app, state, state_json("ses_1", "idle")));
+        assert_eq!(history.len(), 1);
+
+        let recovery = take_requests(respond(
+            &mut app,
+            &history[0],
+            history_page_json(vec![], None, 0),
+        ));
+        assert!(
+            recovery
+                .iter()
+                .any(|request| request.method == "session.history")
+        );
+        assert!(
+            recovery
+                .iter()
+                .all(|request| request.method != "turn.send" && request.method != "turn.steer")
+        );
+        assert!(app.sessions.known["ses_1"].event_gap);
+        assert!(!app.sessions.known["ses_1"].transcript.complete);
+
+        let recovery = recovery
+            .iter()
+            .find(|request| request.method == "session.history")
+            .unwrap();
+        take_requests(respond(
+            &mut app,
+            recovery,
+            history_page_json(vec![], None, 0),
+        ));
+        assert!(!app.sessions.known["ses_1"].event_gap);
+        assert!(app.sessions.known["ses_1"].transcript.complete);
+    }
+
+    #[test]
+    fn reload_late_create_ack_keeps_gap_for_new_session_reads() {
+        let mut app = test_app();
+        ready(&mut app);
+
+        let create = take_requests(app.update(AppEvent::CreateSession {
+            workspace: "/project".to_owned(),
+            profile: None,
+            model: None,
+            reasoning: None,
+            title: None,
+        }))
+        .remove(0);
+        let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
+        take_requests(respond(&mut app, &reload, json!({"ok": false})));
+
+        let reads = take_requests(respond(
+            &mut app,
+            &create,
+            json!({"session": session_info("ses_created_after_reload")}),
+        ));
+        assert!(app.sessions.known["ses_created_after_reload"].event_gap);
+        assert!(
+            !app.sessions.known["ses_created_after_reload"]
+                .transcript
+                .complete
+        );
+        let history = reads
+            .iter()
+            .find(|request| request.method == "session.history")
+            .expect("late create ACK starts a history read");
+        let kind = app.pending_requests.get(&history.id);
+        assert!(matches!(
+            kind,
+            Some(RequestKind::History {
+                gap_revision: Some(1),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn create_ack_during_reload_keeps_the_new_view_uncalibrated() {
+        let mut app = test_app();
+        ready(&mut app);
+
+        let create = take_requests(app.update(AppEvent::CreateSession {
+            workspace: "/project".to_owned(),
+            profile: None,
+            model: None,
+            reasoning: None,
+            title: None,
+        }))
+        .remove(0);
+        let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
+
+        take_requests(respond(
+            &mut app,
+            &create,
+            json!({"session": session_info("ses_created_during_reload")}),
+        ));
+        let view = &app.sessions.known["ses_created_during_reload"];
+        assert!(view.state.is_none());
+        assert!(view.event_gap);
+        assert!(!view.transcript.complete);
+
+        let recovery = take_requests(respond(&mut app, &reload, json!({"ok": false})));
+        assert!(
+            recovery
+                .iter()
+                .any(|request| request.method == "session.state")
+        );
+        assert!(
+            recovery
+                .iter()
+                .any(|request| request.method == "session.history")
+        );
+    }
+
+    #[test]
+    fn incomplete_reload_keeps_active_session_gap_after_channel_end() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        take_requests(app.update(AppEvent::Reload));
+        take_requests(app.update(AppEvent::RpcChannelEnded));
+
+        assert!(app.reload.is_none());
+        assert!(app.sessions.known["ses_1"].event_gap);
+        assert!(!app.sessions.known["ses_1"].transcript.complete);
+        assert!(app.notices().iter().any(|notice| {
+            notice
+                .text
+                .contains("configuration reload outcome is unknown; no automatic retry")
+        }));
+    }
+
+    #[test]
+    fn acknowledged_reload_channel_end_does_not_claim_refresh_success() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
+        take_requests(respond(&mut app, &reload, json!({"ok": true})));
+        take_requests(app.update(AppEvent::RpcChannelEnded));
+
+        assert!(app.notices().iter().any(|notice| {
+            notice.text.contains(
+                "Agent configuration reloaded; view refresh outcome is unknown; no automatic retry",
+            )
+        }));
+        assert!(app.sessions.known["ses_1"].event_gap);
+        assert!(app.sessions.known["ses_1"].state.is_none());
     }
 
     #[test]

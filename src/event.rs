@@ -92,6 +92,9 @@ pub enum AppEvent {
     RefreshTurn {
         session_id: String,
     },
+    /// Ask the Agent to reload its configuration, then refresh the TUI's
+    /// read-only catalogs and active-session projections.
+    Reload,
     /// A transport event from the RPC background tasks.
     Rpc(RpcEvent),
     /// All RPC producer tasks have ended and no buffered transport event

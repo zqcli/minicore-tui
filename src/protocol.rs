@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 pub const JSONRPC_VERSION: &str = "2.0";
 
 pub const METHOD_PING: &str = "agent.ping";
+pub const METHOD_RELOAD: &str = "agent.reload";
 pub const METHOD_LIST_MODELS: &str = "model.list";
 pub const METHOD_LIST_PROFILES: &str = "profile.list";
 pub const METHOD_LIST_SESSIONS: &str = "session.list";
@@ -86,6 +87,9 @@ impl OutgoingRequest {
 
     pub fn ping(id: RequestId) -> Self {
         Self::new(id, METHOD_PING, json!({}))
+    }
+    pub fn reload(id: RequestId) -> Self {
+        Self::new(id, METHOD_RELOAD, json!({}))
     }
     pub fn list_models(id: RequestId) -> Self {
         Self::new(id, METHOD_LIST_MODELS, json!({}))
@@ -296,6 +300,9 @@ impl RpcResponse {
         }
     }
     pub fn parse_ping(&self) -> Result<PingResult, RpcResponseError> {
+        self.result_as()
+    }
+    pub fn parse_reload(&self) -> Result<ReloadResult, RpcResponseError> {
         self.result_as()
     }
     pub fn parse_models(&self) -> Result<ModelListResult, RpcResponseError> {
@@ -873,6 +880,11 @@ pub struct OkResultWire {
     pub ok: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReloadResult {
+    pub ok: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SteerResult {
     pub ok: bool,
     #[serde(default)]
@@ -1306,6 +1318,48 @@ mod tests {
             value,
             json!({"jsonrpc":"2.0","id":1,"method":"agent.ping","params":{}})
         );
+    }
+
+    #[test]
+    fn reload_request_and_result_are_strict() {
+        let value = serde_json::to_value(OutgoingRequest::reload(RequestId(2))).unwrap();
+        assert_eq!(
+            value,
+            json!({"jsonrpc":"2.0","id":2,"method":"agent.reload","params":{}})
+        );
+        let response = RpcResponse {
+            id: RequestId(2),
+            result: Some(json!({"ok": true})),
+            error: None,
+        };
+        assert_eq!(response.parse_reload().unwrap(), ReloadResult { ok: true });
+        let extra = RpcResponse {
+            id: RequestId(2),
+            result: Some(json!({"ok": true, "extra": 1})),
+            error: None,
+        };
+        assert!(matches!(
+            extra.parse_reload(),
+            Err(RpcResponseError::Parse(_))
+        ));
+        let false_result = RpcResponse {
+            id: RequestId(2),
+            result: Some(json!({"ok": false})),
+            error: None,
+        };
+        assert_eq!(
+            false_result.parse_reload().unwrap(),
+            ReloadResult { ok: false }
+        );
+        let missing = RpcResponse {
+            id: RequestId(2),
+            result: Some(json!({})),
+            error: None,
+        };
+        assert!(matches!(
+            missing.parse_reload(),
+            Err(RpcResponseError::Parse(_))
+        ));
     }
 
     #[test]

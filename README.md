@@ -123,13 +123,13 @@ The complete current keymap and slash-command semantics are in
 - `Ctrl+T` toggles reasoning and `Ctrl+O` toggles tool previews;
 - `PageUp`/`PageDown`, `Ctrl+Home`/`Ctrl+End`, and mouse wheel scroll the transcript;
 - `Esc` closes a dock or cancels the exact running turn;
-- `Ctrl+C` clears non-empty input, then double-presses to quit; `/cancel` cancels the exact active loop, `/refresh` re-reads its retained result once, and `/quit` performs normal shutdown.
+- `Ctrl+C` clears non-empty input, then double-presses to quit; `/cancel` cancels the exact active loop, `/reload` reloads Agent configuration and safe read-only state, and `/quit` performs normal shutdown.
 
 Implemented local commands are `/new`, `/resume`, `/sessions`, `/model`,
-`/reasoning`, `/cancel`, `/refresh`, `/theme dark`, `/theme light`, `/clear`,
+`/reasoning`, `/cancel`, `/reload`, `/theme dark`, `/theme light`, `/clear`,
 `/help`, `/logs`, `/quit`, `/close`, and `/delete`. Unknown commands never
-reach the Agent. `/refresh` is idempotent while the same `turn.wait` is in
-flight; `/cancel` never replaces that wait with shutdown.
+reach the Agent. `/reload` sends empty `agent.reload` params and refreshes
+safe catalog/session reads without replacing an active turn or its wait.
 
 ## Backend Contract And Scope
 

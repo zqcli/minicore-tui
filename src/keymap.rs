@@ -276,7 +276,7 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
 fn composer_keys(key: KeyEvent, press: bool, repeat: bool, typing: bool) -> Action {
     // The reducer rejects ordinary prompt/steer submissions in blocked or
     // finishing states, but the editor remains usable for local slash
-    // commands such as `/refresh` and `/close confirm`.
+    // commands such as `/reload` and `/close confirm`.
     if !typing {
         return Action::None;
     }

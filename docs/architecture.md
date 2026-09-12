@@ -98,6 +98,45 @@ revision is still current, and removes the provisional live turn (or transitions
 an unsaved loop banner if persistence failed). Background sessions retain their own
 `SessionView` and continue receiving events.
 
+Configuration reload is a reducer barrier for new turn work. While its staged
+catalog/state/presentation/history candidate is in flight, Enter and direct
+submit/steer events leave composer text and already-admitted steer items in
+place; the FIFO does not issue `turn.send` or `turn.steer`. The event that
+finishes or fails the candidate is also barred from advancing the FIFO, so a
+queued item can only move on a later ordinary event. Existing execution
+requests, including an already-authorized wait, are correlated normally and
+are not cancelled by the read barrier.
+
+Reads retired at reload start become stale responses. If a retired state,
+presentation, or history read could have been the authority for a session,
+the session drops the old state snapshot and retains event-gap and
+incomplete-history fences. A reload failure starts independent fresh
+`session.state` and `session.history` reads; History may clear the gap, but
+submit/close/delete remain blocked until a valid state response also restores
+state authority. Ordinary submit admission retains its existing state/history-read behavior: an
+in-flight ordinary read, loading history, or temporarily absent SessionState
+does not become a new global admission fence. Steer has a separate authority
+fence: after reload or an uncertain state read, only a matching fresh normal
+`session.state` response proving the current `TurnRef` is still `Running` may
+release it. Reload-staged `Running` state, ordinary `Idle` notifications, and
+fresh `Idle` responses do not release that fence. Once released, explicit and
+FIFO Steer may use the authoritative TurnRef through an ordinary History
+`event_gap`; the gap still blocks new turns, lifecycle mutations, and
+configuration updates, and History reconciliation remains an independent
+requirement. The Steer fence applies to the retained live loop, not the
+separate fresh-turn handoff: a completed, persisted, history-settled Idle
+session may hand off its queued input exactly once under the existing rules.
+Reload-retired reads and lifecycle ACKs use the session-scoped
+`close_verification_unknown` fence; a matching fresh state response clears it
+while the independent history-gap fence remains. Configuration updates retain
+their separate calibrated-state and request-boundary rules. Lifecycle requests
+already in flight are not retargeted.
+Open/create ACKs that arrive during or after staging are marked as uncalibrated
+before fresh reads are admitted; other lifecycle ACKs keep the affected session
+fenced so the staged snapshot cannot erase the need for recovery. A known
+post-ACK catalog/state/history failure reports view-refresh failure rather than
+claiming rollback; transport loss leaves the reload outcome unknown.
+
 ## Live And Durable State
 
 `SessionView` separates:

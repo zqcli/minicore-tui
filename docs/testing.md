@@ -113,7 +113,19 @@ comparison is deterministic and works without a review tool.
   request, and full-contract cases.
 - `tests/app_flow.rs` covers bootstrap, session creation/opening, pagination,
   multi-request reconciliation, persistence failure and duplicate wait,
-  shutdown drain, and active-session updates.
+  generation-staged configuration reload, shutdown drain, internal exact-turn
+  refresh, and active-session updates. The reducer tests in `src/app.rs` also
+  pin reload admission: no queue advancement or new `turn.send`/`turn.steer`
+  at reload begin/mid/end/failure, composer and admitted-queue retention,
+  stale-read gap preservation, state-read failure fencing, lifecycle admission,
+  recovery after late lifecycle/create ACKs, and channel-end fencing during an
+  incomplete reload. Reload-created Steer fences require a matching fresh
+  Running state response; an ordinary History gap alone does not create that
+  fence. Coverage includes late TurnRef binding, Idle notifications during state
+  recovery, dropped close-verification reads, and independent History/state
+  reconciliation. The terminal FIFO regression verifies that a completed,
+  persisted, history-settled Idle loop can hand off queued input exactly once
+  without sending another Steer to the old loop.
 - `src/ui/transcript.rs` tests durable cache preparation/install, revision and
   key invalidation, stale preparation rejection, session-local caches, live
   delta isolation, and parse-count cache hits.
@@ -149,15 +161,17 @@ cargo test --locked --test agent_e2e -- --ignored --test-threads=1 --nocapture
 ```
 
 The test harness creates an isolated configuration, data directory, workspace,
-and loopback mock model endpoint. The ignored suite covers discovery, turns,
-steering, updates, shutdown, and the Session-panel rename/close/delete flow.
+and loopback mock model endpoint. The ignored suite covers discovery, turns, steering, updates, configuration
+reload, shutdown, and the Session-panel rename/close/delete flow.
 No provider key or real user data is used.
 
 A delivery run should wrap this command in a 300-second timeout and a cleanup
 trap. The trap must kill/reap only processes created by the run and remove its
-temporary root. The official serial command is `--ignored --test-threads=1` (17 scenarios,
-deterministic in the remote final run). This is loopback evidence against the
-real Agent binary, not external-provider coverage.
+temporary root. The official serial command is `--ignored --test-threads=1`. The historical
+remote final run covered 17 scenarios. The configuration-reload acceptance
+runs execute all 18 scenarios against a fresh Agent binary; both stable and
+MSRV E2E runs passed. This is loopback evidence against the real Agent binary,
+not external-provider coverage.
 
 
 ## Stage 7 PTY Evidence

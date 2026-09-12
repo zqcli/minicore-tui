@@ -2105,20 +2105,15 @@ fn slash_cancel_sends_exact_turn_cancel_and_wait_reconciles() {
 }
 
 #[test]
-fn slash_refresh_and_restricted_commands_remain_usable() {
-    // Slash commands are reachable with no active session even though a
-    // normal prompt is not actionable.
+fn internal_refresh_turn_and_restricted_commands_remain_usable() {
+    // The exact-turn wait path remains internal; there is no public slash
+    // command for it.
     let mut no_session = Driver::new();
-    submit_command(&mut no_session, "/refresh");
+    no_session.step(AppEvent::RefreshTurn {
+        session_id: "ses_1".into(),
+    });
     assert!(no_session.queue.is_empty());
     assert!(no_session.app.composer.is_empty());
-    assert!(
-        no_session
-            .app
-            .notices()
-            .iter()
-            .any(|notice| notice.text.contains("no active session to refresh"))
-    );
 
     let mut driver = Driver::new();
     bootstrap(&mut driver);
@@ -2155,14 +2150,18 @@ fn slash_refresh_and_restricted_commands_remain_usable() {
     ))));
     assert!(driver.app.composer.is_empty());
 
-    // `/refresh` targets the retained blocked TurnRef exactly once.
-    submit_command(&mut driver, "/refresh");
+    // The internal event targets the retained blocked TurnRef exactly once.
+    driver.step(AppEvent::RefreshTurn {
+        session_id: "ses_1".into(),
+    });
     let refresh = driver.request("turn.wait");
     assert_eq!(
         refresh.params,
         json!({"session_id": "ses_1", "loop_id": "loop_blocked"})
     );
-    submit_command(&mut driver, "/refresh");
+    driver.step(AppEvent::RefreshTurn {
+        session_id: "ses_1".into(),
+    });
     assert!(
         driver
             .queue
@@ -2212,7 +2211,9 @@ fn slash_refresh_and_restricted_commands_remain_usable() {
         loop_id: "loop_finishing".into(),
     });
     view.live = Some(live);
-    submit_command(&mut finishing, "/refresh");
+    finishing.step(AppEvent::RefreshTurn {
+        session_id: "ses_1".into(),
+    });
     let finishing_wait = finishing.request("turn.wait");
     assert_eq!(
         finishing_wait.params,

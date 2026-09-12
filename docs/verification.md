@@ -84,10 +84,10 @@ Final6 added slash command entry and restricted-state Composer regressions to th
 - `slash_cancel_sends_exact_turn_cancel_and_wait_reconciles` verifies the
   actual Composer key path, exact `turn.cancel` fields, preservation of the
   original `turn.wait`, and cancelled/persisted History reconciliation.
-- `slash_refresh_and_restricted_commands_remain_usable` verifies one-shot
-  retained-TurnRef refresh, duplicate-wait suppression, blocked/finishing/no-
-  session command access, `/close confirm`, and rejection of ordinary
-  prompt/steer/update operations.
+- `internal_refresh_turn_and_restricted_commands_remain_usable` verifies
+  one-shot retained-TurnRef refresh, duplicate-wait suppression,
+  blocked/finishing/no-session internal access, `/close confirm`, and
+  rejection of ordinary prompt/steer/update operations.
 - `forced_shutdown_message_combines_unknown_known_failure_and_stderr`,
   `forced_shutdown_timeout_report_keeps_unknown_and_known_failure_facts`, and
   `forced_shutdown_drains_gated_stderr_before_reporting`: forced shutdown

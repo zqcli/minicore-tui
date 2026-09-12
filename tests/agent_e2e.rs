@@ -756,6 +756,94 @@ async fn dispatch(process: &mut RpcProcess, app: &mut App, event: AppEvent) -> R
     Ok(())
 }
 
+/// The reload path is deliberately exercised against the real Agent process:
+/// the RPC acknowledgement, fresh catalogs, active-session state, and full
+/// history chain must all settle before the TUI reports success.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_configuration_reload_refreshes_catalogs_and_active_session() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CreateSession {
+                workspace: env.workspace_path.to_string_lossy().into_owned(),
+                profile: Some("coding".to_owned()),
+                model: Some("deep".to_owned()),
+                reasoning: Some(Reasoning::High),
+                title: Some("Reload E2E".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        let session_id = wait_for_active_session(&mut process, &mut app)
+            .await
+            .unwrap();
+
+        let config = std::fs::read_to_string(&env.config_path).unwrap();
+        let config = config.replace(
+            "[profiles.fast]\nmodel = \"fast\"\nreasoning = \"low\"",
+            "[profiles.fast]\nmodel = \"fast\"\nreasoning = \"high\"",
+        );
+        std::fs::write(&env.config_path, config).unwrap();
+
+        dispatch(&mut process, &mut app, AppEvent::Reload)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            !a.pending_requests.values().any(|kind| {
+                matches!(
+                    kind,
+                    RequestKind::Reload { .. }
+                        | RequestKind::ReloadModels { .. }
+                        | RequestKind::ReloadProfiles { .. }
+                        | RequestKind::ReloadSessions { .. }
+                        | RequestKind::ReloadState { .. }
+                        | RequestKind::ReloadPresentation { .. }
+                        | RequestKind::ReloadHistory { .. }
+                )
+            }) && a.notices().back().is_some_and(|notice| {
+                notice.text == "Agent configuration and read-only state reloaded"
+            })
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(app.sessions.active.as_deref(), Some(session_id.as_str()));
+        let view = app.sessions.known.get(&session_id).unwrap();
+        assert!(view.info.loaded);
+        assert!(view.transcript.complete);
+        assert!(app.catalogs.loaded);
+        assert_eq!(
+            app.catalogs
+                .profiles
+                .iter()
+                .find(|profile| profile.id == "fast")
+                .map(|profile| profile.reasoning),
+            Some(Reasoning::High)
+        );
+
+        let report = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(report.shutdown_ok && report.seen_eof && report.seen_exit);
+        process.terminate().await;
+    });
+}
+
 struct StrictShutdownReport {
     shutdown_ok: bool,
     cancelled_waits: Vec<TurnResultViewWire>,

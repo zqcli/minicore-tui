@@ -193,6 +193,7 @@ fn serve(mode: &str) -> ExitCode {
         let params = frame.get("params").cloned().unwrap_or_else(|| json!({}));
 
         match method.as_str() {
+            "agent.reload" => fake_respond(&mut out, &id, json!({"ok": true})),
             "agent.ping" => {
                 if mode == "crash" {
                     return ExitCode::from(1);
@@ -271,6 +272,17 @@ fn serve(mode: &str) -> ExitCode {
             "session.history" => {
                 let result = json!({"items": [], "next_offset": null, "total": 0});
                 fake_respond(&mut out, &id, result);
+            }
+            "session.presentation" => {
+                let session_id = params
+                    .get("session_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("ses_fake_1");
+                fake_respond(
+                    &mut out,
+                    &id,
+                    json!({"session_id": session_id, "context": {"kind": "unknown"}}),
+                );
             }
             "session.update" => {
                 let session_id = params

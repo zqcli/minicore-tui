@@ -111,11 +111,13 @@ Unknown commands and invalid arguments produce a local notice and no RPC.
 | `/close [confirm]` | Close the active session; blocked/unsaved/running sessions require `confirm`. |
 | `/delete [confirm]` | Delete the active session; destructive state requires `confirm`. |
 | `/cancel` | Cancel the active loop with `turn.cancel`; the existing `turn.wait` remains in flight. |
-| `/refresh` | Request one `turn.wait` for the active retained `TurnRef`; duplicate waits are suppressed. |
+| `/reload` | Send empty `agent.reload` params, then refresh catalogs and safe active-session state/history without replacing an active turn. |
 | `/quit` | Request normal Agent shutdown. |
 
-`/cancel` and `/refresh` remain local command entries even when a session is
+`/cancel` and `/reload` remain local command entries even when a session is
 Blocked or Finishing; ordinary prompt/steer/update submissions remain refused.
+The internal one-shot `turn.wait` path remains available to the reducer for
+retained-result reconciliation.
 The following are deliberately not implemented: `!command`, `@file`,
 `/fork`, `/branch`, `/compact`, `/steer`, `/queue`, `/settings`, `/login`,
 `/plugin`, and `/mcp`.

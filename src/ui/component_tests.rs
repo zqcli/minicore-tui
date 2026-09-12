@@ -3662,7 +3662,7 @@ fn help_panel_lists_keys_and_safety_notes() {
     let content = text(&terminal);
     assert!(content.contains("Slash commands"));
     assert!(content.contains("/cancel"));
-    assert!(content.contains("/refresh"));
+    assert!(content.contains("/reload"));
     assert!(content.contains("Tools run automatically."));
     assert!(content.contains("Bash is not sandboxed."));
     assert!(content.contains("No approval UI"));

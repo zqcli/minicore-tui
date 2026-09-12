@@ -76,7 +76,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     lines.push(Line::default());
     lines.push(section(theme, "Slash commands", width));
     for command in [
-        "/new  /resume  /sessions  /model  /reasoning  /cancel  /refresh",
+        "/new  /resume  /sessions  /model  /reasoning  /cancel  /reload",
         "/close [confirm]  /delete [confirm]  /theme dark|light  /clear  /help  /logs  /quit",
     ] {
         lines.push(Line::from(Span::styled(

@@ -72,8 +72,8 @@ pub enum LocalCommand {
     Logs,
     /// Cancel the active loop through `turn.cancel`.
     Cancel,
-    /// Re-read the currently retained turn result through `turn.wait`.
-    Refresh,
+    /// Reload Agent configuration and refresh safe read-only TUI state.
+    Reload,
     /// Normal shutdown intent (`agent.shutdown` arrives in Phase 6).
     Quit,
     /// Close the active session (spec 12, 52).
@@ -96,7 +96,7 @@ pub const SLASH_COMMAND_NAMES: &[&str] = &[
     "help",
     "logs",
     "cancel",
-    "refresh",
+    "reload",
     "quit",
     "close",
     "delete",
@@ -226,7 +226,7 @@ pub fn parse_command(input: &str) -> Result<LocalCommand, CommandIssue> {
         "help" => no_args(LocalCommand::Help),
         "logs" => no_args(LocalCommand::Logs),
         "cancel" => no_args(LocalCommand::Cancel),
-        "refresh" => no_args(LocalCommand::Refresh),
+        "reload" => no_args(LocalCommand::Reload),
         "quit" => no_args(LocalCommand::Quit),
         "close" => match args {
             "" => Ok(LocalCommand::Close { confirm: false }),
@@ -275,7 +275,11 @@ mod tests {
         assert_eq!(parse_command("/help"), Ok(LocalCommand::Help));
         assert_eq!(parse_command("/logs"), Ok(LocalCommand::Logs));
         assert_eq!(parse_command("/cancel"), Ok(LocalCommand::Cancel));
-        assert_eq!(parse_command("/refresh"), Ok(LocalCommand::Refresh));
+        assert_eq!(parse_command("/reload"), Ok(LocalCommand::Reload));
+        assert_eq!(
+            parse_command("/refresh"),
+            Err(CommandIssue::Unknown("refresh".to_owned()))
+        );
         assert_eq!(parse_command("/quit"), Ok(LocalCommand::Quit));
         assert_eq!(
             parse_command("/close"),
@@ -315,6 +319,14 @@ mod tests {
             parse_command("/theme blue"),
             Err(CommandIssue::InvalidArgs(_))
         ));
+    }
+
+    #[test]
+    fn public_command_names_exclude_refresh_and_include_reload() {
+        assert!(SLASH_COMMAND_NAMES.contains(&"reload"));
+        assert!(!SLASH_COMMAND_NAMES.contains(&"refresh"));
+        assert_eq!(slash_command_candidates("ref"), Vec::<String>::new());
+        assert_eq!(slash_command_candidates("rel"), vec!["/reload"]);
     }
 
     #[test]

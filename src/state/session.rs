@@ -117,6 +117,12 @@ pub struct SessionView {
     /// current state snapshot. Lifecycle actions must reread state before
     /// relying on the retained SessionInfo/state projection.
     pub close_verification_unknown: bool,
+    /// A retained live loop cannot be steered until a matching fresh state
+    /// response confirms that the same loop is still running. This is
+    /// independent of the durable History/event gap: an authoritative live
+    /// TurnRef may steer through an ordinary History gap once this fence is
+    /// clear.
+    pub steer_state_unconfirmed: bool,
     /// Retained steer completion notices across loop boundaries.
     pub completed_steers: Vec<CompletedSteerNotice>,
     /// Locally admitted, not-yet-sent steering instructions. Lives outside
@@ -172,6 +178,7 @@ impl SessionView {
             needs_post_wait_history: false,
             closing: false,
             close_verification_unknown: false,
+            steer_state_unconfirmed: false,
             completed_steers: Vec::new(),
             steer_queue: Vec::new(),
             applied_steers: Vec::new(),

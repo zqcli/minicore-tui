@@ -1438,8 +1438,20 @@ mod tests {
         }
 
         process
+            .send(OutgoingRequest::reload(RequestId(5)))
+            .await
+            .expect("agent.reload sends");
+        match next_process_event(&mut process).await {
+            RpcEvent::Frame(IncomingFrame::Response(response)) => {
+                assert_eq!(response.id, RequestId(5));
+                assert_eq!(response.result, Some(json!({"ok": true})));
+            }
+            other => panic!("expected agent.reload, got {other:?}"),
+        }
+
+        process
             .send(OutgoingRequest::session_create(
-                RequestId(5),
+                RequestId(6),
                 "/ws/fake",
                 None,
                 None,
@@ -1450,18 +1462,18 @@ mod tests {
             .expect("session.create sends");
         match next_process_event(&mut process).await {
             RpcEvent::Frame(IncomingFrame::Response(response)) => {
-                assert_eq!(response.id, RequestId(5));
+                assert_eq!(response.id, RequestId(6));
             }
             other => panic!("expected session.create, got {other:?}"),
         }
 
         process
-            .send(OutgoingRequest::send_turn(RequestId(6), "ses_fake_1", "hi"))
+            .send(OutgoingRequest::send_turn(RequestId(7), "ses_fake_1", "hi"))
             .await
             .expect("turn.send sends");
         match next_process_event(&mut process).await {
             RpcEvent::Frame(IncomingFrame::Response(response)) => {
-                assert_eq!(response.id, RequestId(6));
+                assert_eq!(response.id, RequestId(7));
             }
             other => panic!("expected turn.send, got {other:?}"),
         }
