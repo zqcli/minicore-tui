@@ -98,14 +98,20 @@ revision is still current, and removes the provisional live turn (or transitions
 an unsaved loop banner if persistence failed). Background sessions retain their own
 `SessionView` and continue receiving events.
 
-Configuration reload is a reducer barrier for new turn work. While its staged
-catalog/state/presentation/history candidate is in flight, Enter and direct
-submit/steer events leave composer text and already-admitted steer items in
-place; the FIFO does not issue `turn.send` or `turn.steer`. The event that
-finishes or fails the candidate is also barred from advancing the FIFO, so a
-queued item can only move on a later ordinary event. Existing execution
-requests, including an already-authorized wait, are correlated normally and
-are not cancelled by the read barrier.
+Configuration reload is a reducer barrier for new turn work. The public
+`/reload` registers `agent.reload` first and, when the active view has a
+retained `unsaved_loop`, `live.reference`, or `last_result`, appends at most
+one exact-turn internal `turn.wait` without waiting for the reload ACK. That
+wait is an execution request outside the staged candidate: it is correlated
+normally, is not a stale read, and does not complete or fail `ReloadProgress`.
+While the staged catalog/state/presentation/history candidate is in flight,
+Enter and direct submit/steer events leave composer text and already-admitted
+steer items in place; the FIFO does not issue `turn.send` or `turn.steer`. The
+event that finishes or fails the candidate, and a `ReloadWaitTurn` response or
+send failure even when it arrives after staging, are barred from advancing the
+FIFO in that reducer pass. A later ordinary event may resume the existing
+settled/handoff rules. Existing execution requests, including an already-
+authorized wait, are not cancelled by the read barrier.
 
 Reads retired at reload start become stale responses. If a retired state,
 presentation, or history read could have been the authority for a session,

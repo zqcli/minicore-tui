@@ -239,6 +239,9 @@ pub enum RequestKind {
         local_submission: LocalSubmissionId,
     },
     WaitTurn(TurnRef),
+    /// A reload-origin exact-turn wait. It shares the normal wait reducer but
+    /// is not part of staged reload completion or stale-read fencing.
+    ReloadWaitTurn(TurnRef),
     SteerTurn {
         session_id: SessionId,
         loop_id: String,
@@ -266,6 +269,12 @@ pub enum RequestKind {
         session_id: SessionId,
     },
     Shutdown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WaitOrigin {
+    Normal,
+    Reload,
 }
 
 /// CLI preferences injected at construction (spec 6.1). They only seed the
@@ -1203,6 +1212,8 @@ impl App {
         )
     }
 
+    // ReloadWaitTurn remains a reload event for FIFO admission even after
+    // staging ends; the next ordinary event may resume the queue.
     fn is_reload_request(kind: &RequestKind) -> bool {
         matches!(
             kind,
@@ -1214,6 +1225,7 @@ impl App {
                 | RequestKind::ReloadState { .. }
                 | RequestKind::ReloadPresentation { .. }
                 | RequestKind::ReloadHistory { .. }
+                | RequestKind::ReloadWaitTurn(_)
         )
     }
 
@@ -4061,7 +4073,9 @@ impl App {
             | RequestKind::ReloadPresentation { session_id, .. }
             | RequestKind::ReloadHistory { session_id, .. } => Some(session_id),
             RequestKind::SessionPresentation { session_id } => Some(session_id),
-            RequestKind::WaitTurn(turn) | RequestKind::CancelTurn(turn) => Some(&turn.session_id),
+            RequestKind::WaitTurn(turn)
+            | RequestKind::ReloadWaitTurn(turn)
+            | RequestKind::CancelTurn(turn) => Some(&turn.session_id),
             RequestKind::Reload { .. }
             | RequestKind::StaleRead
             | RequestKind::ReloadModels { .. }
@@ -4232,6 +4246,10 @@ impl App {
             );
             return Vec::new();
         }
+        let active_session = self.sessions.active.clone();
+        let retained_turn = active_session
+            .as_ref()
+            .and_then(|session_id| self.retained_turn(session_id));
         let generation = self.next_reload_generation;
         self.next_reload_generation = self
             .next_reload_generation
@@ -4261,11 +4279,15 @@ impl App {
         for view in self.sessions.known.values_mut() {
             view.transcript.render_cache = None;
         }
-        self.reload = Some(ReloadProgress::new(
-            generation,
-            self.sessions.active.clone(),
-        ));
-        vec![self.request(RequestKind::Reload { generation }, OutgoingRequest::reload)]
+        self.reload = Some(ReloadProgress::new(generation, active_session));
+        let mut commands =
+            vec![self.request(RequestKind::Reload { generation }, OutgoingRequest::reload)];
+        if let Some(turn) = retained_turn {
+            if let Some(command) = self.request_wait(turn, WaitOrigin::Reload) {
+                commands.push(command);
+            }
+        }
+        commands
     }
 
     fn retire_reload_active_session(&mut self, session_id: &SessionId) {
@@ -5776,16 +5798,8 @@ impl App {
             None
         };
         if let Some(reference) = reference {
-            let has_wait = self
-                .pending_requests
-                .values()
-                .any(|req| matches!(req, RequestKind::WaitTurn(t) if t == &reference));
-            if !has_wait {
-                commands.push(
-                    self.request(RequestKind::WaitTurn(reference.clone()), |id| {
-                        OutgoingRequest::wait_turn(id, &reference)
-                    }),
-                );
+            if let Some(command) = self.request_wait(reference, WaitOrigin::Normal) {
+                commands.push(command);
             }
         }
         commands.push(self.request(
@@ -7284,6 +7298,29 @@ impl App {
         }
     }
 
+    fn retained_turn(&self, session_id: &SessionId) -> Option<TurnRef> {
+        let view = self.sessions.known.get(session_id)?;
+        if let Some(unsaved) = view.unsaved_loop.as_ref() {
+            return Some(unsaved.turn.clone());
+        }
+        if let Some(live) = view.live.as_ref() {
+            return live.reference.clone();
+        }
+        view.last_result.as_ref().map(|result| result.turn.clone())
+    }
+
+    fn wait_targets_current_turn(view: &SessionView, turn: &TurnRef) -> bool {
+        if let Some(live) = view.live.as_ref() {
+            return live.reference.as_ref() == Some(turn);
+        }
+        match (view.unsaved_loop.as_ref(), view.last_result.as_ref()) {
+            (Some(unsaved), Some(result)) => &unsaved.turn == turn && &result.turn == turn,
+            (Some(unsaved), None) => &unsaved.turn == turn,
+            (None, Some(result)) => &result.turn == turn,
+            (None, None) => false,
+        }
+    }
+
     /// Explicitly reads a retained completion once. A repeated request for
     /// the same turn is ignored while one wait is already registered; the
     /// response reducer also ignores an identical completion, so this cannot
@@ -7292,26 +7329,29 @@ impl App {
         if !self.can_send_requests() {
             return Vec::new();
         }
-        let turn = self.sessions.known.get(session_id).and_then(|view| {
-            view.unsaved_loop
-                .as_ref()
-                .map(|unsaved| unsaved.turn.clone())
-                .or_else(|| view.live.as_ref().and_then(|live| live.reference.clone()))
-                .or_else(|| view.last_result.as_ref().map(|result| result.turn.clone()))
-        });
-        let Some(turn) = turn else {
+        let Some(turn) = self.retained_turn(session_id) else {
             return Vec::new();
         };
-        if self
-            .pending_requests
-            .values()
-            .any(|kind| matches!(kind, RequestKind::WaitTurn(pending) if pending == &turn))
-        {
-            return Vec::new();
+        self.request_wait(turn, WaitOrigin::Normal)
+            .into_iter()
+            .collect()
+    }
+
+    fn request_wait(&mut self, turn: TurnRef, origin: WaitOrigin) -> Option<AppCommand> {
+        if self.pending_requests.values().any(|kind| {
+            matches!(
+                kind,
+                RequestKind::WaitTurn(pending) | RequestKind::ReloadWaitTurn(pending)
+                    if pending == &turn
+            )
+        }) {
+            return None;
         }
-        vec![self.request(RequestKind::WaitTurn(turn.clone()), |id| {
-            OutgoingRequest::wait_turn(id, &turn)
-        })]
+        let kind = match origin {
+            WaitOrigin::Normal => RequestKind::WaitTurn(turn.clone()),
+            WaitOrigin::Reload => RequestKind::ReloadWaitTurn(turn.clone()),
+        };
+        Some(self.request(kind, |id| OutgoingRequest::wait_turn(id, &turn)))
     }
 
     fn on_send_response(
@@ -7465,9 +7505,10 @@ impl App {
                 if let Some(view) = self.sessions.known.get_mut(session_id) {
                     view.steer_queue.retain(|item| !item.handoff);
                 }
-                let mut commands = vec![self.request(RequestKind::WaitTurn(turn.clone()), |id| {
-                    OutgoingRequest::wait_turn(id, &turn)
-                })];
+                let mut commands = Vec::new();
+                if let Some(command) = self.request_wait(turn.clone(), WaitOrigin::Normal) {
+                    commands.push(command);
+                }
                 if cancel {
                     commands.push(self.request(RequestKind::CancelTurn(turn.clone()), |id| {
                         OutgoingRequest::cancel_turn(id, &turn)
@@ -7537,11 +7578,7 @@ impl App {
             let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
                 return Vec::new();
             };
-            if view
-                .live
-                .as_ref()
-                .is_some_and(|live| live.reference.as_ref() != Some(&turn))
-            {
+            if !Self::wait_targets_current_turn(view, &turn) {
                 return Vec::new();
             }
             let old_result = view.last_result.clone();
@@ -8134,21 +8171,21 @@ impl App {
                     view.steer_queue_paused = true;
                 }
             }
-            RequestKind::WaitTurn(turn) => {
-                if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
-                    if view
-                        .live
-                        .as_ref()
-                        .and_then(|live| live.reference.as_ref())
-                        .is_some_and(|reference| reference == &turn)
-                    {
+            RequestKind::WaitTurn(turn) | RequestKind::ReloadWaitTurn(turn) => {
+                let wait_is_current = self
+                    .sessions
+                    .known
+                    .get(&turn.session_id)
+                    .is_some_and(|view| Self::wait_targets_current_turn(view, &turn));
+                if wait_is_current {
+                    if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
                         if let Some(live) = view.live.as_mut() {
                             live.waiting = true;
                         }
                         Self::mark_pending_steers_unconfirmed(view);
                     }
+                    self.clear_steer_handoffs(&turn.session_id);
                 }
-                self.clear_steer_handoffs(&turn.session_id);
                 self.notice(
                     NoticeLevel::Warning,
                     format!("turn wait send failed: {error}; result/save unconfirmed"),
@@ -8515,7 +8552,10 @@ impl App {
         if self.connection == ConnectionState::ShuttingDown
             && !matches!(
                 kind,
-                RequestKind::Shutdown | RequestKind::WaitTurn(_) | RequestKind::SendTurn { .. }
+                RequestKind::Shutdown
+                    | RequestKind::WaitTurn(_)
+                    | RequestKind::ReloadWaitTurn(_)
+                    | RequestKind::SendTurn { .. }
             )
         {
             return Vec::new();
@@ -8639,7 +8679,9 @@ impl App {
                 session_id,
                 local_submission,
             } => self.on_send_response(&session_id, local_submission, &response),
-            RequestKind::WaitTurn(turn) => self.on_wait_response(turn, &response),
+            RequestKind::WaitTurn(turn) | RequestKind::ReloadWaitTurn(turn) => {
+                self.on_wait_response(turn, &response)
+            }
             RequestKind::SteerTurn {
                 session_id,
                 loop_id,

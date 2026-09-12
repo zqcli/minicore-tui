@@ -20,7 +20,7 @@ use minicore_tui::protocol::{
 };
 use minicore_tui::state::selection::Dock;
 use minicore_tui::state::tool::ToolStatus;
-use minicore_tui::state::turn::{PendingSteerState, SteerQueueState, UnsavedLoop};
+use minicore_tui::state::turn::{PendingSteerState, SteerQueueItem, SteerQueueState, UnsavedLoop};
 use minicore_tui::state::{AssistantPart, TranscriptBlock};
 use minicore_tui::ui::{layout, panel};
 
@@ -166,6 +166,27 @@ fn wait_result(session_id: &str, loop_id: &str, persistence: &str) -> Value {
         "turn": {"session_id": session_id, "loop_id": loop_id},
         "outcome": {"type": "completed"}, "usage": {}, "requests": 1,
         "tool_rounds": 0, "final_config_revision": 0, "persistence": persistence
+    })
+}
+
+fn wait_result_with_usage(
+    session_id: &str,
+    loop_id: &str,
+    persistence: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+) -> Value {
+    json!({
+        "turn": {"session_id": session_id, "loop_id": loop_id},
+        "outcome": {"type": "completed"},
+        "usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0
+        },
+        "requests": 1, "tool_rounds": 0, "final_config_revision": 0,
+        "persistence": persistence
     })
 }
 
@@ -404,6 +425,163 @@ fn assert_startup_header(app: &App, expected: bool) {
         rendered_text(app, 80, 24).contains("MINICORE  v0.2.8"),
         expected
     );
+}
+
+fn reload_stage_pending(app: &App) -> bool {
+    app.pending_requests.values().any(|kind| {
+        matches!(
+            kind,
+            RequestKind::Reload { .. }
+                | RequestKind::ReloadModels { .. }
+                | RequestKind::ReloadProfiles { .. }
+                | RequestKind::ReloadSessions { .. }
+                | RequestKind::ReloadState { .. }
+                | RequestKind::ReloadPresentation { .. }
+                | RequestKind::ReloadHistory { .. }
+        )
+    })
+}
+
+fn assert_reload_staging_finished(driver: &Driver) {
+    assert!(!reload_stage_pending(&driver.app));
+    assert!(driver.app.catalogs.loaded);
+    assert_eq!(driver.app.catalogs.models.len(), 1);
+    assert_eq!(driver.app.catalogs.models[0].id, "deep");
+    assert_eq!(driver.app.catalogs.profiles.len(), 1);
+    assert_eq!(driver.app.catalogs.profiles[0].id, "coding");
+    assert!(
+        driver
+            .app
+            .notices()
+            .iter()
+            .any(|notice| notice.text == "Agent configuration and read-only state reloaded")
+    );
+}
+
+fn start_public_reload_with_live_turn(
+    driver: &mut Driver,
+    loop_id: &str,
+) -> (OutgoingRequest, OutgoingRequest) {
+    bootstrap(driver);
+    open_idle(driver, "ses_1");
+    let view = driver.app.sessions.known.get_mut("ses_1").unwrap();
+    view.state.as_mut().unwrap().status = SessionStatusWire::Running;
+    let mut live = minicore_tui::state::turn::LiveLoop::new(
+        minicore_tui::state::turn::LocalSubmissionId(1),
+        "live prompt".to_owned(),
+    );
+    live.reference = Some(TurnRef {
+        session_id: "ses_1".to_owned(),
+        loop_id: loop_id.to_owned(),
+    });
+    view.live = Some(live);
+
+    submit_command(driver, "/reload");
+    let reload = driver.request("agent.reload");
+    let wait = driver.request("turn.wait");
+    assert!(matches!(
+        driver.app.pending_request_kind(wait.id),
+        Some(RequestKind::ReloadWaitTurn(turn))
+            if turn.session_id == "ses_1" && turn.loop_id == loop_id
+    ));
+    (reload, wait)
+}
+
+fn start_public_reload_with_settled_turn(
+    driver: &mut Driver,
+    loop_id: &str,
+    result: Value,
+    history_items: Vec<Value>,
+) -> (OutgoingRequest, OutgoingRequest) {
+    bootstrap(driver);
+    open_idle(driver, "ses_1");
+    driver.step(AppEvent::SubmitTurn {
+        session_id: "ses_1".to_owned(),
+        text: "t1 prompt".to_owned(),
+    });
+    let send = driver.request("turn.send");
+    driver.respond(
+        send,
+        json!({"turn": {"session_id": "ses_1", "loop_id": loop_id}}),
+    );
+    let wait = driver.request("turn.wait");
+    driver.respond(wait, result);
+    driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
+    let history_request = driver.request("session.history");
+    let total = history_items.len();
+    driver.respond(history_request, history(history_items, None, total));
+    assert!(driver.app.sessions.known["ses_1"].live.is_none());
+
+    submit_command(driver, "/reload");
+    let reload = driver.request("agent.reload");
+    let reload_wait = driver.request("turn.wait");
+    assert!(matches!(
+        driver.app.pending_request_kind(reload_wait.id),
+        Some(RequestKind::ReloadWaitTurn(turn))
+            if turn.session_id == "ses_1" && turn.loop_id == loop_id
+    ));
+    (reload, reload_wait)
+}
+
+fn complete_public_reload_with_running_turn(
+    driver: &mut Driver,
+    reload: OutgoingRequest,
+    loop_id: &str,
+) {
+    driver.respond(reload, json!({"ok": true}));
+    driver.respond_method(
+        "model.list",
+        json!({"models": [{
+            "id":"deep","model_ref":"provider/deep","context_window":128000,
+            "supports_tools":true,"supported_reasoning":["auto","high"]
+        }]}),
+    );
+    driver.respond_method(
+        "profile.list",
+        json!({"profiles": [{"id":"coding","model":"deep","reasoning":"high","tools":[]}]}),
+    );
+    driver.respond_method("session.list", json!({"sessions": [session("ses_1")]}));
+
+    let staged_state = driver.request("session.state");
+    driver.respond(
+        staged_state,
+        state(
+            "ses_1",
+            "running",
+            json!({
+                "loop_id": loop_id,
+                "status": "running_model",
+                "request_index": 0,
+                "config_revision": 0,
+                "model": "deep",
+                "pending_interaction": null
+            }),
+        ),
+    );
+    let staged_history = driver.request("session.history");
+    driver.respond(staged_history, history(Vec::new(), None, 0));
+    assert_reload_staging_finished(driver);
+}
+
+fn complete_public_reload_with_idle_view(driver: &mut Driver, reload: OutgoingRequest) {
+    driver.respond(reload, json!({"ok": true}));
+    driver.respond_method(
+        "model.list",
+        json!({"models": [{
+            "id":"deep","model_ref":"provider/deep","context_window":128000,
+            "supports_tools":true,"supported_reasoning":["auto","high"]
+        }]}),
+    );
+    driver.respond_method(
+        "profile.list",
+        json!({"profiles": [{"id":"coding","model":"deep","reasoning":"high","tools":[]}]}),
+    );
+    driver.respond_method("session.list", json!({"sessions": [session("ses_1")]}));
+    let staged_state = driver.request("session.state");
+    driver.respond(staged_state, state("ses_1", "idle", Value::Null));
+    let staged_history = driver.request("session.history");
+    driver.respond(staged_history, history(Vec::new(), None, 0));
+    assert_reload_staging_finished(driver);
 }
 
 #[test]
@@ -2218,6 +2396,629 @@ fn internal_refresh_turn_and_restricted_commands_remain_usable() {
     assert_eq!(
         finishing_wait.params,
         json!({"session_id": "ses_1", "loop_id": "loop_finishing"})
+    );
+}
+
+#[test]
+fn slash_reload_queues_reload_first_and_waits_for_retained_failed_turn() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+
+    driver.step(AppEvent::SubmitTurn {
+        session_id: "ses_1".to_owned(),
+        text: "retained failed turn".to_owned(),
+    });
+    let send = driver.request("turn.send");
+    driver.respond(
+        send,
+        json!({"turn": {"session_id": "ses_1", "loop_id": "loop_reload_failed"}}),
+    );
+    let wait = driver.request("turn.wait");
+    driver.respond(wait, wait_result("ses_1", "loop_reload_failed", "failed"));
+
+    let before = &driver.app.sessions.known["ses_1"];
+    assert!(before.unsaved_loop.is_some());
+    assert_eq!(
+        before
+            .last_result
+            .as_ref()
+            .map(|result| result.turn.clone()),
+        Some(TurnRef {
+            session_id: "ses_1".to_owned(),
+            loop_id: "loop_reload_failed".to_owned(),
+        })
+    );
+    assert!(
+        !driver
+            .app
+            .pending_requests
+            .values()
+            .any(|kind| matches!(kind, RequestKind::WaitTurn(_))),
+        "the failed wait must not remain in flight"
+    );
+
+    // This is deliberately the public composer path, not AppEvent::RefreshTurn.
+    submit_command(&mut driver, "/reload");
+    let methods = driver
+        .queue
+        .iter()
+        .map(|request| request.method)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        methods,
+        vec!["agent.reload", "turn.wait"],
+        "reload must preserve agent.reload as the first RPC and refresh the retained TurnRef"
+    );
+
+    let reload = driver.request("agent.reload");
+    assert_eq!(reload.method, "agent.reload");
+    let refresh_wait = driver.request("turn.wait");
+    assert_eq!(
+        refresh_wait.params,
+        json!({"session_id": "ses_1", "loop_id": "loop_reload_failed"})
+    );
+    let expected_turn = TurnRef {
+        session_id: "ses_1".to_owned(),
+        loop_id: "loop_reload_failed".to_owned(),
+    };
+    assert!(matches!(
+        driver.app.pending_request_kind(refresh_wait.id),
+        Some(RequestKind::ReloadWaitTurn(turn)) if turn == &expected_turn
+    ));
+
+    assert_eq!(
+        driver.app.sessions.active.as_deref(),
+        Some("ses_1"),
+        "reload must not retarget the active session"
+    );
+    let after = &driver.app.sessions.known["ses_1"];
+    assert_eq!(
+        after
+            .live
+            .as_ref()
+            .and_then(|live| live.reference.as_ref())
+            .map(|turn| turn.loop_id.as_str()),
+        Some("loop_reload_failed")
+    );
+    assert_eq!(
+        after
+            .last_result
+            .as_ref()
+            .map(|result| result.turn.loop_id.as_str()),
+        Some("loop_reload_failed")
+    );
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| { matches!(request.method, "agent.reload" | "turn.wait") }),
+        "public reload must not emit turn.send/steer/cancel/session lifecycle requests"
+    );
+}
+
+#[test]
+fn slash_reload_deduplicates_existing_wait_across_reentry_and_late_ack() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+
+    driver.step(AppEvent::SubmitTurn {
+        session_id: "ses_1".to_owned(),
+        text: "wait already exists".to_owned(),
+    });
+    let send = driver.request("turn.send");
+    driver.respond(
+        send,
+        json!({"turn": {"session_id": "ses_1", "loop_id": "loop_reload_wait"}}),
+    );
+    let existing_wait = driver.request("turn.wait");
+    let turn = TurnRef {
+        session_id: "ses_1".to_owned(),
+        loop_id: "loop_reload_wait".to_owned(),
+    };
+    assert!(matches!(
+        driver.app.pending_request_kind(existing_wait.id),
+        Some(RequestKind::WaitTurn(pending)) if pending == &turn
+    ));
+
+    submit_command(&mut driver, "/reload");
+    assert_eq!(
+        driver
+            .queue
+            .iter()
+            .map(|request| request.method)
+            .collect::<Vec<_>>(),
+        vec!["agent.reload"],
+        "an existing same-turn wait must suppress a reload duplicate"
+    );
+    let reload = driver.request("agent.reload");
+
+    // Re-entry while the first reload is still outstanding must not add a
+    // second reload or a second wait.
+    submit_command(&mut driver, "/reload");
+    assert!(
+        driver.queue.is_empty(),
+        "reload re-entry must not issue another reload or wait"
+    );
+    assert!(driver.app.request_is_pending(existing_wait.id));
+
+    // The existing wait is deliberately answered after the reload request has
+    // been admitted. Its completion must not re-execute the retained wait.
+    driver.respond(reload, json!({"ok": false}));
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "turn.wait"),
+        "reload ACK/recovery must not duplicate the existing wait"
+    );
+    driver.respond(
+        existing_wait,
+        wait_result("ses_1", "loop_reload_wait", "persisted"),
+    );
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "turn.wait"),
+        "late existing wait ACK must not re-execute or duplicate turn.wait"
+    );
+    assert_eq!(driver.app.sessions.active.as_deref(), Some("ses_1"));
+    assert_eq!(
+        driver.app.sessions.known["ses_1"]
+            .last_result
+            .as_ref()
+            .map(|result| result.turn.loop_id.as_str()),
+        Some("loop_reload_wait")
+    );
+}
+
+#[test]
+fn reload_wait_response_before_staging_completion_stays_reload_scoped() {
+    let mut driver = Driver::new();
+    let (reload, wait) = start_public_reload_with_live_turn(&mut driver, "loop_reload_before");
+
+    driver.respond(
+        wait,
+        wait_result("ses_1", "loop_reload_before", "persisted"),
+    );
+    assert!(reload_stage_pending(&driver.app));
+    assert!(driver.app.request_is_pending(reload.id));
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| { !matches!(request.method, "turn.send" | "turn.steer") })
+    );
+
+    complete_public_reload_with_running_turn(&mut driver, reload, "loop_reload_before");
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| { !matches!(request.method, "turn.wait" | "turn.send" | "turn.steer") })
+    );
+}
+
+#[test]
+fn reload_staging_finishes_with_reload_wait_pending_and_late_wait_does_not_duplicate() {
+    let mut driver = Driver::new();
+    let (reload, wait) = start_public_reload_with_live_turn(&mut driver, "loop_reload_late");
+    driver
+        .app
+        .sessions
+        .known
+        .get_mut("ses_1")
+        .unwrap()
+        .steer_queue
+        .push(SteerQueueItem {
+            local_id: 1,
+            text: "queued while reload waits".to_owned(),
+            state: SteerQueueState::Unsent,
+            editor_revision: None,
+            handoff: false,
+        });
+
+    complete_public_reload_with_running_turn(&mut driver, reload, "loop_reload_late");
+    assert_reload_staging_finished(&driver);
+    assert!(driver.app.request_is_pending(wait.id));
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| { !matches!(request.method, "turn.wait" | "turn.send" | "turn.steer") })
+    );
+
+    driver.respond(
+        wait.clone(),
+        wait_result("ses_1", "loop_reload_late", "persisted"),
+    );
+    assert!(!driver.app.request_is_pending(wait.id));
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| { !matches!(request.method, "turn.wait" | "turn.send" | "turn.steer") })
+    );
+    assert_eq!(
+        driver.app.sessions.known["ses_1"].steer_queue.len(),
+        1,
+        "a late reload wait must not consume or resend the admitted queue item"
+    );
+}
+
+#[test]
+fn late_reload_wait_response_waits_for_next_tick_before_fifo_advance() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+    driver.step(AppEvent::SubmitTurn {
+        session_id: "ses_1".to_owned(),
+        text: "completed before reload".to_owned(),
+    });
+    let send = driver.request("turn.send");
+    driver.respond(
+        send,
+        json!({"turn": {"session_id": "ses_1", "loop_id": "loop_reload_fifo"}}),
+    );
+    let wait = driver.request("turn.wait");
+    driver.respond(wait, wait_result("ses_1", "loop_reload_fifo", "persisted"));
+    driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
+    let history_request = driver.request("session.history");
+    driver.respond(
+        history_request,
+        history(
+            vec![
+                user(0, "loop_reload_fifo", "completed before reload"),
+                assistant(1, "loop_reload_fifo", 0, "deep", "done"),
+            ],
+            None,
+            2,
+        ),
+    );
+    assert!(driver.app.sessions.known["ses_1"].live.is_none());
+
+    submit_command(&mut driver, "/reload");
+    let reload = driver.request("agent.reload");
+    let refresh_wait = driver.request("turn.wait");
+    assert!(matches!(
+        driver.app.pending_request_kind(refresh_wait.id),
+        Some(RequestKind::ReloadWaitTurn(_))
+    ));
+    driver
+        .app
+        .sessions
+        .known
+        .get_mut("ses_1")
+        .unwrap()
+        .steer_queue
+        .push(SteerQueueItem {
+            local_id: 3,
+            text: "queued fresh turn".to_owned(),
+            state: SteerQueueState::Unsent,
+            editor_revision: None,
+            handoff: false,
+        });
+
+    complete_public_reload_with_idle_view(&mut driver, reload);
+    assert!(driver.app.request_is_pending(refresh_wait.id));
+    driver.respond(
+        refresh_wait,
+        wait_result("ses_1", "loop_reload_fifo", "persisted"),
+    );
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| { !matches!(request.method, "turn.wait" | "turn.send" | "turn.steer") })
+    );
+    assert_eq!(
+        driver.app.sessions.known["ses_1"].steer_queue.len(),
+        1,
+        "the reload wait response must not consume the queued fresh turn"
+    );
+
+    driver.step(AppEvent::Tick);
+    let fresh_send = driver.request("turn.send");
+    assert_eq!(
+        fresh_send.params,
+        json!({"session_id": "ses_1", "text": "queued fresh turn"})
+    );
+    assert!(driver.app.sessions.known["ses_1"].steer_queue[0].handoff);
+
+    driver.step(AppEvent::Tick);
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "turn.send")
+    );
+}
+
+#[test]
+fn reload_wait_send_failure_does_not_retry_or_advance_fifo() {
+    let mut driver = Driver::new();
+    let (reload, wait) =
+        start_public_reload_with_live_turn(&mut driver, "loop_reload_send_failure");
+    driver
+        .app
+        .sessions
+        .known
+        .get_mut("ses_1")
+        .unwrap()
+        .steer_queue
+        .push(SteerQueueItem {
+            local_id: 2,
+            text: "must remain queued".to_owned(),
+            state: SteerQueueState::Unsent,
+            editor_revision: None,
+            handoff: false,
+        });
+
+    complete_public_reload_with_running_turn(&mut driver, reload, "loop_reload_send_failure");
+    driver.step(AppEvent::RpcSendFailed {
+        id: wait.id,
+        error: minicore_tui::rpc::RpcError::Closed,
+    });
+
+    assert!(!driver.app.request_is_pending(wait.id));
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| { !matches!(request.method, "turn.wait" | "turn.send" | "turn.steer") })
+    );
+    assert_eq!(
+        driver.app.sessions.known["ses_1"].steer_queue[0].state,
+        SteerQueueState::Unsent
+    );
+    driver.step(AppEvent::Tick);
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| { !matches!(request.method, "turn.wait" | "turn.send" | "turn.steer") })
+    );
+}
+
+#[test]
+fn slash_reload_without_retained_turn_does_not_enqueue_wait() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+
+    submit_command(&mut driver, "/reload");
+    assert_eq!(
+        driver
+            .queue
+            .iter()
+            .map(|request| request.method)
+            .collect::<Vec<_>>(),
+        vec!["agent.reload"]
+    );
+    let reload = driver.request("agent.reload");
+    assert!(matches!(
+        driver.app.pending_request_kind(reload.id),
+        Some(RequestKind::Reload { .. })
+    ));
+    assert!(!driver.app.pending_requests.values().any(|kind| matches!(
+        kind,
+        RequestKind::WaitTurn(_) | RequestKind::ReloadWaitTurn(_)
+    )));
+}
+
+#[test]
+fn reload_wait_response_after_reload_failure_stays_on_original_session() {
+    let mut driver = Driver::new();
+    let (reload, wait) = start_public_reload_with_live_turn(&mut driver, "loop_reload_identity");
+
+    driver.respond(reload, json!({"ok": false}));
+    assert!(!reload_stage_pending(&driver.app));
+    assert!(
+        driver.app.notices().iter().any(|notice| notice.text
+            == "agent.reload returned {ok:false}; configuration was not applied")
+    );
+
+    driver.step(AppEvent::OpenSession {
+        session_id: "ses_2".to_owned(),
+    });
+    let open = driver.request("session.open");
+    driver.respond(open, json!({"session": session("ses_2")}));
+    driver.respond_method("session.state", state("ses_2", "idle", Value::Null));
+    let history_request = driver.request("session.history");
+    driver.respond(history_request, history(Vec::new(), None, 0));
+    assert_eq!(driver.app.sessions.active.as_deref(), Some("ses_2"));
+
+    driver.respond(
+        wait,
+        wait_result("ses_1", "loop_reload_identity", "persisted"),
+    );
+    assert_eq!(driver.app.sessions.active.as_deref(), Some("ses_2"));
+    assert!(driver.app.sessions.known["ses_2"].last_result.is_none());
+    assert_eq!(
+        driver.app.sessions.known["ses_1"]
+            .last_result
+            .as_ref()
+            .map(|result| result.turn.loop_id.as_str()),
+        Some("loop_reload_identity")
+    );
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| { !matches!(request.method, "turn.send" | "turn.steer") })
+    );
+}
+
+#[test]
+fn late_reload_wait_cannot_overwrite_new_completed_turn() {
+    let mut driver = Driver::new();
+    let t1_result = wait_result_with_usage("ses_1", "loop_t1", "persisted", 11, 5);
+    let (reload, t1_wait) = start_public_reload_with_settled_turn(
+        &mut driver,
+        "loop_t1",
+        t1_result.clone(),
+        vec![
+            user(0, "loop_t1", "t1 prompt"),
+            assistant(1, "loop_t1", 0, "deep", "t1 done"),
+        ],
+    );
+    complete_public_reload_with_idle_view(&mut driver, reload);
+    let post_reload_state = driver.request("session.state");
+    driver.respond(post_reload_state, state("ses_1", "idle", Value::Null));
+
+    submit_command(&mut driver, "t2 prompt");
+    let t2_send = driver.request("turn.send");
+    driver.respond(
+        t2_send,
+        json!({"turn": {"session_id": "ses_1", "loop_id": "loop_t2"}}),
+    );
+    let t2_wait = driver.request("turn.wait");
+    let t2_result = wait_result_with_usage("ses_1", "loop_t2", "persisted", 22, 7);
+    driver.respond(t2_wait, t2_result.clone());
+    driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
+    let t2_history = driver.request("session.history");
+    driver.respond(
+        t2_history,
+        history(
+            vec![
+                user(0, "loop_t2", "t2 prompt"),
+                assistant(1, "loop_t2", 0, "deep", "t2 done"),
+            ],
+            None,
+            2,
+        ),
+    );
+
+    let before = &driver.app.sessions.known["ses_1"];
+    let t2_last_result = before.last_result.clone().expect("T2 result retained");
+    let t2_usage = before.usage_projection.usage;
+    let t2_loaded_count = before.transcript.loaded_count;
+    assert_eq!(t2_last_result.turn.loop_id, "loop_t2");
+    assert_eq!(t2_last_result.usage.input_tokens, Some(22));
+    assert_eq!(t2_last_result.usage.output_tokens, Some(7));
+    assert_eq!(t2_usage.input_tokens, Some(22));
+    assert_eq!(t2_usage.output_tokens, Some(7));
+    assert_eq!(t2_loaded_count, 2);
+    assert!(before.live.is_none());
+    assert!(
+        before
+            .transcript
+            .items
+            .iter()
+            .any(|item| item.item.loop_id() == Some("loop_t2"))
+    );
+
+    driver.respond(t1_wait, t1_result);
+    let after = &driver.app.sessions.known["ses_1"];
+    assert_eq!(driver.app.sessions.active.as_deref(), Some("ses_1"));
+    assert_eq!(after.last_result, Some(t2_last_result));
+    assert_eq!(after.usage_projection.usage, t2_usage);
+    assert_eq!(after.transcript.loaded_count, t2_loaded_count);
+    assert!(after.live.is_none());
+    assert!(
+        after
+            .transcript
+            .items
+            .iter()
+            .any(|item| item.item.loop_id() == Some("loop_t2"))
+    );
+    assert!(
+        driver.queue.is_empty(),
+        "late T1 must not replay state/history RPCs"
+    );
+    assert!(driver.app.pending_requests.is_empty());
+}
+
+#[test]
+fn stale_reload_wait_failure_does_not_clear_t2_handoff() {
+    let mut driver = Driver::new();
+    let (reload, t1_wait) = start_public_reload_with_settled_turn(
+        &mut driver,
+        "loop_t1_handoff",
+        wait_result("ses_1", "loop_t1_handoff", "persisted"),
+        vec![
+            user(0, "loop_t1_handoff", "t1 prompt"),
+            assistant(1, "loop_t1_handoff", 0, "deep", "t1 done"),
+        ],
+    );
+    complete_public_reload_with_idle_view(&mut driver, reload);
+    let post_reload_state = driver.request("session.state");
+    driver.respond(post_reload_state, state("ses_1", "idle", Value::Null));
+    driver
+        .app
+        .sessions
+        .known
+        .get_mut("ses_1")
+        .unwrap()
+        .steer_queue
+        .push(SteerQueueItem {
+            local_id: 4,
+            text: "T2 handoff".to_owned(),
+            state: SteerQueueState::Unsent,
+            editor_revision: None,
+            handoff: false,
+        });
+
+    driver.step(AppEvent::Tick);
+    let t2_send = driver.request("turn.send");
+    assert!(driver.app.sessions.known["ses_1"].steer_queue[0].handoff);
+    assert!(
+        driver.app.sessions.known["ses_1"]
+            .live
+            .as_ref()
+            .is_some_and(|live| live.reference.is_none())
+    );
+
+    driver.step(AppEvent::RpcSendFailed {
+        id: t1_wait.id,
+        error: minicore_tui::rpc::RpcError::Closed,
+    });
+    assert!(driver.app.sessions.known["ses_1"].steer_queue[0].handoff);
+
+    driver.respond(
+        t2_send,
+        json!({"turn": {"session_id": "ses_1", "loop_id": "loop_t2_handoff"}}),
+    );
+    assert!(driver.app.sessions.known["ses_1"].steer_queue.is_empty());
+    let t2_wait = driver.request("turn.wait");
+    driver.respond(
+        t2_wait,
+        wait_result("ses_1", "loop_t2_handoff", "persisted"),
+    );
+    driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
+    let t2_history = driver.request("session.history");
+    driver.respond(
+        t2_history,
+        history(
+            vec![
+                user(0, "loop_t2_handoff", "T2 handoff"),
+                assistant(1, "loop_t2_handoff", 0, "deep", "t2 done"),
+            ],
+            None,
+            2,
+        ),
+    );
+
+    let view = &driver.app.sessions.known["ses_1"];
+    assert!(view.live.is_none());
+    assert!(
+        view.steer_queue.is_empty(),
+        "B must be popped exactly once by T2 ACK"
+    );
+    assert_eq!(
+        view.last_result
+            .as_ref()
+            .map(|result| result.turn.loop_id.as_str()),
+        Some("loop_t2_handoff")
+    );
+    driver.step(AppEvent::Tick);
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| { !matches!(request.method, "turn.send" | "turn.steer") })
     );
 }
 

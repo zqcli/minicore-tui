@@ -128,15 +128,23 @@ tool results patch the matching tool call. Live event order is not used
 to fabricate durable history.
 
 During `agent.reload`, catalog and active-session reads are staged separately
-from the live projection. New submit/steer admission and the automatic steer
-FIFO are paused; composer text and previously admitted queue items remain
-owned by the App. The reload start/end/failure event does not release the FIFO
-in the same reducer pass. Reads issued before reload are fenced as
-`StaleRead`; any retired read or lifecycle ACK that leaves authority uncertain
-clears the old session state and keeps the session's `event_gap`/incomplete-
-history fence. Recovery issues independent fresh `session.state` and
-`session.history` reads. Ordinary pending reads, history loading, and a
-temporarily absent SessionState retain their pre-reload admission behavior.
+from the live projection. The public `/reload` sends `agent.reload` first and,
+when the active view retains an `unsaved_loop`, `live.reference`, or
+`last_result`, registers at most one exact-turn internal `turn.wait` without
+waiting for the configuration ACK. That wait reuses normal wait correlation
+but remains outside `ReloadProgress`, is never retired as `StaleRead`, and does
+not become a reload completion condition. New submit/steer admission and the
+automatic steer FIFO are paused; composer text and previously admitted queue
+items remain owned by the App. The reload start/end/failure event and a
+`ReloadWaitTurn` response or send failure, including one arriving after staging
+has ended, do not release the FIFO in the same reducer pass. A later ordinary
+event resumes the existing settled/handoff rules. Reads issued before reload
+are fenced as `StaleRead`; any retired read or
+lifecycle ACK that leaves authority uncertain clears the old session state and
+keeps the session's `event_gap`/incomplete-history fence. Recovery issues
+independent fresh `session.state` and `session.history` reads. Ordinary pending
+reads, history loading, and a temporarily absent SessionState retain their
+pre-reload admission behavior.
 Reload-retired reads and lifecycle ACKs set a session-scoped
 `close_verification_unknown` fence; a matching fresh state response clears it
 while the independent history-gap fence remains. The reload-installed state is
