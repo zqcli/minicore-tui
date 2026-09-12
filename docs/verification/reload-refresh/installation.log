@@ -1,0 +1,5 @@
+/Users/zzq/Develops/minicore-tui/target/debug/minicore-tui old_inode=76652395 old_sha256=0fb1f77c203f2e105349ee858336837ea6f80c863445c28bc444b931a4add418 new_inode=76676442 new_sha256=998b10c1a8745116ebdb7254bad43530b74533ce3673f7a4a81cf0d5fc2bce14 backup=/Users/zzq/Develops/minicore-tui/target/preserved-before-reload-refresh-AdCugX/debug/minicore-tui
+/Users/zzq/Develops/minicore-tui/target/release/minicore-tui old_inode=76652396 old_sha256=0134d6e882746b929c1d9ea26e9bc9ac9cf3672787089cf743dbdace993a9098 new_inode=76676443 new_sha256=9f61b78ab1ce300bbb714a4b6399a33c05c0ed043e2f78d1e1485fed43a4b203 backup=/Users/zzq/Develops/minicore-tui/target/preserved-before-reload-refresh-AdCugX/release/minicore-tui
+UUID: 4C4C4459-5555-3144-A1E3-4D9E5D5CD3E3 (x86_64) /Users/zzq/Develops/minicore-tui/target/debug/minicore-tui
+UUID: 4C4C4459-5555-3144-A1E3-4D9E5D5CD3E3 (x86_64) /Users/zzq/Develops/minicore-tui/target/debug/minicore-tui.dSYM/Contents/Resources/DWARF/minicore-tui-debug
+INSTALLATION_PASS TUI-only atomic per-file replacements; no user config/store edits or process restart

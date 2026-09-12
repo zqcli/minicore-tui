@@ -1,0 +1,8 @@
+cwd=/root
+command=clang --version 
+Debian clang version 19.1.7 (3+b1)
+Target: x86_64-pc-linux-gnu
+Thread model: posix
+InstalledDir: /usr/lib/llvm-19/bin
+
+exit=0

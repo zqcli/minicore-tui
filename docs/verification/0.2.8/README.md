@@ -2,7 +2,8 @@
 
 Historical version-update baseline, before the same-version Session-management
 follow-up. The original counts and artifacts below are not the current feature
-acceptance; see [Session Management Acceptance](../session-management/README.md).
+acceptance; see [Session Management Acceptance](../session-management/README.md)
+and the current [public reload correction](../reload-refresh/README.md).
 
 All compilation occurred on the authorized Linux builder in
 `/root/minicore-release-028-033.Fm9vbA`, reusing owned Cargo caches and the

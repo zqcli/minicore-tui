@@ -1,0 +1,27 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-followups.6Dpa6e/source/minicore-tui)
+error[E0658]: use of unstable library feature `str_as_str`
+    --> tests/app_flow.rs:2262:39
+     |
+2262 |         .map(|request| request.method.as_str())
+     |                                       ^^^^^^
+     |
+     = note: see issue #130366 <https://github.com/rust-lang/rust/issues/130366> for more information
+
+error[E0658]: use of unstable library feature `str_as_str`
+    --> tests/app_flow.rs:2307:32
+     |
+2307 |                 request.method.as_str(),
+     |                                ^^^^^^
+     |
+     = note: see issue #130366 <https://github.com/rust-lang/rust/issues/130366> for more information
+
+error[E0658]: use of unstable library feature `str_as_str`
+    --> tests/app_flow.rs:2345:43
+     |
+2345 |             .map(|request| request.method.as_str())
+     |                                           ^^^^^^
+     |
+     = note: see issue #130366 <https://github.com/rust-lang/rust/issues/130366> for more information
+
+For more information about this error, try `rustc --explain E0658`.
+error: could not compile `minicore-tui` (test "app_flow") due to 3 previous errors

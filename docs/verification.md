@@ -2,14 +2,18 @@
 
 ## Current Delivery: 0.2.8
 
-Current accepted sources are TUI `30ea7ca` and Agent `f1697f7`, still packaged as
-**0.2.8 / 0.3.3** with Runtime 0.4.1 unchanged. Remote stable/MSRV suites each
-passed 498 TUI tests / 19 ignored and 369 Agent tests / 2 ignored; 18 real-Agent
-E2E tests passed separately on each toolchain. Native Debug/Release feature,
-Session, stream and real-TTY checks passed, and the accepted binaries were installed
-with previous executables/symbols preserved. See the current
-[follow-up provenance and evidence](verification/followups/README.md). No new push,
-release tag, hosted CI, Windows, real-upstream or pixel-parity result is claimed.
+Current accepted sources are TUI `a604e55` and unchanged Agent `f1697f7`, packaged
+as **0.2.8 / 0.3.3** with Runtime 0.4.1 pinned to `6cd2bdbc634437dea925495c61c7eb0be10ba171`.
+See the [public reload correction and current provenance](verification/reload-refresh/README.md).
+Remote stable/MSRV suites each passed **508 TUI tests / 19 ignored** and separately
+**18 real-Agent E2E tests**. The unchanged Agent retains its prior **369 passed /
+2 ignored** acceptance; its Linux binary was freshly built for E2E and its accepted
+macOS binaries reused byte-for-byte. All six native Debug/Release feature, Session
+and stream workflows and real-TTY normal/panic checks were rerun. Corrected TUI
+binaries/symbols are installed with old inodes preserved; Agent installation bytes
+are unchanged. The previous [498-test TUI pairing](verification/followups/README.md)
+and all migration evidence below remain historical. No user-process restart, new
+push, release tag, hosted CI, Windows, real-upstream or pixel-parity result is claimed.
 
 ## Historical Delivery: 0.2.1
 

@@ -1,0 +1,38 @@
+cwd=/root/minicore-followups.6Dpa6e/source/minicore-tui
+command=rustup run stable cargo test -j4 --locked --offline --all-targets 
+   Compiling minicore-tui v0.2.8 (/root/minicore-followups.6Dpa6e/source/minicore-tui)
+error[E0616]: field `reload` of struct `App` is private
+   --> tests/app_flow.rs:475:24
+    |
+475 |     assert!(driver.app.reload.is_none());
+    |                        ^^^^^^ private field
+
+error[E0616]: field `reload` of struct `App` is private
+   --> tests/app_flow.rs:496:24
+    |
+496 |     assert!(driver.app.reload.is_none());
+    |                        ^^^^^^ private field
+
+error[E0616]: field `reload` of struct `App` is private
+    --> tests/app_flow.rs:2498:24
+     |
+2498 |     assert!(driver.app.reload.is_some());
+     |                        ^^^^^^ private field
+
+error[E0616]: field `reload` of struct `App` is private
+    --> tests/app_flow.rs:2536:24
+     |
+2536 |     assert!(driver.app.reload.is_none());
+     |                        ^^^^^^ private field
+
+error[E0616]: field `reload` of struct `App` is private
+    --> tests/app_flow.rs:2726:24
+     |
+2726 |     assert!(driver.app.reload.is_none());
+     |                        ^^^^^^ private field
+
+For more information about this error, try `rustc --explain E0616`.
+error: could not compile `minicore-tui` (test "app_flow") due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...
+
+exit=101

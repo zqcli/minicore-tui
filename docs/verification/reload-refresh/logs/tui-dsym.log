@@ -1,0 +1,4 @@
+cwd=/root/minicore-followups.6Dpa6e/reload-refresh/source/minicore-tui
+command=dsymutil /root/minicore-followups.6Dpa6e/reload-refresh/artifacts/minicore-tui-debug -o /root/minicore-followups.6Dpa6e/reload-refresh/artifacts/minicore-tui-debug.dSYM 
+
+exit=0

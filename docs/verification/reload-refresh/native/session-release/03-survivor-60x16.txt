@@ -1,0 +1,16 @@
+                  
+ Coding agent TUI                                          █
+ q / Ctrl+C to quit                                        █
+                                                           █
+ Open a session — /new, Ctrl+R, or F1 for help             █
+                                                           █
+ Session ses_2fe7a66f136528b371e74271f0cda41a deleted.      
+ ┌─────────────────────────────────────────────────────────┐
+ │Select session                                           │
+ │>                                                        │
+ │→ Native Survivor                                     now│
+ │                                                         │
+ │Enter Open · Ctrl+N New · F5 Refresh                     │
+ │F2 Rename · Ctrl+W Close · Del Delete                    │
+ └─────────────────────────────────────────────────────────┘
+ ▸ workspace · verify a · high · ● ready               ctx ?

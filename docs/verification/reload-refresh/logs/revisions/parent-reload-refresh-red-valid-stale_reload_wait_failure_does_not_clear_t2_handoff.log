@@ -1,0 +1,21 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.11s
+     Running tests/app_flow.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/app_flow-500745b34c71f2c8)
+
+running 1 test
+test stale_reload_wait_failure_does_not_clear_t2_handoff ... FAILED
+
+failures:
+
+---- stale_reload_wait_failure_does_not_clear_t2_handoff stdout ----
+
+thread 'stale_reload_wait_failure_does_not_clear_t2_handoff' (1056050) panicked at tests/app_flow.rs:2931:5:
+assertion failed: driver.app.sessions.known["ses_1"].steer_queue[0].handoff
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    stale_reload_wait_failure_does_not_clear_t2_handoff
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 83 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test app_flow`

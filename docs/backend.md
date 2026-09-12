@@ -1,6 +1,12 @@
-# Backend Provenance
+# Backend Provenance (Historical r2)
 
-The TUI wire DTOs are aligned with these local backend source trees:
+This document records the original r2 migration baseline, not the current Agent,
+Runtime pin or installed binary. Its source revisions, hashes and test evidence
+below are preserved as historical facts. Current TUI `a604e55` / Agent `f1697f7`
+with Runtime 0.4.1 at `6cd2bdbc634437dea925495c61c7eb0be10ba171` is documented in
+[the corrective delivery provenance](verification/reload-refresh/README.md).
+
+The r2 migration's wire DTOs were aligned with these backend source trees:
 
 | Component | Repository / Source | Pinned revision | Package version |
 |---|---|---|---|

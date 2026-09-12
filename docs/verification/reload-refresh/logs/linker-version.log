@@ -1,0 +1,5 @@
+cwd=/root
+command=ld.lld --version 
+Debian LLD 19.1.7 (compatible with GNU linkers)
+
+exit=0

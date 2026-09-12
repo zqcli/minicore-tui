@@ -5,6 +5,8 @@ This is the historical version-update baseline, before the same-version
 The follow-up has separate commits, tests and installed artifacts, and has not
 been pushed. The later [Tool/reload/stateless subagent follow-up](verification/followups/README.md)
 also retains these versions with separate commits and installed artifacts.
+Current TUI `a604e55` additionally includes the separately verified and installed
+[public reload correction](verification/reload-refresh/README.md).
 Statements below concern only the original paired release.
 
 Paired version update with MiniCore Agent 0.3.3. The Rail UI and performance work

@@ -24,15 +24,22 @@ relabeled as new runs. Agent/Runtime protocol compatibility is unchanged.
 
 ## Current Follow-Ups
 
-The same-version [Tool/reload/subagent acceptance](verification/followups/README.md)
-records current sources TUI `30ea7ca` and Agent `f1697f7`. It adds safe failure
-bodies, 100 ms Working animation, consecutive User spacing, empty/new startup
-guidance, bounded Codex Update File support, `/reload`, and native stateless
-subagent single/parallel/chain. Persistent subagent orchestration is not implemented.
-Remote stable/MSRV each passed **498 TUI tests / 19 ignored**, **369 Agent tests /
-2 ignored**, and separately **18 E2E tests**. Native Debug/Release and real-TTY
-checks passed; accepted binaries/symbols are installed with old inodes preserved.
-No user process restart, new push, hosted CI, release tag or pixel parity is implied.
+The same-version [Tool/reload/subagent follow-up](verification/followups/README.md)
+adds safe failure bodies, 100 ms Working animation, consecutive User spacing,
+empty/new startup guidance, bounded Codex Update File support, `/reload`, and
+native stateless subagent single/parallel/chain. Its TUI `30ea7ca` pairing is now
+superseded by the [public reload correction](verification/reload-refresh/README.md):
+current sources are TUI `a604e55` / unchanged Agent `f1697f7`. The correction adds
+the omitted exact-turn result reread and prevents old wait results or send failures
+from overwriting a newer turn or clearing its queue handoff. Three real REDs and
+separate test setup failures are retained. Persistent orchestration and compaction
+are not implemented.
+Remote stable/MSRV each passed **508 TUI tests / 19 ignored** and separately
+**18 E2E tests**; the unchanged Agent retains its earlier **369 passed / 2 ignored**
+acceptance. All six native Debug/Release workflows and real-TTY checks were rerun.
+Corrected TUI binaries/symbols are installed with old inodes preserved; Agent
+bytes are unchanged. No user process restart, new push, hosted CI, release tag or
+pixel parity is implied.
 
 ## Previous Session Acceptance
 

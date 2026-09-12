@@ -35,8 +35,10 @@ ANSI writes through a 64 KiB buffer; render rates are unchanged. The Release
 profile is unchanged. The current release is **0.2.8**, paired with Agent
 **0.3.3**; see [release notes](docs/release-0.2.8.md).
 Same-version [Tool, reload and native subagent follow-ups](docs/verification/followups/README.md)
-now have separate source commits, remote/native verification and installed
-artifacts. The current source pair is TUI `30ea7ca` / Agent `f1697f7`; version
+have separate source commits, remote/native verification and installed artifacts.
+The [public reload correction](docs/verification/reload-refresh/README.md) also
+restores the old command's exact-turn result reread and fences late wait replies.
+The current installed source pair is TUI `a604e55` / Agent `f1697f7`; version
 strings alone do not distinguish it from the older 0.2.8/0.3.3 binaries.
 
 For a macOS x86_64 cross-build, put LLVM's `clang` and `ld64.lld` on `PATH`,
@@ -132,27 +134,29 @@ The complete current keymap and slash-command semantics are in
 Implemented local commands are `/new`, `/resume`, `/sessions`, `/model`,
 `/reasoning`, `/cancel`, `/reload`, `/theme dark`, `/theme light`, `/clear`,
 `/help`, `/logs`, `/quit`, `/close`, and `/delete`. Unknown commands never
-reach the Agent. `/reload` sends empty `agent.reload` params and refreshes
-safe catalog/session reads without replacing an active turn or its wait.
+reach the Agent. `/reload` sends empty `agent.reload` params, refreshes safe
+catalog/session reads and rereads a retained turn result once without duplicating
+an existing wait or replaying execution.
 
 ## Backend Contract And Scope
 
-The wire contract is pinned in [docs/rpc-contract.md](docs/rpc-contract.md),
-with source provenance in [docs/backend.md](docs/backend.md). In r2, `persisted` means the Agent appended the current process's durable items;
-it does not promise transaction/fsync/crash durability. A failed append blocks
-the session while preserving the in-process completion view.
+The wire contract is pinned in [docs/rpc-contract.md](docs/rpc-contract.md), with
+[current source/artifact provenance](docs/verification/reload-refresh/README.md).
+The [r2 backend record](docs/backend.md) is historical. `persisted` acknowledges
+appending the process's durable items, not transaction/fsync/crash durability.
+A failed append blocks the Session while retaining its in-process completion.
 
-- Agent commit `b2e23938d073ab21c2775faa623561ba929a5ed1`;
-- Runtime commit `87f3cf92b9b5980b0f468174a319cf53427d858e`;
+- Agent 0.3.3 commit `f1697f78ce48c8f5f3fde0dc9903c153022bfd9e`;
+- Runtime 0.4.1 commit `6cd2bdbc634437dea925495c61c7eb0be10ba171`;
 - RPC version `0.3.x`;
 - NDJSON over stdio, with one TUI writer, one stdout reader, one stderr reader,
   bounded frames (up to 32 MiB), request IDs, response/event interleaving, and no event replay.
 
-The TUI deliberately does not implement Agent capabilities that are absent
-from this interface: approval UI, compaction controls, live Bash/PTY output,
-MCP, plugins, skills, subagents, remote agents, image input, or session tree
-operations. External editor and OSC52 copy are optional follow-up work. Approval,
-Compaction, Plugin, MCP, and Subagent UI remain intentionally out of scope.
+The Agent executes native stateless `subagent` single/parallel/chain calls;
+the TUI displays their ordinary Tool results. Persistent subagent orchestration,
+manager/tree UI, approval UI, compaction controls, live Bash/PTY output, MCP,
+plugins, skills, remote agents and image input remain outside this delivery.
+External editor and OSC52 copy remain optional follow-up work.
 
 ## Platform And Troubleshooting
 
@@ -180,8 +184,8 @@ lifecycle tests. See [docs/testing.md](docs/testing.md) for the remote Rust
 1.85 commands, snapshot inventory, ignored tests, Windows checks, and E2E
 procedure. Stage 3 Session-panel verification and its requirement matrix are
 in [docs/verification/stage3-session-panel/README.md](docs/verification/stage3-session-panel/README.md).
-See [docs/acceptance.md](docs/acceptance.md) for the honest MIG-001..160
-status note and [docs/verification.md](docs/verification.md) for the final
+See [docs/acceptance.md](docs/acceptance.md) for the historical MIG-001..160 migration
+status note and [docs/verification.md](docs/verification.md) for the current
 delivery evidence. The concise implementation and verification summary is in
 [docs/final-report.md](docs/final-report.md).
 

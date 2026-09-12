@@ -8,16 +8,21 @@ enter an alternate screen during normal CI tests.
 
 ## Current Patch Verification
 
-The current same-version **TUI 0.2.8 / Agent 0.3.3** follow-up acceptance is in
-[verification/followups/README.md](verification/followups/README.md). Fresh committed
-source archives passed **498 TUI tests / 19 ignored** and **369 Agent tests / 2
-ignored** on both stable and Rust 1.85, with all **18 real-Agent E2E tests** run
-separately on both toolchains. Stable fmt, strict Clippy and warning-denied rustdoc
-passed. macOS Debug/Release passed native feature, Session and streaming checks,
-plus real-TTY normal/panic restoration, and the four accepted binaries are installed.
-Accepted Rust work and delivery artifacts came from the authorized Linux builder;
-the disclosed earlier local-Rust violation and excluded results are recorded in
-that report. No new Windows/hosted-CI or pixel-parity result is implied.
+The current same-version **TUI 0.2.8 / Agent 0.3.3** source pair is TUI `a604e55`
+/ Agent `f1697f7`; see the [public reload correction](verification/reload-refresh/README.md).
+Fresh committed source archives passed **508 TUI tests / 19 ignored** on stable
+and Rust 1.85, plus all **18 real-Agent E2E tests** separately on both toolchains.
+Stable fmt, strict Clippy and warning-denied rustdoc passed. The unchanged Agent
+retains its **369 passed / 2 ignored** exact-source acceptance from the earlier
+[Tool/reload/subagent follow-up](verification/followups/README.md); its Linux binary
+was freshly built for the corrective E2E runs and its accepted macOS binaries reused.
+macOS Debug/Release reran all six native feature, Session and streaming workflows,
+plus real-TTY normal/panic restoration. Corrected TUI binaries/symbols are installed;
+Agent installation bytes are unchanged. Accepted Rust work and delivery artifacts
+came from the authorized Linux builder. The earlier local-Rust violation and
+excluded results remain disclosed in the previous report; its 498-test TUI record
+and hashes are historical, not relabeled. No new Windows/hosted-CI or pixel-parity
+result is implied.
 
 The original paired release remains documented in
 [verification/0.2.8/README.md](verification/0.2.8/README.md). The previous

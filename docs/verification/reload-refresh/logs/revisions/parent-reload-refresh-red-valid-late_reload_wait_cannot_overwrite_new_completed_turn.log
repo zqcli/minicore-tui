@@ -1,0 +1,24 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-followups.6Dpa6e/source/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 14.01s
+     Running tests/app_flow.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/app_flow-500745b34c71f2c8)
+
+running 1 test
+test late_reload_wait_cannot_overwrite_new_completed_turn ... FAILED
+
+failures:
+
+---- late_reload_wait_cannot_overwrite_new_completed_turn stdout ----
+
+thread 'late_reload_wait_cannot_overwrite_new_completed_turn' (1056036) panicked at tests/app_flow.rs:2876:5:
+assertion `left == right` failed
+  left: Some(TurnResultViewWire { turn: TurnRef { session_id: "ses_1", loop_id: "loop_t1" }, outcome: Completed, usage: UsageWire { input_tokens: Some(11), output_tokens: Some(5), reasoning_tokens: None, cache_read_tokens: Some(0), cache_write_tokens: Some(0), provider_total_tokens: None }, requests: 1, tool_rounds: 0, final_config_revision: 0, persistence: Persisted, accepted_at: None })
+ right: Some(TurnResultViewWire { turn: TurnRef { session_id: "ses_1", loop_id: "loop_t2" }, outcome: Completed, usage: UsageWire { input_tokens: Some(22), output_tokens: Some(7), reasoning_tokens: None, cache_read_tokens: Some(0), cache_write_tokens: Some(0), provider_total_tokens: None }, requests: 1, tool_rounds: 0, final_config_revision: 0, persistence: Persisted, accepted_at: None })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    late_reload_wait_cannot_overwrite_new_completed_turn
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 83 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test app_flow`

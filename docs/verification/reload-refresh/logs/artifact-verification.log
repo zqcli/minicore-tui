@@ -1,0 +1,42 @@
+ProductName:		macOS
+ProductVersion:		15.7.3
+BuildVersion:		24G419
+x86_64
+/tmp/minicore-followups.AdCugX/reload-refresh/artifacts/minicore-agent-debug: Mach-O 64-bit executable x86_64
+      cmd LC_BUILD_VERSION
+  cmdsize 32
+ platform 1
+    minos 11.0
+      sdk 26.2
+   ntools 1
+/tmp/minicore-followups.AdCugX/reload-refresh/artifacts/minicore-tui-debug: Mach-O 64-bit executable x86_64
+      cmd LC_BUILD_VERSION
+  cmdsize 32
+ platform 1
+    minos 11.0
+      sdk 26.2
+   ntools 1
+/tmp/minicore-followups.AdCugX/reload-refresh/artifacts/minicore-agent-release: Mach-O 64-bit executable x86_64
+      cmd LC_BUILD_VERSION
+  cmdsize 32
+ platform 1
+    minos 11.0
+      sdk 26.2
+   ntools 1
+/tmp/minicore-followups.AdCugX/reload-refresh/artifacts/minicore-tui-release: Mach-O 64-bit executable x86_64
+      cmd LC_BUILD_VERSION
+  cmdsize 32
+ platform 1
+    minos 11.0
+      sdk 26.2
+   ntools 1
+/tmp/minicore-followups.AdCugX/reload-refresh/artifacts/terminal-restore: Mach-O 64-bit executable x86_64
+      cmd LC_BUILD_VERSION
+  cmdsize 32
+ platform 1
+    minos 11.0
+      sdk 26.2
+   ntools 1
+UUID: 4C4C4459-5555-3144-A1E3-4D9E5D5CD3E3 (x86_64) /tmp/minicore-followups.AdCugX/reload-refresh/artifacts/minicore-tui-debug
+UUID: 4C4C4459-5555-3144-A1E3-4D9E5D5CD3E3 (x86_64) /tmp/minicore-followups.AdCugX/reload-refresh/artifacts/minicore-tui-debug.dSYM/Contents/Resources/DWARF/minicore-tui-debug
+MACHO_SIGNATURE_UUID_PASS
