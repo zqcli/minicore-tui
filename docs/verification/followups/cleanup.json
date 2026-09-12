@@ -1,0 +1,20 @@
+{
+  "roots": [
+    "/root/minicore-tui-027-RXdxEP/target-linux",
+    "/root/minicore-tui-027-RXdxEP/target-msrv",
+    "/root/minicore-tui-027-RXdxEP/target-macos-llvm"
+  ],
+  "retained_count": 1542,
+  "removed": [
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/incremental",
+      "logical_bytes": 3877107513
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/incremental",
+      "logical_bytes": 1286585388
+    }
+  ],
+  "logical_bytes_removed": 5163692901,
+  "retained_hashes_verified": true
+}

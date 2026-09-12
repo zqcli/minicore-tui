@@ -1,0 +1,22 @@
+cwd=/root/minicore-followups.6Dpa6e/source/minicore-agent
+command=rustup run stable cargo test -j4 --locked --offline --all-targets 
+   Compiling minicore-agent v0.3.3 (/root/minicore-followups.6Dpa6e/source/minicore-agent)
+error[E0282]: type annotations needed
+    --> src/subagents.rs:1728:13
+     |
+1728 |         let model = "fake".parse().unwrap();
+     |             ^^^^^
+...
+1743 |                     model: model.clone(),
+     |                            ----- type must be known at this point
+     |
+help: consider giving `model` an explicit type
+     |
+1728 |         let model: /* Type */ = "fake".parse().unwrap();
+     |                  ++++++++++++
+
+For more information about this error, try `rustc --explain E0282`.
+error: could not compile `minicore-agent` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+
+exit=101

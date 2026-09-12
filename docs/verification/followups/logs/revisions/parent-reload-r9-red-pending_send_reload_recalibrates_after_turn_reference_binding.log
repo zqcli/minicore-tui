@@ -1,0 +1,24 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-followups.6Dpa6e/source/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 15.21s
+     Running unittests src/lib.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test app::tests::pending_send_reload_recalibrates_after_turn_reference_binding ... FAILED
+
+failures:
+
+---- app::tests::pending_send_reload_recalibrates_after_turn_reference_binding stdout ----
+
+thread 'app::tests::pending_send_reload_recalibrates_after_turn_reference_binding' (816493) panicked at src/app.rs:11221:9:
+assertion `left == right` failed
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    app::tests::pending_send_reload_recalibrates_after_turn_reference_binding
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 381 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

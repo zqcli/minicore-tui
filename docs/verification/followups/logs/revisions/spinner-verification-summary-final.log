@@ -1,0 +1,22 @@
+remote_host=localhost
+tui_source=/root/minicore-followups.6Dpa6e/source/minicore-tui
+stable_target=/root/minicore-tui-027-RXdxEP/target-linux
+msrv_target=/root/minicore-tui-027-RXdxEP/target-msrv
+
+spinner-stable-all-targets.log
+suites=10 passed=467 failed=0 ignored=18\nexit=0
+spinner-msrv-all-targets.log
+suites=10 passed=467 failed=0 ignored=18\nexit=0
+spinner-stable-e2e-final.log test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s exit=0 
+spinner-msrv-e2e-final.log test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.92s exit=0 
+
+quality:
+spinner-stable-fmt-final.log exit=0
+spinner-msrv-fmt-final.log exit=0
+spinner-stable-clippy-final.log exit=0
+spinner-stable-doc-final.log exit=0
+spinner-msrv-doc-final.log exit=0
+
+source_hashes:
+4ba461ab267965afedefa2ada7c32a1bdf5e4ba7f14e76d3c49bc4b03c47ba45  /root/minicore-followups.6Dpa6e/source/minicore-tui/src/app.rs
+ab4bf7aa445008e5d13efea219150dc442ab9a015887d4ff92373e641014bb01  /root/minicore-followups.6Dpa6e/source/minicore-tui/src/main.rs

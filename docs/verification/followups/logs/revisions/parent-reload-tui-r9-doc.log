@@ -1,0 +1,7 @@
+cwd=/root/minicore-followups.6Dpa6e/source/minicore-tui
+command=env RUSTDOCFLAGS=-D\ warnings rustup run stable cargo doc -j4 --locked --offline --no-deps 
+ Documenting minicore-tui v0.2.8 (/root/minicore-followups.6Dpa6e/source/minicore-tui)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 2.05s
+   Generated /root/minicore-tui-027-RXdxEP/target-linux/doc/minicore_tui/index.html
+
+exit=0

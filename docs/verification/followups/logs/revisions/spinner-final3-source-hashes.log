@@ -1,0 +1,6 @@
+command: sha256sum final spinner source
+
+edfaf1abe7ea0dc64066140baf84b0ea1002dd7d37c7f1c3388d7dc897c18b62  /root/minicore-followups.6Dpa6e/source/minicore-tui/src/app.rs
+ab4bf7aa445008e5d13efea219150dc442ab9a015887d4ff92373e641014bb01  /root/minicore-followups.6Dpa6e/source/minicore-tui/src/main.rs
+
+exit=0

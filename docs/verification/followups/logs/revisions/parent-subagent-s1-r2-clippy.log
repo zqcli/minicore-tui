@@ -1,0 +1,38 @@
+cwd=/root/minicore-followups.6Dpa6e/source/minicore-agent
+command=rustup run stable cargo clippy -j4 --locked --offline --all-targets -- -D warnings 
+    Checking minicore-agent v0.3.3 (/root/minicore-followups.6Dpa6e/source/minicore-agent)
+error: this function has too many arguments (11/7)
+   --> src/subagents.rs:251:5
+    |
+251 | /     pub(crate) fn new(
+252 | |         service: Arc<SubagentService>,
+253 | |         session_id: SessionId,
+254 | |         parent_workspace: Arc<Workspace>,
+...   |
+262 | |         default_reasoning: ReasoningPreference,
+263 | |     ) -> Self {
+    | |_____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+    = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: this function has too many arguments (9/7)
+   --> src/subagents.rs:656:1
+    |
+656 | / async fn dispatch_stage(
+657 | |     factory: &SubagentFactory,
+658 | |     task: PreparedTask,
+659 | |     stage_index: usize,
+...   |
+665 | |     scope: Arc<ChildScope>,
+666 | | ) -> Result<StageResult, ToolError> {
+    | |___________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#too_many_arguments
+
+error: could not compile `minicore-agent` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `minicore-agent` (lib test) due to 2 previous errors
+
+exit=101

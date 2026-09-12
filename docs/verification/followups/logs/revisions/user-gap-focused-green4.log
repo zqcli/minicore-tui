@@ -1,0 +1,22 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-followups.6Dpa6e/source/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 9.76s
+     Running unittests src/lib.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 12 tests
+test ui::render_cache_tests::no_op_mouse_moved_retains_prepared_conversation_and_does_not_dirty ... ok
+test ui::render_cache_tests::live_tool_fold_survives_presentation_finish_wait_and_history_replacement ... ok
+test ui::render_cache_tests::scroll_and_tick_and_viewport_retain_prepared_conversation ... ok
+test ui::render_cache_tests::durable_history_mutation_invalidates_and_reparses ... ok
+test ui::render_cache_tests::live_delta_reuses_durable_markdown_without_reparsing ... ok
+test ui::render_cache_tests::ordinary_editor_input_reuses_prepared_rows ... ok
+test ui::render_cache_tests::viewport_duplicate_is_idempotent_and_does_not_cancel_drag ... ok
+test ui::render_cache_tests::theme_width_and_visibility_reject_stale_cache ... ok
+test ui::render_cache_tests::unrelated_rpc_reprepare_keeps_scrollbar_drag_until_release ... ok
+test ui::render_cache_tests::tool_presentation_refresh_invalidates_already_durable_tool_rows ... ok
+test ui::render_cache_tests::consecutive_user_cards_keep_one_transparent_gap_across_all_user_paths ... ok
+test ui::render_cache_tests::cached_render_and_mouse_hit_testing_do_not_parse_history ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 344 filtered out; finished in 0.01s
+
+command: env CARGO_TARGET_DIR=/root/minicore-tui-027-RXdxEP/target-linux cargo +stable test --offline --locked -j4 --lib ui::render_cache_tests -- --nocapture
+exit=0

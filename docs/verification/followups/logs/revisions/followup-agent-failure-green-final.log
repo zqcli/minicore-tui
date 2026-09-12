@@ -1,0 +1,12 @@
+cargo +stable test --offline failed_tool_presentation_exposes_safe_error_and_history_fallback --lib -- --nocapture
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running unittests src/lib.rs (target/debug/deps/minicore_agent-b0bccf8727e203b6)
+
+running 1 test
+test agent::tests::failed_tool_presentation_exposes_safe_error_and_history_fallback ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 297 filtered out; finished in 0.04s
+
+
+exit=0

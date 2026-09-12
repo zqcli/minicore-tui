@@ -1,0 +1,7 @@
+command: env CARGO_TARGET_DIR=/root/minicore-tui-027-RXdxEP/target-msrv RUSTDOCFLAGS="-D warnings" cargo +1.85.0 doc --offline --locked --all-features --no-deps
+
+ Documenting minicore-tui v0.2.8 (/root/minicore-followups.6Dpa6e/source/minicore-tui)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.60s
+   Generated /root/minicore-tui-027-RXdxEP/target-msrv/doc/minicore_tui/index.html
+
+exit=0

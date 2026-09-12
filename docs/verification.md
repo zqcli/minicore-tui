@@ -1,8 +1,19 @@
 # Delivery Verification
 
-## Current Delivery: 0.2.1
+## Current Delivery: 0.2.8
 
-The current TUI package is **0.2.1**, with the same Agent `0.3.x` protocol and
+Current accepted sources are TUI `30ea7ca` and Agent `f1697f7`, still packaged as
+**0.2.8 / 0.3.3** with Runtime 0.4.1 unchanged. Remote stable/MSRV suites each
+passed 498 TUI tests / 19 ignored and 369 Agent tests / 2 ignored; 18 real-Agent
+E2E tests passed separately on each toolchain. Native Debug/Release feature,
+Session, stream and real-TTY checks passed, and the accepted binaries were installed
+with previous executables/symbols preserved. See the current
+[follow-up provenance and evidence](verification/followups/README.md). No new push,
+release tag, hosted CI, Windows, real-upstream or pixel-parity result is claimed.
+
+## Historical Delivery: 0.2.1
+
+The previous **0.2.1** package used the same Agent `0.3.x` protocol and
 unchanged backend pins. Its reasoning Markdown/order fixes, remote verification
 (**277 passed, 0 failed, 8 ignored** on both MSRV and stable), and macOS artifact
 evidence are recorded in [release-0.2.1.md](release-0.2.1.md).

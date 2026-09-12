@@ -1,0 +1,26 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-followups.6Dpa6e/source/minicore-tui)
+warning: unused import: `UserMessageKindWire`
+  --> src/ui/render_cache_tests.rs:14:57
+   |
+14 |     IncomingFrame, RpcNotification, TurnRef, UsageWire, UserMessageKindWire,
+   |                                                         ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `UserBlock`
+  --> src/ui/render_cache_tests.rs:18:64
+   |
+18 |     AssistantBlock, AssistantPart, ToolBlock, TranscriptBlock, UserBlock,
+   |                                                                ^^^^^^^^^
+
+warning: `minicore-tui` (lib test) generated 2 warnings (run `cargo fix --lib -p minicore-tui --tests` to apply 2 suggestions)
+    Finished `test` profile [optimized + debuginfo] target(s) in 12.45s
+     Running unittests src/lib.rs (/root/minicore-tui-027-RXdxEP/target-linux-user-gap-final2/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::render_cache_tests::consecutive_user_cards_keep_one_transparent_gap_across_all_user_paths ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 355 filtered out; finished in 0.00s
+
+command: env CARGO_TARGET_DIR=/root/minicore-tui-027-RXdxEP/target-linux-user-gap-final2 cargo +stable test --offline --locked -j4 --lib ui::render_cache_tests::consecutive_user_cards_keep_one_transparent_gap_across_all_user_paths -- --exact --nocapture
+exit=0

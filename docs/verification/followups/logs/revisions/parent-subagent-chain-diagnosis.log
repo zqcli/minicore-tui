@@ -1,0 +1,22 @@
+   Compiling minicore-agent v0.3.3 (/root/minicore-followups.6Dpa6e/source/minicore-agent)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.90s
+     Running unittests src/lib.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_agent-b0bccf8727e203b6)
+
+running 1 test
+test rpc::server::tests::subagent_chain_replaces_previous_and_reports_completion ... FAILED
+
+failures:
+
+---- rpc::server::tests::subagent_chain_replaces_previous_and_reports_completion stdout ----
+
+thread 'rpc::server::tests::subagent_chain_replaces_previous_and_reports_completion' (789007) panicked at src/rpc/server/tests.rs:1433:5:
+subagent result: {"items":[{"index":0,"item":{"data":{"kind":"prompt","loop_id":"lup_55ec4c09193158eef4fc93c4484f5a30","text":"delegate","timestamp":"2026-09-12T11:03:32.119Z"},"type":"user"}},{"index":1,"item":{"data":{"finish_reason":"tool_calls","loop_id":"lup_55ec4c09193158eef4fc93c4484f5a30","model":"fake","parts":[{"data":{"name":"subagent","tool_call_id":"subagent-rpc-0-0"},"type":"tool_call"}],"reasoning":"","reasoning_level":"medium","request_index":0,"text":"","tool_calls":[{"call_index":0,"display":{"detail":"tool subagent","hidden_line_count":28,"truncated":false},"name":"subagent","tool_call_id":"subagent-rpc-0-0"}],"usage":{"input_tokens":1,"output_tokens":1,"reasoning_tokens":0}},"type":"assistant"}},{"index":2,"item":{"data":{"content":"{\"status\":\"completed\",\"mode\":\"chain\",\"stages\":[{\"stage_index\":1,\"status\":\"completed\",\"model\":\"fake\",\"reasoning\":\"medium\",\"cwd\":\"/tmp/minicore-agent-rpc-subagent-chain-ses_857b17663f1e08695f72d46f4423402a/workspace\",\"loop_id\":\"lup_e60814c7eb0fed142035f09fd1dd0b27\",\"output\":\"first output\",\"output_truncated\":false,\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"reasoning_tokens\":0},\"requests\":1,\"tool_rounds\":0},{\"stage_index\":2,\"status\":\"completed\",\"model\":\"fake\",\"reasoning\":\"medium\",\"cwd\":\"/tmp/minicore-agent-rpc-subagent-chain-ses_857b17663f1e08695f72d46f4423402a/workspace\",\"loop_id\":\"lup_2ff32267df78caf4ab9fc1f86a3d0536\",\"output\":\"second outpu\",\"output_truncated\":true,\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"reasoning_tokens\":0},\"requests\":1,\"tool_rounds\":0},{\"stage_index\":3,\"status\":\"completed\",\"model\":\"fake\",\"reasoning\":\"medium\",\"cwd\":\"/tmp/minicore-agent-rpc-subagent-chain-ses_857b17663f1e08695f72d46f4423402a/workspace\",\"loop_id\":\"lup_ee1e8e45c69e3124b17e3501e6eb06a0\",\"output\":\"third output\",\"output_truncated\":false,\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"reasoning_tokens\":0},\"requests\":1,\"tool_rounds\":0}],\"usage\":{\"input_tokens\":3,\"output_tokens\":3,\"reasoning_tokens\":0},\"requests\":3,\"tool_rounds\":0}","loop_id":"lup_55ec4c09193158eef4fc93c4484f5a30","outcome":"success","request_index":0,"tool_call_id":"subagent-rpc-0-0","tool_name":"subagent"},"type":"tool_result"}},{"index":3,"item":{"data":{"finish_reason":"stop","loop_id":"lup_55ec4c09193158eef4fc93c4484f5a30","model":"fake","parts":[{"data":{"text":"parent answer"},"type":"text"}],"reasoning":"","reasoning_level":"medium","request_index":1,"text":"parent answer","tool_calls":[],"usage":{"input_tokens":1,"output_tokens":1,"reasoning_tokens":0}},"type":"assistant"}}],"next_offset":null,"total":4}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    rpc::server::tests::subagent_chain_replaces_previous_and_reports_completion
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 340 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `--lib`

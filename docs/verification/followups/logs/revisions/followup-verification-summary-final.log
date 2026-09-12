@@ -1,0 +1,31 @@
+remote_host=localhost
+agent_source=/root/minicore-followups.6Dpa6e/source/minicore-agent
+tui_source=/root/minicore-followups.6Dpa6e/source/minicore-tui
+
+agent-stable target_suites=8 passed=320 failed=0 ignored=2\nexit=0
+agent-msrv target_suites=8 passed=320 failed=0 ignored=2\nexit=0
+tui-stable target_suites=10 passed=466 failed=0 ignored=18\nexit=0
+tui-msrv target_suites=10 passed=466 failed=0 ignored=18\nexit=0
+followup-tui-stable-e2e-final.log test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.94s exit=0 
+followup-tui-msrv-e2e-final.log test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s exit=0 
+
+quality_gate_exits:
+followup-agent-msrv-clippy-final.log exit=101
+followup-agent-msrv-doc-final.log exit=0
+followup-agent-msrv-fmt-final.log exit=0
+followup-agent-stable-clippy-final.log exit=0
+followup-agent-stable-doc-final.log exit=0
+followup-agent-stable-fmt-final.log exit=0
+followup-tui-msrv-clippy-final.log exit=101
+followup-tui-msrv-doc-final.log exit=0
+followup-tui-msrv-fmt-final.log exit=0
+followup-tui-stable-clippy-final.log exit=0
+followup-tui-stable-doc-final.log exit=0
+followup-tui-stable-fmt-final.log exit=0
+
+source_hashes:
+9ed4cb342b1718c33a247f14f3a28a7bf7fabd63b41c53cdf7e7d025b42ec66a  /root/minicore-followups.6Dpa6e/source/minicore-agent/src/presentation.rs
+99c427826772ce501148ed329766c2ec58f5b344656b81c07ab5ccae2006cb6e  /root/minicore-followups.6Dpa6e/source/minicore-agent/src/agent/tests.rs
+5383ef95421dad5a603f1c9eb11827e1fe5b5365a88f2a44ba7552acf8f1a4bf  /root/minicore-followups.6Dpa6e/source/minicore-tui/src/ui/tool.rs
+5c2e626a2565133a010390905d6c3e2aee355b6b2a9fdf141923ad0aa9b0afc8  /root/minicore-followups.6Dpa6e/source/minicore-tui/src/ui/component_tests.rs
+0693abc55594a22840320cf769eaad6b45166f96cc9f5deb26c8cf74b3d7b5c1  /root/minicore-followups.6Dpa6e/source/minicore-tui/tests/app_flow.rs

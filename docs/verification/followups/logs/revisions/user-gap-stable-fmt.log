@@ -1,0 +1,96 @@
+Diff in /root/minicore-followups.6Dpa6e/source/minicore-tui/src/ui/render_cache_tests.rs:4:
+ use std::path::PathBuf;
+ 
+ use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
++use ratatui::Terminal;
+ use ratatui::backend::TestBackend;
+ use ratatui::layout::Rect;
+-use ratatui::Terminal;
+ use serde_json::json;
+ 
+ use crate::app::{App, ConnectionState};
+Diff in /root/minicore-followups.6Dpa6e/source/minicore-tui/src/ui/render_cache_tests.rs:13:
+ use crate::event::{AppEvent, RpcEvent};
+ use crate::markdown::{parse_count, reset_parse_count};
+-use crate::protocol::{
+-    IncomingFrame, RpcNotification, TurnRef, UsageWire, UserMessageKindWire,
+-};
++use crate::protocol::{IncomingFrame, RpcNotification, TurnRef, UsageWire, UserMessageKindWire};
+ use crate::state::session::SessionView;
+ use crate::state::transcript::{
+     AssistantBlock, AssistantPart, ToolBlock, TranscriptBlock, UserBlock,
+Diff in /root/minicore-followups.6Dpa6e/source/minicore-tui/src/ui/render_cache_tests.rs:658:
+         "{label}: separator is outside every section range"
+     );
+     assert!(
+-        prepared.copy_ranges.iter().all(|range| range.row != gap_row),
++        prepared
++            .copy_ranges
++            .iter()
++            .all(|range| range.row != gap_row),
+         "{label}: separator is excluded from copy geometry"
+     );
+     let selection = ConversationSelection {
+Diff in /root/minicore-followups.6Dpa6e/source/minicore-tui/src/ui/render_cache_tests.rs:679:
+         dragged: true,
+     };
+     let copied = crate::ui::transcript::selection_text(&prepared, &selection);
+-    assert!(copied.contains("first prompt"), "{label}: first User is selectable");
+     assert!(
++        copied.contains("first prompt"),
++        "{label}: first User is selectable"
++    );
++    assert!(
+         copied.contains(second_text),
+         "{label}: second User is selectable"
+     );
+Diff in /root/minicore-followups.6Dpa6e/source/minicore-tui/src/ui/render_cache_tests.rs:696:
+         screen.transcript.height as usize,
+     );
+     assert!(
+-        gap_row >= position.offset
+-            && gap_row < position.offset + position.visible_rows,
++        gap_row >= position.offset && gap_row < position.offset + position.visible_rows,
+         "{label}: separator must be in the rendered viewport"
+     );
+     let mut terminal = Terminal::new(TestBackend::new(width + 1, height)).unwrap();
+Diff in /root/minicore-followups.6Dpa6e/source/minicore-tui/src/ui/render_cache_tests.rs:704:
+     terminal
+         .draw(|frame| crate::ui::render(frame, app))
+         .unwrap();
+-    let mut rows = terminal.backend().buffer().content().chunks((width + 1) as usize);
++    let mut rows = terminal
++        .backend()
++        .buffer()
++        .content()
++        .chunks((width + 1) as usize);
+     let rendered_row = screen.transcript.y as usize + gap_row - position.offset;
+     let rendered = rows
+         .nth(rendered_row)
+Diff in /root/minicore-followups.6Dpa6e/source/minicore-tui/src/ui/render_cache_tests.rs:765:
+         session_id: "ses_1".to_owned(),
+         loop_id: "loop_2".to_owned(),
+     });
+-    view.live.as_mut().unwrap().pending_steers.push(PendingSteer {
+-        local_id: 2,
+-        text: "queued steering".to_owned(),
+-        state: PendingSteerState::Queued,
+-        accepted_at: None,
+-        steer_index: None,
+-    });
++    view.live
++        .as_mut()
++        .unwrap()
++        .pending_steers
++        .push(PendingSteer {
++            local_id: 2,
++            text: "queued steering".to_owned(),
++            state: PendingSteerState::Queued,
++            accepted_at: None,
++            steer_index: None,
++        });
+     view.transcript.invalidate();
+     assert_user_gap(
+         &queued_app,
+command: cargo +stable fmt --all -- --check
+exit=1

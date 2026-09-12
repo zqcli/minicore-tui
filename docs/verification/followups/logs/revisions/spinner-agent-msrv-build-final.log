@@ -1,0 +1,6 @@
+command: env CARGO_TARGET_DIR=/root/minicore-tui-027-RXdxEP/target-msrv cargo +1.85.0 build --offline --locked --bin minicore-agent
+
+   Compiling minicore-agent v0.3.3 (/root/minicore-followups.6Dpa6e/source/minicore-agent)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.59s
+
+exit=0

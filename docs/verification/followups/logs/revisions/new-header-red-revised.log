@@ -1,0 +1,61 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-followups.6Dpa6e/source/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 1.83s
+     Running tests/app_flow.rs (target/debug/deps/app_flow-500745b34c71f2c8)
+
+running 1 test
+
+thread 'new_session_and_empty_created_session_keep_startup_header' (93148) panicked at tests/app_flow.rs:425:9:
+new-session screen is missing "MINICORE  v0.2.8":
+ ▎                                                                                                                      
+ ▎ previous prompt                                                                                                      
+ ▎ time unavailable                                                                                                     
+ ▎                                                                                                                      
+                                                                                                                        
+  previous answer                                                                                                       
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+ ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │New session                                                                                                          │
+ │workspace  /workspace                                                                                                │
+ │profile    coding  →                                                                                                 │
+ │model      deep  →                                                                                                   │
+ │reasoning  high  →                                                                                                   │
+ │title      (optional)                                                                                                │
+ │action     Create session                                                                                            │
+ │                                                                                                                     │
+ │                                                                                                                     │
+ │                                                                                                                     │
+ │                                                                                                                     │
+ │Tab moves · Enter confirms · Esc closes                                                                              │
+ └─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ▸ workspace · deep · high · ● ready                                                                               ctx ?
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test new_session_and_empty_created_session_keep_startup_header ... FAILED
+
+failures:
+
+failures:
+    new_session_and_empty_created_session_keep_startup_header
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 71 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test app_flow`
+command: baseline header condition + cargo +stable test --locked --offline --test app_flow new_session_and_empty_created_session_keep_startup_header -- --exact --nocapture
+exit=101

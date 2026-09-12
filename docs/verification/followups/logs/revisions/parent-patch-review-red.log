@@ -1,0 +1,34 @@
+   Compiling minicore-agent v0.3.3 (/root/minicore-followups.6Dpa6e/source/minicore-agent)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.14s
+     Running unittests src/lib.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_agent-b0bccf8727e203b6)
+
+running 2 tests
+test tools::apply_patch::tests::codex_review_regression_noeol_context_append_at_eof ... FAILED
+test tools::apply_patch::tests::codex_review_regression_consecutive_header_only_hunks ... FAILED
+
+failures:
+
+---- tools::apply_patch::tests::codex_review_regression_noeol_context_append_at_eof stdout ----
+
+thread 'tools::apply_patch::tests::codex_review_regression_noeol_context_append_at_eof' (356103) panicked at src/tools/apply_patch.rs:1538:13:
+assertion `left == right` failed
+  left: Err(Failed)
+ right: Ok("old\nnew")
+
+---- tools::apply_patch::tests::codex_review_regression_consecutive_header_only_hunks stdout ----
+
+thread 'tools::apply_patch::tests::codex_review_regression_consecutive_header_only_hunks' (356102) panicked at src/tools/apply_patch.rs:1525:9:
+assertion `left == right` failed
+  left: Err(InvalidInvocation)
+ right: Ok("outer\ninner\nnew\n")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tools::apply_patch::tests::codex_review_regression_consecutive_header_only_hunks
+    tools::apply_patch::tests::codex_review_regression_noeol_context_append_at_eof
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 304 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
+exit=101

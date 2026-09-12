@@ -1,0 +1,80 @@
+=== empty_model_search_dark_80x24
+   Compiling minicore-tui v0.2.8 (/root/minicore-followups.6Dpa6e/source/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 1.99s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::snapshots::empty_model_search_dark_80x24 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 354 filtered out; finished in 0.00s
+
+exit=0
+=== narrow_model_selector_dark_60x16
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::snapshots::narrow_model_selector_dark_60x16 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 354 filtered out; finished in 0.00s
+
+exit=0
+=== model_selector_dark_80x24
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.10s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::snapshots::model_selector_dark_80x24 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 354 filtered out; finished in 0.00s
+
+exit=0
+=== model_selector_light_120x40
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::snapshots::model_selector_light_120x40 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 354 filtered out; finished in 0.00s
+
+exit=0
+=== search_query_dark_80x24
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::snapshots::search_query_dark_80x24 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 354 filtered out; finished in 0.00s
+
+exit=0
+=== shutdown_cancel_result_dark_80x24
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::snapshots::shutdown_cancel_result_dark_80x24 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 354 filtered out; finished in 0.00s
+
+exit=0
+=== unknown_cancel_result_dark_80x24
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::snapshots::unknown_cancel_result_dark_80x24 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 354 filtered out; finished in 0.00s
+
+exit=0
+after hashes
+a5cff63c44940e27f6d1553b2d99bb623912eb97f7868b5d9cc2d7d10cad572b  snapshots/empty_model_search_dark_80x24.txt
+1bef95d5ad25a76d9b30982dbdd250065ae5750562596f39a5a829b1d35c99a5  snapshots/narrow_model_selector_dark_60x16.txt
+c45d694a66e156f3c2ba3910fdbb0a4a287aed537c1c590dc4114f90d83f04e6  snapshots/model_selector_dark_80x24.txt
+61c0b29bd275854e06d99dfd41024d96f99fbd9f9dc42306d8a2a67c50d823bc  snapshots/model_selector_light_120x40.txt
+8112d0b7742bbc3f1fc242f89f0bd5fa427b6b0e992106791c257822ff03e4b9  snapshots/search_query_dark_80x24.txt
+5284415a50201899215b7b4639786d8bd441d4a444083ed528f613bee46fa4bd  snapshots/shutdown_cancel_result_dark_80x24.txt
+22e5849ba8999301ea5e73d1e084c9b8dde75bddd20b539c99adea9b901b1e26  snapshots/unknown_cancel_result_dark_80x24.txt
+overall_exit=0

@@ -1,2 +1,4 @@
 # Snapshot comparisons are byte-exact; checkout must preserve renderer LF endings.
 /snapshots/*.txt text eol=lf
+# Preserve checksummed raw evidence bytes on every checkout platform.
+/docs/verification/followups/** -text

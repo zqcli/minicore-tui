@@ -3,7 +3,9 @@
 This is the historical version-update baseline, before the same-version
 [Session-management follow-up](verification/session-management/README.md).
 The follow-up has separate commits, tests and installed artifacts, and has not
-been pushed. Statements below concern only the original paired release.
+been pushed. The later [Tool/reload/stateless subagent follow-up](verification/followups/README.md)
+also retains these versions with separate commits and installed artifacts.
+Statements below concern only the original paired release.
 
 Paired version update with MiniCore Agent 0.3.3. The Rail UI and performance work
 was committed as `c06f3d3`; this patch updates the package version, lockfile,

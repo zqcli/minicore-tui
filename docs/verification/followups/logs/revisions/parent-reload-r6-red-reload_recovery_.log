@@ -1,0 +1,25 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-followups.6Dpa6e/source/minicore-tui)
+error[E0425]: cannot find value `INTERNAL_ERROR` in this scope
+     --> src/app.rs:10863:13
+      |
+10863 |             INTERNAL_ERROR,
+      |             ^^^^^^^^^^^^^^ not found in this scope
+      |
+help: consider importing this constant
+      |
+ 9801 +     use crate::protocol::INTERNAL_ERROR;
+      |
+
+error[E0425]: cannot find value `INTERNAL_ERROR` in this scope
+     --> src/app.rs:10872:13
+      |
+10872 |             INTERNAL_ERROR,
+      |             ^^^^^^^^^^^^^^ not found in this scope
+      |
+help: consider importing this constant
+      |
+ 9801 +     use crate::protocol::INTERNAL_ERROR;
+      |
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `minicore-tui` (lib test) due to 2 previous errors

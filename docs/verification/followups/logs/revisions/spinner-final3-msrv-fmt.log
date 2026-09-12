@@ -1,0 +1,4 @@
+command: cargo +1.85.0 fmt --all -- --check
+
+
+exit=0

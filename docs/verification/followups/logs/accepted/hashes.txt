@@ -1,0 +1,5 @@
+443b88b385d778a41303540f940718cf85968a375ca0f334437f9ff42c4703e6  /root/minicore-followups.6Dpa6e/accepted/artifacts/minicore-agent-debug
+0fb1f77c203f2e105349ee858336837ea6f80c863445c28bc444b931a4add418  /root/minicore-followups.6Dpa6e/accepted/artifacts/minicore-tui-debug
+57a1c3722cf05c251f499b8a1e4d50032e9c8b3ce9e4efcd27028ff4dfc73914  /root/minicore-followups.6Dpa6e/accepted/artifacts/minicore-agent-release
+0134d6e882746b929c1d9ea26e9bc9ac9cf3672787089cf743dbdace993a9098  /root/minicore-followups.6Dpa6e/accepted/artifacts/minicore-tui-release
+39ee6bb070a8bf608e67db1cda9ad239079a8ed3921a18925c66d95c874a9202  /root/minicore-followups.6Dpa6e/accepted/artifacts/terminal-restore

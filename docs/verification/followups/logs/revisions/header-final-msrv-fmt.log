@@ -1,0 +1,35 @@
+Diff in /root/minicore-followups.6Dpa6e/source/minicore-tui/src/ui/header.rs:22:
+             state.status == SessionStatusWire::Idle
+                 && state.active_loop.is_none()
+                 && state.block_reason.is_none()
+-        })
+-            && view.transcript.complete
++        }) && view.transcript.complete
+             && !view.loading
+             && view.transcript.items.is_empty()
+             && view.transcript.blocks.is_empty()
+Diff in /root/minicore-followups.6Dpa6e/source/minicore-tui/tests/app_flow.rs:597:
+ 
+     let (has_error, panel_area) = match &driver.app.dock {
+         Dock::SessionSelector(state) => {
+-            let screen = layout::screen_layout(&driver.app, ratatui::layout::Rect::new(0, 0, 80, 24));
++            let screen =
++                layout::screen_layout(&driver.app, ratatui::layout::Rect::new(0, 0, 80, 24));
+             (
+                 state.error.is_some(),
+                 panel::layout(
+Diff in /root/minicore-followups.6Dpa6e/source/minicore-tui/tests/app_flow.rs:608:
+         }
+         dock => panic!("unexpected dock: {dock:?}"),
+     };
+-    let column = panel_area.footer.x
+-        + unicode_width::UnicodeWidthStr::width("Enter Open") as u16
+-        + 3
+-        + 1;
++    let column =
++        panel_area.footer.x + unicode_width::UnicodeWidthStr::width("Enter Open") as u16 + 3 + 1;
+     let row = panel_area.footer.y;
+     let mouse = |kind| {
+         AppEvent::Terminal(CrosstermEvent::Mouse(crossterm::event::MouseEvent {
+command: cargo +1.85.0 fmt --all -- --check
+exit=1

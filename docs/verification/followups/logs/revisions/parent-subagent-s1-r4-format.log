@@ -1,0 +1,4 @@
+cwd=/root/minicore-followups.6Dpa6e/source/minicore-agent
+command=rustup run stable cargo fmt --all 
+
+exit=0

@@ -1,0 +1,12 @@
+cargo +stable test --offline scroll_and_tick_and_viewport_retain_prepared_conversation --lib -- --nocapture
+
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::render_cache_tests::scroll_and_tick_and_viewport_retain_prepared_conversation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 354 filtered out; finished in 0.00s
+
+
+exit=0

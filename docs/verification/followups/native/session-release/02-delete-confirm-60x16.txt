@@ -1,0 +1,16 @@
+ Coding agent TUI 
+ q / Ctrl+C to quit                                        █
+                                                           █
+ Open a session — /new, Ctrl+R, or F1 for help             █
+                                                           █
+ Session ses_84f2bc933ea2641365b59101ddc740a2 closed. 
+ ┌─────────────────────────────────────────────────────────┐
+ │Select session                                           │
+ │Permanently delete this session?                         │
+ │Renamed During Work 中文 [ses_84f2]                      │
+ │This cannot be undone.                                   │
+ │[ Cancel ]  [ Delete ]                                   │
+ │                                                         │
+ │Tab / ← → choose · Enter activates · Esc Cancel          │
+ └─────────────────────────────────────────────────────────┘
+ ▸ workspace · verify a · high · ● ready               ctx ?

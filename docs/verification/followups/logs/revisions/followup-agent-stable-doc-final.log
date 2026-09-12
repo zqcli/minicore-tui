@@ -1,0 +1,7 @@
+command: RUSTDOCFLAGS="-D warnings" cargo +stable doc --offline --all-features --no-deps
+
+ Documenting minicore-agent v0.3.3 (/root/minicore-followups.6Dpa6e/source/minicore-agent)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.54s
+   Generated /root/minicore-followups.6Dpa6e/source/minicore-agent/target/doc/minicore_agent/index.html
+
+exit=0

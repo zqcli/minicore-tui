@@ -34,6 +34,10 @@ can affect stepping and local-variable visibility. Terminal output batches small
 ANSI writes through a 64 KiB buffer; render rates are unchanged. The Release
 profile is unchanged. The current release is **0.2.8**, paired with Agent
 **0.3.3**; see [release notes](docs/release-0.2.8.md).
+Same-version [Tool, reload and native subagent follow-ups](docs/verification/followups/README.md)
+now have separate source commits, remote/native verification and installed
+artifacts. The current source pair is TUI `30ea7ca` / Agent `f1697f7`; version
+strings alone do not distinguish it from the older 0.2.8/0.3.3 binaries.
 
 For a macOS x86_64 cross-build, put LLVM's `clang` and `ld64.lld` on `PATH`,
 set `SDKROOT` to a macOS SDK, and run `scripts/build-macos-x86_64.sh`.

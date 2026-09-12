@@ -1,0 +1,25 @@
+cargo +stable test --offline failed_tool_presentation_exposes_safe_error_and_history_fallback --lib -- --nocapture
+
+   Compiling minicore-agent v0.3.3 (/root/minicore-followups.6Dpa6e/source/minicore-agent)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.89s
+     Running unittests src/lib.rs (target/debug/deps/minicore_agent-b0bccf8727e203b6)
+
+running 1 test
+
+thread 'agent::tests::failed_tool_presentation_exposes_safe_error_and_history_fallback' (4162189) panicked at src/agent/tests.rs:1023:5:
+assertion `left == right` failed
+  left: None
+ right: Some("tool execution failed")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test agent::tests::failed_tool_presentation_exposes_safe_error_and_history_fallback ... FAILED
+
+failures:
+
+failures:
+    agent::tests::failed_tool_presentation_exposes_safe_error_and_history_fallback
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 296 filtered out; finished in 0.04s
+
+error: test failed, to rerun pass `--lib`
+
+exit=101

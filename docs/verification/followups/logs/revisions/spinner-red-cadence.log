@@ -1,0 +1,25 @@
+cargo +stable test --offline spinner_cadence_uses_monotonic_elapsed_not_tick_count --lib -- --nocapture
+
+   Compiling minicore-tui v0.2.8 (/root/minicore-followups.6Dpa6e/source/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 8.81s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+
+thread 'app::tests::spinner_cadence_uses_monotonic_elapsed_not_tick_count' (25791) panicked at src/app.rs:9112:9:
+assertion `left == right` failed
+  left: Some(33ms)
+ right: Some(100ms)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test app::tests::spinner_cadence_uses_monotonic_elapsed_not_tick_count ... FAILED
+
+failures:
+
+failures:
+    app::tests::spinner_cadence_uses_monotonic_elapsed_not_tick_count
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 354 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
+
+exit=101

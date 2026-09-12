@@ -1,0 +1,4 @@
+command: cargo +stable fmt --all -- --check
+
+
+exit=0

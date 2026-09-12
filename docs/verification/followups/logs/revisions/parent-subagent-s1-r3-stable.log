@@ -1,0 +1,43 @@
+cwd=/root/minicore-followups.6Dpa6e/source/minicore-agent
+command=rustup run stable cargo test -j4 --locked --offline --all-targets 
+   Compiling minicore-agent v0.3.3 (/root/minicore-followups.6Dpa6e/source/minicore-agent)
+error[E0433]: cannot find type `Duration` in this scope
+    --> src/subagents.rs:1729:30
+     |
+1729 |             Instant::now() + Duration::from_secs(1),
+     |                              ^^^^^^^^ use of undeclared type `Duration`
+     |
+     = note: struct `crate::workspace::tests::Duration` exists but is inaccessible
+help: consider importing this struct
+     |
+1332 +     use std::time::Duration;
+     |
+
+error[E0433]: cannot find type `Duration` in this scope
+    --> src/subagents.rs:1745:33
+     |
+1745 |         options.model_timeout = Duration::from_millis(1);
+     |                                 ^^^^^^^^ use of undeclared type `Duration`
+     |
+     = note: struct `crate::workspace::tests::Duration` exists but is inaccessible
+help: consider importing this struct
+     |
+1332 +     use std::time::Duration;
+     |
+
+error[E0433]: cannot find type `Duration` in this scope
+    --> src/subagents.rs:1750:30
+     |
+1750 |             Instant::now() + Duration::from_secs(1),
+     |                              ^^^^^^^^ use of undeclared type `Duration`
+     |
+     = note: struct `crate::workspace::tests::Duration` exists but is inaccessible
+help: consider importing this struct
+     |
+1332 +     use std::time::Duration;
+     |
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `minicore-agent` (lib test) due to 3 previous errors
+
+exit=101

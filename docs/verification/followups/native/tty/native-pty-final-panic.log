@@ -1,0 +1,18 @@
+ALL_STDIO_TTY=yes
+
+running 1 test
+[?1049h[?2004h[?1000h[?1002h[?1003h[?1015h[?1006h[?25l[2J[?25l[?25h[?1006l[?1015l[?1003l[?1002l[?1000l[?2004l[?1049l
+thread 'child_test' (36693507) panicked at tests/terminal_restore.rs:111:5:
+panic hook unwind regression child
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+[?25h[?1006l[?1015l[?1003l[?1002l[?1000l[?2004l[?1049l[?25htest child_test ... FAILED
+
+failures:
+
+failures:
+    child_test
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+
+TTY_RESULT=101

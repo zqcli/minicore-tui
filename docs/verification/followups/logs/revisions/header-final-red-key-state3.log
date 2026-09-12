@@ -1,0 +1,7 @@
+error: unexpected argument 'session_footer_new_invalidates_prepared_header_cache' found
+
+Usage: cargo test [OPTIONS] [TESTNAME] [-- [ARGS]...]
+
+For more information, try '--help'.
+command: env CARGO_TARGET_DIR=/root/minicore-tui-027-RXdxEP/target-linux-user-gap-header-red3 cargo +stable test --offline --locked -j4 --test app_flow confirmed_empty_header_requires_known_idle_and_clean_lifecycle session_footer_new_invalidates_prepared_header_cache -- --exact --nocapture
+exit=1

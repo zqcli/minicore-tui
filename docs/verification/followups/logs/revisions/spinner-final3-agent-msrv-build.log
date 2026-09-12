@@ -1,0 +1,5 @@
+command: env CARGO_TARGET_DIR=/root/minicore-tui-027-RXdxEP/target-msrv cargo +1.85.0 build --offline --locked --bin minicore-agent
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.14s
+
+exit=0

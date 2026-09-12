@@ -1,0 +1,13 @@
+Diff in /root/minicore-followups.6Dpa6e/source/minicore-tui/src/ui/render_cache_tests.rs:4:
+ use std::path::PathBuf;
+ 
+ use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
++use ratatui::Terminal;
+ use ratatui::backend::TestBackend;
+ use ratatui::layout::Rect;
+-use ratatui::Terminal;
+ use serde_json::json;
+ 
+ use crate::app::{App, ConnectionState};
+command: cargo +stable fmt --all -- --check
+exit=1

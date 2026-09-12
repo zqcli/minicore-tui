@@ -1,0 +1,5 @@
+cargo +1.85.0 build --offline --bin minicore-agent
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s
+
+exit=0

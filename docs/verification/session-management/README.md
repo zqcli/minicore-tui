@@ -1,5 +1,9 @@
 # Session Management Acceptance
 
+Historical accepted boundary: its source and artifact hashes are intentionally
+unchanged. The subsequent [Tool/reload/subagent acceptance](../followups/README.md)
+records the current same-version source pair and installation.
+
 Final source and native acceptance of Session management, shared dock panels,
 and the paired Agent rename/prompt-file implementation. This report supersedes
 the stage-local safety conclusions in the Stage 3/4 reports. Versions remain

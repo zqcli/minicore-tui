@@ -1,0 +1,11 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-followups.6Dpa6e/source/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 15.84s
+     Running unittests src/lib.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::render_cache_tests::consecutive_user_cards_keep_one_transparent_gap_across_all_user_paths ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 355 filtered out; finished in 0.01s
+
+command: env CARGO_TARGET_DIR=/root/minicore-tui-027-RXdxEP/target-linux cargo +stable test --offline --locked -j4 --lib ui::render_cache_tests::consecutive_user_cards_keep_one_transparent_gap_across_all_paths -- --exact --nocapture
+exit=0

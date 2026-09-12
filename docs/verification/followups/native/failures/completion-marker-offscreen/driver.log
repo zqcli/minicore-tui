@@ -1,0 +1,30 @@
+{
+  "agent": "/tmp/minicore-followups.AdCugX/accepted/artifacts/minicore-agent-debug",
+  "agent_sha256": "443b88b385d778a41303540f940718cf85968a375ca0f334437f9ff42c4703e6",
+  "checks": [
+    "fresh workspace/store, one real created session, and confirmed empty startup guidance",
+    "/new draft is visible and Esc creates no extra record",
+    "real Esc cancels an active model request without retry",
+    "missing read uses static Agent error body and real mouse fold/expand"
+  ],
+  "error": "Codex apply_patch final response",
+  "evidence_dir": "/private/var/folders/zw/gcpf3t91243dhn6z3bb278s00000gn/T/minicore-native-followups-z79x6pl1/evidence",
+  "owned_root": "/private/var/folders/zw/gcpf3t91243dhn6z3bb278s00000gn/T/minicore-native-followups-z79x6pl1",
+  "pixel_screenshots": "not used; iTerm2 screen text and mouse input only",
+  "profile": "debug",
+  "request_count": 5,
+  "request_log": "/private/var/folders/zw/gcpf3t91243dhn6z3bb278s00000gn/T/minicore-native-followups-z79x6pl1/evidence/requests.jsonl",
+  "result_path": "/private/var/folders/zw/gcpf3t91243dhn6z3bb278s00000gn/T/minicore-native-followups-z79x6pl1/evidence/result.json",
+  "server_errors": [],
+  "status": "FAIL",
+  "tui": "/tmp/minicore-followups.AdCugX/accepted/artifacts/minicore-tui-debug",
+  "tui_sha256": "0fb1f77c203f2e105349ee858336837ea6f80c863445c28bc444b931a4add418",
+  "window_id": 74470
+}
+Traceback (most recent call last):
+  File "/tmp/minicore-followups.AdCugX/native_followups.py", line 645, in <module>
+    wait_screen(window, lambda text: "NATIVE_PATCH_DONE" in text and "ready" in text.lower(), "Codex apply_patch final response", OUT)
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/minicore-followups.AdCugX/native_followups.py", line 384, in wait_screen
+    raise AssertionError(label)
+AssertionError: Codex apply_patch final response

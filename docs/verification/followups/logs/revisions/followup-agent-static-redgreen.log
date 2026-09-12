@@ -1,0 +1,11 @@
+   Compiling minicore-agent v0.3.3 (/root/minicore-followups.6Dpa6e/source/minicore-agent)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.04s
+     Running unittests src/lib.rs (target/debug/deps/minicore_agent-b0bccf8727e203b6)
+
+running 1 test
+test presentation::tests::tool_error_presentation_is_static_for_every_variant ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 297 filtered out; finished in 0.00s
+
+
+exit=0

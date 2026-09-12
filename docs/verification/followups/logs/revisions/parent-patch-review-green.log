@@ -1,0 +1,12 @@
+   Compiling minicore-agent v0.3.3 (/root/minicore-followups.6Dpa6e/source/minicore-agent)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.10s
+     Running unittests src/lib.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_agent-b0bccf8727e203b6)
+
+running 4 tests
+test tools::apply_patch::tests::codex_review_regression_rejects_unanchored_empty_and_eof_hunks ... ok
+test tools::apply_patch::tests::codex_review_regression_noeol_context_append_at_eof ... ok
+test tools::apply_patch::tests::codex_review_regression_consecutive_header_only_hunks ... ok
+test tools::apply_patch::tests::codex_review_regression_preserves_anchor_order_and_range_cursor ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 304 filtered out; finished in 0.00s
+

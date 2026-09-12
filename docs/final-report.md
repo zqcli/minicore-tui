@@ -1,7 +1,7 @@
 # Final Report: Agent v0.3 / Runtime v0.4 Migration
 
 The current release versions are **TUI 0.2.8 / Agent 0.3.3**. The
-[0.2.8 release](release-0.2.8.md) is a paired version update without additional
+original [0.2.8 release](release-0.2.8.md) was a paired version update without additional
 TUI behavior changes. See
 [release-0.2.7.md](release-0.2.7.md) for buffered terminal output, level-1 Debug
 package optimization, preserved executables/cache cleanup, and remote-only builds.
@@ -22,7 +22,19 @@ The [0.2.1 package](release-0.2.1.md), Rail gates below, and **0.2.0** migration
 evidence are historical; their counts and cross-platform checks are not
 relabeled as new runs. Agent/Runtime protocol compatibility is unchanged.
 
-## Session Management
+## Current Follow-Ups
+
+The same-version [Tool/reload/subagent acceptance](verification/followups/README.md)
+records current sources TUI `30ea7ca` and Agent `f1697f7`. It adds safe failure
+bodies, 100 ms Working animation, consecutive User spacing, empty/new startup
+guidance, bounded Codex Update File support, `/reload`, and native stateless
+subagent single/parallel/chain. Persistent subagent orchestration is not implemented.
+Remote stable/MSRV each passed **498 TUI tests / 19 ignored**, **369 Agent tests /
+2 ignored**, and separately **18 E2E tests**. Native Debug/Release and real-TTY
+checks passed; accepted binaries/symbols are installed with old inodes preserved.
+No user process restart, new push, hosted CI, release tag or pixel parity is implied.
+
+## Previous Session Acceptance
 
 Session management now shares dock-panel geometry with all selectors, New
 Session, Help and Logs. Session-specific actions provide open, new, refresh,
@@ -34,8 +46,8 @@ Rename uses the separately committed Agent `session.rename` API and updates the
 UI only after its complete ACK. Runtime, dependencies and package versions remain
 unchanged.
 
-The parent independently rebuilt a fresh remote source mirror: stable and Rust
-1.85.0 each passed **464 tests with 18 default ignored**; the 17 real-Agent E2E
+The previous Session acceptance rebuilt a fresh remote source mirror: stable and
+Rust 1.85.0 each passed **464 tests with 18 default ignored**; the 17 real-Agent E2E
 cases then passed explicitly. Agent passed **318 tests with 2 ignored** on both
 toolchains. Stable strict Clippy, format checks and warning-denied rustdoc passed.
 MSRV Clippy's pre-existing diagnostics are not claimed as fixed. Earlier review
@@ -46,7 +58,8 @@ passed for both Debug and Release, including file-prompt snapshots, filtered
 Session targets, default-Cancel deletion, the existing streaming/FIFO workflow,
 and real-PTY normal/panic restoration. The native run found a hidden-selection
 bug; its fixes and original failing evidence are retained. Accepted binaries
-and Debug symbols are installed with old executable inodes preserved. User
+and Debug symbols were installed at that boundary with old executable inodes
+preserved; the current follow-up installation supersedes those paths. User
 processes were not restarted; no hosted CI, push or pixel-parity claim is implied.
 
 ## Rail Follow-Up Status

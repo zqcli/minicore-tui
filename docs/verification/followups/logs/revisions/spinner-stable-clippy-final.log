@@ -1,0 +1,6 @@
+command: env CARGO_TARGET_DIR=/root/minicore-tui-027-RXdxEP/target-linux cargo +stable clippy --offline --locked --all-targets --all-features -- -D warnings
+
+    Checking minicore-tui v0.2.8 (/root/minicore-followups.6Dpa6e/source/minicore-tui)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 5.07s
+
+exit=0

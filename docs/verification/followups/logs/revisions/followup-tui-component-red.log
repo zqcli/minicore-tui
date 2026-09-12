@@ -1,0 +1,23 @@
+cargo +stable test --offline failed_tool_cards_keep_status_summary_hint_and_error_body --lib -- --nocapture
+
+   Compiling minicore-tui v0.2.8 (/root/minicore-followups.6Dpa6e/source/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 7.22s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+
+thread 'ui::component_tests::failed_tool_cards_keep_status_summary_hint_and_error_body' (4162688) panicked at src/ui/component_tests.rs:1089:5:
+assertion failed: collapsed_text.contains("failed: permission denied")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test ui::component_tests::failed_tool_cards_keep_status_summary_hint_and_error_body ... FAILED
+
+failures:
+
+failures:
+    ui::component_tests::failed_tool_cards_keep_status_summary_hint_and_error_body
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 353 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
+
+exit=101

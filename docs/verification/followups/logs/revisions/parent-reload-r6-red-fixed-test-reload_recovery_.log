@@ -1,0 +1,32 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-followups.6Dpa6e/source/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 17.26s
+     Running unittests src/lib.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 2 tests
+test app::tests::reload_recovery_state_before_history_keeps_history_gap_fenced ... FAILED
+test app::tests::reload_recovery_idle_event_does_not_release_pending_state_fence ... FAILED
+
+failures:
+
+---- app::tests::reload_recovery_state_before_history_keeps_history_gap_fenced stdout ----
+
+thread 'app::tests::reload_recovery_state_before_history_keeps_history_gap_fenced' (707630) panicked at src/app.rs:10832:9:
+assertion failed: before_history.iter().all(|request| request.method != "turn.send")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- app::tests::reload_recovery_idle_event_does_not_release_pending_state_fence stdout ----
+
+thread 'app::tests::reload_recovery_idle_event_does_not_release_pending_state_fence' (707629) panicked at src/app.rs:10775:9:
+assertion failed: take_requests(app.update(AppEvent::SubmitTurn {
+                session_id: "ses_1".to_owned(),
+                text: "blocked until fresh state response".to_owned(),
+            })).is_empty()
+
+
+failures:
+    app::tests::reload_recovery_idle_event_does_not_release_pending_state_fence
+    app::tests::reload_recovery_state_before_history_keeps_history_gap_fenced
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 376 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

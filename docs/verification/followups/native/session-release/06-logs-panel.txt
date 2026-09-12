@@ -1,0 +1,32 @@
+ MINICORE  v0.2.8 
+ 
+ Coding agent TUI 
+ q / Ctrl+C to quit 
+ 
+ Open a session — /new, Ctrl+R, or F1 for help 
+ 
+ 
+ 
+ 
+ 
+                       
+ ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │Agent logs                                                                                       │
+ │Captured stderr (newest first)                                                                   │
+ │                                                                                                 │
+ │2026-09-12T14:59:19.209158Z  INFO session deleted session_id=ses_84f2bc933ea2641365b59101ddc740a2│
+ │2026-09-12T14:59:15.360703Z  INFO session closed session_id=ses_84f2bc933ea2641365b59101ddc740a2 │
+ │2026-09-12T14:59:11.550664Z  INFO session created session_id=ses_5e6eae5eca1e694ab635af5e501a32f8│
+ │2026-09-12T14:59:06.585534Z  INFO turn submitted session_id=ses_84f2bc933ea2641365b59101ddc740a2 │
+ │2026-09-12T14:59:06.137403Z  INFO turn submitted session_id=ses_84f2bc933ea2641365b59101ddc740a2 │
+ │2026-09-12T14:59:05.715883Z  INFO session created session_id=ses_84f2bc933ea2641365b59101ddc740a2│
+ │2026-09-12T14:59:05.283105Z  INFO agent open success                                             │
+ │2026-09-12T14:59:05.282363Z  INFO agent startup                                                  │
+ │                                                                                                 │
+ │                                                                                                 │
+ │                                                                                                 │
+ │                                                                                                 │
+ │                                                                                                 │
+ │Esc closes this panel                                                                            │
+ └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ▸ workspace · verify b · max · ● ready                                                        ctx ?

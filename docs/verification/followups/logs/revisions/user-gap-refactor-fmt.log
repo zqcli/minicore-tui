@@ -1,0 +1,20 @@
+Diff in /root/minicore-followups.6Dpa6e/source/minicore-tui/src/ui/transcript.rs:1095:
+             tool,
+             self.width,
+         );
+-        append_live_section(
+-            out,
+-            ranges,
+-            None,
+-            id,
+-            lines,
+-            self.width,
+-            true,
+-            folded,
+-        );
++        append_live_section(out, ranges, None, id, lines, self.width, true, folded);
+     }
+ }
+ 
+command: cargo +stable fmt --all -- --check
+exit=1

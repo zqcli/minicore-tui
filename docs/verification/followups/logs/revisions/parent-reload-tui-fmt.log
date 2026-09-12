@@ -1,0 +1,14 @@
+error: expected identifier, found keyword `let`
+    --> /root/minicore-followups.6Dpa6e/source/minicore-tui/src/app.rs:4315:17
+     |
+4314 |             Ok(state) if state.session_id == session_id {
+     |                                              ---------- while parsing this struct
+4315 |                 let state_shape_valid = match state.status {
+     |                 ^^^ expected identifier, found keyword
+     |
+help: you might have meant to start a match arm after the match guard
+     |
+4314 |             Ok(state) if state.session_id == session_id => {
+     |                                                         ++
+
+Error writing files: failed to resolve mod `app`: cannot parse /root/minicore-followups.6Dpa6e/source/minicore-tui/src/app.rs

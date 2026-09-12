@@ -8,22 +8,25 @@ enter an alternate screen during normal CI tests.
 
 ## Current Patch Verification
 
-The paired **TUI 0.2.8 / Agent 0.3.3** release is documented in
-[verification/0.2.8/README.md](verification/0.2.8/README.md). Its source behavior
-matches the preceding local builds; version-bearing snapshots were updated.
-No local compilation is used for this release.
+The current same-version **TUI 0.2.8 / Agent 0.3.3** follow-up acceptance is in
+[verification/followups/README.md](verification/followups/README.md). Fresh committed
+source archives passed **498 TUI tests / 19 ignored** and **369 Agent tests / 2
+ignored** on both stable and Rust 1.85, with all **18 real-Agent E2E tests** run
+separately on both toolchains. Stable fmt, strict Clippy and warning-denied rustdoc
+passed. macOS Debug/Release passed native feature, Session and streaming checks,
+plus real-TTY normal/panic restoration, and the four accepted binaries are installed.
+Accepted Rust work and delivery artifacts came from the authorized Linux builder;
+the disclosed earlier local-Rust violation and excluded results are recorded in
+that report. No new Windows/hosted-CI or pixel-parity result is implied.
 
-Final source/native checks and installation are recorded in
-[verification/session-management/README.md](verification/session-management/README.md).
-The historical Session-panel verification follow-ups are recorded in
-[verification/stage3-session-panel/README.md](verification/stage3-session-panel/README.md)
-and [verification/stage4-session-panel/README.md](verification/stage4-session-panel/README.md).
-The current query-filtered Session-selector rename-safety run reports **464
-passed, 0 failed, 18 ignored** on both stable and Rust 1.85 with Cargo's
-default test-thread behavior; the 17 ignored real-Agent E2E tests then passed
-serially on both toolchains. Stable strict Clippy and stable/MSRV rustdoc and
-rustfmt remain part of the remote quality gates. MSRV strict Clippy still
-reports only the pre-existing diagnostics in unmodified files.
+The original paired release remains documented in
+[verification/0.2.8/README.md](verification/0.2.8/README.md). The previous
+[Session-management acceptance](verification/session-management/README.md) reports
+464 TUI tests / 18 ignored, 318 Agent tests / 2 ignored, and 17 E2E scenarios.
+Its source/artifact hashes remain historical. Earlier panel stages are retained in
+[Stage 3](verification/stage3-session-panel/README.md) and
+[Stage 4](verification/stage4-session-panel/README.md). Existing MSRV strict-Clippy
+diagnostics are not claimed as fixed or suppressed.
 
 For the preceding **TUI 0.2.7 / Agent 0.3.2**, see
 [verification/0.2.7/README.md](verification/0.2.7/README.md). All compilation was

@@ -1,0 +1,68 @@
+Diff in /root/minicore-followups.6Dpa6e/source/minicore-tui/src/ui/render_cache_tests.rs:643:
+     assert_eq!(prepared.link_cells.len(), prepared.lines.len());
+     assert!(prepared.link_cells[gap_row].is_empty());
+     assert!(prepared.sections.iter().all(|s| !s.rows.contains(&gap_row)));
+-    assert!(prepared
+-        .section_at(gap_row, users[0].content_columns.start)
+-        .is_none());
++    assert!(
++        prepared
++            .section_at(gap_row, users[0].content_columns.start)
++            .is_none()
++    );
+     assert!(prepared.copy_ranges.iter().all(|r| r.row != gap_row));
+ 
+     let selection = ConversationSelection {
+Diff in /root/minicore-followups.6Dpa6e/source/minicore-tui/src/ui/render_cache_tests.rs:681:
+         WIDTH + 1,
+         HEIGHT,
+     ));
+-    assert!(rows[screen.transcript.y as usize + gap_row - position.offset][1..]
+-        .trim()
+-        .is_empty());
++    assert!(
++        rows[screen.transcript.y as usize + gap_row - position.offset][1..]
++            .trim()
++            .is_empty()
++    );
+ }
+ 
+ #[test]
+Diff in /root/minicore-followups.6Dpa6e/source/minicore-tui/src/ui/render_cache_tests.rs:707:
+     let mut queued = user_gap_app("prompt");
+     let view = queued.sessions.known.get_mut("ses_1").unwrap();
+     add_live(view, 2);
+-    view.live.as_mut().unwrap().pending_steers.push(PendingSteer {
+-        local_id: 2,
+-        text: "queued steering".to_owned(),
+-        state: PendingSteerState::Queued,
+-        accepted_at: None,
+-        steer_index: None,
+-    });
++    view.live
++        .as_mut()
++        .unwrap()
++        .pending_steers
++        .push(PendingSteer {
++            local_id: 2,
++            text: "queued steering".to_owned(),
++            state: PendingSteerState::Queued,
++            accepted_at: None,
++            steer_index: None,
++        });
+     assert_user_gap(&queued, "second message");
+     let prepared = prepare_conversation(&queued, WIDTH);
+     assert_eq!(
+Diff in /root/minicore-followups.6Dpa6e/source/minicore-tui/src/ui/render_cache_tests.rs:729:
+         WIDTH + 1,
+         HEIGHT,
+     ));
+-    assert!(rows.iter().any(|row| row.contains("Steering (accepted): queued steering")));
++    assert!(
++        rows.iter()
++            .any(|row| row.contains("Steering (accepted): queued steering"))
++    );
+ }
+ 
+command: cargo +1.85.0 fmt --all -- --check
+exit=1

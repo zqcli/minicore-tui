@@ -1,0 +1,182 @@
+{
+  "roots": [
+    "/root/minicore-tui-027-RXdxEP/target-red-late",
+    "/root/minicore-tui-027-RXdxEP/target-stage3-msrv-check2",
+    "/root/minicore-tui-027-RXdxEP/target-linux-late",
+    "/root/minicore-tui-027-RXdxEP/target-linux-clippy-final",
+    "/root/minicore-tui-027-RXdxEP/target-e2e-stable",
+    "/root/minicore-tui-027-RXdxEP/target-stage3-check",
+    "/root/minicore-tui-027-RXdxEP/target-linux-final",
+    "/root/minicore-tui-027-RXdxEP/target-macos",
+    "/root/minicore-tui-027-RXdxEP/target-msrv-doc-final",
+    "/root/minicore-tui-027-RXdxEP/target-msrv-clippy-final",
+    "/root/minicore-tui-027-RXdxEP/target-linux-doc-final",
+    "/root/minicore-tui-027-RXdxEP/target-macos-llvm",
+    "/root/minicore-tui-027-RXdxEP/target-msrv",
+    "/root/minicore-tui-027-RXdxEP/target-green-msrv-late",
+    "/root/minicore-tui-027-RXdxEP/target-msrv-late",
+    "/root/minicore-tui-027-RXdxEP/target-green-late",
+    "/root/minicore-tui-027-RXdxEP/target-stage3-check2",
+    "/root/minicore-tui-027-RXdxEP/target-red-late2",
+    "/root/minicore-tui-027-RXdxEP/target-linux",
+    "/root/minicore-tui-027-RXdxEP/target-macos-opt1",
+    "/root/minicore-tui-027-RXdxEP/target-stage3-msrv-check",
+    "/root/minicore-tui-027-RXdxEP/target-e2e-msrv",
+    "/root/minicore-tui-027-RXdxEP/target-msrv-final",
+    "/root/minicore-session-panels.H0sLzv/source/minicore-tui/target",
+    "/root/minicore-session-panels.H0sLzv/minicore-agent/target",
+    "/root/minicore-session-panels.H0sLzv/agent-target-final",
+    "/root/minicore-session-panels.H0sLzv/agent-target-test-final",
+    "/root/minicore-session-panels.H0sLzv/agent-target-test-msrv-final",
+    "/root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui/target"
+  ],
+  "retained_count": 5541,
+  "removed": [
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-red-late/debug/incremental",
+      "logical_bytes": 261854431
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-stage3-msrv-check2/debug/incremental",
+      "logical_bytes": 252960444
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux-late/debug/incremental",
+      "logical_bytes": 261891689
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux-clippy-final/debug/incremental",
+      "logical_bytes": 97407925
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-e2e-stable/debug/incremental",
+      "logical_bytes": 256157990
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-stage3-check/debug/incremental",
+      "logical_bytes": 31567572
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux-final/debug/incremental",
+      "logical_bytes": 624390230
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/x86_64-apple-darwin/debug/incremental",
+      "logical_bytes": 0
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/x86_64-apple-darwin/release/incremental",
+      "logical_bytes": 0
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/debug/incremental",
+      "logical_bytes": 0
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos/release/incremental",
+      "logical_bytes": 0
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv-doc-final/debug/incremental",
+      "logical_bytes": 0
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv-clippy-final/debug/incremental",
+      "logical_bytes": 51712172
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux-doc-final/debug/incremental",
+      "logical_bytes": 0
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/debug/incremental",
+      "logical_bytes": 1064531956
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/x86_64-apple-darwin/release/incremental",
+      "logical_bytes": 0
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/debug/incremental",
+      "logical_bytes": 0
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-llvm/release/incremental",
+      "logical_bytes": 0
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv/debug/incremental",
+      "logical_bytes": 1292256831
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-green-msrv-late/debug/incremental",
+      "logical_bytes": 250491717
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv-late/debug/incremental",
+      "logical_bytes": 250482711
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-green-late/debug/incremental",
+      "logical_bytes": 261898523
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-stage3-check2/debug/incremental",
+      "logical_bytes": 264280538
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-red-late2/debug/incremental",
+      "logical_bytes": 261861186
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-linux/debug/incremental",
+      "logical_bytes": 3580201434
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/x86_64-apple-darwin/debug/incremental",
+      "logical_bytes": 0
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-macos-opt1/debug/incremental",
+      "logical_bytes": 0
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-stage3-msrv-check/debug/incremental",
+      "logical_bytes": 28494656
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-e2e-msrv/debug/incremental",
+      "logical_bytes": 235592943
+    },
+    {
+      "path": "/root/minicore-tui-027-RXdxEP/target-msrv-final/debug/incremental",
+      "logical_bytes": 584490834
+    },
+    {
+      "path": "/root/minicore-session-panels.H0sLzv/source/minicore-tui/target/debug/incremental",
+      "logical_bytes": 2128740559
+    },
+    {
+      "path": "/root/minicore-session-panels.H0sLzv/minicore-agent/target/debug/incremental",
+      "logical_bytes": 2072657006
+    },
+    {
+      "path": "/root/minicore-session-panels.H0sLzv/agent-target-final/debug/incremental",
+      "logical_bytes": 183812351
+    },
+    {
+      "path": "/root/minicore-session-panels.H0sLzv/agent-target-test-final/debug/incremental",
+      "logical_bytes": 682474803
+    },
+    {
+      "path": "/root/minicore-session-panels.H0sLzv/agent-target-test-msrv-final/debug/incremental",
+      "logical_bytes": 585008804
+    },
+    {
+      "path": "/root/minicore-tui-stream-smooth.z2MHSJ/minicore-tui/target/debug/incremental",
+      "logical_bytes": 954073667
+    }
+  ],
+  "logical_bytes_removed": 16519292972,
+  "retained_hashes_verified": true
+}

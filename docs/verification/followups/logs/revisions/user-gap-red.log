@@ -1,0 +1,16 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-followups.6Dpa6e/source/minicore-tui)
+error[E0596]: cannot borrow `rows` as mutable, as it is not declared as mutable
+   --> src/ui/render_cache_tests.rs:663:20
+    |
+663 |     let rendered = rows
+    |                    ^^^^ cannot borrow as mutable
+    |
+help: consider changing this to be mutable
+    |
+661 |     let mut rows = terminal.backend().buffer().content().chunks((width + 1) as usize);
+    |         +++
+
+For more information about this error, try `rustc --explain E0596`.
+error: could not compile `minicore-tui` (lib test) due to 1 previous error
+command: env CARGO_TARGET_DIR=/root/minicore-tui-027-RXdxEP/target-linux cargo +stable test --offline --locked -j4 --lib ui::render_cache_tests::consecutive_user_cards_keep_one_transparent_gap_across_all_user_paths -- --exact --nocapture
+exit=101

@@ -1,0 +1,25 @@
+cargo +stable test --offline active_tick_deadline_survives_continuous_non_tick_events --bin minicore-tui -- --nocapture
+
+   Compiling minicore-tui v0.2.8 (/root/minicore-followups.6Dpa6e/source/minicore-tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 2.67s
+     Running unittests src/main.rs (target/debug/deps/minicore_tui-c879d79f4ee2b2cb)
+
+running 1 test
+
+thread 'tests::active_tick_deadline_survives_continuous_non_tick_events' (26074) panicked at src/main.rs:664:9:
+assertion `left == right` failed: continuous non-Tick events must not reset the active absolute deadline
+  left: Some(33)
+ right: Some(100)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test tests::active_tick_deadline_survives_continuous_non_tick_events ... FAILED
+
+failures:
+
+failures:
+    tests::active_tick_deadline_survives_continuous_non_tick_events
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--bin minicore-tui`
+
+exit=101

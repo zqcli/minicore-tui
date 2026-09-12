@@ -1,0 +1,998 @@
+{
+  "terminal": "iTerm2 3.6.11",
+  "window_id": 74476,
+  "evidence_dir": "/var/folders/zw/gcpf3t91243dhn6z3bb278s00000gn/T/minicore-stream-smooth-iterm-ibaw6xkh/evidence",
+  "expect_fixed": true,
+  "tui_sha256": "0134d6e882746b929c1d9ea26e9bc9ac9cf3672787089cf743dbdace993a9098",
+  "agent_sha256": "57a1c3722cf05c251f499b8a1e4d50032e9c8b3ce9e4efcd27028ff4dfc73914",
+  "pixel_screenshots": "UNVERIFIED; protected iTerm windows, no screenshot attempt or replacement",
+  "agent_version": "0.3.3",
+  "live_tool_click_collapses": true,
+  "cpu_dimensions": "220, 53",
+  "idle_cpu": {
+    "start_epoch_ms": 1789225379594,
+    "end_epoch_ms": 1789225381600,
+    "wall_seconds": 2.006,
+    "tui_cpu_seconds": 0.0,
+    "agent_cpu_seconds": 0.0,
+    "tui_cpu_percent_one_core": 0.0
+  },
+  "busy_cpu": [
+    {
+      "start_epoch_ms": 1789225382563,
+      "end_epoch_ms": 1789225390569,
+      "wall_seconds": 8.006,
+      "tui_cpu_seconds": 0.1,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 1.249
+    },
+    {
+      "start_epoch_ms": 1789225390588,
+      "end_epoch_ms": 1789225398592,
+      "wall_seconds": 8.004,
+      "tui_cpu_seconds": 0.1,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 1.249
+    },
+    {
+      "start_epoch_ms": 1789225398609,
+      "end_epoch_ms": 1789225406619,
+      "wall_seconds": 8.009,
+      "tui_cpu_seconds": 0.1,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 1.249
+    }
+  ],
+  "held_spinner": {
+    "samples": [
+      {
+        "at": 1789225406773,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225406796,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225406820,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225406843,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789225406867,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789225406890,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789225406915,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789225406939,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789225406959,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225406982,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225407007,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225407031,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225407052,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789225407074,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789225407094,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789225407120,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789225407140,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789225407167,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789225407191,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789225407214,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789225407236,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789225407257,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789225407283,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789225407309,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789225407335,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789225407357,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225407379,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225407399,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225407421,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225407442,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225407465,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789225407488,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789225407513,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789225407536,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789225407557,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789225407582,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789225407605,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789225407628,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789225407652,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789225407674,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789225407697,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789225407718,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789225407743,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789225407764,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225407786,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225407811,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225407836,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225407860,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225407885,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789225407911,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789225407937,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789225407959,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789225407983,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225408004,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225408024,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225408044,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225408066,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225408087,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789225408110,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789225408130,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789225408152,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789225408174,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789225408196,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789225408217,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789225408239,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789225408260,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789225408281,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789225408307,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789225408330,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789225408352,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789225408373,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789225408393,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225408417,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225408439,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225408465,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225408491,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789225408516,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789225408538,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789225408560,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789225408580,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789225408601,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789225408626,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789225408651,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789225408673,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789225408704,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789225408725,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789225408750,
+        "glyph": "\u2827"
+      }
+    ],
+    "changes": 20,
+    "duration_ms": 1977,
+    "change_intervals_ms": [
+      70,
+      116,
+      93,
+      115,
+      90,
+      100,
+      108,
+      117,
+      92,
+      90,
+      121,
+      98,
+      104,
+      87,
+      107,
+      112,
+      98,
+      89,
+      124
+    ],
+    "median_change_interval_ms": 100
+  },
+  "flood_spinner": {
+    "samples": [
+      {
+        "at": 1789225409219,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789225409243,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789225409264,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789225409285,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789225409309,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789225409334,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789225409353,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789225409379,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789225409401,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789225409423,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225409444,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225409470,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225409494,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225409515,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225409537,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225409562,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225409585,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789225409609,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789225409633,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789225409656,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789225409681,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789225409704,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789225409730,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789225409752,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789225409772,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789225409795,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789225409816,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789225409841,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225409865,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225409886,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225409907,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225409926,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225409949,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225409971,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225409992,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789225410014,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225410035,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225410061,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225410086,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225410109,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225410128,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789225410154,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789225410175,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789225410197,
+        "glyph": "\u2819"
+      },
+      {
+        "at": 1789225410222,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789225410247,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789225410268,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789225410292,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789225410311,
+        "glyph": "\u2839"
+      },
+      {
+        "at": 1789225410336,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789225410359,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789225410381,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789225410401,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789225410423,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789225410447,
+        "glyph": "\u2838"
+      },
+      {
+        "at": 1789225410468,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225410492,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225410514,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225410536,
+        "glyph": "\u283c"
+      },
+      {
+        "at": 1789225410560,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789225410580,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789225410604,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789225410623,
+        "glyph": "\u2834"
+      },
+      {
+        "at": 1789225410648,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789225410669,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789225410689,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789225410710,
+        "glyph": "\u2826"
+      },
+      {
+        "at": 1789225410734,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789225410755,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789225410777,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789225410802,
+        "glyph": "\u2827"
+      },
+      {
+        "at": 1789225410827,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225410848,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225410870,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225410893,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225410918,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225410942,
+        "glyph": "\u2807"
+      },
+      {
+        "at": 1789225410963,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789225410988,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789225411011,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789225411031,
+        "glyph": "\u280f"
+      },
+      {
+        "at": 1789225411054,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225411076,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225411097,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225411118,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225411139,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225411161,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225411181,
+        "glyph": "\u280b"
+      },
+      {
+        "at": 1789225411207,
+        "glyph": "\u2819"
+      }
+    ],
+    "changes": 20,
+    "duration_ms": 1988,
+    "change_intervals_ms": [
+      115,
+      89,
+      162,
+      71,
+      74,
+      111,
+      151,
+      22,
+      114,
+      94,
+      114,
+      132,
+      92,
+      88,
+      86,
+      93,
+      136,
+      91,
+      153
+    ],
+    "median_change_interval_ms": 94
+  },
+  "scroll_cpu": [
+    {
+      "start_epoch_ms": 1789225413107,
+      "end_epoch_ms": 1789225421110,
+      "wall_seconds": 8.003,
+      "tui_cpu_seconds": 0.25,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 3.124,
+      "injected_events": 200
+    },
+    {
+      "start_epoch_ms": 1789225421128,
+      "end_epoch_ms": 1789225429129,
+      "wall_seconds": 8.002,
+      "tui_cpu_seconds": 0.26,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 3.249,
+      "injected_events": 200
+    },
+    {
+      "start_epoch_ms": 1789225429148,
+      "end_epoch_ms": 1789225437149,
+      "wall_seconds": 8.001,
+      "tui_cpu_seconds": 0.25,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 3.125,
+      "injected_events": 200
+    }
+  ],
+  "scroll_800_cpu_seconds": 1.04,
+  "scroll_800_wall_seconds": 33.044,
+  "scroll_input": {
+    "events": 800,
+    "period_seconds": 0.04,
+    "reverse_every_events": 80,
+    "injection_wall_seconds": 31.969,
+    "measurements": "absolute 25Hz deadlines; 3 x 8 seconds after 0.5s settle; event timestamps recorded; sample separately"
+  },
+  "hover_200_input_seconds": 0.615,
+  "hover_200_cpu_seconds": 0.0,
+  "wheel_100_visible_seconds": 0.611,
+  "wheel_100_cpu_seconds": 0.0,
+  "drag_body_follows_before_release": true,
+  "stationary_drag_cpu": {
+    "start_epoch_ms": 1789225449917,
+    "end_epoch_ms": 1789225451918,
+    "wall_seconds": 2.001,
+    "tui_cpu_seconds": 0.0,
+    "agent_cpu_seconds": 0.0,
+    "tui_cpu_percent_one_core": 0.0
+  },
+  "drag_cpu": [
+    {
+      "start_epoch_ms": 1789225452442,
+      "end_epoch_ms": 1789225460443,
+      "wall_seconds": 8.001,
+      "tui_cpu_seconds": 0.12,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 1.5,
+      "injected_events": 200
+    },
+    {
+      "start_epoch_ms": 1789225460460,
+      "end_epoch_ms": 1789225468470,
+      "wall_seconds": 8.009,
+      "tui_cpu_seconds": 0.11,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 1.373,
+      "injected_events": 200
+    },
+    {
+      "start_epoch_ms": 1789225468489,
+      "end_epoch_ms": 1789225476493,
+      "wall_seconds": 8.004,
+      "tui_cpu_seconds": 0.12,
+      "agent_cpu_seconds": 0.0,
+      "tui_cpu_percent_one_core": 1.499,
+      "injected_events": 200
+    }
+  ],
+  "drag_distinct_windows_including_scrollbar": 8,
+  "drag_distinct_body_windows": 8,
+  "status": "PASS",
+  "checks": [
+    "same-part tokens concatenate; distinct summary parts without raw newlines occupy three native rows",
+    "two rapid steers appear in dock queue above Working, with a blank gap, not as User cards",
+    "Option+Up withdraws unsent beta; resubmission keeps both entries and changes only local identity",
+    "request alpha excludes beta; request beta follows alpha answer; both history entries appear exactly once",
+    "existing immediate-footer max selection remains intact without another user turn",
+    "idle and held request 2s controls, changing Working display, owned-process CPU only; input remains responsive",
+    "800 paced bidirectional wheel events; continuous-scroll CPU measured for 3x8s; input drain marker and tail confirmed",
+    "long history: 200 hover events preserve responsive input; 100 wheel events scroll; scrollbar drag reaches beginning",
+    "native TUI exits zero and restores its shell"
+  ],
+  "captures": [
+    {
+      "name": "01-thinking-part-boundaries",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "01b-live-tool-click",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "02-two-queued-steers",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "03-queued-60x16",
+      "dimensions": "60, 16"
+    },
+    {
+      "name": "04-alpha-applied-beta-queued",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "05-both-completed",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "06-footer-max",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "07-long-history-tail",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "08-cpu-idle-wide",
+      "dimensions": "220, 53"
+    },
+    {
+      "name": "09-cpu-busy-wide",
+      "dimensions": "220, 53"
+    },
+    {
+      "name": "10-continuous-scroll-wide",
+      "dimensions": "220, 53"
+    },
+    {
+      "name": "08-long-history-scrolled",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "09a-drag-before-release",
+      "dimensions": "100, 32"
+    },
+    {
+      "name": "09-long-history-drag-top",
+      "dimensions": "100, 32"
+    }
+  ],
+  "requests": [
+    {
+      "model": "verify-a",
+      "effort": "high",
+      "alpha": false,
+      "beta": false,
+      "alpha_answer": false
+    },
+    {
+      "model": "verify-a",
+      "effort": "high",
+      "alpha": true,
+      "beta": false,
+      "alpha_answer": false
+    },
+    {
+      "model": "verify-a",
+      "effort": "high",
+      "alpha": true,
+      "beta": true,
+      "alpha_answer": true
+    },
+    {
+      "model": "verify-a",
+      "effort": "max",
+      "alpha": true,
+      "beta": true,
+      "alpha_answer": true
+    },
+    {
+      "model": "verify-a",
+      "effort": "max",
+      "alpha": true,
+      "beta": true,
+      "alpha_answer": true,
+      "flood_deltas": 250
+    }
+  ],
+  "tui_version": "minicore-tui 0.2.8",
+  "note": "Native iTerm2 screen text and input + real Agent/loopback. No user config or Store; no external provider."
+}

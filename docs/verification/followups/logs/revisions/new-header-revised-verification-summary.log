@@ -1,0 +1,55 @@
+new-header revised verification summary
+remote source: /root/minicore-followups.6Dpa6e/source/minicore-tui
+remote logs: /root/minicore-followups.6Dpa6e/logs
+local archive: /tmp/minicore-followups.AdCugX/logs
+remote Git metadata: absent; no Git writes performed
+cargo clean: not run
+
+implementation
+- header visibility: no active session OR new-session draft OR confirmed empty active history
+- confirmed empty requires transcript.complete, !loading, empty raw items, empty rendered blocks, and no live loop
+- live prompt/user text and history loading suppress the startup header
+- header remains in prepared transcript geometry and is excluded from copy ranges
+
+final changed files
+- src/ui/header.rs b6564f9d3f9b5dd07bea333ec804312a7715b8569f32da8e7f8b95acb96dd363
+- tests/app_flow.rs 12747bb58a8649b632a6af2c02acd8805b457d0a12765a6603f79bb8cb5eef50
+- snapshots/empty_model_search_dark_80x24.txt a5cff63c44940e27f6d1553b2d99bb623912eb97f7868b5d9cc2d7d10cad572b
+- snapshots/narrow_model_selector_dark_60x16.txt 1bef95d5ad25a76d9b30982dbdd250065ae5750562596f39a5a829b1d35c99a5
+- snapshots/model_selector_dark_80x24.txt c45d694a66e156f3c2ba3910fdbb0a4a287aed537c1c590dc4114f90d83f04e6
+- snapshots/model_selector_light_120x40.txt 61c0b29bd275854e06d99dfd41024d96f99fbd9f9dc42306d8a2a67c50d823bc
+- snapshots/search_query_dark_80x24.txt 8112d0b7742bbc3f1fc242f89f0bd5fa427b6b0e992106791c257822ff03e4b9
+- snapshots/shutdown_cancel_result_dark_80x24.txt 5284415a50201899215b7b4639786d8bd441d4a444083ed528f613bee46fa4bd
+- snapshots/unknown_cancel_result_dark_80x24.txt 22e5849ba8999301ea5e73d1e084c9b8dde75bddd20b539c99adea9b901b1e26
+
+unchanged hashes
+- src/app.rs edfaf1abe7ea0dc64066140baf84b0ea1002dd7d37c7f1c3388d7dc897c18b62
+- src/main.rs ab4bf7aa445008e5d13efea219150dc442ab9a015887d4ff92373e641014bb01
+- src/ui/component_tests.rs 5c2e626a2565133a010390905d6c3e2aee355b6b2a9fdf141923ad0aa9b0afc8
+- src/ui/tool.rs 5383ef95421dad5a603f1c9eb11827e1fe5b5365a88f2a44ba7552acf8f1a4bf
+- Cargo.toml 5666ff82804b88e8a98221a7f3a78aa736d53db2c946b605f04d8c150b8d3a33
+- Cargo.lock 40a638f2ef3b3192ee1731796c77a6dcf018d95f66f817ef191eb3b6182e01de
+
+RED/GREEN
+- revised baseline RED: exit=101; current final test lacked MINICORE header while old history was active
+- stable revised focused GREEN: 1 passed, 0 failed
+- MSRV revised focused GREEN: 1 passed, 0 failed
+- final focused flow: existing non-empty history -> /new -> form -> session.create ACK -> state -> history(empty) -> TestBackend title/help visible -> live pending user text -> header suppressed
+
+quality
+- stable all-targets: 468 passed, 0 failed, 18 ignored
+- MSRV 1.85.0 all-targets: 468 passed, 0 failed, 18 ignored
+- stable fmt --check: exit=0
+- MSRV fmt --check: exit=0
+- stable strict Clippy: exit=0
+- MSRV strict Clippy: exit=101; four pre-existing diagnostics only: src/ui/editor_layout.rs:283-284, src/ui/rail.rs:177, src/markdown.rs:817
+- stable rustdoc with RUSTDOCFLAGS=-D warnings: exit=0
+- MSRV rustdoc with RUSTDOCFLAGS=-D warnings: exit=0
+- stable final serialized Agent E2E: 17 passed, 0 failed
+- MSRV Agent E2E: 17 passed, 0 failed
+- the initial cross-toolchain parallel stable E2E log had two pacing failures; the required serialized stable rerun passed
+
+integrity
+- snapshot manifest differs from baseline in exactly 7 listed files
+- snapshot CRLF files: []
+- trailing whitespace in changed source/snapshots: []
