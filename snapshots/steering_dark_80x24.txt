@@ -1,21 +1,21 @@
  ▎ time pending
  ▎
-                                                                               █
-  Streaming content                                                            █
-                                                                               █
- ▎thinking hard                                                                █
-                                                                               █
- ▎ read                                                                        █
- ▎ read                                                                        █
-                                                                               █
-  more                                                                         █
-                                                                               █
- ▎                                                                             █
- ▎ ↪ Focus on memory safety instead                                            █
- ▎ time pending                                                                █
- ▎                                                                             █
-  ⠸ applied                                                                    █
-                                                                               █
+
+  Streaming content
+
+ ▎thinking hard
+
+ ▎ read
+ ▎ read
+
+  more
+
+ ▎
+ ▎ ↪ Focus on memory safety instead
+ ▎ time pending
+ ▎
+  ⠸ applied
+
  ⠋ Running read…
  ▎
  ▎

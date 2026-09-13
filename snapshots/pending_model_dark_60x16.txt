@@ -1,12 +1,12 @@
   Streaming content
 
  ▎thinking hard
-                                                           █
- ▎ read                                                    █
- ▎ read                                                    █
-                                                           █
-  more                                                     █
-                                                           █
+
+ ▎ read
+ ▎ read
+
+  more
+
  ⠋ Running read…
  Saved · applies at next model request (rev 2)
  ▎

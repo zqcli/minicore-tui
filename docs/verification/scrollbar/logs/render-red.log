@@ -1,0 +1,24 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-scrollbar.1ulnCV)
+    Finished `test` profile [optimized + debuginfo] target(s) in 29.89s
+     Running unittests src/lib.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 1 test
+test ui::scrollbar::tests::pi_fullscreen_track_and_inactive_thumb ... FAILED
+
+failures:
+
+---- ui::scrollbar::tests::pi_fullscreen_track_and_inactive_thumb stdout ----
+
+thread 'ui::scrollbar::tests::pi_fullscreen_track_and_inactive_thumb' (1593872) panicked at src/ui/scrollbar.rs:142:9:
+assertion `left == right` failed
+  left: " "
+ right: "│"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ui::scrollbar::tests::pi_fullscreen_track_and_inactive_thumb
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 383 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

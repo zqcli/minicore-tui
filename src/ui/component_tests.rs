@@ -1739,10 +1739,10 @@ fn scrollbar_drag_body_follows_before_release() {
     let total = prepared.total_rows();
     let visible = transcript::visible_rows(&app, total, screen.transcript.height);
     let current = total.saturating_sub(visible);
-    let geometry = crate::ui::scrollbar::geometry(screen.transcript, total, visible, current)
+    let geometry = crate::ui::scrollbar::geometry(screen.transcript, total, current)
         .expect("tool transcript overflows");
     let view_offset_before = app.active_view().unwrap().scroll.offset;
-    let view_follow_before = app.active_view().unwrap().scroll.follow_tail;
+    assert!(app.active_view().unwrap().scroll.follow_tail);
     let down = |kind, row| {
         AppEvent::Terminal(CrosstermEvent::Mouse(MouseEvent {
             kind,
@@ -1763,10 +1763,7 @@ fn scrollbar_drag_body_follows_before_release() {
         .expect("pending offset");
     assert_eq!(pending, 0);
     assert_eq!(app.active_view().unwrap().scroll.offset, view_offset_before);
-    assert_eq!(
-        app.active_view().unwrap().scroll.follow_tail,
-        view_follow_before
-    );
+    assert!(!app.active_view().unwrap().scroll.follow_tail);
     assert!(
         buffer_lines(&draw(&app, 80, 24))
             .iter()
@@ -3843,7 +3840,7 @@ fn new_output_marker_renders_when_scrolled_away() {
 }
 
 #[test]
-fn new_output_marker_gets_its_own_row_without_overwriting_transcript() {
+fn new_output_marker_overlays_without_reducing_viewport() {
     let mut app = testapp::scrolled(ThemeKind::Dark);
     let all = transcript::all_lines(&Theme::dark(), &app, 80);
     let total = all.len();
@@ -3858,36 +3855,85 @@ fn new_output_marker_gets_its_own_row_without_overwriting_transcript() {
         .position(|row| row.contains("↓ new output"))
         .expect("scrolled transcript shows the new-output marker");
     assert!(rows[marker_row].contains("↓ new output"));
-    assert!(!rows[marker_row].contains("wisdom"));
+    let screen = layout::screen_layout(&app, Rect::new(0, 0, 80, 24));
+    let prepared = transcript::prepare_conversation(&app, screen.content.width);
+    let position = transcript::scroll_position(
+        &app,
+        prepared.total_rows(),
+        screen.transcript.height as usize,
+    );
+    let mut underlay = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    underlay
+        .draw(|frame| {
+            frame.render_widget(
+                ratatui::widgets::Paragraph::new(
+                    prepared
+                        .lines
+                        .iter()
+                        .skip(position.offset)
+                        .take(position.visible_rows)
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                ),
+                screen.transcript,
+            )
+        })
+        .unwrap();
+    let overlay = transcript::marker_area(screen.transcript, "↓ new output", false);
+    for column in screen.transcript.x..screen.transcript.right() {
+        if !overlay.contains((column, marker_row as u16).into()) {
+            assert_eq!(
+                terminal
+                    .backend()
+                    .buffer()
+                    .cell((column, marker_row as u16))
+                    .unwrap()
+                    .symbol(),
+                underlay
+                    .backend()
+                    .buffer()
+                    .cell((column, marker_row as u16))
+                    .unwrap()
+                    .symbol()
+            );
+        }
+    }
 
     assert_eq!(transcript::total_lines(&app, 80), total);
     assert_eq!(
         transcript::visible_rows(&app, total, 17),
-        16,
-        "the marker consumes one transcript row"
+        17,
+        "the marker must not change scroll geometry"
     );
     assert!(
         all.iter()
             .any(|line| line_text(line).contains("quoted wisdom")),
         "the covered transcript body remains available to scrolling"
     );
-    let marker_cells =
-        &terminal.backend().buffer().content()[marker_row * 80..(marker_row + 1) * 80];
+    let marker_area = transcript::marker_area(
+        Rect::new(1, marker_row as u16, 79, 1),
+        "↓ new output",
+        false,
+    );
+    let marker_cells = &terminal.backend().buffer().content()
+        [marker_row * 80 + marker_area.x as usize..marker_row * 80 + marker_area.right() as usize];
     assert!(
         marker_cells
             .iter()
             .all(|cell| cell.bg == Theme::dark().page_bg),
-        "the marker row clears the transcript background"
+        "only the indicator cells replace the transcript background"
     );
 
-    app.update(AppEvent::Terminal(crossterm::event::Event::Mouse(
-        crossterm::event::MouseEvent {
-            kind: crossterm::event::MouseEventKind::ScrollDown,
-            column: 0,
-            row: 0,
-            modifiers: crossterm::event::KeyModifiers::empty(),
-        },
-    )));
+    for _ in 0..3 {
+        app.update(AppEvent::Terminal(crossterm::event::Event::Mouse(
+            crossterm::event::MouseEvent {
+                kind: crossterm::event::MouseEventKind::ScrollDown,
+                column: 0,
+                row: 0,
+                modifiers: crossterm::event::KeyModifiers::empty(),
+            },
+        )));
+    }
     assert!(
         buffer_lines(&draw(&app, 80, 24))
             .iter()
@@ -3897,7 +3943,7 @@ fn new_output_marker_gets_its_own_row_without_overwriting_transcript() {
 }
 
 #[test]
-fn end_resumes_follow_after_marker_reservation() {
+fn end_resumes_follow_with_marker_overlay() {
     let mut app = testapp::scrolled(ThemeKind::Dark);
     let total = transcript::total_lines(&app, 80);
     app.update(AppEvent::Viewport {

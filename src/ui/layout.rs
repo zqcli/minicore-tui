@@ -12,6 +12,39 @@ use crate::state::selection::Dock;
 pub const MIN_WIDTH: u16 = 60;
 pub const MIN_HEIGHT: u16 = 16;
 
+/// Clear only graphemes straddling an overlay edge, retaining their background.
+pub(crate) fn clear_wide_overlay_edges(buffer: &mut ratatui::buffer::Buffer, area: Rect) {
+    if area.width == 0 {
+        return;
+    }
+    for row in area.y..area.bottom() {
+        let background = area.x.checked_sub(1).and_then(|column| {
+            let cell = buffer.cell_mut((column, row))?;
+            if unicode_width::UnicodeWidthStr::width(cell.symbol()) <= 1 {
+                return None;
+            }
+            let background = cell.bg;
+            cell.set_symbol(" ")
+                .set_style(Style::reset().bg(background));
+            Some(background)
+        });
+        if let Some(background) = background {
+            if let Some(cell) = buffer.cell_mut((area.x, row)) {
+                cell.set_bg(background);
+            }
+        }
+        let background = buffer.cell((area.right() - 1, row)).and_then(|cell| {
+            (unicode_width::UnicodeWidthStr::width(cell.symbol()) > 1).then_some(cell.bg)
+        });
+        if let Some(background) = background {
+            if let Some(cell) = buffer.cell_mut((area.right(), row)) {
+                cell.set_symbol(" ")
+                    .set_style(Style::reset().bg(background));
+            }
+        }
+    }
+}
+
 pub fn is_too_small(area: Rect) -> bool {
     area.width < MIN_WIDTH || area.height < MIN_HEIGHT
 }

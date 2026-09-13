@@ -1,22 +1,22 @@
-
-  A substantial assistant reply for block 21 with enough text to wrap over sever
-  al rows.
-
- ▎
- ▎ a user turn
- ▎ time unavailable
- ▎
-
-  A substantial assistant reply for block 22 with enough text to wrap over sever
-  al rows.
-
- ▎
- ▎ a user turn
- ▎ time unavailable
- ▎
-
-  A substantial assistant reply for block 23 with enough text to wrap over seve█
- ↓ new output                                                                  █
+  A substantial assistant reply for block 21 with enough text to wrap over seve│
+  al rows.                                                                     │
+                                                                               │
+ ▎                                                                             │
+ ▎ a user turn                                                                 │
+ ▎ time unavailable                                                            │
+ ▎                                                                             │
+                                                                               │
+  A substantial assistant reply for block 22 with enough text to wrap over seve│
+  al rows.                                                                     │
+                                                                               │
+ ▎                                                                             │
+ ▎ a user turn                                                                 │
+ ▎ time unavailable                                                            │
+ ▎                                                                             │
+                                                                               │
+  A substantial assistant reply for block 23 with enough text to wrap over seve│
+  al rows.                                                                     ┃
+                                  ↓ new output                                 ┃
  ▎
  ▎
  ▎

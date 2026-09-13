@@ -616,13 +616,16 @@ fn rust_slash_enter_states_match_the_fixed_native_editor() {
 }
 
 #[test]
-fn rust_scrollbar_cells_match_the_fixed_reference_positions_and_color() {
-    for (fixture_name, scroll_top) in [
-        ("scrollbar/thumb-top.json", 0),
-        ("scrollbar/thumb-mid.json", 10),
-        ("scrollbar/thumb-bottom.json", 80),
-    ] {
-        let source = fixture(fixture_name);
+fn rust_scrollbar_cells_match_pi_0851_positions_glyphs_and_colors() {
+    let source: Value =
+        serde_json::from_str(include_str!("fixtures/pi-scrollbar-0.85.1.json")).unwrap();
+    assert_eq!(source["version"], "0.85.1");
+    for rendering in source["renderings"].as_array().unwrap() {
+        let theme = if rendering["theme"] == "dark" {
+            Theme::dark()
+        } else {
+            Theme::light()
+        };
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal
             .draw(|frame| {
@@ -630,14 +633,14 @@ fn rust_scrollbar_cells_match_the_fixed_reference_positions_and_color() {
                     frame,
                     Rect::new(0, 0, 80, 20),
                     100,
-                    20,
-                    scroll_top,
-                    &Theme::dark(),
+                    rendering["offset"].as_u64().unwrap() as usize,
+                    &theme,
+                    rendering["active"].as_bool().unwrap(),
                 );
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
-        for (row, source_row) in source["rows"].as_array().unwrap().iter().enumerate() {
+        for (row, source_row) in rendering["rows"].as_array().unwrap().iter().enumerate() {
             let actual = buffer
                 .content()
                 .chunks(80)
@@ -646,18 +649,22 @@ fn rust_scrollbar_cells_match_the_fixed_reference_positions_and_color() {
                 .iter()
                 .map(|cell| cell.symbol())
                 .collect::<String>();
+            let expected = source_row.as_str().unwrap();
+            assert_eq!(actual, expected, "{rendering} row {row}");
+            let kind = if expected.ends_with('│') {
+                "track"
+            } else {
+                "thumb"
+            };
+            let rgb = &rendering["colors"][kind];
             assert_eq!(
-                actual,
-                source_row_text(source_row),
-                "{fixture_name} row {row}"
+                buffer.cell((79, row as u16)).unwrap().fg,
+                Color::Rgb(
+                    rgb[0].as_u64().unwrap() as u8,
+                    rgb[1].as_u64().unwrap() as u8,
+                    rgb[2].as_u64().unwrap() as u8
+                )
             );
-            if source_row_text(source_row).ends_with('█') {
-                assert_eq!(
-                    buffer.cell((79, row as u16)).unwrap().fg,
-                    Color::Rgb(137, 180, 250),
-                    "{fixture_name} thumb color at row {row}"
-                );
-            }
         }
     }
 }

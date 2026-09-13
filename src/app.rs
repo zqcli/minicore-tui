@@ -165,11 +165,6 @@ struct SelectorClick {
 struct ScrollbarDrag {
     session_id: String,
     grab_offset: usize,
-    pending_offset: usize,
-    pending_row: u16,
-    visible_rows: usize,
-    marker: bool,
-    geometry: crate::ui::scrollbar::ScrollbarGeometry,
 }
 
 /// Why a request was issued; `pending_requests` routes each response to the
@@ -338,6 +333,7 @@ pub struct App {
     panel_click: Option<PanelClick>,
     selector_click: Option<SelectorClick>,
     scrollbar_drag: Option<ScrollbarDrag>,
+    scrollbar: crate::ui::scrollbar::ScrollbarState,
     selection_drag: Option<SelectionDrag>,
     editor_selection: Option<EditorSelection>,
     /// The single prepared conversation snapshot shared by measurement,
@@ -512,6 +508,7 @@ impl App {
             panel_click: None,
             selector_click: None,
             scrollbar_drag: None,
+            scrollbar: crate::ui::scrollbar::ScrollbarState::default(),
             selection_drag: None,
             editor_selection: None,
             prepared_conversation: None,
@@ -603,6 +600,10 @@ impl App {
                 .map(|deadline| deadline.saturating_duration_since(now))
                 .unwrap_or(SPINNER_INTERVAL);
             earliest = Some(remaining);
+        }
+        if let Some(deadline) = self.scrollbar.hide_at {
+            let remaining = deadline.saturating_duration_since(now);
+            earliest = Some(earliest.map_or(remaining, |e| e.min(remaining)));
         }
         for notice in &self.notices {
             if !notice.sticky {
@@ -718,13 +719,57 @@ impl App {
             self.dirty = false;
             return Vec::new();
         }
-        if matches!(&event, AppEvent::Terminal(CrosstermEvent::Mouse(mouse))
-            if mouse.kind == crossterm::event::MouseEventKind::Moved)
-            || matches!(&event, AppEvent::Viewport { total_lines, visible_rows }
-                if (*total_lines, *visible_rows) == self.viewport)
+        if let AppEvent::Terminal(CrosstermEvent::Mouse(mouse)) = &event {
+            if mouse.kind == crossterm::event::MouseEventKind::Moved {
+                if self.scrollbar_drag.is_some() && self.scrollbar_allowed() {
+                    let before = self.scroll_visual_state();
+                    self.update_scrollbar_drag(mouse.row);
+                    self.dirty |= before != self.scroll_visual_state();
+                } else {
+                    self.dirty |= self.update_scrollbar_hover(mouse.column, mouse.row);
+                }
+                return Vec::new();
+            }
+        }
+        if matches!(&event, AppEvent::Viewport { total_lines, visible_rows }
+            if (*total_lines, *visible_rows) == self.viewport)
         {
             return Vec::new();
         }
+        let queues_empty = self
+            .sessions
+            .known
+            .values()
+            .all(|view| view.steer_queue.is_empty());
+        let idle_tick_before = if queues_empty
+            && matches!(&event, AppEvent::Tick)
+            && !self.spinner_active()
+            && self.selection_drag.is_none()
+            && self.notices.is_empty()
+            && self.ctrl_c_at.is_none()
+            && self.selection_copied_until.is_none()
+        {
+            Some((self.dirty, self.scrollbar.hide_at))
+        } else {
+            None
+        };
+        let scroll_visual_before = if (matches!(&event, AppEvent::Terminal(CrosstermEvent::Key(key))
+            if matches!(keymap::map(self, *key), Action::ScrollRows(_) | Action::ScrollWindow(_) | Action::ScrollTop | Action::ScrollBottom))
+            || matches!(&event,
+            AppEvent::Terminal(CrosstermEvent::Mouse(mouse))
+                if matches!(mouse.kind, crossterm::event::MouseEventKind::ScrollUp | crossterm::event::MouseEventKind::ScrollDown)
+                    || (mouse.kind == crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left) && self.scrollbar_drag.is_some())))
+            && queues_empty
+            && matches!(self.dock, Dock::Composer)
+            && self.selection.is_none()
+            && self.editor_selection.is_none()
+            && self.selection_drag.is_none()
+            && !self.selection_copied()
+        {
+            Some((self.dirty, self.scroll_visual_state()))
+        } else {
+            None
+        };
         let reuse_layout = match &event {
             AppEvent::ConversationPrepared(_) | AppEvent::Tick | AppEvent::Viewport { .. } => true,
             AppEvent::Terminal(
@@ -762,7 +807,9 @@ impl App {
             self.prepared_conversation = None;
         }
         // Hit tests in one mouse event share the same immutable preparation.
-        if matches!(&event, AppEvent::Terminal(CrosstermEvent::Mouse(_))) {
+        if matches!(&event, AppEvent::Terminal(CrosstermEvent::Mouse(mouse))
+            if !matches!(mouse.kind, crossterm::event::MouseEventKind::ScrollUp | crossterm::event::MouseEventKind::ScrollDown))
+        {
             let width = self.terminal_content_width();
             if self.prepared_conversation(width).is_none() {
                 let prepared = crate::ui::transcript::prepare_conversation(self, width);
@@ -806,6 +853,13 @@ impl App {
             AppEvent::ShutdownRequested => self.request_shutdown(),
             AppEvent::Tick => {
                 let now = self.instant_now();
+                if self
+                    .scrollbar
+                    .hide_at
+                    .is_some_and(|deadline| deadline <= now)
+                {
+                    self.scrollbar.hide_at = None;
+                }
                 if self.spinner_active()
                     && self
                         .spinner_next_due
@@ -917,17 +971,14 @@ impl App {
                 total_lines,
                 visible_rows,
             } => {
-                if self.scrollbar_drag.is_some() {
+                self.viewport = (total_lines, visible_rows);
+                if total_lines <= visible_rows {
                     ui_actions::cancel_scrollbar_drag(self);
                 }
-                self.viewport = (total_lines, visible_rows);
                 self.clamp_transcript_scroll();
                 Vec::new()
             }
             AppEvent::TerminalSize { width, height } => {
-                if self.terminal_size != (width, height) && self.scrollbar_drag.is_some() {
-                    ui_actions::cancel_scrollbar_drag(self);
-                }
                 self.terminal_size = (width, height);
                 Vec::new()
             }
@@ -954,6 +1005,12 @@ impl App {
         if header_visible_before != crate::ui::header::visible(self) {
             self.prepared_conversation = None;
         }
+        if !self.scrollbar_allowed() {
+            if self.scrollbar_drag.take().is_some() {
+                self.mouse_down = None;
+            }
+            self.scrollbar = crate::ui::scrollbar::ScrollbarState::default();
+        }
         // Central FIFO queue advance: after any event, at most one steer RPC
         // per session (or a fresh-turn fallback once a finished loop settles).
         // Do not advance on the event that starts or finishes a reload: the
@@ -968,6 +1025,12 @@ impl App {
             commands.extend(advance);
         }
         self.sync_spinner_deadline();
+        if let Some((was_dirty, before)) = scroll_visual_before {
+            self.dirty = was_dirty || before != self.scroll_visual_state() || !commands.is_empty();
+        }
+        if let Some((was_dirty, deadline)) = idle_tick_before {
+            self.dirty = was_dirty || deadline != self.scrollbar.hide_at || !commands.is_empty();
+        }
         commands
     }
 
@@ -1024,14 +1087,48 @@ impl App {
         self.scrollbar_drag
             .as_ref()
             .filter(|drag| drag.session_id == session_id)
-            .map(|drag| drag.pending_offset)
+            .and_then(|_| self.active_view())
+            .map(|view| {
+                if view.scroll.follow_tail {
+                    self.viewport.0.saturating_sub(self.viewport.1)
+                } else {
+                    view.scroll.offset
+                }
+            })
     }
 
-    pub(crate) fn scrollbar_drag_preview(&self, session_id: &str) -> Option<(usize, usize, bool)> {
-        self.scrollbar_drag
-            .as_ref()
-            .filter(|drag| drag.session_id == session_id)
-            .map(|drag| (drag.pending_offset, drag.visible_rows, drag.marker))
+    pub(crate) fn scrollbar_visible(&self, total: usize, height: usize) -> bool {
+        self.scrollbar_allowed()
+            && self.active_view().is_some()
+            && total > height
+            && height > 0
+            && self.scrollbar.visible(self.instant_now())
+    }
+
+    pub(crate) fn scrollbar_active(&self) -> bool {
+        self.scrollbar.active
+    }
+
+    fn scrollbar_allowed(&self) -> bool {
+        matches!(self.dock, Dock::Composer | Dock::Help | Dock::Logs)
+    }
+
+    fn scroll_visual_state(&self) -> Option<(usize, bool, bool, bool, bool)> {
+        self.active_view().map(|view| {
+            (
+                view.scroll.offset,
+                view.scroll.follow_tail,
+                view.scroll.new_content,
+                self.scrollbar_visible(self.viewport.0, self.viewport.1),
+                self.scrollbar.active,
+            )
+        })
+    }
+
+    fn mark_scrollbar_activity(&mut self, total: usize, visible: usize) {
+        if total > visible {
+            self.scrollbar.activity(self.instant_now());
+        }
     }
 
     pub(crate) fn install_conversation(&mut self, prepared: PreparedConversation) {
@@ -2920,8 +3017,8 @@ impl App {
                 if matches!(self.dock, Dock::Help | Dock::Logs) {
                     self.panel_scroll_page(delta)
                 } else {
-                    let visible = self.viewport.1.max(1) as i32;
-                    self.scroll_focused(delta * visible)
+                    let step = self.transcript_scroll_extent().1.saturating_sub(4).max(1) as i32;
+                    self.scroll_focused(delta.saturating_mul(step))
                 }
             }
             ScrollTop => self.scroll_top_focused(),
@@ -3035,66 +3132,71 @@ impl App {
     /// explicit offset from the top; positive deltas return toward the
     /// tail and restore follow at the bottom (spec 32, 43.8).
     fn transcript_scroll(&mut self, delta: i32) {
-        if self.scrollbar_drag.is_some() {
-            ui_actions::cancel_scrollbar_drag(self);
+        if delta == 0 {
+            return;
         }
-        let Some(active) = self.sessions.active.clone() else {
-            return;
-        };
-        let Some(view) = self.sessions.known.get_mut(&active) else {
-            return;
-        };
-        let (total, visible) = self.viewport;
-        let visible = visible.max(1);
+        let (total, visible) = self.transcript_scroll_extent();
         let max_offset = total.saturating_sub(visible);
-        if delta < 0 {
-            let amount = delta.unsigned_abs();
-            let anchor = if view.scroll.follow_tail {
-                max_offset
-            } else {
-                view.scroll.offset
-            };
-            view.scroll.follow_tail = false;
-            view.scroll.offset = anchor.saturating_sub(amount as usize);
+        let Some(view) = self.active_view() else {
+            return;
+        };
+        let current = if view.scroll.follow_tail {
+            max_offset
         } else {
-            let current = if view.scroll.follow_tail {
-                max_offset
-            } else {
-                view.scroll.offset
-            };
-            let next = current.saturating_add(delta as usize);
-            if next >= max_offset {
-                view.scroll.follow_tail = true;
-                view.scroll.offset = 0;
-                view.scroll.new_content = false;
-            } else {
-                view.scroll.follow_tail = false;
-                view.scroll.offset = next;
-            }
+            view.scroll.offset.min(max_offset)
+        };
+        let next = if delta < 0 {
+            current.saturating_sub(delta.unsigned_abs() as usize)
+        } else {
+            current.saturating_add(delta as usize).min(max_offset)
+        };
+        self.set_transcript_offset(next, total, visible);
+    }
+
+    fn set_transcript_offset(&mut self, offset: usize, total: usize, visible: usize) {
+        let maximum = total.saturating_sub(visible);
+        let offset = offset.min(maximum);
+        let Some(view) = self.active_session_mut() else {
+            return;
+        };
+        let current = if view.scroll.follow_tail {
+            maximum
+        } else {
+            view.scroll.offset
+        };
+        let moved = current != offset;
+        view.scroll.follow_tail = offset == maximum;
+        view.scroll.offset = if view.scroll.follow_tail { 0 } else { offset };
+        if view.scroll.follow_tail {
+            view.scroll.new_content = false;
+        }
+        if moved {
+            self.mark_scrollbar_activity(total, visible);
         }
     }
 
     fn transcript_scroll_top(&mut self) -> Vec<AppCommand> {
-        if self.scrollbar_drag.is_some() {
-            ui_actions::cancel_scrollbar_drag(self);
-        }
-        if let Some(view) = self.active_session_mut() {
-            view.scroll.follow_tail = false;
-            view.scroll.offset = 0;
-        }
+        let (total, visible) = self.transcript_scroll_extent();
+        self.set_transcript_offset(0, total, visible);
         Vec::new()
     }
 
     fn transcript_scroll_bottom(&mut self) -> Vec<AppCommand> {
-        if self.scrollbar_drag.is_some() {
-            ui_actions::cancel_scrollbar_drag(self);
-        }
-        if let Some(view) = self.active_session_mut() {
-            view.scroll.follow_tail = true;
-            view.scroll.offset = 0;
-            view.scroll.new_content = false;
-        }
+        let (total, visible) = self.transcript_scroll_extent();
+        self.set_transcript_offset(total.saturating_sub(visible), total, visible);
         Vec::new()
+    }
+
+    fn transcript_scroll_extent(&self) -> (usize, usize) {
+        let screen = crate::ui::layout::screen_layout(
+            self,
+            ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1),
+        );
+        self.prepared_conversation(screen.content.width)
+            .map(|prepared| (prepared.total_rows(), screen.transcript.height as usize))
+            // Like Pi's currentLayout, the last measurement remains usable until
+            // the next preparation; pointer motion does not rebuild history.
+            .unwrap_or(self.viewport)
     }
 
     /// Clamps the stored offset after a geometry/content change and marks
@@ -3104,6 +3206,7 @@ impl App {
         let (total, visible) = self.viewport;
         let grew = total > self.last_total;
         self.last_total = total;
+        let suppress_follow = self.selection.is_some();
         if let Some(view) = self.active_session_mut() {
             if grew && !view.scroll.follow_tail {
                 view.scroll.new_content = true;
@@ -3111,6 +3214,11 @@ impl App {
             let max_offset = total.saturating_sub(visible);
             if !view.scroll.follow_tail {
                 view.scroll.offset = view.scroll.offset.min(max_offset);
+                if view.scroll.offset == max_offset && !suppress_follow {
+                    view.scroll.follow_tail = true;
+                    view.scroll.offset = 0;
+                    view.scroll.new_content = false;
+                }
             }
         }
     }
@@ -10001,6 +10109,9 @@ fn merge_history_items(view: &mut SessionView, items: &[IndexedHistoryItemWire])
 }
 
 #[cfg(test)]
+mod scrollbar_tests;
+
+#[cfg(test)]
 mod tests {
     use crossterm::event::MouseEventKind;
     use serde_json::{Value, json};
@@ -12927,10 +13038,12 @@ mod tests {
         let elapsed = Arc::new(AtomicU64::new(0));
         let clock = Arc::clone(&elapsed);
         let base = Instant::now();
-        let mut app = crate::ui::testapp::new_output_marker(ThemeKind::Dark);
+        let mut app = crate::ui::testapp::tools(ThemeKind::Dark);
         app.monotonic_now =
             Arc::new(move || base + Duration::from_millis(clock.load(Ordering::Relaxed)));
         app.terminal_size = (80, 24);
+        app.active_session_mut().unwrap().scroll.follow_tail = false;
+        app.active_session_mut().unwrap().scroll.offset = 0;
         app.active_session_mut()
             .unwrap()
             .state
@@ -13010,10 +13123,12 @@ mod tests {
         let elapsed = Arc::new(AtomicU64::new(0));
         let clock = Arc::clone(&elapsed);
         let base = Instant::now();
-        let mut app = crate::ui::testapp::new_output_marker(ThemeKind::Dark);
+        let mut app = crate::ui::testapp::tools(ThemeKind::Dark);
         app.monotonic_now =
             Arc::new(move || base + Duration::from_millis(clock.load(Ordering::Relaxed)));
         app.terminal_size = (80, 24);
+        app.active_session_mut().unwrap().scroll.follow_tail = false;
+        app.active_session_mut().unwrap().scroll.offset = 0;
         app.active_session_mut()
             .unwrap()
             .state
@@ -13095,7 +13210,7 @@ mod tests {
     }
 
     #[test]
-    fn marker_row_is_not_a_conversation_link_or_fold_target() {
+    fn marker_overlay_leaves_uncovered_links_and_blocks_its_own_cells() {
         let mut app = crate::ui::testapp::chat(ThemeKind::Dark);
         app.terminal_size = (80, 24);
         let screen =
@@ -13120,8 +13235,13 @@ mod tests {
         let marker_row = screen.transcript.bottom().saturating_sub(1);
         let column = screen.content.x + link_cell as u16;
         assert!(
+            app.pressed_cell_is_link(column, marker_row),
+            "uncovered link remains interactive"
+        );
+        let column = crate::ui::transcript::marker_area(screen.transcript, "↓ new output", false).x;
+        assert!(
             !app.pressed_cell_is_link(column, marker_row),
-            "the marker row is not a markdown link cell"
+            "the indicator itself is not a markdown link cell"
         );
         let tool_folds = app.active_view().unwrap().tool_folds.clone();
         let reasoning_folds = app.active_view().unwrap().reasoning_folds.clone();
@@ -13135,7 +13255,7 @@ mod tests {
         )));
         assert!(
             app.selection.is_none(),
-            "the marker row cannot start selection"
+            "the indicator cannot start selection"
         );
         app.update(AppEvent::Terminal(CrosstermEvent::Mouse(
             crossterm::event::MouseEvent {
@@ -13166,7 +13286,7 @@ mod tests {
         app.active_session_mut().unwrap().scroll.offset = tool.rows.start - budget;
         app.active_session_mut().unwrap().scroll.new_content = true;
         let marker_row = screen.transcript.bottom().saturating_sub(1);
-        let column = screen.content.x + tool.content_columns.start as u16;
+        let column = crate::ui::transcript::marker_area(screen.transcript, "↓ new output", false).x;
         let before = app.active_view().unwrap().tool_folds.clone();
 
         app.update(AppEvent::Terminal(CrosstermEvent::Mouse(
@@ -13225,7 +13345,7 @@ mod tests {
     }
 
     #[test]
-    fn scrollbar_drag_requires_release_and_cancels_on_focus_or_resize() {
+    fn scrollbar_drag_is_live_and_cancellation_keeps_applied_position() {
         use std::sync::atomic::{AtomicU64, Ordering};
 
         let elapsed = Arc::new(AtomicU64::new(0));
@@ -13247,9 +13367,8 @@ mod tests {
                 view.scroll.offset
             }
         });
-        let geometry =
-            crate::ui::scrollbar::geometry(screen.transcript, total, visible.max(1), current)
-                .expect("overflowing transcript has a scrollbar");
+        let geometry = crate::ui::scrollbar::geometry(screen.transcript, total, current)
+            .expect("overflowing transcript has a scrollbar");
 
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
         app.update_scrollbar_drag((geometry.track_top + geometry.max_thumb_start / 2) as u16);
@@ -13260,7 +13379,7 @@ mod tests {
             app.active_view().unwrap().scroll.offset,
             app.active_view().unwrap().scroll.follow_tail,
         );
-        assert_eq!(app.active_view().unwrap().scroll.offset, 0);
+        assert_eq!(app.active_view().unwrap().scroll.offset, preview);
         elapsed.store(999, Ordering::Relaxed);
         app.update(AppEvent::Tick);
         assert!(app.scrollbar_preview_offset("ses_1").is_some());
@@ -13285,9 +13404,8 @@ mod tests {
         } else {
             view.scroll.offset
         };
-        let geometry =
-            crate::ui::scrollbar::geometry(screen.transcript, total, visible.max(1), current)
-                .expect("scrollbar remains available");
+        let geometry = crate::ui::scrollbar::geometry(screen.transcript, total, current)
+            .expect("scrollbar remains available");
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
         app.update_scrollbar_drag((geometry.track_top + geometry.max_thumb_start) as u16);
         app.update(AppEvent::Terminal(CrosstermEvent::FocusLost));
@@ -13297,7 +13415,7 @@ mod tests {
                 app.active_view().unwrap().scroll.offset,
                 app.active_view().unwrap().scroll.follow_tail,
             ),
-            (preview, false)
+            (0, true)
         );
         app.update(AppEvent::Terminal(CrosstermEvent::Mouse(
             crossterm::event::MouseEvent {
@@ -13312,28 +13430,31 @@ mod tests {
                 app.active_view().unwrap().scroll.offset,
                 app.active_view().unwrap().scroll.follow_tail,
             ),
-            (preview, false),
-            "a late mouse-up after focus cancellation must not commit the pending drag"
+            (0, true),
+            "a late mouse-up after focus cancellation must not change the applied position"
         );
 
+        let geometry =
+            crate::ui::scrollbar::geometry(screen.transcript, total, total.saturating_sub(visible))
+                .unwrap();
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
         app.update_scrollbar_drag((geometry.track_top + geometry.max_thumb_start) as u16);
         app.update(AppEvent::TerminalSize {
             width: 81,
             height: 24,
         });
-        assert!(app.scrollbar_preview_offset("ses_1").is_none());
+        assert!(app.scrollbar_preview_offset("ses_1").is_some());
         assert_eq!(
             (
                 app.active_view().unwrap().scroll.offset,
                 app.active_view().unwrap().scroll.follow_tail,
             ),
-            (preview, false)
+            (0, true)
         );
     }
 
     #[test]
-    fn scrollbar_drag_cancels_before_tail_scroll_and_late_release() {
+    fn scrollbar_tail_scroll_during_capture_is_not_undone_by_release() {
         let mut app = crate::ui::testapp::tools(ThemeKind::Dark);
         app.terminal_size = (80, 24);
         let screen =
@@ -13341,13 +13462,9 @@ mod tests {
         let prepared = crate::ui::transcript::prepare_conversation(&app, screen.content.width);
         let total = prepared.total_rows();
         let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
-        let geometry = crate::ui::scrollbar::geometry(
-            screen.transcript,
-            total,
-            visible.max(1),
-            total.saturating_sub(visible),
-        )
-        .expect("overflowing transcript has a scrollbar");
+        let geometry =
+            crate::ui::scrollbar::geometry(screen.transcript, total, total.saturating_sub(visible))
+                .expect("overflowing transcript has a scrollbar");
 
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
         app.update_scrollbar_drag((geometry.track_top + geometry.max_thumb_start / 2) as u16);
@@ -13357,7 +13474,7 @@ mod tests {
                 crossterm::event::KeyModifiers::CONTROL,
             ),
         )));
-        assert!(app.scrollbar_preview_offset("ses_1").is_none());
+        assert!(app.scrollbar_preview_offset("ses_1").is_some());
         assert_eq!(
             (
                 app.active_view().unwrap().scroll.offset,
@@ -13419,13 +13536,9 @@ mod tests {
         let prepared = crate::ui::transcript::prepare_conversation(&app, screen.content.width);
         let total = prepared.total_rows();
         let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
-        let geometry = crate::ui::scrollbar::geometry(
-            screen.transcript,
-            total,
-            visible.max(1),
-            total.saturating_sub(visible),
-        )
-        .expect("overflowing transcript has a scrollbar");
+        let geometry =
+            crate::ui::scrollbar::geometry(screen.transcript, total, total.saturating_sub(visible))
+                .expect("overflowing transcript has a scrollbar");
         app.update(AppEvent::ConversationPrepared(prepared));
 
         let mouse = |kind, row| {
@@ -13485,13 +13598,9 @@ mod tests {
         let prepared = crate::ui::transcript::prepare_conversation(&app, screen.content.width);
         let total = prepared.total_rows();
         let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
-        let geometry = crate::ui::scrollbar::geometry(
-            screen.transcript,
-            total,
-            visible.max(1),
-            total.saturating_sub(visible),
-        )
-        .expect("overflowing transcript has a scrollbar");
+        let geometry =
+            crate::ui::scrollbar::geometry(screen.transcript, total, total.saturating_sub(visible))
+                .expect("overflowing transcript has a scrollbar");
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
         app.update_scrollbar_drag(geometry.track_top as u16);
 
@@ -13533,13 +13642,9 @@ mod tests {
         let prepared = crate::ui::transcript::prepare_conversation(&app, screen.content.width);
         let total = prepared.total_rows();
         let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
-        let geometry = crate::ui::scrollbar::geometry(
-            screen.transcript,
-            total,
-            visible.max(1),
-            total.saturating_sub(visible),
-        )
-        .expect("overflowing transcript has a scrollbar");
+        let geometry =
+            crate::ui::scrollbar::geometry(screen.transcript, total, total.saturating_sub(visible))
+                .expect("overflowing transcript has a scrollbar");
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
 
         let info: crate::protocol::SessionInfo = serde_json::from_value(serde_json::json!({
@@ -13569,7 +13674,7 @@ mod tests {
     }
 
     #[test]
-    fn scrollbar_drag_cancels_on_a_real_viewport_change() {
+    fn scrollbar_drag_survives_content_viewport_change_without_release_remap() {
         let mut app = crate::ui::testapp::tools(ThemeKind::Dark);
         app.terminal_size = (80, 24);
         let screen =
@@ -13577,13 +13682,9 @@ mod tests {
         let prepared = crate::ui::transcript::prepare_conversation(&app, screen.content.width);
         let total = prepared.total_rows();
         let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
-        let geometry = crate::ui::scrollbar::geometry(
-            screen.transcript,
-            total,
-            visible.max(1),
-            total.saturating_sub(visible),
-        )
-        .expect("overflowing transcript has a scrollbar");
+        let geometry =
+            crate::ui::scrollbar::geometry(screen.transcript, total, total.saturating_sub(visible))
+                .expect("overflowing transcript has a scrollbar");
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
         app.update_scrollbar_drag(geometry.track_top as u16);
         let committed = (
@@ -13595,14 +13696,14 @@ mod tests {
             total_lines: total + 1,
             visible_rows: visible,
         });
-        assert!(app.scrollbar_preview_offset("ses_1").is_none());
+        assert!(app.scrollbar_preview_offset("ses_1").is_some());
         assert_eq!(
             (
                 app.active_view().unwrap().scroll.offset,
                 app.active_view().unwrap().scroll.follow_tail,
             ),
             committed,
-            "viewport cancellation must discard pending state without committing it"
+            "viewport growth must retain the last applied position"
         );
         app.update(AppEvent::Terminal(CrosstermEvent::Mouse(
             crossterm::event::MouseEvent {
@@ -13618,7 +13719,7 @@ mod tests {
                 app.active_view().unwrap().scroll.follow_tail,
             ),
             committed,
-            "a late mouse-up after viewport cancellation must not commit"
+            "mouse-up must not remap the pointer against changed geometry"
         );
     }
 
@@ -13632,9 +13733,8 @@ mod tests {
         let total = prepared.total_rows();
         let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
         let current = total.saturating_sub(visible);
-        let geometry =
-            crate::ui::scrollbar::geometry(screen.transcript, total, visible.max(1), current)
-                .expect("overflowing transcript has a scrollbar");
+        let geometry = crate::ui::scrollbar::geometry(screen.transcript, total, current)
+            .expect("overflowing transcript has a scrollbar");
 
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
         app.update_scrollbar_drag(geometry.track_top as u16);
@@ -13657,13 +13757,9 @@ mod tests {
         let prepared = crate::ui::transcript::prepare_conversation(&app, screen.content.width);
         let total = prepared.total_rows();
         let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
-        let geometry = crate::ui::scrollbar::geometry(
-            screen.transcript,
-            total,
-            visible.max(1),
-            total.saturating_sub(visible),
-        )
-        .expect("overflowing transcript has a scrollbar");
+        let geometry =
+            crate::ui::scrollbar::geometry(screen.transcript, total, total.saturating_sub(visible))
+                .expect("overflowing transcript has a scrollbar");
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
         app.update_scrollbar_drag(geometry.track_top as u16);
         assert_eq!(
@@ -13691,7 +13787,7 @@ mod tests {
     }
 
     #[test]
-    fn scrollbar_wheel_input_cancels_an_uncommitted_drag() {
+    fn scrollbar_wheel_input_preserves_capture_and_release_does_not_undo_it() {
         let mut app = crate::ui::testapp::tools(ThemeKind::Dark);
         app.terminal_size = (80, 24);
         let screen =
@@ -13700,11 +13796,14 @@ mod tests {
         let total = prepared.total_rows();
         let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
         let current = total.saturating_sub(visible);
-        let geometry =
-            crate::ui::scrollbar::geometry(screen.transcript, total, visible.max(1), current)
-                .expect("overflowing transcript has a scrollbar");
+        let geometry = crate::ui::scrollbar::geometry(screen.transcript, total, current)
+            .expect("overflowing transcript has a scrollbar");
 
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
+        app.update(AppEvent::Viewport {
+            total_lines: total,
+            visible_rows: visible,
+        });
         app.update(AppEvent::Terminal(CrosstermEvent::Mouse(
             crossterm::event::MouseEvent {
                 kind: MouseEventKind::ScrollUp,
@@ -13714,9 +13813,12 @@ mod tests {
             },
         )));
         assert!(
-            app.scrollbar_preview_offset("ses_1").is_none(),
-            "wheel input must not leave a stale drag to be committed by a later release"
+            app.scrollbar_preview_offset("ses_1").is_some(),
+            "Pi retains scrollbar capture during wheel input"
         );
+        assert_eq!(app.active_view().unwrap().scroll.offset, current - 1);
+        app.finish_scrollbar_drag(geometry.track_top as u16);
+        assert_eq!(app.active_view().unwrap().scroll.offset, current - 1);
     }
 
     #[test]

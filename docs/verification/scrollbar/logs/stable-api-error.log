@@ -1,0 +1,36 @@
+cwd=/root/minicore-scrollbar.1ulnCV
+command=rustup run stable cargo test -j4 --locked --offline --all-targets 
+   Compiling minicore-tui v0.2.8 (/root/minicore-scrollbar.1ulnCV)
+error[E0308]: arguments to this function are incorrect
+   --> tests/rail_fixtures.rs:629:17
+    |
+629 |                 minicore_tui::ui::scrollbar::render(
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+634 |                     scroll_top,
+    |                     ---------- unexpected argument #5 of type `{integer}`
+635 |                     &Theme::dark(),
+    |                     -------------- argument #6 of type `bool` is missing
+    |
+note: function defined here
+   --> src/ui/scrollbar.rs:113:8
+    |
+113 | pub fn render(
+    |        ^^^^^^
+help: did you mean
+    |
+629 ~                 minicore_tui::ui::scrollbar::render(
+630 +                     frame,
+631 +                     Rect::new(0, 0, 80, 20),
+632 +                     100,
+633 +                     20,
+634 +                     &Theme::dark(),
+635 +                     /* bool */,
+636 ~                 );
+    |
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `minicore-tui` (test "rail_fixtures") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+
+exit=101

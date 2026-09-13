@@ -1,0 +1,24 @@
+  SCROLL_ROW_044 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_045 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_046 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_047 — synthetic 中文 é example                                    │
+                                                                               ┃
+  SCROLL_ROW_048 — synthetic 中文 é example                                    ┃
+                                                                               │
+  SCROLL_ROW_049 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_050 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_051 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_052 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_053 — synthetic 中↑ scroll position                               │
+ ▎                                                                              
+ ▎                                                                              
+ ▎                                                                              
+ ▎                                                                              
+ ▸ workspace · verify scrollbar · high · ● ready · 0m      ↑10 ↓12 R0 W0 · ctx ?

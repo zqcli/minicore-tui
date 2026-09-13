@@ -1,0 +1,6 @@
+cwd=/root/minicore-scrollbar.1ulnCV
+command=rustup run stable cargo build -j4 --locked --offline 
+   Compiling minicore-tui v0.2.8 (/root/minicore-scrollbar.1ulnCV)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 19.83s
+
+exit=0

@@ -1,0 +1,20 @@
+{
+  "window_id": 76407,
+  "root": "/var/folders/zw/gcpf3t91243dhn6z3bb278s00000gn/T/minicore-native-scrollbar-wxbgveq2",
+  "tui_sha256": "f1a9eb3516e5ed1f9632c1ef4b1fe1cc622aa8545878a30141cc7e9b61e1917e",
+  "agent_sha256": "443b88b385d778a41303540f940718cf85968a375ca0f334437f9ff42c4703e6",
+  "checks": [
+    "auto hide, hover activity, inactive glyph, full-height track",
+    "wheel 1, Alt-wheel 5, PageUp viewport minus 4",
+    "track-center jump and live drag; release coordinates do not remap",
+    "capture survives native resize and uses new geometry",
+    "normal exit restores exact stty state"
+  ],
+  "pixel_parity": "not claimed; native text captures and injected SGR input",
+  "requests": [
+    {
+      "model": "verify-scrollbar"
+    }
+  ],
+  "status": "PASS"
+}

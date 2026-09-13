@@ -1,0 +1,24 @@
+ ▎                                                                             █
+ ▎ scrollbar verification                                                      █
+ ▎ 8:50 PM · 9/13/2026                                                         │
+ ▎                                                                             │
+                                                                               │
+  SCROLL_ROW_000 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_001 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_002 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_003 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_004 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_005 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_006 — synthetic 中文 é example                                    │
+                               ↑ scroll position                               │
+ ▎                                                                              
+ ▎                                                                              
+ ▎                                                                              
+ ▎                                                                              
+ ▸ workspace · verify scrollbar · high · ● ready · 0m      ↑10 ↓12 R0 W0 · ctx ?

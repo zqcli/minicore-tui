@@ -1,0 +1,9 @@
+signature_dataoff=6920000 datasize=54224 signature_end=6974224 file_size=6974224
+ncmds=17 sizeofcmds=2224 load_end=2256 first_text_offset=18640 gap=16384
+minos=11.0
+/tmp/minicore-scrollbar.jB2v84/artifacts/minicore-tui-release: Mach-O 64-bit executable x86_64
+UUID: 4C4C4435-5555-3144-A1C0-17F1C04004C7 (x86_64) /tmp/minicore-scrollbar.jB2v84/artifacts/minicore-tui-release
+nm=passed size=passed dwarfdump=passed
+/tmp/minicore-scrollbar.jB2v84/artifacts/minicore-tui-release: valid on disk
+/tmp/minicore-scrollbar.jB2v84/artifacts/minicore-tui-release: satisfies its Designated Requirement
+codesign=valid

@@ -12,11 +12,11 @@
  ▎ bash
  ▎ bash
  ▎   not allowed
-                                                                               █
- ▎ edit                                                                        █
- ▎ edit                                                                        █
- ▎   edit rejected                                                             █
-                                                                               █
+
+ ▎ edit
+ ▎ edit
+ ▎   edit rejected
+
  ▎
  ▎
  ▎

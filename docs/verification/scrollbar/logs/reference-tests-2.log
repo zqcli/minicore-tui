@@ -1,0 +1,39 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-scrollbar.1ulnCV)
+    Finished `test` profile [optimized + debuginfo] target(s) in 28.97s
+     Running unittests src/lib.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 6 tests
+test app::scrollbar_tests::pi_track_click_and_drag_are_live_release_does_not_recalculate ... ok
+test app::scrollbar_tests::pi_auto_hide_hover_and_idle_deadline ... ok
+test app::scrollbar_tests::boundary_wheel_is_noop_and_does_not_reveal_scrollbar ... ok
+test app::scrollbar_tests::viewport_growth_keeps_capture_and_drag_uses_new_geometry ... ok
+test app::scrollbar_tests::pi_wheel_steps_and_page_overlap_preserve_prepared_rows ... ok
+test app::scrollbar_tests::app_scroll_and_visibility_trace_matches_pi ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 388 filtered out; finished in 0.01s
+
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 3 tests
+test ui::scrollbar::reference_tests::active_thumb_matches_pi_palette_and_preserves_background_without_wide_artifacts ... FAILED
+test ui::scrollbar::reference_tests::auto_visibility_matches_released_pi_oracle ... ok
+test ui::scrollbar::reference_tests::geometry_and_pointer_mapping_match_released_pi_oracle ... ok
+
+failures:
+
+---- ui::scrollbar::reference_tests::active_thumb_matches_pi_palette_and_preserves_background_without_wide_artifacts stdout ----
+
+thread 'ui::scrollbar::reference_tests::active_thumb_matches_pi_palette_and_preserves_background_without_wide_artifacts' (1609088) panicked at src/ui/scrollbar_reference_tests.rs:38:9:
+assertion `left == right` failed
+  left: Reset
+ right: Rgb(21, 22, 23)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ui::scrollbar::reference_tests::active_thumb_matches_pi_palette_and_preserves_background_without_wide_artifacts
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 391 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

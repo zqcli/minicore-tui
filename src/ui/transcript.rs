@@ -140,21 +140,8 @@ pub(crate) fn scroll_position(app: &App, total: usize, height: usize) -> ScrollP
             marker: false,
         };
     };
-    if let Some((pending, visible_rows, marker)) = app.scrollbar_drag_preview(&view.info.session_id)
-    {
-        let visible_rows = visible_rows.min(height).min(total);
-        return ScrollPosition {
-            offset: pending.min(total.saturating_sub(visible_rows.max(1))),
-            visible_rows,
-            marker: marker && total > height,
-        };
-    }
     let marker = !view.scroll.follow_tail && total > height;
-    let visible_rows = if marker {
-        height.saturating_sub(1)
-    } else {
-        height
-    };
+    let visible_rows = height;
     let max_offset = total.saturating_sub(visible_rows.max(1));
     let offset = if view.scroll.follow_tail {
         max_offset
@@ -575,6 +562,7 @@ fn apply_selection(
     selection: Option<&ConversationSelection>,
     sections: &[SectionRange],
     theme: &Theme,
+    clip_end: usize,
 ) -> Vec<Line<'static>> {
     let Some(selection) = selection.filter(|selection| !selection.is_empty()) else {
         return lines;
@@ -597,19 +585,26 @@ fn apply_selection(
             } else {
                 usize::MAX
             })
-            .min(content_end);
-            select_line_cells(line, from, to, theme)
+            .min(content_end)
+            .min(clip_end);
+            select_line_cells(line, from, to, theme, clip_end)
         })
         .collect()
 }
 
-fn select_line_cells(line: Line<'static>, from: usize, to: usize, theme: &Theme) -> Line<'static> {
+fn select_line_cells(
+    line: Line<'static>,
+    from: usize,
+    to: usize,
+    theme: &Theme,
+    clip_end: usize,
+) -> Line<'static> {
     let mut used = 0;
     let mut spans = Vec::new();
     for span in line.spans {
         for grapheme in span.content.graphemes(true) {
             let width = UnicodeWidthStr::width(grapheme);
-            let selected = used < to && used + width > from;
+            let selected = used < to && used + width > from && used + width <= clip_end;
             let style = if selected {
                 Style::new().fg(theme.selection_fg).bg(theme.selection_bg)
             } else {
@@ -1403,6 +1398,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
         app.selection.as_ref(),
         prepared.sections.as_slice(),
         theme,
+        width.saturating_sub(usize::from(app.scrollbar_visible(total, height))),
     );
     let body_area = Rect {
         x: area.x,
@@ -1419,15 +1415,20 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
             width: area.width,
             height: 1,
         };
-        render_marker(frame, marker_area, app, theme);
+        render_marker(
+            frame,
+            marker_area,
+            app,
+            theme,
+            app.scrollbar_visible(total, height),
+        );
     }
-    if app.active_view().is_some() {
-        let visible = position.visible_rows;
-        crate::ui::scrollbar::render(frame, area, total, visible, offset, theme);
+    if app.scrollbar_visible(total, height) {
+        crate::ui::scrollbar::render(frame, area, total, offset, theme, app.scrollbar_active());
     }
 }
 
-fn render_marker(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
+fn render_marker(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme, scrollbar: bool) {
     let label = if app
         .active_view()
         .is_some_and(|view| view.scroll.new_content)
@@ -1436,10 +1437,23 @@ fn render_marker(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
     } else {
         "↑ scroll position"
     };
+    let area = marker_area(area, label, scrollbar);
+    layout::clear_wide_overlay_edges(frame.buffer_mut(), area);
     let line = layout::filled(
         label,
         area.width as usize,
         Style::new().fg(theme.dim).bg(theme.page_bg),
     );
     frame.render_widget(ratatui::widgets::Paragraph::new(line), area);
+}
+
+pub(crate) fn marker_area(area: Rect, label: &str, scrollbar: bool) -> Rect {
+    let width = area.width.saturating_sub(u16::from(scrollbar));
+    let label_width = crate::markdown::column_width(label).min(width as usize) as u16;
+    Rect::new(
+        area.x + (width - label_width) / 2,
+        area.bottom().saturating_sub(1),
+        label_width,
+        1,
+    )
 }

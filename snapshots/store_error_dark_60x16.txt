@@ -4,10 +4,10 @@
   │}                                                       │
   ╰────────────────────────────────────────────────────────╯
 
-  link (https://example.com) at the end.                   █
-                                                           █
-  ─────────────────────────────────────────────────────────█
-                                                           █
+  link (https://example.com) at the end.
+
+  ──────────────────────────────────────────────────────────
+
  Unable to open this session. Its data may be unavailable, i
  ▎
  ▎

@@ -3,11 +3,11 @@
   more
 
  ▎
- ▎ ↪ Focus on memory safety instead                        █
- ▎ time pending                                            █
- ▎                                                         █
-  ⠸ applied                                                █
-                                                           █
+ ▎ ↪ Focus on memory safety instead
+ ▎ time pending
+ ▎
+  ⠸ applied
+
  ⠋ Running read…
  ▎
  ▎

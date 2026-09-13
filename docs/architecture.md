@@ -193,23 +193,38 @@ visible graphemes on each draw, even without Paragraph wrapping. Debug builds
 optimize dependencies at level 2 and, since 0.2.7, this package at level 1 to also
 optimize locally instantiated generic terminal/ANSI code. Debug information and
 assertions remain, with the usual optimized-code stepping/variable tradeoffs.
-There is no Cell cache. The render budget remains 30 FPS; busy animation now
-requests a 33 ms tick with an absolute deadline that unrelated events cannot
-postpone. Idle disarms the tick timer, and selection auto-scroll retains its own
-50 ms deadline. Large live snapshots still copy history rows.
+There is no Cell cache. The render budget remains 30 FPS; the Working glyph has
+an independent 100 ms monotonic deadline. Selection auto-scroll retains its own
+50 ms deadline. Idle disarms periodic ticks; a transient scrollbar can arm one
+absolute hide deadline. Large live snapshots still copy history rows.
 
 Live and durable Tool clicks resolve the same full Tool identity and expansion
 policy. Live-only folds discard the combined snapshot without invalidating the
 durable Markdown cache; overrides survive presentation and history reconciliation.
 
-Scrollbar dragging projects its pending offset into the same `ScrollPosition`
-used by body painting, thumb placement and hit testing. The body follows before
-release; release commits only if current geometry still matches. The visible-row
-budget and marker are frozen during a drag, then resume normal layout on release.
-Resize, real viewport changes, focus/session changes, wheel and explicit scroll
-commands cancel the drag. Unrelated RPC/repreparation does not. A stationary drag
-needs no animation timer, and marker rows cannot select or activate hidden content.
-See [stream interaction verification](verification/stream-interaction/README.md).
+The scrollbar follows Pi 0.85.1 fullscreen's default `auto` mode: a full-height
+`│` track, `┃` thumb, `█` active thumb, independent dark/light colors, and a 1000 ms
+hide deadline after scrolling or hover exit. It overlays the final column without
+changing content width. Geometry and pointer mapping use Pi's rounded/clamped
+formula; the thumb is at least two rows, bounded by the track height.
+
+Dragging writes the Session offset directly. Track clicks jump using a centered
+grab offset; release only ends capture and never remaps its coordinates. Resize,
+content changes, wheel input and explicit scrolling retain capture and subsequent
+drag events use the current geometry. Focus/session/modal changes or content
+fitting the viewport end capture. No second pending position or drag timer exists.
+Wheel steps are one row, or five with Alt; PageUp/PageDown overlap four rows.
+
+Scroll inputs prefer the valid prepared layout; otherwise the last viewport
+measurement remains usable, like Pi's last published `currentLayout`. Hover and
+wheel do not rebuild full history. The bottom status hint is a centered overlay,
+not a reserved row; only its actual rectangle blocks text/fold/link hits. MiniCore's
+existing status labels remain. Wide-grapheme edges and background colors are
+preserved by the same overlay helper. Selection highlighting excludes the bar.
+Unchanged pointer, boundary wheel, keyboard scroll and early idle Tick events
+avoid repaint when no queued Steer semantics need to advance.
+See [scrollbar verification](verification/scrollbar/README.md); the earlier
+[stream interaction evidence](verification/stream-interaction/README.md) is historical.
 
 ## Markdown
 

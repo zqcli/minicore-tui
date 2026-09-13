@@ -1,0 +1,1189 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-scrollbar.1ulnCV)
+    Finished `test` profile [optimized + debuginfo] target(s) in 24.88s
+     Running unittests src/lib.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 384 tests
+test app::steer_queue_ui_tests::alt_up_withdraws_next_unsent_into_empty_editor_only ... ok
+test app::steer_receipt_tests::dropped_receipt_recovered_via_presentation_steer_progress ... ok
+test app::steer_queue_ui_tests::dock_queue_caps_display_and_footer_counts_unsent_and_inflight ... ok
+test app::steer_receipt_tests::stale_steer_progress_after_loop_switch_is_ignored ... ok
+test app::steer_receipt_tests::mid_loop_history_without_steer_keeps_queued_and_terminal_marks_not_recorded ... ok
+test app::tests::bootstrap_reaches_ready_for_supported_version_0_3_0 ... ok
+test app::steer_receipt_tests::valid_ack_index_applies_with_original_request_and_then_sends_next ... ok
+test app::steer_receipt_tests::receipt_without_matching_index_holds_until_a_correct_receipt ... ok
+test app::tests::bootstrap_registers_pending_requests_before_commands_leave_update ... ok
+test app::tests::bootstrap_rejects_version_0_4_0_and_latches_failed ... ok
+test app::tests::bootstrap_accepts_prerelease_0_3_1_rc_1 ... ok
+test app::tests::bootstrap_rejects_version_0_2_0_and_latches_failed ... ok
+test app::tests::acknowledged_reload_channel_end_does_not_claim_refresh_success ... ok
+test app::tests::clipboard_feedback_retries_after_failure_and_expires_after_1800ms ... ok
+test app::tests::close_verify_failure_idle_event_does_not_authorize_repeat_close ... ok
+test app::tests::composer_rejects_submit_when_session_is_blocked ... ok
+test app::tests::composer_clears_only_on_matching_submit_and_late_ack_never_clears_new_content ... ok
+test app::tests::create_ack_during_reload_keeps_the_new_view_uncalibrated ... ok
+test app::tests::composer_routes_to_steer_turn_when_session_is_running ... ok
+test app::tests::composer_retains_text_on_steer_failure_and_shows_warning ... ok
+test app::tests::enter_accepts_a_skill_completion_without_submitting ... ok
+test app::tests::create_session_activates_and_pages_history ... ok
+test app::steer_queue_ui_tests::queue_layout_sits_above_status_with_one_blank_gap_and_hides_in_modal ... ok
+test app::tests::late_open_ack_after_reload_failure_starts_recovery_for_the_new_view ... ok
+test app::tests::idle_state_evidence_does_not_release_steer_authority_fence ... ok
+test app::tests::history_merges_user_assistant_tool_summary_without_synthetic_terminals ... ok
+test app::tests::malformed_reload_ack_reports_unknown_without_retrying_reload ... ok
+test app::tests::paste_normalization_matches_the_native_editor_without_changing_submit_authority ... ok
+test app::tests::editor_click_and_drag_use_visual_cells_and_copy_the_selected_text ... ok
+test app::tests::reload_after_ack_reports_refresh_failure_without_claiming_rollback ... ok
+test app::tests::pending_send_reload_recalibrates_after_turn_reference_binding ... ok
+test app::tests::reload_does_not_advance_steer_queue_or_consume_new_input ... ok
+test app::tests::paragraph_selection_stops_at_rendered_blank_boundaries ... ok
+test app::tests::marker_row_is_not_a_conversation_link_or_fold_target ... FAILED
+test app::tests::dropped_close_verification_enters_guarded_unknown_and_recovers ... ok
+test app::tests::rail14_link_geometry_covers_code_and_bold_links_but_not_plain_text ... ok
+test app::tests::reload_fences_a_pending_normal_state_read_as_stale ... ok
+test app::tests::reload_does_not_replace_a_live_projection_with_staged_idle_state ... ok
+test app::tests::failed_state_read_drops_old_authority_and_blocks_submission ... ok
+test app::tests::rail14_link_and_overlay_clicks_never_fold_while_plain_click_toggles ... ok
+test app::tests::reload_late_create_ack_keeps_gap_for_new_session_reads ... ok
+test app::tests::incomplete_reload_keeps_active_session_gap_after_channel_end ... ok
+test app::tests::reload_late_lifecycle_ack_keeps_gap_and_starts_recovery ... ok
+test app::tests::open_ack_during_reload_creates_an_uncalibrated_view ... ok
+test app::tests::reload_recovery_state_before_history_keeps_history_gap_fenced ... ok
+test app::tests::live_loop_records_multi_request_deltas_and_tools ... ok
+test app::tests::reload_queued_steer_waits_for_settled_idle_before_fresh_turn_handoff ... ok
+test app::tests::reopening_a_loaded_session_is_idempotent ... ok
+test app::tests::reload_stages_out_of_order_catalogs_before_installing_them ... ok
+test app::tests::request_usage_event_populates_live_projection_by_request_index ... ok
+test app::tests::reload_recovery_idle_event_does_not_release_pending_state_fence ... ok
+test app::tests::reload_reentry_and_failed_ack_leave_the_existing_projection_untouched ... ok
+test app::tests::reload_running_loop_steers_through_history_gap_after_fresh_state ... ok
+test app::tests::reload_retired_history_keeps_gap_and_blocks_submit_until_reconciled ... ok
+test app::tests::slash_completion_matches_native_trigger_and_selection_rules ... ok
+test app::tests::state_send_failure_drops_old_authority_and_blocks_submission ... ok
+test app::tests::turn_wait_persistence_failure_latches_blocked_and_creates_unsaved_loop ... ok
+test app::ui_actions::tests::word_bounds_keep_internal_word_punctuation_together ... ok
+test app::ui_actions::tests::word_bounds_match_source_segmenter_for_emoji_combining_and_paths ... ok
+test app::ui_actions::tests::word_bounds_group_cjk_runs_without_crossing_latin_boundaries ... ok
+test args::tests::agent_config_is_required ... ok
+test args::tests::help_with_a_config_still_prints_help ... ok
+test args::tests::help_and_version_work_without_an_agent_config ... ok
+test args::tests::reasoning_cli_accepts_all_agent_levels_and_rejects_unknown ... ok
+test app::tests::spinner_cadence_uses_monotonic_elapsed_not_tick_count ... ok
+test args::tests::defaults_use_path_agent_and_dark_theme ... ok
+test app::tests::tool_result_without_presentation_gets_a_safe_fallback ... ok
+test args::tests::parses_all_flags_in_both_forms ... ok
+test app::ui_actions::tests::word_bounds_use_the_dictionary_not_a_cell_pair_heuristic ... ok
+test args::tests::parses_help_and_version ... ok
+test args::tests::rejects_missing_values ... ok
+test args::tests::rejects_unknown_flags ... ok
+test app::tests::wrapped_editor_vertical_motion_uses_visual_rows_and_preserves_history_edges ... ok
+test args::tests::unknown_flags_error_even_when_help_or_version_is_present ... ok
+test args::tests::workspace_defaults_to_cwd_without_flag ... ok
+test clipboard::tests::clipboard_payload_encoding_matches_the_target_platform ... ok
+test clipboard::tests::mock_clipboard_records_text_and_can_fail ... ok
+test clipboard::tests::native_adapter_uses_one_compile_time_program ... ok
+test app::tests::marker_row_cannot_toggle_a_tool_section ... FAILED
+test app::tests::scrollbar_wheel_input_cancels_an_uncommitted_drag ... FAILED
+test command::tests::leading_whitespace_and_case_are_flexible_but_trailing_args_are_not ... ok
+test command::tests::parses_every_implemented_command ... ok
+test app::tests::busy_spinner_does_not_advance_selection_drag_before_its_50ms_deadline ... ok
+test app::tests::scrollbar_thumb_uses_the_same_pending_offset_as_content ... ok
+test args::tests::rejects_invalid_theme_and_reasoning ... ok
+test error::tests::reports_operation_and_source ... ok
+test keymap::tests::composer_keys_submit_newline_history_undo_and_word_delete ... ok
+test command::tests::public_command_names_exclude_refresh_and_include_reload ... ok
+test keymap::tests::esc_is_contextual ... ok
+test keymap::tests::global_shortcuts_map_regardless_of_the_dock ... ok
+test keymap::tests::release_events_are_ignored_but_repeats_type ... ok
+test command::tests::unknown_and_empty_commands_are_local_issues ... ok
+test app::tests::scrollbar_release_cancels_if_live_output_grew_before_viewport_measurement ... ok
+test keymap::tests::ctrl_c_and_ctrl_d_take_the_dedicated_actions ... ok
+test keymap::tests::selector_pages_are_selection_pages_not_transcript_scroll ... ok
+test markdown::tests::adjacent_same_style_text_is_one_span_and_style_boundaries_remain ... ok
+test markdown::tests::column_width_counts_cjk_as_two ... ok
+test markdown::tests::code_block_is_framed_and_preserves_indent ... ok
+test markdown::tests::headings_lists_quotes_and_rules_render ... ok
+test markdown::tests::link_surfaces_a_different_url_in_dim ... ok
+test app::tests::scrollbar_drag_cancels_on_a_real_viewport_change ... FAILED
+test keymap::tests::q_is_a_character_in_the_composer_but_quits_from_help ... ok
+test keymap::tests::session_panel_shortcuts_do_not_consume_filter_letters ... ok
+test markdown::tests::paragraphs_bold_italic_and_inline_code_are_styled ... ok
+test markdown::tests::render_with_links_reports_real_link_cells_not_colors ... ok
+test clipboard::tests::native_adapter_rejects_oversized_text_before_spawning ... ok
+test markdown::tests::soft_breaks_become_spaces_and_paragraphs_gap ... ok
+test markdown::tests::wrap_plain_cjk_emoji_blank_lines_lose_no_chars_or_width ... ok
+test app::tests::scrollbar_drag_cancels_before_tail_scroll_and_late_release ... ok
+test markdown::tests::wrap_plain_keeps_empty_lines_and_single_newlines ... ok
+test markdown::tests::wrap_plain_never_exceeds_the_width_and_splits_at_overflow ... ok
+test protocol::tests::presentation_wire_debug_redacts_content_bodies ... ok
+test protocol::tests::reasoning_wire_roundtrips_all_agent_levels ... ok
+test protocol::tests::reload_request_and_result_are_strict ... ok
+test protocol::tests::version_gate_is_exactly_0_3_major_minor ... ok
+test protocol::tests::ping_request_has_the_documented_shape ... ok
+test app::tests::selection_edge_reentry_waits_for_a_fresh_50ms_deadline ... ok
+test protocol::tests::version_gate_prerelease_policy ... ok
+test app::tests::idle_scrollbar_drag_does_not_arm_a_tick_but_still_renders_pending_content ... ok
+test protocol::tests::rename_request_has_the_documented_shape ... ok
+test rpc::tests::agent_process_name_selection_accepts_windows_executables_only ... ok
+test protocol::tests::wait_result_is_not_wrapped_in_ok_result ... ok
+test app::tests::selection_auto_scroll_stops_at_both_transcript_limits ... ok
+test rpc::tests::helper_hangs ... ok
+test rpc::tests::helper_quiet_exit ... ok
+test app::tests::scrollbar_drag_requires_release_and_cancels_on_focus_or_resize ... FAILED
+test rpc::tests::fake_configs_have_independently_owned_directories ... ok
+test app::tests::scrollbar_drag_cancels_when_switching_sessions ... ok
+test rpc::tests::child_waiter_reports_natural_exit ... ok
+test rpc::tests::spawn_rejects_missing_config_before_spawning ... ok
+test clipboard::tests::nonzero_exit_without_reading_is_reported_bounded ... ok
+test clipboard::tests::draining_child_consumes_the_full_payload ... ok
+test rpc::tests::stderr_line_replaces_interior_invalid_bytes_lossily ... ok
+test rpc::tests::reader_reports_clean_eof_and_partial_frames ... ok
+test rpc::tests::try_recv_drains_all_buffered_events_before_reporting_closed ... ok
+test rpc::tests::spawn_reports_an_unusable_agent_binary ... ok
+test rpc::tests::writer_failure_emits_a_protocol_error ... ok
+test rpc::tests::writer_emits_one_flushed_ndjson_line_per_request ... ok
+test state::composer::tests::editing_inside_a_paste_expands_it_and_literal_marker_text_is_not_hidden ... ok
+test state::composer::tests::large_paste_is_projected_as_a_marker_but_submits_raw_text ... ok
+test state::composer::tests::history_recall_preserves_the_draft_and_enforces_the_cap ... ok
+test state::composer::tests::multiline_editing_and_blank_lines_roundtrip ... ok
+test state::composer::tests::set_text_splits_logical_lines_and_normalizes_native_text ... ok
+test state::composer::tests::submitting_deduplicates_the_newest_entry ... ok
+test state::composer::tests::typing_inserts_into_the_buffer_with_char_cursor ... ok
+test state::selection::tests::parse_rfc3339_handles_fractions_offsets_and_future ... ok
+test rpc::tests::agent_process_bare_run_is_quiet_and_successful ... ok
+test state::selection::tests::session_sort_ties_by_string_then_id_and_invalid_sorts_last ... ok
+test state::selection::tests::sessions_sort_by_absolute_instant_across_offsets ... ok
+test state::session::tests::live_per_request_usage_shows_during_the_loop_and_persisted_total_replaces_it ... ok
+test state::session::tests::usage_deduplicates_request_rows_and_persisted_loop_totals_replace_them ... ok
+test state::session::tests::usage_marks_partial_fields_and_keeps_failed_unsaved_usage_separate ... ok
+test terminal::tests::ansi_sequences::entry_runs_screen_commands_in_spec_order ... ok
+test terminal::tests::ansi_sequences::partial_entry_failure_rolls_back_only_completed_steps ... ok
+test terminal::tests::ansi_sequences::restore_reports_first_error_but_still_runs_later_steps ... ok
+test terminal::tests::ansi_sequences::restore_runs_commands_in_reverse_order ... ok
+test terminal::tests::latch_allows_retry_after_failure_and_noops_after_success ... ok
+test terminal::writer_tests::discard_prevents_ratatui_drop_from_flushing_a_stale_frame ... ok
+test terminal::writer_tests::drop_does_not_emit_pending_frame_after_emergency_restore ... ok
+test rpc::tests::fake_serve_mode_speaks_the_full_contract ... ok
+test terminal::writer_tests::failed_write_on_flush_is_reported_without_drop_retry ... ok
+test terminal::writer_tests::interrupted_and_short_writes_preserve_every_byte ... ok
+test terminal::writer_tests::full_buffers_flush_in_order ... ok
+test terminal::writer_tests::large_writes_are_not_truncated ... ok
+test terminal::writer_tests::crossterm_bytes_match_with_far_fewer_underlying_writes ... ok
+test terminal::writer_tests::small_writes_are_batched_until_explicit_flush ... ok
+test terminal::writer_tests::underlying_flush_error_is_not_swallowed ... ok
+test theme::tests::dark_palette_matches_spec ... ok
+test terminal::writer_tests::writer_panic_does_not_retry_io_during_unwind ... ok
+test theme::tests::default_kind_is_dark_and_for_kind_roundtrips ... ok
+test theme::tests::light_base_palette_matches_spec ... ok
+test theme::tests::reasoning_color_maps_to_the_level_palette ... ok
+test ui::component_tests::adjacent_assistant_sections_share_one_boundary_row ... ok
+test ui::component_tests::assistant_parts_keep_order_and_share_boundary_padding ... ok
+test ui::component_tests::cancelled_calls_use_the_dedicated_surface_in_live_and_durable_cards ... ok
+test ui::component_tests::cached_and_fallback_transcripts_have_identical_section_spacing ... ok
+test ui::component_tests::conversation_copy_skips_external_section_spacers_but_keeps_timestamp_content ... ok
+test ui::component_tests::assistant_text_has_no_background ... ok
+test state::composer::tests::word_delete_uses_display_segments_without_entering_paste_payload ... ok
+test rpc::tests::fake_oversized_request_lines_are_rejected_without_writing ... ok
+test ui::component_tests::conversation_drag_copies_across_blocks_without_the_rail_or_padding ... ok
+test ui::component_tests::composer_uses_a_fixed_blue_rail_without_a_rectangular_border ... ok
+test ui::component_tests::durable_and_live_tool_sections_have_the_same_padding_shape ... ok
+test state::composer::tests::cursor_and_delete_treat_a_large_paste_as_one_editor_segment ... ok
+test ui::component_tests::conversation_selection_uses_grapheme_boundaries_for_cjk_and_emoji ... ok
+test ui::component_tests::empty_reasoning_renders_nothing_and_does_not_hide_the_next_run ... ok
+test ui::component_tests::double_click_selects_one_unicode_word ... ok
+test ui::component_tests::empty_user_sections_do_not_add_spacer_rows ... ok
+test ui::component_tests::explicit_markdown_blank_lines_survive_section_padding ... ok
+test ui::component_tests::event_gap_blocks_session_panel_close_and_delete_but_allows_rename ... ok
+test ui::component_tests::failed_tool_cards_keep_status_summary_hint_and_error_body ... ok
+test ui::component_tests::durable_tool_fold_override_is_honored_by_the_prepared_transcript ... ok
+test ui::component_tests::cursor_sits_at_the_composer_caret ... ok
+test ui::component_tests::empty_selector_search_shows_no_matching_items ... ok
+test ui::component_tests::fatal_connection_renders_the_overlay ... ok
+test ui::component_tests::fatal_overlay_retains_a_known_result_summary ... ok
+test rpc::tests::send_accepts_request_lines_up_to_one_megabyte ... ok
+test ui::component_tests::end_resumes_follow_after_marker_reservation ... ok
+test ui::component_tests::generic_selector_mouse_selects_and_confirms_the_hit_item ... ok
+test ui::component_tests::footer_is_one_row_on_short_terminals ... ok
+test ui::component_tests::help_and_logs_body_paging_does_not_scroll_the_transcript ... ok
+test ui::component_tests::footer_waiting_boundary_shows_next_config_with_current_request_preserved ... ok
+test ui::component_tests::help_panel_lists_keys_and_safety_notes ... ok
+test ui::component_tests::footer_hides_secondary_info_below_80_columns ... ok
+test ui::component_tests::light_theme_renders_identically_shaped_content ... ok
+test ui::component_tests::message_and_tool_sections_have_symmetric_vertical_padding ... ok
+test ui::component_tests::live_tool_mouse_click_collapses_the_running_card ... ok
+test ui::component_tests::logs_panel_shows_bounded_agent_stderr_without_raw_frames ... ok
+test ui::component_tests::live_request_without_model_is_explicitly_unknown ... ok
+test ui::component_tests::multiline_composer_grows_the_panel_and_wraps_cjk ... ok
+test ui::component_tests::new_session_mouse_click_selects_field_and_places_unicode_cursor ... ok
+test ui::component_tests::new_output_marker_gets_its_own_row_without_overwriting_transcript ... FAILED
+test ui::component_tests::prepared_section_ids_survive_tool_result_updates ... ok
+test ui::component_tests::new_session_form_shows_all_fields_and_the_active_field_background ... ok
+test ui::component_tests::last_result_renders_outcome_and_persistence_in_status_and_transcript ... ok
+test ui::component_tests::prepared_tool_sections_keep_full_identity_and_mouse_toggle_uses_the_same_range ... ok
+test ui::component_tests::reasoning_selector_lists_only_supported_levels_with_the_current_session_header ... ok
+test ui::component_tests::reasoning_is_gray_and_italic_and_can_be_hidden ... ok
+test ui::component_tests::recent_notices_render_above_the_composer ... ok
+test ui::component_tests::new_output_marker_renders_when_scrolled_away ... ok
+test ui::component_tests::selection_rebases_when_a_live_section_grows_after_the_selected_row ... ok
+test ui::component_tests::reasoning_selector_offers_max_only_when_the_model_advertises_it ... ok
+test ui::component_tests::running_live_turn_shows_gap_footer_and_status_spinner ... ok
+test ui::component_tests::selection_rebases_when_older_history_prepends_rows ... ok
+test ui::component_tests::selecting_max_updates_the_session_and_footer_shows_max ... ok
+test ui::component_tests::session_delete_requires_close_then_second_confirmation_and_tombstones_id ... ok
+test ui::component_tests::selector_search_query_is_visible ... ok
+test ui::component_tests::scrollbar_drag_body_follows_before_release ... FAILED
+test ui::component_tests::selector_panel_replaces_the_composer_and_keeps_the_transcript_visible ... ok
+test ui::component_tests::running_request_metadata_drives_footer_until_the_later_request_uses_max ... ok
+test ui::component_tests::session_double_click_release_rechecks_the_current_target ... ok
+test ui::component_tests::session_footer_mouse_refresh_uses_the_action_hit_rect ... ok
+test ui::component_tests::session_panel_rename_uses_id_and_waits_for_complete_ack ... ok
+test ui::component_tests::session_panel_mouse_selection_and_double_click_use_shared_content_rect ... ok
+test ui::component_tests::session_panel_cancel_reconciles_after_frozen_target_updates ... ok
+test ui::component_tests::session_selector_refresh_preserves_selected_id_after_reorder ... ok
+test ui::component_tests::shared_panel_layout_has_one_geometry_for_render_and_hit_testing ... ok
+test ui::component_tests::session_rename_ack_clears_hidden_target_when_query_has_no_matches ... ok
+test ui::component_tests::session_rename_dialog_freezes_target_and_reconciles_before_footer_actions ... ok
+test ui::component_tests::stale_durable_tool_toggle_cannot_mutate_the_current_live_card ... ok
+test ui::component_tests::stale_live_tool_loop_cannot_toggle_the_current_card ... ok
+test ui::component_tests::session_selector_sorts_newest_first_and_marks_running_loaded_idle ... ok
+test ui::component_tests::short_terminal_renders_an_8_row_selector_panel ... ok
+test ui::component_tests::user_assistant_and_tool_boundaries_share_one_blank_row ... ok
+test ui::component_tests::short_panels_page_down_moves_help_logs_and_session_selector ... ok
+test ui::component_tests::workspace_shortening_replaces_the_home_prefix ... ok
+test ui::composer::tests::cjk_cursor_hardware_position_uses_display_columns ... ok
+test ui::component_tests::word_selection_drag_extends_from_the_original_word_range ... ok
+test ui::component_tests::user_card_uses_the_spec_background ... ok
+test ui::composer::tests::cursor_cell_is_the_visual_wrapped_position ... ok
+test ui::component_tests::tool_cards_use_state_backgrounds_and_expanded_preview_bounds ... ok
+test ui::composer::tests::cursor_wrap_pos_matches_the_greedy_rule ... ok
+test ui::editor_layout::tests::centered_padding_is_not_a_cursor_target ... ok
+test ui::editor_layout::tests::cursor_at_wide_grapheme_middle_snaps_to_its_start ... ok
+test ui::editor_layout::tests::cursor_boundary_moves_to_the_next_soft_wrapped_row ... ok
+test ui::editor_layout::tests::wraps_without_splitting_wide_graphemes ... ok
+test ui::editor_layout::tests::only_valid_paste_ranges_are_kept_atomic ... ok
+test ui::footer::tests::duration_format_matches_rail_boundaries ... ok
+test ui::component_tests::session_selector_query_refresh_and_footer_actions_keep_filtered_target ... ok
+test ui::footer::tests::fit_aligned_matches_reference_narrow_footer_text ... ok
+test ui::footer::tests::model_shortening_preserves_unknown_model_identity_without_raw_prefixes ... ok
+test ui::footer::tests::numbers_cost_and_right_group_follow_rail_boundaries ... ok
+test ui::footer::tests::partial_usage_annotation_gets_a_separator_not_a_jammed_suffix ... ok
+test ui::footer::tests::ready_footer_styled_cells_match_the_source_fixture ... ok
+test ui::composer::tests::long_wrapped_line_cursor_is_visible_with_correct_hardware_position ... ok
+test ui::rail::tests::editor_height_is_four_to_twelve_and_roughly_thirty_two_percent ... ok
+test ui::layout::tests::seventy_nine_column_content_needs_two_visual_rows_at_inner_width_78 ... ok
+test ui::rail::tests::simple_line_collapses_control_whitespace_and_clip_is_cell_safe ... ok
+test ui::rail::tests::surface_content_start_preserves_requested_inset ... ok
+test ui::rail::tests::surface_row_has_one_rail_cell_and_exact_width ... ok
+test ui::layout::tests::composer_height_caps_at_forty_percent_and_short_is_fixed ... ok
+test ui::layout::tests::dock_rows_derives_status_notice_panel_and_footer_consistently ... ok
+test ui::render_cache_tests::durable_history_mutation_invalidates_and_reparses ... ok
+test ui::render_cache_tests::live_tool_fold_survives_presentation_finish_wait_and_history_replacement ... ok
+test ui::render_cache_tests::live_delta_reuses_durable_markdown_without_reparsing ... ok
+test ui::render_cache_tests::no_op_mouse_moved_retains_prepared_conversation_and_does_not_dirty ... ok
+test ui::render_cache_tests::scroll_and_tick_and_viewport_retain_prepared_conversation ... ok
+test ui::render_cache_tests::ordinary_editor_input_reuses_prepared_rows ... ok
+test ui::render_cache_tests::theme_width_and_visibility_reject_stale_cache ... ok
+test ui::render_cache_tests::unrelated_rpc_reprepare_keeps_scrollbar_drag_until_release ... ok
+test ui::scrollbar::tests::drag_mapping_uses_thumb_grab_offset_and_reaches_both_edges ... ok
+test ui::scrollbar::tests::geometry_matches_the_pinned_reference_dimensions ... ok
+test ui::render_cache_tests::tool_presentation_refresh_invalidates_already_durable_tool_rows ... ok
+test ui::component_tests::selectors_render_on_both_themes_without_panicking ... ok
+test ui::scrollbar::tests::pi_fullscreen_track_and_inactive_thumb ... ok
+test ui::scrollbar::tests::render_paints_pi_track_and_thumb_without_reflow ... ok
+test ui::section_gap_tests::consecutive_reasoning_parts_join_like_live_accumulation ... ok
+test ui::section_gap_tests::thinking_single_newline_is_a_visual_break_not_flattened ... ok
+test ui::section_gap_tests::prepared_transcript_preserves_thinking_newlines_from_wire_entry ... ok
+test ui::selector::tests::model_line_marks_the_current_session_model ... ok
+test ui::section_gap_tests::user_card_then_thinking_has_exactly_one_transparent_spacer ... ok
+test ui::selector::tests::relative_age_formats_seconds_minutes_hours_days ... ok
+test ui::render_cache_tests::consecutive_user_cards_keep_one_transparent_gap_across_all_user_paths ... ok
+test ui::render_cache_tests::viewport_duplicate_is_idempotent_and_does_not_cancel_drag ... ok
+test ui::settings_footer_steer_tests::accepted_steer_awaiting_marker_is_excluded_from_the_copy ... ok
+test ui::settings_footer_steer_tests::folded_thinking_copy_excludes_the_hint_row_in_durable ... ok
+test ui::settings_footer_steer_tests::folded_thinking_copy_excludes_the_hint_row_in_live ... ok
+test ui::settings_footer_steer_tests::footer_reflects_acknowledged_reasoning_immediately_while_live ... ok
+test ui::settings_footer_steer_tests::pending_steer_uses_gray_queue_not_a_user_card ... ok
+test ui::settings_footer_steer_tests::footer_reflects_acknowledged_model_and_rejected_update_keeps_old ... ok
+test ui::settings_footer_steer_tests::accepted_pending_steer_renders_as_user_card_with_subtle_awaiting_marker ... ok
+test ui::settings_footer_steer_tests::provisional_steer_selection_never_rebases_onto_a_wrong_durable_user ... ok
+test ui::component_tests::tool_expanded_preview_remains_available_without_a_fixed_renderer_cap ... ok
+test ui::settings_footer_steer_tests::persisted_steer_removes_provisional_and_stale_queued ... ok
+test ui::snapshots::cjk_80x24 ... ok
+test ui::snapshots::chat_dark_80x24 ... FAILED
+test ui::snapshots::chat_light_80x24 ... FAILED
+test ui::section_gap_tests::busy_working_keeps_one_clear_blank_above_it_at_every_size ... ok
+test ui::snapshots::close_user_dark_80x24 ... ok
+test ui::snapshots::empty_light_80x24 ... ok
+test ui::snapshots::empty_dark_80x24 ... ok
+test ui::snapshots::empty_model_search_dark_80x24 ... ok
+test ui::snapshots::help_dark_80x24 ... ok
+test ui::snapshots::close_user_light_120x40 ... ok
+test ui::snapshots::logs_dark_80x24 ... ok
+test ui::snapshots::finishing_dark_80x24 ... ok
+test ui::snapshots::model_selector_dark_80x24 ... ok
+test ui::snapshots::help_light_120x40 ... ok
+test ui::snapshots::narrow_model_selector_dark_60x16 ... ok
+test ui::snapshots::model_selector_light_120x40 ... ok
+test ui::snapshots::multiline_composer_dark_80x24 ... FAILED
+test ui::snapshots::finishing_light_120x40 ... ok
+test ui::snapshots::new_session_dark_80x24 ... ok
+test ui::snapshots::new_session_light_120x40 ... ok
+test ui::snapshots::pending_model_dark_60x16 ... FAILED
+test ui::render_cache_tests::cached_render_and_mouse_hit_testing_do_not_parse_history ... ok
+test ui::snapshots::profile_selector_dark_80x24 ... ok
+test ui::snapshots::pending_model_dark_80x24 ... ok
+test ui::snapshots::reasoning_hidden_80x24 ... ok
+test ui::snapshots::new_output_marker_dark_80x24 ... FAILED
+test ui::snapshots::reasoning_selector_dark_80x24 ... ok
+test ui::snapshots::running_gap_80x24 ... ok
+test ui::snapshots::search_query_dark_80x24 ... ok
+test ui::snapshots::scroll_top_80x24 ... FAILED
+test ui::snapshots::pending_model_light_120x40 ... ok
+test ui::snapshots::session_selector_dark_80x24 ... ok
+test ui::snapshots::small_50x10 ... ok
+test ui::snapshots::session_selector_light_120x40 ... ok
+test ui::snapshots::shutdown_cancel_result_dark_80x24 ... ok
+test ui::snapshots::steering_dark_60x16 ... FAILED
+test ui::snapshots::steering_dark_80x24 ... FAILED
+test ui::snapshots::store_error_dark_60x16 ... FAILED
+test ui::snapshots::store_error_dark_80x24 ... FAILED
+test ui::snapshots::unknown_cancel_result_dark_80x24 ... ok
+test ui::snapshots::steering_dark_160x50 ... ok
+test ui::snapshots::steering_light_120x40 ... ok
+test ui::snapshots::tools_80x24 ... FAILED
+test ui::snapshots::unsaved_gap_dark_60x16 ... FAILED
+test ui::steer_queue::tests::normal_queued_steer_shows_withdrawal_hint_without_pause_prefix ... ok
+test ui::snapshots::wide_120x40 ... ok
+test ui::snapshots::store_error_light_120x40 ... ok
+test ui::steer_queue::tests::truncation_exact_fit_is_never_silently_truncated ... ok
+test ui::snapshots::unsaved_gap_dark_80x24 ... FAILED
+test ui::steer_queue::tests::truncation_is_grapheme_safe_and_never_splits_a_cluster ... ok
+test ui::tests::small_terminal_renders_the_centered_hint ... ok
+test ui::tool::tests::default_expansion_only_forces_write_and_uses_generic_boundary ... ok
+test ui::tests::dock_is_below_the_transcript_with_a_rail_composer ... ok
+test ui::steer_queue::tests::paused_queue_shows_withdrawal_hint_above_status ... ok
+test ui::tool::tests::wrapped_hidden_count_reflects_visual_rows_and_survives_graphemes ... ok
+test ui::user::tests::invalid_timestamp_is_not_replaced_with_current_time ... ok
+test ui::tool::tests::expanded_durable_rows_expose_the_full_payload_without_omission ... ok
+test ui::user::tests::timestamp_fixture_matches_the_pinned_utc_source_rows ... ok
+test ui::user::tests::timestamp_matches_rail_display_format ... ok
+test ui::steer_queue::tests::preview_is_cell_aware_and_flattens_multiline ... ok
+test ui::snapshots::unsaved_gap_light_120x40 ... ok
+test ui::tests::fullscreen_background_is_page_color_and_draw_never_panics ... ok
+test ui::snapshots::unsaved_gap_dark_160x50 ... ok
+test rpc::tests::recv_ends_when_all_sender_tasks_are_gone ... ok
+test rpc::tests::send_forwards_pre_numbered_requests_without_touching_ids ... ok
+test rpc::tests::reader_treats_malformed_frames_as_fatal_and_stops ... ok
+test rpc::tests::reader_emits_frames_in_arrival_order_with_preserved_ids ... ok
+test rpc::tests::stderr_reader_emits_bounded_utf8_safe_lines ... ok
+test rpc::tests::fake_unknown_method_reports_a_top_level_jsonrpc_error ... ok
+test rpc::tests::fake_responses_are_out_of_order_but_ids_never_reorder ... ok
+test rpc::tests::fake_crashing_agent_reports_termination_and_a_failed_exit ... ok
+test rpc::tests::fake_ping_then_clean_shutdown_reaps_the_child ... ok
+test rpc::tests::fake_hanging_agent_stderr_survives_until_kill_and_reap ... ok
+test rpc::tests::fake_events_arrive_before_the_send_response ... ok
+test rpc::tests::fake_terminate_kills_and_reaps_a_hanging_agent ... ok
+test rpc::tests::reader_rejects_the_first_byte_beyond_the_max ... ok
+test rpc::tests::child_waiter_kills_and_reaps_a_hanging_child ... ok
+test rpc::tests::reader_accepts_exactly_max_size_frames ... ok
+test rpc::tests::send_rejects_oversized_lines_without_writing_them ... ok
+test clipboard::tests::non_draining_child_is_bounded_and_killed ... ok
+
+failures:
+
+---- app::tests::marker_row_is_not_a_conversation_link_or_fold_target stdout ----
+
+thread 'app::tests::marker_row_is_not_a_conversation_link_or_fold_target' (1598549) panicked at src/app.rs:13175:9:
+the marker row is not a markdown link cell
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- app::tests::marker_row_cannot_toggle_a_tool_section stdout ----
+
+thread 'app::tests::marker_row_cannot_toggle_a_tool_section' (1598548) panicked at src/app.rs:13241:9:
+assertion failed: app.selection.is_none()
+
+---- app::tests::scrollbar_wheel_input_cancels_an_uncommitted_drag stdout ----
+
+thread 'app::tests::scrollbar_wheel_input_cancels_an_uncommitted_drag' (1598577) panicked at src/app.rs:13769:9:
+wheel input must not leave a stale drag to be committed by a later release
+
+---- app::tests::scrollbar_drag_cancels_on_a_real_viewport_change stdout ----
+
+thread 'app::tests::scrollbar_drag_cancels_on_a_real_viewport_change' (1598572) panicked at src/app.rs:13651:9:
+assertion failed: app.scrollbar_preview_offset("ses_1").is_none()
+
+---- app::tests::scrollbar_drag_requires_release_and_cancels_on_focus_or_resize stdout ----
+
+thread 'app::tests::scrollbar_drag_requires_release_and_cancels_on_focus_or_resize' (1598574) panicked at src/app.rs:13316:9:
+assertion `left == right` failed
+  left: 30
+ right: 0
+
+---- ui::component_tests::new_output_marker_gets_its_own_row_without_overwriting_transcript stdout ----
+
+thread 'ui::component_tests::new_output_marker_gets_its_own_row_without_overwriting_transcript' (1598756) panicked at src/ui/component_tests.rs:3864:5:
+assertion `left == right` failed: the marker consumes one transcript row
+  left: 17
+ right: 16
+
+---- ui::component_tests::scrollbar_drag_body_follows_before_release stdout ----
+
+thread 'ui::component_tests::scrollbar_drag_body_follows_before_release' (1598768) panicked at src/ui/component_tests.rs:1766:5:
+assertion `left == right` failed
+  left: false
+ right: true
+
+---- ui::snapshots::chat_dark_80x24 stdout ----
+
+thread 'ui::snapshots::chat_dark_80x24' (1598851) panicked at src/ui/snapshots.rs:43:5:
+assertion `left == right` failed: 
+--- snapshot `chat_dark_80x24` differs ---
+ACTUAL:
+  Heading
+
+  A paragraph with bold, italic, and code.
+
+  • first item
+  • second item
+
+  ▍ quoted wisdom
+
+  ╭────────────────────────────────────────────────────────────────────────────╮
+  │fn hello() {                                                                │
+  │    println!("hi");                                                         │
+  │}                                                                           │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+  link (https://example.com) at the end.
+
+  ──────────────────────────────────────────────────────────────────────────────
+
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ● ready                                         ctx ?
+
+--- EXPECTED:
+  Heading
+
+  A paragraph with bold, italic, and code.
+
+  • first item                                                                 █
+  • second item                                                                █
+                                                                               █
+  ▍ quoted wisdom                                                              █
+                                                                               █
+  ╭────────────────────────────────────────────────────────────────────────────█
+  │fn hello() {                                                                █
+  │    println!("hi");                                                         █
+  │}                                                                           █
+  ╰────────────────────────────────────────────────────────────────────────────█
+                                                                               █
+  link (https://example.com) at the end.                                       █
+                                                                               █
+  ─────────────────────────────────────────────────────────────────────────────█
+                                                                               █
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ● ready                                         ctx ?
+
+
+  left: "  Heading\n\n  A paragraph with bold, italic, and code.\n\n  • first item                                                                 █\n  • second item                                                                █\n                                                                               █\n  ▍ quoted wisdom                                                              █\n                                                                               █\n  ╭────────────────────────────────────────────────────────────────────────────█\n  │fn hello() {                                                                █\n  │    println!(\"hi\");                                                         █\n  │}                                                                           █\n  ╰────────────────────────────────────────────────────────────────────────────█\n                                                                               █\n  link (https://example.com) at the end.                                       █\n                                                                               █\n  ─────────────────────────────────────────────────────────────────────────────█\n                                                                               █\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ● ready                                         ctx ?\n"
+ right: "  Heading\n\n  A paragraph with bold, italic, and code.\n\n  • first item\n  • second item\n\n  ▍ quoted wisdom\n\n  ╭────────────────────────────────────────────────────────────────────────────╮\n  │fn hello() {                                                                │\n  │    println!(\"hi\");                                                         │\n  │}                                                                           │\n  ╰────────────────────────────────────────────────────────────────────────────╯\n\n  link (https://example.com) at the end.\n\n  ──────────────────────────────────────────────────────────────────────────────\n\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ● ready                                         ctx ?\n"
+
+---- ui::snapshots::chat_light_80x24 stdout ----
+
+thread 'ui::snapshots::chat_light_80x24' (1598852) panicked at src/ui/snapshots.rs:43:5:
+assertion `left == right` failed: 
+--- snapshot `chat_light_80x24` differs ---
+ACTUAL:
+  Heading
+
+  A paragraph with bold, italic, and code.
+
+  • first item
+  • second item
+
+  ▍ quoted wisdom
+
+  ╭────────────────────────────────────────────────────────────────────────────╮
+  │fn hello() {                                                                │
+  │    println!("hi");                                                         │
+  │}                                                                           │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+  link (https://example.com) at the end.
+
+  ──────────────────────────────────────────────────────────────────────────────
+
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ● ready                                         ctx ?
+
+--- EXPECTED:
+  Heading
+
+  A paragraph with bold, italic, and code.
+
+  • first item                                                                 █
+  • second item                                                                █
+                                                                               █
+  ▍ quoted wisdom                                                              █
+                                                                               █
+  ╭────────────────────────────────────────────────────────────────────────────█
+  │fn hello() {                                                                █
+  │    println!("hi");                                                         █
+  │}                                                                           █
+  ╰────────────────────────────────────────────────────────────────────────────█
+                                                                               █
+  link (https://example.com) at the end.                                       █
+                                                                               █
+  ─────────────────────────────────────────────────────────────────────────────█
+                                                                               █
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ● ready                                         ctx ?
+
+
+  left: "  Heading\n\n  A paragraph with bold, italic, and code.\n\n  • first item                                                                 █\n  • second item                                                                █\n                                                                               █\n  ▍ quoted wisdom                                                              █\n                                                                               █\n  ╭────────────────────────────────────────────────────────────────────────────█\n  │fn hello() {                                                                █\n  │    println!(\"hi\");                                                         █\n  │}                                                                           █\n  ╰────────────────────────────────────────────────────────────────────────────█\n                                                                               █\n  link (https://example.com) at the end.                                       █\n                                                                               █\n  ─────────────────────────────────────────────────────────────────────────────█\n                                                                               █\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ● ready                                         ctx ?\n"
+ right: "  Heading\n\n  A paragraph with bold, italic, and code.\n\n  • first item\n  • second item\n\n  ▍ quoted wisdom\n\n  ╭────────────────────────────────────────────────────────────────────────────╮\n  │fn hello() {                                                                │\n  │    println!(\"hi\");                                                         │\n  │}                                                                           │\n  ╰────────────────────────────────────────────────────────────────────────────╯\n\n  link (https://example.com) at the end.\n\n  ──────────────────────────────────────────────────────────────────────────────\n\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ● ready                                         ctx ?\n"
+
+---- ui::snapshots::multiline_composer_dark_80x24 stdout ----
+
+thread 'ui::snapshots::multiline_composer_dark_80x24' (1598866) panicked at src/ui/snapshots.rs:43:5:
+assertion `left == right` failed: 
+--- snapshot `multiline_composer_dark_80x24` differs ---
+ACTUAL:
+  A paragraph with bold, italic, and code.
+
+  • first item
+  • second item
+
+  ▍ quoted wisdom
+
+  ╭────────────────────────────────────────────────────────────────────────────╮
+  │fn hello() {                                                                │
+  │    println!("hi");                                                         │
+  │}                                                                           │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+  link (https://example.com) at the end.
+
+  ──────────────────────────────────────────────────────────────────────────────
+
+ ▎line one
+ ▎line two 你 好 😀
+ ▎line three
+ ▎line four
+ ▎line five
+ ▎line six
+ ▸ project · deep · high · ● ready                                         ctx ?
+
+--- EXPECTED:
+  A paragraph with bold, italic, and code.
+
+  • first item
+  • second item
+
+  ▍ quoted wisdom                                                              █
+                                                                               █
+  ╭────────────────────────────────────────────────────────────────────────────█
+  │fn hello() {                                                                █
+  │    println!("hi");                                                         █
+  │}                                                                           █
+  ╰────────────────────────────────────────────────────────────────────────────█
+                                                                               █
+  link (https://example.com) at the end.                                       █
+                                                                               █
+  ─────────────────────────────────────────────────────────────────────────────█
+                                                                               █
+ ▎line one
+ ▎line two 你 好 😀
+ ▎line three
+ ▎line four
+ ▎line five
+ ▎line six
+ ▸ project · deep · high · ● ready                                         ctx ?
+
+
+  left: "  A paragraph with bold, italic, and code.\n\n  • first item\n  • second item\n\n  ▍ quoted wisdom                                                              █\n                                                                               █\n  ╭────────────────────────────────────────────────────────────────────────────█\n  │fn hello() {                                                                █\n  │    println!(\"hi\");                                                         █\n  │}                                                                           █\n  ╰────────────────────────────────────────────────────────────────────────────█\n                                                                               █\n  link (https://example.com) at the end.                                       █\n                                                                               █\n  ─────────────────────────────────────────────────────────────────────────────█\n                                                                               █\n ▎line one\n ▎line two 你 好 😀\n ▎line three\n ▎line four\n ▎line five\n ▎line six\n ▸ project · deep · high · ● ready                                         ctx ?\n"
+ right: "  A paragraph with bold, italic, and code.\n\n  • first item\n  • second item\n\n  ▍ quoted wisdom\n\n  ╭────────────────────────────────────────────────────────────────────────────╮\n  │fn hello() {                                                                │\n  │    println!(\"hi\");                                                         │\n  │}                                                                           │\n  ╰────────────────────────────────────────────────────────────────────────────╯\n\n  link (https://example.com) at the end.\n\n  ──────────────────────────────────────────────────────────────────────────────\n\n ▎line one\n ▎line two 你 好 😀\n ▎line three\n ▎line four\n ▎line five\n ▎line six\n ▸ project · deep · high · ● ready                                         ctx ?\n"
+
+---- ui::snapshots::pending_model_dark_60x16 stdout ----
+
+thread 'ui::snapshots::pending_model_dark_60x16' (1598871) panicked at src/ui/snapshots.rs:43:5:
+assertion `left == right` failed: 
+--- snapshot `pending_model_dark_60x16` differs ---
+ACTUAL:
+  Streaming content
+
+ ▎thinking hard
+
+ ▎ read
+ ▎ read
+
+  more
+
+ ⠋ Running read…
+ Saved · applies at next model request (rev 2)
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ⚠ incomplete                ctx ?
+
+--- EXPECTED:
+  Streaming content
+
+ ▎thinking hard
+                                                           █
+ ▎ read                                                    █
+ ▎ read                                                    █
+                                                           █
+  more                                                     █
+                                                           █
+ ⠋ Running read…
+ Saved · applies at next model request (rev 2)
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ⚠ incomplete                ctx ?
+
+
+  left: "  Streaming content\n\n ▎thinking hard\n                                                           █\n ▎ read                                                    █\n ▎ read                                                    █\n                                                           █\n  more                                                     █\n                                                           █\n ⠋ Running read…\n Saved · applies at next model request (rev 2)\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ⚠ incomplete                ctx ?\n"
+ right: "  Streaming content\n\n ▎thinking hard\n\n ▎ read\n ▎ read\n\n  more\n\n ⠋ Running read…\n Saved · applies at next model request (rev 2)\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ⚠ incomplete                ctx ?\n"
+
+---- ui::snapshots::new_output_marker_dark_80x24 stdout ----
+
+thread 'ui::snapshots::new_output_marker_dark_80x24' (1598868) panicked at src/ui/snapshots.rs:43:5:
+assertion `left == right` failed: 
+--- snapshot `new_output_marker_dark_80x24` differs ---
+ACTUAL:
+  A substantial assistant reply for block 21 with enough text to wrap over seve│
+  al rows.                                                                     │
+                                                                               │
+ ▎                                                                             │
+ ▎ a user turn                                                                 │
+ ▎ time unavailable                                                            │
+ ▎                                                                             │
+                                                                               │
+  A substantial assistant reply for block 22 with enough text to wrap over seve│
+  al rows.                                                                     │
+                                                                               │
+ ▎                                                                             │
+ ▎ a user turn                                                                 │
+ ▎ time unavailable                                                            │
+ ▎                                                                             │
+                                                                               │
+  A substantial assistant reply for block 23 with enough text to wrap over seve│
+  al rows.                                                                     ┃
+                                  ↓ new output                                 ┃
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ● ready                                         ctx ?
+
+--- EXPECTED:
+
+  A substantial assistant reply for block 21 with enough text to wrap over sever
+  al rows.
+
+ ▎
+ ▎ a user turn
+ ▎ time unavailable
+ ▎
+
+  A substantial assistant reply for block 22 with enough text to wrap over sever
+  al rows.
+
+ ▎
+ ▎ a user turn
+ ▎ time unavailable
+ ▎
+
+  A substantial assistant reply for block 23 with enough text to wrap over seve█
+ ↓ new output                                                                  █
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ● ready                                         ctx ?
+
+
+  left: "\n  A substantial assistant reply for block 21 with enough text to wrap over sever\n  al rows.\n\n ▎\n ▎ a user turn\n ▎ time unavailable\n ▎\n\n  A substantial assistant reply for block 22 with enough text to wrap over sever\n  al rows.\n\n ▎\n ▎ a user turn\n ▎ time unavailable\n ▎\n\n  A substantial assistant reply for block 23 with enough text to wrap over seve█\n ↓ new output                                                                  █\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ● ready                                         ctx ?\n"
+ right: "  A substantial assistant reply for block 21 with enough text to wrap over seve│\n  al rows.                                                                     │\n                                                                               │\n ▎                                                                             │\n ▎ a user turn                                                                 │\n ▎ time unavailable                                                            │\n ▎                                                                             │\n                                                                               │\n  A substantial assistant reply for block 22 with enough text to wrap over seve│\n  al rows.                                                                     │\n                                                                               │\n ▎                                                                             │\n ▎ a user turn                                                                 │\n ▎ time unavailable                                                            │\n ▎                                                                             │\n                                                                               │\n  A substantial assistant reply for block 23 with enough text to wrap over seve│\n  al rows.                                                                     ┃\n                                  ↓ new output                                 ┃\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ● ready                                         ctx ?\n"
+
+---- ui::snapshots::scroll_top_80x24 stdout ----
+
+thread 'ui::snapshots::scroll_top_80x24' (1598878) panicked at src/ui/snapshots.rs:43:5:
+assertion `left == right` failed: 
+--- snapshot `scroll_top_80x24` differs ---
+ACTUAL:
+ ▎
+ ▎ Hello world with code.
+ ▎ time unavailable
+ ▎
+
+  Heading
+
+  A paragraph with bold, italic, and code.
+
+  • first item
+  • second item
+
+  ▍ quoted wisdom
+
+  ╭────────────────────────────────────────────────────────────────────────────╮
+  │fn hello() {                                                                │
+  │    println!("hi");                                                         │
+  │}                                                                           │
+  ╰───────────────────────────────↓ new output─────────────────────────────────╯
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ● ready                                         ctx ?
+
+--- EXPECTED:
+ ▎                                                                             █
+ ▎ Hello world with code.                                                      █
+ ▎ time unavailable                                                            █
+ ▎                                                                             █
+                                                                               █
+  Heading                                                                      █
+                                                                               █
+  A paragraph with bold, italic, and code.                                     █
+                                                                               █
+  • first item                                                                 █
+  • second item                                                                █
+                                                                               █
+  ▍ quoted wisdom                                                              █
+                                                                               █
+  ╭────────────────────────────────────────────────────────────────────────────█
+  │fn hello() {                                                                │
+  │    println!("hi");                                                         │
+  │}                                                                           │
+ ↓ new output
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ● ready                                         ctx ?
+
+
+  left: " ▎                                                                             █\n ▎ Hello world with code.                                                      █\n ▎ time unavailable                                                            █\n ▎                                                                             █\n                                                                               █\n  Heading                                                                      █\n                                                                               █\n  A paragraph with bold, italic, and code.                                     █\n                                                                               █\n  • first item                                                                 █\n  • second item                                                                █\n                                                                               █\n  ▍ quoted wisdom                                                              █\n                                                                               █\n  ╭────────────────────────────────────────────────────────────────────────────█\n  │fn hello() {                                                                │\n  │    println!(\"hi\");                                                         │\n  │}                                                                           │\n ↓ new output\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ● ready                                         ctx ?\n"
+ right: " ▎\n ▎ Hello world with code.\n ▎ time unavailable\n ▎\n\n  Heading\n\n  A paragraph with bold, italic, and code.\n\n  • first item\n  • second item\n\n  ▍ quoted wisdom\n\n  ╭────────────────────────────────────────────────────────────────────────────╮\n  │fn hello() {                                                                │\n  │    println!(\"hi\");                                                         │\n  │}                                                                           │\n  ╰───────────────────────────────↓ new output─────────────────────────────────╯\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ● ready                                         ctx ?\n"
+
+---- ui::snapshots::steering_dark_60x16 stdout ----
+
+thread 'ui::snapshots::steering_dark_60x16' (1598885) panicked at src/ui/snapshots.rs:43:5:
+assertion `left == right` failed: 
+--- snapshot `steering_dark_60x16` differs ---
+ACTUAL:
+ ▎ read
+
+  more
+
+ ▎
+ ▎ ↪ Focus on memory safety instead
+ ▎ time pending
+ ▎
+  ⠸ applied
+
+ ⠋ Running read…
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ⚠ incomplete                ctx ?
+
+--- EXPECTED:
+ ▎ read
+
+  more
+
+ ▎
+ ▎ ↪ Focus on memory safety instead                        █
+ ▎ time pending                                            █
+ ▎                                                         █
+  ⠸ applied                                                █
+                                                           █
+ ⠋ Running read…
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ⚠ incomplete                ctx ?
+
+
+  left: " ▎ read\n\n  more\n\n ▎\n ▎ ↪ Focus on memory safety instead                        █\n ▎ time pending                                            █\n ▎                                                         █\n  ⠸ applied                                                █\n                                                           █\n ⠋ Running read…\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ⚠ incomplete                ctx ?\n"
+ right: " ▎ read\n\n  more\n\n ▎\n ▎ ↪ Focus on memory safety instead\n ▎ time pending\n ▎\n  ⠸ applied\n\n ⠋ Running read…\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ⚠ incomplete                ctx ?\n"
+
+---- ui::snapshots::steering_dark_80x24 stdout ----
+
+thread 'ui::snapshots::steering_dark_80x24' (1598886) panicked at src/ui/snapshots.rs:43:5:
+assertion `left == right` failed: 
+--- snapshot `steering_dark_80x24` differs ---
+ACTUAL:
+ ▎ time pending
+ ▎
+
+  Streaming content
+
+ ▎thinking hard
+
+ ▎ read
+ ▎ read
+
+  more
+
+ ▎
+ ▎ ↪ Focus on memory safety instead
+ ▎ time pending
+ ▎
+  ⠸ applied
+
+ ⠋ Running read…
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ⚠ incomplete                                    ctx ?
+
+--- EXPECTED:
+ ▎ time pending
+ ▎
+                                                                               █
+  Streaming content                                                            █
+                                                                               █
+ ▎thinking hard                                                                █
+                                                                               █
+ ▎ read                                                                        █
+ ▎ read                                                                        █
+                                                                               █
+  more                                                                         █
+                                                                               █
+ ▎                                                                             █
+ ▎ ↪ Focus on memory safety instead                                            █
+ ▎ time pending                                                                █
+ ▎                                                                             █
+  ⠸ applied                                                                    █
+                                                                               █
+ ⠋ Running read…
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ⚠ incomplete                                    ctx ?
+
+
+  left: " ▎ time pending\n ▎\n                                                                               █\n  Streaming content                                                            █\n                                                                               █\n ▎thinking hard                                                                █\n                                                                               █\n ▎ read                                                                        █\n ▎ read                                                                        █\n                                                                               █\n  more                                                                         █\n                                                                               █\n ▎                                                                             █\n ▎ ↪ Focus on memory safety instead                                            █\n ▎ time pending                                                                █\n ▎                                                                             █\n  ⠸ applied                                                                    █\n                                                                               █\n ⠋ Running read…\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ⚠ incomplete                                    ctx ?\n"
+ right: " ▎ time pending\n ▎\n\n  Streaming content\n\n ▎thinking hard\n\n ▎ read\n ▎ read\n\n  more\n\n ▎\n ▎ ↪ Focus on memory safety instead\n ▎ time pending\n ▎\n  ⠸ applied\n\n ⠋ Running read…\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ⚠ incomplete                                    ctx ?\n"
+
+---- ui::snapshots::store_error_dark_60x16 stdout ----
+
+thread 'ui::snapshots::store_error_dark_60x16' (1598888) panicked at src/ui/snapshots.rs:43:5:
+assertion `left == right` failed: 
+--- snapshot `store_error_dark_60x16` differs ---
+ACTUAL:
+  ╭────────────────────────────────────────────────────────╮
+  │fn hello() {                                            │
+  │    println!("hi");                                     │
+  │}                                                       │
+  ╰────────────────────────────────────────────────────────╯
+
+  link (https://example.com) at the end.
+
+  ──────────────────────────────────────────────────────────
+
+ Unable to open this session. Its data may be unavailable, i
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ● ready                     ctx ?
+
+--- EXPECTED:
+  ╭────────────────────────────────────────────────────────╮
+  │fn hello() {                                            │
+  │    println!("hi");                                     │
+  │}                                                       │
+  ╰────────────────────────────────────────────────────────╯
+
+  link (https://example.com) at the end.                   █
+                                                           █
+  ─────────────────────────────────────────────────────────█
+                                                           █
+ Unable to open this session. Its data may be unavailable, i
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ● ready                     ctx ?
+
+
+  left: "  ╭────────────────────────────────────────────────────────╮\n  │fn hello() {                                            │\n  │    println!(\"hi\");                                     │\n  │}                                                       │\n  ╰────────────────────────────────────────────────────────╯\n\n  link (https://example.com) at the end.                   █\n                                                           █\n  ─────────────────────────────────────────────────────────█\n                                                           █\n Unable to open this session. Its data may be unavailable, i\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ● ready                     ctx ?\n"
+ right: "  ╭────────────────────────────────────────────────────────╮\n  │fn hello() {                                            │\n  │    println!(\"hi\");                                     │\n  │}                                                       │\n  ╰────────────────────────────────────────────────────────╯\n\n  link (https://example.com) at the end.\n\n  ──────────────────────────────────────────────────────────\n\n Unable to open this session. Its data may be unavailable, i\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ● ready                     ctx ?\n"
+
+---- ui::snapshots::store_error_dark_80x24 stdout ----
+
+thread 'ui::snapshots::store_error_dark_80x24' (1598889) panicked at src/ui/snapshots.rs:43:5:
+assertion `left == right` failed: 
+--- snapshot `store_error_dark_80x24` differs ---
+ACTUAL:
+
+  A paragraph with bold, italic, and code.
+
+  • first item
+  • second item
+
+  ▍ quoted wisdom
+
+  ╭────────────────────────────────────────────────────────────────────────────╮
+  │fn hello() {                                                                │
+  │    println!("hi");                                                         │
+  │}                                                                           │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+  link (https://example.com) at the end.
+
+  ──────────────────────────────────────────────────────────────────────────────
+
+ Unable to open this session. Its data may be unavailable, invalid, or from an u
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ● ready                                         ctx ?
+
+--- EXPECTED:
+
+  A paragraph with bold, italic, and code.
+
+  • first item
+  • second item                                                                █
+                                                                               █
+  ▍ quoted wisdom                                                              █
+                                                                               █
+  ╭────────────────────────────────────────────────────────────────────────────█
+  │fn hello() {                                                                █
+  │    println!("hi");                                                         █
+  │}                                                                           █
+  ╰────────────────────────────────────────────────────────────────────────────█
+                                                                               █
+  link (https://example.com) at the end.                                       █
+                                                                               █
+  ─────────────────────────────────────────────────────────────────────────────█
+                                                                               █
+ Unable to open this session. Its data may be unavailable, invalid, or from an u
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ● ready                                         ctx ?
+
+
+  left: "\n  A paragraph with bold, italic, and code.\n\n  • first item\n  • second item                                                                █\n                                                                               █\n  ▍ quoted wisdom                                                              █\n                                                                               █\n  ╭────────────────────────────────────────────────────────────────────────────█\n  │fn hello() {                                                                █\n  │    println!(\"hi\");                                                         █\n  │}                                                                           █\n  ╰────────────────────────────────────────────────────────────────────────────█\n                                                                               █\n  link (https://example.com) at the end.                                       █\n                                                                               █\n  ─────────────────────────────────────────────────────────────────────────────█\n                                                                               █\n Unable to open this session. Its data may be unavailable, invalid, or from an u\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ● ready                                         ctx ?\n"
+ right: "\n  A paragraph with bold, italic, and code.\n\n  • first item\n  • second item\n\n  ▍ quoted wisdom\n\n  ╭────────────────────────────────────────────────────────────────────────────╮\n  │fn hello() {                                                                │\n  │    println!(\"hi\");                                                         │\n  │}                                                                           │\n  ╰────────────────────────────────────────────────────────────────────────────╯\n\n  link (https://example.com) at the end.\n\n  ──────────────────────────────────────────────────────────────────────────────\n\n Unable to open this session. Its data may be unavailable, invalid, or from an u\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ● ready                                         ctx ?\n"
+
+---- ui::snapshots::tools_80x24 stdout ----
+
+thread 'ui::snapshots::tools_80x24' (1598891) panicked at src/ui/snapshots.rs:43:5:
+assertion `left == right` failed: 
+--- snapshot `tools_80x24` differs ---
+ACTUAL:
+ ▎   line 50 of a long file
+ ▎   line 51 of a long file
+ ▎   line 52 of a long file
+ ▎   line 53 of a long file
+ ▎   line 54 of a long file
+ ▎   line 55 of a long file
+ ▎   line 56 of a long file
+ ▎   line 57 of a long file
+ ▎   line 58 of a long file
+ ▎   line 59 of a long file
+
+ ▎ bash
+ ▎ bash
+ ▎   not allowed
+
+ ▎ edit
+ ▎ edit
+ ▎   edit rejected
+
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ● ready                                         ctx ?
+
+--- EXPECTED:
+ ▎   line 50 of a long file
+ ▎   line 51 of a long file
+ ▎   line 52 of a long file
+ ▎   line 53 of a long file
+ ▎   line 54 of a long file
+ ▎   line 55 of a long file
+ ▎   line 56 of a long file
+ ▎   line 57 of a long file
+ ▎   line 58 of a long file
+ ▎   line 59 of a long file
+
+ ▎ bash
+ ▎ bash
+ ▎   not allowed
+                                                                               █
+ ▎ edit                                                                        █
+ ▎ edit                                                                        █
+ ▎   edit rejected                                                             █
+                                                                               █
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ project · deep · high · ● ready                                         ctx ?
+
+
+  left: " ▎   line 50 of a long file\n ▎   line 51 of a long file\n ▎   line 52 of a long file\n ▎   line 53 of a long file\n ▎   line 54 of a long file\n ▎   line 55 of a long file\n ▎   line 56 of a long file\n ▎   line 57 of a long file\n ▎   line 58 of a long file\n ▎   line 59 of a long file\n\n ▎ bash\n ▎ bash\n ▎   not allowed\n                                                                               █\n ▎ edit                                                                        █\n ▎ edit                                                                        █\n ▎   edit rejected                                                             █\n                                                                               █\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ● ready                                         ctx ?\n"
+ right: " ▎   line 50 of a long file\n ▎   line 51 of a long file\n ▎   line 52 of a long file\n ▎   line 53 of a long file\n ▎   line 54 of a long file\n ▎   line 55 of a long file\n ▎   line 56 of a long file\n ▎   line 57 of a long file\n ▎   line 58 of a long file\n ▎   line 59 of a long file\n\n ▎ bash\n ▎ bash\n ▎   not allowed\n\n ▎ edit\n ▎ edit\n ▎   edit rejected\n\n ▎\n ▎\n ▎\n ▎\n ▸ project · deep · high · ● ready                                         ctx ?\n"
+
+---- ui::snapshots::unsaved_gap_dark_60x16 stdout ----
+
+thread 'ui::snapshots::unsaved_gap_dark_60x16' (1598894) panicked at src/ui/snapshots.rs:43:5:
+assertion `left == right` failed: 
+--- snapshot `unsaved_gap_dark_60x16` differs ---
+ACTUAL:
+
+  ⚠ UNSAVED TURN
+  This turn finished, but the Agent did not confirm saving
+  it.
+  The session is blocked. Tool side effects may already exi
+  st.
+  Closing releases this result; reopening reads whatever th
+  e Store can recover.
+  Some live output may be missing.
+
+ ⠋ Blocked · persistence · completed · persistence failed
+ ▎
+ ▎Session blocked
+ ▎
+ ▎
+ ▸ project · deep · high · ● blocked                   ctx ?
+
+--- EXPECTED:
+
+  ⚠ UNSAVED TURN
+  This turn finished, but the Agent did not confirm saving
+  it.
+  The session is blocked. Tool side effects may already exi
+  st.
+  Closing releases this result; reopening reads whatever th
+  e Store can recover.                                     █
+  Some live output may be missing.                         █
+                                                           █
+ ⠋ Blocked · persistence · completed · persistence failed
+ ▎
+ ▎Session blocked
+ ▎
+ ▎
+ ▸ project · deep · high · ● blocked                   ctx ?
+
+
+  left: "\n  ⚠ UNSAVED TURN\n  This turn finished, but the Agent did not confirm saving\n  it.\n  The session is blocked. Tool side effects may already exi\n  st.\n  Closing releases this result; reopening reads whatever th\n  e Store can recover.                                     █\n  Some live output may be missing.                         █\n                                                           █\n ⠋ Blocked · persistence · completed · persistence failed\n ▎\n ▎Session blocked\n ▎\n ▎\n ▸ project · deep · high · ● blocked                   ctx ?\n"
+ right: "\n  ⚠ UNSAVED TURN\n  This turn finished, but the Agent did not confirm saving\n  it.\n  The session is blocked. Tool side effects may already exi\n  st.\n  Closing releases this result; reopening reads whatever th\n  e Store can recover.\n  Some live output may be missing.\n\n ⠋ Blocked · persistence · completed · persistence failed\n ▎\n ▎Session blocked\n ▎\n ▎\n ▸ project · deep · high · ● blocked                   ctx ?\n"
+
+---- ui::snapshots::unsaved_gap_dark_80x24 stdout ----
+
+thread 'ui::snapshots::unsaved_gap_dark_80x24' (1598895) panicked at src/ui/snapshots.rs:43:5:
+assertion `left == right` failed: 
+--- snapshot `unsaved_gap_dark_80x24` differs ---
+ACTUAL:
+  ▍ quoted wisdom
+
+  ╭────────────────────────────────────────────────────────────────────────────╮
+  │fn hello() {                                                                │
+  │    println!("hi");                                                         │
+  │}                                                                           │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+  link (https://example.com) at the end.
+
+  ──────────────────────────────────────────────────────────────────────────────
+
+  ⚠ UNSAVED TURN
+  This turn finished, but the Agent did not confirm saving it.
+  The session is blocked. Tool side effects may already exist.
+  Closing releases this result; reopening reads whatever the Store can recover.
+  Some live output may be missing.
+
+ ⠋ Blocked · persistence · completed · persistence failed
+ ▎
+ ▎Session blocked
+ ▎
+ ▎
+ ▸ project · deep · high · ● blocked                                       ctx ?
+
+--- EXPECTED:
+  ▍ quoted wisdom
+
+  ╭────────────────────────────────────────────────────────────────────────────╮
+  │fn hello() {                                                                │
+  │    println!("hi");                                                         │
+  │}                                                                           │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+                                                                               █
+  link (https://example.com) at the end.                                       █
+                                                                               █
+  ─────────────────────────────────────────────────────────────────────────────█
+                                                                               █
+  ⚠ UNSAVED TURN                                                               █
+  This turn finished, but the Agent did not confirm saving it.                 █
+  The session is blocked. Tool side effects may already exist.                 █
+  Closing releases this result; reopening reads whatever the Store can recover.█
+  Some live output may be missing.                                             █
+                                                                               █
+ ⠋ Blocked · persistence · completed · persistence failed
+ ▎
+ ▎Session blocked
+ ▎
+ ▎
+ ▸ project · deep · high · ● blocked                                       ctx ?
+
+
+  left: "  ▍ quoted wisdom\n\n  ╭────────────────────────────────────────────────────────────────────────────╮\n  │fn hello() {                                                                │\n  │    println!(\"hi\");                                                         │\n  │}                                                                           │\n  ╰────────────────────────────────────────────────────────────────────────────╯\n                                                                               █\n  link (https://example.com) at the end.                                       █\n                                                                               █\n  ─────────────────────────────────────────────────────────────────────────────█\n                                                                               █\n  ⚠ UNSAVED TURN                                                               █\n  This turn finished, but the Agent did not confirm saving it.                 █\n  The session is blocked. Tool side effects may already exist.                 █\n  Closing releases this result; reopening reads whatever the Store can recover.█\n  Some live output may be missing.                                             █\n                                                                               █\n ⠋ Blocked · persistence · completed · persistence failed\n ▎\n ▎Session blocked\n ▎\n ▎\n ▸ project · deep · high · ● blocked                                       ctx ?\n"
+ right: "  ▍ quoted wisdom\n\n  ╭────────────────────────────────────────────────────────────────────────────╮\n  │fn hello() {                                                                │\n  │    println!(\"hi\");                                                         │\n  │}                                                                           │\n  ╰────────────────────────────────────────────────────────────────────────────╯\n\n  link (https://example.com) at the end.\n\n  ──────────────────────────────────────────────────────────────────────────────\n\n  ⚠ UNSAVED TURN\n  This turn finished, but the Agent did not confirm saving it.\n  The session is blocked. Tool side effects may already exist.\n  Closing releases this result; reopening reads whatever the Store can recover.\n  Some live output may be missing.\n\n ⠋ Blocked · persistence · completed · persistence failed\n ▎\n ▎Session blocked\n ▎\n ▎\n ▸ project · deep · high · ● blocked                                       ctx ?\n"
+
+
+failures:
+    app::tests::marker_row_cannot_toggle_a_tool_section
+    app::tests::marker_row_is_not_a_conversation_link_or_fold_target
+    app::tests::scrollbar_drag_cancels_on_a_real_viewport_change
+    app::tests::scrollbar_drag_requires_release_and_cancels_on_focus_or_resize
+    app::tests::scrollbar_wheel_input_cancels_an_uncommitted_drag
+    ui::component_tests::new_output_marker_gets_its_own_row_without_overwriting_transcript
+    ui::component_tests::scrollbar_drag_body_follows_before_release
+    ui::snapshots::chat_dark_80x24
+    ui::snapshots::chat_light_80x24
+    ui::snapshots::multiline_composer_dark_80x24
+    ui::snapshots::new_output_marker_dark_80x24
+    ui::snapshots::pending_model_dark_60x16
+    ui::snapshots::scroll_top_80x24
+    ui::snapshots::steering_dark_60x16
+    ui::snapshots::steering_dark_80x24
+    ui::snapshots::store_error_dark_60x16
+    ui::snapshots::store_error_dark_80x24
+    ui::snapshots::tools_80x24
+    ui::snapshots::unsaved_gap_dark_60x16
+    ui::snapshots::unsaved_gap_dark_80x24
+
+test result: FAILED. 364 passed; 20 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+
+error: test failed, to rerun pass `--lib`

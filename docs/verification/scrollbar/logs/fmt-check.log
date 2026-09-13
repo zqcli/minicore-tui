@@ -1,0 +1,4 @@
+cwd=/root/minicore-scrollbar.1ulnCV
+command=rustup run stable cargo fmt --all -- --check 
+
+exit=0

@@ -1,0 +1,24 @@
+                                                                               │
+  SCROLL_ROW_111 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_112 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_113 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_114 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_115 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_116 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_117 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_118 — synthetic 中文 é example                                    │
+                                                                               │
+  SCROLL_ROW_119 — synthetic 中文 é example                                    █
+                                                                               █
+ ▎                                                                              
+ ▎                                                                              
+ ▎                                                                              
+ ▎                                                                              
+ ▸ workspace · verify scrollbar · high · ● ready · 0m      ↑10 ↓12 R0 W0 · ctx ?

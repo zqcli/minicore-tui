@@ -24,6 +24,43 @@ const WIDTH: u16 = 79;
 const HEIGHT: u16 = 24;
 const MD: &str = "# Title\n\nSome **bold** and *italic* text with `code`.\n\n- item 1\n- item 2\n\n```rust\nfn test() {}\n```\n";
 
+#[test]
+#[ignore = "manual matched scrollbar event benchmark"]
+fn scrollbar_noop_event_benchmark() {
+    let mut app = make_test_app(200);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+    terminal
+        .draw(|frame| crate::ui::render(frame, &app))
+        .unwrap();
+    app.update(AppEvent::Rendered);
+    reset_parse_count();
+    let start = std::time::Instant::now();
+    let mut frames = 0;
+    for _ in 0..5000 {
+        app.update(AppEvent::Terminal(crossterm::event::Event::Mouse(
+            MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: 4,
+                row: 1,
+                modifiers: KeyModifiers::empty(),
+            },
+        )));
+        if app.dirty {
+            terminal
+                .draw(|frame| crate::ui::render(frame, &app))
+                .unwrap();
+            app.update(AppEvent::Rendered);
+            frames += 1;
+        }
+    }
+    println!(
+        "scrollbar_noop events=5000 history_messages=200 frames={frames} elapsed_us={} markdown_parses={}",
+        start.elapsed().as_micros(),
+        parse_count()
+    );
+    assert_eq!(parse_count(), 0);
+}
+
 fn make_test_app(item_count: usize) -> App {
     let mut app = App::new(PathBuf::from("/project"));
     app.connection = ConnectionState::Ready;
@@ -247,9 +284,8 @@ fn viewport_duplicate_is_idempotent_and_does_not_cancel_drag() {
     });
 
     // Start scrollbar drag directly
-    let geo =
-        crate::ui::scrollbar::geometry(screen.transcript, total, vis, total.saturating_sub(vis))
-            .unwrap();
+    let geo = crate::ui::scrollbar::geometry(screen.transcript, total, total.saturating_sub(vis))
+        .unwrap();
     let drag_column = geo.column as u16;
     let drag_row = geo.thumb_top as u16;
 
@@ -287,9 +323,8 @@ fn unrelated_rpc_reprepare_keeps_scrollbar_drag_until_release() {
     let area = ratatui::layout::Rect::new(0, 0, WIDTH + 1, HEIGHT);
     let screen = crate::ui::layout::screen_layout(&app, area);
     let visible = visible_rows(&app, total, screen.transcript.height);
-    let geometry =
-        crate::ui::scrollbar::geometry(screen.transcript, total, visible, total - visible)
-            .expect("overflowing transcript has a scrollbar");
+    let geometry = crate::ui::scrollbar::geometry(screen.transcript, total, total - visible)
+        .expect("overflowing transcript has a scrollbar");
 
     app.update(AppEvent::Terminal(crossterm::event::Event::Mouse(
         MouseEvent {

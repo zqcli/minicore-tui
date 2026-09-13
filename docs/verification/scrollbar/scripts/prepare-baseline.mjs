@@ -1,0 +1,11 @@
+import {readFileSync, writeFileSync} from 'node:fs';
+import {execFileSync} from 'node:child_process';
+const path='src/ui/render_cache_tests.rs';
+const original=execFileSync('git',['show',`6ecd736:${path}`],{encoding:'utf8'});
+const current=readFileSync(path,'utf8');
+const start=current.indexOf('#[test]\n#[ignore = "manual matched scrollbar event benchmark"]');
+const end=current.indexOf('\nfn make_test_app',start);
+if(start<0||end<start) throw Error('benchmark not found');
+const benchmark=current.slice(start,end);
+writeFileSync('/tmp/minicore-scrollbar.jB2v84/baseline-render-cache-tests.rs',original+'\n'+benchmark+'\n');
+writeFileSync('/tmp/minicore-scrollbar.jB2v84/benchmark-instrumentation.rs',benchmark+'\n');

@@ -127,7 +127,9 @@ The complete current keymap and slash-command semantics are in
 - `Ctrl+R` opens Sessions, `Ctrl+N` opens New Session, `Ctrl+L` opens Model, and `Shift+Tab` opens Reasoning;
 - In Sessions, `F2` renames, `F5` refreshes, `Ctrl+W` closes, and `Delete`/`Ctrl+D` deletes after the required confirmations;
 - `Ctrl+T` toggles reasoning and `Ctrl+O` toggles tool previews;
-- `PageUp`/`PageDown`, `Ctrl+Home`/`Ctrl+End`, and mouse wheel scroll the transcript;
+- `PageUp`/`PageDown` scroll with four rows of overlap; `Ctrl+Home`/`Ctrl+End` jump to the transcript ends;
+- mouse wheel moves one row, or five with Alt; the Pi-style scrollbar appears on scrolling/hover, supports live dragging, and hides after one second;
+- the bottom scroll-status hint overlays the transcript without consuming a row; see [scrollbar verification](docs/verification/scrollbar/README.md);
 - `Esc` closes a dock or cancels the exact running turn;
 - `Ctrl+C` clears non-empty input, then double-presses to quit; `/cancel` cancels the exact active loop, `/reload` reloads Agent configuration and safe read-only state, and `/quit` performs normal shutdown.
 

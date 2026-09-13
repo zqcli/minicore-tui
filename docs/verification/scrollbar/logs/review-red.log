@@ -1,0 +1,42 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-scrollbar.1ulnCV)
+    Finished `test` profile [optimized + debuginfo] target(s) in 28.78s
+     Running unittests src/lib.rs (/root/minicore-tui-027-RXdxEP/target-linux/debug/deps/minicore_tui-41daef67e6d48117)
+
+running 9 tests
+test app::scrollbar_tests::pi_wheel_steps_and_page_overlap_preserve_prepared_rows ... ok
+test app::scrollbar_tests::pi_track_click_and_drag_are_live_release_does_not_recalculate ... ok
+test app::scrollbar_tests::pi_auto_hide_hover_and_idle_deadline ... ok
+test app::scrollbar_tests::marker_click_uses_prepared_geometry_before_viewport_receipt ... FAILED
+test app::scrollbar_tests::early_scrollbar_tick_does_not_redraw ... FAILED
+test app::scrollbar_tests::any_mouse_release_ends_scrollbar_capture ... FAILED
+test app::scrollbar_tests::boundary_wheel_is_noop_and_does_not_reveal_scrollbar ... ok
+test app::scrollbar_tests::viewport_growth_keeps_capture_and_drag_uses_new_geometry ... ok
+test app::scrollbar_tests::app_scroll_and_visibility_trace_matches_pi ... ok
+
+failures:
+
+---- app::scrollbar_tests::marker_click_uses_prepared_geometry_before_viewport_receipt stdout ----
+
+thread 'app::scrollbar_tests::marker_click_uses_prepared_geometry_before_viewport_receipt' (1622616) panicked at src/app/scrollbar_tests.rs:47:5:
+assertion failed: app.active_view().unwrap().scroll.follow_tail
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- app::scrollbar_tests::early_scrollbar_tick_does_not_redraw stdout ----
+
+thread 'app::scrollbar_tests::early_scrollbar_tick_does_not_redraw' (1622615) panicked at src/app/scrollbar_tests.rs:26:5:
+assertion failed: !app.dirty
+
+---- app::scrollbar_tests::any_mouse_release_ends_scrollbar_capture stdout ----
+
+thread 'app::scrollbar_tests::any_mouse_release_ends_scrollbar_capture' (1622612) panicked at src/app/scrollbar_tests.rs:35:5:
+assertion failed: app.scrollbar_drag.is_none()
+
+
+failures:
+    app::scrollbar_tests::any_mouse_release_ends_scrollbar_capture
+    app::scrollbar_tests::early_scrollbar_tick_does_not_redraw
+    app::scrollbar_tests::marker_click_uses_prepared_geometry_before_viewport_receipt
+
+test result: FAILED. 6 passed; 3 failed; 0 ignored; 0 measured; 388 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

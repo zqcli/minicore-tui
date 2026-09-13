@@ -5,17 +5,17 @@
   │    println!("hi");                                                         │
   │}                                                                           │
   ╰────────────────────────────────────────────────────────────────────────────╯
-                                                                               █
-  link (https://example.com) at the end.                                       █
-                                                                               █
-  ─────────────────────────────────────────────────────────────────────────────█
-                                                                               █
-  ⚠ UNSAVED TURN                                                               █
-  This turn finished, but the Agent did not confirm saving it.                 █
-  The session is blocked. Tool side effects may already exist.                 █
-  Closing releases this result; reopening reads whatever the Store can recover.█
-  Some live output may be missing.                                             █
-                                                                               █
+
+  link (https://example.com) at the end.
+
+  ──────────────────────────────────────────────────────────────────────────────
+
+  ⚠ UNSAVED TURN
+  This turn finished, but the Agent did not confirm saving it.
+  The session is blocked. Tool side effects may already exist.
+  Closing releases this result; reopening reads whatever the Store can recover.
+  Some live output may be missing.
+
  ⠋ Blocked · persistence · completed · persistence failed
  ▎
  ▎Session blocked

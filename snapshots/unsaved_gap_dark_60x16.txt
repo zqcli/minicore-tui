@@ -5,9 +5,9 @@
   The session is blocked. Tool side effects may already exi
   st.
   Closing releases this result; reopening reads whatever th
-  e Store can recover.                                     █
-  Some live output may be missing.                         █
-                                                           █
+  e Store can recover.
+  Some live output may be missing.
+
  ⠋ Blocked · persistence · completed · persistence failed
  ▎
  ▎Session blocked

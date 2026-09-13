@@ -1,22 +1,22 @@
- ▎                                                                             █
- ▎ Hello world with code.                                                      █
- ▎ time unavailable                                                            █
- ▎                                                                             █
-                                                                               █
-  Heading                                                                      █
-                                                                               █
-  A paragraph with bold, italic, and code.                                     █
-                                                                               █
-  • first item                                                                 █
-  • second item                                                                █
-                                                                               █
-  ▍ quoted wisdom                                                              █
-                                                                               █
-  ╭────────────────────────────────────────────────────────────────────────────█
+ ▎
+ ▎ Hello world with code.
+ ▎ time unavailable
+ ▎
+
+  Heading
+
+  A paragraph with bold, italic, and code.
+
+  • first item
+  • second item
+
+  ▍ quoted wisdom
+
+  ╭────────────────────────────────────────────────────────────────────────────╮
   │fn hello() {                                                                │
   │    println!("hi");                                                         │
   │}                                                                           │
- ↓ new output
+  ╰───────────────────────────────↓ new output─────────────────────────────────╯
  ▎
  ▎
  ▎
