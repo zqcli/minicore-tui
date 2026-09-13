@@ -1,0 +1,20 @@
+{
+  "implementation": "5feab8d3885092f41a5fcd7b10bd2d8090622c6d",
+  "source_files": 245,
+  "source_archive_sha256": "eede0ab5ca936df071f9666fbd5eef4e7aa77f6b6a81fb0e680228de306f344c",
+  "source_manifest_sha256": "5df6cf741dd4e6802419f2c4df3a68d0e4017c648f5bdfd2ff31d6b824435da3",
+  "artifacts": {
+    "debug": {
+      "path": "target/debug/minicore-tui",
+      "sha256": "f1a9eb3516e5ed1f9632c1ef4b1fe1cc622aa8545878a30141cc7e9b61e1917e"
+    },
+    "release": {
+      "path": "target/release/minicore-tui",
+      "sha256": "c4d97f442290e5c3c58496ce46719d3138cfbabb17e6ad87a3d53364bacbf019"
+    }
+  },
+  "backup": "target/preserved-before-scrollbar-jB2v84",
+  "agent_implementation": "f1697f78ce48c8f5f3fde0dc9903c153022bfd9e",
+  "atomic_per_file": true,
+  "user_process_restart": false
+}

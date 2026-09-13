@@ -1,8 +1,28 @@
 # Delivery Verification
 
-## Current Delivery: 0.2.8
+## Current Delivery: 0.2.8 — Fullscreen Scrollbar
 
-Current accepted sources are TUI `a604e55` and unchanged Agent `f1697f7`, packaged
+Installed TUI implementation is `5feab8d`, with unchanged Agent `f1697f7` and
+Runtime 0.4.1. The scrollbar follows Pi 0.85.1's default fullscreen auto behavior.
+See [source binding, gates, benchmark and native evidence](verification/scrollbar/README.md).
+Remote stable/MSRV suites each passed **525 TUI tests / 20 ignored**, with **18
+real-Agent E2E tests** separately passing on each toolchain. Stable fmt, strict
+Clippy, warning-denied rustdoc and macOS Debug/Release builds passed.
+
+Both TUI candidates passed targeted real iTerm2 scrolling workflows against the
+unchanged installed Agent Debug binary, with one loopback request each and exact
+normal-exit TTY restoration. Mach-O metadata, signatures and Debug/dSYM UUID
+match. Both TUI profiles are installed via per-file atomic replacement; old
+inodes and symbols are preserved under `target/preserved-before-scrollbar-jB2v84`.
+The matched 5000-event boundary-wheel workload changed from 5000 redraws to zero;
+this is not an overall FPS/CPU claim. Existing hint labels and the broader Rail
+theme remain. No user-process restart, new Agent full suite, panic-native rerun,
+real provider, hosted CI, Windows, tag, version bump or push is claimed. The
+separate Agent compaction work and private-copy cleanup remain paused and untouched.
+
+## Historical 0.2.8 — Reload Correction
+
+At that delivery, accepted sources were TUI `a604e55` and unchanged Agent `f1697f7`, packaged
 as **0.2.8 / 0.3.3** with Runtime 0.4.1 pinned to `6cd2bdbc634437dea925495c61c7eb0be10ba171`.
 See the [public reload correction and current provenance](verification/reload-refresh/README.md).
 Remote stable/MSRV suites each passed **508 TUI tests / 19 ignored** and separately

@@ -1,0 +1,5 @@
+/Users/zzq/Develops/minicore-tui/target/debug/minicore-tui old_inode=76676442 old_sha256=998b10c1a8745116ebdb7254bad43530b74533ce3673f7a4a81cf0d5fc2bce14 new_inode=76702281 new_sha256=f1a9eb3516e5ed1f9632c1ef4b1fe1cc622aa8545878a30141cc7e9b61e1917e backup=/Users/zzq/Develops/minicore-tui/target/preserved-before-scrollbar-jB2v84/debug/minicore-tui
+/Users/zzq/Develops/minicore-tui/target/release/minicore-tui old_inode=76676443 old_sha256=9f61b78ab1ce300bbb714a4b6399a33c05c0ed043e2f78d1e1485fed43a4b203 new_inode=76702282 new_sha256=c4d97f442290e5c3c58496ce46719d3138cfbabb17e6ad87a3d53364bacbf019 backup=/Users/zzq/Develops/minicore-tui/target/preserved-before-scrollbar-jB2v84/release/minicore-tui
+UUID: 4C4C445A-5555-3144-A105-9C2CE9C62379 (x86_64) /Users/zzq/Develops/minicore-tui/target/debug/minicore-tui
+UUID: 4C4C445A-5555-3144-A105-9C2CE9C62379 (x86_64) /Users/zzq/Develops/minicore-tui/target/debug/minicore-tui.dSYM/Contents/Resources/DWARF/minicore-tui-debug
+INSTALLATION_PASS: TUI-only per-file atomic replacement; old inodes preserved; Agent unchanged; no user-process restart

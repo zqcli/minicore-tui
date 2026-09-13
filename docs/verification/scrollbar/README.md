@@ -2,8 +2,9 @@
 
 Date: 2026-09-13. TUI remains 0.2.8; Agent remains 0.3.3. This is a TUI-only
 change, independent of the paused Agent compaction draft and incident cleanup.
-The exact tested source is bound by `source-sha256.json`; implementation and
-installation commits are recorded in `../../verification.md`.
+Implementation commit: `5feab8d`. The exact tested source is bound by
+`source-sha256.json` (245 files matched remotely). Current installation is
+recorded in `../../verification.md`.
 
 ## Reference and Scope
 
@@ -59,7 +60,7 @@ of accepted Agent `f1697f7`; native runs use its unchanged installed Debug binar
 No new Agent full-suite acceptance is claimed.
 
 `logs/render-red.log`, `review-red.log` and `reference-tests-2.log` preserve real
-track, completion/interaction and wide-background failures. Compile/setup errors
+track, timer/capture/marker and wide-background failures. Compile/setup errors
 and outdated fixture assumptions remain separately recorded and are not product
 REDs. Existing selection timing assertions remain; their setup now supplies
 sufficient actual content rather than inconsistent synthetic viewport counts.
@@ -97,8 +98,14 @@ closed or restarted. No new panic-exit or real-provider run is claimed.
 | TUI Debug | `f1a9eb3516e5ed1f9632c1ef4b1fe1cc622aa8545878a30141cc7e9b61e1917e` |
 | TUI Release | `c4d97f442290e5c3c58496ce46719d3138cfbabb17e6ad87a3d53364bacbf019` |
 
+Both TUI profiles are installed at `target/{debug,release}/minicore-tui`.
+Old binary inodes and the Debug dSYM remain under
+`target/preserved-before-scrollbar-jB2v84`. Agent installation hashes are unchanged.
+`scripts/install.sh` and `logs/install.log` record the guarded, per-file atomic
+replacement. No running user process was restarted.
+
 Raw logs, native text captures, TTY metadata and exact execution scripts are
-retained here. Binaries/dSYM and complete local evidence are under
+retained here; `checksums.sha256` protects the complete checked-in evidence set. Binaries/dSYM and complete local evidence are under
 `/tmp/minicore-scrollbar.jB2v84`; remote artifacts and benchmark binaries remain
 under `/root/minicore-scrollbar.1ulnCV`. Historical verification packages,
 rejected artifacts, Runtime work and the paused compaction evidence are retained.
