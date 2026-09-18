@@ -44,11 +44,15 @@ package-minor gate (`minor == 3`) is deleted in stage B and replaced by
 necessary but not sufficient condition; the fixed Agent 0.5.0 build plus this
 repository's fixtures/E2E remain the release gate.
 
-**Measured stage-A fact:** running the current real-Agent E2E suite against the
-fixed Agent 0.5.0 binary fails immediately at bootstrap with
-`unsupported agent version '0.5.0': minicore-tui requires agent 0.3.x`. Every
-E2E scenario is blocked until stage B removes the 0.3.x gate. This is the
-concrete, reproduced reason the gate must go.
+**Current status:** stage B1 (commit `afd2894`) removed the
+`is_supported_agent_version` package-minor gate and replaced it with
+`validate_backend(protocol_version, capabilities)`, so a pinned Agent 0.5.0
+now passes bootstrap. The reducer tests
+`bootstrap_accepts_the_pinned_agent_0_5_protocol_v1` and
+`bootstrap_rejects_a_backend_missing_required_capabilities` measure both
+directions. The 18 real-Agent E2E scenarios are still `#[ignore]`d on this
+host because they need `MINICORE_AGENT_BIN` and the loopback mock; protocol v1
+equality is a necessary condition, not a release pass.
 
 ## Method surface (33 methods)
 
@@ -64,7 +68,7 @@ concrete, reproduced reason the gate must go.
 `turn.send`, `turn.steer`, `turn.cancel`, `turn.wait`, `turn.result`,
 `interaction.answer`.
 
-The stage-B migration consumes: `session.read`, `turn.result`,
+The migration consumes: `session.read`, `turn.result`,
 `session.context`, `session.compact`/`session.compact.cancel`, `tool.read`,
 `tool.output`, `workspace.*`, `changes.*`. `session.history` and
 `session.presentation` remain display/diagnostic only; they must not become
@@ -131,6 +135,22 @@ TUI targets 2 read-query slots and ≤16 outstanding deferred requests. Domain
 error codes are unchanged from `docs/rpc.md` (`-32001`..`-32022`); error data
 carries only `{kind, retryable}` plus a short stable message.
 
+C1 enforces the local side of those limits (spec §5.2/§5.4):
+
+- Outbound FIFO: 32 slots total, 28 ordinary + 4 reserved for control
+  (`turn.cancel`, `session.compact.cancel`, `session.close`, `agent.shutdown`).
+  `try_send` admits or refuses synchronously; a refused request was never
+  written, so the app revokes its pending registration and keeps the input.
+  `MAX_REQUEST_LINE_BYTES = 1 MiB` is checked before any write.
+- Inbound: 32 MiB per frame plus a 64 MiB aggregate wire budget whose charge
+  is released by the app taking ownership of a decoded frame.
+- Read/deferred: `app/queries.rs` keeps `QuerySlots::CAPACITY = 2` in-flight
+  read-only slots with `MAX_WAITING = 16` queued; `app.rs` keeps at most 16
+  deferred `turn.wait`/`turn.result`/`session.compact` intents and coalesces
+  retries by exact target.
+- Local jobs: clipboard work runs on an owned blocking task with an owner, a
+  deadline and a joinable shutdown; the main loop never awaits it.
+
 ## Fixtures
 
 `tests/fixtures/agent-v1/` holds desensitized result payloads captured from a
@@ -185,7 +205,8 @@ Fixed inputs:
 agent  binary  /root/minicore-tui-v03-refactor/agent-target/debug/minicore-agent  (0.5.0)
 agent  head    061743369459299e66be97bf97d2b27352a39914
 runtime head   6cd2bdbc634437dea925495c61c7eb0be10ba171
-tui    head    9d11ee69c4efa02ef1e5bff143662b48dc3194de (stage-A base)
+tui    base    9d11ee69c4efa02ef1e5bff143662b48dc3194de (stage-A baseline)
+tui    head    d47d837 (C1 history-read convergence)
 CARGO_TARGET_DIR=/root/minicore-tui-v03-refactor/tui-target
 ```
 
@@ -193,18 +214,27 @@ Verification commands:
 
 ```bash
 cd /root/minicore-tui-v03-refactor/tui
-cargo fmt --all -- --check
-cargo test --locked --all-targets
-cargo clippy --locked --all-targets -- -D warnings
+RUSTUP_TOOLCHAIN=1.85.0 cargo fmt --all -- --check
+RUSTUP_TOOLCHAIN=1.85.0 cargo test --locked --all-targets --no-fail-fast
+RUSTUP_TOOLCHAIN=1.85.0 cargo clippy --locked --all-targets -- -D warnings
 python3 scripts/generate_agent_v1_fixtures.py \
   --agent-bin /root/minicore-tui-v03-refactor/agent-target/debug/minicore-agent \
   --out tests/fixtures/agent-v1
 cargo test --release --locked --test performance -- --ignored --nocapture
 ```
 
-Last stage-A result: `fmt` 0, `test` 566 passed / 0 failed / 23 ignored,
-`clippy -D warnings` 0. Raw logs are kept on the builder as
-`/root/minicore-tui-v03-refactor/final-{fmt,test,clippy}.log` and
-`perf-baseline.log`. The pinned Agent 0.5.0 E2E run fails at bootstrap with
-`unsupported agent version '0.5.0'`; that is `REF-01` and is expected to stay
-red until stage B.
+Last verified result (C1, commit `d47d837`): `fmt` clean, `test` 610 passed /
+0 failed / 23 ignored, `clippy -D warnings` clean, all under Rust 1.85. Raw
+logs: `/root/minicore-tui-v03-refactor/c1-io-tests4.log`,
+`c1-history-tests.log`, `c1-io-clippy.log`. Earlier B1/B2 logs are
+`b1-*.log` / `b2-*.log`.
+
+The 23 ignored tests are the 18 real-Agent E2E scenarios plus 5 release/perf
+tests; they are not evidence. `docs/refactor-acceptance.md` tracks which
+REF rows remain open.
+
+C1 status: the synchronous-admission/IO slice (`c843105`) and the
+history-read-state convergence (`d47d837`) are landed and verified. The
+reload narrowing, the `result_unconfirmed` → `Confirmation` migration, and
+the `src/app.rs` module split are **not** landed; the acceptance matrix lists
+them explicitly so no partial claim is made.
