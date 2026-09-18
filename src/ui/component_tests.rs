@@ -316,20 +316,18 @@ fn stale_durable_tool_toggle_cannot_mutate_the_current_live_card() {
         .first_mut()
         .unwrap()
         .expanded = true;
-    view.transcript
-        .blocks_mut()
-        .push(TranscriptBlock::Tool(ToolBlock {
-            index: Some(99),
-            loop_id: "loop_old".to_owned(),
-            request_index: 0,
-            tool_call_id: "c1".to_owned(),
-            name: "read".to_owned(),
-            result: None,
-            outcome: None,
-            live_status: None,
-            progress: None,
-            expanded: true,
-        }));
+    view.transcript.push_block(TranscriptBlock::Tool(ToolBlock {
+        index: Some(99),
+        loop_id: "loop_old".to_owned(),
+        request_index: 0,
+        tool_call_id: "c1".to_owned(),
+        name: "read".to_owned(),
+        result: None,
+        outcome: None,
+        live_status: None,
+        progress: None,
+        expanded: true,
+    }));
 
     app.update(AppEvent::ToggleTool {
         session_id: "ses_1".to_owned(),
@@ -360,7 +358,8 @@ fn prepared_section_ids_survive_tool_result_updates() {
         .collect();
     let view = app.sessions.known.get_mut("ses_1").unwrap();
     for block in view.transcript.blocks_mut() {
-        if let TranscriptBlock::Tool(tool) = block {
+        let block = std::sync::Arc::make_mut(block);
+        if let TranscriptBlock::Tool(tool) = &mut *block {
             if tool.tool_call_id == "call-1" {
                 tool.result = Some("a changed result\nwith another line".to_owned());
             }
@@ -406,7 +405,7 @@ fn selection_rebases_when_older_history_prepends_rows() {
     app.update(AppEvent::ConversationPrepared(first));
 
     let view = app.sessions.known.get_mut("ses_1").unwrap();
-    view.transcript.blocks_mut().insert(
+    view.transcript.insert_block(
         0,
         TranscriptBlock::User(UserBlock {
             index: Some(99),
@@ -908,43 +907,48 @@ fn cached_and_fallback_transcripts_have_identical_section_spacing() {
         .get_mut("ses_1")
         .unwrap()
         .transcript
-        .blocks = std::sync::Arc::new(vec![
-        TranscriptBlock::User(UserBlock {
-            index: Some(1),
-            loop_id: Some("turn".to_owned()),
-            kind: crate::protocol::UserMessageKindWire::Prompt,
-            text: "user".to_owned(),
-            pending: false,
-        }),
-        TranscriptBlock::Assistant(AssistantBlock {
-            index: 2,
-            loop_id: "turn".to_owned(),
-            request_index: 0,
-            model: "model".to_owned(),
-            reasoning_level: crate::protocol::Reasoning::Auto,
-            parts: vec![
-                AssistantPart::Text("first".to_owned()),
-                AssistantPart::Reasoning("thinking".to_owned()),
-                AssistantPart::Text("second".to_owned()),
-            ],
-            tool_calls: vec![],
-            usage: Default::default(),
-            finish_reason: "stop".to_owned(),
-            terminal_error: None,
-        }),
-        TranscriptBlock::Tool(ToolBlock {
-            index: None,
-            loop_id: "turn".to_owned(),
-            request_index: 0,
-            tool_call_id: "call".to_owned(),
-            name: "bash".to_owned(),
-            result: None,
-            outcome: None,
-            live_status: None,
-            progress: None,
-            expanded: false,
-        }),
-    ]);
+        .blocks = std::sync::Arc::new(
+        vec![
+            TranscriptBlock::User(UserBlock {
+                index: Some(1),
+                loop_id: Some("turn".to_owned()),
+                kind: crate::protocol::UserMessageKindWire::Prompt,
+                text: "user".to_owned(),
+                pending: false,
+            }),
+            TranscriptBlock::Assistant(AssistantBlock {
+                index: 2,
+                loop_id: "turn".to_owned(),
+                request_index: 0,
+                model: "model".to_owned(),
+                reasoning_level: crate::protocol::Reasoning::Auto,
+                parts: vec![
+                    AssistantPart::Text("first".to_owned()),
+                    AssistantPart::Reasoning("thinking".to_owned()),
+                    AssistantPart::Text("second".to_owned()),
+                ],
+                tool_calls: vec![],
+                usage: Default::default(),
+                finish_reason: "stop".to_owned(),
+                terminal_error: None,
+            }),
+            TranscriptBlock::Tool(ToolBlock {
+                index: None,
+                loop_id: "turn".to_owned(),
+                request_index: 0,
+                tool_call_id: "call".to_owned(),
+                name: "bash".to_owned(),
+                result: None,
+                outcome: None,
+                live_status: None,
+                progress: None,
+                expanded: false,
+            }),
+        ]
+        .into_iter()
+        .map(std::sync::Arc::new)
+        .collect(),
+    );
 
     let fallback = transcript::all_lines(&theme, &app, 80);
     let prepared = transcript::prepare_conversation(&app, 80);

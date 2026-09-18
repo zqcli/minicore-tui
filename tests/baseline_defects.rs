@@ -267,7 +267,7 @@ fn tool_projection_uses_one_index_and_never_rescans_blocks() {
         "C2: each tool call resolves through the index"
     );
     assert!(
-        !source.contains(".find_map(|block| match block {"),
+        !source.contains(".find_map(|block| match block.as_ref() {"),
         "C2: the projection must not scan every block per tool call"
     );
     assert!(

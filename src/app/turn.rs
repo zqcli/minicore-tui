@@ -734,9 +734,9 @@ impl App {
                 } else if let Some(live) = view.live.as_ref() {
                     recovered = Some(live.user_text.clone());
                 }
-                view.transcript
-                    .blocks_mut()
-                    .retain(|block| !matches!(block, TranscriptBlock::User(card) if card.pending));
+                view.transcript.blocks_mut().retain(
+                    |block| !matches!(block.as_ref(), TranscriptBlock::User(card) if card.pending),
+                );
                 view.transcript.invalidate();
             }
             recovered
@@ -1191,15 +1191,13 @@ impl App {
             view.steer_queue_paused = !view.steer_queue.is_empty();
             view.steer_receipt = None;
             view.applied_steers.clear();
-            view.transcript
-                .blocks_mut()
-                .push(TranscriptBlock::User(UserBlock {
-                    index: None,
-                    loop_id: None,
-                    kind: UserMessageKindWire::Prompt,
-                    text: trimmed.to_owned(),
-                    pending: true,
-                }));
+            view.transcript.push_block(TranscriptBlock::User(UserBlock {
+                index: None,
+                loop_id: None,
+                kind: UserMessageKindWire::Prompt,
+                text: trimmed.to_owned(),
+                pending: true,
+            }));
             view.transcript.invalidate();
         }
         let send = self.request(
@@ -1456,11 +1454,12 @@ impl App {
             {
                 Plan::Stale
             } else {
-                let pending_user_text =
-                    view.transcript.blocks.iter().find_map(|block| match block {
-                        TranscriptBlock::User(card) if card.pending => Some(card.text.clone()),
-                        _ => None,
-                    });
+                let pending_user_text = view.transcript.blocks.iter().find_map(|block| match block
+                    .as_ref()
+                {
+                    TranscriptBlock::User(card) if card.pending => Some(card.text.clone()),
+                    _ => None,
+                });
                 let Some(live) = view.live.as_mut() else {
                     return Vec::new();
                 };
@@ -1504,12 +1503,13 @@ impl App {
                             live.reference = Some(result.turn.clone());
                             view.live_user_timestamp = result.accepted_at.clone();
                             view.live_user_time_accepted = true;
-                            let pending_user = view.transcript.blocks_mut().iter_mut().find_map(
-                                |block| match block {
-                                    TranscriptBlock::User(card) if card.pending => Some(card),
-                                    _ => None,
-                                },
-                            );
+                            let pending_user =
+                                view.transcript.blocks_mut().iter_mut().find_map(|block| {
+                                    match std::sync::Arc::make_mut(block) {
+                                        TranscriptBlock::User(card) if card.pending => Some(card),
+                                        _ => None,
+                                    }
+                                });
                             if let Some(card) = pending_user {
                                 card.loop_id = Some(result.turn.loop_id.clone());
                             }
@@ -1544,7 +1544,7 @@ impl App {
                                 view.live.as_ref().is_some_and(|live| live.cancel_requested)
                                     || submission_cancel_requested;
                             view.transcript.blocks_mut().retain(
-                            |block| !matches!(block, TranscriptBlock::User(card) if card.pending),
+                            |block| !matches!(block.as_ref(), TranscriptBlock::User(card) if card.pending),
                         );
                             view.transcript.invalidate();
                             // The started loop owns the text: drop the queue entry
@@ -1562,7 +1562,7 @@ impl App {
                                 view.live.take().map(|live| live.user_text)
                             };
                             view.transcript.blocks_mut().retain(
-                            |block| !matches!(block, TranscriptBlock::User(card) if card.pending),
+                            |block| !matches!(block.as_ref(), TranscriptBlock::User(card) if card.pending),
                         );
                             view.transcript.invalidate();
                             Plan::Failed { recovered, error }
@@ -2465,7 +2465,8 @@ impl App {
         live.reference = Some(turn.clone());
         let mut changed = false;
         for block in view.transcript.blocks_mut() {
-            if let TranscriptBlock::User(card) = block {
+            let block = std::sync::Arc::make_mut(block);
+            if let TranscriptBlock::User(card) = &mut *block {
                 if card.pending {
                     card.loop_id = Some(turn.loop_id.clone());
                     changed = true;

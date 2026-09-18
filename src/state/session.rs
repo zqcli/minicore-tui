@@ -428,7 +428,7 @@ impl SessionView {
         let mut request_keys = HashSet::new();
         let mut source_count = 0;
         for block in self.transcript.blocks.iter() {
-            let TranscriptBlock::Assistant(assistant) = block else {
+            let TranscriptBlock::Assistant(assistant) = block.as_ref() else {
                 continue;
             };
             if persisted_loop == Some(assistant.loop_id.as_str())
@@ -718,16 +718,13 @@ mod tests {
         let mut session = view();
         session
             .transcript
-            .blocks_mut()
-            .push(assistant("loop_1", 0, Some(10), Some(20)));
+            .push_block(assistant("loop_1", 0, Some(10), Some(20)));
         session
             .transcript
-            .blocks_mut()
-            .push(assistant("loop_1", 0, Some(100), Some(200)));
+            .push_block(assistant("loop_1", 0, Some(100), Some(200)));
         session
             .transcript
-            .blocks_mut()
-            .push(assistant("loop_2", 0, Some(3), Some(4)));
+            .push_block(assistant("loop_2", 0, Some(3), Some(4)));
         session.transcript.complete = true;
         session.last_result = Some(TurnResultViewWire {
             turn: TurnRef {
@@ -765,8 +762,7 @@ mod tests {
         let mut session = view();
         session
             .transcript
-            .blocks_mut()
-            .push(assistant("loop_1", 0, Some(10), None));
+            .push_block(assistant("loop_1", 0, Some(10), None));
         session.transcript.complete = true;
         session.recompute_usage_projection();
         assert_eq!(session.usage_projection.usage.input_tokens, Some(10));
@@ -864,8 +860,7 @@ mod tests {
         session.transcript.complete = true;
         session
             .transcript
-            .blocks_mut()
-            .push(assistant("loop_0", 0, Some(100), Some(200)));
+            .push_block(assistant("loop_0", 0, Some(100), Some(200)));
         session.last_result = Some(TurnResultViewWire {
             turn: TurnRef {
                 session_id: "ses_1".to_owned(),

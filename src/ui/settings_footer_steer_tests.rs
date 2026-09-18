@@ -488,15 +488,13 @@ fn steer_identity_app(count: u32, steer_id: u32) -> crate::app::App {
     // Same-loop durable history already reconciled (indices 0..count-1).
     if let Some(view) = app.sessions.known.get_mut("ses_1") {
         for index in 0..count {
-            view.transcript
-                .blocks_mut()
-                .push(TranscriptBlock::User(UserBlock {
-                    index: Some(index as usize),
-                    loop_id: Some("loop_live".to_owned()),
-                    kind: crate::protocol::UserMessageKindWire::Prompt,
-                    text: format!("prompt {index}"),
-                    pending: false,
-                }));
+            view.transcript.push_block(TranscriptBlock::User(UserBlock {
+                index: Some(index as usize),
+                loop_id: Some("loop_live".to_owned()),
+                kind: crate::protocol::UserMessageKindWire::Prompt,
+                text: format!("prompt {index}"),
+                pending: false,
+            }));
         }
     }
     let commands = testapp::take_requests(app.update(AppEvent::SteerTurn {
@@ -585,15 +583,13 @@ fn provisional_steer_selection_never_rebases_onto_a_wrong_durable_user() {
     // (same loop) exactly once, exactly as in the live->history reconcile: the
     // matching applied (receipt-proven) provisional card is removed.
     if let Some(view) = app.sessions.known.get_mut("ses_1") {
-        view.transcript
-            .blocks_mut()
-            .push(TranscriptBlock::User(UserBlock {
-                index: Some(8),
-                loop_id: Some("loop_live".to_owned()),
-                kind: crate::protocol::UserMessageKindWire::Steering,
-                text: "steer body".to_owned(),
-                pending: false,
-            }));
+        view.transcript.push_block(TranscriptBlock::User(UserBlock {
+            index: Some(8),
+            loop_id: Some("loop_live".to_owned()),
+            kind: crate::protocol::UserMessageKindWire::Steering,
+            text: "steer body".to_owned(),
+            pending: false,
+        }));
         view.applied_steers
             .retain(|applied| applied.text != "steer body");
         view.transcript.invalidate();

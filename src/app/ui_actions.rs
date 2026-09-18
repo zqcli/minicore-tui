@@ -1606,7 +1606,7 @@ pub(super) fn set_all_tools_expanded(view: &mut SessionView, expanded: bool) {
         .transcript
         .blocks
         .iter()
-        .filter_map(|block| match block {
+        .filter_map(|block| match block.as_ref() {
             TranscriptBlock::Tool(tool) => Some(ToolKey::new(
                 &view.info.session_id,
                 &tool.loop_id,
@@ -1617,7 +1617,8 @@ pub(super) fn set_all_tools_expanded(view: &mut SessionView, expanded: bool) {
         })
         .collect::<Vec<_>>();
     for block in view.transcript.blocks_mut() {
-        if let TranscriptBlock::Tool(tool) = block {
+        let block = std::sync::Arc::make_mut(block);
+        if let TranscriptBlock::Tool(tool) = &mut *block {
             tool.expanded = expanded;
         }
     }
@@ -1879,7 +1880,7 @@ pub(super) fn toggle_tool(
     };
     let has_durable_tool = view.transcript.blocks.iter().any(|block| {
         matches!(
-            block,
+            block.as_ref(),
             TranscriptBlock::Tool(tool)
                 if tool.loop_id == loop_id
                     && tool.request_index == request_index
@@ -1888,7 +1889,8 @@ pub(super) fn toggle_tool(
     });
     let expanded = !current;
     for block in view.transcript.blocks_mut() {
-        if let TranscriptBlock::Tool(tool) = block {
+        let block = std::sync::Arc::make_mut(block);
+        if let TranscriptBlock::Tool(tool) = &mut *block {
             if tool.loop_id == loop_id
                 && tool.request_index == request_index
                 && tool.tool_call_id == tool_call_id
@@ -1936,16 +1938,21 @@ fn current_tool_expanded(view: &SessionView, key: &ToolKey) -> Option<bool> {
     if key.session_id != view.info.session_id {
         return None;
     }
-    if let Some(expanded) = view.transcript.blocks.iter().find_map(|block| match block {
-        TranscriptBlock::Tool(tool)
-            if tool.loop_id == key.loop_id
-                && tool.request_index == key.request_index
-                && tool.tool_call_id == key.tool_call_id =>
-        {
-            Some(crate::ui::transcript::effective_tool_expanded(view, tool))
-        }
-        _ => None,
-    }) {
+    if let Some(expanded) = view
+        .transcript
+        .blocks
+        .iter()
+        .find_map(|block| match block.as_ref() {
+            TranscriptBlock::Tool(tool)
+                if tool.loop_id == key.loop_id
+                    && tool.request_index == key.request_index
+                    && tool.tool_call_id == key.tool_call_id =>
+            {
+                Some(crate::ui::transcript::effective_tool_expanded(view, tool))
+            }
+            _ => None,
+        })
+    {
         return Some(expanded);
     }
 

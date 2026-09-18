@@ -1701,7 +1701,7 @@ fn e2e_reasoning_summary_item_boundaries_survive_to_the_tui() {
             .transcript
             .blocks
             .iter()
-            .filter_map(|block| match block {
+            .filter_map(|block| match block.as_ref() {
                 minicore_tui::state::transcript::TranscriptBlock::Assistant(assistant) => {
                     assistant.parts.iter().find_map(|part| {
                         if let AssistantPart::Reasoning(text) = part {
@@ -3175,7 +3175,7 @@ fn e2e_live_request_usage_shows_during_loop_and_persisted_total_replaces_it() {
         pump_until(&mut process, &mut app, |app| {
             app.sessions.known.get(&session_id).is_some_and(|view| {
                 view.transcript.blocks.iter().any(|block| {
-                    matches!(block, minicore_tui::state::transcript::TranscriptBlock::Assistant(assistant) if assistant.loop_id == loop_id)
+                    matches!(block.as_ref(), minicore_tui::state::transcript::TranscriptBlock::Assistant(assistant) if assistant.loop_id == loop_id)
                 })
             })
         })

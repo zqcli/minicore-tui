@@ -5074,7 +5074,8 @@ impl App {
             );
         }
         if view.transcript.blocks.iter().any(|block| {
-            matches!(block,
+            matches!(
+            block.as_ref(),
             TranscriptBlock::Tool(tool) if tool.loop_id == turn.loop_id
                 && tool.request_index == request_index && tool.tool_call_id == tool_call_id)
         }) {
@@ -5128,7 +5129,8 @@ impl App {
         let display_for_live = display.clone();
         let _ = state;
         if view.transcript.blocks.iter().any(|block| {
-            matches!(block,
+            matches!(
+            block.as_ref(),
             TranscriptBlock::Tool(tool) if tool.loop_id == turn.loop_id
                 && tool.request_index == request_index && tool.tool_call_id == tool_call_id)
         }) {
@@ -5189,7 +5191,7 @@ fn tool_outcome_status(outcome: ToolOutcomeWire) -> ToolStatus {
     }
 }
 
-fn has_item_index(blocks: &[TranscriptBlock], index: usize) -> bool {
+fn has_item_index(blocks: &[std::sync::Arc<TranscriptBlock>], index: usize) -> bool {
     blocks.iter().any(|block| block.index() == Some(index))
 }
 
@@ -5312,8 +5314,7 @@ fn install_history_placeholder(view: &mut SessionView, index: usize, total_bytes
         return;
     }
     view.transcript
-        .blocks_mut()
-        .push(TranscriptBlock::HistoryPlaceholder(
+        .push_block(TranscriptBlock::HistoryPlaceholder(
             HistoryPlaceholderBlock { index, total_bytes },
         ));
     view.transcript.invalidate();
@@ -5342,7 +5343,7 @@ fn install_history_item(
                 .blocks_mut()
                 .iter_mut()
                 .rev()
-                .find_map(|block| match block {
+                .find_map(|block| match std::sync::Arc::make_mut(block) {
                     TranscriptBlock::User(card)
                         if card.pending
                             && (card.loop_id.as_deref() == Some(&user.loop_id)
@@ -5359,15 +5360,13 @@ fn install_history_item(
                 card.text = user.input.text.clone();
                 card.pending = false;
             } else if !has_item_index(&view.transcript.blocks, index) {
-                view.transcript
-                    .blocks_mut()
-                    .push(TranscriptBlock::User(UserBlock {
-                        index: Some(index),
-                        loop_id: Some(user.loop_id.clone()),
-                        kind,
-                        text: user.input.text.clone(),
-                        pending: false,
-                    }));
+                view.transcript.push_block(TranscriptBlock::User(UserBlock {
+                    index: Some(index),
+                    loop_id: Some(user.loop_id.clone()),
+                    kind,
+                    text: user.input.text.clone(),
+                    pending: false,
+                }));
             } else {
                 return;
             }
@@ -5420,8 +5419,7 @@ fn install_history_item(
                 })
                 .unwrap_or_default();
             view.transcript
-                .blocks_mut()
-                .push(TranscriptBlock::Assistant(AssistantBlock {
+                .push_block(TranscriptBlock::Assistant(AssistantBlock {
                     index,
                     loop_id: assistant.loop_id.clone(),
                     request_index: assistant.request_index,
@@ -5434,28 +5432,26 @@ fn install_history_item(
                     terminal_error: None,
                 }));
             for call in &tool_calls {
-                view.transcript
-                    .blocks_mut()
-                    .push(TranscriptBlock::Tool(ToolBlock {
-                        index: None,
-                        loop_id: assistant.loop_id.clone(),
-                        request_index: assistant.request_index,
-                        tool_call_id: call.tool_call_id.clone(),
-                        name: call.name.clone(),
-                        result: None,
-                        outcome: None,
-                        live_status: None,
-                        progress: None,
-                        expanded: view
-                            .tool_folds
-                            .get(&ToolKey::new(
-                                &view.info.session_id,
-                                &assistant.loop_id,
-                                assistant.request_index,
-                                &call.tool_call_id,
-                            ))
-                            .is_some_and(FoldOverride::expanded),
-                    }));
+                view.transcript.push_block(TranscriptBlock::Tool(ToolBlock {
+                    index: None,
+                    loop_id: assistant.loop_id.clone(),
+                    request_index: assistant.request_index,
+                    tool_call_id: call.tool_call_id.clone(),
+                    name: call.name.clone(),
+                    result: None,
+                    outcome: None,
+                    live_status: None,
+                    progress: None,
+                    expanded: view
+                        .tool_folds
+                        .get(&ToolKey::new(
+                            &view.info.session_id,
+                            &assistant.loop_id,
+                            assistant.request_index,
+                            &call.tool_call_id,
+                        ))
+                        .is_some_and(FoldOverride::expanded),
+                }));
             }
             view.transcript.invalidate();
         }
@@ -5467,21 +5463,21 @@ fn install_history_item(
                 result.outcome.clone(),
             ))
             .unwrap_or(ToolOutcomeWire::Unknown);
-            let patched =
-                view.transcript
-                    .blocks_mut()
-                    .iter_mut()
-                    .rev()
-                    .find_map(|block| match block {
-                        TranscriptBlock::Tool(tool)
-                            if tool.tool_call_id == result.call_id
-                                && tool.loop_id == result.loop_id
-                                && tool.request_index == result.request_index =>
-                        {
-                            Some(tool)
-                        }
-                        _ => None,
-                    });
+            let patched = view
+                .transcript
+                .blocks_mut()
+                .iter_mut()
+                .rev()
+                .find_map(|block| match std::sync::Arc::make_mut(block) {
+                    TranscriptBlock::Tool(tool)
+                        if tool.tool_call_id == result.call_id
+                            && tool.loop_id == result.loop_id
+                            && tool.request_index == result.request_index =>
+                    {
+                        Some(tool)
+                    }
+                    _ => None,
+                });
             if let Some(tool) = patched {
                 if tool.index.is_none() {
                     tool.index = Some(index);
@@ -5489,28 +5485,26 @@ fn install_history_item(
                 tool.result = Some(result.output.content.clone());
                 tool.outcome = Some(outcome);
             } else if !has_item_index(&view.transcript.blocks, index) {
-                view.transcript
-                    .blocks_mut()
-                    .push(TranscriptBlock::Tool(ToolBlock {
-                        index: Some(index),
-                        loop_id: result.loop_id.clone(),
-                        request_index: result.request_index,
-                        tool_call_id: result.call_id.clone(),
-                        name: result.tool_name.clone(),
-                        result: Some(result.output.content.clone()),
-                        outcome: Some(outcome),
-                        live_status: None,
-                        progress: None,
-                        expanded: view
-                            .tool_folds
-                            .get(&ToolKey::new(
-                                &view.info.session_id,
-                                &result.loop_id,
-                                result.request_index,
-                                &result.call_id,
-                            ))
-                            .is_some_and(FoldOverride::expanded),
-                    }));
+                view.transcript.push_block(TranscriptBlock::Tool(ToolBlock {
+                    index: Some(index),
+                    loop_id: result.loop_id.clone(),
+                    request_index: result.request_index,
+                    tool_call_id: result.call_id.clone(),
+                    name: result.tool_name.clone(),
+                    result: Some(result.output.content.clone()),
+                    outcome: Some(outcome),
+                    live_status: None,
+                    progress: None,
+                    expanded: view
+                        .tool_folds
+                        .get(&ToolKey::new(
+                            &view.info.session_id,
+                            &result.loop_id,
+                            result.request_index,
+                            &result.call_id,
+                        ))
+                        .is_some_and(FoldOverride::expanded),
+                }));
             } else {
                 return;
             }
@@ -5521,8 +5515,7 @@ fn install_history_item(
                 return;
             }
             view.transcript
-                .blocks_mut()
-                .push(TranscriptBlock::Summary(SummaryBlock {
+                .push_block(TranscriptBlock::Summary(SummaryBlock {
                     index,
                     content: summary.content.clone(),
                 }));
@@ -8842,8 +8835,7 @@ mod tests {
             let view = app.sessions.known.get_mut("ses_1").unwrap();
             for index in 0..24 {
                 view.transcript
-                    .blocks_mut()
-                    .push(TranscriptBlock::Assistant(AssistantBlock {
+                    .push_block(TranscriptBlock::Assistant(AssistantBlock {
                         index,
                         loop_id: format!("history_{index}"),
                         request_index: 0,

@@ -724,8 +724,7 @@ mod tests {
         let view = app.sessions.known.get_mut("ses_1").expect("active view");
         // One known metric with another missing: a partially-known total.
         view.transcript
-            .blocks_mut()
-            .push(crate::state::transcript::TranscriptBlock::Assistant(
+            .push_block(crate::state::transcript::TranscriptBlock::Assistant(
                 crate::state::transcript::AssistantBlock {
                     index: 0,
                     loop_id: "loop_1".to_owned(),

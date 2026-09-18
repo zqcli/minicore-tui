@@ -89,8 +89,7 @@ fn make_test_app(item_count: usize) -> App {
     );
     for i in 0..item_count {
         view.transcript
-            .blocks_mut()
-            .push(TranscriptBlock::Assistant(AssistantBlock {
+            .push_block(TranscriptBlock::Assistant(AssistantBlock {
                 index: i,
                 loop_id: format!("loop_{i}"),
                 request_index: 0,
@@ -246,8 +245,7 @@ fn durable_history_mutation_invalidates_and_reparses() {
     // Mutate durable history
     let view = app.sessions.known.get_mut("ses_test").unwrap();
     view.transcript
-        .blocks_mut()
-        .push(TranscriptBlock::Assistant(AssistantBlock {
+        .push_block(TranscriptBlock::Assistant(AssistantBlock {
             index: 1,
             loop_id: "loop_1".into(),
             request_index: 0,
@@ -483,8 +481,7 @@ fn live_tool_fold_survives_presentation_finish_wait_and_history_replacement() {
     {
         let view = app.sessions.known.get_mut("ses_1").unwrap();
         view.transcript
-            .blocks_mut()
-            .push(TranscriptBlock::Assistant(AssistantBlock {
+            .push_block(TranscriptBlock::Assistant(AssistantBlock {
                 index: 0,
                 loop_id: "old_loop".to_owned(),
                 request_index: 0,
@@ -565,27 +562,25 @@ fn live_tool_fold_survives_presentation_finish_wait_and_history_replacement() {
             completed_at: None,
         });
         view.live = None;
-        view.transcript
-            .blocks_mut()
-            .push(TranscriptBlock::Tool(ToolBlock {
-                index: Some(1),
-                loop_id: "loop_live".to_owned(),
-                request_index: 0,
-                tool_call_id: "c1".to_owned(),
-                name: "read".to_owned(),
-                result: Some("history result".to_owned()),
-                outcome: Some(crate::protocol::ToolOutcomeWire::Success),
-                live_status: Some(crate::state::tool::ToolStatus::Succeeded),
-                progress: None,
-                expanded: true,
-            }));
+        view.transcript.push_block(TranscriptBlock::Tool(ToolBlock {
+            index: Some(1),
+            loop_id: "loop_live".to_owned(),
+            request_index: 0,
+            tool_call_id: "c1".to_owned(),
+            name: "read".to_owned(),
+            result: Some("history result".to_owned()),
+            outcome: Some(crate::protocol::ToolOutcomeWire::Success),
+            live_status: Some(crate::state::tool::ToolStatus::Succeeded),
+            progress: None,
+            expanded: true,
+        }));
         view.transcript.complete = true;
         view.transcript.invalidate();
         let history_tool = view
             .transcript
             .blocks
             .iter()
-            .find_map(|block| match block {
+            .find_map(|block| match block.as_ref() {
                 TranscriptBlock::Tool(tool) if tool.loop_id == "loop_live" => Some(tool),
                 _ => None,
             })

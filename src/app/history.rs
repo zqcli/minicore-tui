@@ -1191,7 +1191,7 @@ impl App {
         });
 
         let loop_contained_in_history = match &live_loop_id {
-            Some(id) => view.transcript.blocks.iter().any(|b| match b {
+            Some(id) => view.transcript.blocks.iter().any(|b| match b.as_ref() {
                 TranscriptBlock::User(u) => !u.pending && u.loop_id.as_deref() == Some(id),
                 TranscriptBlock::Assistant(a) => a.loop_id.as_str() == id.as_str(),
                 TranscriptBlock::Tool(t) => t.loop_id.as_str() == id.as_str(),
@@ -1242,7 +1242,7 @@ impl App {
             .transcript
             .blocks
             .iter()
-            .filter_map(|block| match block {
+            .filter_map(|block| match block.as_ref() {
                 TranscriptBlock::User(user)
                     if user.kind == UserMessageKindWire::Steering
                         && loop_id

@@ -1711,7 +1711,7 @@ fn send_response_registers_direct_wait_and_durable_history_replaces_live() {
     );
     let view = &driver.app.sessions.known["ses_1"];
     assert!(view.live.is_none());
-    assert!(view.transcript.blocks.iter().any(|block| matches!(block, TranscriptBlock::Assistant(card) if card.parts == vec![AssistantPart::Text("durable answer".into())])));
+    assert!(view.transcript.blocks.iter().any(|block| matches!(block.as_ref(), TranscriptBlock::Assistant(card) if card.parts == vec![AssistantPart::Text("durable answer".into())])));
 }
 
 #[test]
@@ -4177,7 +4177,7 @@ fn regression_scenario_d_steer_retention_single_render_and_late_response_correla
         .transcript
         .blocks
         .iter()
-        .filter(|b| matches!(b, TranscriptBlock::User(u) if u.kind == minicore_tui::protocol::UserMessageKindWire::Steering))
+        .filter(|b| matches!(b.as_ref(), TranscriptBlock::User(u) if u.kind == minicore_tui::protocol::UserMessageKindWire::Steering))
         .count();
     assert_eq!(
         steering_blocks_count, 1,

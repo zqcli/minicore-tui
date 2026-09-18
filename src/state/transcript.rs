@@ -98,7 +98,7 @@ pub struct TranscriptState {
     /// Durable transcript blocks. `Arc` so a layout request can snapshot the
     /// whole transcript with one refcount bump instead of copying every
     /// string; mutation is copy-on-write through [`Self::blocks_mut`].
-    pub blocks: Arc<Vec<TranscriptBlock>>,
+    pub blocks: Arc<Vec<Arc<TranscriptBlock>>>,
     /// The authoritative pinned window of decoded Runtime items. Render blocks
     /// may expand one item into several cards, so their length is unrelated.
     pub window: crate::app::history::HistoryWindow,
@@ -133,10 +133,28 @@ impl TranscriptState {
         self.render_cache = None;
     }
 
-    /// Copy-on-write access to the durable blocks. A layout job that holds a
-    /// snapshot `Arc` keeps its own copy; the next mutation clones once.
-    pub fn blocks_mut(&mut self) -> &mut Vec<TranscriptBlock> {
+    /// Copy-on-write access to the durable block list. A layout job that holds
+    /// a snapshot `Arc` keeps its own view; the next mutation clones only the
+    /// `Arc` vector, never the block text.
+    pub fn blocks_mut(&mut self) -> &mut Vec<Arc<TranscriptBlock>> {
         Arc::make_mut(&mut self.blocks)
+    }
+
+    /// Appends one block without copying any existing block text.
+    pub fn push_block(&mut self, block: TranscriptBlock) {
+        Arc::make_mut(&mut self.blocks).push(Arc::new(block));
+    }
+
+    /// Inserts one block without copying any existing block text.
+    pub fn insert_block(&mut self, index: usize, block: TranscriptBlock) {
+        Arc::make_mut(&mut self.blocks).insert(index, Arc::new(block));
+    }
+
+    /// Mutable access to one block; only that block's body is cloned when a
+    /// snapshot still references it.
+    pub fn block_mut(&mut self, index: usize) -> &mut TranscriptBlock {
+        let blocks = Arc::make_mut(&mut self.blocks);
+        Arc::make_mut(&mut blocks[index])
     }
 
     /// Clears blocks and invalidates prepared conversation metadata.

@@ -254,7 +254,7 @@ fn build_durable_prepared(
     let mut tool_index: std::collections::HashMap<(&str, u32, &str), &ToolBlock> =
         std::collections::HashMap::new();
     for block in view.transcript.blocks.iter() {
-        if let TranscriptBlock::Tool(tool) = block {
+        if let TranscriptBlock::Tool(tool) = block.as_ref() {
             tool_index.insert(
                 (
                     tool.loop_id.as_str(),
@@ -266,7 +266,7 @@ fn build_durable_prepared(
         }
     }
     for (ordinal, block) in view.transcript.blocks.iter().enumerate() {
-        if let TranscriptBlock::Assistant(assistant_block) = block {
+        if let TranscriptBlock::Assistant(assistant_block) = block.as_ref() {
             for assistant_section in assistant::sections_with_folds(
                 theme,
                 assistant_block,
@@ -362,7 +362,7 @@ fn build_durable_prepared(
             }
             continue;
         }
-        if let TranscriptBlock::Tool(tool) = block {
+        if let TranscriptBlock::Tool(tool) = block.as_ref() {
             let key = crate::state::tool::ToolKey::new(
                 &view.info.session_id,
                 &tool.loop_id,
@@ -396,8 +396,8 @@ fn build_durable_prepared(
             id,
             rows: before..after,
             content_columns: content_columns_for(block, width),
-            collapsible: matches!(block, TranscriptBlock::Tool(_)),
-            folded: matches!(block, TranscriptBlock::Tool(tool) if {
+            collapsible: matches!(block.as_ref(), TranscriptBlock::Tool(_)),
+            folded: matches!(block.as_ref(), TranscriptBlock::Tool(tool) if {
                 let key = crate::state::tool::ToolKey::new(
                     &view.info.session_id,
                     &tool.loop_id,
