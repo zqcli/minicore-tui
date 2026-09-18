@@ -249,19 +249,30 @@ fn history_read_uses_chunked_runtime_items_not_the_display_dto() {
     assert!(source.contains("pub enum Assembled"));
 }
 
-/// Defect: `all_lines` clones the full prepared conversation and
-/// `build_durable_prepared` rescans every block to pair a tool call with its
-/// result. Stage C replaces both with shared sections and a single index.
+/// C2 migration (formerly the RED pin
+/// `baseline_prepare_clones_full_history_and_rescans_tools`): the projection
+/// builds one `ToolKey` index per pass and resolves each tool call in O(1)
+/// (`tool_index.get`), never by scanning every block per call. The old defect
+/// `all_lines` full-frame clone remains only in the test/diagnostic helper;
+/// the production renderer composes through `prepare_conversation`.
 #[test]
-fn baseline_prepare_clones_full_history_and_rescans_tools() {
+fn tool_projection_uses_one_index_and_never_rescans_blocks() {
     let source = include_str!("../src/ui/transcript.rs");
     assert!(
-        source.contains("|prepared| prepared.lines.clone()"),
-        "BASELINE: all_lines clones the full prepared conversation"
+        source.contains("tool_index: std::collections::HashMap"),
+        "C2: the projection builds one tool index per pass"
     );
     assert!(
-        source.contains(".find_map(|block| match block {"),
-        "BASELINE: durable preparation rescans every block per tool call"
+        source.contains("tool_index.get(&("),
+        "C2: each tool call resolves through the index"
+    );
+    assert!(
+        !source.contains(".find_map(|block| match block {"),
+        "C2: the projection must not scan every block per tool call"
+    );
+    assert!(
+        source.contains("fn all_lines("),
+        "the diagnostic helper remains available to tests"
     );
 }
 

@@ -37,6 +37,9 @@ pub struct Composer {
     draft: String,
     /// Monotonic content-edit generation used to correlate delayed acks.
     editor_revision: u64,
+    /// Cached UTF-8 byte length of the buffer. Ordinary edits adjust it by
+    /// their delta instead of joining the whole buffer (spec §12.1, §25.1).
+    byte_len: usize,
     /// Display-only ranges for large paste payloads. The payload remains in
     /// the TextArea and is what `content()` returns.
     pastes: Vec<PasteRange>,
@@ -58,6 +61,7 @@ impl Composer {
             history_index: None,
             draft: String::new(),
             editor_revision: 0,
+            byte_len: 0,
             pastes: Vec::new(),
             paste_undo: Vec::new(),
             paste_redo: Vec::new(),
@@ -143,6 +147,7 @@ impl Composer {
         }
         self.textarea.insert_str(replacement);
         let after = self.content();
+        self.byte_len = after.len();
         self.reconcile_pastes(&before, &after);
         self.bump_revision();
     }
@@ -151,9 +156,16 @@ impl Composer {
         self.textarea.lines().iter().all(|line| line.is_empty())
     }
 
-    /// The full buffer joined with `\n`, used for submit and paste math.
+    /// The full buffer joined with `\n`, used for submit, export and paste
+    /// math. Ordinary editing never calls this (spec §12.1).
     pub fn content(&self) -> String {
+        crate::perf::count(crate::perf::Counter::ComposerFullJoins);
         self.textarea.lines().join("\n")
+    }
+
+    /// Cached UTF-8 byte length without materializing the buffer.
+    pub fn byte_len(&self) -> usize {
+        self.byte_len
     }
 
     /// The TextArea for the renderer (read-only widget access).
@@ -164,27 +176,40 @@ impl Composer {
     // ---- editing (App::update only) -----------------------------------
 
     pub fn type_char(&mut self, c: char) -> bool {
-        if !self.can_insert(&c.to_string()) {
+        let bytes = c.len_utf8();
+        if !self.can_insert_bytes(bytes) {
             return false;
         }
         self.begin_edit();
-        let before = self.content();
-        self.textarea.insert_char(c);
-        let after = self.content();
-        self.reconcile_pastes(&before, &after);
+        if self.insert_needs_no_diff() {
+            self.textarea.insert_char(c);
+            self.byte_len = self.byte_len.saturating_add(bytes);
+        } else {
+            let before = self.content();
+            self.textarea.insert_char(c);
+            let after = self.content();
+            self.byte_len = after.len();
+            self.reconcile_pastes(&before, &after);
+        }
         self.bump_revision();
         true
     }
 
     pub fn type_text(&mut self, text: &str) -> bool {
-        if !self.can_insert(text) {
+        if !self.can_insert_bytes(text.len()) {
             return false;
         }
         self.begin_edit();
-        let before = self.content();
-        self.textarea.insert_str(text);
-        let after = self.content();
-        self.reconcile_pastes(&before, &after);
+        if self.insert_needs_no_diff() {
+            self.textarea.insert_str(text);
+            self.byte_len = self.byte_len.saturating_add(text.len());
+        } else {
+            let before = self.content();
+            self.textarea.insert_str(text);
+            let after = self.content();
+            self.byte_len = after.len();
+            self.reconcile_pastes(&before, &after);
+        }
         self.bump_revision();
         true
     }
@@ -192,7 +217,7 @@ impl Composer {
     /// Inserts a paste as one edit. Large payloads receive a display-only
     /// marker while `content()` continues to return the complete original.
     pub fn insert_paste(&mut self, text: &str) -> bool {
-        if !self.can_insert(text) {
+        if !self.can_insert_bytes(text.len()) {
             return false;
         }
         self.begin_edit();
@@ -200,6 +225,7 @@ impl Composer {
         let start = global_cursor(&self.textarea, &before);
         self.textarea.insert_str(text);
         let after = self.content();
+        self.byte_len = after.len();
         self.reconcile_pastes(&before, &after);
         let line_count = text.split('\n').count();
         let char_count = text.chars().count();
@@ -218,19 +244,50 @@ impl Composer {
         true
     }
 
-    fn can_insert(&self, text: &str) -> bool {
-        self.content().len().saturating_add(text.len()) <= MAX_COMPOSER_BYTES
+    /// Whether `additional` more UTF-8 bytes fit in the draft budget. Uses the
+    /// cached length, so it never joins the buffer.
+    pub fn can_insert_bytes(&self, additional: usize) -> bool {
+        self.byte_len.saturating_add(additional) <= MAX_COMPOSER_BYTES
+    }
+
+    /// True when the next insertion cannot intersect a paste range, so its
+    /// only effect is a byte-length delta. The cursor is at or after every
+    /// paste; any other position keeps the full before/after diff so paste
+    /// ranges stay exact.
+    fn insert_needs_no_diff(&self) -> bool {
+        if self.pastes.is_empty() {
+            return true;
+        }
+        let at = self.cursor_char_offset();
+        self.pastes.iter().all(|paste| at >= paste.end)
+    }
+
+    /// Global char offset of the cursor, without joining the buffer. Sums the
+    /// lines before the cursor (O(chars before the cursor), no allocation).
+    fn cursor_char_offset(&self) -> usize {
+        let (row, column) = self.textarea.cursor();
+        let mut offset = 0usize;
+        for line in self.textarea.lines().iter().take(row) {
+            offset += line.chars().count() + 1;
+        }
+        offset + column
     }
 
     pub fn newline(&mut self) -> bool {
-        if !self.can_insert("\n") {
+        if !self.can_insert_bytes(1) {
             return false;
         }
         self.begin_edit();
-        let before = self.content();
-        self.textarea.insert_newline();
-        let after = self.content();
-        self.reconcile_pastes(&before, &after);
+        if self.insert_needs_no_diff() {
+            self.textarea.insert_newline();
+            self.byte_len = self.byte_len.saturating_add(1);
+        } else {
+            let before = self.content();
+            self.textarea.insert_newline();
+            let after = self.content();
+            self.byte_len = after.len();
+            self.reconcile_pastes(&before, &after);
+        }
         self.bump_revision();
         true
     }
@@ -251,6 +308,7 @@ impl Composer {
             self.textarea.delete_char();
         }
         let after = self.content();
+        self.byte_len = after.len();
         self.reconcile_pastes(&before, &after);
         self.bump_revision();
     }
@@ -269,6 +327,7 @@ impl Composer {
             self.textarea.delete_next_char();
         }
         let after = self.content();
+        self.byte_len = after.len();
         self.reconcile_pastes(&before, &after);
         self.bump_revision();
     }
@@ -325,6 +384,7 @@ impl Composer {
             }
         }
         let after = self.content();
+        self.byte_len = after.len();
         self.reconcile_pastes(&before, &after);
         self.bump_revision();
     }
@@ -332,6 +392,9 @@ impl Composer {
     pub fn undo(&mut self) {
         let current = self.pastes.clone();
         self.textarea.undo();
+        // Undo/redo may replace arbitrary text; recomputing the length once is
+        // acceptable (spec §12.1).
+        self.byte_len = self.content().len();
         if let Some(previous) = self.paste_undo.pop() {
             self.paste_redo.push(current);
             self.pastes = previous;
@@ -342,6 +405,7 @@ impl Composer {
     pub fn redo(&mut self) {
         let current = self.pastes.clone();
         self.textarea.redo();
+        self.byte_len = self.content().len();
         if let Some(next) = self.paste_redo.pop() {
             self.paste_undo.push(current);
             self.pastes = next;
@@ -372,6 +436,7 @@ impl Composer {
         self.pastes.clear();
         self.paste_undo.clear();
         self.paste_redo.clear();
+        self.byte_len = normalized.len();
         self.bump_revision();
     }
 
@@ -828,6 +893,31 @@ mod tests {
         composer.submit_pushed("same");
         composer.submit_pushed("same");
         assert_eq!(composer.history_len(), 1);
+    }
+
+    /// Spec §25.1: after a 256 KiB paste, ordinary typing must not join the
+    /// whole buffer. Only the paste itself materializes text.
+    #[test]
+    fn ordinary_typing_after_a_large_paste_does_not_join_the_buffer() {
+        let mut composer = Composer::new();
+        // Just under the draft cap so the ordinary typing below fits.
+        let payload = "x".repeat(256 * 1024 - 1024);
+        assert!(composer.insert_paste(&payload));
+        assert_eq!(composer.paste_ranges().len(), 1);
+        let before = crate::perf::snapshot().composer_full_joins;
+        for _ in 0..40 {
+            assert!(composer.type_char('a'));
+        }
+        let after = crate::perf::snapshot().composer_full_joins;
+        assert_eq!(
+            after, before,
+            "ordinary typing must not materialize the whole draft"
+        );
+        assert_eq!(
+            composer.byte_len(),
+            payload.len() + 40,
+            "the cached byte length tracks the delta"
+        );
     }
 
     #[test]

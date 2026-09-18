@@ -45,6 +45,9 @@ pub fn prepare_conversation(app: &App, width: u16) -> PreparedConversation {
         {
             return Arc::clone(cached);
         }
+        // A cache miss is the only point that rebuilds the durable layout;
+        // a cache hit below must not count (spec §25.1).
+        crate::perf::count(crate::perf::Counter::LayoutCalls);
         let (lines, sections, copy_ranges, link_cells) =
             build_durable_prepared(&theme, view, width as usize, app.reasoning_visible);
         Arc::new(PreparedDurable {
@@ -114,6 +117,10 @@ pub fn prepare_conversation(app: &App, width: u16) -> PreparedConversation {
             })
         }));
     conversation.sections.extend(live_sections);
+    crate::perf::add(
+        crate::perf::Counter::ViewportRowsMaterialized,
+        conversation.lines.len() as u64,
+    );
     conversation
 }
 
@@ -194,6 +201,22 @@ fn build_durable_prepared(
     let mut copy_ranges = Vec::new();
     let mut link_cells = Vec::new();
     let mut rendered_tools = HashSet::new();
+    // One projection index for the whole pass (spec §11.3): a tool call is
+    // resolved in O(1), never by scanning every block for each tool.
+    let mut tool_index: std::collections::HashMap<(&str, u32, &str), &ToolBlock> =
+        std::collections::HashMap::new();
+    for block in &view.transcript.blocks {
+        if let TranscriptBlock::Tool(tool) = block {
+            tool_index.insert(
+                (
+                    tool.loop_id.as_str(),
+                    tool.request_index,
+                    tool.tool_call_id.as_str(),
+                ),
+                tool,
+            );
+        }
+    }
     for (ordinal, block) in view.transcript.blocks.iter().enumerate() {
         if let TranscriptBlock::Assistant(assistant_block) = block {
             for assistant_section in assistant::sections_with_folds(
@@ -210,21 +233,16 @@ fn build_durable_prepared(
                         assistant_block.request_index,
                         &call.tool_call_id,
                     );
-                    let tool = view
-                        .transcript
-                        .blocks
-                        .iter()
-                        .find_map(|block| match block {
-                            TranscriptBlock::Tool(tool)
-                                if tool.loop_id == assistant_block.loop_id
-                                    && tool.request_index == assistant_block.request_index
-                                    && tool.tool_call_id == call.tool_call_id =>
-                            {
-                                Some(tool.clone())
-                            }
-                            _ => None,
-                        })
-                        .unwrap_or_else(|| ToolBlock {
+                    let tool = match tool_index.get(&(
+                        assistant_block.loop_id.as_str(),
+                        assistant_block.request_index,
+                        call.tool_call_id.as_str(),
+                    )) {
+                        Some(tool) => {
+                            crate::perf::count(crate::perf::Counter::ToolIndexLookups);
+                            (*tool).clone()
+                        }
+                        None => ToolBlock {
                             index: None,
                             loop_id: assistant_block.loop_id.clone(),
                             request_index: assistant_block.request_index,
@@ -235,7 +253,8 @@ fn build_durable_prepared(
                             live_status: None,
                             progress: None,
                             expanded: false,
-                        });
+                        },
+                    };
                     rendered_tools.insert(key);
                     let folded = !effective_tool_expanded(view, &tool);
                     append_prepared_section(
@@ -849,6 +868,17 @@ fn all_lines_with_durable(
     link_rows.extend(header.iter().map(|_| Vec::new()));
     lines.extend(header);
     if let Some(view) = app.active_view() {
+        // Measured where the rows are actually cloned into the owned frame
+        // buffer; a constant zero would be a lie (spec §25.1).
+        let cloned: usize = durable
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.len())
+            .sum();
+        crate::perf::add(
+            crate::perf::Counter::HistoricalTextBytesCloned,
+            cloned as u64,
+        );
         let before = lines.len();
         layout::append_section_ref(&mut lines, durable);
         // Keep link rows aligned with whatever the boundary check actually

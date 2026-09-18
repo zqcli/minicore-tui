@@ -144,6 +144,43 @@ fn prepared_tool_sections_keep_full_identity_and_mouse_toggle_uses_the_same_rang
     assert!(folded, "the per-tool collapse overrides global expansion");
 }
 
+/// Spec §25.1 (structural): a cached durable layout is not rebuilt, the tool
+/// projection resolves every call through the index (never a block scan), and
+/// the cloned bytes are counted where they are actually cloned.
+#[test]
+fn stable_history_layout_is_cached_and_tool_projection_uses_the_index() {
+    crate::perf::reset();
+    let mut app = testapp::tools(ThemeKind::Dark);
+    let first = transcript::prepare_conversation(&app, 79);
+    let mid = crate::perf::snapshot();
+    assert_eq!(mid.tool_linear_scans, 0, "no block scan in the projection");
+    assert!(
+        mid.tool_index_lookups >= 3,
+        "the three tool calls resolved through the projection index"
+    );
+    assert!(mid.layout_calls >= 1, "the first durable layout was built");
+    assert!(
+        mid.historical_text_bytes_cloned > 0,
+        "clone bytes are counted at the append point, not a constant"
+    );
+    assert!(
+        mid.viewport_rows_materialized > 0,
+        "the owned frame rows were counted"
+    );
+
+    // Same view and width: the installed durable cache is authoritative, so a
+    // second preparation must not rebuild the stable history.
+    app.install_conversation(first);
+    let second = transcript::prepare_conversation(&app, 79);
+    let after = crate::perf::snapshot();
+    assert_eq!(
+        after.layout_calls, mid.layout_calls,
+        "a cached durable layout is not rebuilt for a stable history"
+    );
+    assert_eq!(after.tool_linear_scans, 0);
+    drop(second);
+}
+
 #[test]
 fn live_tool_mouse_click_collapses_the_running_card() {
     let mut app = testapp::live_turn(ThemeKind::Dark);

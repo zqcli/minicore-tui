@@ -21,6 +21,7 @@ pub mod event;
 pub mod jobs;
 pub mod keymap;
 pub mod markdown;
+pub mod perf;
 pub mod protocol;
 pub mod rpc;
 pub mod safe_text;
