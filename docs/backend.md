@@ -1,57 +1,143 @@
-# Backend Provenance (Historical r2)
+# Backend Contract (v0.3 refactor)
 
-This document records the original r2 migration baseline, not the current Agent,
-Runtime pin or installed binary. Its source revisions, hashes and test evidence
-below are preserved as historical facts. Current TUI `a604e55` / Agent `f1697f7`
-with Runtime 0.4.1 at `6cd2bdbc634437dea925495c61c7eb0be10ba171` is documented in
-[the corrective delivery provenance](verification/reload-refresh/README.md).
+This document fixes the backend facts the v0.3 refactor is built against. It
+supersedes the historical r2 provenance that previously lived here (that text
+is preserved in git history and in
+[the corrective delivery provenance](verification/reload-refresh/README.md)).
 
-The r2 migration's wire DTOs were aligned with these backend source trees:
+The TUI does not link the Agent or Runtime crates, does not read their source
+at runtime, and never touches the Agent Store. The Agent executable is supplied
+through `--agent-bin`; its config and data directory belong to the Agent.
 
-| Component | Repository / Source | Pinned revision | Package version |
+## Pinned revisions
+
+| Component | Repository | Revision | Package |
 |---|---|---|---|
-| Agent | `minicore-agent` | `b2e23938d073ab21c2775faa623561ba929a5ed1` | `0.3.0` |
-| Runtime | `minicore-runtime` | `87f3cf92b9b5980b0f468174a319cf53427d858e` | backend dependency of Agent (`0.4.0`) |
+| TUI | `zqcli/minicore-tui` | `9d11ee69c4efa02ef1e5bff143662b48dc3194de` | `0.2.8` |
+| Agent | `zqcli/minicore-agent` | `061743369459299e66be97bf97d2b27352a39914` | `0.5.0` |
+| Runtime | `zqcli/minicore-runtime` | `6cd2bdbc634437dea925495c61c7eb0be10ba171` | `0.4.1` |
 
-## Remote Build & Binary Origin
+These were re-checked at the start of stage A. All three match the spec's
+baseline; no protocol-difference check was triggered. The refactor does not
+upgrade dependencies and does not modify the Agent or Runtime source.
 
-- **Source Archive**: Git archive from commit `b2e23938d073ab21c2775faa623561ba929a5ed1` transferred to `/root/minicore-tui-r2-01a06ec1/agent`.
-- **Compiler Toolchain**: Rust `1.85.0` (`cargo +1.85.0 build --locked --offline`).
-- **Binary Output**: `/root/minicore-tui-r2-01a06ec1/agent/target/debug/minicore-agent`.
-- **Binary SHA-256**: `bc82d6c0908129e45c3bc48b9e21f020967165e16f912fa61fbc6eb84925aa2d` (parent-measured).
-- **Checkout audit**: Agent and Runtime `HEAD` and `dev` resolve to the revisions above at both start and finish. The user's `c362446a…` Agent reference was older than the actual starting `dev HEAD`; the implementation pins actual `b2e23938…`, as required. Neither backend's tracked source changed.
-- **Runtime Dependency**: Pinned directly to `87f3cf92b9b5980b0f468174a319cf53427d858e` in `minicore-agent`'s `Cargo.lock`.
+## Handshake
 
-## Five Recent Agent Baseline Commits & TUI Impact Audit
+`agent.ping` returns an ordered capability list plus the protocol version:
 
-The `minicore-agent` baseline `b2e23938d073ab21c2775faa623561ba929a5ed1` includes five recent commits directly relevant to TUI stability and contract boundaries:
+```json
+{
+  "version": "0.5.0",
+  "protocol_version": 1,
+  "capabilities": [
+    "session.read", "session.context", "turn.result", "tool.read",
+    "tool.output", "session.history", "workspace.read", "workspace.files",
+    "workspace.search", "workspace.status", "changes.list", "changes.diff",
+    "deferred.waiter_limit"
+  ]
+}
+```
 
-1. `b2e23938d073ab21c2775faa623561ba929a5ed1` — `test(write): bound commit deadline gate wait`
-   - **Upstream change**: Adds bounded gate/deadline waits to the Write tool test; no production RPC or Write behavior changes.
-   - **TUI impact**: TUI test gates and child waits likewise use deadlines and cleanup. The upstream test-only change does not itself make TUI tests pass.
-2. `c362446a156dbcc5854930d0dbaac97bb612ba19` — `docs(agent): clarify shutdown and persistence boundaries`
-   - **Upstream change**: Clarifies that `persisted` only guarantees appending to the current process store stream, without transaction/fsync durability guarantees.
-   - **TUI impact**: Documented in TUI spec/README: TUI never promises disk crash/fsync durability and handles `failed` by cleanly latching `Blocked`.
-3. `cc9ddf7436b49d2360ce5fde16b76e81cd52ef92` — `fix(store): validate persisted session settings`
-   - **Upstream change**: Enforces strict format validation for persisted session configurations upon store loading; invalid records return `STORE_ERROR (-32011)`.
-   - **TUI impact**: Verified in `regression_test_close_agent_error_single_state_check_and_store_error`; Agent skips invalid records in its list, and TUI preserves healthy sessions and reports explicit open errors without inspecting or mutating Store files.
-4. `e511d9e29c75f7d6a7476baec09fc55ca5fcd379` — `test(agent): verify same-loop request-boundary model updates`
-   - **Upstream change**: Validates that mid-turn `session.update` takes effect strictly at subsequent model request boundaries (`request_index > 0`).
-   - **TUI impact**: Verified in `e2e_scenario_e_same_loop_update` and `deterministic_same_loop_model_a_to_tool_to_model_b`; footer preserves current request config and indicates pending next revision.
-5. `bac2b715f7bee3a5865fc581f133dd60acadd1bc` — `fix(session): preserve blocked turn completion`
-   - **Upstream change**: Ensures that when turn persistence fails, the in-memory turn completion view is preserved so `turn.wait` returns the actual outcome.
-   - **TUI impact**: Verified in `persistence_failure_blocks_without_losing_the_old_result_view`; TUI displays the completed turn content alongside the `UNSAVED TURN` banner and blocked status.
+The refactor requires `protocol_version == 1`. The old `is_supported_agent_version`
+package-minor gate (`minor == 3`) is deleted in stage B and replaced by
+`validate_backend(protocol_version, capabilities)`. Protocol v1 equality is a
+necessary but not sufficient condition; the fixed Agent 0.5.0 build plus this
+repository's fixtures/E2E remain the release gate.
 
-## Upstream Agent Test Verification Status
+## Method surface (33 methods)
 
-Upstream agent test records in `/root/minicore-tui-r2-01a06ec1/agent` are provenance only:
-- `tests/tui_rpc_flow.rs` (6 tests): Passed remotely.
-- `blocked` retained completion tests (2 tests): Passed remotely.
-- `same-loop-update` test (1 test): Passed remotely.
-- `invalidRecord` test (1 test): Passed remotely.
-- **CI Run 33897540665**: Recorded as the upstream spec baseline success run; it is not final6 TUI platform evidence. GitHub Actions Linux, macOS, and Windows jobs were not run for final6.
+`agent.ping`, `agent.reload`, `agent.shutdown`,
+`profile.list`, `model.list`,
+`session.list`, `session.create`, `session.open`, `session.close`,
+`session.delete`, `session.state`, `session.context`, `session.compact`,
+`session.compact.cancel`, `session.update`, `session.rename`,
+`session.history`, `session.read`, `session.presentation`,
+`workspace.read`, `workspace.files`, `workspace.search`, `workspace.status`,
+`changes.list`, `changes.diff`,
+`tool.read`, `tool.output`,
+`turn.send`, `turn.steer`, `turn.cancel`, `turn.wait`, `turn.result`,
+`interaction.answer`.
 
-The TUI does not link either backend crate and does not read their source or
-store files at runtime. The Agent executable is supplied separately through
-`--agent-bin`; its configuration and data directory are supplied through
-`--agent-config` and owned by the Agent process.
+The stage-B migration consumes: `session.read`, `turn.result`,
+`session.context`, `session.compact`/`session.compact.cancel`, `tool.read`,
+`tool.output`, `workspace.*`, `changes.*`. `session.history` and
+`session.presentation` remain display/diagnostic only; they must not become
+the new authoritative read path.
+
+## Read and result contracts
+
+`session.read` returns ordered `utf8_json` chunks of one sanitized Runtime
+`HistoryItem` envelope each:
+
+```json
+{"item": {"type": "user", "data": {"loop_id": "lup_…", "kind": "prompt",
+  "input": {"text": "…"}}}, "timestamp": "2026-…"}
+```
+
+The envelope is **not** the legacy `HistoryItemView` display DTO: User carries
+`input`, Assistant carries `content` (ordered parts), not `text`/`reasoning`/
+`tool_calls`. `captured_end` is a JSONL-prefix boundary (not an item count);
+`total` is the readable item count. `history_revision` is the SHA-256 of the
+captured prefix; continuation requests carry both. `trailing_incomplete`
+reports a half JSONL tail and is never repaired. A large item spans pages; the
+next page resumes at `{item, offset}` and `offset`/`total_bytes` are UTF-8
+bytes. `max_bytes` bounds the encoded result DTO (default 256 KiB, max 1 MiB).
+
+`turn.result` returns the same chunk shape with an `availability` of
+`pending` / `live` / `stored`, plus optional outcome/persistence/usage. Item
+indexes are turn-local, not session-global. `turn.wait` is the normal
+completion signal and returns a direct result view.
+
+`tool.read` addresses a call by the full
+`{session_id, loop_id, request_index, tool_call_id}`. `state` is one of
+`requested`/`awaiting_policy`/`running`/`succeeded`/`failed`/`denied`/
+`cancelled`/`input_provided`; `awaiting_policy` is never `running` and
+`started_at` is set only after the policy decision. `tool.output` streams are
+`input`/`output` (`utf8_json`/`utf8`, UTF-8 byte offsets) or `stdout`/`stderr`
+(`base64`, raw byte offsets). `base_offset`/`next_offset`/`observed_end` count
+decoded bytes, never base64 characters.
+
+`workspace.read` statuses are `ok`/`binary`/`changed`/`too_large`; a page
+continues a line byte-exactly via `next_range` + `if_revision`. `workspace.files`
+and `workspace.search` return `next_cursor` only when the scan can advance;
+`deadline`/`depth`/`entries`/`rules` stop without one. `workspace.status`
+reports `repo_available: false` for a definite non-repo and `complete: false`
+plus a `warnings` code (never a path) when the observation is partial.
+
+`changes.list` returns opaque `tool:`/`workspace:` `change_ref` values that the
+client must not parse; `changes.diff` returns structured hunks whose
+`line_complete` fragments concatenate byte-exactly.
+
+## Events
+
+`agent.event` carries `params.data.meta` with `session_id`, optional
+`loop_id`, and `dropped_before`. Loop events carry the exact
+`{session_id, loop_id}` turn reference. The Agent 0.5 additions the refactor
+must decode are `tool_invocation`, `tool_execution`, `tool_process`, and the
+current compaction state on `session_state`. Unknown read-only event types are
+ignored; known event field corruption is a protocol error.
+
+## Capacity and errors
+
+At most 4 read queries and 32 total deferred waiters/queries run at once;
+beyond that the Agent returns `-32019` (`resource_exhausted`, retryable). The
+TUI targets 2 read-query slots and ≤16 outstanding deferred requests. Domain
+error codes are unchanged from `docs/rpc.md` (`-32001`..`-32022`); error data
+carries only `{kind, retryable}` plus a short stable message.
+
+## Fixtures
+
+`tests/fixtures/agent-v1/` holds desensitized result payloads captured from a
+real Agent 0.5.0 process by
+[`scripts/generate_agent_v1_fixtures.py`](../scripts/generate_agent_v1_fixtures.py).
+The generator starts a loopback OpenAI-Responses mock, a synthetic temp
+`data_dir` and workspace, drives the RPC methods, and records only result
+payloads (no prompts, credentials, tool bodies, or real paths).
+`manifest.json` records the pins, generator, capability list, and the fixture
+classes that cannot be reproduced against a healthy real process (preparing
+timing, compaction fault injection, store-blocked, stream gap/eviction, scan
+deadline, stale cursors, records-truncated). Those gaps are synthesized in
+stage B unit tests and disclosed rather than fabricated.
+
+`tests/agent_v1_fixtures.rs` decodes the fixtures and asserts the raw item
+envelope shape; it is the stage-B migration's starting contract.
