@@ -28,13 +28,24 @@ cargo clippy --locked --all-targets -- -D warnings  # clean
 ```
 
 The 23 ignored tests are the 18 real-Agent E2E scenarios plus 5 release/perf
-tests; no ignored test is counted as evidence below.
+tests. The E2E suite **was run** for this commit against the pinned binary:
+
+```bash
+MINICORE_AGENT_BIN=/root/minicore-tui-v03-refactor/agent-target/debug/minicore-agent \
+  cargo test --locked --test agent_e2e -- --ignored --test-threads=1
+# 18 passed / 0 failed / 0 ignored, log c1-agent-e2e.log
+```
+
+Those 18 scenarios cover discovery, basic turn, max reasoning, tool execution,
+steer pacing, update, shutdown cancel, reload and stress; they do **not** cover
+manual compaction or automatic preparation, so those two behaviors stay below
+their implementation status.
 
 | ID | Required behavior | Status | Evidence / remaining |
 |---|---|---|---|
-| REF-01 | Fixed Agent 0.5 / Protocol 1, no Agent/Runtime crate dependency | **Implemented** | B1 removed the `minor == 3` gate and validates `protocol_version == 1` plus the capability list (`src/app.rs::validate_backend`); positive/negative reducer tests `bootstrap_accepts_the_pinned_agent_0_5_protocol_v1` and `bootstrap_rejects_a_backend_missing_required_capabilities`. Real-Agent E2E still ignored. |
-| REF-02 | Protocol version + capability check; no 0.3 fallback | **Implemented** | `agent.ping` parses `version`/`protocol_version`/`capabilities`; unknown capability list is rejected. Same tests as REF-01. |
-| REF-03 | Extended reasoning kept, no silent downgrade | **Not run** | Requires real-Agent E2E. |
+| REF-01 | Fixed Agent 0.5 / Protocol 1, no Agent/Runtime crate dependency | **Passed** | B1 removed the `minor == 3` gate and validates `protocol_version == 1` plus the capability list (`src/app.rs::validate_backend`); reducer tests `bootstrap_accepts_the_pinned_agent_0_5_protocol_v1` / `bootstrap_rejects_a_backend_missing_required_capabilities`, and all 18 real-Agent E2E scenarios spawn the pinned 0.5.0 binary and reach `Ready`. |
+| REF-02 | Protocol version + capability check; no 0.3 fallback | **Passed** | `agent.ping` parses `version`/`protocol_version`/`capabilities`; an incomplete capability list is rejected in the reducer test and every real-Agent E2E bootstrap exercises the accepted path. |
+| REF-03 | Extended reasoning kept, no silent downgrade | **Passed** | `e2e_max_reasoning_ships_literal_max_and_provider_body_carries_it` drives a real turn and asserts the provider request body carries the literal `max` reasoning. |
 | REF-04 | Response/Event interleave; partial frame and EOF | **Passed** | `src/rpc.rs` transport tests, including the 32 MiB frame bound and partial-EOF cases. |
 | REF-05 | Send-full does not block UI; draft kept | **Passed** | `tests/backpressure_baseline.rs` drives a real spawned child that never reads stdin: 28 normal `try_send` calls succeed without awaiting, the 29th returns `QueueFull(Normal)`. `run_commands` revokes the pending registration and keeps the draft (`deferred_admission_ok`/`on_queue_full` tests). |
 | REF-06 | Control reserve does not reorder queued same-session requests | **Passed** | Four reserved control slots stay usable after the normal class is full; the writer drains the single FIFO in admission order (`four_control_slots_stay_reserved_after_the_normal_class_is_full`). |
@@ -49,8 +60,8 @@ tests; no ignored test is counted as evidence below.
 | REF-15 | Cancel routes by exact operation ID or TurnRef | **Implemented** | `RequestKind::CancelTurn(TurnRef)` / `CompactCancel { operation_id }`; unknown-write fence never resends. |
 | REF-16 | Manual compact four results + unknown_write | **Implemented** | Four `CompactStatusWire` outcomes decoded; `unknown_write` keeps the fence until state+context refresh. Real-Agent compact E2E scenario not yet added. |
 | REF-17 | Context estimate scope; utility usage separate | **Not run** | Stage B/E. |
-| REF-18 | Update next Request; current Tool labels unchanged | **Implemented** | `PendingConfigUpdate` evidence is settled by `RequestStarted` (`revision`/model/reasoning). |
-| REF-19 | Steer accepted/applied/recorded separated; no cross-Loop prompt | **Implemented** | Bounded local steer queue (8 entries / 256 KiB) keyed to the exact `TurnRef`; an old steer is never promoted to a new prompt. |
+| REF-18 | Update next Request; current Tool labels unchanged | **Passed** | `PendingConfigUpdate` evidence is settled by `RequestStarted`; `e2e_scenario_e_same_loop_update` and `e2e_scenario_e2_update_single_request_then_next_turn` pass against the real Agent. |
+| REF-19 | Steer accepted/applied/recorded separated; no cross-Loop prompt | **Passed** | Bounded local steer queue (8 entries / 256 KiB) keyed to the exact `TurnRef`; `e2e_scenario_d_steer_turn`, `e2e_two_consecutive_steers_both_reach_the_provider` and `e2e_fifo_steers_are_paced_until_receipt` pass against the real Agent. |
 | REF-20 | ACK does not clear a newer draft revision | **Passed** | `tests/app_flow.rs` steer/editor revision tests. |
 | REF-21 | wait failure/lost event recovers via turn.result, no tool rerun | **Implemented** | `recover_turn` reads `turn.result` by exact `TurnRef`; `lost_wait_result_recovers_through_turn_result`. |
 | REF-22 | Failed save retained result readable; Blocked/unknown correct | **Implemented** | Retained result is readable after `pending → stored`; `agent_exit_marks_live_result_unconfirmed_without_overwriting_known_result`. |
@@ -85,19 +96,19 @@ tests; no ignored test is counted as evidence below.
 | REF-51 | Existing CJK/IME/mouse/scrollbar/Terminal restore preserved | **Passed** | `ui::*`, `tests/terminal_restore.rs`, `tests/rail_fixtures.rs`. |
 | REF-52 | Common command table/completion/help consistent | **Failed** | Three separate lists still diverge; `/refresh` missing. D |
 | REF-53 | No approval/plugin/Subagent/PTY/Git-write/auto-reconnect | **Passed** | Source audit: no such code. |
-| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Failed** | All 18 E2E scenarios are `#[ignore]`d and require `MINICORE_AGENT_BIN`; the B2 preparation/compaction scenarios that this stage must add do not exist yet. |
+| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Failed** | 18 real-Agent scenarios exist and all pass (`c1-agent-e2e.log`), covering read, tool, steer, update, shutdown and reload. No scenario covers manual compaction / automatic preparation, and none covers workspace file or changes/diff; those must be added before this criterion can pass. |
 | REF-55 | Rust 1.85/stable, three-platform original tests pass | **Partial** | Full suite, fmt and clippy run clean under `RUSTUP_TOOLCHAIN=1.85.0` on remote Linux. macOS/Windows not run. |
 | REF-56 | Release perf before/after with real data, not faked | **Not run** | Before data in `docs/performance.md`; after is C2/F. |
 
 ## Status counts
 
-- **Passed** (12): REF-04, 05, 06, 08, 20, 23, 31, 33, 48, 49, 51, 53.
-- **Implemented** (14): REF-01, 02, 07, 09, 10, 11, 13, 14, 15, 16, 18, 19,
-  21, 22.
+- **Passed** (17): REF-01, 02, 03, 04, 05, 06, 08, 18, 19, 20, 23, 31, 33,
+  48, 49, 51, 53.
+- **Implemented** (9): REF-07, 09, 10, 11, 13, 14, 15, 16, 21, 22.
 - **Partial** (3): REF-24, 50, 55.
-- **Not run** (23): REF-03, 12, 17, 26, 27, 29, 30, 32, 34, 35, 36, 37, 38,
-  39, 40, 41, 42, 43, 44, 45, 46, 47, 56, plus the real-Agent E2E half of
-  every **Implemented** row.
+- **Not run** (22): REF-12, 17, 26, 27, 29, 30, 32, 34, 35, 36, 37, 38, 39,
+  40, 41, 42, 43, 44, 45, 46, 47, 56, plus the real-Agent E2E half of every
+  **Implemented** row.
 - **Failed** (4): REF-25, 28, 52, 54.
 
 ## C1 progress and remaining work
@@ -112,6 +123,8 @@ Landed and verified (each commit was tested remotely on Rust 1.85):
    `HistoryTrigger::{Refresh, Gap, PostWait}` replaces `loading` /
    `reconcile_inflight` / `needs_post_wait_history`; the header, takeover and
    wait reducers read the converged state.
+3. Real-Agent E2E was executed against the pinned 0.5.0 binary: 18 passed / 0
+   failed (`c1-agent-e2e.log`).
 
 Still open in C1 (do not claim C1 complete):
 
@@ -122,4 +135,6 @@ Still open in C1 (do not claim C1 complete):
   and reverted because 13 reload tests encode that ordering.
 - `src/app.rs` is not yet split into `app/session.rs`, `app/turn.rs`,
   `app/history.rs`, `app/queries.rs` as real modules.
-- No real-Agent preparation/compaction E2E scenario has been added yet.
+- No real-Agent preparation/compaction E2E scenario has been added yet; the
+  18 existing scenarios do not exercise `session.compact` or automatic
+  preparation.
