@@ -58,8 +58,8 @@ their implementation status.
 | REF-12 | Read-only browse does not open Session/require Workspace | **Not run** | Stage E. |
 | REF-13 | Large/missing/records_truncated/trailing_incomplete not faked complete | **Implemented** | Placeholders keep unloaded ranges explicit; `trailing_incomplete` is decoded as incomplete and never repaired. |
 | REF-14 | send may be deferred; preparation visible, no auto-resend | **Implemented** | B2 preparing state plus deferred admission; `prepare` cancel routes to `session.compact.cancel` by operation id. Real-Agent prep E2E scenario not yet added. |
-| REF-15 | Cancel routes by exact operation ID or TurnRef | **Implemented** | `RequestKind::CancelTurn(TurnRef)` / `CompactCancel { operation_id }`; unknown-write fence never resends. |
-| REF-16 | Manual compact four results + unknown_write | **Implemented** | Four `CompactStatusWire` outcomes decoded; `unknown_write` keeps the fence until state+context refresh. Real-Agent compact E2E scenario not yet added. |
+| REF-15 | Cancel routes by exact operation ID or TurnRef | **Implemented** | `RequestKind::CancelTurn(TurnRef)` / `CompactCancel { operation_id }`; unknown-write fence never resends. `e2e_manual_compact_deferred_cancel` measures the deferred `session.compact.cancel` path against the real Agent by the locally known operation id. |
+| REF-16 | Manual compact four results + unknown_write | **Implemented** | Four `CompactStatusWire` outcomes decoded. Real-Agent E2E now measures `noop` (`e2e_manual_compact_without_history_is_a_noop`), `compacted` (`e2e_manual_compact_summarizes_history`) and cancel→`failed` (`e2e_manual_compact_deferred_cancel`); `unknown_write` keeps the fence until state+context refresh and is only reducer-tested. |
 | REF-17 | Context estimate scope; utility usage separate | **Not run** | Stage B/E. |
 | REF-18 | Update next Request; current Tool labels unchanged | **Passed** | `PendingConfigUpdate` evidence is settled by `RequestStarted`; `e2e_scenario_e_same_loop_update` and `e2e_scenario_e2_update_single_request_then_next_turn` pass against the real Agent. |
 | REF-19 | Steer accepted/applied/recorded separated; no cross-Loop prompt | **Passed** | Bounded local steer queue (8 entries / 256 KiB) keyed to the exact `TurnRef`; `e2e_scenario_d_steer_turn`, `e2e_two_consecutive_steers_both_reach_the_provider` and `e2e_fifo_steers_are_paced_until_receipt` pass against the real Agent. |
@@ -67,7 +67,7 @@ their implementation status.
 | REF-21 | wait failure/lost event recovers via turn.result, no tool rerun | **Implemented** | `recover_turn` reads `turn.result` by exact `TurnRef`; `lost_wait_result_recovers_through_turn_result`. |
 | REF-22 | Failed save retained result readable; Blocked/unknown correct | **Implemented** | Retained result is readable after `pending → stored`; `agent_exit_marks_live_result_unconfirmed_without_overwriting_known_result`. |
 | REF-23 | Cancel does not claim file rollback; close keeps in-flight result | **Passed** | `tests/app_flow.rs` lifecycle tests. |
-| REF-24 | reload does not clear History/Live/draft or reinstall history | **Partial** | B1/B2 deleted the staged history replacement (`reload_does_not_stage_a_full_history_replacement`); a C1 attempt to also stop installing the staged active-session state/presentation was reverted (13 reload tests depended on the staged install), so reload still installs one staged projection before the normal read chain confirms it. |
+| REF-24 | reload does not clear History/Live/draft or reinstall history | **Passed** | `fe59a49` narrowed reload to catalog generation only: the `ReloadState`/`ReloadPresentation`/`ReloadWaitTurn` requests, the staged state/presentation install and the `reload_fenced_*` patch branches are gone, and reload never touches Live, the draft, the selection or history. Reload-affected sessions are re-marked uncalibrated and converge through the normal read chain; `reload_does_not_stage_a_full_history_replacement` and the migrated reload tests plus the real-Agent `e2e_configuration_reload_refreshes_catalogs_only` measure it. |
 | REF-25 | Per-session drafts/undo/paste/cursor independent | **Failed** | Draft state is one global `App.composer`; switching sessions does not keep an independent draft. D |
 | REF-26 | New/continue/rename/delete explicit, no cross-project guess | **Not run** | Reducer tests exist; E2E 3 needs the real Agent. C/D |
 | REF-27 | Single Arc body; single Tool index | **Not run** | C2. Reload no longer duplicates history bodies, but the shared body/index is not built. |
@@ -97,16 +97,16 @@ their implementation status.
 | REF-51 | Existing CJK/IME/mouse/scrollbar/Terminal restore preserved | **Passed** | `ui::*`, `tests/terminal_restore.rs`, `tests/rail_fixtures.rs`. |
 | REF-52 | Common command table/completion/help consistent | **Failed** | Three separate lists still diverge; `/refresh` missing. D |
 | REF-53 | No approval/plugin/Subagent/PTY/Git-write/auto-reconnect | **Passed** | Source audit: no such code. |
-| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Failed** | 18 real-Agent scenarios exist and all pass (`c1-agent-e2e.log`), covering read, tool, steer, update, shutdown and reload. No scenario covers manual compaction / automatic preparation, and none covers workspace file or changes/diff; those must be added before this criterion can pass. |
+| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Failed** | 21 real-Agent scenarios exist and all pass (`c1f-agent-e2e.log`), covering read, tool, steer, update, shutdown, reload and manual compaction (`noop`, `compacted`, deferred cancel). Automatic preparation and workspace file/changes/diff scenarios are still missing, so this criterion cannot pass yet. |
 | REF-55 | Rust 1.85/stable, three-platform original tests pass | **Partial** | Full suite, fmt and clippy run clean under `RUSTUP_TOOLCHAIN=1.85.0` on remote Linux. macOS/Windows not run. |
 | REF-56 | Release perf before/after with real data, not faked | **Not run** | Before data in `docs/performance.md`; after is C2/F. |
 
 ## Status counts
 
-- **Passed** (17): REF-01, 02, 03, 04, 05, 06, 08, 18, 19, 20, 23, 31, 33,
-  48, 49, 51, 53.
-- **Implemented** (9): REF-07, 09, 10, 11, 13, 14, 15, 16, 21, 22.
-- **Partial** (3): REF-24, 50, 55.
+- **Passed** (18): REF-01, 02, 03, 04, 05, 06, 08, 18, 19, 20, 23, 24, 31,
+  33, 48, 49, 51, 53.
+- **Implemented** (10): REF-07, 09, 10, 11, 13, 14, 15, 16, 21, 22.
+- **Partial** (2): REF-50, 55.
 - **Not run** (22): REF-12, 17, 26, 27, 29, 30, 32, 34, 35, 36, 37, 38, 39,
   40, 41, 42, 43, 44, 45, 46, 47, 56, plus the real-Agent E2E half of every
   **Implemented** row.
@@ -118,24 +118,48 @@ Landed and verified (each commit was tested remotely on Rust 1.85):
 
 1. `c843105` — synchronous bounded admission (32 = 28+4), 1 MiB line bound,
    FIFO writer, 64 MiB inbound wire budget released on ownership, deferred
-   retries keyed by exact target, owned clipboard jobs, content-free stderr,
-   unified safe-display boundary.
+   retries keyed by exact target, content-free stderr, unified safe-display
+   boundary.
 2. `d47d837` — `SessionView.history_read: HistoryRead { active, pending }` with
    `HistoryTrigger::{Refresh, Gap, PostWait}` replaces `loading` /
    `reconcile_inflight` / `needs_post_wait_history`; the header, takeover and
    wait reducers read the converged state.
-3. Real-Agent E2E was executed against the pinned 0.5.0 binary: 18 passed / 0
-   failed (`c1-agent-e2e.log`).
+3. `3d159a7` — `LocalJobs` owns exactly one clipboard job; a second copy is
+   refused without queueing; the debug log writes from a dedicated thread and
+   never blocks the UI; refused sends have bounded retries (initial + ≤2) and
+   abandoned input is restored to the composer or returned to the paused steer
+   queue, never dropped.
+4. `f440741` + `b3eeda8` — `result_unconfirmed: bool` becomes
+   `ResultConfirmation::{Confirmed, NeedsRead, Unknown}` with per-site evidence
+   and recovery, and a known failed save no longer leaks into the forced
+   shutdown message.
+5. `fe59a49` — reload narrows to configuration→models/profiles/metadata
+   catalog generation; `ReloadState` / `ReloadPresentation` /
+   `ReloadWaitTurn`, the staged install and the `reload_fenced_*` branches are
+   removed and the ~26 affected reload tests migrated to conservative
+   re-read semantics. (This commit's first push had fmt/clippy drift, fixed in
+   the next commit.)
+6. `77c0ebf` — session catalogs are generation-based: a late
+   `session.list` that predates a rename/delete can no longer resurrect a
+   title override or a deleted row; stale bootstrap/refresh/reload lists are
+   re-issued with their own generation.
+7. `c91a686` — three real-Agent manual-compaction E2E scenarios (`noop`,
+   `compacted`, gated deferred cancel).
+
+Verified evidence at `c91a686`: `fmt` clean, `620 passed / 0 failed / 26
+ignored`, `clippy -D warnings` clean, tree md5
+`ee2180393a5993ba47daed879aa31328`; real-Agent E2E `21 passed / 0 failed`
+(`c1f-agent-e2e.log`). Logs: `c1a-*`..`c1g-*` under
+`/root/minicore-tui-v03-refactor/`.
 
 Still open in C1 (do not claim C1 complete):
 
-- `result_unconfirmed` is still a single boolean; it has not been migrated to
-  the `Confirmation::{Confirmed, NeedsRead, Unknown}` model.
-- reload still installs one staged active-session state/presentation before
-  the normal read chain confirms it; the staged-projection removal was tried
-  and reverted because 13 reload tests encode that ordering.
 - `src/app.rs` is not yet split into `app/session.rs`, `app/turn.rs`,
-  `app/history.rs`, `app/queries.rs` as real modules.
-- No real-Agent preparation/compaction E2E scenario has been added yet; the
-  18 existing scenarios do not exercise `session.compact` or automatic
-  preparation.
+  `app/history.rs`, `app/queries.rs` as real modules; only the type-only
+  `app/history.rs`, `app/queries.rs` and the existing `app/ui_actions.rs`
+  method group are split out today.
+- No real-Agent automatic-preparation E2E scenario has been added; the 21
+  scenarios cover manual compaction but not `session.context.current_operation`
+  preparation-on-submit.
+- The C2/C3 items behind REF-25/28/52/54 (per-session draft state, shared
+  history body/layout, file/diff E2E) are untouched.

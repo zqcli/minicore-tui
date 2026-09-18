@@ -141,6 +141,11 @@ C1 enforces the local side of those limits (spec §5.2/§5.4):
   (`turn.cancel`, `session.compact.cancel`, `session.close`, `agent.shutdown`).
   `try_send` admits or refuses synchronously; a refused request was never
   written, so the app revokes its pending registration and keeps the input.
+  Refusals are retried at most twice per exact target (`MAX_SEND_ATTEMPTS`);
+  when the bound is reached the app abandons the attempt and restores the
+  input — `turn.send` text goes back to the composer (appended after an
+  existing draft), a `turn.steer` returns to the front of the paused steer
+  queue as unsent, and `session.update`/read intents are dropped with a notice.
   `MAX_REQUEST_LINE_BYTES = 1 MiB` is checked before any write.
 - Inbound: 32 MiB per frame plus a 64 MiB aggregate wire budget whose charge
   is released by the app taking ownership of a decoded frame.
@@ -148,8 +153,12 @@ C1 enforces the local side of those limits (spec §5.2/§5.4):
   read-only slots with `MAX_WAITING = 16` queued; `app.rs` keeps at most 16
   deferred `turn.wait`/`turn.result`/`session.compact` intents and coalesces
   retries by exact target.
-- Local jobs: clipboard work runs on an owned blocking task with an owner, a
-  deadline and a joinable shutdown; the main loop never awaits it.
+- Local jobs: `LocalJobs` owns exactly one clipboard job (a second copy is
+  refused immediately and the selection stays in the app) with a bounded
+  result channel and a joinable shutdown; the clipboard write and wait share
+  one deadline. The debug log uses a dedicated writer thread fed by a bounded
+  `try_send`, so no file IO ever runs on the UI path; `agent.stderr` frames
+  carry `{bytes, dropped}` only.
 
 ## Fixtures
 
@@ -206,7 +215,7 @@ agent  binary  /root/minicore-tui-v03-refactor/agent-target/debug/minicore-agent
 agent  head    061743369459299e66be97bf97d2b27352a39914
 runtime head   6cd2bdbc634437dea925495c61c7eb0be10ba171
 tui    base    9d11ee69c4efa02ef1e5bff143662b48dc3194de (stage-A baseline)
-tui    head    d47d837 (C1 history-read convergence)
+tui    head    c91a686 (C1: full quality gate green, 21 real-Agent E2E)
 CARGO_TARGET_DIR=/root/minicore-tui-v03-refactor/tui-target
 ```
 
@@ -223,24 +232,30 @@ python3 scripts/generate_agent_v1_fixtures.py \
 cargo test --release --locked --test performance -- --ignored --nocapture
 ```
 
-Last verified result (C1, commit `d47d837`, log `c1-final-tests4.log`): `fmt`
-clean, `test` 610 passed / 0 failed / 23 ignored, `clippy -D warnings` clean,
-all under Rust 1.85. Per-slice logs: `c1-io-tests4.log`, `c1-history-tests.log`,
-`c1-io-clippy.log`; earlier B1/B2 logs are `b1-*.log` / `b2-*.log`. The 18
-real-Agent E2E scenarios were also run against the pinned binary and all pass
-(`c1-agent-e2e.log`).
+Last verified result (C1, commit `c91a686`, logs `c1g-fmt.log` /
+`c1g-tests.log` / `c1g-clippy.log`): `fmt` clean, `test` 620 passed / 0 failed
+/ 26 ignored, `clippy -D warnings` clean, tree md5
+`ee2180393a5993ba47daed879aa31328`, all under Rust 1.85. Per-slice logs:
+`c1a-*` (job ownership + bounded retries), `c1b/c1c-*` (confirmation model),
+`c1d/c1e-*` (reload narrowing + catalog generation), `c1f-agent-e2e.log` (real
+Agent), plus the earlier `c1-io-tests4.log` and `c1-history-tests.log`; B1/B2
+logs are `b1-*.log` / `b2-*.log`. The 21 real-Agent E2E scenarios were run
+against the pinned binary and all pass (`c1f-agent-e2e.log`), including the
+three manual-compaction scenarios.
 
 When reusing the existing `tui-target` directory after an rsync, run
 `cargo clean -p minicore-tui` (or touch the sources) before the build: rsync
 preserves source mtimes, and a newer stale rlib otherwise shadows the synced
 source, producing confusing "variant not found" errors.
 
-The 23 ignored tests are the 18 real-Agent E2E scenarios plus 5 release/perf
-tests; they are not evidence. `docs/refactor-acceptance.md` tracks which
-REF rows remain open.
+The 26 ignored tests are the 21 real-Agent E2E scenarios plus 5 release/perf
+tests; they are not evidence. `docs/refactor-acceptance.md` tracks which REF
+rows remain open.
 
-C1 status: the synchronous-admission/IO slice (`c843105`) and the
-history-read-state convergence (`d47d837`) are landed and verified. The
-reload narrowing, the `result_unconfirmed` → `Confirmation` migration, and
-the `src/app.rs` module split are **not** landed; the acceptance matrix lists
-them explicitly so no partial claim is made.
+C1 status: the synchronous-admission/IO slice (`c843105`), the history-read
+state convergence (`d47d837`), the owned-job/bounded-retry slice (`3d159a7`),
+the confirmation model (`f440741`, `b3eeda8`), the reload narrowing
+(`fe59a49`), catalog generations (`77c0ebf`) and the compaction E2E
+(`c91a686`) are landed and verified. The `src/app.rs` module split and the
+automatic-preparation E2E scenario are **not** landed; the acceptance matrix
+lists them explicitly so no partial claim is made.
