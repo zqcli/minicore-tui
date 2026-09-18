@@ -8,17 +8,17 @@
 //! instead of spawning another blocking thread; the refused text is dropped
 //! and never overwrites a newer selection later.
 //!
-//! A job runs on a blocking thread and its *only* way back into the app is an
-//! [`AppEvent::JobFinished`] result carrying the capture identity. The result
-//! channel is bounded (two slots for one job, so a send can never wedge a
-//! worker) and the main loop remains the single place that mutates app state.
+//! A job runs as one owned async task and its *only* way back into the app is
+//! an [`AppEvent::JobFinished`] result carrying the capture identity. The
+//! result channel is bounded (two slots for one job, so a send can never wedge
+//! a worker) and the main loop remains the single place that mutates app state.
 //!
 //! No blocking call happens in `App::update`, in draw, or in the RPC command
 //! dispatch: `run_commands` starts a job and returns. The clipboard adapter
-//! bounds the whole write+wait with one shared deadline and kills the direct
-//! child (`src/clipboard.rs`); the writer thread is detached on the deadline,
-//! so `shutdown` stays bounded even in the documented descendant-holds-the-
-//! pipe case (see the clipboard module docs for that residual risk).
+//! bounds the whole write+wait with one shared deadline, owns the child's
+//! stdin, and kills and waits the direct child (`src/clipboard.rs`). Dropping
+//! the task closes this process's pipe end, so no writer thread can outlive
+//! its owner and `shutdown` never detaches one.
 
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -86,8 +86,8 @@ impl LocalJobs {
         text: String,
     ) -> CopyAdmission {
         let mut clipboard = crate::clipboard::terminal_clipboard();
-        self.try_start_clipboard_job(session_id, revision, text, move |captured| {
-            clipboard.set_text(captured)
+        self.try_start_clipboard_job(session_id, revision, text, move |captured| async move {
+            clipboard.set_text(&captured).await
         })
     }
 
@@ -102,13 +102,13 @@ impl LocalJobs {
     where
         P: ClipboardPort + Send + 'static,
     {
-        self.try_start_clipboard_job(session_id, revision, text, move |captured| {
+        self.try_start_clipboard_job(session_id, revision, text, move |captured| async move {
             let mut adapter = adapter;
-            adapter.set_text(captured)
+            adapter.set_text(&captured).await
         })
     }
 
-    fn try_start_clipboard_job<F>(
+    fn try_start_clipboard_job<F, Fut>(
         &mut self,
         session_id: &str,
         revision: u64,
@@ -116,7 +116,8 @@ impl LocalJobs {
         write: F,
     ) -> CopyAdmission
     where
-        F: FnOnce(&str) -> std::io::Result<()> + Send + 'static,
+        F: FnOnce(String) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = std::io::Result<()>> + Send,
     {
         if self
             .clipboard
@@ -133,15 +134,22 @@ impl LocalJobs {
         self.next_id = self.next_id.wrapping_add(1);
         let events = self.events_tx.clone();
         let session_id = session_id.to_owned();
-        let handle = tokio::task::spawn_blocking(move || {
-            let result = write(&text).map_err(|error| format!("copy failed: {error}"));
+        // One owned async task. Cancelling it drops the adapter future, which
+        // drops the child's stdin and its `kill_on_drop` child: the production
+        // path never leaves a writer thread behind.
+        let handle = tokio::spawn(async move {
+            let result = write(text)
+                .await
+                .map_err(|error| format!("copy failed: {error}"));
             // The channel has room for this single result (two slots, one job),
             // so no send path waits on the main loop.
-            let _ = events.blocking_send(AppEvent::JobFinished(JobOutcome::Clipboard {
-                session_id,
-                revision,
-                result,
-            }));
+            let _ = events
+                .send(AppEvent::JobFinished(JobOutcome::Clipboard {
+                    session_id,
+                    revision,
+                    result,
+                }))
+                .await;
         });
         self.clipboard = Some(handle);
         CopyAdmission::Started(id)
@@ -168,8 +176,9 @@ impl LocalJobs {
             .is_some_and(|handle| !handle.is_finished())
     }
 
-    /// Joins the owned job. The adapter is deadline-bounded, so this waits for
-    /// local cleanup but never for a hung helper indefinitely.
+    /// Joins the owned job. The adapter is deadline-bounded and owns its
+    /// child, so this waits for local cleanup but never for a hung helper
+    /// indefinitely.
     ///
     /// While joining, any completion result is drained so a full channel can
     /// never wedge the worker (there is one job and two slots, but shutdown
@@ -191,24 +200,23 @@ impl LocalJobs {
 mod tests {
     use super::*;
     use crate::clipboard::MockClipboard;
-    use std::sync::mpsc as std_mpsc;
     use std::time::{Duration, Instant};
 
-    /// A clipboard adapter that blocks until its gate is released. It stands
+    /// A clipboard adapter that waits until its gate is released. It stands
     /// in for a slow native helper while the main loop keeps running.
     struct GatedClipboard {
-        gate: std_mpsc::Receiver<()>,
+        gate: tokio::sync::oneshot::Receiver<()>,
     }
 
     impl ClipboardPort for GatedClipboard {
-        fn set_text(&mut self, _text: &str) -> std::io::Result<()> {
-            let _ = self.gate.recv_timeout(Duration::from_secs(5));
+        async fn set_text(&mut self, _text: &str) -> std::io::Result<()> {
+            let _ = (&mut self.gate).await;
             Ok(())
         }
     }
 
-    fn gated() -> (GatedClipboard, std_mpsc::Sender<()>) {
-        let (tx, rx) = std_mpsc::channel();
+    fn gated() -> (GatedClipboard, tokio::sync::oneshot::Sender<()>) {
+        let (tx, rx) = tokio::sync::oneshot::channel();
         (GatedClipboard { gate: rx }, tx)
     }
 
@@ -328,7 +336,7 @@ mod tests {
             sink: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
         }
         impl ClipboardPort for Recording {
-            fn set_text(&mut self, text: &str) -> std::io::Result<()> {
+            async fn set_text(&mut self, text: &str) -> std::io::Result<()> {
                 self.sink.lock().unwrap().push(text.to_owned());
                 Ok(())
             }
@@ -378,8 +386,8 @@ mod tests {
     async fn shutdown_waits_for_a_slow_but_bounded_job() {
         struct Slow;
         impl ClipboardPort for Slow {
-            fn set_text(&mut self, _text: &str) -> std::io::Result<()> {
-                std::thread::sleep(Duration::from_millis(60));
+            async fn set_text(&mut self, _text: &str) -> std::io::Result<()> {
+                tokio::time::sleep(Duration::from_millis(60)).await;
                 Ok(())
             }
         }

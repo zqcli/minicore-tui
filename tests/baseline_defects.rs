@@ -301,8 +301,21 @@ fn run_commands_admits_synchronously_and_owns_the_clipboard() {
     assert!(include_str!("../src/lib.rs").contains("pub mod jobs;"));
     let jobs = include_str!("../src/jobs.rs");
     assert!(
-        jobs.contains("spawn_blocking") && jobs.contains("shutdown"),
-        "clipboard work runs on an owned blocking task with a joinable shutdown"
+        jobs.contains("tokio::spawn") && jobs.contains("shutdown"),
+        "clipboard work runs on one owned async task with a joinable shutdown"
+    );
+    assert!(
+        !jobs.contains("spawn_blocking"),
+        "C2: the production clipboard path must not use a blocking writer"
+    );
+    let clipboard = include_str!("../src/clipboard.rs");
+    assert!(
+        clipboard.contains("tokio::process::Command") && clipboard.contains("kill_on_drop(true)"),
+        "the clipboard child is owned by an async process handle"
+    );
+    assert!(
+        !clipboard.contains("thread::spawn"),
+        "C2: no unrecyclable writer thread in the production clipboard"
     );
 }
 

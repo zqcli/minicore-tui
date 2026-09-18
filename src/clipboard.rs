@@ -6,12 +6,11 @@
 //! or cannot accept its pipe is killed and reported; no partial state is left
 //! behind.
 //!
-//! Reclamation is bounded but not omniscient: the call kills the direct child
-//! and detaches its writer thread on the deadline, so a descendant that
-//! inherited the pipe's read end can, in principle, keep that thread alive
-//! until the pipe closes or the process exits. The fixed platform adapters
-//! (`pbcopy`, `xclip`, `clip.exe`) do not spawn descendants; the residual
-//! leak is documented here rather than assumed away.
+//! The write is one async future that owns the child's stdin. On the deadline
+//! the future is dropped — closing this process's write end — and the direct
+//! child is killed and waited. A descendant that inherited the pipe's read
+//! end therefore cannot hold the caller: nothing waits on the pipe, and the
+//! production path never creates a writer thread.
 //!
 //! Encoding is per platform: macOS (`pbcopy`) and Linux (`xclip`) receive
 //! `text` as UTF-8; Windows `clip.exe` interprets console input in the OEM
@@ -21,17 +20,22 @@
 //! adapters verified by unit tests and honest documentation, not native
 //! machine runs.
 
-use std::io::{self, Write};
-use std::process::{Child, Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::io;
+use std::process::Stdio;
+use std::time::Duration;
+
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
+use tokio::time::Instant;
 
 /// Refuse an unbounded selection before handing it to an OS clipboard
 /// process. The limit is on UTF-8 bytes, which is also what the child receives.
 pub const MAX_CLIPBOARD_BYTES: usize = 1_000_000;
 
 pub trait ClipboardPort {
-    fn set_text(&mut self, text: &str) -> io::Result<()>;
+    /// Writes `text` to the clipboard. The returned future owns the child's
+    /// stdin; dropping it closes this process's write end of the pipe.
+    fn set_text(&mut self, text: &str) -> impl std::future::Future<Output = io::Result<()>> + Send;
 }
 
 /// The platform-native clipboard adapter. Its command is fixed by target
@@ -65,24 +69,6 @@ impl Default for NativeClipboard {
 /// before it is treated as hung.
 const CHILD_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Poll `try_wait` until `deadline`; `None` means the child is still alive at
-/// the deadline. The deadline is shared with the write phase so the whole
-/// `set_text` call is bounded by one wall clock, never by pipe capacity.
-fn reap_until(
-    child: &mut Child,
-    deadline: Instant,
-) -> io::Result<Option<std::process::ExitStatus>> {
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(Some(status));
-        }
-        if Instant::now() >= deadline {
-            return Ok(None);
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-}
-
 /// The platform-correct byte encoding for one clipboard program. `clip.exe`
 /// decodes its stdin in the OEM/ANSI codepage, so UTF-8 would corrupt every
 /// non-ASCII run; UTF-16LE with a BOM is what it round-trips. All other
@@ -106,19 +92,12 @@ fn clipboard_payload(text: &str) -> Vec<u8> {
 /// Spawn `program`, stream `text` into its stdin, wait for it to exit, and
 /// return — all bounded by one shared `timeout` wall clock.
 ///
-/// A synchronous `write_all` alone can hang forever: a child that never
-/// drains its pipe fills the OS pipe buffer (~64 KiB) while a multi-hundred-
-/// KiB selection is still queued. The write therefore runs on a controlled
-/// writer thread. On the deadline the direct child is killed; that normally
-/// closes the pipe and unblocks the writer with `EPIPE`. If the child spawned
-/// a descendant that inherited the read end, killing the direct child does
-/// not close the pipe and the writer can stay blocked: the thread is then
-/// detached instead of joined so this function and the UI stay bounded, and
-/// the detached thread exits when the pipe finally closes or the process
-/// exits. The fixed platform adapters (`pbcopy`/`xclip`/`clip.exe`) spawn no
-/// descendants in practice; the residual leak is a real, documented risk (see
-/// the module docs), not a claim that a hung helper can never block.
-fn run_clipboard_with_timeout(
+/// A plain `write_all` can block forever when a child never drains its pipe.
+/// The write therefore runs as one async future that owns `ChildStdin`; on
+/// the deadline that future is dropped, closing this process's write end, and
+/// the direct child is killed and waited. A descendant holding the inherited
+/// read end cannot block the caller because nothing ever waits on the pipe.
+async fn run_clipboard_with_timeout(
     program: &str,
     args: &[&str],
     text: &str,
@@ -130,6 +109,7 @@ fn run_clipboard_with_timeout(
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|error| {
             io::Error::new(
@@ -138,55 +118,45 @@ fn run_clipboard_with_timeout(
             )
         })?;
     let payload = clipboard_payload(text);
-    let Some(mut stdin) = child.stdin.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
+    let Some(stdin) = child.stdin.take() else {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
         return Err(io::Error::other(format!(
             "native clipboard `{program}` has no stdin"
         )));
     };
 
-    // The payload is streamed by a short-lived writer thread. It gains no
-    // independent lifetime while it can make progress: the caller either
-    // joins it here or, on the deadline, kills the direct child first (which
-    // normally breaks the pipe and unblocks the write with EPIPE). If a child
-    // descendant still holds the read end, the thread is detached rather than
-    // joined so the caller stays bounded; see the function docs for the
-    // residual risk.
-    let writer = thread::spawn(move || {
-        let outcome = stdin.write_all(&payload).map(drop);
-        drop(stdin); // EOF to the child after a successful write
-        outcome
-    });
+    // One future owns stdin; dropping it (deadline or cancellation) closes the
+    // write end. Nothing else can hold the pipe write side.
+    let write = async move {
+        let mut stdin = stdin;
+        stdin.write_all(&payload).await?;
+        stdin.shutdown().await?;
+        Ok::<(), io::Error>(())
+    };
 
-    let write_outcome = loop {
-        if writer.is_finished() {
-            break writer
-                .join()
-                .unwrap_or_else(|_| Err(io::Error::other("clipboard writer thread panicked")));
-        }
-        if Instant::now() >= deadline {
-            // The child never drained the pipe: kill the direct child and
-            // detach the writer (do not join) so a descendant that inherited
-            // the read end cannot block this bounded call.
-            let _ = child.kill();
-            drop(writer);
-            let _ = child.wait();
+    let write_outcome = match tokio::time::timeout_at(deadline, write).await {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
             return Err(io::Error::other(format!(
                 "native clipboard `{program}` did not drain its input within {timeout:?}"
             )));
         }
-        thread::sleep(Duration::from_millis(5));
     };
 
-    // The write is done; reap the child with the same shared deadline.
-    let status = reap_until(&mut child, deadline)?;
-    let Some(status) = status else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(io::Error::other(format!(
-            "native clipboard `{program}` did not exit within {timeout:?}"
-        )));
+    // The write is done; reap the direct child with the same shared deadline.
+    let status = match tokio::time::timeout_at(deadline, child.wait()).await {
+        Ok(Ok(status)) => status,
+        Ok(Err(error)) => return Err(error),
+        Err(_) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(io::Error::other(format!(
+                "native clipboard `{program}` did not exit within {timeout:?}"
+            )));
+        }
     };
     match (write_outcome, status.success()) {
         // The child gave up on its input; a broken pipe is a symptom of its
@@ -201,19 +171,15 @@ fn run_clipboard_with_timeout(
     }
 }
 
-fn run_clipboard(program: &str, args: &[&str], text: &str) -> io::Result<()> {
-    run_clipboard_with_timeout(program, args, text, CHILD_TIMEOUT)
-}
-
 impl ClipboardPort for NativeClipboard {
-    fn set_text(&mut self, text: &str) -> io::Result<()> {
+    async fn set_text(&mut self, text: &str) -> io::Result<()> {
         if text.len() > MAX_CLIPBOARD_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "selection is too large for the native clipboard",
             ));
         }
-        run_clipboard(self.program, self.args, text)
+        run_clipboard_with_timeout(self.program, self.args, text, CHILD_TIMEOUT).await
     }
 }
 
@@ -274,7 +240,7 @@ pub struct MockClipboard {
 }
 
 impl ClipboardPort for MockClipboard {
-    fn set_text(&mut self, text: &str) -> io::Result<()> {
+    async fn set_text(&mut self, text: &str) -> io::Result<()> {
         if let Some(error) = &self.error {
             return Err(io::Error::other(error.clone()));
         }
@@ -302,25 +268,31 @@ mod tests {
         assert!(!clipboard.program().is_empty());
     }
 
-    #[test]
-    fn mock_clipboard_records_text_and_can_fail() {
+    #[tokio::test]
+    async fn mock_clipboard_records_text_and_can_fail() {
         let mut clipboard = MockClipboard::default();
-        clipboard.set_text("select").expect("mock accepts text");
+        clipboard
+            .set_text("select")
+            .await
+            .expect("mock accepts text");
         assert_eq!(clipboard.text.as_deref(), Some("select"));
 
         let mut clipboard = MockClipboard {
             text: None,
             error: Some("headless".to_owned()),
         };
-        assert!(clipboard.set_text("select").is_err());
+        assert!(clipboard.set_text("select").await.is_err());
         assert!(clipboard.text.is_none());
     }
 
-    #[test]
-    fn native_adapter_rejects_oversized_text_before_spawning() {
+    #[tokio::test]
+    async fn native_adapter_rejects_oversized_text_before_spawning() {
         let mut clipboard = NativeClipboard::new();
         let text = "x".repeat(MAX_CLIPBOARD_BYTES + 1);
-        let error = clipboard.set_text(&text).expect_err("limit is enforced");
+        let error = clipboard
+            .set_text(&text)
+            .await
+            .expect_err("limit is enforced");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     }
 
@@ -352,21 +324,19 @@ mod tests {
     }
 
     /// A child that never drains its input must not hang the caller: the
-    /// payload (much larger than a 64 KiB pipe buffer) is written by the
-    /// controlled writer thread, the deadline kills the direct child and
-    /// detaches the writer, and `set_text` returns bounded. (A descendant
-    /// holding the pipe could keep the detached thread alive; the fixed
-    /// adapters spawn none, and the risk is documented in the module docs.)
+    /// async write future is dropped at the deadline (closing our write end),
+    /// the direct child is killed and reaped, and `set_text` returns bounded.
     #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn non_draining_child_is_bounded_and_killed() {
+    #[tokio::test]
+    async fn non_draining_child_is_bounded_and_killed() {
         let started = std::time::Instant::now();
         let result = run_clipboard_with_timeout(
             "sleep",
             &["30"],
             &"x".repeat(1_000_000), // 1 MiB >> the OS pipe buffer
             Duration::from_millis(500),
-        );
+        )
+        .await;
         assert!(
             result.is_err(),
             "a non-draining clipboard child must be reported as a failure"
@@ -378,31 +348,58 @@ mod tests {
         );
     }
 
+    /// A descendant that inherits the pipe must not hold the caller: dropping
+    /// the write future closes our write end, and waiting only ever targets
+    /// the direct child, so the inherited read end is irrelevant.
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn descendant_holding_the_pipe_does_not_hold_the_caller() {
+        let started = std::time::Instant::now();
+        let result = run_clipboard_with_timeout(
+            "sh",
+            &["-c", "sleep 3 & exit 0"],
+            &"x".repeat(1_000_000),
+            Duration::from_millis(500),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "the direct child exited without draining the payload"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "an inherited pipe must not extend the deadline (elapsed {:?})",
+            started.elapsed()
+        );
+    }
+
     /// A real draining reader accepts the full payload and closes cleanly.
     #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn draining_child_consumes_the_full_payload() {
+    #[tokio::test]
+    async fn draining_child_consumes_the_full_payload() {
         let result = run_clipboard_with_timeout(
             "cat",
             &[],
             &"payload-line\n".repeat(50_000),
             Duration::from_secs(5),
-        );
+        )
+        .await;
         assert!(result.is_ok(), "draining `cat` must succeed: {result:?}");
     }
 
     /// A child that exits without reading its input (nonzero) is reaped and
     /// the failure is reported; the write error and child are cleaned up.
     #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn nonzero_exit_without_reading_is_reported_bounded() {
+    #[tokio::test]
+    async fn nonzero_exit_without_reading_is_reported_bounded() {
         let started = std::time::Instant::now();
         let result = run_clipboard_with_timeout(
             "sh",
             &["-c", "exit 7"],
             &"x".repeat(200_000),
             Duration::from_secs(5),
-        );
+        )
+        .await;
         assert!(result.is_err(), "exit 7 must be a failure");
         assert!(
             started.elapsed() < Duration::from_secs(2),
