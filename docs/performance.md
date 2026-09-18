@@ -1,133 +1,118 @@
-# Performance Baseline (Stage A)
+# Performance Evidence
 
-This records the **measured** v0.2.8 baseline that the stage C performance work
-must improve on. It is not a claim that the refactor passed a performance
-budget; the stage C structural counters and timing runs are still pending.
+This document separates historical Stage A baselines from the current C2b/C2c
+structural evidence. Timing values are workload measurements, not hard CI
+limits and not terminal input-to-frame latency claims.
 
 ## Environment
 
 | Item | Value |
 |---|---|
-| Builder | remote Linux host `192.168.20.199` |
-| Kernel / arch | Linux 6.12.94, x86_64, 24 cores |
-| Toolchain | `cargo 1.97.1` / `rustc 1.97.1` (workspace MSRV is 1.85.0) |
+| Builder | `root@192.168.20.199` |
 | Workspace | `/root/minicore-tui-v03-refactor/tui` |
-| Build | `cargo test --release --locked` |
-| Date | 2026-09-18 |
+| Authoritative toolchain | Rust 1.85.0 |
+| Workload terminal | 120×40 release probe; content width 119 |
+| History workload | 7300 synthetic assistant blocks, about 43,870 durable rows |
+| Stream workload | 1000 real `output_delta` events |
 
-The wall-clock numbers are machine-dependent and are **not** CI assertions.
-They exist so the same fixture can be rerun for an apples-to-apples
-before/after. The raw run logs are kept on the builder at
-`/root/minicore-tui-v03-refactor/perf-baseline.log`.
+## Historical Baseline
 
-## Two distinct paths
+The Stage A release baseline used the synchronous full-transcript preparation
+path. It measured roughly 51,101 rows and 118–121 ms per cache-miss build on
+the recorded remote Linux host. `all_lines` materialized the complete row
+vector and was a diagnostic helper, not a target production API.
 
-The baseline measures two different code paths deliberately:
+Those numbers are retained for before/after context only. They are not used to
+claim that the current frame path has the same cost.
 
-- **production frame path** — `main::prepare_frame` calls
-  `ui::transcript::prepare_conversation` once per changed frame and installs the
-  result via `AppEvent::ConversationPrepared`. This is what a live frame and a
-  new history page cost.
-- **diagnostic helper** — `ui::transcript::all_lines` clones the already
-  prepared rows. This is a test/measurement helper, **not** the per-frame cost,
-  and is never cited as the production frame cost.
+## C2b Structural Evidence
 
-## Structural baseline
+Recorded C2b release probe:
 
-Measured through public behavior (no hidden telemetry hook):
-
-| Metric | Value | Test |
-|---|---:|---|
-| prepared rows, 20 msgs × ~240 B | 701 | `baseline_prepared_rows_scale_with_total_history` |
-| prepared rows, 200 msgs × ~240 B | 7001 | same |
-| owned rows from `all_lines`, 200 msgs | 7001 | `baseline_all_lines_materializes_full_transcript` |
-
-`prepared rows` scale with the number of messages: the renderer materializes
-the entire durable transcript into one owned `Vec<Line>` on every preparation.
-Stage C must make a viewport preparation proportional to the viewport plus
-overscan, not the total history.
-
-## Timing baseline (Release, ignored tests)
-
-Command:
-
-```bash
-cargo test --release --locked --test performance -- --ignored --nocapture
+```text
+durable_rows=51101
+deltas=1000
+layout_calls=0
+history_bytes_cloned=0
+viewport_rows=40000
+viewport_bytes=2986911
 ```
 
-| Probe | Result (across 2 recorded remote runs) |
-|---|---|
-| `measure_prepare_frame_path_over_50k_rows` (7300 msgs, 5 calls) | **51,101 rows, 118–121 ms/call** on the production frame path |
-| `measure_live_delta_rebuild_cost` (7300 msgs, 1000 real `output_delta`, 51,101 rows) | history rows 51,101 → 51,234 (+133 visible), live-push loop 11.1–11.3 ms total |
-| `measure_all_lines_clone_latency` (1000 msgs, diagnostic helper, 20 clones) | 7001 rows/call, 16.0–17.6 ms/call |
+The probe installed the durable layout once, then applied 1000 real live
+output events. Stable history was not rebuilt and the viewport materialized
+only the measured visible window. A layout build is now owned by the single
+serialized `LocalJobs` layout worker; production active sessions do not use a
+synchronous durable-layout fallback.
 
-The live-delta probe pushes 1000 real `output_delta` events into an active
-loop and shows the visible delta is small (+133 rows) while the underlying
-preparation still rebuilds the full history on each durable-revision change.
-Stage C removes the full-history clone and stale-block re-layout.
+## C2c Release Evidence
 
-### What the numbers do and do not cover
+Current-tree C2c release probe after the decode-worker and ToolFacts changes:
 
-- **Covered:** production-path preparation time and materialized row counts at
-  50k+ rows; a 1000-delta live update; the diagnostic clone helper.
-- **Not covered:** cloned *bytes* and layout-call *counts* through a dedicated
-  counter — the stage C `PerfCounters` will add those and re-measure. Stage A
-  did not measure them and does not claim them.
-- The 1000-delta probe appends to a live loop held in one process; it is a
-  structural probe, not the Spec §25.2 fixed-workstation P95/P99 stream test.
+```text
+p95_us=2876
+p99_us=3154
+durable_rows=43870
+layout_calls=0
+history_bytes_cloned=0
+viewport_rows=40000
+viewport_bytes=4396336
+retained_layout_bytes_estimate=8035080
+c2c_max_tree_vm_hwm_kib=47172
+```
 
-## Backpressure baseline
+The samples are synthetic frame-processing measurements for the fixed 120×40
+workload. They are **not** terminal input latency or terminal
+input-to-frame P95/P99 measurements. The focused current-tree C2b/C2c probes
+passed; the full six-test ignored release suite also passed in this validation
+cycle. The source/perf workload is 1000 deltas,
+7300 history blocks, 43,870 durable rows, a 119-column content width, and a
+40-row viewport; these units must remain in future logs.
 
-`tests/backpressure_baseline.rs` drives a real spawned child that never reads
-stdin:
+## Decode Worker Evidence
 
-- 64 requests of 512 KiB fill the 64-slot outbound channel plus the OS pipe;
-- the next `RpcProcess::send(...).await` does not complete within 300 ms.
+Complete automatic items at or below `MAX_AUTO_ITEM_BYTES` are assembled as a
+bounded `Arc<str>` canonical body and submitted one at a time to the single
+serialized decode worker. The App retains at most one active decode identity
+per process plus the bounded encoded page owned by the current read chain.
+Worker results carry `session_epoch`, `read_chain`, and either the history
+index or exact `TurnRef`/turn-local index. Stale results release the worker
+identity and cannot install into a newer view.
 
-This proves the current UI admission path (`send().await`) can block
-`App::update`'s caller. Stage B replaces it with a synchronous `try_send`
-(32-slot queue, 28 ordinary + 4 control) that returns immediately and keeps
-the input.
+The deterministic tests cover:
 
-## C2 measured (this commit, `c2e-perf.log`)
+- worker identity and typed Runtime-item decoding;
+- App installation only after worker completion;
+- stale epoch completion without installation;
+- cancellation completion and queue shutdown ownership.
 
-`measure_c2_stable_layout_and_viewport_ownership` (release, ignored) installs
-1000 frames over a 51,101-row history with 251 real `output_delta` events:
+A fresh release decode-throughput/RSS measurement is **Notrun**. No timing or
+RSS claim is made from the unit tests.
 
-- `layout_calls` delta **0** and `historical_text_bytes_cloned` **0** across
-  the 1000 frames;
-- materialized rows exactly `frames * height` (40,000 = 1000 x 40), window
-  bytes 2,742,348 — the counters are read at the real clone point;
-- ~3.36 ms per installed frame at 50k rows, down from 5.24 ms before the
-  section/copy strings became `Arc<str>`.
+## Budgets
 
-`measure_prepare_frame_path_over_50k_rows` measures a durable cache **miss**
-(no install between calls): 115.71 ms per build of the 51,101-row layout. In
-production this happens only when the durable revision changes, but it is the
-remaining layout-worker cost: a bounded background layout worker is not built
-yet.
+The implemented owner-level targets are centralized in `src/limits.rs`:
 
-Residual per-frame cost at C2: the durable `sections` and `copy_ranges` Vecs
-are still cloned into every frame (metadata only, no text bytes). The
-section-Arc layout engine with integer prefix offsets must replace that clone.
+- history body: 32 MiB;
+- layout cache, including in-flight partials: 48 MiB;
+- live output: 4 MiB per loop and 16 MiB per session;
+- tool presentation: 1 MiB per stream and 16 MiB per session;
+- composer draft: 256 KiB and 8 MiB for retained submitted drafts;
+- one automatic item decode: 8 MiB;
+- remote read slots: 2 with bounded waiting/coalescing;
+- decode and layout workers: one serialized owner each with bounded queues.
 
-## Not measured / not run
+History eviction releases semantic owners and reopens the corresponding read
+gaps. Layout eviction accounts both installed cache entries and in-flight
+partials. These are retained-payload estimates, not exact process RSS or
+allocator-capacity measurements.
 
-- No three-platform numbers; only the remote Linux builder was used.
-- No resident-set (RSS) or allocation profiling; only row counts and wall
-  clock.
-- No terminal-input-to-frame P95/P99 latency under streaming; the stage C
-  `PerfCounters` and the fixed-workstation latency runs are pending.
-- No 256 KiB paste edit-latency measurement (stage C).
-- No clipboard-hang responsiveness measurement (stage C).
-- No upstream Agent/Runtime benchmarks were run; their sources were only read.
+## Not Run / Remaining
 
-## Budget targets from the spec (not yet enforced)
-
-These are the Spec §21/§25 budgets the refactor aims at. They are recorded here
-as targets, not results: outbound line 1 MiB; outbound queue 32 (4 control);
-inbound frame 32 MiB; inbound pending wire bytes 64 MiB; read queries 2;
-deferred ≤16; composer 256 KiB; all drafts 8 MiB; unsent steer 8 items/256 KiB;
-history body 32 MiB; single auto-decoded item 8 MiB; layout cache 48 MiB; tool
-UI stream 1 MiB/stream, 16 MiB total; live display 4 MiB/loop, 16 MiB total;
-log 200 lines × 4096 B; search hits 500.
+- decode-throughput and RSS measurements for the current serialized decode
+  worker;
+- typed explicit decoding/read workflow for items over 8 MiB;
+- final single-Arc body deduplication across `ToolBlock`, `LiveTool`, and every
+  presentation/detail path;
+- exact allocation-capacity and RSS accounting;
+- terminal input-to-frame latency under real interactive streaming;
+- D/E search, export, workspace, and external-editor workflows.
