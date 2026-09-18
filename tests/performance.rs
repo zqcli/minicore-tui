@@ -276,6 +276,66 @@ async fn measure_c2b_worker_over_50k_rows_and_1000_output_deltas() {
     jobs.shutdown().await;
 }
 
+#[tokio::test]
+#[ignore = "C2c release workload; run with --ignored --nocapture"]
+async fn measure_c2c_release_workload_120x40() {
+    const WORKLOAD_WIDTH: u16 = 119;
+    const HEIGHT: usize = 40;
+    let mut app = app_with_history(7300, 240);
+    app.enable_async_layout();
+    let mut jobs = LocalJobs::new();
+    install_worker_layout(&mut app, &mut jobs, WORKLOAD_WIDTH).await;
+    let turn = TurnRef {
+        session_id: "ses_perf".into(),
+        loop_id: "lup_c2c_live".into(),
+    };
+    app.update(AppEvent::SubmitTurn {
+        session_id: "ses_perf".into(),
+        text: "c2c workload".into(),
+    });
+    install_worker_layout(&mut app, &mut jobs, WORKLOAD_WIDTH).await;
+    push_live_deltas(&mut app, &turn, 1);
+    install_worker_layout(&mut app, &mut jobs, WORKLOAD_WIDTH).await;
+
+    let base = minicore_tui::perf::snapshot();
+    let mut samples = Vec::with_capacity(1000);
+    for index in 0..1000 {
+        let started = std::time::Instant::now();
+        push_live_deltas(&mut app, &turn, 1);
+        let prepared = minicore_tui::ui::transcript::prepare_conversation_from_cache(
+            &app,
+            WORKLOAD_WIDTH,
+            app.cached_durable(WORKLOAD_WIDTH).expect("durable cache"),
+        );
+        let _ = prepared.window(prepared.total_rows().saturating_sub(HEIGHT), HEIGHT);
+        app.update(AppEvent::ConversationPrepared(prepared));
+        samples.push(started.elapsed());
+        if index % 250 == 0 {
+            assert!(app.cached_durable(WORKLOAD_WIDTH).is_some());
+        }
+    }
+    samples.sort_unstable();
+    let p95 = samples[949];
+    let p99 = samples[989];
+    let counters = minicore_tui::perf::snapshot();
+    let prepared = app
+        .prepared_conversation(WORKLOAD_WIDTH)
+        .expect("prepared workload frame");
+    println!(
+        "c2c_120x40: p95_us={} p99_us={} durable_rows={} history_bytes_cloned={} layout_calls={} viewport_rows={} viewport_bytes={} retained_layout_bytes_estimate={}",
+        p95.as_micros(),
+        p99.as_micros(),
+        prepared.total_rows(),
+        counters.historical_text_bytes_cloned - base.historical_text_bytes_cloned,
+        counters.layout_calls - base.layout_calls,
+        counters.viewport_rows_materialized - base.viewport_rows_materialized,
+        counters.viewport_text_bytes_cloned - base.viewport_text_bytes_cloned,
+        app.cached_durable(WORKLOAD_WIDTH)
+            .map_or(0, |cache| cache.retained_bytes()),
+    );
+    jobs.shutdown().await;
+}
+
 /// Defect: the total prepared row count for a long history grows with the
 /// number of messages. A viewport-only composition (stage C) must produce a
 /// row count proportional to the viewport, not this total.
