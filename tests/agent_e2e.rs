@@ -21,9 +21,9 @@ use minicore_tui::app::{App, ConnectionState, RequestKind};
 use minicore_tui::command::AppCommand;
 use minicore_tui::event::{AppEvent, RpcEvent};
 use minicore_tui::protocol::{
-    AgentEventWire, CancelReasonWire, IncomingFrame, LoopOutcomeWire, OutgoingRequest, Reasoning,
-    RequestId, RpcNotification, RuntimeAssistantPart, RuntimeItem, RuntimeUserKind,
-    ToolCallViewWire, TurnPersistenceWire, TurnRef, TurnResultViewWire,
+    AgentEventWire, CancelReasonWire, CompactStatusWire, IncomingFrame, LoopOutcomeWire,
+    OutgoingRequest, Reasoning, RequestId, RpcNotification, RuntimeAssistantPart, RuntimeItem,
+    RuntimeUserKind, ToolCallViewWire, TurnPersistenceWire, TurnRef, TurnResultViewWire,
 };
 use minicore_tui::rpc::RpcProcess;
 use minicore_tui::state::session::ConfigUpdateState;
@@ -3374,6 +3374,304 @@ fn e2e_stress_session_switch_preserves_tool_fold() {
 
         let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
         assert!(rep.shutdown_ok && rep.seen_eof && rep.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// Types a slash command into the composer and presses Enter through the
+/// same key events a user sends.
+async fn submit_slash_command(
+    process: &mut RpcProcess,
+    app: &mut App,
+    command: &str,
+) -> Result<(), String> {
+    for character in command.chars() {
+        dispatch(
+            process,
+            app,
+            AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+                KeyCode::Char(character),
+                KeyModifiers::empty(),
+            ))),
+        )
+        .await?;
+    }
+    dispatch(
+        process,
+        app,
+        AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::empty(),
+        ))),
+    )
+    .await
+}
+
+fn compact_status(app: &App, session_id: &str) -> Option<CompactStatusWire> {
+    app.sessions
+        .known
+        .get(session_id)
+        .and_then(|view| view.manual_compact.as_ref())
+        .and_then(|compact| compact.result.as_ref())
+        .map(|result| result.status)
+}
+
+async fn create_compact_session(
+    process: &mut RpcProcess,
+    app: &mut App,
+    workspace: &std::path::Path,
+    title: &str,
+) -> String {
+    dispatch(
+        process,
+        app,
+        AppEvent::CreateSession {
+            workspace: workspace.to_string_lossy().into_owned(),
+            profile: Some("coding".to_owned()),
+            model: Some("deep".to_owned()),
+            reasoning: Some(Reasoning::High),
+            title: Some(title.to_owned()),
+        },
+    )
+    .await
+    .unwrap();
+    wait_for_active_session(process, app).await.unwrap()
+}
+
+/// Manual compaction on a session with no history is a real `noop`: the Agent
+/// answers without any provider call and the TUI returns to idle.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_manual_compact_without_history_is_a_noop() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+        let session_id = create_compact_session(
+            &mut process,
+            &mut app,
+            &env.workspace_path,
+            "Compact noop E2E",
+        )
+        .await;
+
+        submit_slash_command(&mut process, &mut app, "/compact")
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            compact_status(a, &session_id).is_some()
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            compact_status(&app, &session_id),
+            Some(CompactStatusWire::Noop),
+            "an empty session cannot compact any history"
+        );
+        assert!(!app.sessions.known[&session_id].is_preparing());
+        assert_eq!(
+            env._server.recorded_requests().len(),
+            0,
+            "a noop compaction must not call the provider"
+        );
+
+        let report = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(report.shutdown_ok && report.seen_eof && report.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// Manual compaction over real persisted history performs one summary utility
+/// call and reports `compacted`.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_manual_compact_summarizes_history() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    env._server.enqueue_sse(sse_text_response("first answer"));
+    env._server
+        .enqueue_sse(sse_text_response("history summary"));
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+        let session_id = create_compact_session(
+            &mut process,
+            &mut app,
+            &env.workspace_path,
+            "Compact history E2E",
+        )
+        .await;
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "Say hello before compacting".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .known
+                .get(&session_id)
+                .is_some_and(|view| view.live.is_none() && view.transcript.complete)
+        })
+        .await
+        .unwrap();
+
+        submit_slash_command(&mut process, &mut app, "/compact")
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            compact_status(a, &session_id) == Some(CompactStatusWire::Compacted)
+                && !a.sessions.known[&session_id].is_preparing()
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            compact_status(&app, &session_id),
+            Some(CompactStatusWire::Compacted),
+            "real history is summarized"
+        );
+        assert!(!app.sessions.known[&session_id].is_preparing());
+        let requests = env._server.recorded_requests();
+        assert!(
+            requests.len() >= 2,
+            "compaction adds one summary provider call, got {}",
+            requests.len()
+        );
+        assert!(
+            app.sessions.known[&session_id].transcript.complete,
+            "compaction preserves readable history"
+        );
+
+        let report = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(report.shutdown_ok && report.seen_eof && report.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// A manual compaction whose summary call is still in flight is cancelled by
+/// its known operation id: the deferred result must never claim success and
+/// the session returns to idle.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_manual_compact_deferred_cancel() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    let gate = Arc::new(AtomicBool::new(false));
+    env._server.enqueue_sse(sse_text_response("first answer"));
+    env._server
+        .enqueue_gated(sse_text_response("late summary"), gate.clone(), None);
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+        let session_id = create_compact_session(
+            &mut process,
+            &mut app,
+            &env.workspace_path,
+            "Compact cancel E2E",
+        )
+        .await;
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "Say hello before cancelling".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .known
+                .get(&session_id)
+                .is_some_and(|view| view.live.is_none() && view.transcript.complete)
+        })
+        .await
+        .unwrap();
+
+        submit_slash_command(&mut process, &mut app, "/compact")
+            .await
+            .unwrap();
+        // Wait until the summary provider call is in flight (recorded and
+        // gated), then cancel by the locally known operation id.
+        let deadline = Instant::now() + TIMEOUT;
+        while env._server.recorded_requests().len() < 2 && Instant::now() < deadline {
+            pump_step(&mut process, &mut app)
+                .await
+                .expect("pump while waiting for the summary call");
+        }
+        assert!(
+            env._server.recorded_requests().len() >= 2,
+            "the summary provider call never arrived"
+        );
+        assert!(
+            app.sessions.known[&session_id].manual_compact.is_some(),
+            "the deferred compaction is still owned locally"
+        );
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CancelTurn {
+                session_id: session_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        gate.store(true, Ordering::Relaxed);
+
+        pump_until(&mut process, &mut app, |a| {
+            compact_status(a, &session_id).is_some()
+                && !a.sessions.known[&session_id].is_preparing()
+        })
+        .await
+        .unwrap();
+
+        assert_ne!(
+            compact_status(&app, &session_id),
+            Some(CompactStatusWire::Compacted),
+            "a cancelled compaction must not claim it summarized the history"
+        );
+
+        let report = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(report.shutdown_ok && report.seen_eof && report.seen_exit);
         process.terminate().await;
     });
 }
