@@ -145,6 +145,10 @@ Landed and verified (each commit was tested remotely on Rust 1.85):
    re-issued with their own generation.
 7. `c91a686` — three real-Agent manual-compaction E2E scenarios (`noop`,
    `compacted`, gated deferred cancel).
+8. This commit — the read/result chain (20 methods, ~1.1k lines: the
+   `session.read` pin/assembler/paging chain, gap reconciliation and
+   `turn.result` recovery) moved out of `app.rs` into `pub(super)` methods in
+   `app/history.rs`; the earlier `app/ui_actions.rs` group is unchanged.
 
 Verified evidence at `c91a686`: `fmt` clean, `620 passed / 0 failed / 26
 ignored`, `clippy -D warnings` clean, tree md5
@@ -154,10 +158,10 @@ ignored`, `clippy -D warnings` clean, tree md5
 
 Still open in C1 (do not claim C1 complete):
 
-- `src/app.rs` is not yet split into `app/session.rs`, `app/turn.rs`,
-  `app/history.rs`, `app/queries.rs` as real modules; only the type-only
-  `app/history.rs`, `app/queries.rs` and the existing `app/ui_actions.rs`
-  method group are split out today.
+- `src/app.rs` (14.7k lines) is only partially split: the read/result chain
+  now lives in `app/history.rs` as real methods, while `app/session.rs`,
+  `app/turn.rs` and the remaining `app/queries.rs` groups are not split out
+  yet and app.rs still owns the session/turn/UI reducers.
 - No real-Agent automatic-preparation E2E scenario has been added; the 21
   scenarios cover manual compaction but not `session.context.current_operation`
   preparation-on-submit.

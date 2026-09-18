@@ -255,7 +255,8 @@ rows remain open.
 C1 status: the synchronous-admission/IO slice (`c843105`), the history-read
 state convergence (`d47d837`), the owned-job/bounded-retry slice (`3d159a7`),
 the confirmation model (`f440741`, `b3eeda8`), the reload narrowing
-(`fe59a49`), catalog generations (`77c0ebf`) and the compaction E2E
-(`c91a686`) are landed and verified. The `src/app.rs` module split and the
+(`fe59a49`), catalog generations (`77c0ebf`), the compaction E2E (`c91a686`)
+and the read/result module split into `app/history.rs` are landed and
+verified. The remaining `src/app.rs` module groups and the
 automatic-preparation E2E scenario are **not** landed; the acceptance matrix
 lists them explicitly so no partial claim is made.
