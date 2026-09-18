@@ -278,6 +278,10 @@ pub struct ReadRequest {
     pub window_start: usize,
     pub replacement: bool,
     pub reconcile: bool,
+    /// A one-item probe that only establishes the pin/`total` for a fresh
+    /// window (spec §6.3 step 1). Its single item is reused only when it falls
+    /// inside the chosen window.
+    pub probe: bool,
     /// The local gap revision when the request was issued; a response cannot
     /// clear a gap observed after the request left.
     pub gap_revision: u64,
@@ -4068,13 +4072,22 @@ impl App {
     fn request_read(&mut self, session_id: &SessionId, read: ReadRequest) -> AppCommand {
         let cursor = read.cursor;
         let pin = read.pin.clone();
+        let probe = read.probe;
         let build = move |id: RequestId| {
+            let (limit, max_bytes) = if probe {
+                (
+                    crate::protocol::READ_PROBE_LIMIT,
+                    crate::protocol::READ_PROBE_MAX_BYTES,
+                )
+            } else {
+                (READ_PAGE_LIMIT, READ_PAGE_MAX_BYTES)
+            };
             OutgoingRequest::session_read(
                 id,
                 session_id,
                 Some(cursor),
-                READ_PAGE_LIMIT,
-                READ_PAGE_MAX_BYTES,
+                limit,
+                max_bytes,
                 pin.as_ref(),
             )
         };
@@ -4091,22 +4104,34 @@ impl App {
     /// The next read for a chain that is either starting fresh or continuing
     /// from the backend's own cursor. A fresh chain never carries the old window
     /// pin: after a new turn the revision has moved and §6.4 requires a new pin.
+    /// A fresh window starts with the one-item §6.3 probe.
     fn request_history(&mut self, session_id: &SessionId) -> AppCommand {
-        let (cursor, pin, window_start, replacement, reconcile) = self
+        let (cursor, pin, window_start, replacement, reconcile, probe) = self
             .sessions
             .known
             .get(session_id)
             .map(|view| {
                 let next = view.transcript.next_cursor;
+                let pin = next.and(view.transcript.window.pin().cloned());
                 (
                     next.unwrap_or(crate::protocol::ReadCursor::start()),
-                    next.and(view.transcript.window.pin().cloned()),
+                    pin.clone(),
                     view.transcript.window.confirmed_prefix(),
                     view.transcript.window.is_empty(),
                     view.event_gap,
+                    // Probe whenever this request carries no pin: the read then
+                    // has to establish the prefix before any windowed read.
+                    pin.is_none(),
                 )
             })
-            .unwrap_or((crate::protocol::ReadCursor::start(), None, 0, true, false));
+            .unwrap_or((
+                crate::protocol::ReadCursor::start(),
+                None,
+                0,
+                true,
+                false,
+                true,
+            ));
         let gap_revision = self
             .sessions
             .known
@@ -4120,6 +4145,7 @@ impl App {
                 window_start,
                 replacement,
                 reconcile,
+                probe,
                 gap_revision,
             },
         )
@@ -4807,6 +4833,7 @@ impl App {
                             window_start: 0,
                             replacement: true,
                             reconcile: false,
+                            probe: true,
                             gap_revision,
                         },
                         generation,
@@ -4968,6 +4995,7 @@ impl App {
                         window_start: 0,
                         replacement: false,
                         reconcile: false,
+                        probe: false,
                         gap_revision: read.gap_revision,
                     },
                     generation,
@@ -6956,6 +6984,103 @@ impl App {
         page_state.reconcile = read.reconcile;
         if read.replacement && read.cursor == crate::protocol::ReadCursor::start() {
             view.transcript.window.reset();
+        }
+
+        // §6.3 step 1: the first read of a fresh window is a one-item probe.
+        // It establishes the pin and `total`; the probe item is kept only when
+        // the chosen window starts at it, otherwise its assembler is discarded
+        // so a stray chunk below the window is never faked as loaded (§6.3
+        // step 3).
+        if read.probe {
+            let pin = page.pin();
+            let window_start = pin.total.saturating_sub(crate::protocol::READ_TAIL_ITEMS);
+            view.transcript.window.replace_pin(pin);
+            view.read_page = None;
+            view.transcript.next_cursor = None;
+            page_state.window_start = window_start;
+            let apply =
+                crate::app::history::apply_page(&mut view.transcript.window, &mut page_state, page);
+            match apply {
+                Ok(crate::app::history::ReadApply::Ok(applied)) => {
+                    if let Some(error) = &applied.error {
+                        view.read_page = None;
+                        Self::mark_history_unconfirmed(view);
+                        let message = match error {
+                            crate::protocol::ReadError::NonContiguous { expected, .. } => {
+                                format!(
+                                    "history for {session_id} is not contiguous at item {expected}"
+                                )
+                            }
+                            crate::protocol::ReadError::CursorStalled { item } => {
+                                format!("history for {session_id} did not advance from item {item}")
+                            }
+                            crate::protocol::ReadError::ItemChanged { index } => {
+                                format!(
+                                    "history for {session_id} changed at an existing item index {index}"
+                                )
+                            }
+                            other => {
+                                format!("history for {session_id} is not decodable: {other}")
+                            }
+                        };
+                        self.notice(NoticeLevel::Error, message);
+                        return Vec::new();
+                    }
+                    for (index, item) in &applied.inserted {
+                        install_history_item(view, *index, item);
+                    }
+                    // A probe that already delivered the whole prefix (a short
+                    // history) needs no further read.
+                    if applied.next.is_none() {
+                        view.transcript.sync_from_window();
+                        view.loading = false;
+                        view.read_page = None;
+                        let next = Self::finish_read_chain(view, session_id, read);
+                        view.recompute_usage_projection();
+                        return match next {
+                            NextChain::Page | NextChain::Reconcile => {
+                                vec![self.request_history(session_id)]
+                            }
+                            NextChain::LoopNotContained(loop_id) => {
+                                self.notice(
+                                    NoticeLevel::Warning,
+                                    format!(
+                                        "history sync warning: loop {loop_id} not contained in history response"
+                                    ),
+                                );
+                                Vec::new()
+                            }
+                            NextChain::Done => Vec::new(),
+                        };
+                    }
+                    if window_start == 0 {
+                        // The probe item belongs to the window; continue from
+                        // the backend's own next cursor under the new pin.
+                        view.read_page = Some(page_state);
+                        view.transcript.next_cursor = applied.next;
+                        view.transcript.sync_from_window();
+                        view.loading = true;
+                        return vec![self.request_history(session_id)];
+                    }
+                }
+                _ => {
+                    view.read_page = None;
+                }
+            }
+            // A long session opens at its tail: read forward from the window
+            // start under the fresh pin, never sending a cursor without one.
+            let mut next_request = read.clone();
+            next_request.cursor = crate::protocol::ReadCursor {
+                item: window_start,
+                offset: 0,
+            };
+            next_request.window_start = window_start;
+            next_request.replacement = false;
+            next_request.probe = false;
+            next_request.pin = view.transcript.window.pin().cloned();
+            view.transcript.sync_from_window();
+            view.loading = true;
+            return vec![self.request_read(session_id, next_request)];
         }
 
         let applied = match crate::app::history::apply_page(
@@ -12309,6 +12434,7 @@ mod tests {
                     window_start: 2,
                     replacement: false,
                     reconcile: false,
+                    probe: false,
                     gap_revision: 0,
                 },
             })
@@ -14436,6 +14562,7 @@ mod steer_receipt_tests {
             window_start: 0,
             replacement: true,
             reconcile: true,
+            probe: false,
             gap_revision: 0,
         };
         let mid_loop = RpcResponse {

@@ -143,6 +143,8 @@ fn history_read_request_with(gap_revision: u64, reconcile: bool) -> minicore_tui
         window_start: 0,
         replacement: true,
         reconcile,
+        // A fresh window issues the §6.3 one-item probe first.
+        probe: true,
         gap_revision,
     }
 }
@@ -6762,5 +6764,59 @@ fn tool_completion_updates_in_place_without_duplicate_or_reorder() {
     assert!(
         matches!(tools[1].status, ToolStatus::Pending | ToolStatus::Running),
         "the untouched second card must not be completed by the first tool's event"
+    );
+}
+
+/// §6.3: a long session opens at `max(total-200, 0)`. The one-item probe
+/// establishes the pin/total first; the tail item is then read from the
+/// window start with that pin, never from a non-zero cursor without one.
+#[test]
+fn long_session_opens_at_the_tail_two_hundred_window() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    driver.step(AppEvent::OpenSession {
+        session_id: "ses_1".into(),
+    });
+    driver.respond_method("session.open", json!({"session": session("ses_1")}));
+    driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
+
+    // Probe: total 500, so the window starts at item 300. Its own item 0 is
+    // below the window and must be discarded, not shown.
+    let probe = driver.request("session.read");
+    assert_eq!(probe.params["limit"], 1, "first read is the §6.3 probe");
+    assert!(probe.params.get("captured_end").is_none());
+    driver.respond(
+        probe,
+        history(
+            vec![user(0, "loop_0", "ancient")],
+            Some(json!({"item": 1, "offset": 0})),
+            500,
+        ),
+    );
+
+    // The tail read must start at the window start and carry the new pin.
+    let tail = driver.request("session.read");
+    assert_eq!(tail.params["cursor"]["item"], 300);
+    assert!(tail.params["captured_end"].is_number());
+    {
+        let view = &driver.app.sessions.known["ses_1"];
+        assert_eq!(view.transcript.window.total(), 500);
+        assert_eq!(
+            view.transcript.window.len(),
+            0,
+            "probe item is out of window"
+        );
+    }
+    driver.respond(
+        tail,
+        history(vec![user(300, "loop_300", "recent")], None, 500),
+    );
+
+    let view = &driver.app.sessions.known["ses_1"];
+    assert_eq!(view.transcript.window.total(), 500);
+    assert!(view.transcript.window.item(300).is_some());
+    assert!(
+        view.transcript.window.item(0).is_none(),
+        "an out-of-window item is never faked as loaded"
     );
 }

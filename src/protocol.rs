@@ -65,6 +65,11 @@ pub const READ_PAGE_LIMIT: usize = 20;
 pub const READ_PAGE_MAX_BYTES: usize = 262_144;
 /// The tail window opened by default for a long session (spec §6.3).
 pub const READ_TAIL_ITEMS: usize = 200;
+/// The one-item probe that establishes a fresh pin/`total` before a windowed
+/// read (spec §6.3 step 1). It must start at cursor 0: a non-zero cursor
+/// without a pin is an illegal request.
+pub const READ_PROBE_LIMIT: usize = 1;
+pub const READ_PROBE_MAX_BYTES: usize = 65_536;
 
 pub const PARSE_ERROR: i64 = -32_700;
 pub const INVALID_REQUEST: i64 = -32_600;
