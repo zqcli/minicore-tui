@@ -14,6 +14,10 @@ pub const LAYOUT_CACHE_BYTES: usize = 48 * 1024 * 1024;
 pub const LIVE_LOOP_BYTES: usize = 4 * 1024 * 1024;
 /// Retained live output for every loop of one session.
 pub const LIVE_TOTAL_BYTES: usize = 16 * 1024 * 1024;
+/// Retained presentation output for one tool stream.
+pub const TOOL_STREAM_BYTES: usize = 1024 * 1024;
+/// Retained presentation output for all tools in one session.
+pub const TOOL_TOTAL_BYTES: usize = 16 * 1024 * 1024;
 /// One Composer draft.
 pub const COMPOSER_DRAFT_BYTES: usize = 256 * 1024;
 /// Every Composer draft held by the app.
@@ -42,6 +46,8 @@ mod tests {
         assert_eq!(LAYOUT_CACHE_BYTES, 48 * 1024 * 1024);
         assert_eq!(LIVE_LOOP_BYTES, 4 * 1024 * 1024);
         assert_eq!(LIVE_TOTAL_BYTES, 16 * 1024 * 1024);
+        assert_eq!(TOOL_STREAM_BYTES, 1024 * 1024);
+        assert_eq!(TOOL_TOTAL_BYTES, 16 * 1024 * 1024);
         assert_eq!(COMPOSER_DRAFT_BYTES, 256 * 1024);
         assert_eq!(COMPOSER_ALL_DRAFTS_BYTES, 8 * 1024 * 1024);
         assert_eq!(HISTORY_PROTECT_TAIL_ITEMS_BACKGROUND, 0);

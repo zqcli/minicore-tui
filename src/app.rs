@@ -1155,6 +1155,7 @@ impl App {
         self.enforce_history_budget();
         self.enforce_layout_budget();
         self.enforce_live_budget();
+        self.enforce_tool_budget();
         commands
     }
 

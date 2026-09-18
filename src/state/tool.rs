@@ -31,6 +31,49 @@ pub struct ToolPresentationState {
     pub result_truncated: bool,
 }
 
+impl ToolPresentationState {
+    pub fn retained_bytes(&self) -> usize {
+        self.display.detail.len()
+            + self
+                .display
+                .expanded_input
+                .as_ref()
+                .map_or(0, String::len)
+            + self.result.as_ref().map_or(0, |result| result.len())
+    }
+
+    pub fn truncate_to_bytes(&mut self, budget: usize) {
+        let mut used = 0;
+        truncate_string(&mut self.display.detail, budget, &mut used);
+        if let Some(input) = &mut self.display.expanded_input {
+            truncate_string(input, budget, &mut used);
+        }
+        if let Some(result) = &mut self.result {
+            let available = budget.saturating_sub(used);
+            if result.len() > available {
+                let mut end = available;
+                while end > 0 && !result.is_char_boundary(end) {
+                    end -= 1;
+                }
+                *result = Arc::<str>::from(&result[..end]);
+                self.result_truncated = true;
+            }
+        }
+    }
+}
+
+fn truncate_string(value: &mut String, budget: usize, used: &mut usize) {
+    let available = budget.saturating_sub(*used);
+    if value.len() > available {
+        let mut end = available;
+        while end > 0 && !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        value.truncate(end);
+    }
+    *used = (*used).saturating_add(value.len());
+}
+
 /// Tool call lifecycle as shown in the live, provisional view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolStatus {

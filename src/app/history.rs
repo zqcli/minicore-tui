@@ -877,6 +877,35 @@ impl App {
         }
     }
 
+    pub(crate) fn enforce_tool_budget(&mut self) {
+        for view in self.sessions.known.values_mut() {
+            let presentations = std::sync::Arc::make_mut(&mut view.tool_presentations);
+            let mut changed = false;
+            for state in presentations.values_mut() {
+                let state = std::sync::Arc::make_mut(state);
+                if state.retained_bytes() > crate::limits::TOOL_STREAM_BYTES {
+                    state.truncate_to_bytes(crate::limits::TOOL_STREAM_BYTES);
+                    changed = true;
+                }
+            }
+            let mut remaining = crate::limits::TOOL_TOTAL_BYTES;
+            for state in presentations.values_mut() {
+                let state = std::sync::Arc::make_mut(state);
+                let before = state.retained_bytes();
+                let allowed = before.min(remaining);
+                if before > allowed {
+                    state.truncate_to_bytes(allowed);
+                    changed = true;
+                }
+                remaining = remaining.saturating_sub(state.retained_bytes());
+            }
+            if changed {
+                view.transcript.invalidate();
+                self.prepared_conversation = None;
+            }
+        }
+    }
+
     fn history_protect_from(view: &SessionView, viewport: (usize, usize), tail: usize) -> usize {
         let mut protect_from = view.transcript.window.protect_from(tail);
         if tail == 0 {
