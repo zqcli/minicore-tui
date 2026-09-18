@@ -317,27 +317,14 @@ pub fn append_section(out: &mut Vec<Line<'static>>, mut section: Vec<Line<'stati
     out.extend(section);
 }
 
-/// Appends a borrowed section without copying its line data before the
-/// boundary check. This is used for the durable line cache.
-pub(crate) fn append_section_ref(out: &mut Vec<Line<'static>>, section: &[Line<'static>]) {
-    if section.is_empty() {
-        return;
-    }
-    let start = if shares_blank_boundary(out, section) {
-        1
-    } else {
-        0
-    };
-    out.extend_from_slice(&section[start..]);
-}
-
 fn shares_blank_boundary(out: &[Line<'static>], section: &[Line<'static>]) -> bool {
     out.last().is_some_and(line_is_blank) && section.first().is_some_and(line_is_blank)
 }
 
-fn line_is_blank(line: &Line<'_>) -> bool {
-    // Styled spaces are filled surface rows and must not be consumed as an
-    // external spacer. Only an actually empty Line is shareable.
+/// True only for a genuinely empty spacer row: styled spaces are filled
+/// surface rows and must not be consumed as an external spacer. The frame
+/// composer uses the same rule as [`append_section`].
+pub(crate) fn line_is_blank(line: &Line<'_>) -> bool {
     is_transparent_blank(line)
 }
 

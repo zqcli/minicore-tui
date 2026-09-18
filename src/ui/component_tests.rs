@@ -159,13 +159,32 @@ fn stable_history_layout_is_cached_and_tool_projection_uses_the_index() {
         "the three tool calls resolved through the projection index"
     );
     assert!(mid.layout_calls >= 1, "the first durable layout was built");
+    assert_eq!(
+        mid.historical_text_bytes_cloned, 0,
+        "C2: preparing a frame never copies the durable history"
+    );
+    assert_eq!(
+        mid.viewport_rows_materialized, 0,
+        "C2: preparing a frame materializes no rows; only the window does"
+    );
+    // The counters are not constants: the diagnostic full materialization and
+    // one viewport window both report real work.
+    let _all = first.lines();
+    let after_all = crate::perf::snapshot();
     assert!(
-        mid.historical_text_bytes_cloned > 0,
-        "clone bytes are counted at the append point, not a constant"
+        after_all.historical_text_bytes_cloned > 0,
+        "the full-frame diagnostic clone is counted where it happens"
+    );
+    let window = first.window(0, 5);
+    assert_eq!(window.len(), 5);
+    let after_window = crate::perf::snapshot();
+    assert!(
+        after_window.viewport_rows_materialized >= 5,
+        "the visible window rows are counted"
     );
     assert!(
-        mid.viewport_rows_materialized > 0,
-        "the owned frame rows were counted"
+        after_window.viewport_text_bytes_cloned > 0,
+        "the visible window bytes are counted"
     );
 
     // Same view and width: the installed durable cache is authoritative, so a
@@ -3926,7 +3945,7 @@ fn new_output_marker_overlays_without_reducing_viewport() {
             frame.render_widget(
                 ratatui::widgets::Paragraph::new(
                     prepared
-                        .lines
+                        .lines()
                         .iter()
                         .skip(position.offset)
                         .take(position.visible_rows)

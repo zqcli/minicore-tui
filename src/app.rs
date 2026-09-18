@@ -8549,11 +8549,13 @@ mod tests {
         let screen =
             crate::ui::layout::screen_layout(&app, ratatui::layout::Rect::new(0, 0, 80, 24));
         let prepared = crate::ui::transcript::prepare_conversation(&app, screen.content.width);
-        let (link_row, link_cell) = prepared
-            .link_cells
-            .iter()
-            .enumerate()
-            .find_map(|(row, cells)| cells.first().map(|range| (row, range.start)))
+        let (link_row, link_cell) = (0..prepared.total_rows())
+            .find_map(|row| {
+                prepared
+                    .links_at(row)
+                    .first()
+                    .map(|range| (row, range.start))
+            })
             .expect("markdown link fixture");
         let marker_budget = screen.transcript.height.saturating_sub(1) as usize;
         assert!(
@@ -9215,7 +9217,7 @@ mod tests {
         let content_x = screen.content.x as usize;
 
         let mut link_cell = None;
-        for (row, line) in prepared.lines.iter().enumerate() {
+        for (row, line) in prepared.lines().iter().enumerate() {
             let mut cursor = 0usize;
             for span in &line.spans {
                 let start = cursor;
@@ -9424,7 +9426,7 @@ mod tests {
         // Inline-code link cells and bold-link cells are all links even though
         // `inline` is painted in the inline-code color, not md_link.
         for needle in ["inline", "link", "e.com/code"] {
-            let cell = cell_of(&prepared.lines[text_row], needle);
+            let cell = cell_of(&prepared.lines()[text_row], needle);
             assert!(
                 app.pressed_cell_is_link((content_x + cell) as u16, text_row as u16),
                 "link cell for {needle:?} must be detected"
@@ -9433,7 +9435,7 @@ mod tests {
 
         // Plain prose is not a link cell, so a press there cannot fold and the
         // guard stays off (no same-colored false positive).
-        let plain_cell = cell_of(&prepared.lines[text_row], "plain");
+        let plain_cell = cell_of(&prepared.lines()[text_row], "plain");
         assert!(
             !app.pressed_cell_is_link((content_x + plain_cell) as u16, text_row as u16),
             "plain prose must not be treated as a link"
@@ -9454,7 +9456,7 @@ mod tests {
         );
 
         // A link press does arm the guard (RAIL-14 flow through real ranges).
-        let link_cell = cell_of(&prepared.lines[text_row], "e.com/b");
+        let link_cell = cell_of(&prepared.lines()[text_row], "e.com/b");
         app.update(AppEvent::Terminal(mouse_down(
             (content_x + link_cell) as u16,
             text_row as u16,

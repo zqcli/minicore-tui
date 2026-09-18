@@ -158,9 +158,9 @@ fn marker_click_uses_prepared_geometry_before_viewport_receipt() {
 fn wheel_uses_current_prepared_extent_before_viewport_receipt() {
     let mut app = ready();
     let mut prepared = crate::ui::transcript::prepare_conversation(&app, 79);
-    prepared
-        .lines
-        .extend((0..100).map(|_| ratatui::text::Line::from("growth")));
+    let mut base = prepared.lines();
+    base.extend((0..100).map(|_| ratatui::text::Line::from("growth")));
+    prepared.set_test_rows(base.len());
     let maximum = prepared.total_rows() - app.viewport.1;
     app.update(AppEvent::ConversationPrepared(prepared));
     mouse(
@@ -186,7 +186,7 @@ fn mouse(app: &mut App, kind: MouseEventKind, column: u16, row: u16, modifiers: 
 fn pi_wheel_steps_and_page_overlap_preserve_prepared_rows() {
     let mut app = ready();
     let maximum = app.viewport.0 - app.viewport.1;
-    let rows = app.prepared_conversation(79).unwrap().lines.as_ptr();
+    let rows = app.prepared_conversation(79).unwrap().history_ptr();
     mouse(
         &mut app,
         MouseEventKind::ScrollUp,
@@ -204,7 +204,7 @@ fn pi_wheel_steps_and_page_overlap_preserve_prepared_rows() {
         app.active_view().unwrap().scroll.offset,
         maximum - 6 - app.viewport.1.saturating_sub(4).max(1)
     );
-    assert_eq!(app.prepared_conversation(79).unwrap().lines.as_ptr(), rows);
+    assert_eq!(app.prepared_conversation(79).unwrap().history_ptr(), rows);
 }
 
 #[test]
@@ -315,7 +315,7 @@ fn pi_track_click_and_drag_are_live_release_does_not_recalculate() {
 #[test]
 fn boundary_wheel_is_noop_and_does_not_reveal_scrollbar() {
     let mut app = ready();
-    let rows = app.prepared_conversation(79).unwrap().lines.as_ptr();
+    let rows = app.prepared_conversation(79).unwrap().history_ptr();
     for _ in 0..100 {
         mouse(
             &mut app,
@@ -329,7 +329,7 @@ fn boundary_wheel_is_noop_and_does_not_reveal_scrollbar() {
     assert!(app.active_view().unwrap().scroll.follow_tail);
     assert!(!app.scrollbar_visible(app.viewport.0, app.viewport.1));
     assert_eq!(app.next_tick(), None);
-    assert_eq!(app.prepared_conversation(79).unwrap().lines.as_ptr(), rows);
+    assert_eq!(app.prepared_conversation(79).unwrap().history_ptr(), rows);
 }
 
 #[test]
@@ -351,9 +351,9 @@ fn viewport_growth_keeps_capture_and_drag_uses_new_geometry() {
     );
     let before = app.active_view().unwrap().scroll.offset;
     let mut prepared = crate::ui::transcript::prepare_conversation(&app, 79);
-    prepared
-        .lines
-        .extend((0..500).map(|_| ratatui::text::Line::from("synthetic growth")));
+    let mut base = prepared.lines();
+    base.extend((0..500).map(|_| ratatui::text::Line::from("synthetic growth")));
+    prepared.set_test_rows(base.len());
     let total = prepared.total_rows();
     app.update(AppEvent::ConversationPrepared(prepared));
     app.update(AppEvent::Viewport {
@@ -408,7 +408,7 @@ fn app_scroll_and_visibility_trace_matches_pi() {
                     height: visible as u16 + chrome,
                 });
                 let mut prepared = crate::ui::transcript::prepare_conversation(&app, 79);
-                prepared.lines.resize(total, ratatui::text::Line::default());
+                prepared.set_test_rows(total);
                 app.update(AppEvent::Viewport {
                     total_lines: total,
                     visible_rows: visible,

@@ -19,10 +19,14 @@ pub struct PerfCounters {
     /// Times a durable/whole conversation layout was actually rebuilt (cache
     /// misses and live-tail composition), not cache hits.
     pub layout_calls: AtomicU64,
-    /// Historical row bytes cloned into a freshly owned `Vec<Line>`.
+    /// Historical row bytes cloned into a full owned `Vec<Line>` frame
+    /// (`PreparedConversation::lines`, diagnostics/tests only; the draw path
+    /// materializes just the visible window and counts it separately).
     pub historical_text_bytes_cloned: AtomicU64,
     /// Owned transcript rows materialized for one prepared conversation.
     pub viewport_rows_materialized: AtomicU64,
+    /// Bytes of history text cloned into the visible viewport window.
+    pub viewport_text_bytes_cloned: AtomicU64,
     /// `Composer::content()` full joins (the buffer joined into a String).
     pub composer_full_joins: AtomicU64,
     /// Tool lookups served by the projection index.
@@ -40,6 +44,7 @@ impl PerfCounters {
             layout_calls: AtomicU64::new(0),
             historical_text_bytes_cloned: AtomicU64::new(0),
             viewport_rows_materialized: AtomicU64::new(0),
+            viewport_text_bytes_cloned: AtomicU64::new(0),
             composer_full_joins: AtomicU64::new(0),
             tool_index_lookups: AtomicU64::new(0),
             tool_linear_scans: AtomicU64::new(0),
@@ -58,6 +63,7 @@ impl PerfCounters {
             layout_calls: self.layout_calls.load(Ordering::Relaxed),
             historical_text_bytes_cloned: self.historical_text_bytes_cloned.load(Ordering::Relaxed),
             viewport_rows_materialized: self.viewport_rows_materialized.load(Ordering::Relaxed),
+            viewport_text_bytes_cloned: self.viewport_text_bytes_cloned.load(Ordering::Relaxed),
             composer_full_joins: self.composer_full_joins.load(Ordering::Relaxed),
             tool_index_lookups: self.tool_index_lookups.load(Ordering::Relaxed),
             tool_linear_scans: self.tool_linear_scans.load(Ordering::Relaxed),
@@ -65,11 +71,12 @@ impl PerfCounters {
         }
     }
 
-    fn counters(&self) -> [&AtomicU64; 7] {
+    fn counters(&self) -> [&AtomicU64; 8] {
         [
             &self.layout_calls,
             &self.historical_text_bytes_cloned,
             &self.viewport_rows_materialized,
+            &self.viewport_text_bytes_cloned,
             &self.composer_full_joins,
             &self.tool_index_lookups,
             &self.tool_linear_scans,
@@ -84,6 +91,7 @@ pub struct PerfSnapshot {
     pub layout_calls: u64,
     pub historical_text_bytes_cloned: u64,
     pub viewport_rows_materialized: u64,
+    pub viewport_text_bytes_cloned: u64,
     pub composer_full_joins: u64,
     pub tool_index_lookups: u64,
     pub tool_linear_scans: u64,
@@ -97,6 +105,7 @@ pub enum Counter {
     LayoutCalls,
     HistoricalTextBytesCloned,
     ViewportRowsMaterialized,
+    ViewportTextBytesCloned,
     ComposerFullJoins,
     ToolIndexLookups,
     ToolLinearScans,
@@ -132,6 +141,7 @@ pub fn add(counter: Counter, delta: u64) {
             Counter::LayoutCalls => &perf.layout_calls,
             Counter::HistoricalTextBytesCloned => &perf.historical_text_bytes_cloned,
             Counter::ViewportRowsMaterialized => &perf.viewport_rows_materialized,
+            Counter::ViewportTextBytesCloned => &perf.viewport_text_bytes_cloned,
             Counter::ComposerFullJoins => &perf.composer_full_joins,
             Counter::ToolIndexLookups => &perf.tool_index_lookups,
             Counter::ToolLinearScans => &perf.tool_linear_scans,

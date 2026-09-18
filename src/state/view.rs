@@ -166,6 +166,9 @@ impl ConversationSelection {
     }
 }
 
+/// Per-row link cell ranges, parallel to the rows of one frame part.
+pub type LinkRow = Vec<std::ops::Range<usize>>;
+
 #[derive(Clone, Debug, Default)]
 pub struct PreparedConversation {
     /// Content width used to build the rows. It is the width after the App
@@ -178,20 +181,156 @@ pub struct PreparedConversation {
     /// Durable transcript revision observed while preparing the rows.
     pub transcript_revision: u64,
     /// History preparation carried back to the App-owned cache installer.
+    /// The rows are shared with the session cache, so installing a frame
+    /// copies no history (`spec §11.2`).
     pub durable: Option<Arc<PreparedDurable>>,
-    pub lines: Vec<Line<'static>>,
+    /// Leading durable rows the frame drops because the header already ends
+    /// with a blank row (the boundary rule of `layout::append_section_ref`).
+    pub durable_skip: usize,
+    /// Header rows, before the durable block. Rebuilt per frame and small.
+    pub header: Vec<Line<'static>>,
+    pub header_links: Vec<LinkRow>,
+    /// Rows after the durable block: notices, live sections, busy status.
+    pub live: Vec<Line<'static>>,
+    pub live_links: Vec<LinkRow>,
     pub sections: Vec<SectionRange>,
     pub copy_ranges: Vec<CopyRange>,
-    /// Content-cell ranges per rendered line that are inside a markdown
-    /// link. Parallel to `lines`; the whole row is empty for non-link lines.
-    /// Read-only click arbitration data (RAIL-14 pressedUrl), never changed
-    /// by selection or copied as text.
-    pub link_cells: Vec<Vec<std::ops::Range<usize>>>,
 }
 
 impl PreparedConversation {
+    pub fn header_rows(&self) -> usize {
+        self.header.len()
+    }
+
+    /// Durable rows actually visible in this frame (the skip is excluded).
+    pub fn durable_rows(&self) -> usize {
+        self.durable.as_ref().map_or(0, |durable| {
+            durable.lines.len().saturating_sub(self.durable_skip)
+        })
+    }
+
+    pub fn live_rows(&self) -> usize {
+        self.live.len()
+    }
+
     pub fn total_rows(&self) -> usize {
-        self.lines.len()
+        self.header_rows() + self.durable_rows() + self.live_rows()
+    }
+
+    /// One absolute frame row, borrowed from the installed frame parts. Hit
+    /// tests, copy and the render window share this single fact.
+    pub fn row(&self, row: usize) -> Option<&Line<'static>> {
+        let header = self.header_rows();
+        if row < header {
+            return self.header.get(row);
+        }
+        let row = row - header;
+        let durable = self.durable_rows();
+        if row < durable {
+            return self
+                .durable
+                .as_ref()?
+                .lines
+                .get(self.durable_skip.checked_add(row)?);
+        }
+        self.live.get(row - durable)
+    }
+
+    /// Link cell ranges for one absolute frame row; empty when the row has
+    /// no markdown link.
+    pub fn links_at(&self, row: usize) -> &[std::ops::Range<usize>] {
+        const EMPTY: &[std::ops::Range<usize>] = &[];
+        let header = self.header_rows();
+        if row < header {
+            return self.header_links.get(row).map_or(EMPTY, Vec::as_slice);
+        }
+        let row = row - header;
+        let durable = self.durable_rows();
+        if row < durable {
+            return self
+                .durable
+                .as_ref()
+                .and_then(|durable| durable.link_cells.get(self.durable_skip + row))
+                .map_or(EMPTY, Vec::as_slice);
+        }
+        self.live_links
+            .get(row - durable)
+            .map_or(EMPTY, Vec::as_slice)
+    }
+
+    /// Clones only the requested rows. The draw path uses this; nothing in
+    /// the frame materializes the whole durable history.
+    pub fn window(&self, offset: usize, rows: usize) -> Vec<Line<'static>> {
+        let total = self.total_rows();
+        let start = offset.min(total);
+        let end = start.saturating_add(rows).min(total);
+        let mut window = Vec::with_capacity(end.saturating_sub(start));
+        let mut bytes = 0usize;
+        for row in start..end {
+            if let Some(line) = self.row(row) {
+                bytes += line
+                    .spans
+                    .iter()
+                    .map(|span| span.content.len())
+                    .sum::<usize>();
+                window.push(line.clone());
+            }
+        }
+        // Real call point: the rows and bytes that became owned are measured
+        // here, so a zero cannot come from a constant.
+        crate::perf::add(
+            crate::perf::Counter::ViewportRowsMaterialized,
+            window.len() as u64,
+        );
+        crate::perf::add(crate::perf::Counter::ViewportTextBytesCloned, bytes as u64);
+        window
+    }
+
+    /// Full materialization, for diagnostics and tests only. The draw path
+    /// never calls this, so a nonzero historical clone count means a full
+    /// frame was built somewhere it should not have been.
+    pub fn lines(&self) -> Vec<Line<'static>> {
+        let rows = self.total_rows();
+        let lines = self.window(0, rows);
+        let bytes: usize = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.len())
+            .sum();
+        crate::perf::add(
+            crate::perf::Counter::HistoricalTextBytesCloned,
+            bytes as u64,
+        );
+        lines
+    }
+
+    /// Test-only: replaces the frame with `total` blank rows so scroll math
+    /// can be exercised without building a huge transcript.
+    #[cfg(test)]
+    pub fn set_test_rows(&mut self, total: usize) {
+        self.header = vec![Line::default(); total];
+        self.header_links = vec![Vec::new(); total];
+        self.durable = None;
+        self.durable_skip = 0;
+        self.live.clear();
+        self.live_links.clear();
+        self.sections.clear();
+        self.copy_ranges.clear();
+    }
+
+    /// Stable identity of the shared historical frame; retention tests compare
+    /// it instead of a per-frame buffer address.
+    pub fn history_ptr(&self) -> *const PreparedDurable {
+        self.durable.as_ref().map_or(std::ptr::null(), Arc::as_ptr)
+    }
+
+    /// Copy metadata for one absolute row, if any. `copy_ranges` is ordered by
+    /// row, so this is a lookup, not a scan.
+    pub fn copy_row(&self, row: usize) -> Option<&CopyRange> {
+        self.copy_ranges
+            .binary_search_by_key(&row, |copy| copy.row)
+            .ok()
+            .map(|index| &self.copy_ranges[index])
     }
 
     pub fn section_at(&self, row: usize, column: usize) -> Option<&SectionRange> {
@@ -199,29 +338,4 @@ impl PreparedConversation {
             .iter()
             .find(|section| section.contains_row(row) && section.content_columns.contains(&column))
     }
-}
-
-/// Add one rendered section and record the exact rows it occupies. The same
-/// helper is used by source comparisons and the eventual click/selection
-/// path, so a renderer cannot silently acquire a different height formula.
-pub fn append_section(
-    conversation: &mut PreparedConversation,
-    id: SectionId,
-    lines: Vec<Line<'static>>,
-    content_columns: std::ops::Range<usize>,
-    collapsible: bool,
-    folded: bool,
-) {
-    if lines.is_empty() {
-        return;
-    }
-    let start = conversation.lines.len();
-    conversation.lines.extend(lines);
-    conversation.sections.push(SectionRange {
-        id,
-        rows: start..conversation.lines.len(),
-        content_columns,
-        collapsible,
-        folded,
-    });
 }

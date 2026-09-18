@@ -58,70 +58,118 @@ pub fn prepare_conversation(app: &App, width: u16) -> PreparedConversation {
             link_cells,
         })
     });
+    let header = header::lines(&theme, app);
+    let header_rows = header.len();
+    let durable_lines = durable.as_ref().map_or(&[][..], |d| d.lines.as_slice());
+    // The shared durable frame is never copied: the frame only records how
+    // many leading rows the header boundary drops (`layout::append_section_ref`
+    // rule), and the live tail starts after it.
+    let durable_skip = usize::from(
+        header.last().is_some_and(layout::line_is_blank)
+            && durable_lines.first().is_some_and(layout::line_is_blank),
+    );
+    let durable_rows = durable_lines.len().saturating_sub(durable_skip);
+    let durable_last_row_blank = durable_lines.last().map_or_else(
+        || header.last().is_some_and(layout::line_is_blank),
+        |line| layout::line_is_blank(line),
+    );
+    let last_kind = durable
+        .as_ref()
+        .and_then(|d| d.sections.last().map(|section| section.id.kind));
     let mut live_sections = Vec::new();
-    let header_rows = header::lines(&theme, app).len();
-    let (durable_lines, durable_links_aligned) = all_lines_with_durable(
+    let (mut live, mut live_links) = build_live_tail(
         &theme,
         app,
         width as usize,
-        durable.as_ref().map_or(&[], |d| d.lines.as_slice()),
-        durable.as_ref().map_or(&[], |d| d.link_cells.as_slice()),
-        durable
-            .as_ref()
-            .and_then(|d| d.sections.last().map(|section| section.id.kind)),
+        last_kind,
         Some(&mut live_sections),
     );
-    let mut conversation = PreparedConversation {
-        lines: durable_lines,
-        link_cells: durable_links_aligned,
+    // One boundary blank can be shared between the durable block and the
+    // first live row; the builders record rows with that row still present,
+    // so the frame shifts live rows by one less when it is dropped.
+    let live_skip =
+        usize::from(durable_last_row_blank && live.first().is_some_and(layout::line_is_blank));
+    if live_skip == 1 {
+        live.remove(0);
+        live_links.remove(0);
+    }
+    // While the busy status row is visible, exactly one clear transparent
+    // blank must separate the last *frame* row (which may be the last durable
+    // row when the live tail is empty) from it. Sections that already end with
+    // a transparent blank must not get a second one; this row belongs to no
+    // section, so ranges/copy/hits exclude it consistently.
+    let last_frame_blank = match (live.last(), durable_rows, header.last()) {
+        (Some(line), ..) => layout::line_is_blank(line),
+        (None, rows, _) if rows > 0 => durable_last_row_blank,
+        (None, _, Some(line)) => layout::line_is_blank(line),
+        (None, _, None) => true,
+    };
+    if layout::busy(app) && !last_frame_blank {
+        live.push(Line::default());
+        live_links.push(Vec::new());
+    }
+    let durable_base = header_rows - durable_skip;
+    let live_base = header_rows + durable_rows - live_skip;
+    let copy_start_for_live: Vec<(std::ops::Range<usize>, usize)> = live_sections
+        .iter()
+        .map(|section| (section.rows.clone(), copy_start_for_kind(&section.id.kind)))
+        .collect();
+    let live_copy: Vec<CopyRange> = copy_start_for_live
+        .iter()
+        .flat_map(|(rows, copy_start)| {
+            rows.clone().map(|row| {
+                let section = live_sections
+                    .iter()
+                    .find(|section| section.rows.contains(&row))
+                    .expect("live copy row belongs to a live section");
+                let text = section_copy_text(section, row, &live, *copy_start);
+                CopyRange {
+                    row: row + live_base,
+                    columns: *copy_start..width as usize,
+                    decorative: section_copy_is_decorative(section, row, &text),
+                    text,
+                }
+            })
+        })
+        .collect();
+    let mut sections: Vec<SectionRange> = durable
+        .as_ref()
+        .into_iter()
+        .flat_map(|d| d.sections.iter().cloned())
+        .map(|mut section| {
+            section.rows = section.rows.start + durable_base..section.rows.end + durable_base;
+            section
+        })
+        .collect();
+    sections.extend(live_sections.into_iter().map(|mut section| {
+        section.rows = section.rows.start + live_base..section.rows.end + live_base;
+        section
+    }));
+    let mut copy_ranges: Vec<CopyRange> = durable
+        .as_ref()
+        .into_iter()
+        .flat_map(|d| d.copy_ranges.iter().cloned())
+        .map(|mut range| {
+            range.row += durable_base;
+            range
+        })
+        .collect();
+    copy_ranges.extend(live_copy);
+    PreparedConversation {
         width,
         session_id: app.active_view().map(|view| view.info.session_id.clone()),
         transcript_revision: app
             .active_view()
             .map_or(0, |view| view.transcript.render_revision),
         durable: durable.clone(),
-        ..PreparedConversation::default()
-    };
-    conversation.sections = durable
-        .as_ref()
-        .into_iter()
-        .flat_map(|d| d.sections.iter().cloned())
-        .map(|mut section| {
-            section.rows = section.rows.start + header_rows..section.rows.end + header_rows;
-            section
-        })
-        .collect();
-    conversation.copy_ranges = durable
-        .as_ref()
-        .into_iter()
-        .flat_map(|d| d.copy_ranges.iter().cloned())
-        .map(|mut range| {
-            range.row += header_rows;
-            range
-        })
-        .collect();
-    // History copy/link metadata is already prepared; only build the live tail.
-    let lines = &conversation.lines;
-    conversation
-        .copy_ranges
-        .extend(live_sections.iter().flat_map(|section| {
-            let copy_start = copy_start_for_kind(&section.id.kind);
-            section.rows.clone().map(move |row| {
-                let text = section_copy_text(section, row, lines, copy_start);
-                CopyRange {
-                    row,
-                    columns: copy_start..width as usize,
-                    decorative: section_copy_is_decorative(section, row, &text),
-                    text,
-                }
-            })
-        }));
-    conversation.sections.extend(live_sections);
-    crate::perf::add(
-        crate::perf::Counter::ViewportRowsMaterialized,
-        conversation.lines.len() as u64,
-    );
-    conversation
+        durable_skip,
+        header,
+        header_links: vec![Vec::new(); header_rows],
+        live,
+        live_links,
+        sections,
+        copy_ranges,
+    }
 }
 
 /// Returns the transcript content rows available in `height`.
@@ -177,8 +225,8 @@ pub fn total_lines(app: &App, width: u16) -> usize {
 /// Builds every transcript row (startup header, durable blocks, live tail).
 pub fn all_lines(_theme: &Theme, app: &App, width: usize) -> Vec<Line<'static>> {
     app.prepared_conversation(width as u16).map_or_else(
-        || prepare_conversation(app, width as u16).lines,
-        |prepared| prepared.lines.clone(),
+        || prepare_conversation(app, width as u16).lines(),
+        PreparedConversation::lines,
     )
 }
 
@@ -853,42 +901,19 @@ fn effective_tool_block(view: &SessionView, tool: &ToolBlock) -> ToolBlock {
     render_tool
 }
 
-fn all_lines_with_durable(
+/// Builds the rows after the header and the shared durable block. The durable
+/// rows are never copied here: the frame composes them by reference, so a
+/// live delta costs only the live tail (`spec §11.2`).
+fn build_live_tail(
     theme: &Theme,
     app: &App,
     width: usize,
-    durable: &[Line<'static>],
-    durable_links: &[LinkRow],
     durable_last_kind: Option<SectionKind>,
     live_sections: Option<&mut Vec<SectionRange>>,
 ) -> (Vec<Line<'static>>, Vec<LinkRow>) {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut link_rows: Vec<LinkRow> = Vec::new();
-    let header = header::lines(theme, app);
-    link_rows.extend(header.iter().map(|_| Vec::new()));
-    lines.extend(header);
     if let Some(view) = app.active_view() {
-        // Measured where the rows are actually cloned into the owned frame
-        // buffer; a constant zero would be a lie (spec §25.1).
-        let cloned: usize = durable
-            .iter()
-            .flat_map(|line| line.spans.iter())
-            .map(|span| span.content.len())
-            .sum();
-        crate::perf::add(
-            crate::perf::Counter::HistoricalTextBytesCloned,
-            cloned as u64,
-        );
-        let before = lines.len();
-        layout::append_section_ref(&mut lines, durable);
-        // Keep link rows aligned with whatever the boundary check actually
-        // appended (it may drop one leading blank, which is always link-free).
-        let added = lines.len() - before;
-        link_rows.extend(
-            durable_links[durable_links.len().saturating_sub(added)..]
-                .iter()
-                .cloned(),
-        );
         let mut live_previous_kind = durable_last_kind;
 
         // Warning for unsaved loop if persistence failed (spec 30.5)
@@ -991,18 +1016,6 @@ fn all_lines_with_durable(
                 }
             }
         }
-    }
-    // While the busy status row is visible, exactly one clear transparent
-    // blank must separate the last transcript row from it, even when content
-    // fills the viewport. Sections that already end with a transparent blank
-    // (assistant text) must not get a second one; this row belongs to no
-    // section, so ranges/copy/hits exclude it consistently.
-    if layout::busy(app)
-        && lines
-            .last()
-            .is_some_and(|line| !layout::is_transparent_blank(line))
-    {
-        lines.push(Line::default());
     }
     while link_rows.len() < lines.len() {
         link_rows.push(Vec::new());
@@ -1434,19 +1447,15 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
             &fallback
         }
     };
-    let total = prepared.lines.len();
+    let total = prepared.total_rows();
     let position = scroll_position(app, total, height);
     let offset = position.offset;
     let marker = position.marker;
     let budget = position.visible_rows;
+    // Only the visible rows become owned; the shared durable block is read
+    // through the frame, never re-cloned (`spec §11.7`).
     let slice: Vec<Line<'static>> = apply_selection(
-        prepared
-            .lines
-            .iter()
-            .skip(offset)
-            .take(budget)
-            .cloned()
-            .collect(),
+        prepared.window(offset, budget),
         offset,
         app.selection.as_ref(),
         prepared.sections.as_slice(),

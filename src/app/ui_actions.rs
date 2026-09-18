@@ -1155,7 +1155,7 @@ impl App {
     /// RAIL-14 pressedUrl guard: a press on a rendered markdown link cell is
     /// recorded so the release cannot fold the containing section. Geometry
     /// comes from the same markdown layout pass that produced the drawn lines
-    /// (`PreparedConversation::link_cells`), so links inside inline code or
+    /// (`PreparedConversation::links_at`), so links inside inline code or
     /// bold runs are detected regardless of their foreground color, and no
     /// same-colored non-link text can produce a false positive.
     pub(crate) fn pressed_cell_is_link(&self, column: u16, row: u16) -> bool {
@@ -1181,14 +1181,14 @@ impl App {
             return false;
         }
         let logical_row = position.offset.saturating_add(local_row);
-        if logical_row >= prepared.lines.len() {
+        if logical_row >= prepared.total_rows() {
             return false;
         }
         let cell = column.saturating_sub(screen.content.x) as usize;
         prepared
-            .link_cells
-            .get(logical_row)
-            .is_some_and(|cells| cells.iter().any(|range| range.contains(&cell)))
+            .links_at(logical_row)
+            .iter()
+            .any(|range| range.contains(&cell))
     }
 
     pub(super) fn paragraph_selection(&self, point: SelectionPoint) -> ConversationSelection {
@@ -1635,29 +1635,19 @@ pub(super) fn set_all_tools_expanded(view: &mut SessionView, expanded: bool) {
 }
 
 fn copy_row_text(conversation: &PreparedConversation, row: usize) -> Option<&str> {
-    conversation
-        .copy_ranges
-        .iter()
-        .find(|copy| copy.row == row)
-        .map(|copy| copy.text.as_str())
+    conversation.copy_row(row).map(|copy| copy.text.as_str())
 }
 
 fn first_copy_column(conversation: &PreparedConversation, row: usize) -> usize {
     conversation
-        .copy_ranges
-        .iter()
-        .find(|copy| copy.row == row)
+        .copy_row(row)
         .map_or(0, |copy| copy.columns.start)
 }
 
 fn copy_row_width(conversation: &PreparedConversation, row: usize) -> usize {
-    conversation
-        .copy_ranges
-        .iter()
-        .find(|copy| copy.row == row)
-        .map_or(1, |copy| {
-            copy.columns.start + UnicodeWidthStr::width(copy.text.as_str())
-        })
+    conversation.copy_row(row).map_or(1, |copy| {
+        copy.columns.start + UnicodeWidthStr::width(copy.text.as_str())
+    })
 }
 
 pub fn word_cell_bounds(text: &str, target: usize) -> (usize, usize) {

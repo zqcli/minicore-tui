@@ -696,12 +696,12 @@ mod tests {
         let width = ui::layout::screen_layout(&app, area).content.width;
         let prepared = app.prepared_conversation(width).unwrap();
         assert_eq!(app.viewport.0, prepared.total_rows());
-        let pointer = prepared.lines.as_ptr();
+        let pointer = prepared.history_ptr();
         app.update(AppEvent::Rendered);
         for _ in 0..20 {
             prepare_frame(&mut app, area);
             assert_eq!(
-                app.prepared_conversation(width).unwrap().lines.as_ptr(),
+                app.prepared_conversation(width).unwrap().history_ptr(),
                 pointer
             );
             assert!(!app.dirty);

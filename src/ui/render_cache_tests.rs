@@ -221,7 +221,7 @@ fn live_delta_reuses_durable_markdown_without_reparsing() {
     let next_prepared = prepare_conversation(&app, WIDTH);
     assert!(
         next_prepared
-            .lines
+            .lines()
             .iter()
             .any(|line| line.to_string().contains("streaming delta"))
     );
@@ -380,7 +380,7 @@ fn unrelated_rpc_reprepare_keeps_scrollbar_drag_until_release() {
 fn cached_render_and_mouse_hit_testing_do_not_parse_history() {
     let mut app = make_test_app(50);
     reset_parse_count();
-    let pointer = app.prepared_conversation(WIDTH).unwrap().lines.as_ptr();
+    let pointer = app.prepared_conversation(WIDTH).unwrap().history_ptr();
     for _ in 0..20 {
         app.update(AppEvent::Tick);
         let mut terminal =
@@ -400,7 +400,7 @@ fn cached_render_and_mouse_hit_testing_do_not_parse_history() {
     )));
     assert_eq!(parse_count(), 0);
     assert_eq!(
-        app.prepared_conversation(WIDTH).unwrap().lines.as_ptr(),
+        app.prepared_conversation(WIDTH).unwrap().history_ptr(),
         pointer
     );
 }
@@ -456,7 +456,7 @@ fn tool_presentation_refresh_invalidates_already_durable_tool_rows() {
     assert!(parse_count() > 0);
     assert!(
         prepared
-            .lines
+            .lines()
             .iter()
             .any(|line| line.to_string().contains("UPDATED_PRESENTATION"))
     );
@@ -620,7 +620,7 @@ fn live_tool_fold_survives_presentation_finish_wait_and_history_replacement() {
 #[test]
 fn ordinary_editor_input_reuses_prepared_rows() {
     let mut app = make_test_app(5);
-    let pointer = app.prepared_conversation(WIDTH).unwrap().lines.as_ptr();
+    let pointer = app.prepared_conversation(WIDTH).unwrap().history_ptr();
     for character in "hello world".chars() {
         app.update(AppEvent::Terminal(crossterm::event::Event::Key(
             crossterm::event::KeyEvent::new(
@@ -629,7 +629,7 @@ fn ordinary_editor_input_reuses_prepared_rows() {
             ),
         )));
         assert_eq!(
-            app.prepared_conversation(WIDTH).unwrap().lines.as_ptr(),
+            app.prepared_conversation(WIDTH).unwrap().history_ptr(),
             pointer
         );
     }
@@ -677,9 +677,10 @@ fn assert_user_gap(app: &App, expected: &str) {
     let gap = users[1].rows.start.saturating_sub(users[0].rows.end);
     assert_eq!(gap, 1, "one transparent User separator");
     let gap_row = users[0].rows.end;
-    assert!(prepared.lines[gap_row].spans.is_empty());
-    assert_eq!(prepared.link_cells.len(), prepared.lines.len());
-    assert!(prepared.link_cells[gap_row].is_empty());
+    assert!(prepared.row(gap_row).unwrap().spans.is_empty());
+    let durable = prepared.durable.as_ref().expect("durable frame");
+    assert_eq!(durable.link_cells.len(), durable.lines.len());
+    assert!(prepared.links_at(gap_row).is_empty());
     assert!(prepared.sections.iter().all(|s| !s.rows.contains(&gap_row)));
     assert!(
         prepared

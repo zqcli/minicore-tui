@@ -722,7 +722,7 @@ fn new_session_and_empty_created_session_keep_startup_header() {
     );
     assert_eq!(
         prepared
-            .lines
+            .lines()
             .iter()
             .filter(|line| line_text(line).contains("MINICORE"))
             .count(),
