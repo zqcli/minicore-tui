@@ -17,16 +17,16 @@ or "partial" soft pass):
 ## Current evidence (commit `d47d837`)
 
 Raw logs are on the builder at `/root/minicore-tui-v03-refactor/`. The
-verification of the current tree is `c2a-fmt.log` / `c2a-tests.log` /
-`c2a-clippy.log`; the real-Agent run is `c2a-agent-e2e.log`.
+verification of the current tree is `c2b-fmt.log` / `c2b-tests.log` /
+`c2b-clippy.log`; the real-Agent run is `c2b-agent-e2e.log`.
 
 ```bash
 # remote /root/minicore-tui-v03-refactor/tui, RUSTUP_TOOLCHAIN=1.85.0
 cargo fmt --all -- --check                       # clean
-cargo test --locked --all-targets --no-fail-fast # 621 passed / 0 failed / 27 ignored
+cargo test --locked --all-targets --no-fail-fast # 624 passed / 0 failed / 27 ignored
 cargo clippy --locked --all-targets -- -D warnings  # clean
 MINICORE_AGENT_BIN=... cargo test --locked --test agent_e2e -- --ignored --test-threads=1
-# 22 passed / 0 failed / 0 ignored, log c2a-agent-e2e.log
+# 22 passed / 0 failed / 0 ignored, log c2b-agent-e2e.log
 ```
 
 The 27 ignored tests are the 22 real-Agent E2E scenarios plus 5 release/perf
@@ -62,8 +62,8 @@ execution, steer pacing, update, shutdown cancel, reload, manual compaction
 | REF-24 | reload does not clear History/Live/draft or reinstall history | **Passed** | `fe59a49` narrowed reload to catalog generation only: the `ReloadState`/`ReloadPresentation`/`ReloadWaitTurn` requests, the staged state/presentation install and the `reload_fenced_*` patch branches are gone, and reload never touches Live, the draft, the selection or history. Reload-affected sessions are re-marked uncalibrated and converge through the normal read chain; `reload_does_not_stage_a_full_history_replacement` and the migrated reload tests plus the real-Agent `e2e_configuration_reload_refreshes_catalogs_only` measure it. |
 | REF-25 | Per-session drafts/undo/paste/cursor independent | **Failed** | Draft state is one global `App.composer`; switching sessions does not keep an independent draft. D |
 | REF-26 | New/continue/rename/delete explicit, no cross-project guess | **Not run** | Reducer tests exist; E2E 3 needs the real Agent. C/D |
-| REF-27 | Single Arc body; single Tool index | **Not run** | C2. Reload no longer duplicates history bodies, but the shared body/index is not built. |
-| REF-28 | Live update zero full-history clone; zero stable re-layout | **Failed** | `tests/performance.rs` shows full-history materialization; counters are C2. |
+| REF-27 | Single Arc body; single Tool index | **Not run** | The transcript projection now builds one `ToolKey` index per pass and resolves tools in O(1) (`stable_history_layout_is_cached_and_tool_projection_uses_the_index`), but the body is still duplicated between `RawHistoryItem` and the `TranscriptBlock` bridge, so the single `Arc<Message>` model is not built. |
+| REF-28 | Live update zero full-history clone; zero stable re-layout | **Failed** | The new `PerfCounters` measure the real points: a cached durable layout is not rebuilt (`layout_calls` stops increasing), but every prepared frame still clones the durable rows (`historical_text_bytes_cloned > 0` in `stable_history_layout_is_cached_and_tool_projection_uses_the_index`), so the zero-clone half is not met. |
 | REF-29 | viewport/click/copy share layout; softwrap adds no copy newline | **Not run** | C2. |
 | REF-30 | Fold/resize/page-load keep anchor | **Not run** | C2. |
 | REF-31 | Rail geometry / single-line Footer baseline | **Passed** | `src/ui/snapshots.rs`, `tests/rail_fixtures.rs`, `tests/render_snapshots.rs` pass unchanged; `logs_dark_80x24.txt` was regenerated for the content-free log rows. |
@@ -85,7 +85,7 @@ execution, steer pacing, update, shutdown cancel, reload, manual compaction
 | REF-47 | External editor: background RPC continues; no draft overwrite | **Not run** | Stage D. |
 | REF-48 | ANSI/OSC/control safe display; backend offset unchanged | **Passed** | `src/safe_text.rs::safe_display` is the single display boundary for markdown, plain wrap, filled rows, tool rows, selector rows, footer parts and error surfaces; `control_sequences_are_escaped_at_the_display_boundary` and the `safe_text` unit tests; escaping is display-only, protocol offsets still use the raw bytes. |
 | REF-49 | Logs contain no message/command/result/file/secret | **Passed** | `RpcEvent::AgentStderr { bytes, dropped }` carries counts only; the app stores `agent stderr: N bytes`; `agent_stderr_is_never_stored_as_content` and the fatal-overlay/logs-panel tests. |
-| REF-50 | All cache/queue bounded; background sessions release | **Failed** | Outbound 32 (28+4), wire 64 MiB, 2 read slots, 16 deferred and the job deadline are bounded and measured. The global 32 MiB transcript正文 cache with per-session eviction and background-session release is **not** implemented yet (C2), so this criterion fails. |
+| REF-50 | All cache/queue bounded; background sessions release | **Failed** | Outbound 32 (28+4), wire 64 MiB, 2 read slots, 16 deferred, the Composer 256 KiB cap and the job deadline are bounded and measured. `HistoryWindow` still tracks but does not enforce a 32 MiB body budget and never evicts, and the Composer 8 MiB all-drafts budget has no owner yet, so this criterion fails. |
 | REF-51 | Existing CJK/IME/mouse/scrollbar/Terminal restore preserved | **Passed** | `ui::*`, `tests/terminal_restore.rs`, `tests/rail_fixtures.rs`. |
 | REF-52 | Common command table/completion/help consistent | **Failed** | Three separate lists still diverge; `/refresh` missing. D |
 | REF-53 | No approval/plugin/Subagent/PTY/Git-write/auto-reconnect | **Passed** | Source audit: no such code. |
@@ -175,6 +175,39 @@ Still open in C1 (do not claim C1 complete):
   lines; the remainder is the `App` owner/fields, `update` and the event
   router, navigation/selector logic and the small clocks by design, so a
   further split is optional follow-up, not a C1 blocker.
+
+## C2 progress (incomplete)
+
+C2 is not complete; this is the measured state of the first slice.
+
+Landed and verified in `835c27c`:
+
+- `src/perf.rs` thread-local `PerfCounters` incremented at the real execution
+  points (layout rebuilds, durable bytes cloned, owned rows materialized,
+  Composer full joins, tool index lookups/linear scans, retained history
+  bytes). Tests read the counters; no constant-zero evidence is used.
+- The transcript projection resolves tool calls through one `ToolKey` index
+  per pass; the per-call block scan is gone and `tool_linear_scans` is
+  asserted zero.
+- `Composer` keeps a cached `byte_len`; ordinary typing after a 256 KiB paste
+  performs no full-buffer join (`composer_full_joins` unchanged).
+- `prepare_conversation` counts a durable layout rebuild only on a cache miss.
+
+Measured structure at this commit: a cached durable layout is not rebuilt, but
+each prepared frame still clones all durable rows (`historical_text_bytes_cloned`
+is non-zero). The C2 completion threshold therefore is **not** met; the
+remaining work is:
+
+- `ConversationLayout` sections with integer prefix offsets and a
+  viewport+overscan `VisibleConversation` shared by draw/hit/copy/scrollbar
+  (spec §11.2/§11.7).
+- `HistoryWindow` 32 MiB body budget with eviction of confirmed content from
+  inactive, far-from-viewport sessions (spec §6.5/§21).
+- Composer 8 MiB all-drafts budget with a real per-session draft owner
+  (spec §12.1/§21) — this is also REF-25's prerequisite.
+- 48 MiB layout cache enforcement and the single bounded layout worker
+  (spec §11.5/§11.6).
+- Release perf run at 120x40 with P95/P99 and RSS (spec §25.2) — Not run.
 
 ## C1 review fixes (this commit)
 
