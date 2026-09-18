@@ -68,7 +68,7 @@ fn prepared_tool_sections_keep_full_identity_and_mouse_toggle_uses_the_same_rang
         prepared
             .copy_ranges
             .iter()
-            .any(|range| range.text == "run the tools")
+            .any(|range| &*range.text == "run the tools")
     );
     assert!(
         prepared
@@ -444,7 +444,7 @@ fn selection_rebases_when_a_live_section_grows_after_the_selected_row() {
     let row = first
         .copy_ranges
         .iter()
-        .find(|range| range.text == "more")
+        .find(|range| &*range.text == "more")
         .expect("live text row");
     let (section_id, section_start) = first
         .sections

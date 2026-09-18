@@ -127,7 +127,7 @@ pub fn prepare_conversation(app: &App, width: u16) -> PreparedConversation {
                     row: row + live_base,
                     columns: *copy_start..width as usize,
                     decorative: section_copy_is_decorative(section, row, &text),
-                    text,
+                    text: text.into(),
                 }
             })
         })
@@ -312,12 +312,12 @@ fn build_durable_prepared(
                         &mut link_cells,
                         PreparedSection {
                             id: SectionId {
-                                session_id: view.info.session_id.clone(),
-                                loop_id: Some(tool.loop_id.clone()),
+                                session_id: view.info.session_id.clone().into(),
+                                loop_id: Some(tool.loop_id.clone().into()),
                                 request_index: Some(tool.request_index),
                                 kind: SectionKind::Tool,
                                 ordinal: 0,
-                                tool_call_id: Some(tool.tool_call_id.clone()),
+                                tool_call_id: Some(tool.tool_call_id.clone().into()),
                                 // Keep the assistant/tool relationship stable while a
                                 // result arrives and supplies its own history index.
                                 history_index: Some(assistant_block.index),
@@ -344,8 +344,8 @@ fn build_durable_prepared(
                     &mut link_cells,
                     PreparedSection {
                         id: SectionId {
-                            session_id: view.info.session_id.clone(),
-                            loop_id: Some(assistant_block.loop_id.clone()),
+                            session_id: view.info.session_id.clone().into(),
+                            loop_id: Some(assistant_block.loop_id.clone().into()),
                             request_index: Some(assistant_block.request_index),
                             kind: assistant_section.kind,
                             ordinal: assistant_section.ordinal,
@@ -416,7 +416,7 @@ fn build_durable_prepared(
             copy_ranges.push(CopyRange {
                 row,
                 columns: copy_start..width,
-                text,
+                text: text.into(),
                 decorative,
             });
         }
@@ -472,7 +472,7 @@ fn append_prepared_section(
         copy_ranges.push(CopyRange {
             row,
             columns: copy_start..width,
-            text,
+            text: text.into(),
             decorative,
         });
     }
@@ -769,8 +769,8 @@ fn durable_block_lines(
 fn section_id(session_id: &str, block: &TranscriptBlock, _ordinal: u32) -> SectionId {
     match block {
         TranscriptBlock::User(user) => SectionId {
-            session_id: session_id.to_owned(),
-            loop_id: user.loop_id.clone(),
+            session_id: session_id.into(),
+            loop_id: user.loop_id.as_deref().map(std::sync::Arc::from),
             request_index: None,
             kind: SectionKind::User,
             // The history index/loop identity is the stable anchor. The
@@ -781,8 +781,8 @@ fn section_id(session_id: &str, block: &TranscriptBlock, _ordinal: u32) -> Secti
             history_index: user.index,
         },
         TranscriptBlock::Assistant(assistant) => SectionId {
-            session_id: session_id.to_owned(),
-            loop_id: Some(assistant.loop_id.clone()),
+            session_id: session_id.into(),
+            loop_id: Some(assistant.loop_id.clone().into()),
             request_index: Some(assistant.request_index),
             kind: SectionKind::AssistantText,
             ordinal: 0,
@@ -790,16 +790,16 @@ fn section_id(session_id: &str, block: &TranscriptBlock, _ordinal: u32) -> Secti
             history_index: Some(assistant.index),
         },
         TranscriptBlock::Tool(tool) => SectionId {
-            session_id: session_id.to_owned(),
-            loop_id: Some(tool.loop_id.clone()),
+            session_id: session_id.into(),
+            loop_id: Some(tool.loop_id.clone().into()),
             request_index: Some(tool.request_index),
             kind: SectionKind::Tool,
             ordinal: 0,
-            tool_call_id: Some(tool.tool_call_id.clone()),
+            tool_call_id: Some(tool.tool_call_id.clone().into()),
             history_index: tool.index,
         },
         TranscriptBlock::Summary(_summary) => SectionId {
-            session_id: session_id.to_owned(),
+            session_id: session_id.into(),
             loop_id: None,
             request_index: None,
             kind: SectionKind::Summary,
@@ -808,7 +808,7 @@ fn section_id(session_id: &str, block: &TranscriptBlock, _ordinal: u32) -> Secti
             history_index: Some(_summary.index),
         },
         TranscriptBlock::HistoryPlaceholder(placeholder) => SectionId {
-            session_id: session_id.to_owned(),
+            session_id: session_id.into(),
             loop_id: None,
             request_index: None,
             kind: SectionKind::Summary,
@@ -1106,8 +1106,8 @@ impl LiveRenderContext<'_> {
             ranges,
             None,
             SectionId {
-                session_id: self.session_id.to_owned(),
-                loop_id: Some(self.loop_id.to_owned()),
+                session_id: self.session_id.into(),
+                loop_id: Some(self.loop_id.into()),
                 request_index: Some(self.request_index),
                 kind: SectionKind::Thinking,
                 ordinal,
@@ -1145,8 +1145,8 @@ impl LiveRenderContext<'_> {
             ranges,
             None,
             SectionId {
-                session_id: self.session_id.to_owned(),
-                loop_id: Some(self.loop_id.to_owned()),
+                session_id: self.session_id.into(),
+                loop_id: Some(self.loop_id.into()),
                 request_index: Some(self.request_index),
                 kind: SectionKind::AssistantText,
                 ordinal,
@@ -1200,12 +1200,12 @@ fn live_tool_render(
     render_tool.expanded = effective_live_tool_expanded(view, &tool_key, &render_tool);
     (
         SectionId {
-            session_id: view.info.session_id.clone(),
-            loop_id: Some(loop_id.to_owned()),
+            session_id: view.info.session_id.clone().into(),
+            loop_id: Some(loop_id.into()),
             request_index: Some(request_index),
             kind: SectionKind::Tool,
             ordinal: 0,
-            tool_call_id: Some(tool.tool_call_id.clone()),
+            tool_call_id: Some(tool.tool_call_id.clone().into()),
             history_index: None,
         },
         tool::live_with_display(theme, &render_tool, width, display),
@@ -1329,8 +1329,8 @@ fn live_section(
             &mut ranges,
             previous_kind,
             SectionId {
-                session_id: session_id.clone(),
-                loop_id: Some(loop_id.clone()),
+                session_id: session_id.clone().into(),
+                loop_id: Some(loop_id.clone().into()),
                 request_index: None,
                 kind: SectionKind::User,
                 ordinal: applied.local_id as u32,
@@ -1357,8 +1357,8 @@ fn live_section(
             &mut ranges,
             None,
             SectionId {
-                session_id: session_id.clone(),
-                loop_id: Some(loop_id.clone()),
+                session_id: session_id.clone().into(),
+                loop_id: Some(loop_id.clone().into()),
                 request_index: None,
                 kind: SectionKind::Notice,
                 ordinal: steer.local_id as u32,

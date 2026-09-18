@@ -5630,7 +5630,7 @@ fn failed_tool_survives_live_finished_wait_and_history_with_folded_geometry() {
         .copy_ranges
         .iter()
         .filter(|range| range.row >= durable_tool.rows.start && range.row < durable_tool.rows.end)
-        .map(|range| range.text.as_str())
+        .map(|range| &*range.text)
         .collect::<Vec<_>>()
         .join("\n");
     assert!(section_copy.contains("tool failed"));
@@ -5655,8 +5655,7 @@ fn failed_tool_survives_live_finished_wait_and_history_with_folded_geometry() {
     );
     let body_row = final_screen.transcript.y + (body_copy.row - final_offset) as u16;
     let body_start = final_screen.content.x + body_copy.columns.start as u16;
-    let body_end =
-        body_start + UnicodeWidthStr::width(body_copy.text.as_str()).saturating_sub(1) as u16;
+    let body_end = body_start + UnicodeWidthStr::width(&*body_copy.text).saturating_sub(1) as u16;
     let final_mouse = |kind, column, row| {
         AppEvent::Terminal(CrosstermEvent::Mouse(crossterm::event::MouseEvent {
             kind,

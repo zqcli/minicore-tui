@@ -72,12 +72,13 @@ impl ReasoningKey {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct SectionId {
-    pub session_id: String,
-    pub loop_id: Option<String>,
+    /// Shared strings: cloning section metadata per frame must not allocate.
+    pub session_id: Arc<str>,
+    pub loop_id: Option<Arc<str>>,
     pub request_index: Option<u32>,
     pub kind: SectionKind,
     pub ordinal: u32,
-    pub tool_call_id: Option<String>,
+    pub tool_call_id: Option<Arc<str>>,
     pub history_index: Option<usize>,
 }
 
@@ -114,7 +115,8 @@ impl SectionRange {
 pub struct CopyRange {
     pub row: usize,
     pub columns: std::ops::Range<usize>,
-    pub text: String,
+    /// Shared row text: a frame copy bumps a refcount instead of the bytes.
+    pub text: Arc<str>,
     /// True for layout-only boundary rows and folded hints. These rows may
     /// be rendered for spacing or affordances, but they are not transcript
     /// content when a selection is copied.

@@ -206,6 +206,92 @@ fn measure_live_delta_rebuild_cost() {
     );
 }
 
+/// C2 structural acceptance (spec §11.2/§11.7/§25.1): over a 50k-row
+/// history, live deltas must not rebuild the durable layout or copy history
+/// text, and each installed frame must materialize only its viewport window.
+/// Counters are read from the real call points; the window byte count proves
+/// they are not constants.
+#[test]
+#[ignore = "manual performance measurement; run with --ignored --nocapture"]
+fn measure_c2_stable_layout_and_viewport_ownership() {
+    const HEIGHT: usize = 40;
+    let mut app = app_with_history(7300, 240);
+    app.update(AppEvent::ConversationPrepared(prepare_conversation(
+        &app, WIDTH,
+    )));
+    let first = prepare_conversation(&app, WIDTH);
+    assert!(
+        first.total_rows() >= 50_000,
+        "fixture must reach 50k rows, got {}",
+        first.total_rows()
+    );
+    // The turn-start durable change is settled before the measurement, so
+    // the 1000 frames below measure only delta frames.
+    app.update(AppEvent::SubmitTurn {
+        session_id: "ses_perf".into(),
+        text: "live turn".into(),
+    });
+    let turn = TurnRef {
+        session_id: "ses_perf".into(),
+        loop_id: "lup_live".into(),
+    };
+    // The first unattributed delta materializes a durable live block; it and
+    // the turn-start change are settled before the measurement.
+    push_live_deltas(&mut app, &turn, 1);
+    app.update(AppEvent::ConversationPrepared(prepare_conversation(
+        &app, WIDTH,
+    )));
+    let base = minicore_tui::perf::snapshot();
+    let start = std::time::Instant::now();
+    let mut window_rows = 0usize;
+    let mut live_rows = 0usize;
+    let mut rebuild_frames: Vec<usize> = Vec::new();
+    for index in 0..1000 {
+        if index % 4 == 0 {
+            push_live_deltas(&mut app, &turn, 1);
+        }
+        let before_frame = minicore_tui::perf::snapshot().layout_calls;
+        let prepared = prepare_conversation(&app, WIDTH);
+        if minicore_tui::perf::snapshot().layout_calls != before_frame {
+            rebuild_frames.push(index);
+        }
+        live_rows = prepared.live_rows();
+        let offset = prepared.total_rows().saturating_sub(HEIGHT);
+        window_rows += prepared.window(offset, HEIGHT).len();
+        app.update(AppEvent::ConversationPrepared(prepared));
+    }
+    let elapsed = start.elapsed();
+    let after = minicore_tui::perf::snapshot();
+    let layout_delta = after.layout_calls - base.layout_calls;
+    let history_bytes = after.historical_text_bytes_cloned - base.historical_text_bytes_cloned;
+    let viewport_rows = after.viewport_rows_materialized - base.viewport_rows_materialized;
+    let viewport_bytes = after.viewport_text_bytes_cloned - base.viewport_text_bytes_cloned;
+    println!(
+        "measure_c2: frames=1000 deltas=250 live_rows={live_rows} layout_calls_delta={layout_delta}          history_bytes_cloned={history_bytes} viewport_rows={viewport_rows}          viewport_bytes={viewport_bytes} window_rows={window_rows} rebuild_frames={rebuild_frames:?} elapsed_ms={:.2}",
+        elapsed.as_secs_f64() * 1000.0
+    );
+    assert_eq!(
+        layout_delta, 0,
+        "live deltas must not rebuild the stable durable layout"
+    );
+    assert_eq!(
+        history_bytes, 0,
+        "live deltas must not clone history text into a frame"
+    );
+    assert_eq!(
+        window_rows as u64, viewport_rows,
+        "each frame materializes exactly its requested window"
+    );
+    assert!(
+        viewport_rows <= 1000 * HEIGHT as u64,
+        "viewport materialization is bounded by height, not history"
+    );
+    assert!(
+        viewport_bytes > 0,
+        "the window clone is measured at the real call point, not a constant"
+    );
+}
+
 /// Ignored timing probe retained for the diagnostic helper, clearly labelled
 /// as `all_lines` (not the production frame path).
 #[test]

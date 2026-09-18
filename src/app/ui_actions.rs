@@ -1635,7 +1635,7 @@ pub(super) fn set_all_tools_expanded(view: &mut SessionView, expanded: bool) {
 }
 
 fn copy_row_text(conversation: &PreparedConversation, row: usize) -> Option<&str> {
-    conversation.copy_row(row).map(|copy| copy.text.as_str())
+    conversation.copy_row(row).map(|copy| &*copy.text)
 }
 
 fn first_copy_column(conversation: &PreparedConversation, row: usize) -> usize {
@@ -1646,7 +1646,7 @@ fn first_copy_column(conversation: &PreparedConversation, row: usize) -> usize {
 
 fn copy_row_width(conversation: &PreparedConversation, row: usize) -> usize {
     conversation.copy_row(row).map_or(1, |copy| {
-        copy.columns.start + UnicodeWidthStr::width(copy.text.as_str())
+        copy.columns.start + UnicodeWidthStr::width(&*copy.text)
     })
 }
 
