@@ -346,7 +346,10 @@ fn prepare_frame_with_jobs(app: &mut App, jobs: &mut LocalJobs, area: Rect) {
     let screen = ui::layout::screen_layout(app, area);
     let width = screen.content.width;
     if app.prepared_conversation(width).is_none() {
-        if app.async_layout_enabled() && app.active_view().is_some() {
+        if !app.async_layout_enabled() {
+            return;
+        }
+        if app.active_view().is_some() {
             if let Some(durable) = app.cached_durable(width) {
                 let prepared =
                     ui::transcript::prepare_conversation_with_durable(app, width, Some(durable));
@@ -358,7 +361,8 @@ fn prepare_frame_with_jobs(app: &mut App, jobs: &mut LocalJobs, area: Rect) {
                 }
             }
         } else {
-            prepare_conversation(app, width);
+            let prepared = ui::transcript::prepare_startup_conversation(app, width);
+            app.update(AppEvent::ConversationPrepared(prepared));
         }
     }
     let Some(prepared) = app.prepared_conversation(width) else {
@@ -377,13 +381,6 @@ fn prepare_frame_with_jobs(app: &mut App, jobs: &mut LocalJobs, area: Rect) {
             total_lines: total,
             visible_rows: visible,
         });
-    }
-}
-
-fn prepare_conversation(app: &mut App, width: u16) {
-    if app.prepared_conversation(width).is_none() {
-        let prepared = ui::transcript::prepare_conversation(app, width);
-        app.update(AppEvent::ConversationPrepared(prepared));
     }
 }
 
@@ -689,6 +686,13 @@ impl Drop for DebugLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn prepare_conversation(app: &mut App, width: u16) {
+        if app.prepared_conversation(width).is_none() {
+            let prepared = ui::transcript::prepare_conversation(app, width);
+            app.update(AppEvent::ConversationPrepared(prepared));
+        }
+    }
 
     fn prepare_frame(app: &mut App, area: Rect) {
         if ui::layout::is_too_small(area) {

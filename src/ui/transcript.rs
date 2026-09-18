@@ -195,6 +195,14 @@ pub fn prepare_conversation(app: &App, width: u16) -> PreparedConversation {
     prepare_conversation_with_durable(app, width, None)
 }
 
+/// The no-session startup screen has no durable transcript. Production uses
+/// this small path before a session is selected; active sessions always wait
+/// for the owned layout worker.
+pub fn prepare_startup_conversation(app: &App, width: u16) -> PreparedConversation {
+    debug_assert!(app.active_view().is_none());
+    prepare_conversation_with_durable(app, width, None)
+}
+
 pub fn prepare_conversation_with_durable(
     app: &App,
     width: u16,
