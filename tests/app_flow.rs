@@ -6610,3 +6610,65 @@ fn handoff_turn_started_already_proves_accept_keeps_loop_and_drops_entry() {
         "no composer duplicate for a proven-accept handoff"
     );
 }
+
+/// REF-33 baseline fact: completed tool events update the existing card in
+/// place by `tool_call_id` and never append a duplicate card or reorder the
+/// request's cards. This must keep holding after the stage-C rework.
+#[test]
+fn tool_completion_updates_in_place_without_duplicate_or_reorder() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+    driver.step(AppEvent::SubmitTurn {
+        session_id: "ses_1".into(),
+        text: "run two tools".into(),
+    });
+    let send = driver.request("turn.send");
+    driver.respond(
+        send,
+        json!({"turn": {"session_id": "ses_1", "loop_id": "loop_tools"}}),
+    );
+    let turn = json!({"session_id": "ses_1", "loop_id": "loop_tools"});
+    let started = |id: &str, name: &str| {
+        agent_event(json!({
+            "type": "tool_started",
+            "data": {
+                "turn": turn,
+                "request_index": 0,
+                "tool_call_id": id,
+                "tool_name": name,
+                "meta": {"session_id": "ses_1", "dropped_before": 0}
+            }
+        }))
+    };
+    driver.step(started("call_a", "read"));
+    driver.step(started("call_b", "bash"));
+    // Completion arrives for the *first* tool after both started. It must
+    // update call_a in place; call_b stays running and order is unchanged.
+    driver.step(agent_event(json!({
+        "type": "tool_finished",
+        "data": {
+            "turn": turn,
+            "request_index": 0,
+            "tool_call_id": "call_a",
+            "result": {"outcome": "success", "content_bytes": 12},
+            "meta": {"session_id": "ses_1", "dropped_before": 0}
+        }
+    })));
+    let tools = &driver.app.sessions.known["ses_1"]
+        .live
+        .as_ref()
+        .unwrap()
+        .requests[0]
+        .tools;
+    let ids: Vec<&str> = tools
+        .iter()
+        .map(|tool| tool.tool_call_id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["call_a", "call_b"], "no duplicate and no reorder");
+    assert_eq!(tools[0].status, ToolStatus::Succeeded);
+    assert!(
+        matches!(tools[1].status, ToolStatus::Pending | ToolStatus::Running),
+        "the untouched second card must not be completed by the first tool's event"
+    );
+}

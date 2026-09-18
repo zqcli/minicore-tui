@@ -235,3 +235,62 @@ fn baseline_reload_stages_a_full_history_replacement() {
         "BASELINE: apply_reload installs the staged history"
     );
 }
+
+/// Defect (REF-48): the markdown display boundary passes raw control
+/// sequences straight through. Measured: an ESC/OSC-52+BEL payload survives
+/// both `MarkdownRenderer::render` and `wrap_plain` into the final rows.
+/// Stage E adds the unified safe-display boundary.
+#[test]
+fn baseline_control_sequences_reach_the_display_rows() {
+    use minicore_tui::markdown::{MarkdownRenderer, wrap_plain};
+    use minicore_tui::theme::Theme;
+    let theme = Theme::dark();
+    let renderer = MarkdownRenderer::new(&theme);
+    let payload = "before \u{1b}]52;c;evil\u{7} after";
+    let style = ratatui::style::Style::new();
+    let joined = |lines: Vec<ratatui::text::Line<'static>>| -> String {
+        lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect()
+    };
+    let rendered = joined(renderer.render(payload, 80, style));
+    let plain = joined(wrap_plain(payload, 80, style));
+    assert!(
+        rendered.contains('\u{1b}') && rendered.contains('\u{7}'),
+        "BASELINE: markdown rendering leaks ESC/BEL control sequences"
+    );
+    assert!(
+        plain.contains('\u{1b}') && plain.contains('\u{7}'),
+        "BASELINE: plain wrapping leaks ESC/BEL control sequences"
+    );
+}
+
+/// Defect (REF-49): the Agent's stderr is stored into `agent_logs` and shown
+/// verbatim; there is no redaction boundary and no test asserting log content
+/// is content-free. Only `--debug` logs method/id/byte-count/duration. Stage C
+/// adds the redaction boundary and its tests.
+#[test]
+fn baseline_agent_stderr_is_logged_without_a_redaction_boundary() {
+    let rpc = include_str!("../src/rpc.rs");
+    assert!(
+        rpc.contains("RpcEvent::AgentLogLine(agent_log_line(&line))"),
+        "BASELINE: raw stderr lines become AgentLogLine events"
+    );
+    let main = include_str!("../src/main.rs");
+    assert!(
+        !main.contains("redact") && !main.contains("sanitize_log"),
+        "BASELINE: no log redaction function exists yet"
+    );
+    let tests = [
+        include_str!("../tests/agent_e2e.rs"),
+        include_str!("../tests/app_flow.rs"),
+        include_str!("../tests/protocol.rs"),
+    ]
+    .concat();
+    assert!(
+        !tests.contains("agent_logs_contain_no"),
+        "BASELINE: no test asserts the debug log is content-free"
+    );
+}
