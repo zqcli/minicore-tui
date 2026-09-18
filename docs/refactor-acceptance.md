@@ -57,7 +57,7 @@ their implementation status.
 | REF-11 | Session-global vs Turn-local index not mixed | **Implemented** | `turn.result` items decode into a turn-local window; history window is keyed by the session-global index (`src/protocol/read.rs`, `tests/protocol.rs`). |
 | REF-12 | Read-only browse does not open Session/require Workspace | **Not run** | Stage E. |
 | REF-13 | Large/missing/records_truncated/trailing_incomplete not faked complete | **Implemented** | Placeholders keep unloaded ranges explicit; `trailing_incomplete` is decoded as incomplete and never repaired. |
-| REF-14 | send may be deferred; preparation visible, no auto-resend | **Implemented** | B2 preparing state plus deferred admission; `prepare` cancel routes to `session.compact.cancel` by operation id. Real-Agent prep E2E scenario not yet added. |
+| REF-14 | send may be deferred; preparation visible, no auto-resend | **Passed** | B2 preparing state plus deferred admission. `e2e_automatic_preparation_is_observable_and_cancellable` measures it against the real Agent: the second submit starts a real summary utility call, the app observes the live operation from `session.context`, Esc routes `session.compact.cancel` by that exact id, the deferred send fails and the prompt returns to the composer without a resend. |
 | REF-15 | Cancel routes by exact operation ID or TurnRef | **Implemented** | `RequestKind::CancelTurn(TurnRef)` / `CompactCancel { operation_id }`; unknown-write fence never resends. `e2e_manual_compact_deferred_cancel` measures the deferred `session.compact.cancel` path against the real Agent by the locally known operation id. |
 | REF-16 | Manual compact four results + unknown_write | **Implemented** | Four `CompactStatusWire` outcomes decoded. Real-Agent E2E now measures `noop` (`e2e_manual_compact_without_history_is_a_noop`), `compacted` (`e2e_manual_compact_summarizes_history`) and cancel→`failed` (`e2e_manual_compact_deferred_cancel`); `unknown_write` keeps the fence until state+context refresh and is only reducer-tested. |
 | REF-17 | Context estimate scope; utility usage separate | **Not run** | Stage B/E. |
@@ -97,15 +97,15 @@ their implementation status.
 | REF-51 | Existing CJK/IME/mouse/scrollbar/Terminal restore preserved | **Passed** | `ui::*`, `tests/terminal_restore.rs`, `tests/rail_fixtures.rs`. |
 | REF-52 | Common command table/completion/help consistent | **Failed** | Three separate lists still diverge; `/refresh` missing. D |
 | REF-53 | No approval/plugin/Subagent/PTY/Git-write/auto-reconnect | **Passed** | Source audit: no such code. |
-| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Failed** | 21 real-Agent scenarios exist and all pass (`c1f-agent-e2e.log`), covering read, tool, steer, update, shutdown, reload and manual compaction (`noop`, `compacted`, deferred cancel). Automatic preparation and workspace file/changes/diff scenarios are still missing, so this criterion cannot pass yet. |
+| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Failed** | 22 real-Agent scenarios exist and all pass (`c1l-agent-e2e.log`), covering read, tool, steer, update, shutdown, reload, manual compaction (`noop`, `compacted`, deferred cancel) and automatic preparation (observable + cancellable). Only workspace file/changes/diff scenarios are still missing, so this criterion cannot pass yet. |
 | REF-55 | Rust 1.85/stable, three-platform original tests pass | **Partial** | Full suite, fmt and clippy run clean under `RUSTUP_TOOLCHAIN=1.85.0` on remote Linux. macOS/Windows not run. |
 | REF-56 | Release perf before/after with real data, not faked | **Not run** | Before data in `docs/performance.md`; after is C2/F. |
 
 ## Status counts
 
-- **Passed** (18): REF-01, 02, 03, 04, 05, 06, 08, 18, 19, 20, 23, 24, 31,
-  33, 48, 49, 51, 53.
-- **Implemented** (10): REF-07, 09, 10, 11, 13, 14, 15, 16, 21, 22.
+- **Passed** (19): REF-01, 02, 03, 04, 05, 06, 08, 14, 18, 19, 20, 23, 24,
+  31, 33, 48, 49, 51, 53.
+- **Implemented** (9): REF-07, 09, 10, 11, 13, 15, 16, 21, 22.
 - **Partial** (2): REF-50, 55.
 - **Not run** (22): REF-12, 17, 26, 27, 29, 30, 32, 34, 35, 36, 37, 38, 39,
   40, 41, 42, 43, 44, 45, 46, 47, 56, plus the real-Agent E2E half of every
@@ -159,12 +159,17 @@ Landed and verified (each commit was tested remotely on Rust 1.85):
    `pub(super)` methods in `app/turn.rs`; the source-scanning baseline tests
    now read all app module files as one source so they keep checking the same
    invariants.
-11. This commit — the query-slot/context-poll group (`read_context_command`,
+11. The query-slot/context-poll group (`read_context_command`,
    `free_query_slot`, `drain_query_followups`, `context_interval`,
    `context_query_pending`, `arm_context_poll`, `poll_contexts`,
    `reschedule_context_poll`) moved into `pub(super)` methods in
    `app/queries.rs`, next to the `QuerySlots`/`QueryKey` types. `app.rs` is
-   now 10.0k lines; all four named modules exist.
+   10.0k lines; all four named modules exist.
+12. This commit — `e2e_automatic_preparation_is_observable_and_cancellable`
+   closes the last real-Agent gap: a large first answer pushes the estimated
+   history over the automatic trigger, the second submit runs a gated summary
+   utility call, the app observes the operation from `session.context` and
+   Esc cancels it by the exact id; the prompt returns to the composer.
 
 Verified evidence at `c91a686`: `fmt` clean, `620 passed / 0 failed / 26
 ignored`, `clippy -D warnings` clean, tree md5
@@ -174,14 +179,9 @@ ignored`, `clippy -D warnings` clean, tree md5
 
 Still open in C1 (do not claim C1 complete):
 
-- The four named modules now exist and own their method groups
-  (`app/history.rs`, `app/session.rs`, `app/turn.rs`, `app/queries.rs`), and
-  `app.rs` shrank from 15.8k to 10.0k lines. The remainder is the `App`
-  owner/fields, `update` and the event router, navigation/selector logic and
-  the small clocks by design; a further split of the remaining UI reducers is
-  optional follow-up, not a C1 blocker.
-- No real-Agent automatic-preparation E2E scenario has been added; the 21
-  scenarios cover manual compaction but not `session.context.current_operation`
-  preparation-on-submit.
 - The C2/C3 items behind REF-25/28/52/54 (per-session draft state, shared
-  history body/layout, file/diff E2E) are untouched.
+  history body/layout, file/changes/diff E2E scenarios) are untouched.
+  The four named app modules exist and `app.rs` shrank from 15.8k to 10.0k
+  lines; the remainder is the `App` owner/fields, `update` and the event
+  router, navigation/selector logic and the small clocks by design, so a
+  further split is optional follow-up, not a C1 blocker.

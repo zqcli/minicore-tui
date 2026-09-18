@@ -215,7 +215,7 @@ agent  binary  /root/minicore-tui-v03-refactor/agent-target/debug/minicore-agent
 agent  head    061743369459299e66be97bf97d2b27352a39914
 runtime head   6cd2bdbc634437dea925495c61c7eb0be10ba171
 tui    base    9d11ee69c4efa02ef1e5bff143662b48dc3194de (stage-A baseline)
-tui    head    c91a686 (C1: full quality gate green, 21 real-Agent E2E)
+tui    head    c1l tree (C1: full quality gate green, 22 real-Agent E2E)
 CARGO_TARGET_DIR=/root/minicore-tui-v03-refactor/tui-target
 ```
 
@@ -232,23 +232,24 @@ python3 scripts/generate_agent_v1_fixtures.py \
 cargo test --release --locked --test performance -- --ignored --nocapture
 ```
 
-Last verified result (C1, commit `c91a686`, logs `c1g-fmt.log` /
-`c1g-tests.log` / `c1g-clippy.log`): `fmt` clean, `test` 620 passed / 0 failed
-/ 26 ignored, `clippy -D warnings` clean, tree md5
-`ee2180393a5993ba47daed879aa31328`, all under Rust 1.85. Per-slice logs:
+Last verified result (C1, logs `c1l-fmt.log` / `c1l-tests.log` /
+`c1l-clippy.log`): `fmt` clean, `test` 620 passed / 0 failed / 27 ignored,
+`clippy -D warnings` clean, tree md5
+`a146e3db83b2414950af2e2cf4f042bb`, all under Rust 1.85. Per-slice logs:
 `c1a-*` (job ownership + bounded retries), `c1b/c1c-*` (confirmation model),
-`c1d/c1e-*` (reload narrowing + catalog generation), `c1f-agent-e2e.log` (real
-Agent), plus the earlier `c1-io-tests4.log` and `c1-history-tests.log`; B1/B2
-logs are `b1-*.log` / `b2-*.log`. The 21 real-Agent E2E scenarios were run
-against the pinned binary and all pass (`c1f-agent-e2e.log`), including the
-three manual-compaction scenarios.
+`c1d/c1e-*` (reload narrowing + catalog generation), `c1f`/`c1l-agent-e2e.log`
+(real Agent), `c1g`..`c1k-*` (module splits), plus the earlier
+`c1-io-tests4.log` and `c1-history-tests.log`; B1/B2 logs are `b1-*.log` /
+`b2-*.log`. The 22 real-Agent E2E scenarios were run against the pinned binary
+and all pass (`c1l-agent-e2e.log`), including the three manual-compaction
+scenarios and the automatic-preparation scenario.
 
 When reusing the existing `tui-target` directory after an rsync, run
 `cargo clean -p minicore-tui` (or touch the sources) before the build: rsync
 preserves source mtimes, and a newer stale rlib otherwise shadows the synced
 source, producing confusing "variant not found" errors.
 
-The 26 ignored tests are the 21 real-Agent E2E scenarios plus 5 release/perf
+The 27 ignored tests are the 22 real-Agent E2E scenarios plus 5 release/perf
 tests; they are not evidence. `docs/refactor-acceptance.md` tracks which REF
 rows remain open.
 
@@ -256,8 +257,9 @@ C1 status: the synchronous-admission/IO slice (`c843105`), the history-read
 state convergence (`d47d837`), the owned-job/bounded-retry slice (`3d159a7`),
 the confirmation model (`f440741`, `b3eeda8`), the reload narrowing
 (`fe59a49`), catalog generations (`77c0ebf`), the compaction E2E (`c91a686`)
-and the module splits into `app/history.rs` (read/result chain),
+the module splits into `app/history.rs` (read/result chain),
 `app/session.rs` (session lifecycle), `app/turn.rs` (turn state machine) and
-`app/queries.rs` (query slots/context polling) are landed and verified. The
-automatic-preparation E2E scenario is **not** landed; the acceptance matrix
-lists it explicitly so no partial claim is made.
+`app/queries.rs` (query slots/context polling), and the real-Agent
+automatic-preparation scenario are landed and verified. No C1 item is left
+open; the remaining REF rows are C2/C3 work and the acceptance matrix lists
+them explicitly.

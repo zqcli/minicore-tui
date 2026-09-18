@@ -3675,3 +3675,150 @@ fn e2e_manual_compact_deferred_cancel() {
         process.terminate().await;
     });
 }
+
+/// Automatic admission prepares before a loop exists. A large first answer
+/// pushes the estimated history over the automatic-compaction trigger, so the
+/// second submit really runs a summary utility call; the call is gated to keep
+/// the preparation observable. The app polls `session.context`, records the
+/// operation id and Esc cancels by that exact id.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_automatic_preparation_is_observable_and_cancellable() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    let gate = Arc::new(AtomicBool::new(false));
+    env._server
+        .enqueue_sse(sse_text_response(&"h".repeat(160 * 1024)));
+    env._server
+        .enqueue_gated(sse_text_response("prepared summary"), gate.clone(), None);
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+        let session_id = create_compact_session(
+            &mut process,
+            &mut app,
+            &env.workspace_path,
+            "Preparation E2E",
+        )
+        .await;
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "fill the history".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .known
+                .get(&session_id)
+                .is_some_and(|view| view.live.is_none() && view.transcript.complete)
+        })
+        .await
+        .unwrap();
+
+        // The next submit must prepare: the agent starts a summary utility
+        // call before any loop exists, and the gate keeps it in flight.
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "prepared turn".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        let deadline = Instant::now() + TIMEOUT;
+        while env._server.recorded_requests().len() < 2 && Instant::now() < deadline {
+            pump_step(&mut process, &mut app)
+                .await
+                .expect("pump while the preparation summary is in flight");
+        }
+        assert!(
+            env._server.recorded_requests().len() >= 2,
+            "automatic admission never started a summary call"
+        );
+
+        // The submission-owned context poll observes the live operation and
+        // records its exact identity.
+        let deadline = Instant::now() + TIMEOUT;
+        while app.sessions.known[&session_id]
+            .state
+            .as_ref()
+            .and_then(|state| state.compaction.as_ref())
+            .is_none()
+            && Instant::now() < deadline
+        {
+            pump_step(&mut process, &mut app)
+                .await
+                .expect("pump while observing the preparation operation");
+        }
+        let observed = app.sessions.known[&session_id]
+            .state
+            .as_ref()
+            .and_then(|state| state.compaction.clone())
+            .expect("the app must observe the preparation operation from session.context");
+        assert!(
+            !observed.operation_id.is_empty(),
+            "the observed preparation carries the real operation id"
+        );
+        assert!(
+            app.sessions.known[&session_id].is_preparing(),
+            "the session stays preparing until the preparation settles"
+        );
+
+        // Esc marks the submission cancelled; the next context poll that still
+        // sees `observed` routes session.compact.cancel by that exact id.
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CancelTurn {
+                session_id: session_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            pump_step(&mut process, &mut app)
+                .await
+                .expect("pump while routing the preparation cancel");
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        gate.store(true, Ordering::Relaxed);
+
+        // The cancelled preparation fails the deferred send, and the prompt
+        // returns to the composer instead of being lost.
+        pump_until(&mut process, &mut app, |a| {
+            let view = &a.sessions.known[&session_id];
+            view.live.is_none()
+                && !view.is_preparing()
+                && a.composer.content().contains("prepared turn")
+        })
+        .await
+        .unwrap();
+        assert!(
+            app.composer.content().contains("prepared turn"),
+            "a cancelled preparation must not lose the prompt"
+        );
+
+        let report = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(report.shutdown_ok && report.seen_eof && report.seen_exit);
+        process.terminate().await;
+    });
+}
