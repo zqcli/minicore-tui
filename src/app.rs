@@ -3228,28 +3228,6 @@ impl App {
         }
     }
 
-    fn read_context_command(&mut self) -> Vec<AppCommand> {
-        let Some(session_id) = self.sessions.active.clone() else {
-            self.notice(NoticeLevel::Info, "no active session to inspect");
-            return Vec::new();
-        };
-        if !self
-            .sessions
-            .known
-            .get(&session_id)
-            .is_some_and(|view| view.info.loaded)
-        {
-            self.notice(
-                NoticeLevel::Info,
-                "open the session before inspecting context",
-            );
-            return Vec::new();
-        }
-        self.arm_context_poll(&session_id, ContextQueryOwner::Explicit, true)
-            .into_iter()
-            .collect()
-    }
-
     /// `/clear` wipes only the local view of the active session and reloads
     /// its transcript from the beginning; the agent session is untouched
     /// and the command is refused while a turn is running (spec 23.3).
@@ -3558,21 +3536,6 @@ impl App {
         self.next_request_id
     }
 
-    /// Releases the read-only slot owned by a finished request. A key that was
-    /// asked to refresh while in flight runs once more, so a burst of requests
-    /// coalesces into at most one follow-up read (spec §5.3).
-    fn free_query_slot(&mut self, id: RequestId) {
-        let Some((key, refresh, ready)) = self.queries.on_query_finished(id) else {
-            return;
-        };
-        if let Some(ready) = ready {
-            self.pending_query_followups.push_back(ready);
-        }
-        if refresh {
-            self.pending_query_followups.push_back(key);
-        }
-    }
-
     /// Stores a coalesced retry for a request that was refused admission. The
     /// bounded map keeps at most one request per precise target.
     fn defer_request(
@@ -3653,108 +3616,6 @@ impl App {
     /// is retained as a retry intent by its caller, never silently dropped.
     fn deferred_admission_ok(&self) -> bool {
         self.deferred_pending() < MAX_DEFERRED_REQUESTS
-    }
-
-    fn drain_query_followups(&mut self, commands: &mut Vec<AppCommand>) {
-        while let Some(key) = self.pending_query_followups.pop_front() {
-            let command = match key {
-                crate::app::queries::QueryKey::History { session_id, .. } => self
-                    .sessions
-                    .known
-                    .contains_key(&session_id)
-                    .then(|| self.request_history(&session_id))
-                    .flatten(),
-                crate::app::queries::QueryKey::TurnResult {
-                    session_id,
-                    loop_id,
-                } => {
-                    let turn = TurnRef {
-                        session_id,
-                        loop_id,
-                    };
-                    self.turn_results
-                        .get(&turn)
-                        .filter(|window| !window.complete)
-                        .map(|window| (turn.clone(), window.cursor))
-                        .and_then(|(turn, cursor)| self.request_turn_result_page(turn, cursor))
-                }
-                crate::app::queries::QueryKey::Context { session_id, .. } => {
-                    self.request_session_context(&session_id)
-                }
-            };
-            if let Some(command) = command {
-                commands.push(command);
-            }
-        }
-    }
-
-    fn context_interval(&self, session_id: &SessionId) -> Duration {
-        if self.sessions.active.as_ref() == Some(session_id) {
-            Duration::from_millis(500)
-        } else {
-            Duration::from_secs(2)
-        }
-    }
-
-    fn context_query_pending(&self, session_id: &SessionId) -> bool {
-        self.pending_requests.values().any(|kind| {
-            matches!(kind, RequestKind::SessionContext { session_id: pending, .. } if pending == session_id)
-        })
-    }
-
-    fn arm_context_poll(
-        &mut self,
-        session_id: &SessionId,
-        owner: ContextQueryOwner,
-        immediate: bool,
-    ) -> Option<AppCommand> {
-        let owner = if matches!(&owner, ContextQueryOwner::Explicit) {
-            self.context_polls
-                .get(session_id)
-                .filter(|poll| !matches!(&poll.owner, ContextQueryOwner::Explicit))
-                .map_or(owner.clone(), |poll| poll.owner.clone())
-        } else {
-            owner
-        };
-        let due = if immediate {
-            self.instant_now()
-        } else {
-            self.instant_now()
-                .checked_add(self.context_interval(session_id))
-                .expect("context poll deadline is representable")
-        };
-        self.context_polls
-            .insert(session_id.clone(), ContextPoll { owner, due });
-        if immediate {
-            self.request_session_context(session_id)
-        } else {
-            None
-        }
-    }
-
-    fn poll_contexts(&mut self) -> Vec<AppCommand> {
-        let now = self.instant_now();
-        let due: Vec<SessionId> = self
-            .context_polls
-            .iter()
-            .filter_map(|(session_id, poll)| (poll.due <= now).then_some(session_id.clone()))
-            .collect();
-        let mut commands = Vec::new();
-        for session_id in due {
-            if self.context_query_pending(&session_id) {
-                continue;
-            }
-            if let Some(command) = self.request_session_context(&session_id) {
-                commands.push(command);
-            }
-            let interval = self.context_interval(&session_id);
-            if let Some(poll) = self.context_polls.get_mut(&session_id) {
-                poll.due = now
-                    .checked_add(interval)
-                    .expect("context poll deadline is representable");
-            }
-        }
-        commands
     }
 
     /// Issues the next `session.read` page for one session. The cursor is
@@ -4210,24 +4071,6 @@ impl App {
                 .insert(session_id.clone(), SessionView::new(session.clone()));
         }
         self.on_session_response(session_id, response)
-    }
-
-    fn reschedule_context_poll(&mut self, session_id: &SessionId, owner: &ContextQueryOwner) {
-        if matches!(owner, ContextQueryOwner::Explicit) {
-            self.context_polls.remove(session_id);
-            return;
-        }
-        let due = self
-            .instant_now()
-            .checked_add(self.context_interval(session_id))
-            .expect("context poll deadline is representable");
-        self.context_polls.insert(
-            session_id.clone(),
-            ContextPoll {
-                owner: owner.clone(),
-                due,
-            },
-        );
     }
 
     fn on_rpc_event(&mut self, event: RpcEvent) -> Vec<AppCommand> {

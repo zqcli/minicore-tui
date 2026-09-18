@@ -153,14 +153,18 @@ Landed and verified (each commit was tested remotely on Rust 1.85):
    create/open/close/delete/rename, the state/presentation/context reads and
    responses, and the catalog generation that owns `session.list`) moved into
    `pub(super)` methods in `app/session.rs`.
-10. This commit — the turn state machine (47 methods, ~2.4k lines:
-   submission, the bounded steer queue, deferred `turn.wait`/`turn.result`
-   slots, cancellation, manual compaction and the local clipboard/stderr
-   jobs) moved into `pub(super)` methods in `app/turn.rs`; the
-   source-scanning baseline tests now read all app module files as one
-   source so they keep checking the same invariants. `app.rs` is now 10.1k
-   lines and keeps the owner, the event router, navigation and the small
-   clocks.
+10. The turn state machine (47 methods, ~2.4k lines: submission, the bounded
+   steer queue, deferred `turn.wait`/`turn.result` slots, cancellation,
+   manual compaction and the local clipboard/stderr jobs) moved into
+   `pub(super)` methods in `app/turn.rs`; the source-scanning baseline tests
+   now read all app module files as one source so they keep checking the same
+   invariants.
+11. This commit — the query-slot/context-poll group (`read_context_command`,
+   `free_query_slot`, `drain_query_followups`, `context_interval`,
+   `context_query_pending`, `arm_context_poll`, `poll_contexts`,
+   `reschedule_context_poll`) moved into `pub(super)` methods in
+   `app/queries.rs`, next to the `QuerySlots`/`QueryKey` types. `app.rs` is
+   now 10.0k lines; all four named modules exist.
 
 Verified evidence at `c91a686`: `fmt` clean, `620 passed / 0 failed / 26
 ignored`, `clippy -D warnings` clean, tree md5
@@ -170,11 +174,12 @@ ignored`, `clippy -D warnings` clean, tree md5
 
 Still open in C1 (do not claim C1 complete):
 
-- `src/app.rs` (10.1k lines) is partially split: the read/result chain
-  (`app/history.rs`), the session lifecycle (`app/session.rs`) and the turn
-  state machine (`app/turn.rs`) live as real `pub(super)` methods. The
-  query-slot/context-poll group is only half-out (`app/queries.rs` owns the
-  types) and the remaining reducers still sit in `app.rs`.
+- The four named modules now exist and own their method groups
+  (`app/history.rs`, `app/session.rs`, `app/turn.rs`, `app/queries.rs`), and
+  `app.rs` shrank from 15.8k to 10.0k lines. The remainder is the `App`
+  owner/fields, `update` and the event router, navigation/selector logic and
+  the small clocks by design; a further split of the remaining UI reducers is
+  optional follow-up, not a C1 blocker.
 - No real-Agent automatic-preparation E2E scenario has been added; the 21
   scenarios cover manual compaction but not `session.context.current_operation`
   preparation-on-submit.

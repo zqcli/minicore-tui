@@ -257,7 +257,7 @@ state convergence (`d47d837`), the owned-job/bounded-retry slice (`3d159a7`),
 the confirmation model (`f440741`, `b3eeda8`), the reload narrowing
 (`fe59a49`), catalog generations (`77c0ebf`), the compaction E2E (`c91a686`)
 and the module splits into `app/history.rs` (read/result chain),
-`app/session.rs` (session lifecycle) and `app/turn.rs` (turn state machine)
-are landed and verified. The remaining `app/queries.rs` method group and the
-automatic-preparation E2E scenario are **not** landed; the acceptance matrix
-lists them explicitly so no partial claim is made.
+`app/session.rs` (session lifecycle), `app/turn.rs` (turn state machine) and
+`app/queries.rs` (query slots/context polling) are landed and verified. The
+automatic-preparation E2E scenario is **not** landed; the acceptance matrix
+lists it explicitly so no partial claim is made.
