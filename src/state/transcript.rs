@@ -73,7 +73,7 @@ pub struct ToolBlock {
     pub request_index: u32,
     pub tool_call_id: String,
     pub name: String,
-    pub result: Option<String>,
+    pub result: Option<Arc<str>>,
     pub outcome: Option<ToolOutcomeWire>,
     pub live_status: Option<ToolStatus>,
     pub progress: Option<String>,

@@ -18,10 +18,11 @@ use serde_json::{Value, json};
 pub mod read;
 
 pub use read::{
-    Assembled, ChunkAssembler, MAX_AUTO_ITEM_BYTES, RawHistoryItem, ReadChunk, ReadCursor,
-    ReadError, ReadSessionResult, ReadTurnSummary, RuntimeAssistantItem, RuntimeAssistantPart,
-    RuntimeItem, RuntimeSummaryItem, RuntimeToolOutput, RuntimeToolResultItem, RuntimeUserInput,
-    RuntimeUserItem, RuntimeUserKind, SnapshotPin, TurnAvailability, TurnResultPage,
+    Assembled, ChunkAssembler, EncodedHistoryItem, MAX_AUTO_ITEM_BYTES, RawHistoryItem, ReadChunk,
+    ReadCursor, ReadError, ReadSessionResult, ReadTurnSummary, RuntimeAssistantItem,
+    RuntimeAssistantPart, RuntimeItem, RuntimeSummaryItem, RuntimeToolOutput,
+    RuntimeToolResultItem, RuntimeUserInput, RuntimeUserItem, RuntimeUserKind, SnapshotPin,
+    TurnAvailability, TurnResultPage,
 };
 
 pub const JSONRPC_VERSION: &str = "2.0";

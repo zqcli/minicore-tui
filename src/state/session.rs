@@ -7,7 +7,7 @@ use crate::protocol::{
     CompactResultWire, Reasoning, SessionContextWire, SessionInfo, SessionPresentationWire,
     SessionStateWire, TurnPersistenceWire, TurnRef, UsageWire,
 };
-use crate::state::tool::{ToolKey, ToolPresentationState};
+use crate::state::tool::{ToolFacts, ToolKey};
 use crate::state::transcript::{TranscriptBlock, TranscriptState};
 use crate::state::turn::{LiveLoop, UnsavedLoop};
 use crate::state::view::{FoldOverride, ReasoningKey};
@@ -272,7 +272,7 @@ pub struct SessionView {
     /// Live/history bounded tool display data keyed by the full tool identity.
     /// COW map whose values remain individually shared. Layout snapshots can
     /// retain the table without cloning large tool result/display strings.
-    pub tool_presentations: Arc<HashMap<ToolKey, Arc<ToolPresentationState>>>,
+    pub tool_presentations: Arc<HashMap<ToolKey, Arc<ToolFacts>>>,
     /// Stable per-section fold choices. These are local UI state only.
     pub tool_folds: HashMap<ToolKey, FoldOverride>,
     pub reasoning_folds: HashMap<ReasoningKey, FoldOverride>,

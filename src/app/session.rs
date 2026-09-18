@@ -1619,6 +1619,13 @@ impl App {
             .as_ref()
             .and_then(|turn| self.retained_results.get(turn))
             .cloned();
+        self.invalidate_decode_for_session(&session_id);
+        // A turn-result window may still own encoded items from the retired
+        // session epoch. Retain the authoritative summary, but force any
+        // later read-back to create a fresh window/read chain instead of
+        // re-identifying old bytes under the new epoch.
+        self.turn_results
+            .retain(|turn, _| turn.session_id != session_id);
         if let Some(view) = self.sessions.known.get_mut(&session_id) {
             // Rebuild from history offset 0; never compare the new total with
             // the old local projection.

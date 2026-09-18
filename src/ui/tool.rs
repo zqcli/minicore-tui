@@ -442,7 +442,7 @@ mod tests {
             request_index: 0,
             tool_call_id: "c".to_owned(),
             name: "read".to_owned(),
-            result: Some(payload.clone()),
+            result: Some(payload.clone().into()),
             outcome: Some(ToolOutcomeWire::Success),
             live_status: None,
             progress: None,
@@ -472,7 +472,7 @@ mod tests {
         // A one-line payload wrapped across cards must still reproduce exactly.
         let last = payload.trim_end_matches('\n').rsplit('\n').next().unwrap();
         let block_long = ToolBlock {
-            result: Some(last.to_owned()),
+            result: Some(last.to_owned().into()),
             ..block.clone()
         };
         let lines_long = durable(&theme, &block_long, 80, false);

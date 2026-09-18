@@ -180,6 +180,7 @@ async fn run_fullscreen(
     let mut app = App::with_cli_prefs(workspace, prefs);
     app.update(AppEvent::SetTheme(opts.theme));
     app.enable_async_layout();
+    app.enable_async_decode();
     // `--debug` owns one writer thread with a bounded queue; the UI path only
     // enqueues a line (spec 13/§5.5). Dropping it at the end joins the writer.
     let debug_log = DebugLog::new(opts.debug);
@@ -544,6 +545,15 @@ fn send_class(request: &OutgoingRequest) -> SendClass {
 /// RPC admission is synchronous and never awaits queue capacity; the
 /// clipboard is started as an owned job. This function therefore never
 /// blocks the UI loop on a full queue or a slow helper (spec §5.1/§5.2/§5.5).
+fn schedule_pending_decode(app: &mut App, jobs: &mut LocalJobs) {
+    let Some(request) = app.pending_decode_request() else {
+        return;
+    };
+    if jobs.try_schedule_decode(request) {
+        app.mark_decode_scheduled();
+    }
+}
+
 async fn run_commands(
     process: &mut RpcProcess,
     app: &mut App,
@@ -551,6 +561,7 @@ async fn run_commands(
     commands: Vec<AppCommand>,
     debug_log: &DebugLog,
 ) -> io::Result<bool> {
+    schedule_pending_decode(app, jobs);
     let mut queue: VecDeque<AppCommand> = commands.into();
     while let Some(command) = queue.pop_front() {
         match command {
@@ -601,7 +612,9 @@ async fn run_commands(
             }
             AppCommand::Exit => return Ok(true),
         }
+        schedule_pending_decode(app, jobs);
     }
+    schedule_pending_decode(app, jobs);
     Ok(false)
 }
 

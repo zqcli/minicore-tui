@@ -24,18 +24,75 @@ impl ToolKey {
     }
 }
 
+/// The single semantic owner for one tool call. The presentation map owns
+/// these facts; live and durable cards retain the shared result `Arc<str>`
+/// projected from them instead of copying the body. `status`/`outcome` are
+/// monotonic: a late `started` event cannot move a terminal fact back to
+/// running.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolPresentationState {
+pub struct ToolFacts {
     pub display: ToolDisplayWire,
     pub result: Option<Arc<str>>,
     pub result_truncated: bool,
+    pub status: ToolStatus,
+    pub outcome: Option<crate::protocol::ToolOutcomeWire>,
 }
 
-impl ToolPresentationState {
+/// Compatibility name retained for existing render/source APIs. The map in
+/// `SessionView` is now explicitly a `ToolKey -> ToolFacts` owner.
+pub type ToolPresentationState = ToolFacts;
+
+impl ToolFacts {
     pub fn retained_bytes(&self) -> usize {
         self.display.detail.len()
             + self.display.expanded_input.as_ref().map_or(0, String::len)
             + self.result.as_ref().map_or(0, |result| result.len())
+    }
+
+    pub fn accept_started(&mut self, name: &str) {
+        self.display.detail = name.to_owned();
+        if matches!(self.status, ToolStatus::Pending | ToolStatus::Running) {
+            self.status = ToolStatus::Running;
+        }
+    }
+
+    pub fn accept_finished(
+        &mut self,
+        outcome: crate::protocol::ToolOutcomeWire,
+        result: Option<Arc<str>>,
+        truncated: bool,
+    ) {
+        let same_terminal = self.is_terminal() && self.outcome == Some(outcome);
+        if !self.is_terminal() {
+            self.status = match outcome {
+                crate::protocol::ToolOutcomeWire::Success
+                | crate::protocol::ToolOutcomeWire::InputProvided => ToolStatus::Succeeded,
+                crate::protocol::ToolOutcomeWire::Failed
+                | crate::protocol::ToolOutcomeWire::Unknown => ToolStatus::Failed,
+                crate::protocol::ToolOutcomeWire::Denied => ToolStatus::Denied,
+                crate::protocol::ToolOutcomeWire::Cancelled => ToolStatus::Cancelled,
+            };
+            self.outcome = Some(outcome);
+        }
+        if result.is_some() && (self.result.is_none() || same_terminal) {
+            self.result = result;
+        }
+        if self.display.hidden_line_count.is_none() {
+            self.display.hidden_line_count = self
+                .result
+                .as_deref()
+                .filter(|text| !text.is_empty())
+                .map(|text| text.split('\n').count());
+        }
+        self.result_truncated |= truncated;
+        self.display.truncated |= truncated;
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self.status,
+            ToolStatus::Succeeded | ToolStatus::Failed | ToolStatus::Denied | ToolStatus::Cancelled
+        )
     }
 
     pub fn truncate_to_bytes(&mut self, budget: usize) {
@@ -90,7 +147,60 @@ pub struct LiveTool {
     /// Agent-owned bounded display data, merged by full loop/request/call
     /// identity and never used to execute a tool.
     pub display: Option<ToolDisplayWire>,
-    pub result: Option<String>,
+    pub result: Option<Arc<str>>,
     pub result_truncated: bool,
     pub expanded: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::ToolOutcomeWire;
+
+    fn facts() -> ToolFacts {
+        ToolFacts {
+            display: ToolDisplayWire {
+                detail: "tool".to_owned(),
+                expanded_input: None,
+                input_line_count: None,
+                hidden_line_count: None,
+                truncated: false,
+            },
+            result: None,
+            result_truncated: false,
+            status: ToolStatus::Pending,
+            outcome: None,
+        }
+    }
+
+    #[test]
+    fn terminal_facts_ignore_late_started_and_conflicting_finished_events() {
+        let mut facts = facts();
+        let first: Arc<str> = Arc::from("first");
+        let conflicting: Arc<str> = Arc::from("conflicting");
+        facts.accept_finished(ToolOutcomeWire::Success, Some(first.clone()), false);
+        facts.accept_started("late-name");
+        facts.accept_finished(ToolOutcomeWire::Failed, Some(conflicting), true);
+
+        assert_eq!(facts.status, ToolStatus::Succeeded);
+        assert_eq!(facts.outcome, Some(ToolOutcomeWire::Success));
+        assert!(Arc::ptr_eq(facts.result.as_ref().unwrap(), &first));
+        assert!(facts.result_truncated);
+        assert!(facts.display.truncated);
+        assert_eq!(facts.display.detail, "late-name");
+    }
+
+    #[test]
+    fn finished_facts_reuse_an_existing_result_owner() {
+        let mut facts = facts();
+        let result: Arc<str> = Arc::from("shared");
+        facts.result = Some(result.clone());
+        facts.accept_finished(
+            ToolOutcomeWire::Success,
+            Some(Arc::from("duplicate")),
+            false,
+        );
+
+        assert!(Arc::ptr_eq(facts.result.as_ref().unwrap(), &result));
+    }
 }

@@ -8,6 +8,8 @@
 //! Stage B is the only main-history migration; the legacy DTO remains only for
 //! compatibility fixtures/diagnostics and is not used by the app read path.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{LoopOutcomeWire, SessionInfo, UsageWire};
@@ -111,6 +113,22 @@ pub struct ReadTurnSummary {
     pub tool_rounds: u16,
     pub final_config_revision: u64,
     pub completed_at: String,
+}
+
+/// One complete canonical item body emitted by [`ChunkAssembler`]. The
+/// assembler never deserializes item JSON on the App thread; the shared string
+/// is submitted to the single bounded decode worker and is dropped after that
+/// hand-off.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EncodedHistoryItem {
+    pub index: usize,
+    pub data: Arc<str>,
+}
+
+impl EncodedHistoryItem {
+    pub fn bytes(&self) -> usize {
+        self.data.len()
+    }
 }
 
 /// One decoded raw Runtime `HistoryItem` plus its optional acceptance time.
@@ -286,16 +304,16 @@ pub struct RuntimeSummaryItem {
     pub content: String,
 }
 
-/// The outcome of feeding one chunk to the assembler. `Item` is deliberately
-/// much larger than `Pending`: `Pending` is returned mid-item and allocating a
-/// box for every chunk would cost more than the size difference saves.
+/// The outcome of feeding one chunk to the assembler. `EncodedItem` is
+/// deliberately separate from a decoded Runtime value: the App loop only
+/// validates/chunks and the bounded worker owns JSON deserialization.
 #[derive(Clone, Debug, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum Assembled {
     /// The item is still incomplete; feed the next chunk.
     Pending,
-    /// One complete, contiguous item was decoded.
-    Item { index: usize, item: RawHistoryItem },
+    /// One complete, contiguous canonical item is ready for the decode worker.
+    EncodedItem { item: EncodedHistoryItem },
     /// The item exceeds [`MAX_AUTO_ITEM_BYTES`]. Its bytes were discarded; the
     /// caller shows a visible placeholder and can re-read it on demand. It is
     /// never reported as a complete item.
@@ -377,9 +395,10 @@ pub enum ReadError {
     CursorOffsetMismatch { expected: usize, found: usize },
 }
 
-/// Reassembles raw item chunks into Runtime items (spec §6.2). It buffers at
-/// most one incomplete item, advances only by real `data.as_bytes().len()`,
-/// and never preallocates from the declared `total_bytes`.
+/// Reassembles raw item chunks into one canonical encoded item (spec §6.2).
+/// It buffers at most one incomplete item, advances only by real
+/// `data.as_bytes().len()`, and never preallocates from the declared
+/// `total_bytes`. JSON deserialization happens in the owned decode worker.
 #[derive(Debug, Default)]
 pub struct ChunkAssembler {
     index: usize,
@@ -541,11 +560,12 @@ impl ChunkAssembler {
                 delivered: self.next_offset,
             });
         }
-        let index = self.index;
-        let item = decode_item(&self.buffer)
-            .map_err(|detail| ReadError::MalformedItem { index, detail })?;
+        let item = EncodedHistoryItem {
+            index: self.index,
+            data: Arc::<str>::from(self.buffer.as_str()),
+        };
         self.discard();
-        Ok(Assembled::Item { index, item })
+        Ok(Assembled::EncodedItem { item })
     }
 
     fn begin(&mut self, index: usize, total_bytes: usize) {
@@ -568,7 +588,10 @@ struct Envelope {
     timestamp: Option<String>,
 }
 
-fn decode_item(raw: &str) -> Result<RawHistoryItem, String> {
+/// Decodes one complete item body. This function is called by the owned decode
+/// worker in production; synchronous callers are limited to explicit fixture /
+/// compatibility paths.
+pub fn decode_item(raw: &str) -> Result<RawHistoryItem, String> {
     let envelope: Envelope = serde_json::from_str(raw).map_err(|error| error.to_string())?;
     Ok(RawHistoryItem {
         item: envelope.item,

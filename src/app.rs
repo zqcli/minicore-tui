@@ -13,6 +13,7 @@ use crossterm::event::Event as CrosstermEvent;
 
 use crate::command::{AppCommand, CommandIssue, LocalCommand, is_slash_command, parse_command};
 use crate::event::{AppEvent, JobOutcome, RpcEvent};
+use crate::jobs::{DecodeIdentity, DecodeRequest};
 use crate::keymap::{self, Action, EditorCursor};
 use crate::protocol::{
     AgentEventWire, EventMetaWire, IncomingFrame, METHOD_LIST_MODELS, METHOD_LIST_PROFILES,
@@ -417,6 +418,12 @@ pub struct App {
     /// Production rendering never rebuilds a durable layout synchronously;
     /// the main loop requests it from the single owned worker instead.
     async_layout: bool,
+    /// Production enables this together with the owned LocalJobs decode
+    /// worker. The false default is an explicit deterministic compatibility /
+    /// fixture path; it is never used by `main`.
+    async_decode: bool,
+    pending_decode: Option<DecodeRequest>,
+    decode_in_flight: Option<DecodeIdentity>,
     layout_pending: Option<DurableLayoutIdentity>,
     layout_partial: Option<(DurableLayoutIdentity, Arc<ConversationLayout>)>,
     next_layout_generation: u64,
@@ -484,6 +491,7 @@ pub struct App {
     next_draft_id: u64,
     next_steer_id: u64,
     next_reload_generation: u64,
+    next_read_chain: u64,
     /// Lifecycle responses crossing a reload boundary must start from fresh
     /// session state authority; the existing history window is not staged or
     /// replaced by configuration reload.
@@ -608,6 +616,9 @@ impl App {
             editor_selection: None,
             prepared_conversation: None,
             async_layout: false,
+            async_decode: false,
+            pending_decode: None,
+            decode_in_flight: None,
             layout_pending: None,
             layout_partial: None,
             next_layout_generation: 0,
@@ -639,6 +650,7 @@ impl App {
             next_draft_id: 0,
             next_steer_id: 0,
             next_reload_generation: 0,
+            next_read_chain: 0,
             bootstrap: BootstrapProgress::default(),
             reload: None,
             blocked_notice: false,
@@ -1114,6 +1126,7 @@ impl App {
                 self.install_durable_layout(result);
                 Vec::new()
             }
+            AppEvent::HistoryItemDecoded(outcome) => self.on_history_item_decoded(*outcome),
         };
         if header_visible_before != crate::ui::header::visible(self) {
             self.prepared_conversation = None;
@@ -1216,6 +1229,32 @@ impl App {
 
     pub fn async_layout_enabled(&self) -> bool {
         self.async_layout
+    }
+
+    /// Enables the production serialized JSON decode hand-off. The main loop
+    /// calls this before it starts consuming Agent frames; tests may leave it
+    /// disabled and use the deterministic synchronous compatibility drain.
+    pub fn enable_async_decode(&mut self) {
+        self.async_decode = true;
+        self.pending_decode = None;
+        self.decode_in_flight = None;
+    }
+
+    pub fn async_decode_enabled(&self) -> bool {
+        self.async_decode
+    }
+
+    /// The main loop passes the one retained encoded item to `LocalJobs`.
+    /// Cloning this handle only bumps the `Arc<str>` count; it never copies
+    /// the JSON body.
+    pub fn pending_decode_request(&self) -> Option<DecodeRequest> {
+        self.pending_decode.clone()
+    }
+
+    /// Marks the pending request as owned by the decode worker after its
+    /// bounded queue accepts it.
+    pub fn mark_decode_scheduled(&mut self) {
+        self.pending_decode = None;
     }
 
     pub fn layout_request(&mut self, width: u16) -> Option<DurableLayoutRequest> {
@@ -5034,15 +5073,31 @@ impl App {
         if request_missing {
             view.event_gap = true;
         }
-        let presentation = view
-            .tool_presentations
-            .get(&ToolKey::new(
-                &turn.session_id,
-                &turn.loop_id,
-                request_index,
-                tool_call_id,
-            ))
-            .cloned();
+        let key = ToolKey::new(&turn.session_id, &turn.loop_id, request_index, tool_call_id);
+        {
+            let presentations = std::sync::Arc::make_mut(&mut view.tool_presentations);
+            if let Some(facts) = presentations.get_mut(&key) {
+                std::sync::Arc::make_mut(facts).accept_started(tool_name);
+            } else {
+                presentations.insert(
+                    key.clone(),
+                    std::sync::Arc::new(ToolPresentationState {
+                        display: ToolDisplayWire {
+                            detail: tool_name.to_owned(),
+                            expanded_input: None,
+                            input_line_count: None,
+                            hidden_line_count: None,
+                            truncated: false,
+                        },
+                        result: None,
+                        result_truncated: false,
+                        status: ToolStatus::Running,
+                        outcome: None,
+                    }),
+                );
+            }
+        }
+        let presentation = view.tool_presentations.get(&key).cloned();
         let live = view.live.as_mut().expect("live turn was bound");
         live.event_gap |= request_missing;
         let request = live.ensure_request_mut(request_index, 0, String::new(), Reasoning::Auto);
@@ -5062,25 +5117,25 @@ impl App {
         {
             tool.name = tool_name.to_owned();
             if let Some(presentation) = &presentation {
+                tool.status = presentation.status;
                 tool.display = Some(presentation.display.clone());
                 if tool.result.is_none() {
-                    tool.result = presentation
-                        .result
-                        .as_ref()
-                        .map(|result| result.to_string());
-                    tool.result_truncated = presentation.result_truncated;
+                    tool.result = presentation.result.as_ref().cloned();
                 }
+                tool.result_truncated |= presentation.result_truncated;
             }
         } else {
             request.tools.push(LiveTool {
                 tool_call_id: tool_call_id.to_owned(),
                 name: tool_name.to_owned(),
-                status: ToolStatus::Pending,
+                status: presentation
+                    .as_ref()
+                    .map_or(ToolStatus::Running, |state| state.status),
                 progress: None,
                 display: presentation.as_ref().map(|state| state.display.clone()),
                 result: presentation
                     .as_ref()
-                    .and_then(|state| state.result.as_ref().map(|result| result.to_string())),
+                    .and_then(|state| state.result.as_ref().cloned()),
                 result_truncated: presentation
                     .as_ref()
                     .is_some_and(|state| state.result_truncated),
@@ -5177,6 +5232,9 @@ impl App {
         if !Self::bind_live_turn(view, turn) {
             return;
         }
+        let shared_result = content
+            .as_ref()
+            .map(|result| Arc::<str>::from(result.as_str()));
         let request_missing = view.live.as_ref().is_some_and(|live| {
             !live
                 .requests
@@ -5218,7 +5276,7 @@ impl App {
             .find(|tool| tool.tool_call_id == tool_call_id)
         {
             tool.status = tool_outcome_status(outcome);
-            tool.result = content.clone();
+            tool.result = shared_result.clone();
             tool.result_truncated = content_truncated;
         } else {
             request.tools.push(LiveTool {
@@ -5227,7 +5285,7 @@ impl App {
                 status: tool_outcome_status(outcome),
                 progress: None,
                 display: None,
-                result: content.clone(),
+                result: shared_result.clone(),
                 result_truncated: content_truncated,
                 expanded: false,
             });
@@ -5256,11 +5314,7 @@ impl App {
             // input+result hidden count. If it arrived before ToolFinished,
             // leave that count intact; the later result event only fills the
             // result side of the state.
-            presentation.result = content
-                .as_ref()
-                .map(|result| Arc::<str>::from(result.as_str()));
-            presentation.result_truncated = content_truncated;
-            presentation.display.truncated |= content_truncated;
+            presentation.accept_finished(outcome, shared_result.clone(), content_truncated);
         } else {
             // Presentation is best effort. A result without its companion
             // event still gets a safe result-only card instead of losing the
@@ -5270,7 +5324,7 @@ impl App {
                 .filter(|text| !text.is_empty())
                 .map(|text| text.split('\n').count());
             presentations.insert(
-                key,
+                key.clone(),
                 std::sync::Arc::new(ToolPresentationState {
                     display: ToolDisplayWire {
                         detail: fallback_name,
@@ -5279,12 +5333,35 @@ impl App {
                         hidden_line_count,
                         truncated: content_truncated,
                     },
-                    result: content
-                        .as_ref()
-                        .map(|result| Arc::<str>::from(result.as_str())),
+                    result: shared_result,
                     result_truncated: content_truncated,
+                    status: tool_outcome_status(outcome),
+                    outcome: Some(outcome),
                 }),
             );
+        }
+        let accepted = view
+            .tool_presentations
+            .get(&key)
+            .map(|facts| (facts.status, facts.result.clone(), facts.result_truncated));
+        if let Some(live) = view.live.as_mut() {
+            if let Some(request) = live
+                .requests
+                .iter_mut()
+                .find(|request| request.request_index == request_index)
+            {
+                if let Some(tool) = request
+                    .tools
+                    .iter_mut()
+                    .find(|tool| tool.tool_call_id == tool_call_id)
+                {
+                    if let Some((status, result, truncated)) = &accepted {
+                        tool.status = *status;
+                        tool.result = result.clone();
+                        tool.result_truncated = *truncated;
+                    }
+                }
+            }
         }
         if view.transcript.blocks.iter().any(|block| {
             matches!(
@@ -5332,10 +5409,12 @@ impl App {
                 display: display.clone(),
                 result: existing_result
                     .as_ref()
-                    .and_then(|(result, _)| result.as_deref().map(Arc::<str>::from)),
+                    .and_then(|(result, _)| result.clone()),
                 result_truncated: existing_result
                     .as_ref()
                     .is_some_and(|(_, truncated)| *truncated),
+                status: ToolStatus::Pending,
+                outcome: None,
             })
         });
         let state = std::sync::Arc::make_mut(state);
@@ -5650,6 +5729,56 @@ fn install_history_item(
                 result.outcome.clone(),
             ))
             .unwrap_or(ToolOutcomeWire::Unknown);
+            let tool_key = ToolKey::new(
+                &view.info.session_id,
+                &result.loop_id,
+                result.request_index,
+                &result.call_id,
+            );
+            let durable_result = Arc::<str>::from(result.output.content.as_str());
+            let (shared_result, accepted_outcome, accepted_status, accepted_truncated) = {
+                let presentations = std::sync::Arc::make_mut(&mut view.tool_presentations);
+                let state = presentations.entry(tool_key.clone()).or_insert_with(|| {
+                    std::sync::Arc::new(ToolPresentationState {
+                        display: ToolDisplayWire {
+                            detail: result.tool_name.clone(),
+                            expanded_input: None,
+                            input_line_count: None,
+                            hidden_line_count: None,
+                            truncated: false,
+                        },
+                        result: None,
+                        result_truncated: false,
+                        status: ToolStatus::Pending,
+                        outcome: None,
+                    })
+                });
+                let state = std::sync::Arc::make_mut(state);
+                state.accept_finished(outcome, Some(durable_result), false);
+                (
+                    state.result.clone().expect("durable tool result owner"),
+                    state.outcome,
+                    state.status,
+                    state.result_truncated,
+                )
+            };
+            if let Some(live) = view.live.as_mut() {
+                if let Some(request) = live
+                    .requests
+                    .iter_mut()
+                    .find(|request| request.request_index == result.request_index)
+                {
+                    if let Some(tool) = request
+                        .tools
+                        .iter_mut()
+                        .find(|tool| tool.tool_call_id == result.call_id)
+                    {
+                        tool.status = accepted_status;
+                        tool.result = Some(Arc::clone(&shared_result));
+                        tool.result_truncated = accepted_truncated;
+                    }
+                }
+            }
             let patched =
                 view.transcript
                     .blocks_mut()
@@ -5672,8 +5801,8 @@ fn install_history_item(
                     request_index: result.request_index,
                     tool_call_id: result.call_id.clone(),
                     name: result.tool_name.clone(),
-                    result: Some(result.output.content.clone()),
-                    outcome: Some(outcome),
+                    result: Some(Arc::clone(&shared_result)),
+                    outcome: accepted_outcome,
                     live_status: None,
                     progress: None,
                     expanded: view
@@ -5714,8 +5843,8 @@ fn install_history_item(
                     request_index: result.request_index,
                     tool_call_id: result.call_id.clone(),
                     name: result.tool_name.clone(),
-                    result: Some(result.output.content.clone()),
-                    outcome: Some(outcome),
+                    result: Some(Arc::clone(&shared_result)),
+                    outcome: accepted_outcome,
                     live_status: None,
                     progress: None,
                     expanded: view

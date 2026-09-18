@@ -571,7 +571,7 @@ fn live_tool_fold_survives_presentation_finish_wait_and_history_replacement() {
             request_index: 0,
             tool_call_id: "c1".to_owned(),
             name: "read".to_owned(),
-            result: Some("history result".to_owned()),
+            result: Some("history result".to_owned().into()),
             outcome: Some(crate::protocol::ToolOutcomeWire::Success),
             live_status: Some(crate::state::tool::ToolStatus::Succeeded),
             progress: None,

@@ -163,7 +163,7 @@ impl LiveRequest {
         for tool in &self.tools {
             bytes += tool.tool_call_id.len() + tool.name.len();
             bytes += tool.progress.as_ref().map_or(0, String::len);
-            bytes += tool.result.as_ref().map_or(0, String::len);
+            bytes += tool.result.as_ref().map_or(0, |result| result.len());
             if let Some(display) = &tool.display {
                 bytes += display.detail.len();
                 bytes += display.expanded_input.as_ref().map_or(0, String::len);
@@ -191,8 +191,16 @@ impl LiveRequest {
                 trim_string(progress, budget, used);
             }
             if let Some(result) = &mut tool.result {
-                trim_string(result, budget, used);
-                tool.result_truncated = true;
+                let available = budget.saturating_sub(*used);
+                if result.len() > available {
+                    let mut end = available;
+                    while end > 0 && !result.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    *result = std::sync::Arc::<str>::from(&result[..end]);
+                    tool.result_truncated = true;
+                }
+                *used = (*used).saturating_add(result.len());
             }
             if let Some(display) = &mut tool.display {
                 trim_string(&mut display.detail, budget, used);

@@ -948,13 +948,14 @@ fn make_section_layout(
             (text.clone(), section_copy_is_decorative(&range, row, &text))
         })
         .collect::<Vec<_>>();
-    let source: Arc<str> = row_texts
-        .iter()
-        .map(|(text, _)| text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n")
-        .into();
-    let mut offset = 0;
+    let source: Arc<str> = source_hint.map(Arc::<str>::from).unwrap_or_else(|| {
+        row_texts
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+            .into()
+    });
     let last_content_row = row_texts
         .iter()
         .enumerate()
@@ -970,33 +971,36 @@ fn make_section_layout(
             .saturating_sub(range.content_columns.start),
         last_content_row,
     );
+    let logical_ranges = source_ranges(source_hint, &row_texts, &hard_break_rows);
+    let copy_source: Arc<str> = row_texts
+        .iter()
+        .map(|(text, _)| text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .into();
+    let copy_ranges_in_source = source_ranges(None, &row_texts, &hard_break_rows);
     let copy_ranges: Vec<CopyRange> = row_texts
         .into_iter()
         .enumerate()
-        .map(|(row, (text, decorative))| {
-            let start = offset;
-            offset += text.len();
-            let end = offset;
-            offset += 1;
-            CopyRange {
-                row,
-                columns: range.content_columns.clone(),
-                source: Arc::clone(&source),
-                source_range: start..end,
-                hard_break_after: hard_break_rows.get(row).copied().unwrap_or(false),
-                decorative,
-            }
+        .map(|(row, (_text, decorative))| CopyRange {
+            row,
+            columns: range.content_columns.clone(),
+            source: Arc::clone(&copy_source),
+            source_range: copy_ranges_in_source.get(row).cloned().unwrap_or(0..0),
+            hard_break_after: hard_break_rows.get(row).copied().unwrap_or(false),
+            decorative,
         })
         .collect();
     let source_map = Arc::new(SourceMap {
         source: Arc::clone(&source),
         rows: Arc::new(
-            copy_ranges
-                .iter()
-                .map(|copy| SourceRow {
-                    source_range: copy.source_range.clone(),
-                    hard_break_after: copy.hard_break_after,
-                    decorative: copy.decorative,
+            logical_ranges
+                .into_iter()
+                .enumerate()
+                .map(|(row, source_range)| SourceRow {
+                    source_range,
+                    hard_break_after: hard_break_rows.get(row).copied().unwrap_or(false),
+                    decorative: copy_ranges.get(row).is_none_or(|copy| copy.decorative),
                 })
                 .collect(),
         ),
@@ -1013,6 +1017,61 @@ fn make_section_layout(
         collapsible,
         folded,
     }))
+}
+
+fn source_ranges(
+    source_hint: Option<&str>,
+    rows: &[(String, bool)],
+    hard_breaks: &[bool],
+) -> Vec<Range<usize>> {
+    let Some(source) = source_hint else {
+        let mut offset = 0usize;
+        return rows
+            .iter()
+            .map(|(text, _)| {
+                let range = offset..offset.saturating_add(text.len());
+                offset = offset.saturating_add(text.len()).saturating_add(1);
+                range
+            })
+            .collect();
+    };
+    let logical_lines: Vec<(usize, usize, usize)> = source
+        .split_inclusive('\n')
+        .scan(0usize, |offset, line| {
+            let start = *offset;
+            *offset = offset.saturating_add(line.len());
+            let end = start + line.trim_end_matches('\n').len();
+            Some((start, end, *offset))
+        })
+        .collect();
+    let mut line = 0usize;
+    let mut cursor = logical_lines.first().map_or(0, |entry| entry.0);
+    rows.iter()
+        .enumerate()
+        .map(|(row, (text, decorative))| {
+            if *decorative || text.is_empty() {
+                return cursor..cursor;
+            }
+            let Some((line_start, line_end, next_line)) = logical_lines.get(line).copied() else {
+                return source.len()..source.len();
+            };
+            cursor = cursor.max(line_start).min(line_end);
+            let start = cursor;
+            let wanted = text.len().min(line_end.saturating_sub(cursor));
+            let mut end = cursor.saturating_add(wanted);
+            while end > cursor && !source.is_char_boundary(end) {
+                end -= 1;
+            }
+            if hard_breaks.get(row).copied().unwrap_or(false) {
+                end = line_end;
+                line = line.saturating_add(1);
+                cursor = next_line;
+            } else {
+                cursor = end;
+            }
+            start..end
+        })
+        .collect()
 }
 
 fn hard_break_rows(
@@ -1290,7 +1349,10 @@ fn durable_block_lines<V: DurableLayoutSource>(
                 crate::state::transcript::AssistantPart::ToolCall(call) => call.name.len(),
             })
             .sum(),
-        TranscriptBlock::Tool(tool) => tool.result.as_ref().map_or(tool.name.len(), String::len),
+        TranscriptBlock::Tool(tool) => tool
+            .result
+            .as_ref()
+            .map_or(tool.name.len(), |result| result.len()),
         TranscriptBlock::Summary(summary) => summary.content.len(),
         TranscriptBlock::HistoryPlaceholder(_) => 0,
     };
@@ -2104,4 +2166,119 @@ pub(crate) fn marker_area(area: Rect, label: &str, scrollbar: bool) -> Rect {
         label_width,
         1,
     )
+}
+
+#[cfg(test)]
+mod source_map_tests {
+    use super::*;
+
+    fn key(kind: SectionKind) -> LayoutKey {
+        LayoutKey {
+            section: SectionId {
+                session_id: Arc::from("source-test"),
+                loop_id: Some(Arc::from("loop")),
+                request_index: Some(0),
+                kind,
+                ordinal: 0,
+                tool_call_id: None,
+                history_index: Some(0),
+            },
+            revision: 1,
+            width: 12,
+            theme: crate::theme::ThemeKind::Dark,
+            folded: false,
+            reasoning_visible: true,
+        }
+    }
+
+    #[test]
+    fn soft_wraps_share_source_without_inventing_a_hard_break() {
+        let lines = crate::markdown::wrap_plain("alpha beta gamma", 6, Style::default());
+        let layout = make_section_layout(
+            key(SectionKind::AssistantText),
+            lines,
+            Vec::new(),
+            false,
+            false,
+            0,
+            Some("alpha beta gamma"),
+        )
+        .expect("wrapped section");
+        assert_eq!(layout.source_map.source.as_ref(), "alpha beta gamma");
+        assert!(layout.source_map.rows.len() > 1);
+        assert!(
+            layout
+                .source_map
+                .rows
+                .iter()
+                .take(layout.source_map.rows.len() - 1)
+                .all(|row| !row.hard_break_after)
+        );
+        assert!(layout.source_map.rows.last().unwrap().hard_break_after);
+        assert!(
+            layout
+                .source_map
+                .rows
+                .iter()
+                .all(|row| row.source_range.end <= layout.source_map.source.len())
+        );
+    }
+
+    #[test]
+    fn blank_logical_lines_and_links_keep_source_bounds() {
+        let theme = crate::theme::Theme::dark();
+        let renderer = crate::markdown::MarkdownRenderer::new(&theme);
+        let source = "one\n\n[three](https://example.test)";
+        let (lines, links) = renderer.render_with_links(source, 40, Style::default());
+        let layout = make_section_layout(
+            key(SectionKind::AssistantText),
+            lines,
+            links,
+            false,
+            false,
+            0,
+            Some(source),
+        )
+        .expect("markdown section");
+        assert_eq!(layout.source_map.source.as_ref(), source);
+        assert!(layout.link_cells.iter().flatten().next().is_some());
+        assert!(
+            layout
+                .source_map
+                .rows
+                .iter()
+                .all(|row| row.source_range.end <= source.len())
+        );
+        assert!(
+            layout
+                .source_map
+                .rows
+                .iter()
+                .any(|row| row.hard_break_after)
+        );
+    }
+
+    #[test]
+    fn grapheme_ranges_are_utf8_boundary_safe() {
+        let source = "🙂 café";
+        let lines = crate::markdown::wrap_plain(source, 5, Style::default());
+        let layout = make_section_layout(
+            key(SectionKind::AssistantText),
+            lines,
+            Vec::new(),
+            false,
+            false,
+            0,
+            Some(source),
+        )
+        .expect("grapheme section");
+        assert!(
+            layout
+                .source_map
+                .rows
+                .iter()
+                .all(|row| source.is_char_boundary(row.source_range.start)
+                    && source.is_char_boundary(row.source_range.end))
+        );
+    }
 }

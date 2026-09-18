@@ -222,12 +222,22 @@ impl App {
     pub(super) fn drain_query_followups(&mut self, commands: &mut Vec<AppCommand>) {
         while let Some(key) = self.pending_query_followups.pop_front() {
             let command = match key {
-                crate::app::queries::QueryKey::History { session_id, .. } => self
-                    .sessions
-                    .known
-                    .contains_key(&session_id)
-                    .then(|| self.request_history(&session_id))
-                    .flatten(),
+                crate::app::queries::QueryKey::History { session_id, .. } => {
+                    if self.history_decode_pending(&session_id) {
+                        self.pending_query_followups.push_front(
+                            crate::app::queries::QueryKey::History {
+                                session_id,
+                                generation: 0,
+                            },
+                        );
+                        break;
+                    }
+                    self.sessions
+                        .known
+                        .contains_key(&session_id)
+                        .then(|| self.request_history(&session_id))
+                        .flatten()
+                }
                 crate::app::queries::QueryKey::TurnResult {
                     session_id,
                     loop_id,
@@ -236,6 +246,15 @@ impl App {
                         session_id,
                         loop_id,
                     };
+                    if self.turn_result_decode_pending(&turn) {
+                        self.pending_query_followups.push_front(
+                            crate::app::queries::QueryKey::TurnResult {
+                                session_id: turn.session_id,
+                                loop_id: turn.loop_id,
+                            },
+                        );
+                        break;
+                    }
                     self.turn_results
                         .get(&turn)
                         .filter(|window| !window.complete)

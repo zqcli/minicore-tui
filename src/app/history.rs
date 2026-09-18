@@ -2,11 +2,12 @@
 //! (spec §5.3, §6). This module owns the `session.read` pin/assembler chain so
 //! it does not keep growing `app.rs`.
 //!
-//! It deliberately does **not** know about the display model. It returns
-//! decoded Runtime items; `app.rs` projects them into the short-term
-//! `TranscriptBlock` bridge, which stage C replaces with shared sections.
+//! It deliberately does **not** know about the display model. It validates
+//! pages and stages canonical item bodies; the owned decode worker returns
+//! transient `RawHistoryItem` values to `app.rs`, which immediately projects
+//! them into the shared `TranscriptBlock` owner.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -17,8 +18,7 @@ use crate::state::transcript::{
 
 use super::*;
 use crate::protocol::read::{
-    Assembled, ChunkAssembler, RawHistoryItem, ReadCursor, ReadError, RuntimeItem, SnapshotPin,
-    TurnResultPage,
+    Assembled, ChunkAssembler, RawHistoryItem, ReadCursor, ReadError, SnapshotPin, TurnResultPage,
 };
 
 /// Why the read chain cannot continue with the pin it holds.
@@ -300,9 +300,12 @@ impl HistoryWindow {
     }
 }
 
+#[cfg(test)]
 fn item_bytes(item: &RawHistoryItem) -> usize {
-    // Charge the visible text once; this is a budget estimate, not RSS
-    // (spec §11.6).
+    use crate::protocol::read::RuntimeItem;
+    // The raw item only exists at the reducer boundary, so its wire strings
+    // are charged by length. Once projected, `owner_bytes` charges retained
+    // String capacities instead of pretending a reallocation has no cost.
     match &item.item {
         RuntimeItem::User(user) => user.input.text.len(),
         RuntimeItem::Assistant(assistant) => assistant
@@ -315,11 +318,54 @@ fn item_bytes(item: &RawHistoryItem) -> usize {
     }
 }
 
+pub(crate) fn owner_bytes(owner: &TranscriptBlock) -> usize {
+    match owner {
+        TranscriptBlock::User(user) => {
+            user.text.capacity() + user.loop_id.as_ref().map_or(0, String::capacity)
+        }
+        TranscriptBlock::Assistant(assistant) => {
+            assistant.loop_id.capacity()
+                + assistant.model.capacity()
+                + assistant.finish_reason.capacity()
+                + assistant
+                    .parts
+                    .iter()
+                    .map(|part| match part {
+                        AssistantPart::Text(text) | AssistantPart::Reasoning(text) => {
+                            text.capacity()
+                        }
+                        AssistantPart::ToolCall(call) => {
+                            call.tool_call_id.capacity() + call.name.capacity()
+                        }
+                    })
+                    .sum::<usize>()
+        }
+        TranscriptBlock::Tool(tool) => {
+            tool.loop_id.capacity()
+                + tool.tool_call_id.capacity()
+                + tool.name.capacity()
+                + tool.result.as_ref().map_or(0, |result| result.len())
+                + tool.progress.as_ref().map_or(0, String::capacity)
+        }
+        TranscriptBlock::Summary(summary) => summary.content.capacity(),
+        TranscriptBlock::HistoryPlaceholder(placeholder) => placeholder.total_bytes,
+    }
+}
+
+#[cfg(test)]
 fn raw_item_fingerprint(item: &RawHistoryItem) -> u64 {
     use std::hash::{Hash, Hasher};
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     format!("{item:?}").hash(&mut hasher);
+    hasher.finish()
+}
+
+pub(crate) fn encoded_item_fingerprint(item: &crate::protocol::read::EncodedHistoryItem) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    item.data.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -331,6 +377,12 @@ pub struct ReadPage {
     pub cursor: ReadCursor,
     pub want_pin: Option<SnapshotPin>,
     pub assembler: ChunkAssembler,
+    /// Complete canonical items waiting for the single decode worker. The page
+    /// size is bounded by the remote `READ_PAGE_MAX_BYTES` limit, and only the
+    /// front item is ever submitted.
+    pub pending_encoded: VecDeque<crate::protocol::read::EncodedHistoryItem>,
+    /// Page metadata is held until every encoded item has been decoded.
+    pub pending_page: Option<PendingPage>,
     /// The lowest index this page may contribute to the window. A reused
     /// first-page chunk below the window start is dropped, not faked.
     pub window_start: usize,
@@ -338,6 +390,16 @@ pub struct ReadPage {
     pub replacement: bool,
     /// Whether this page is a stale-check or gap reconcile.
     pub reconcile: bool,
+    /// Gap revision captured when this chain started; late event drops during
+    /// decode must still force reconciliation at page completion.
+    pub gap_revision: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingPage {
+    pub next: Option<ReadCursor>,
+    pub explicit_large_item: bool,
+    pub error: Option<ReadError>,
 }
 
 /// Converts one decoded result item into its semantic owner. This conversion
@@ -418,7 +480,7 @@ pub(super) fn raw_item_owner(index: usize, item: &RawHistoryItem) -> Arc<Transcr
             request_index: result.request_index,
             tool_call_id: result.call_id.clone(),
             name: result.tool_name.clone(),
-            result: Some(result.output.content.clone()),
+            result: Some(Arc::<str>::from(result.output.content.as_str())),
             outcome: serde_json::from_value::<crate::protocol::ToolOutcomeWire>(
                 serde_json::Value::String(result.outcome.clone()),
             )
@@ -440,9 +502,12 @@ impl ReadPage {
             cursor,
             want_pin,
             assembler: ChunkAssembler::new(),
+            pending_encoded: VecDeque::new(),
+            pending_page: None,
             window_start,
             replacement: false,
             reconcile: false,
+            gap_revision: 0,
         }
     }
 }
@@ -455,11 +520,30 @@ pub struct TurnResultWindow {
     pub cursor: ReadCursor,
     pub assembler: ChunkAssembler,
     pub total: Option<usize>,
+    pub read_chain: u64,
+    pub pending_encoded: VecDeque<crate::protocol::read::EncodedHistoryItem>,
+    pub pending_page: Option<PendingTurnPage>,
     pub items: BTreeMap<usize, Arc<TranscriptBlock>>,
+    pub fingerprints: BTreeMap<usize, u64>,
     pub large_items: BTreeMap<usize, usize>,
     pub pending_large_items: BTreeMap<usize, ()>,
     pub explicit_large_item: bool,
     pub complete: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingTurnPage {
+    pub availability: crate::protocol::read::TurnAvailability,
+    pub outcome: Option<crate::protocol::LoopOutcomeWire>,
+    pub persistence: Option<crate::protocol::TurnPersistenceWire>,
+    pub usage: Option<crate::protocol::UsageWire>,
+    pub requests: Option<u32>,
+    pub tool_rounds: Option<u16>,
+    pub final_config_revision: Option<u64>,
+    pub completed_at: Option<String>,
+    pub total: usize,
+    pub next_cursor: Option<ReadCursor>,
+    pub terminal: bool,
 }
 
 impl TurnResultWindow {
@@ -469,7 +553,11 @@ impl TurnResultWindow {
             cursor: ReadCursor::start(),
             assembler: ChunkAssembler::new(),
             total: None,
+            read_chain: 0,
+            pending_encoded: VecDeque::new(),
+            pending_page: None,
             items: BTreeMap::new(),
+            fingerprints: BTreeMap::new(),
             large_items: BTreeMap::new(),
             pending_large_items: BTreeMap::new(),
             explicit_large_item: false,
@@ -477,13 +565,18 @@ impl TurnResultWindow {
         }
     }
 
-    pub fn apply_page(&mut self, page: &TurnResultPage) -> Result<(), ReadError> {
+    /// Validates a page and stages its complete canonical items without
+    /// deserializing them. Production calls this method and drains
+    /// `pending_encoded` through the decode worker.
+    pub fn stage_page(&mut self, page: &TurnResultPage) -> Result<(), ReadError> {
         if page.turn != self.turn {
             return Err(ReadError::NonContiguous {
                 expected: self.cursor.item,
                 found: page.total,
             });
         }
+        self.pending_encoded.clear();
+        self.pending_page = None;
         let terminal = !matches!(
             page.availability,
             crate::protocol::read::TurnAvailability::Pending
@@ -504,7 +597,8 @@ impl TurnResultWindow {
         for chunk in &page.items {
             match self.assembler.push(chunk.clone())? {
                 Assembled::Pending => {}
-                Assembled::Item { index, item } => {
+                Assembled::EncodedItem { item } => {
+                    let index = item.index;
                     if index != expected {
                         return Err(ReadError::NonContiguous {
                             expected,
@@ -512,15 +606,16 @@ impl TurnResultWindow {
                         });
                     }
                     expected = index.saturating_add(1);
-                    let owner = raw_item_owner(index, &item);
-                    if let Some(existing) = self.items.get(&index) {
-                        if existing.as_ref() != owner.as_ref() {
+                    let fingerprint = encoded_item_fingerprint(&item);
+                    if let Some(existing) = self.fingerprints.get(&index) {
+                        if *existing != fingerprint {
                             return Err(ReadError::ItemChanged { index });
                         }
                     } else {
                         self.large_items.remove(&index);
                         self.pending_large_items.remove(&index);
-                        self.items.insert(index, owner);
+                        self.fingerprints.insert(index, fingerprint);
+                        self.pending_encoded.push_back(item);
                     }
                 }
                 Assembled::LargeItem { index, total_bytes } => {
@@ -589,8 +684,77 @@ impl TurnResultWindow {
                 item: expected,
                 offset: 0,
             };
-            self.complete = terminal && self.pending_large_items.is_empty();
         }
+        self.pending_page = Some(PendingTurnPage {
+            availability: page.availability,
+            outcome: page.outcome.clone(),
+            persistence: page.persistence,
+            usage: page.usage,
+            requests: page.requests,
+            tool_rounds: page.tool_rounds,
+            final_config_revision: page.final_config_revision,
+            completed_at: page.completed_at.clone(),
+            total: page.total,
+            next_cursor: page.next_cursor,
+            terminal,
+        });
+        self.complete = self.pending_encoded.is_empty()
+            && terminal
+            && self.pending_large_items.is_empty()
+            && page.next_cursor.is_none();
+        Ok(())
+    }
+
+    /// Installs one worker-decoded item and returns whether the staged page is
+    /// now ready for its metadata/cursor to be committed.
+    pub fn apply_decoded(
+        &mut self,
+        index: usize,
+        item: RawHistoryItem,
+        fingerprint: u64,
+    ) -> Result<bool, ReadError> {
+        if self
+            .pending_encoded
+            .front()
+            .is_none_or(|encoded| encoded.index != index)
+            || self.fingerprints.get(&index).copied() != Some(fingerprint)
+        {
+            return Err(ReadError::ItemChanged { index });
+        }
+        self.pending_encoded.pop_front();
+        self.items
+            .entry(index)
+            .or_insert_with(|| raw_item_owner(index, &item));
+        let ready = self.pending_encoded.is_empty();
+        if ready {
+            if let Some(page) = self.pending_page.as_ref() {
+                self.complete = page.terminal
+                    && page.next_cursor.is_none()
+                    && self.pending_large_items.is_empty();
+            }
+            self.pending_page = None;
+        }
+        Ok(ready)
+    }
+
+    /// Compatibility/test-only synchronous drain. Production result handling
+    /// uses `stage_page` plus `apply_decoded` from the owned worker.
+    pub fn apply_page(&mut self, page: &TurnResultPage) -> Result<(), ReadError> {
+        self.stage_page(page)?;
+        while let Some(encoded) = self.pending_encoded.pop_front() {
+            let item = crate::protocol::read::decode_item(&encoded.data).map_err(|detail| {
+                ReadError::MalformedItem {
+                    index: encoded.index,
+                    detail,
+                }
+            })?;
+            self.items
+                .insert(encoded.index, raw_item_owner(encoded.index, &item));
+        }
+        self.pending_page = None;
+        let terminal = !matches!(page.availability, TurnAvailability::Pending);
+        self.complete =
+            terminal && page.next_cursor.is_none() && self.pending_large_items.is_empty();
         Ok(())
     }
 }
@@ -598,8 +762,9 @@ impl TurnResultWindow {
 /// What one applied page contributed.
 #[derive(Debug)]
 pub struct AppliedPage {
-    /// Newly decoded items in page order.
-    pub inserted: Vec<(usize, RawHistoryItem)>,
+    /// Complete canonical items in page order. JSON decoding is performed by
+    /// the owned worker after this page has passed chunk validation.
+    pub inserted: Vec<crate::protocol::read::EncodedHistoryItem>,
     /// Items over the automatic decode budget. Their bytes are not retained,
     /// but their indexes remain visible as bounded placeholders.
     pub placeholders: Vec<(usize, usize)>,
@@ -655,6 +820,8 @@ pub fn apply_page(
         }
     }
 
+    page.pending_encoded.clear();
+    page.pending_page = None;
     let mut inserted = Vec::new();
     let mut placeholders = Vec::new();
     let mut explicit_large_item = false;
@@ -664,13 +831,14 @@ pub fn apply_page(
     for chunk in &result.items {
         match page.assembler.push(chunk.clone()) {
             Ok(Assembled::Pending) => {}
-            Ok(Assembled::Item { index, item }) => {
+            Ok(Assembled::EncodedItem { item }) => {
+                let index = item.index;
                 // An already-loaded index must never silently change: a durable
-                // item is immutable, so different bytes are a protocol conflict.
-                // This is checked before ordering so an overlapping changed item
-                // is reported as a conflict rather than a mere gap.
+                // item is immutable, so different canonical bytes are a
+                // protocol conflict. Comparing the encoded owner avoids a
+                // second JSON decode on the App thread.
                 if let Some(existing) = window.fingerprint(index) {
-                    if existing != raw_item_fingerprint(&item) {
+                    if existing != encoded_item_fingerprint(&item) {
                         return Ok(ReadApply::Ok(AppliedPage {
                             inserted,
                             placeholders,
@@ -696,7 +864,7 @@ pub fn apply_page(
                 if index < page.window_start || window.item(index).is_some() {
                     continue;
                 }
-                inserted.push((index, item));
+                inserted.push(item);
             }
             Ok(Assembled::LargeItem { index, total_bytes }) => {
                 if index != expected {
@@ -824,6 +992,12 @@ pub fn apply_page(
     window.install_pin(result.pin());
     window.trailing_incomplete |= result.trailing_incomplete;
     window.records_truncated |= result.records_truncated;
+    page.pending_encoded = inserted.iter().cloned().collect();
+    page.pending_page = Some(PendingPage {
+        next: result.next_cursor,
+        explicit_large_item,
+        error: None,
+    });
     Ok(ReadApply::Ok(AppliedPage {
         inserted,
         placeholders,
@@ -947,6 +1121,9 @@ impl App {
         turn: TurnRef,
         cursor: crate::protocol::ReadCursor,
     ) -> Option<AppCommand> {
+        if self.turn_result_decode_pending(&turn) {
+            return None;
+        }
         let kind = RequestKind::TurnResult(turn.clone());
         if let Some(retry) = Self::retry_key(&kind) {
             if self.retry_pending(&retry) {
@@ -964,6 +1141,23 @@ impl App {
                 )
             });
             return None;
+        }
+        self.turn_results
+            .entry(turn.clone())
+            .or_insert_with(|| crate::app::history::TurnResultWindow::new(turn.clone()));
+        let needs_read_chain = self
+            .turn_results
+            .get(&turn)
+            .is_some_and(|window| window.read_chain == 0);
+        if needs_read_chain {
+            self.next_read_chain = self
+                .next_read_chain
+                .checked_add(1)
+                .expect("read chains exhausted");
+            let chain = self.next_read_chain;
+            if let Some(window) = self.turn_results.get_mut(&turn) {
+                window.read_chain = chain;
+            }
         }
         let key = crate::app::queries::QueryKey::TurnResult {
             session_id: turn.session_id.clone(),
@@ -997,7 +1191,70 @@ impl App {
     /// from the backend's own cursor. A fresh chain never carries the old window
     /// pin: after a new turn the revision has moved and §6.4 requires a new pin.
     /// A fresh window starts with the one-item §6.3 probe.
+    pub(super) fn history_decode_pending(&self, session_id: &SessionId) -> bool {
+        let page_pending = self
+            .sessions
+            .known
+            .get(session_id)
+            .and_then(|view| view.read_page.as_ref())
+            .is_some_and(|page| !page.pending_encoded.is_empty());
+        let request_pending = self.pending_decode.as_ref().is_some_and(|request| {
+            matches!(
+                &request.identity.target,
+                crate::jobs::DecodeTarget::History { session_id: pending, .. }
+                    if pending == session_id
+            )
+        });
+        let worker_pending = self.decode_in_flight.as_ref().is_some_and(|identity| {
+            matches!(
+                &identity.target,
+                crate::jobs::DecodeTarget::History { session_id: pending, .. }
+                    if pending == session_id
+            )
+        });
+        page_pending || request_pending || worker_pending
+    }
+
+    pub(super) fn invalidate_decode_for_session(&mut self, session_id: &SessionId) {
+        let target_matches = |target: &crate::jobs::DecodeTarget| match target {
+            crate::jobs::DecodeTarget::History {
+                session_id: pending,
+                ..
+            } => pending == session_id,
+            crate::jobs::DecodeTarget::TurnResult { turn, .. } => turn.session_id == *session_id,
+        };
+        if self
+            .pending_decode
+            .as_ref()
+            .is_some_and(|request| target_matches(&request.identity.target))
+        {
+            if let Some(request) = self.pending_decode.take() {
+                request
+                    .cancel
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        if self
+            .decode_in_flight
+            .as_ref()
+            .is_some_and(|identity| target_matches(&identity.target))
+        {
+            self.decode_in_flight = None;
+        }
+    }
+
     pub(super) fn request_history(&mut self, session_id: &SessionId) -> Option<AppCommand> {
+        if self.history_decode_pending(session_id) {
+            return None;
+        }
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            if view.read_page.is_none() && view.history_read.is_loading() {
+                view.history_query_generation = view
+                    .history_query_generation
+                    .checked_add(1)
+                    .expect("history query generations exhausted");
+            }
+        }
         let (cursor, pin, window_start, replacement, reconcile, probe) = self
             .sessions
             .known
@@ -1041,6 +1298,98 @@ impl App {
                 gap_revision,
             },
         )
+    }
+
+    fn queue_history_decode(&mut self, session_id: &SessionId) {
+        if self.pending_decode.is_some() || self.decode_in_flight.is_some() {
+            return;
+        }
+        let Some((session_epoch, read_chain, item)) =
+            self.sessions.known.get(session_id).and_then(|view| {
+                view.read_page.as_ref().and_then(|page| {
+                    page.pending_encoded
+                        .front()
+                        .cloned()
+                        .map(|item| (view.session_epoch, view.history_query_generation, item))
+                })
+            })
+        else {
+            return;
+        };
+        let identity = crate::jobs::DecodeIdentity {
+            session_epoch,
+            read_chain,
+            target: crate::jobs::DecodeTarget::History {
+                session_id: session_id.clone(),
+                index: item.index,
+            },
+        };
+        let request = crate::jobs::DecodeRequest {
+            identity: identity.clone(),
+            fingerprint: encoded_item_fingerprint(&item),
+            item,
+            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        self.decode_in_flight = Some(identity);
+        self.pending_decode = Some(request);
+    }
+
+    pub(super) fn turn_result_decode_pending(&self, turn: &TurnRef) -> bool {
+        let window_pending = self
+            .turn_results
+            .get(turn)
+            .is_some_and(|window| !window.pending_encoded.is_empty());
+        let request_pending = self.pending_decode.as_ref().is_some_and(|request| {
+            matches!(
+                &request.identity.target,
+                crate::jobs::DecodeTarget::TurnResult { turn: pending, .. }
+                    if pending == turn
+            )
+        });
+        let worker_pending = self.decode_in_flight.as_ref().is_some_and(|identity| {
+            matches!(
+                &identity.target,
+                crate::jobs::DecodeTarget::TurnResult { turn: pending, .. }
+                    if pending == turn
+            )
+        });
+        window_pending || request_pending || worker_pending
+    }
+
+    fn queue_turn_result_decode(&mut self, turn: &TurnRef) {
+        if self.pending_decode.is_some() || self.decode_in_flight.is_some() {
+            return;
+        }
+        let Some((session_epoch, read_chain, item)) =
+            self.turn_results.get(turn).and_then(|window| {
+                window.pending_encoded.front().cloned().map(|item| {
+                    let epoch = self
+                        .sessions
+                        .known
+                        .get(&turn.session_id)
+                        .map_or(0, |view| view.session_epoch);
+                    (epoch, window.read_chain, item)
+                })
+            })
+        else {
+            return;
+        };
+        let identity = crate::jobs::DecodeIdentity {
+            session_epoch,
+            read_chain,
+            target: crate::jobs::DecodeTarget::TurnResult {
+                turn: turn.clone(),
+                index: item.index,
+            },
+        };
+        let request = crate::jobs::DecodeRequest {
+            identity: identity.clone(),
+            fingerprint: encoded_item_fingerprint(&item),
+            item,
+            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        self.decode_in_flight = Some(identity);
+        self.pending_decode = Some(request);
     }
 
     pub(super) fn pending_open_or_history(&self, session_id: &SessionId) -> bool {
@@ -1206,6 +1555,7 @@ impl App {
         page_state.window_start = read.window_start;
         page_state.replacement = read.replacement;
         page_state.reconcile = read.reconcile;
+        page_state.gap_revision = read.gap_revision;
         if read.replacement && read.cursor == crate::protocol::ReadCursor::start() {
             view.transcript.window.reset();
         }
@@ -1250,19 +1600,42 @@ impl App {
                         self.notice(NoticeLevel::Error, message);
                         return Vec::new();
                     }
-                    for (index, item) in &applied.inserted {
-                        if let Some(owner) = install_history_item(view, *index, item) {
-                            view.transcript.window.insert_owner(
-                                *index,
-                                owner,
-                                raw_item_fingerprint(item),
-                                item_bytes(item),
-                            );
-                        }
-                    }
                     for (index, total_bytes) in &applied.placeholders {
                         install_history_placeholder(view, *index, *total_bytes);
                     }
+                    if self.async_decode && !applied.inserted.is_empty() {
+                        page_state.pending_encoded = applied.inserted.iter().cloned().collect();
+                        view.read_page = Some(page_state);
+                        view.transcript.next_cursor = applied.next;
+                        view.transcript.sync_from_window();
+                        self.queue_history_decode(session_id);
+                        return Vec::new();
+                    }
+                    for encoded in &applied.inserted {
+                        let item = match crate::protocol::read::decode_item(&encoded.data) {
+                            Ok(item) => item,
+                            Err(detail) => {
+                                view.read_page = None;
+                                Self::mark_history_unconfirmed(view);
+                                self.notice(
+                                    NoticeLevel::Error,
+                                    format!("history for {session_id} is not decodable: {detail}"),
+                                );
+                                return Vec::new();
+                            }
+                        };
+                        if let Some(owner) = install_history_item(view, encoded.index, &item) {
+                            let bytes = owner_bytes(&owner);
+                            view.transcript.window.insert_owner(
+                                encoded.index,
+                                owner,
+                                encoded_item_fingerprint(encoded),
+                                bytes,
+                            );
+                        }
+                    }
+                    page_state.pending_encoded.clear();
+                    page_state.pending_page = None;
                     if applied.explicit_large_item && window_start == 0 {
                         view.read_page = Some(page_state);
                         view.transcript.next_cursor = applied.next;
@@ -1355,21 +1728,43 @@ impl App {
             Ok(crate::app::history::ReadApply::Ok(applied)) => applied,
         };
 
-        // Project newly decoded Runtime items into the display bridge.
-        for (index, item) in &applied.inserted {
-            if let Some(owner) = install_history_item(view, *index, item) {
-                view.transcript.window.insert_owner(
-                    *index,
-                    owner,
-                    raw_item_fingerprint(item),
-                    item_bytes(item),
-                );
-            }
-        }
         for (index, total_bytes) in &applied.placeholders {
             install_history_placeholder(view, *index, *total_bytes);
         }
+        if self.async_decode && !applied.inserted.is_empty() {
+            page_state.pending_encoded = applied.inserted.iter().cloned().collect();
+            view.read_page = Some(page_state);
+            view.transcript.next_cursor = applied.next;
+            view.transcript.sync_from_window();
+            self.queue_history_decode(session_id);
+            return Vec::new();
+        }
+        for encoded in &applied.inserted {
+            let item = match crate::protocol::read::decode_item(&encoded.data) {
+                Ok(item) => item,
+                Err(detail) => {
+                    view.read_page = None;
+                    Self::mark_history_unconfirmed(view);
+                    self.notice(
+                        NoticeLevel::Error,
+                        format!("history for {session_id} is not decodable: {detail}"),
+                    );
+                    return Vec::new();
+                }
+            };
+            if let Some(owner) = install_history_item(view, encoded.index, &item) {
+                let bytes = owner_bytes(&owner);
+                view.transcript.window.insert_owner(
+                    encoded.index,
+                    owner,
+                    encoded_item_fingerprint(encoded),
+                    bytes,
+                );
+            }
+        }
 
+        page_state.pending_encoded.clear();
+        page_state.pending_page = None;
         if let Some(error) = applied.error {
             view.read_page = None;
             Self::mark_history_unconfirmed(view);
@@ -1430,6 +1825,341 @@ impl App {
             }
             NextChain::Done => Vec::new(),
         }
+    }
+
+    fn queue_any_pending_decode(&mut self) {
+        if self.pending_decode.is_some() || self.decode_in_flight.is_some() {
+            return;
+        }
+        if let Some(session_id) = self.sessions.known.iter().find_map(|(session_id, view)| {
+            view.read_page
+                .as_ref()
+                .filter(|page| !page.pending_encoded.is_empty())
+                .map(|_| session_id.clone())
+        }) {
+            self.queue_history_decode(&session_id);
+            return;
+        }
+        if let Some(turn) = self
+            .turn_results
+            .iter()
+            .find_map(|(turn, window)| (!window.pending_encoded.is_empty()).then(|| turn.clone()))
+        {
+            self.queue_turn_result_decode(&turn);
+        }
+    }
+
+    pub(super) fn on_history_item_decoded(
+        &mut self,
+        outcome: crate::jobs::DecodeOutcome,
+    ) -> Vec<AppCommand> {
+        if self.decode_in_flight.as_ref() != Some(&outcome.identity) {
+            // A cancelled/stale completion still consumed its worker slot; it
+            // must not touch a newer page or read chain.
+            return Vec::new();
+        }
+        self.decode_in_flight = None;
+        if outcome.cancelled {
+            self.queue_any_pending_decode();
+            return Vec::new();
+        }
+        let target = outcome.identity.target.clone();
+        let commands = match target {
+            crate::jobs::DecodeTarget::History { session_id, index } => self
+                .finish_history_item_decode(
+                    &session_id,
+                    outcome.identity.session_epoch,
+                    outcome.identity.read_chain,
+                    index,
+                    outcome.fingerprint,
+                    outcome.result,
+                ),
+            crate::jobs::DecodeTarget::TurnResult { turn, index } => self
+                .finish_turn_result_item_decode(
+                    &turn,
+                    outcome.identity.session_epoch,
+                    outcome.identity.read_chain,
+                    index,
+                    outcome.fingerprint,
+                    outcome.result,
+                ),
+        };
+        self.queue_any_pending_decode();
+        commands
+    }
+
+    fn finish_history_item_decode(
+        &mut self,
+        session_id: &SessionId,
+        session_epoch: u64,
+        read_chain: u64,
+        index: usize,
+        fingerprint: u64,
+        result: Result<RawHistoryItem, String>,
+    ) -> Vec<AppCommand> {
+        let Some(view) = self.sessions.known.get_mut(session_id) else {
+            return Vec::new();
+        };
+        if view.session_epoch != session_epoch || view.history_query_generation != read_chain {
+            return Vec::new();
+        }
+        let item = match result {
+            Ok(item) => item,
+            Err(detail) => {
+                view.read_page = None;
+                Self::mark_history_unconfirmed(view);
+                self.notice(
+                    NoticeLevel::Error,
+                    format!("history for {session_id} is not decodable: {detail}"),
+                );
+                return Vec::new();
+            }
+        };
+        let (has_more, pending) = {
+            let Some(page) = view.read_page.as_mut() else {
+                return Vec::new();
+            };
+            let Some(front) = page.pending_encoded.front() else {
+                return Vec::new();
+            };
+            if front.index != index || encoded_item_fingerprint(front) != fingerprint {
+                return Vec::new();
+            }
+            page.pending_encoded.pop_front();
+            let has_more = !page.pending_encoded.is_empty();
+            let pending = (!has_more).then(|| page.pending_page.take()).flatten();
+            (has_more, pending)
+        };
+        if let Some(owner) = install_history_item(view, index, &item) {
+            let bytes = owner_bytes(&owner);
+            view.transcript
+                .window
+                .insert_owner(index, owner, fingerprint, bytes);
+        }
+        if has_more {
+            self.queue_history_decode(session_id);
+            return Vec::new();
+        }
+        let page_state = view.read_page.take().expect("decode page remains owned");
+        let Some(pending) = pending else {
+            return Vec::new();
+        };
+        if let Some(error) = pending.error {
+            Self::mark_history_unconfirmed(view);
+            self.notice(
+                NoticeLevel::Error,
+                format!("history for {session_id} is not decodable: {error}"),
+            );
+            return Vec::new();
+        }
+        view.transcript.next_cursor = pending.next;
+        if pending.explicit_large_item {
+            view.transcript.sync_from_window();
+            view.history_read.finish();
+            if page_state.window_start == 0 {
+                view.read_page = Some(page_state);
+            }
+            return Vec::new();
+        }
+        let next = match pending.next {
+            Some(_) => {
+                view.read_page = Some(page_state);
+                view.transcript.sync_from_window();
+                view.history_read.continue_loading();
+                NextChain::Page
+            }
+            None => {
+                view.transcript.sync_from_window();
+                view.history_read.finish();
+                let read = ReadRequest {
+                    cursor: page_state.cursor,
+                    pin: page_state.want_pin.clone(),
+                    window_start: page_state.window_start,
+                    replacement: page_state.replacement,
+                    reconcile: page_state.reconcile,
+                    probe: false,
+                    gap_revision: page_state.gap_revision,
+                };
+                Self::finish_read_chain(view, session_id, &read)
+            }
+        };
+        view.recompute_usage_projection();
+        match next {
+            NextChain::Page | NextChain::Reconcile => {
+                self.request_history(session_id).into_iter().collect()
+            }
+            NextChain::LoopNotContained(loop_id) => {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!(
+                        "history sync warning: loop {loop_id} not contained in history response"
+                    ),
+                );
+                Vec::new()
+            }
+            NextChain::Done => Vec::new(),
+        }
+    }
+
+    fn finish_turn_result_item_decode(
+        &mut self,
+        turn: &TurnRef,
+        session_epoch: u64,
+        read_chain: u64,
+        index: usize,
+        fingerprint: u64,
+        result: Result<RawHistoryItem, String>,
+    ) -> Vec<AppCommand> {
+        let current_epoch = self
+            .sessions
+            .known
+            .get(&turn.session_id)
+            .map_or(0, |view| view.session_epoch);
+        let Some(window) = self.turn_results.get_mut(turn) else {
+            return Vec::new();
+        };
+        if current_epoch != session_epoch || window.read_chain != read_chain {
+            return Vec::new();
+        }
+        let item = match result {
+            Ok(item) => item,
+            Err(detail) => {
+                if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
+                    view.result_confirmation = ResultConfirmation::NeedsRead;
+                    Self::mark_pending_steers_unconfirmed(view);
+                }
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!(
+                        "result read-back for {}/{} is not decodable: {detail}",
+                        turn.session_id, turn.loop_id
+                    ),
+                );
+                return Vec::new();
+            }
+        };
+        if window
+            .pending_encoded
+            .front()
+            .is_none_or(|encoded| encoded.index != index)
+        {
+            return Vec::new();
+        }
+        match window.apply_decoded(index, item, fingerprint) {
+            Ok(false) => {
+                self.queue_turn_result_decode(turn);
+                Vec::new()
+            }
+            Ok(true) => self.finish_turn_result_page(turn),
+            Err(error) => {
+                if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
+                    view.result_confirmation = ResultConfirmation::NeedsRead;
+                    Self::mark_pending_steers_unconfirmed(view);
+                }
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!(
+                        "result read-back for {}/{} is not decodable ({error})",
+                        turn.session_id, turn.loop_id
+                    ),
+                );
+                Vec::new()
+            }
+        }
+    }
+
+    fn finish_turn_result_page(&mut self, turn: &TurnRef) -> Vec<AppCommand> {
+        let Some(page) = self
+            .turn_results
+            .get_mut(turn)
+            .and_then(|window| window.pending_page.take())
+        else {
+            return Vec::new();
+        };
+        let (complete, next_cursor, explicit_large_item) = self
+            .turn_results
+            .get(turn)
+            .map(|window| {
+                (
+                    window.complete,
+                    (!window.complete).then_some(window.cursor),
+                    window.explicit_large_item,
+                )
+            })
+            .unwrap_or((false, None, false));
+        if !complete && !explicit_large_item {
+            if let Some(cursor) = next_cursor {
+                return self
+                    .request_turn_result_page(turn.clone(), cursor)
+                    .into_iter()
+                    .collect();
+            }
+        }
+        if explicit_large_item {
+            self.notice(
+                NoticeLevel::Info,
+                format!(
+                    "result for {}/{} contains a large item; read it explicitly to continue",
+                    turn.session_id, turn.loop_id
+                ),
+            );
+            return Vec::new();
+        }
+        if page.availability == TurnAvailability::Pending {
+            if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
+                if Self::wait_targets_current_turn(view, turn) {
+                    view.result_confirmation = ResultConfirmation::NeedsRead;
+                    if let Some(live) = view.live.as_mut() {
+                        live.waiting = true;
+                    }
+                }
+            }
+            if !self.pending_wait_for(turn) {
+                return self.request_wait(turn.clone()).into_iter().collect();
+            }
+            return Vec::new();
+        }
+        let Some(outcome) = page.outcome else {
+            return Vec::new();
+        };
+        let result = crate::protocol::TurnResultViewWire {
+            turn: turn.clone(),
+            outcome,
+            usage: page.usage,
+            requests: page.requests,
+            tool_rounds: page.tool_rounds,
+            final_config_revision: page.final_config_revision,
+            persistence: page.persistence,
+            accepted_at: None,
+            completed_at: page.completed_at,
+        };
+        self.retain_result_summary(result.clone());
+        if result.persistence.is_none() {
+            if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
+                view.result_confirmation = ResultConfirmation::NeedsRead;
+            }
+            self.notice(
+                NoticeLevel::Warning,
+                format!(
+                    "result read-back for {}/{} omitted persistence; outcome remains unconfirmed",
+                    turn.session_id, turn.loop_id
+                ),
+            );
+            return Vec::new();
+        }
+        if result.persistence == Some(TurnPersistenceWire::Failed) {
+            self.project_turn_result_into_live(turn, &result);
+            self.retain_failed_result_on_view(turn, &result);
+            self.notice(
+                NoticeLevel::Error,
+                format!(
+                    "Turn {}/{} completed but persistence is still unconfirmed.",
+                    turn.session_id, turn.loop_id
+                ),
+            );
+            return Vec::new();
+        }
+        self.reconcile_after_wait(turn)
     }
 
     /// Reconciles the live loop once the read chain is complete (spec §6.4,
@@ -1759,11 +2489,17 @@ impl App {
             return Vec::new();
         }
 
-        let apply_result = self
-            .turn_results
-            .entry(turn.clone())
-            .or_insert_with(|| crate::app::history::TurnResultWindow::new(turn.clone()))
-            .apply_page(&page);
+        let apply_result = if self.async_decode {
+            self.turn_results
+                .entry(turn.clone())
+                .or_insert_with(|| crate::app::history::TurnResultWindow::new(turn.clone()))
+                .stage_page(&page)
+        } else {
+            self.turn_results
+                .entry(turn.clone())
+                .or_insert_with(|| crate::app::history::TurnResultWindow::new(turn.clone()))
+                .apply_page(&page)
+        };
         if let Err(error) = apply_result {
             if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
                 view.result_confirmation = ResultConfirmation::NeedsRead;
@@ -1800,6 +2536,16 @@ impl App {
                     view.recompute_usage_projection();
                 }
             }
+        }
+
+        if self.async_decode
+            && self
+                .turn_results
+                .get(turn)
+                .is_some_and(|window| !window.pending_encoded.is_empty())
+        {
+            self.queue_turn_result_decode(turn);
+            return Vec::new();
         }
 
         let (complete, next_cursor, explicit_large_item) = self
@@ -2234,6 +2980,27 @@ mod budget_tests {
     }
 
     #[test]
+    fn evicting_an_owner_releases_the_last_arc_body_reference() {
+        let owner = Arc::new(TranscriptBlock::User(UserBlock {
+            index: Some(0),
+            loop_id: Some("loop".to_owned()),
+            kind: crate::protocol::UserMessageKindWire::Prompt,
+            text: "retained body".to_owned(),
+            pending: false,
+        }));
+        let weak = Arc::downgrade(&owner);
+        let mut window = HistoryWindow::default();
+        window.insert_owner(0, Arc::clone(&owner), 7, owner_bytes(&owner));
+        drop(owner);
+        assert!(weak.upgrade().is_some(), "the window owns the body");
+        assert!(window.bytes() > 0);
+        let bytes = window.bytes();
+        assert_eq!(window.evict_oldest(1), Some(bytes));
+        assert!(weak.upgrade().is_none(), "eviction releases the body owner");
+        assert_eq!(window.bytes(), 0);
+    }
+
+    #[test]
     fn eviction_never_removes_the_protected_tail() {
         let mut window = window_with(4, 100);
         let released = window.evict_to_budget(0, 1);
@@ -2292,5 +3059,142 @@ mod budget_tests {
             0,
             "the background session gave up its bodies first"
         );
+    }
+}
+
+#[cfg(test)]
+mod decode_tests {
+    use crate::jobs::LocalJobs;
+    use crate::state::session::HistoryTrigger;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    fn session_info() -> crate::protocol::SessionInfo {
+        serde_json::from_value(json!({
+            "session_id": "ses_decode",
+            "title": null,
+            "profile": "coding",
+            "workspace": "/project",
+            "model": "deep",
+            "reasoning": "high",
+            "loaded": true,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap()
+    }
+
+    fn page() -> crate::protocol::ReadSessionResult {
+        let data = r#"{"item":{"type":"user","data":{"loop_id":"loop","kind":"prompt","input":{"text":"hello"}}},"timestamp":"2026-01-01T00:00:00Z"}"#;
+        serde_json::from_value(json!({
+            "session": session_info(),
+            "items": [{
+                "index": 0,
+                "offset": 0,
+                "total_bytes": data.len(),
+                "encoding": "utf8_json",
+                "data": data,
+                "complete": true
+            }],
+            "total": 1,
+            "records": [],
+            "records_truncated": false,
+            "history_revision": "0000000000000000000000000000000000000000000000000000000000000000",
+            "captured_end": 1,
+            "trailing_incomplete": false
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn async_history_waits_for_the_decode_worker_before_installing_owner() {
+        let mut app = crate::app::App::new(PathBuf::from("/project"));
+        app.connection = crate::app::ConnectionState::Ready;
+        app.enable_async_decode();
+        app.sessions.known.insert(
+            "ses_decode".to_owned(),
+            crate::state::session::SessionView::new(session_info()),
+        );
+        app.sessions.active = Some("ses_decode".to_owned());
+        app.sessions
+            .known
+            .get_mut("ses_decode")
+            .unwrap()
+            .history_read
+            .begin(HistoryTrigger::Refresh);
+        let request = app
+            .request_history(&"ses_decode".to_owned())
+            .expect("history request");
+        let read = match request {
+            crate::command::AppCommand::Rpc(request) => match app.pending_requests.get(&request.id)
+            {
+                Some(crate::app::RequestKind::History { read, .. }) => read.clone(),
+                other => panic!("unexpected pending kind: {other:?}"),
+            },
+            _ => panic!("history request is RPC"),
+        };
+        assert!(
+            app.continue_read_chain(&"ses_decode".to_owned(), &read, &page())
+                .is_empty()
+        );
+        assert!(
+            app.sessions.known["ses_decode"]
+                .transcript
+                .blocks
+                .is_empty()
+        );
+        let decode = app.pending_decode_request().expect("one decode handoff");
+        let mut jobs = LocalJobs::new();
+        assert!(jobs.try_schedule_decode(decode));
+        app.mark_decode_scheduled();
+        let event = jobs.events().recv().await.expect("decode event");
+        app.update(event);
+        assert_eq!(app.sessions.known["ses_decode"].transcript.blocks.len(), 1);
+        assert!(app.sessions.known["ses_decode"].transcript.complete);
+        jobs.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn stale_decode_result_clears_worker_identity_without_installing_new_epoch() {
+        let mut app = crate::app::App::new(PathBuf::from("/project"));
+        app.connection = crate::app::ConnectionState::Ready;
+        app.enable_async_decode();
+        app.sessions.known.insert(
+            "ses_decode".to_owned(),
+            crate::state::session::SessionView::new(session_info()),
+        );
+        app.sessions.active = Some("ses_decode".to_owned());
+        app.sessions
+            .known
+            .get_mut("ses_decode")
+            .unwrap()
+            .history_read
+            .begin(HistoryTrigger::Refresh);
+        let request = app.request_history(&"ses_decode".to_owned()).unwrap();
+        let read = match request {
+            crate::command::AppCommand::Rpc(request) => match app.pending_requests.get(&request.id)
+            {
+                Some(crate::app::RequestKind::History { read, .. }) => read.clone(),
+                other => panic!("unexpected pending kind: {other:?}"),
+            },
+            _ => panic!("history request is RPC"),
+        };
+        app.continue_read_chain(&"ses_decode".to_owned(), &read, &page());
+        let decode = app.pending_decode_request().unwrap();
+        let mut jobs = LocalJobs::new();
+        assert!(jobs.try_schedule_decode(decode));
+        app.mark_decode_scheduled();
+        let view = app.sessions.known.get_mut("ses_decode").unwrap();
+        view.session_epoch += 1;
+        view.read_page = None;
+        app.update(jobs.events().recv().await.unwrap());
+        assert!(
+            app.sessions.known["ses_decode"]
+                .transcript
+                .blocks
+                .is_empty()
+        );
+        assert!(app.decode_in_flight.is_none());
+        jobs.shutdown().await;
     }
 }

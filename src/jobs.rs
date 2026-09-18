@@ -1,10 +1,10 @@
 //! Owned local side-effect jobs (spec §5.5).
 //!
-//! Every local effect has exactly one owner here: the native clipboard and
-//! the single serialized durable-layout worker. There is at most **one**
-//! clipboard job and one layout build in flight, so the thread count, retained
-//! text bytes, request queue, and completion backlog are bounded by
-//! construction. A
+//! Every local effect has exactly one owner here: the native clipboard, the
+//! single serialized durable-layout worker, and the single serialized
+//! canonical-item decode worker. There is at most **one** clipboard job, one
+//! layout build, and one decode item in flight; their request queues and the
+//! completion backlog are bounded by construction. A
 //! second copy while one is running is refused with [`CopyAdmission::Busy`]
 //! instead of spawning another blocking thread; the refused text is dropped
 //! and never overwrites a newer selection later.
@@ -28,6 +28,40 @@ use tokio::task::JoinHandle;
 
 use crate::clipboard::ClipboardPort;
 use crate::event::{AppEvent, JobOutcome};
+use crate::protocol::TurnRef;
+use crate::protocol::read::{EncodedHistoryItem, RawHistoryItem};
+
+/// Exact identity carried through one serialized history-item decode. A stale
+/// result may release the worker slot but can never install into a newer
+/// session epoch or read chain.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DecodeTarget {
+    History { session_id: String, index: usize },
+    TurnResult { turn: TurnRef, index: usize },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DecodeIdentity {
+    pub session_epoch: u64,
+    pub read_chain: u64,
+    pub target: DecodeTarget,
+}
+
+#[derive(Clone, Debug)]
+pub struct DecodeRequest {
+    pub identity: DecodeIdentity,
+    pub item: EncodedHistoryItem,
+    pub fingerprint: u64,
+    pub cancel: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[derive(Debug)]
+pub struct DecodeOutcome {
+    pub identity: DecodeIdentity,
+    pub fingerprint: u64,
+    pub result: Result<RawHistoryItem, String>,
+    pub cancelled: bool,
+}
 
 /// Owner-local identifier for one started job. It is only used for tests and
 /// diagnostics; results are identified by their capture identity.
@@ -59,6 +93,9 @@ pub struct LocalJobs {
     layout_tx: Option<mpsc::Sender<crate::ui::transcript::DurableLayoutRequest>>,
     layout_task: Option<JoinHandle<()>>,
     layout_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    decode_tx: Option<mpsc::Sender<DecodeRequest>>,
+    decode_task: Option<JoinHandle<()>>,
+    decode_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Default for LocalJobs {
@@ -171,6 +208,54 @@ impl LocalJobs {
                 }
             }
         });
+        let (decode_tx, mut decode_rx) = mpsc::channel::<DecodeRequest>(1);
+        let decode_events = events_tx.clone();
+        let decode_task = tokio::spawn(async move {
+            while let Some(request) = decode_rx.recv().await {
+                let identity = request.identity.clone();
+                let fingerprint = request.fingerprint;
+                let item = request.item;
+                let cancel = Arc::clone(&request.cancel);
+                if cancel.load(Ordering::Relaxed) {
+                    let _ = decode_events
+                        .send(AppEvent::HistoryItemDecoded(Box::new(DecodeOutcome {
+                            identity,
+                            fingerprint,
+                            result: Err("history decode cancelled".to_owned()),
+                            cancelled: true,
+                        })))
+                        .await;
+                    continue;
+                }
+                let cancel_for_decode = Arc::clone(&cancel);
+                let result = tokio::task::spawn_blocking(move || {
+                    if cancel_for_decode.load(Ordering::Relaxed) {
+                        return Err("history decode cancelled".to_owned());
+                    }
+                    crate::protocol::read::decode_item(&item.data)
+                })
+                .await
+                .map_err(|error| format!("history decode worker failed: {error}"))
+                .and_then(|result| result);
+                let cancelled = cancel.load(Ordering::Relaxed);
+                if decode_events
+                    .send(AppEvent::HistoryItemDecoded(Box::new(DecodeOutcome {
+                        identity,
+                        fingerprint,
+                        result: if cancelled {
+                            Err("history decode cancelled".to_owned())
+                        } else {
+                            result
+                        },
+                        cancelled,
+                    })))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
         Self {
             next_id: 0,
             clipboard: None,
@@ -179,6 +264,9 @@ impl LocalJobs {
             layout_tx: Some(layout_tx),
             layout_task: Some(layout_task),
             layout_cancel: None,
+            decode_tx: Some(decode_tx),
+            decode_task: Some(decode_task),
+            decode_cancel: None,
         }
     }
 
@@ -203,6 +291,30 @@ impl LocalJobs {
             Err(mpsc::error::TrySendError::Full(_)) | Err(mpsc::error::TrySendError::Closed(_)) => {
                 false
             }
+        }
+    }
+
+    /// Schedules one bounded canonical-item decode. The App submits at most
+    /// one item at a time; a newer lifecycle/read identity cancels the older
+    /// queued or active request cooperatively.
+    pub fn try_schedule_decode(&mut self, request: DecodeRequest) -> bool {
+        let Some(sender) = self.decode_tx.as_ref() else {
+            return false;
+        };
+        let cancel = Arc::clone(&request.cancel);
+        match sender.try_send(request) {
+            Ok(()) => {
+                if let Some(previous) = self.decode_cancel.replace(cancel) {
+                    previous.store(true, Ordering::Relaxed);
+                }
+                true
+            }
+            Err(mpsc::error::TrySendError::Full(_returned)) => {
+                // The App retains its own pending owner when the single queue
+                // is full, so no JSON is cloned or queued here.
+                false
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => false,
         }
     }
 
@@ -330,6 +442,17 @@ impl LocalJobs {
             }
             let _ = task.await;
         }
+        if let Some(cancel) = self.decode_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        self.decode_tx.take();
+        if let Some(task) = self.decode_task.take() {
+            while !task.is_finished() {
+                while self.events_rx.try_recv().is_ok() {}
+                tokio::task::yield_now().await;
+            }
+            let _ = task.await;
+        }
         let Some(handle) = self.clipboard.take() else {
             return;
         };
@@ -364,6 +487,74 @@ mod tests {
     fn gated() -> (GatedClipboard, tokio::sync::oneshot::Sender<()>) {
         let (tx, rx) = tokio::sync::oneshot::channel();
         (GatedClipboard { gate: rx }, tx)
+    }
+
+    #[tokio::test]
+    async fn serialized_decode_worker_returns_exact_identity_and_item() {
+        let mut jobs = LocalJobs::new();
+        let identity = DecodeIdentity {
+            session_epoch: 4,
+            read_chain: 9,
+            target: DecodeTarget::History {
+                session_id: "ses_decode".to_owned(),
+                index: 3,
+            },
+        };
+        let data: Arc<str> = Arc::from(
+            r#"{"item":{"type":"summary","data":{"content":"decoded"}},"timestamp":"2026-01-01T00:00:00Z"}"#,
+        );
+        let item = EncodedHistoryItem { index: 3, data };
+        let fingerprint = 17;
+        assert!(jobs.try_schedule_decode(DecodeRequest {
+            identity: identity.clone(),
+            item,
+            fingerprint,
+            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }));
+        let event = jobs.events().recv().await.expect("decode completion");
+        match event {
+            AppEvent::HistoryItemDecoded(outcome) => {
+                assert_eq!(outcome.identity, identity);
+                assert_eq!(outcome.fingerprint, fingerprint);
+                assert!(!outcome.cancelled);
+                let item = outcome.result.expect("valid Runtime item");
+                assert_eq!(item.timestamp.as_deref(), Some("2026-01-01T00:00:00Z"));
+                assert!(matches!(
+                    item.item,
+                    crate::protocol::RuntimeItem::Summary(_)
+                ));
+            }
+            other => panic!("unexpected worker event: {other:?}"),
+        }
+        jobs.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_decode_still_releases_its_identity() {
+        let mut jobs = LocalJobs::new();
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        assert!(jobs.try_schedule_decode(DecodeRequest {
+            identity: DecodeIdentity {
+                session_epoch: 1,
+                read_chain: 2,
+                target: DecodeTarget::History {
+                    session_id: "ses_cancel".to_owned(),
+                    index: 0,
+                },
+            },
+            item: EncodedHistoryItem {
+                index: 0,
+                data: Arc::from("{}"),
+            },
+            fingerprint: 0,
+            cancel,
+        }));
+        let event = jobs.events().recv().await.expect("cancel completion");
+        match event {
+            AppEvent::HistoryItemDecoded(outcome) => assert!(outcome.cancelled),
+            other => panic!("unexpected worker event: {other:?}"),
+        }
+        jobs.shutdown().await;
     }
 
     #[tokio::test]

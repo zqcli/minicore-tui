@@ -21,7 +21,7 @@ pub use session::{
     ConfigUpdateState, ManualCompactState, PendingConfigUpdate, ScrollState, SessionId,
     SessionView, SessionsState,
 };
-pub use tool::{LiveTool, ToolKey, ToolPresentationState, ToolStatus};
+pub use tool::{LiveTool, ToolFacts, ToolKey, ToolPresentationState, ToolStatus};
 pub use transcript::{
     AssistantBlock, AssistantPart, HistoryPlaceholderBlock, SummaryBlock, ToolBlock, ToolExpansion,
     TranscriptBlock, TranscriptState, UserBlock,

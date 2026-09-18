@@ -220,6 +220,9 @@ pub enum AppEvent {
     ConversationPrepared(PreparedConversation),
     /// A durable section layout produced by the single owned layout worker.
     DurableLayoutPrepared(crate::ui::transcript::DurableLayoutResult),
+    /// One canonical Runtime history item finished in the single serialized
+    /// decode worker. The identity is checked before any state mutation.
+    HistoryItemDecoded(Box<crate::jobs::DecodeOutcome>),
 }
 
 /// The result of one owned local job (clipboard now; export and the draft

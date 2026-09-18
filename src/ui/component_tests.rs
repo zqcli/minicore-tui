@@ -1,6 +1,8 @@
 //! Component-level rendering tests: exact colors, modifiers, preview bounds,
 //! footer behavior, and cursor column math (development spec 15, 29, 31).
 
+use std::sync::Arc;
+
 use crossterm::event::{
     Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
     MouseEventKind,
@@ -361,7 +363,7 @@ fn prepared_section_ids_survive_tool_result_updates() {
         let block = std::sync::Arc::make_mut(block);
         if let TranscriptBlock::Tool(tool) = &mut *block {
             if tool.tool_call_id == "call-1" {
-                tool.result = Some("a changed result\nwith another line".to_owned());
+                tool.result = Some("a changed result\nwith another line".to_owned().into());
             }
         }
     }
@@ -699,7 +701,7 @@ fn message_and_tool_sections_have_symmetric_vertical_padding() {
             request_index: 0,
             tool_call_id: "call".to_owned(),
             name: "bash".to_owned(),
-            result: Some("command result".to_owned()),
+            result: Some("command result".to_owned().into()),
             outcome: Some(crate::protocol::ToolOutcomeWire::Success),
             live_status: None,
             progress: None,
@@ -1131,7 +1133,7 @@ fn failed_tool_cards_keep_status_summary_hint_and_error_body() {
             request_index: 0,
             tool_call_id: "call".to_owned(),
             name: "bash".to_owned(),
-            result: Some("permission denied\nprivate diagnostic".to_owned()),
+            result: Some("permission denied\nprivate diagnostic".to_owned().into()),
             outcome: Some(crate::protocol::ToolOutcomeWire::Failed),
             live_status: None,
             progress: None,
@@ -1154,7 +1156,7 @@ fn failed_tool_cards_keep_status_summary_hint_and_error_body() {
         &theme,
         &ToolBlock {
             expanded: true,
-            result: Some("permission denied\nprivate diagnostic".to_owned()),
+            result: Some("permission denied\nprivate diagnostic".to_owned().into()),
             outcome: Some(crate::protocol::ToolOutcomeWire::Failed),
             ..ToolBlock {
                 index: None,
@@ -1191,7 +1193,7 @@ fn failed_tool_cards_keep_status_summary_hint_and_error_body() {
             request_index: 0,
             tool_call_id: "denied".to_owned(),
             name: "write".to_owned(),
-            result: Some("not allowed".to_owned()),
+            result: Some("not allowed".to_owned().into()),
             outcome: Some(crate::protocol::ToolOutcomeWire::Denied),
             live_status: None,
             progress: None,
@@ -1217,7 +1219,7 @@ fn failed_tool_cards_keep_status_summary_hint_and_error_body() {
             status: ToolStatus::Cancelled,
             progress: None,
             display: None,
-            result: Some("cancellation detail".to_owned()),
+            result: Some("cancellation detail".to_owned().into()),
             result_truncated: false,
             expanded: false,
         },
@@ -1240,7 +1242,7 @@ fn failed_tool_cards_keep_status_summary_hint_and_error_body() {
             request_index: 0,
             tool_call_id: "long".to_owned(),
             name: "bash".to_owned(),
-            result: Some(long_result),
+            result: Some(long_result.into()),
             outcome: Some(crate::protocol::ToolOutcomeWire::Failed),
             live_status: None,
             progress: None,
@@ -1344,7 +1346,7 @@ fn tool_cards_use_state_backgrounds_and_expanded_preview_bounds() {
         request_index: 0,
         tool_call_id: "c".into(),
         name: "read".into(),
-        result: Some("data".into()),
+        result: Some(Arc::<str>::from("data")),
         outcome,
         live_status: None,
         progress: None,
@@ -1397,7 +1399,7 @@ fn tool_expanded_preview_remains_available_without_a_fixed_renderer_cap() {
         request_index: 0,
         tool_call_id: "c".into(),
         name: "bash".into(),
-        result: Some(result.to_owned()),
+        result: Some(result.to_owned().into()),
         outcome: Some(crate::protocol::ToolOutcomeWire::Success),
         live_status: None,
         progress: None,

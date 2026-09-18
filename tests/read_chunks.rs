@@ -41,7 +41,11 @@ fn paged_chunks_reconstruct_real_runtime_items_exactly() {
         for chunk in page["items"].as_array().unwrap() {
             match assembler.push(read_chunks(chunk.clone())).unwrap() {
                 Assembled::Pending => {}
-                Assembled::Item { index, item } => items.push((index, item)),
+                Assembled::EncodedItem { item } => {
+                    let decoded = minicore_tui::protocol::read::decode_item(&item.data)
+                        .expect("fixture item decodes");
+                    items.push((item.index, decoded));
+                }
                 Assembled::LargeItem { .. } | Assembled::LargeItemPending { .. } => {
                     panic!("long fixture must fit the auto budget")
                 }
@@ -84,8 +88,11 @@ fn assembled_item_round_trips_the_canonical_bytes() {
     let mut assembler = ChunkAssembler::new();
     let mut decoded = Vec::new();
     for chunk in page.items.iter().cloned() {
-        if let Assembled::Item { item, .. } = assembler.push(chunk).unwrap() {
-            decoded.push(item);
+        if let Assembled::EncodedItem { item } = assembler.push(chunk).unwrap() {
+            decoded.push(
+                minicore_tui::protocol::read::decode_item(&item.data)
+                    .expect("fixture item decodes"),
+            );
         }
     }
     assert_eq!(decoded.len(), 2);
@@ -153,7 +160,7 @@ fn trailing_incomplete_tail_is_not_fabricated() {
     let mut assembler = ChunkAssembler::new();
     let mut items = 0;
     for chunk in page.items.iter().cloned() {
-        if let Assembled::Item { .. } = assembler.push(chunk).unwrap() {
+        if let Assembled::EncodedItem { .. } = assembler.push(chunk).unwrap() {
             items += 1;
         }
     }
@@ -383,8 +390,10 @@ fn turn_result_pages_decode_all_availabilities() {
     let mut assembler = ChunkAssembler::new();
     let mut items = Vec::new();
     for chunk in stored.items.iter().cloned() {
-        if let Assembled::Item { index, item } = assembler.push(chunk).unwrap() {
-            items.push((index, item));
+        if let Assembled::EncodedItem { item } = assembler.push(chunk).unwrap() {
+            let decoded = minicore_tui::protocol::read::decode_item(&item.data)
+                .expect("fixture item decodes");
+            items.push((item.index, decoded));
         }
     }
     assert_eq!(items.len(), 2);
