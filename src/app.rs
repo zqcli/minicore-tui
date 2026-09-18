@@ -786,7 +786,7 @@ impl App {
                     .is_some_and(|result| result.persistence == Some(TurnPersistenceWire::Failed))
         });
         let unconfirmed = self.sessions.known.values().any(|view| {
-            view.needs_result_confirmation()
+            view.result_confirmation != ResultConfirmation::Confirmed
                 || view.live.as_ref().is_some_and(|live| {
                     live.last_result
                         .as_ref()
