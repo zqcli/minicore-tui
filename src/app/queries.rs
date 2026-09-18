@@ -9,7 +9,7 @@
 //! scheduler: a repeated refresh of the same key records one `refresh_needed`
 //! flag, never a queue of duplicate requests.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 use crate::protocol::RequestId;
 
@@ -22,6 +22,8 @@ pub enum QueryKey {
     History { session_id: String, generation: u64 },
     /// An authoritative `turn.result` read-back, keyed by the exact turn.
     TurnResult { session_id: String, loop_id: String },
+    /// A bounded context snapshot used by preparation/compaction polling.
+    Context { session_id: String, generation: u64 },
 }
 
 /// The result of asking to start a read.
@@ -42,6 +44,8 @@ pub enum QueryAdmission {
 pub struct QuerySlots {
     in_flight: Vec<(RequestId, QueryKey)>,
     refresh_needed: HashSet<QueryKey>,
+    waiting: VecDeque<QueryKey>,
+    waiting_set: HashSet<QueryKey>,
 }
 
 impl QuerySlots {
@@ -72,7 +76,12 @@ impl QuerySlots {
             self.refresh_needed.insert(key);
             return QueryAdmission::Coalesced;
         }
+        if self.waiting_set.contains(&key) {
+            return QueryAdmission::Coalesced;
+        }
         if self.in_flight.len() >= Self::CAPACITY {
+            self.waiting_set.insert(key.clone());
+            self.waiting.push_back(key);
             return QueryAdmission::Busy;
         }
         self.in_flight.push((request_id, key));
@@ -82,14 +91,21 @@ impl QuerySlots {
     /// Frees the slot owned by `request_id`, returning its key and whether a
     /// refresh was requested while it was in flight. An unknown id is a no-op
     /// (a stale or duplicated response must not corrupt the counters).
-    pub fn on_query_finished(&mut self, request_id: RequestId) -> Option<(QueryKey, bool)> {
+    pub fn on_query_finished(
+        &mut self,
+        request_id: RequestId,
+    ) -> Option<(QueryKey, bool, Option<QueryKey>)> {
         let position = self
             .in_flight
             .iter()
             .position(|(id, _)| *id == request_id)?;
         let (_, key) = self.in_flight.remove(position);
         let refresh = self.refresh_needed.remove(&key);
-        Some((key, refresh))
+        let ready = self.waiting.pop_front();
+        if let Some(ready) = ready.as_ref() {
+            self.waiting_set.remove(ready);
+        }
+        Some((key, refresh, ready))
     }
 
     /// Drops every key in the scope and forgets its pending refresh, so a late
@@ -97,6 +113,15 @@ impl QuerySlots {
     /// request keeps its slot until it actually finishes (spec §5.3).
     pub fn invalidate_scope(&mut self, scope: &QueryScope) {
         self.refresh_needed.retain(|key| !scope.matches(key));
+        let mut retained = VecDeque::new();
+        while let Some(key) = self.waiting.pop_front() {
+            if scope.matches(&key) {
+                self.waiting_set.remove(&key);
+            } else {
+                retained.push_back(key);
+            }
+        }
+        self.waiting = retained;
     }
 
     /// Whether a refresh was requested for `key` while it was in flight.
@@ -120,6 +145,7 @@ impl QueryScope {
             Self::Session(session_id) => match key {
                 QueryKey::History { session_id: id, .. } => id == session_id,
                 QueryKey::TurnResult { session_id: id, .. } => id == session_id,
+                QueryKey::Context { session_id: id, .. } => id == session_id,
             },
         }
     }
@@ -151,7 +177,7 @@ mod tests {
         // Finishing the first reports the coalesced refresh exactly once.
         assert_eq!(
             slots.on_query_finished(RequestId(1)),
-            Some((history("ses_1"), true))
+            Some((history("ses_1"), true, None))
         );
         assert_eq!(slots.on_query_finished(RequestId(1)), None);
     }
@@ -212,7 +238,7 @@ mod tests {
         assert_eq!(slots.in_flight_len(), 1, "the remote read keeps its slot");
         assert_eq!(
             slots.on_query_finished(RequestId(1)),
-            Some((history("ses_1"), false)),
+            Some((history("ses_1"), false, None)),
             "a closed view does not schedule a follow-up read"
         );
     }

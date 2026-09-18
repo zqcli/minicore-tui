@@ -6,10 +6,13 @@
 
 use std::path::PathBuf;
 
-use minicore_tui::app::history::TurnResultWindow;
+use minicore_tui::app::history::{
+    HistoryWindow, ReadApply, ReadPage, TurnResultWindow, apply_page,
+};
 use minicore_tui::protocol::read::{
-    Assembled, ChunkAssembler, ReadError, ReadSessionResult, RuntimeAssistantPart, RuntimeItem,
-    RuntimeUserKind, SnapshotPin, TurnAvailability, TurnResultPage,
+    Assembled, ChunkAssembler, ReadChunk, ReadCursor, ReadError, ReadSessionResult,
+    RuntimeAssistantPart, RuntimeItem, RuntimeUserKind, SnapshotPin, TurnAvailability,
+    TurnResultPage,
 };
 use serde_json::Value;
 
@@ -39,7 +42,9 @@ fn paged_chunks_reconstruct_real_runtime_items_exactly() {
             match assembler.push(read_chunks(chunk.clone())).unwrap() {
                 Assembled::Pending => {}
                 Assembled::Item { index, item } => items.push((index, item)),
-                Assembled::LargeItem { .. } => panic!("long fixture must fit the auto budget"),
+                Assembled::LargeItem { .. } | Assembled::LargeItemPending { .. } => {
+                    panic!("long fixture must fit the auto budget")
+                }
             }
         }
     }
@@ -183,7 +188,11 @@ fn oversized_item_becomes_a_placeholder() {
         data: head.into(),
         complete: false,
     };
-    assert_eq!(assembler.push(first).unwrap(), Assembled::Pending);
+    assert!(matches!(
+        assembler.push(first).unwrap(),
+        Assembled::LargeItemPending { index: 0, total_bytes: value } if value == total
+    ));
+    assert_eq!(assembler.current_index(), Some(0));
     let last = minicore_tui::protocol::read::ReadChunk {
         index: 0,
         offset: head.len(),
@@ -200,6 +209,80 @@ fn oversized_item_becomes_a_placeholder() {
         other => panic!("expected a LargeItem placeholder, got {other:?}"),
     }
     assert!(assembler.current_index().is_none(), "placeholder released");
+}
+
+/// Page-level malformed shapes are rejected deterministically and never
+/// advance a window as if the page were complete.
+#[test]
+fn malformed_history_pages_do_not_advance_or_fabricate_completion() {
+    let base: ReadSessionResult =
+        serde_json::from_value(fixture("session-read-first-page")["result"].clone()).unwrap();
+
+    let mut offset_page = base.clone();
+    offset_page.items.truncate(1);
+    offset_page.items[0].offset = 1;
+    offset_page.total = 1;
+    offset_page.next_cursor = None;
+    let mut window = HistoryWindow::default();
+    window.install_pin(SnapshotPin {
+        captured_end: base.captured_end,
+        history_revision: base.history_revision.clone(),
+        total: 1,
+    });
+    let mut read = ReadPage::new(ReadCursor::start(), None, 0);
+    let result = apply_page(&mut window, &mut read, &offset_page).unwrap();
+    assert!(matches!(
+        result,
+        ReadApply::Ok(page) if matches!(page.error, Some(ReadError::OffsetMismatch { .. }))
+    ));
+    assert!(!window.complete());
+
+    let mut empty_page = base.clone();
+    empty_page.items.clear();
+    empty_page.total = 1;
+    empty_page.next_cursor = Some(ReadCursor::start());
+    let mut read = ReadPage::new(ReadCursor::start(), None, 0);
+    let result = apply_page(&mut window, &mut read, &empty_page).unwrap();
+    assert!(matches!(
+        result,
+        ReadApply::Ok(page) if matches!(page.error, Some(ReadError::CursorStalled { .. }))
+    ));
+
+    let mut missing_tail = base;
+    missing_tail.items.truncate(1);
+    missing_tail.total = 2;
+    missing_tail.next_cursor = None;
+    let mut read = ReadPage::new(ReadCursor::start(), None, 0);
+    let result = apply_page(&mut window, &mut read, &missing_tail).unwrap();
+    assert!(matches!(
+        result,
+        ReadApply::Ok(page) if matches!(page.error, Some(ReadError::NonContiguous { expected: 1, found: 2 }))
+    ));
+}
+
+#[test]
+fn large_item_gap_is_rejected_before_placeholder_installation() {
+    let mut page: ReadSessionResult =
+        serde_json::from_value(fixture("session-read-first-page")["result"].clone()).unwrap();
+    let total = minicore_tui::protocol::MAX_AUTO_ITEM_BYTES + 1;
+    page.items = vec![ReadChunk {
+        index: 1,
+        offset: 0,
+        total_bytes: total,
+        encoding: "utf8_json".to_owned(),
+        data: "x".repeat(total),
+        complete: true,
+    }];
+    page.total = 2;
+    page.next_cursor = None;
+    let mut window = HistoryWindow::default();
+    let mut read = ReadPage::new(ReadCursor::start(), None, 0);
+    let result = apply_page(&mut window, &mut read, &page).unwrap();
+    assert!(matches!(
+        result,
+        ReadApply::Ok(page) if matches!(page.error, Some(ReadError::NonContiguous { expected: 0, found: 1 }))
+    ));
+    assert!(window.is_empty());
 }
 
 /// A chunk whose declared total does not match the assembled byte count is a
@@ -258,6 +341,21 @@ fn valid_snapshot_pins_require_the_agent_revision_shape() {
         .validate()
         .is_err()
     );
+}
+
+#[test]
+fn pending_turn_result_does_not_freeze_a_zero_total_snapshot() {
+    let pending: TurnResultPage =
+        serde_json::from_value(fixture("turn-result-pending")["result"].clone()).unwrap();
+    let stored: TurnResultPage =
+        serde_json::from_value(fixture("turn-result-stored")["result"].clone()).unwrap();
+    let mut window = TurnResultWindow::new(pending.turn.clone());
+    window.apply_page(&pending).unwrap();
+    assert_eq!(window.total, None);
+    assert!(!window.complete);
+    window.apply_page(&stored).unwrap();
+    assert_eq!(window.total, Some(stored.total));
+    assert!(window.complete);
 }
 
 #[test]

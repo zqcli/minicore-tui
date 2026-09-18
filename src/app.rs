@@ -395,9 +395,10 @@ pub struct App {
     /// Exact wait/result summaries retained across reload/reopen boundaries.
     retained_results: HashMap<TurnRef, crate::protocol::TurnResultViewWire>,
     retained_result_order: VecDeque<TurnRef>,
-    /// A coalesced refresh that must be dispatched after the current response's
-    /// own commands, so a follow-up read never overtakes the response handling.
-    pending_query_followups: Vec<AppCommand>,
+    /// Read keys whose slot became available while a response was being
+    /// reduced. They are converted to requests only after the page/result
+    /// handler has installed its newest cursor.
+    pending_query_followups: VecDeque<crate::app::queries::QueryKey>,
     next_request_id: RequestId,
     next_state_query: u64,
     next_submission: u64,
@@ -548,7 +549,7 @@ impl App {
             turn_results: HashMap::new(),
             retained_results: HashMap::new(),
             retained_result_order: VecDeque::new(),
-            pending_query_followups: Vec::new(),
+            pending_query_followups: VecDeque::new(),
             next_request_id: RequestId(0),
             next_state_query: 0,
             next_submission: 0,
@@ -682,7 +683,7 @@ impl App {
                 || view
                     .last_result
                     .as_ref()
-                    .is_some_and(|result| result.persistence == TurnPersistenceWire::Failed)
+                    .is_some_and(|result| result.persistence == Some(TurnPersistenceWire::Failed))
         });
         let unconfirmed = self.sessions.known.values().any(|view| {
             view.result_unconfirmed
@@ -1050,9 +1051,10 @@ impl App {
             let advance = self.advance_steer_queues();
             commands.extend(advance);
         }
-        // A coalesced read refresh waits until the response that freed the slot
-        // has been fully handled, so it can never overtake that reducer pass.
-        commands.append(&mut self.pending_query_followups);
+        // A coalesced/queued read waits until the response that freed the slot
+        // has been fully handled, so it observes the newest cursor and never
+        // overtakes that reducer pass.
+        self.drain_query_followups(&mut commands);
         self.sync_spinner_deadline();
         if let Some((was_dirty, before)) = scroll_visual_before {
             self.dirty = was_dirty || before != self.scroll_visual_state() || !commands.is_empty();
@@ -3584,7 +3586,7 @@ impl App {
             let settled = view.live.is_none()
                 && view.last_result.as_ref().is_some_and(|result| {
                     result.outcome == crate::protocol::LoopOutcomeWire::Completed
-                        && result.persistence == TurnPersistenceWire::Persisted
+                        && result.persistence == Some(TurnPersistenceWire::Persisted)
                 })
                 && view.transcript.complete
                 && !view.event_gap
@@ -4055,37 +4057,44 @@ impl App {
     /// asked to refresh while in flight runs once more, so a burst of requests
     /// coalesces into at most one follow-up read (spec §5.3).
     fn free_query_slot(&mut self, id: RequestId) {
-        let Some((key, refresh)) = self.queries.on_query_finished(id) else {
+        let Some((key, refresh, ready)) = self.queries.on_query_finished(id) else {
             return;
         };
-        if !refresh {
-            return;
+        if refresh {
+            self.pending_query_followups.push_back(key);
         }
-        match key {
-            crate::app::queries::QueryKey::History { session_id, .. } => {
-                if self.sessions.known.contains_key(&session_id) {
-                    if let Some(command) = self.request_history(&session_id) {
-                        self.pending_query_followups.push(command);
-                    }
-                }
-            }
-            crate::app::queries::QueryKey::TurnResult {
-                session_id,
-                loop_id,
-            } => {
-                let turn = TurnRef {
+        if let Some(ready) = ready {
+            self.pending_query_followups.push_back(ready);
+        }
+    }
+
+    fn drain_query_followups(&mut self, commands: &mut Vec<AppCommand>) {
+        while let Some(key) = self.pending_query_followups.pop_front() {
+            let command = match key {
+                crate::app::queries::QueryKey::History { session_id, .. } => self
+                    .sessions
+                    .known
+                    .contains_key(&session_id)
+                    .then(|| self.request_history(&session_id))
+                    .flatten(),
+                crate::app::queries::QueryKey::TurnResult {
                     session_id,
                     loop_id,
-                };
-                if let Some(command) = self
-                    .turn_results
-                    .get(&turn)
-                    .filter(|window| !window.complete)
-                    .map(|window| (turn.clone(), window.cursor))
-                    .and_then(|(turn, cursor)| self.request_turn_result_page(turn, cursor))
-                {
-                    self.pending_query_followups.push(command);
+                } => {
+                    let turn = TurnRef {
+                        session_id,
+                        loop_id,
+                    };
+                    self.turn_results
+                        .get(&turn)
+                        .filter(|window| !window.complete)
+                        .map(|window| (turn.clone(), window.cursor))
+                        .and_then(|(turn, cursor)| self.request_turn_result_page(turn, cursor))
                 }
+                crate::app::queries::QueryKey::Context { .. } => None,
+            };
+            if let Some(command) = command {
+                commands.push(command);
             }
         }
     }
@@ -5491,11 +5500,11 @@ impl App {
         view.transcript.complete
             && (view.last_result.as_ref().is_some_and(|result| {
                 result.turn.loop_id == loop_id
-                    && result.persistence == TurnPersistenceWire::Persisted
+                    && result.persistence == Some(TurnPersistenceWire::Persisted)
             }) || view.live.as_ref().is_some_and(|live| {
                 live.last_result.as_ref().is_some_and(|result| {
                     result.turn.loop_id == loop_id
-                        && result.persistence == TurnPersistenceWire::Persisted
+                        && result.persistence == Some(TurnPersistenceWire::Persisted)
                 })
             }))
             && view
@@ -6550,7 +6559,7 @@ impl App {
             view.result_unconfirmed = view
                 .last_result
                 .as_ref()
-                .is_some_and(|result| result.persistence == TurnPersistenceWire::Failed);
+                .is_some_and(|result| result.persistence == Some(TurnPersistenceWire::Failed));
         }
         let opened_id = session_id.clone();
         let during_reload = self.reload.is_some();
@@ -6922,6 +6931,13 @@ impl App {
                     for (index, total_bytes) in &applied.placeholders {
                         install_history_placeholder(view, *index, *total_bytes);
                     }
+                    if applied.explicit_large_item && window_start == 0 {
+                        view.read_page = Some(page_state);
+                        view.transcript.next_cursor = applied.next;
+                        view.transcript.sync_from_window();
+                        view.loading = false;
+                        return Vec::new();
+                    }
                     // A probe that already delivered the whole prefix (a short
                     // history) needs no further read.
                     if applied.next.is_none() {
@@ -7039,6 +7055,12 @@ impl App {
         view.read_page = Some(page_state);
         view.transcript.next_cursor = applied.next;
 
+        if applied.explicit_large_item {
+            view.transcript.sync_from_window();
+            view.loading = false;
+            return Vec::new();
+        }
+
         let next = match applied.next {
             Some(_) => {
                 view.transcript.sync_from_window();
@@ -7105,13 +7127,14 @@ impl App {
         let same_turn_persisted = match &live_loop_id {
             Some(id) => {
                 view.last_result.as_ref().is_some_and(|r| {
-                    r.persistence == TurnPersistenceWire::Persisted && r.turn.loop_id == *id
+                    r.persistence == Some(TurnPersistenceWire::Persisted) && r.turn.loop_id == *id
                 }) || view
                     .live
                     .as_ref()
                     .and_then(|l| l.last_result.as_ref())
                     .is_some_and(|r| {
-                        r.persistence == TurnPersistenceWire::Persisted && r.turn.loop_id == *id
+                        r.persistence == Some(TurnPersistenceWire::Persisted)
+                            && r.turn.loop_id == *id
                     })
             }
             None => true,
@@ -7518,13 +7541,13 @@ impl App {
                 view.live.as_ref().is_some_and(|live| {
                     live.reference.as_ref() == Some(&turn) && live.last_result.is_some()
                 }) || view.last_result.as_ref().is_some_and(|r| {
-                    r.turn == turn && r.persistence == TurnPersistenceWire::Persisted
+                    r.turn == turn && r.persistence == Some(TurnPersistenceWire::Persisted)
                 })
             })
             || self
                 .retained_results
                 .get(&turn)
-                .is_some_and(|result| result.persistence == TurnPersistenceWire::Persisted)
+                .is_some_and(|result| result.persistence == Some(TurnPersistenceWire::Persisted))
         {
             return None;
         }
@@ -7768,13 +7791,13 @@ impl App {
             .is_some_and(|view| Self::wait_targets_current_turn(view, &turn));
         if !current_turn {
             if parsed.as_ref().is_ok_and(|result| {
-                result.turn == turn && result.persistence == TurnPersistenceWire::Failed
+                result.turn == turn && result.persistence == Some(TurnPersistenceWire::Failed)
             }) {
                 return self.recover_turn(turn).into_iter().collect();
             }
             return Vec::new();
         }
-        let (persistence_failed, result, duplicate) = {
+        let (persistence_failed, persistence_unknown, result, duplicate) = {
             let view = self
                 .sessions
                 .known
@@ -7791,10 +7814,10 @@ impl App {
                         let live = view.live.as_mut().expect("matching live turn exists");
                         live.waiting = true;
                     }
-                    (false, None, false)
+                    (false, false, None, false)
                 }
                 Ok(result) => {
-                    let failed = result.persistence == TurnPersistenceWire::Failed;
+                    let failed = result.persistence == Some(TurnPersistenceWire::Failed);
                     let duplicate = old_result.as_ref() == Some(result);
                     if live_matches {
                         let live = view.live.as_mut().expect("matching live turn exists");
@@ -7803,14 +7826,19 @@ impl App {
                             live.last_result = Some(result.clone());
                         }
                     }
-                    (failed, Some(result.clone()), duplicate)
+                    (
+                        failed,
+                        result.persistence.is_none(),
+                        Some(result.clone()),
+                        duplicate,
+                    )
                 }
                 Err(_) => {
                     if live_matches {
                         let live = view.live.as_mut().expect("matching live turn exists");
                         live.waiting = true;
                     }
-                    (false, None, false)
+                    (false, false, None, false)
                 }
             }
         };
@@ -7847,6 +7875,17 @@ impl App {
                 if let Some(live) = view.live.as_mut() {
                     live.waiting = true;
                 }
+            }
+            return self.recover_turn(turn).into_iter().collect();
+        }
+
+        if persistence_unknown {
+            self.notice(
+                NoticeLevel::Warning,
+                "turn.wait did not report persistence; result remains unconfirmed",
+            );
+            if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
+                view.result_unconfirmed = true;
             }
             return self.recover_turn(turn).into_iter().collect();
         }
@@ -7909,12 +7948,14 @@ impl App {
         Some(crate::protocol::TurnResultViewWire {
             turn: page.turn.clone(),
             outcome: page.outcome.clone()?,
-            usage: page.usage.unwrap_or_default(),
-            requests: page.requests.unwrap_or(0),
-            tool_rounds: page.tool_rounds.unwrap_or(0),
-            final_config_revision: page.final_config_revision.unwrap_or(0),
-            persistence: page.persistence?,
-            accepted_at: page.completed_at.clone(),
+            usage: page.usage,
+            requests: page.requests,
+            tool_rounds: page.tool_rounds,
+            final_config_revision: page.final_config_revision,
+            persistence: page.persistence,
+            // `turn.result.completed_at` is not prompt acceptance time.
+            accepted_at: None,
+            completed_at: page.completed_at.clone(),
         })
     }
 
@@ -7933,6 +7974,7 @@ impl App {
         turn: &TurnRef,
         result: &crate::protocol::TurnResultViewWire,
     ) {
+        self.project_turn_result_into_live(turn, result);
         let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
             return;
         };
@@ -7968,6 +8010,57 @@ impl App {
         }
         Self::mark_pending_steers_unconfirmed(view);
         view.recompute_usage_projection();
+    }
+
+    /// Rebuilds the readable provisional body from the authoritative
+    /// turn-local result window. This is deliberately kept in `LiveLoop` only
+    /// as a display bridge; the local item indexes never enter the session
+    /// history window. In particular, a persistence failure with dropped live
+    /// deltas still exposes the complete retained report before the user
+    /// closes or reopens the session.
+    fn project_turn_result_into_live(
+        &mut self,
+        turn: &TurnRef,
+        result: &crate::protocol::TurnResultViewWire,
+    ) {
+        let Some(window) = self.turn_results.get(turn) else {
+            return;
+        };
+        if !window.complete {
+            return;
+        }
+        let (local_submission, fallback_text, cancel_requested, event_gap, pending_steers) = self
+            .sessions
+            .known
+            .get(&turn.session_id)
+            .and_then(|view| view.live.as_ref())
+            .map(|live| {
+                (
+                    live.local_submission,
+                    live.user_text.clone(),
+                    live.cancel_requested,
+                    live.event_gap,
+                    live.pending_steers.clone(),
+                )
+            })
+            .unwrap_or((
+                LocalSubmissionId(u64::MAX),
+                String::new(),
+                false,
+                false,
+                Vec::new(),
+            ));
+        let mut projected =
+            live_loop_from_turn_result(turn, window, local_submission, fallback_text);
+        projected.waiting = true;
+        projected.cancel_requested = cancel_requested;
+        projected.event_gap = event_gap;
+        projected.pending_steers = pending_steers;
+        projected.last_result = Some(result.clone());
+        if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
+            view.live = Some(projected);
+            view.transcript.invalidate();
+        }
     }
 
     /// Settles an authoritative `turn.result` read-back (spec §7.2). Pages
@@ -8026,7 +8119,8 @@ impl App {
             if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
                 if Self::wait_targets_current_turn(view, turn) {
                     view.last_result = Some(result.clone());
-                    view.result_unconfirmed = result.persistence != TurnPersistenceWire::Persisted;
+                    view.result_unconfirmed =
+                        result.persistence != Some(TurnPersistenceWire::Persisted);
                     if let Some(live) = view.live.as_mut() {
                         if live.reference.as_ref() == Some(turn) {
                             live.last_result = Some(result.clone());
@@ -8038,19 +8132,35 @@ impl App {
             }
         }
 
-        let (complete, next_cursor) = self
+        let (complete, next_cursor, explicit_large_item) = self
             .turn_results
             .get(turn)
-            .map(|window| (window.complete, (!window.complete).then_some(window.cursor)))
-            .unwrap_or((false, None));
-        if !complete {
-            let Some(cursor) = next_cursor else {
-                return Vec::new();
-            };
-            return self
-                .request_turn_result_page(turn.clone(), cursor)
-                .into_iter()
-                .collect();
+            .map(|window| {
+                (
+                    window.complete,
+                    (!window.complete).then_some(window.cursor),
+                    window.explicit_large_item,
+                )
+            })
+            .unwrap_or((false, None, false));
+        if !complete && !explicit_large_item {
+            if let Some(cursor) = next_cursor {
+                return self
+                    .request_turn_result_page(turn.clone(), cursor)
+                    .into_iter()
+                    .collect();
+            }
+        }
+
+        if explicit_large_item {
+            self.notice(
+                NoticeLevel::Info,
+                format!(
+                    "result for {}/{} contains a large item; read it explicitly to continue",
+                    turn.session_id, turn.loop_id
+                ),
+            );
+            return Vec::new();
         }
 
         if page.availability == TurnAvailability::Pending {
@@ -8074,7 +8184,21 @@ impl App {
         let Some(result) = Self::turn_result_view(&page) else {
             return Vec::new();
         };
-        if result.persistence == TurnPersistenceWire::Failed {
+        if result.persistence.is_none() {
+            if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
+                view.result_unconfirmed = true;
+            }
+            self.notice(
+                NoticeLevel::Warning,
+                format!(
+                    "result read-back for {}/{} omitted persistence; outcome remains unconfirmed",
+                    turn.session_id, turn.loop_id
+                ),
+            );
+            return Vec::new();
+        }
+        if result.persistence == Some(TurnPersistenceWire::Failed) {
+            self.project_turn_result_into_live(turn, &result);
             self.retain_failed_result_on_view(turn, &result);
             self.notice(
                 NoticeLevel::Error,
@@ -10169,6 +10293,120 @@ fn tool_outcome_status(outcome: ToolOutcomeWire) -> ToolStatus {
 
 fn has_item_index(blocks: &[TranscriptBlock], index: usize) -> bool {
     blocks.iter().any(|block| block.index() == Some(index))
+}
+
+fn live_loop_from_turn_result(
+    turn: &TurnRef,
+    window: &crate::app::history::TurnResultWindow,
+    local_submission: LocalSubmissionId,
+    fallback_text: String,
+) -> LiveLoop {
+    use crate::protocol::read::{RuntimeAssistantPart, RuntimeItem, RuntimeUserKind};
+
+    let mut live = LiveLoop::new(local_submission, fallback_text);
+    live.reference = Some(turn.clone());
+    for item in window.items.values() {
+        match &item.item {
+            RuntimeItem::User(user) => {
+                if user.kind == RuntimeUserKind::Prompt {
+                    live.user_text = user.input.text.clone();
+                }
+            }
+            RuntimeItem::Assistant(assistant) => {
+                let reasoning = assistant
+                    .reasoning
+                    .as_deref()
+                    .and_then(|value| {
+                        serde_json::from_value::<Reasoning>(serde_json::Value::String(
+                            value.to_owned(),
+                        ))
+                        .ok()
+                    })
+                    .unwrap_or_default();
+                let request = live.ensure_request_mut(
+                    assistant.request_index,
+                    0,
+                    assistant.model.clone(),
+                    reasoning,
+                );
+                for part in &assistant.content {
+                    match part {
+                        RuntimeAssistantPart::Text(text) => {
+                            if !text.is_empty() {
+                                request.text.push_str(text);
+                                request.parts.push(LivePart::Text(text.clone()));
+                            }
+                        }
+                        RuntimeAssistantPart::Reasoning { text, summary, .. } => {
+                            let body = text.clone().or_else(|| summary.clone()).unwrap_or_default();
+                            if !body.is_empty() {
+                                request.reasoning_text.push_str(&body);
+                                request.parts.push(LivePart::Reasoning(body));
+                            }
+                        }
+                        RuntimeAssistantPart::ToolCall {
+                            tool_call_id, name, ..
+                        } => {
+                            request.parts.push(LivePart::Tool {
+                                tool_call_id: tool_call_id.clone(),
+                            });
+                            if !request
+                                .tools
+                                .iter()
+                                .any(|tool| tool.tool_call_id == *tool_call_id)
+                            {
+                                request.tools.push(crate::state::tool::LiveTool {
+                                    tool_call_id: tool_call_id.clone(),
+                                    name: name.clone(),
+                                    status: ToolStatus::Pending,
+                                    progress: None,
+                                    display: None,
+                                    result: None,
+                                    result_truncated: false,
+                                    expanded: false,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            RuntimeItem::ToolResult(tool_result) => {
+                let status = tool_outcome_status(
+                    serde_json::from_value::<ToolOutcomeWire>(serde_json::Value::String(
+                        tool_result.outcome.clone(),
+                    ))
+                    .unwrap_or(ToolOutcomeWire::Unknown),
+                );
+                if let Some(request) = live
+                    .requests
+                    .iter_mut()
+                    .find(|request| request.request_index == tool_result.request_index)
+                {
+                    if let Some(tool) = request
+                        .tools
+                        .iter_mut()
+                        .find(|tool| tool.tool_call_id == tool_result.call_id)
+                    {
+                        tool.status = status;
+                        tool.result = Some(tool_result.output.content.clone());
+                    } else {
+                        request.tools.push(crate::state::tool::LiveTool {
+                            tool_call_id: tool_result.call_id.clone(),
+                            name: tool_result.tool_name.clone(),
+                            status,
+                            progress: None,
+                            display: None,
+                            result: Some(tool_result.output.content.clone()),
+                            result_truncated: false,
+                            expanded: false,
+                        });
+                    }
+                }
+            }
+            RuntimeItem::Summary(_) => {}
+        }
+    }
+    live
 }
 
 fn install_history_placeholder(view: &mut SessionView, index: usize, total_bytes: usize) {
@@ -14754,12 +14992,13 @@ mod steer_receipt_tests {
                     loop_id: "loop_live".into(),
                 },
                 outcome: crate::protocol::LoopOutcomeWire::Completed,
-                usage: crate::protocol::UsageWire::default(),
-                requests: 1,
-                tool_rounds: 0,
-                final_config_revision: 0,
-                persistence: crate::protocol::TurnPersistenceWire::Persisted,
+                usage: Some(crate::protocol::UsageWire::default()),
+                requests: Some(1),
+                tool_rounds: Some(0),
+                final_config_revision: Some(0),
+                persistence: Some(crate::protocol::TurnPersistenceWire::Persisted),
                 accepted_at: None,
+                completed_at: None,
             });
         }
         let terminal = RpcResponse {

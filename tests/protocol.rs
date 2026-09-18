@@ -107,8 +107,8 @@ fn event_fixtures_keep_request_index_and_tool_outcome() {
 fn turn_wait_is_a_direct_turn_result_view() {
     let result = response("turn-wait.json").parse_turn_wait().unwrap();
     assert_eq!(result.turn.loop_id, "loop_77aa");
-    assert_eq!(result.requests, 1);
-    assert_eq!(result.persistence, TurnPersistenceWire::Persisted);
+    assert_eq!(result.requests, Some(1));
+    assert_eq!(result.persistence, Some(TurnPersistenceWire::Persisted));
 }
 
 #[test]
@@ -187,7 +187,7 @@ fn unknown_fields_and_usage_defaults_and_outcome_tolerance() {
     let result: minicore_tui::protocol::TurnResultViewWire =
         serde_json::from_value(result_json).unwrap();
     assert_eq!(result.turn.loop_id, "loop_1");
-    assert_eq!(result.requests, 1);
-    assert_eq!(result.usage.input_tokens, Some(42));
-    assert_eq!(result.usage.output_tokens, None);
+    assert_eq!(result.requests, Some(1));
+    assert_eq!(result.usage.as_ref().unwrap().input_tokens, Some(42));
+    assert_eq!(result.usage.as_ref().unwrap().output_tokens, None);
 }

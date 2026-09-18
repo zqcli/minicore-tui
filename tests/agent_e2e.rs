@@ -2411,15 +2411,18 @@ fn e2e_scenario_e_same_loop_update() {
             "Loop ID must remain identical throughout dynamic update (no cancel+send)"
         );
         assert_eq!(
-            last_result.requests, 2,
+            last_result.requests,
+            Some(2),
             "Must execute exactly 2 requests in this turn"
         );
         assert_eq!(
-            last_result.tool_rounds, 1,
+            last_result.tool_rounds,
+            Some(1),
             "Must execute exactly 1 tool round"
         );
         assert_eq!(
-            last_result.final_config_revision, assigned_revision,
+            last_result.final_config_revision,
+            Some(assigned_revision),
             "final_config_revision must match the updated revision"
         );
 
@@ -2579,8 +2582,8 @@ fn e2e_scenario_e2_update_single_request_then_next_turn() {
             .last_result
             .as_ref()
             .unwrap();
-        assert_eq!(t1_res.requests, 1, "Turn 1 must not be extended");
-        assert_eq!(t1_res.tool_rounds, 0);
+        assert_eq!(t1_res.requests, Some(1), "Turn 1 must not be extended");
+        assert_eq!(t1_res.tool_rounds, Some(0));
 
         // Submit Turn 2
         dispatch(
@@ -2706,7 +2709,7 @@ fn e2e_scenario_f_shutdown_cancels_active_wait() {
         );
         assert_eq!(
             wait_res.persistence,
-            TurnPersistenceWire::Persisted,
+            Some(TurnPersistenceWire::Persisted),
             "Cancelled turn must report persistence record"
         );
 
@@ -3122,8 +3125,8 @@ fn e2e_live_request_usage_shows_during_loop_and_persisted_total_replaces_it() {
             .as_ref()
             .expect("loop result")
             .clone();
-        assert_eq!(result.usage.input_tokens, Some(40));
-        assert_eq!(result.usage.output_tokens, Some(50));
+        assert_eq!(result.usage.as_ref().unwrap().input_tokens, Some(40));
+        assert_eq!(result.usage.as_ref().unwrap().output_tokens, Some(50));
         assert_eq!(
             app.sessions.known[&session_id]
                 .usage_projection

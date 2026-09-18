@@ -555,12 +555,13 @@ fn live_tool_fold_survives_presentation_finish_wait_and_history_replacement() {
                 loop_id: "loop_live".to_owned(),
             },
             outcome: crate::protocol::LoopOutcomeWire::Completed,
-            persistence: crate::protocol::TurnPersistenceWire::Persisted,
-            usage: UsageWire::default(),
-            requests: 1,
-            tool_rounds: 1,
-            final_config_revision: 0,
+            persistence: Some(crate::protocol::TurnPersistenceWire::Persisted),
+            usage: Some(UsageWire::default()),
+            requests: Some(1),
+            tool_rounds: Some(1),
+            final_config_revision: Some(0),
             accepted_at: None,
+            completed_at: None,
         });
         view.live = None;
         view.transcript

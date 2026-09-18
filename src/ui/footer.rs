@@ -637,19 +637,20 @@ mod tests {
                 loop_id: "loop_1".to_owned(),
             },
             outcome: crate::protocol::LoopOutcomeWire::Completed,
-            usage: crate::protocol::UsageWire {
+            usage: Some(crate::protocol::UsageWire {
                 input_tokens: Some(4_200),
                 output_tokens: Some(67_100),
                 reasoning_tokens: None,
                 cache_read_tokens: Some(7_900_000),
                 cache_write_tokens: Some(0),
                 provider_total_tokens: None,
-            },
-            requests: 1,
-            tool_rounds: 0,
-            final_config_revision: 0,
-            persistence: crate::protocol::TurnPersistenceWire::Persisted,
+            }),
+            requests: Some(1),
+            tool_rounds: Some(0),
+            final_config_revision: Some(0),
+            persistence: Some(crate::protocol::TurnPersistenceWire::Persisted),
             accepted_at: None,
+            completed_at: None,
         });
         view.recompute_usage_projection();
         view.presentation = Some(crate::protocol::SessionPresentationWire {

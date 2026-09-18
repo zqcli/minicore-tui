@@ -38,8 +38,9 @@ pub(crate) fn result_summary(result: &TurnResultViewWire) -> String {
         }
     };
     let persistence = match result.persistence {
-        TurnPersistenceWire::Persisted => "persisted",
-        TurnPersistenceWire::Failed => "persistence failed",
+        Some(TurnPersistenceWire::Persisted) => "persisted",
+        Some(TurnPersistenceWire::Failed) => "persistence failed",
+        None => "persistence unknown",
     };
     format!("{outcome} · {persistence}")
 }
@@ -49,8 +50,9 @@ pub(crate) fn result_color(result: &TurnResultViewWire, theme: &Theme) -> ratatu
         LoopOutcomeWire::Failed { .. } => theme.error,
         LoopOutcomeWire::Cancelled { .. } => theme.warning,
         LoopOutcomeWire::Completed => match result.persistence {
-            TurnPersistenceWire::Persisted => theme.success,
-            TurnPersistenceWire::Failed => theme.error,
+            Some(TurnPersistenceWire::Persisted) => theme.success,
+            Some(TurnPersistenceWire::Failed) => theme.error,
+            None => theme.warning,
         },
     }
 }

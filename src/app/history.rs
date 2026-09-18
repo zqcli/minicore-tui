@@ -6,7 +6,7 @@
 //! decoded Runtime items; `app.rs` projects them into the short-term
 //! `TranscriptBlock` bridge, which stage C replaces with shared sections.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -35,6 +35,7 @@ pub struct HistoryWindow {
     pin: Option<SnapshotPin>,
     items: BTreeMap<usize, Arc<RawHistoryItem>>,
     large_items: BTreeMap<usize, usize>,
+    pending_large_items: BTreeMap<usize, ()>,
     loaded_ranges: Vec<Range<usize>>,
     bytes: usize,
     pub trailing_incomplete: bool,
@@ -81,17 +82,22 @@ impl HistoryWindow {
     /// Highest contiguous loaded prefix length, used as the incremental read
     /// start when a new turn is persisted (spec §6.4).
     pub fn confirmed_prefix(&self) -> usize {
-        self.loaded_ranges
+        let end = self
+            .loaded_ranges
             .iter()
             .find(|range| range.start == 0)
-            .map_or(0, |range| range.end)
+            .map_or(0, |range| range.end);
+        self.pending_large_items
+            .keys()
+            .next()
+            .map_or(end, |pending| end.min(*pending))
     }
 
     /// True when every item in `[0, total)` is present. An empty session
     /// (total 0) is trivially complete.
     pub fn complete(&self) -> bool {
         let total = self.total();
-        total == 0 || self.confirmed_prefix() >= total
+        total == 0 || (self.pending_large_items.is_empty() && self.confirmed_prefix() >= total)
     }
 
     pub fn has_items(&self) -> bool {
@@ -102,6 +108,7 @@ impl HistoryWindow {
         self.pin = None;
         self.items.clear();
         self.large_items.clear();
+        self.pending_large_items.clear();
         self.loaded_ranges.clear();
         self.bytes = 0;
         self.trailing_incomplete = false;
@@ -123,7 +130,11 @@ impl HistoryWindow {
     /// Inserts one decoded item, returning its `Arc` for the display bridge.
     pub fn insert(&mut self, index: usize, item: RawHistoryItem) -> Arc<RawHistoryItem> {
         let item = Arc::new(item);
+        if let Some(previous) = self.items.remove(&index) {
+            self.bytes = self.bytes.saturating_sub(item_bytes(&previous));
+        }
         self.large_items.remove(&index);
+        self.pending_large_items.remove(&index);
         self.bytes += item_bytes(&item);
         self.items.insert(index, item.clone());
         self.merge_range(index);
@@ -131,10 +142,19 @@ impl HistoryWindow {
     }
 
     pub fn insert_placeholder(&mut self, index: usize, total_bytes: usize) {
+        self.insert_large_placeholder(index, total_bytes, true);
+    }
+
+    pub fn insert_large_placeholder(&mut self, index: usize, total_bytes: usize, complete: bool) {
         if self.items.contains_key(&index) {
             return;
         }
         self.large_items.insert(index, total_bytes);
+        if complete {
+            self.pending_large_items.remove(&index);
+        } else {
+            self.pending_large_items.insert(index, ());
+        }
         self.merge_range(index);
     }
 
@@ -211,6 +231,8 @@ pub struct TurnResultWindow {
     pub total: Option<usize>,
     pub items: BTreeMap<usize, Arc<RawHistoryItem>>,
     pub large_items: BTreeMap<usize, usize>,
+    pub pending_large_items: BTreeMap<usize, ()>,
+    pub explicit_large_item: bool,
     pub complete: bool,
 }
 
@@ -223,6 +245,8 @@ impl TurnResultWindow {
             total: None,
             items: BTreeMap::new(),
             large_items: BTreeMap::new(),
+            pending_large_items: BTreeMap::new(),
+            explicit_large_item: false,
             complete: false,
         }
     }
@@ -234,14 +258,19 @@ impl TurnResultWindow {
                 found: page.total,
             });
         }
-        if let Some(expected) = self.total {
-            if expected != page.total {
-                return Err(ReadError::TurnTotalMismatch {
-                    expected,
-                    found: page.total,
-                });
+        let terminal = !matches!(
+            page.availability,
+            crate::protocol::read::TurnAvailability::Pending
+        );
+        if terminal {
+            if let Some(expected) = self.total {
+                if expected != page.total {
+                    return Err(ReadError::TurnTotalMismatch {
+                        expected,
+                        found: page.total,
+                    });
+                }
             }
-        } else {
             self.total = Some(page.total);
         }
 
@@ -263,6 +292,7 @@ impl TurnResultWindow {
                         }
                     } else {
                         self.large_items.remove(&index);
+                        self.pending_large_items.remove(&index);
                         self.items.insert(index, Arc::new(item));
                     }
                 }
@@ -276,7 +306,19 @@ impl TurnResultWindow {
                     expected = index.saturating_add(1);
                     if !self.items.contains_key(&index) {
                         self.large_items.insert(index, total_bytes);
+                        self.pending_large_items.remove(&index);
                     }
+                }
+                Assembled::LargeItemPending { index, total_bytes } => {
+                    if index != expected {
+                        return Err(ReadError::NonContiguous {
+                            expected,
+                            found: index,
+                        });
+                    }
+                    self.large_items.insert(index, total_bytes);
+                    self.pending_large_items.insert(index, ());
+                    self.explicit_large_item = true;
                 }
             }
         }
@@ -300,23 +342,27 @@ impl TurnResultWindow {
                     found: next.offset,
                 });
             }
+            if next == self.cursor && !self.explicit_large_item {
+                return Err(ReadError::CursorStalled {
+                    item: self.cursor.item,
+                });
+            }
             self.cursor = next;
         } else {
             if self.assembler.current_index().is_some() {
                 return Err(ReadError::CursorStalled { item: expected });
             }
-            let loaded = self.items.len() + self.large_items.len();
-            if loaded != page.total {
+            if terminal && expected != page.total {
                 return Err(ReadError::NonContiguous {
-                    expected: loaded,
+                    expected,
                     found: page.total,
                 });
             }
             self.cursor = ReadCursor {
-                item: page.total,
+                item: expected,
                 offset: 0,
             };
-            self.complete = true;
+            self.complete = terminal && self.pending_large_items.is_empty();
         }
         Ok(())
     }
@@ -332,6 +378,9 @@ pub struct AppliedPage {
     pub placeholders: Vec<(usize, usize)>,
     /// The backend-provided cursor for the next page, if any.
     pub next: Option<ReadCursor>,
+    /// A large item was surfaced before its bytes were exhausted. Ordinary
+    /// pagination must stop until an explicit continuation is requested.
+    pub explicit_large_item: bool,
     /// A `ReadChunk` that was refused (protocol error), with its index.
     pub error: Option<ReadError>,
 }
@@ -381,6 +430,7 @@ pub fn apply_page(
 
     let mut inserted = Vec::new();
     let mut placeholders = Vec::new();
+    let mut explicit_large_item = false;
     // The page must be contiguous from the requested cursor, and its items must
     // advance by exactly one; a gap is a protocol violation, never spliced.
     let mut expected = page.cursor.item;
@@ -398,6 +448,7 @@ pub fn apply_page(
                             inserted,
                             placeholders,
                             next: None,
+                            explicit_large_item,
                             error: Some(ReadError::ItemChanged { index }),
                         }));
                     }
@@ -407,6 +458,7 @@ pub fn apply_page(
                         inserted,
                         placeholders,
                         next: None,
+                        explicit_large_item,
                         error: Some(ReadError::NonContiguous {
                             expected,
                             found: index,
@@ -421,19 +473,49 @@ pub fn apply_page(
                 inserted.push((index, item));
             }
             Ok(Assembled::LargeItem { index, total_bytes }) => {
-                // The bytes are intentionally not retained, but the item must
-                // remain visible and count toward the loaded range.
+                if index != expected {
+                    return Ok(ReadApply::Ok(AppliedPage {
+                        inserted,
+                        placeholders,
+                        next: None,
+                        explicit_large_item,
+                        error: Some(ReadError::NonContiguous {
+                            expected,
+                            found: index,
+                        }),
+                    }));
+                }
                 if index >= page.window_start && window.item(index).is_none() {
-                    window.insert_placeholder(index, total_bytes);
+                    window.insert_large_placeholder(index, total_bytes, true);
                     placeholders.push((index, total_bytes));
                 }
                 expected = index.saturating_add(1);
+            }
+            Ok(Assembled::LargeItemPending { index, total_bytes }) => {
+                if index != expected {
+                    return Ok(ReadApply::Ok(AppliedPage {
+                        inserted,
+                        placeholders,
+                        next: None,
+                        explicit_large_item,
+                        error: Some(ReadError::NonContiguous {
+                            expected,
+                            found: index,
+                        }),
+                    }));
+                }
+                if index >= page.window_start && window.item(index).is_none() {
+                    window.insert_large_placeholder(index, total_bytes, false);
+                    placeholders.push((index, total_bytes));
+                }
+                explicit_large_item = true;
             }
             Err(error) => {
                 return Ok(ReadApply::Ok(AppliedPage {
                     inserted,
                     placeholders,
                     next: result.next_cursor,
+                    explicit_large_item,
                     error: Some(error),
                 }));
             }
@@ -448,8 +530,67 @@ pub fn apply_page(
                 inserted,
                 placeholders,
                 next: None,
+                explicit_large_item,
                 error: Some(ReadError::CursorStalled {
                     item: page.cursor.item,
+                }),
+            }));
+        }
+        if next == page.cursor && !explicit_large_item {
+            return Ok(ReadApply::Ok(AppliedPage {
+                inserted,
+                placeholders,
+                next: None,
+                explicit_large_item,
+                error: Some(ReadError::CursorStalled {
+                    item: page.cursor.item,
+                }),
+            }));
+        }
+        if let Some(partial) = page.assembler.next_cursor() {
+            if next != partial {
+                return Ok(ReadApply::Ok(AppliedPage {
+                    inserted,
+                    placeholders,
+                    next: None,
+                    explicit_large_item,
+                    error: Some(ReadError::CursorOffsetMismatch {
+                        expected: partial.offset,
+                        found: next.offset,
+                    }),
+                }));
+            }
+        } else if next.offset != 0 {
+            return Ok(ReadApply::Ok(AppliedPage {
+                inserted,
+                placeholders,
+                next: None,
+                explicit_large_item,
+                error: Some(ReadError::CursorOffsetMismatch {
+                    expected: 0,
+                    found: next.offset,
+                }),
+            }));
+        }
+    } else {
+        if page.assembler.current_index().is_some() {
+            return Ok(ReadApply::Ok(AppliedPage {
+                inserted,
+                placeholders,
+                next: None,
+                explicit_large_item,
+                error: Some(ReadError::CursorStalled { item: expected }),
+            }));
+        }
+        if expected != result.total {
+            return Ok(ReadApply::Ok(AppliedPage {
+                inserted,
+                placeholders,
+                next: None,
+                explicit_large_item,
+                error: Some(ReadError::NonContiguous {
+                    expected,
+                    found: result.total,
                 }),
             }));
         }
@@ -461,68 +602,9 @@ pub fn apply_page(
         inserted,
         placeholders,
         next: result.next_cursor,
+        explicit_large_item,
         error: None,
     }))
-}
-
-/// A bounded body budget across sessions (spec §6.5). The active session's
-/// window is pinned; inactive sessions evict their least-recently-touched
-/// items first. Eviction never calls `session.close` and never changes backend
-/// history.
-#[derive(Debug, Default)]
-pub struct HistoryBudget {
-    limit: usize,
-    /// (session_id, index) in touch order, oldest first.
-    order: Vec<(String, usize)>,
-    pinned: HashSet<String>,
-}
-
-impl HistoryBudget {
-    pub fn new(limit: usize) -> Self {
-        Self {
-            limit,
-            order: Vec::new(),
-            pinned: HashSet::new(),
-        }
-    }
-
-    pub fn touch(&mut self, session_id: &str, index: usize) {
-        let entry = (session_id.to_owned(), index);
-        self.order.retain(|existing| existing != &entry);
-        self.order.push(entry);
-    }
-
-    pub fn pin_session(&mut self, session_id: &str) {
-        self.pinned.insert(session_id.to_owned());
-    }
-
-    pub fn unpin_session(&mut self, session_id: &str) {
-        self.pinned.remove(session_id);
-    }
-
-    pub fn forget_session(&mut self, session_id: &str) {
-        self.unpin_session(session_id);
-        self.order.retain(|(id, _)| id != session_id);
-    }
-
-    /// Returns the items that must be evicted to fit `entries` items.
-    pub fn evicted(&mut self, entries: usize) -> Vec<(String, usize)> {
-        let mut evicted = Vec::new();
-        let mut remaining = entries;
-        while remaining > self.limit {
-            let Some(position) = self
-                .order
-                .iter()
-                .position(|(session_id, _)| !self.pinned.contains(session_id))
-            else {
-                break;
-            };
-            let entry = self.order.remove(position);
-            remaining -= 1;
-            evicted.push(entry);
-        }
-        evicted
-    }
 }
 
 /// Convenience re-export so callers do not import the protocol path directly.

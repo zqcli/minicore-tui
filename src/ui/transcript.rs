@@ -1017,8 +1017,12 @@ fn last_result_lines(
         " {} Turn {} · requests: {} · tool rounds: {}",
         badge,
         result_summary(result),
-        result.requests,
-        result.tool_rounds
+        result
+            .requests
+            .map_or_else(|| "unknown".to_owned(), |value| value.to_string()),
+        result
+            .tool_rounds
+            .map_or_else(|| "unknown".to_owned(), |value| value.to_string())
     );
 
     vec![

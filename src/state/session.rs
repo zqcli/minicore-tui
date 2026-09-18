@@ -278,7 +278,7 @@ impl SessionView {
         let persisted = self
             .last_result
             .as_ref()
-            .filter(|result| result.persistence == TurnPersistenceWire::Persisted);
+            .filter(|result| result.persistence == Some(TurnPersistenceWire::Persisted));
         let persisted_loop = persisted.map(|result| result.turn.loop_id.as_str());
         let mut accumulator = UsageAccumulator::default();
         let mut request_keys = HashSet::new();
@@ -296,8 +296,10 @@ impl SessionView {
             accumulator.add(assistant.usage);
         }
         if let Some(result) = persisted {
-            source_count += 1;
-            accumulator.add(result.usage);
+            if let Some(usage) = result.usage {
+                source_count += 1;
+                accumulator.add(usage);
+            }
         }
 
         // Live per-request rows from an in-progress loop (spec 9.4/12.4): each
@@ -339,11 +341,13 @@ impl SessionView {
             .or_else(|| {
                 self.last_result
                     .as_ref()
-                    .filter(|result| result.persistence == TurnPersistenceWire::Failed)
+                    .filter(|result| result.persistence == Some(TurnPersistenceWire::Failed))
             });
         let mut unsaved_accumulator = UsageAccumulator::default();
         if let Some(result) = unsaved_result {
-            unsaved_accumulator.add(result.usage);
+            if let Some(usage) = result.usage {
+                unsaved_accumulator.add(usage);
+            }
         }
         let unsaved_completeness = match (self.unsaved_loop.as_ref(), unsaved_result) {
             (None, None) => UsageCompleteness::Unknown,
@@ -587,18 +591,19 @@ mod tests {
                 loop_id: "loop_1".to_owned(),
             },
             outcome: LoopOutcomeWire::Completed,
-            usage: UsageWire {
+            usage: Some(UsageWire {
                 input_tokens: Some(7),
                 output_tokens: Some(8),
                 cache_read_tokens: Some(0),
                 cache_write_tokens: Some(0),
                 ..UsageWire::default()
-            },
-            requests: 1,
-            tool_rounds: 0,
-            final_config_revision: 0,
-            persistence: TurnPersistenceWire::Persisted,
+            }),
+            requests: Some(1),
+            tool_rounds: Some(0),
+            final_config_revision: Some(0),
+            persistence: Some(TurnPersistenceWire::Persisted),
             accepted_at: None,
+            completed_at: None,
         });
 
         session.recompute_usage_projection();
@@ -636,16 +641,17 @@ mod tests {
                 kind: "model_error".to_owned(),
                 model_error: None,
             },
-            usage: UsageWire {
+            usage: Some(UsageWire {
                 input_tokens: Some(5),
                 output_tokens: Some(6),
                 ..UsageWire::default()
-            },
-            requests: 1,
-            tool_rounds: 0,
-            final_config_revision: 0,
-            persistence: TurnPersistenceWire::Failed,
+            }),
+            requests: Some(1),
+            tool_rounds: Some(0),
+            final_config_revision: Some(0),
+            persistence: Some(TurnPersistenceWire::Failed),
             accepted_at: None,
+            completed_at: None,
         };
         session.last_result = Some(result.clone());
         session.unsaved_loop = Some(UnsavedLoop {
@@ -722,18 +728,19 @@ mod tests {
                 loop_id: "loop_1".to_owned(),
             },
             outcome: LoopOutcomeWire::Completed,
-            usage: UsageWire {
+            usage: Some(UsageWire {
                 input_tokens: Some(7),
                 output_tokens: Some(8),
                 cache_read_tokens: Some(0),
                 cache_write_tokens: Some(0),
                 ..UsageWire::default()
-            },
-            requests: 2,
-            tool_rounds: 1,
-            final_config_revision: 0,
-            persistence: TurnPersistenceWire::Persisted,
+            }),
+            requests: Some(2),
+            tool_rounds: Some(1),
+            final_config_revision: Some(0),
+            persistence: Some(TurnPersistenceWire::Persisted),
             accepted_at: None,
+            completed_at: None,
         });
         session.recompute_usage_projection();
         // 100/200 (older loop) + 7/8 (loop_1 total) — the live rows 10+3/20+4

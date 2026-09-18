@@ -981,7 +981,7 @@ mod tests {
                 .last_result
                 .as_ref()
                 .map(|result| result.persistence),
-            Some(minicore_tui::protocol::TurnPersistenceWire::Failed)
+            Some(Some(minicore_tui::protocol::TurnPersistenceWire::Failed))
         );
         assert!(
             process.child_reaped(),

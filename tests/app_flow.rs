@@ -2439,7 +2439,7 @@ fn slash_cancel_sends_exact_turn_cancel_and_wait_reconciles() {
     );
     assert_eq!(
         result.persistence,
-        minicore_tui::protocol::TurnPersistenceWire::Persisted
+        Some(minicore_tui::protocol::TurnPersistenceWire::Persisted)
     );
 }
 
@@ -3059,10 +3059,16 @@ fn late_reload_wait_cannot_overwrite_new_completed_turn() {
     assert_eq!(t2_last_result.turn.loop_id, "loop_t2");
     assert_eq!(
         t2_last_result.persistence,
-        minicore_tui::protocol::TurnPersistenceWire::Persisted
+        Some(minicore_tui::protocol::TurnPersistenceWire::Persisted)
     );
-    assert_eq!(t2_last_result.usage.input_tokens, Some(22));
-    assert_eq!(t2_last_result.usage.output_tokens, Some(7));
+    assert_eq!(
+        t2_last_result.usage.as_ref().unwrap().input_tokens,
+        Some(22)
+    );
+    assert_eq!(
+        t2_last_result.usage.as_ref().unwrap().output_tokens,
+        Some(7)
+    );
     assert_eq!(t2_loaded_count, 2);
     assert!(before.live.is_none());
     assert!(
@@ -5816,7 +5822,7 @@ fn turn_result_completed_and_persistence_failed() {
     );
     assert_eq!(
         last.persistence,
-        minicore_tui::protocol::TurnPersistenceWire::Failed
+        Some(minicore_tui::protocol::TurnPersistenceWire::Failed)
     );
     assert!(matches!(
         view.state.as_ref().unwrap().status,
@@ -5879,7 +5885,7 @@ fn turn_result_failed_and_persisted_with_model_error() {
     ));
     assert_eq!(
         last.persistence,
-        minicore_tui::protocol::TurnPersistenceWire::Persisted
+        Some(minicore_tui::protocol::TurnPersistenceWire::Persisted)
     );
 }
 
@@ -6944,5 +6950,72 @@ fn pending_turn_result_keeps_the_unconfirmed_fence() {
     assert!(
         driver.queue.iter().all(|r| r.method != "turn.send"),
         "pending recovery must never rerun the turn"
+    );
+}
+
+#[test]
+fn failed_turn_result_projects_authoritative_body_when_live_deltas_are_missing() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+    driver.step(AppEvent::SubmitTurn {
+        session_id: "ses_1".into(),
+        text: "recover the saved body".into(),
+    });
+    let send = driver.request("turn.send");
+    driver.respond(
+        send,
+        json!({"turn": {"session_id": "ses_1", "loop_id": "loop_saved_failed"}}),
+    );
+    let wait = driver.request("turn.wait");
+    driver.respond_error(wait, minicore_tui::protocol::INTERNAL_ERROR, "wait lost");
+    let recover = driver.request("turn.result");
+
+    let items = vec![
+        user(0, "loop_saved_failed", "recover the saved body"),
+        assistant(
+            1,
+            "loop_saved_failed",
+            0,
+            "deep",
+            "authoritative result body",
+        ),
+    ];
+    let chunks: Vec<Value> = items.iter().flat_map(encode_item).collect();
+    driver.respond(
+        recover,
+        json!({
+            "turn": {"session_id": "ses_1", "loop_id": "loop_saved_failed"},
+            "availability": "live",
+            "outcome": {"type": "completed"},
+            "persistence": "failed",
+            "usage": {"input_tokens": 3, "output_tokens": 4},
+            "requests": 1,
+            "tool_rounds": 0,
+            "final_config_revision": 0,
+            "completed_at": "2026-01-02T03:04:06Z",
+            "items": chunks,
+            "next_cursor": null,
+            "total": 2
+        }),
+    );
+
+    let view = &driver.app.sessions.known["ses_1"];
+    assert!(view.is_blocked());
+    assert!(view.result_unconfirmed);
+    assert_eq!(
+        view.live.as_ref().unwrap().requests[0].text,
+        "authoritative result body"
+    );
+    assert_eq!(
+        view.unsaved_loop.as_ref().unwrap().requests[0].text,
+        "authoritative result body"
+    );
+    assert!(
+        view.transcript
+            .window
+            .items()
+            .all(|(_, item)| item.item.loop_id() != Some("loop_saved_failed")),
+        "turn-local result items must not enter session history"
     );
 }

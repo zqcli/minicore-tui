@@ -1363,13 +1363,22 @@ pub enum TurnPersistenceWire {
 pub struct TurnResultViewWire {
     pub turn: TurnRef,
     pub outcome: LoopOutcomeWire,
-    pub usage: UsageWire,
-    pub requests: u32,
-    pub tool_rounds: u16,
-    pub final_config_revision: u64,
-    pub persistence: TurnPersistenceWire,
+    #[serde(default)]
+    pub usage: Option<UsageWire>,
+    #[serde(default)]
+    pub requests: Option<u32>,
+    #[serde(default)]
+    pub tool_rounds: Option<u16>,
+    #[serde(default)]
+    pub final_config_revision: Option<u64>,
+    #[serde(default)]
+    pub persistence: Option<TurnPersistenceWire>,
     #[serde(default)]
     pub accepted_at: Option<String>,
+    /// Completion time is distinct from prompt/steer acceptance time. The
+    /// wait DTO normally does not carry it; `turn.result` may.
+    #[serde(default)]
+    pub completed_at: Option<String>,
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct UsageWire {
@@ -1785,8 +1794,8 @@ mod tests {
     fn wait_result_is_not_wrapped_in_ok_result() {
         let value = json!({"turn":{"session_id":"ses_1","loop_id":"loop_1"},"outcome":{"type":"completed"},"usage":{},"requests":2,"tool_rounds":1,"final_config_revision":3,"persistence":"persisted"});
         let result: TurnResultViewWire = serde_json::from_value(value).unwrap();
-        assert_eq!(result.requests, 2);
-        assert_eq!(result.persistence, TurnPersistenceWire::Persisted);
+        assert_eq!(result.requests, Some(2));
+        assert_eq!(result.persistence, Some(TurnPersistenceWire::Persisted));
     }
 
     #[test]

@@ -300,6 +300,10 @@ pub enum Assembled {
     /// caller shows a visible placeholder and can re-read it on demand. It is
     /// never reported as a complete item.
     LargeItem { index: usize, total_bytes: usize },
+    /// The first chunk of an oversized item. The placeholder is visible now,
+    /// while the assembler remains positioned inside the item for an explicit
+    /// continuation read.
+    LargeItemPending { index: usize, total_bytes: usize },
 }
 
 /// `turn.result` availability: a turn may still be running, may only exist as
@@ -485,6 +489,12 @@ impl ChunkAssembler {
         if self.total_bytes > MAX_AUTO_ITEM_BYTES {
             self.skipping_large = true;
             self.next_offset = self.next_offset.saturating_add(delivered);
+            if !chunk.complete {
+                return Ok(Assembled::LargeItemPending {
+                    index: self.index,
+                    total_bytes: self.total_bytes,
+                });
+            }
             if self.next_offset > self.total_bytes {
                 return Err(ReadError::ByteCountMismatch {
                     index: self.index,

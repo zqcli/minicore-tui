@@ -786,12 +786,13 @@ pub fn unsaved_gap(theme: ThemeKind) -> App {
                 loop_id: "loop_unsaved".to_string(),
             },
             outcome: crate::protocol::LoopOutcomeWire::Completed,
-            persistence: crate::protocol::TurnPersistenceWire::Failed,
-            usage: crate::protocol::UsageWire::default(),
-            requests: 1,
-            tool_rounds: 0,
-            final_config_revision: 0,
+            persistence: Some(crate::protocol::TurnPersistenceWire::Failed),
+            usage: Some(crate::protocol::UsageWire::default()),
+            requests: Some(1),
+            tool_rounds: Some(0),
+            final_config_revision: Some(0),
             accepted_at: None,
+            completed_at: None,
         };
         view.event_gap = true;
         view.last_result = Some(result.clone());
@@ -864,12 +865,13 @@ pub fn close_user(theme: ThemeKind) -> App {
             outcome: crate::protocol::LoopOutcomeWire::Cancelled {
                 reason: crate::protocol::CancelReasonWire::User,
             },
-            persistence: crate::protocol::TurnPersistenceWire::Persisted,
-            usage: crate::protocol::UsageWire::default(),
-            requests: 1,
-            tool_rounds: 1,
-            final_config_revision: 0,
+            persistence: Some(crate::protocol::TurnPersistenceWire::Persisted),
+            usage: Some(crate::protocol::UsageWire::default()),
+            requests: Some(1),
+            tool_rounds: Some(1),
+            final_config_revision: Some(0),
             accepted_at: None,
+            completed_at: None,
         });
     }
     // Keep the rendered incomplete marker from the live-turn fixture while
@@ -892,12 +894,13 @@ fn result_only(theme: ThemeKind, loop_id: &str, reason: crate::protocol::CancelR
                 loop_id: loop_id.to_string(),
             },
             outcome: crate::protocol::LoopOutcomeWire::Cancelled { reason },
-            persistence: crate::protocol::TurnPersistenceWire::Persisted,
-            usage: crate::protocol::UsageWire::default(),
-            requests: 1,
-            tool_rounds: 0,
-            final_config_revision: 0,
+            persistence: Some(crate::protocol::TurnPersistenceWire::Persisted),
+            usage: Some(crate::protocol::UsageWire::default()),
+            requests: Some(1),
+            tool_rounds: Some(0),
+            final_config_revision: Some(0),
             accepted_at: None,
+            completed_at: None,
         });
     }
     app

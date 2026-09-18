@@ -1478,12 +1478,13 @@ fn last_result_renders_outcome_and_persistence_in_status_and_transcript() {
         view.last_result = Some(crate::protocol::TurnResultViewWire {
             turn: turn("loop_done"),
             outcome: crate::protocol::LoopOutcomeWire::Completed,
-            persistence: crate::protocol::TurnPersistenceWire::Persisted,
-            usage: Default::default(),
-            requests: 1,
-            tool_rounds: 0,
-            final_config_revision: 0,
+            persistence: Some(crate::protocol::TurnPersistenceWire::Persisted),
+            usage: Some(Default::default()),
+            requests: Some(1),
+            tool_rounds: Some(0),
+            final_config_revision: Some(0),
             accepted_at: None,
+            completed_at: None,
         });
     }
     let content = text(&draw(&app, 120, 40));
@@ -1496,12 +1497,13 @@ fn last_result_renders_outcome_and_persistence_in_status_and_transcript() {
             outcome: crate::protocol::LoopOutcomeWire::Cancelled {
                 reason: crate::protocol::CancelReasonWire::Unknown("sandbox_evicted".to_owned()),
             },
-            persistence: crate::protocol::TurnPersistenceWire::Persisted,
-            usage: Default::default(),
-            requests: 1,
-            tool_rounds: 0,
-            final_config_revision: 0,
+            persistence: Some(crate::protocol::TurnPersistenceWire::Persisted),
+            usage: Some(Default::default()),
+            requests: Some(1),
+            tool_rounds: Some(0),
+            final_config_revision: Some(0),
             accepted_at: None,
+            completed_at: None,
         });
     }
     let content = text(&draw(&app, 80, 24));
@@ -1514,12 +1516,13 @@ fn last_result_renders_outcome_and_persistence_in_status_and_transcript() {
             outcome: crate::protocol::LoopOutcomeWire::Cancelled {
                 reason: crate::protocol::CancelReasonWire::Shutdown,
             },
-            persistence: crate::protocol::TurnPersistenceWire::Persisted,
-            usage: Default::default(),
-            requests: 1,
-            tool_rounds: 0,
-            final_config_revision: 0,
+            persistence: Some(crate::protocol::TurnPersistenceWire::Persisted),
+            usage: Some(Default::default()),
+            requests: Some(1),
+            tool_rounds: Some(0),
+            final_config_revision: Some(0),
             accepted_at: None,
+            completed_at: None,
         });
     }
     let content = text(&draw(&app, 80, 24));
@@ -1537,12 +1540,13 @@ fn last_result_renders_outcome_and_persistence_in_status_and_transcript() {
                     retry_after_millis: None,
                 }),
             },
-            persistence: crate::protocol::TurnPersistenceWire::Failed,
-            usage: Default::default(),
-            requests: 1,
-            tool_rounds: 0,
-            final_config_revision: 0,
+            persistence: Some(crate::protocol::TurnPersistenceWire::Failed),
+            usage: Some(Default::default()),
+            requests: Some(1),
+            tool_rounds: Some(0),
+            final_config_revision: Some(0),
             accepted_at: None,
+            completed_at: None,
         });
         view.state.as_mut().unwrap().status = crate::protocol::SessionStatusWire::Blocked;
         view.state.as_mut().unwrap().block_reason =
