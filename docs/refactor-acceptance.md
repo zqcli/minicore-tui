@@ -62,8 +62,8 @@ execution, steer pacing, update, shutdown cancel, reload, manual compaction
 | REF-24 | reload does not clear History/Live/draft or reinstall history | **Passed** | `fe59a49` narrowed reload to catalog generation only: the `ReloadState`/`ReloadPresentation`/`ReloadWaitTurn` requests, the staged state/presentation install and the `reload_fenced_*` patch branches are gone, and reload never touches Live, the draft, the selection or history. Reload-affected sessions are re-marked uncalibrated and converge through the normal read chain; `reload_does_not_stage_a_full_history_replacement` and the migrated reload tests plus the real-Agent `e2e_configuration_reload_refreshes_catalogs_only` measure it. |
 | REF-25 | Per-session drafts/undo/paste/cursor independent | **Failed** | Draft state is one global `App.composer`; switching sessions does not keep an independent draft. D |
 | REF-26 | New/continue/rename/delete explicit, no cross-project guess | **Not run** | Reducer tests exist; E2E 3 needs the real Agent. C/D |
-| REF-27 | Single Arc body; single Tool index | **Not run** | The transcript projection now builds one `ToolKey` index per pass and resolves tools in O(1) (`stable_history_layout_is_cached_and_tool_projection_uses_the_index`), but the body is still duplicated between `RawHistoryItem` and the `TranscriptBlock` bridge, so the single `Arc<Message>` model is not built. |
-| REF-28 | Live update zero full-history clone; zero stable re-layout | **Failed** | The new `PerfCounters` measure the real points: a cached durable layout is not rebuilt (`layout_calls` stops increasing), but every prepared frame still clones the durable rows (`historical_text_bytes_cloned > 0` in `stable_history_layout_is_cached_and_tool_projection_uses_the_index`), so the zero-clone half is not met. |
+| REF-27 | Single Arc body; single Tool index | **Not run** | One `ToolKey` index per projection pass with O(1) resolution is measured (`stable_history_layout_is_cached_and_tool_projection_uses_the_index`), and the frame now composes the header, the shared `Arc<PreparedDurable>` and a live tail without merging (`c85bf03`). The semantic body is still duplicated between `RawHistoryItem` and the `TranscriptBlock` bridge and sections are still cloned per frame, so the single `Arc<Message>` model is not built. |
+| REF-28 | Live update zero full-history clone; zero stable re-layout | **Passed** | `tests/performance.rs::measure_c2_stable_layout_and_viewport_ownership` (release, `c2e-perf.log`) installs 1000 frames over a 51,101-row history with 251 deltas and measures `layout_calls` delta 0 and `historical_text_bytes_cloned` 0, with exactly `frames * height` materialized rows and non-zero window bytes to prove the counters are real. The residual per-frame metadata clone is recorded in `docs/performance.md`; the 0.5-1.5 screen streaming latency target is not measured (Not run). |
 | REF-29 | viewport/click/copy share layout; softwrap adds no copy newline | **Not run** | C2. |
 | REF-30 | Fold/resize/page-load keep anchor | **Not run** | C2. |
 | REF-31 | Rail geometry / single-line Footer baseline | **Passed** | `src/ui/snapshots.rs`, `tests/rail_fixtures.rs`, `tests/render_snapshots.rs` pass unchanged; `logs_dark_80x24.txt` was regenerated for the content-free log rows. |
@@ -85,7 +85,7 @@ execution, steer pacing, update, shutdown cancel, reload, manual compaction
 | REF-47 | External editor: background RPC continues; no draft overwrite | **Not run** | Stage D. |
 | REF-48 | ANSI/OSC/control safe display; backend offset unchanged | **Passed** | `src/safe_text.rs::safe_display` is the single display boundary for markdown, plain wrap, filled rows, tool rows, selector rows, footer parts and error surfaces; `control_sequences_are_escaped_at_the_display_boundary` and the `safe_text` unit tests; escaping is display-only, protocol offsets still use the raw bytes. |
 | REF-49 | Logs contain no message/command/result/file/secret | **Passed** | `RpcEvent::AgentStderr { bytes, dropped }` carries counts only; the app stores `agent stderr: N bytes`; `agent_stderr_is_never_stored_as_content` and the fatal-overlay/logs-panel tests. |
-| REF-50 | All cache/queue bounded; background sessions release | **Failed** | Outbound 32 (28+4), wire 64 MiB, 2 read slots, 16 deferred, the Composer 256 KiB cap and the job deadline are bounded and measured. `HistoryWindow` still tracks but does not enforce a 32 MiB body budget and never evicts, and the Composer 8 MiB all-drafts budget has no owner yet, so this criterion fails. |
+| REF-50 | All cache/queue bounded; background sessions release | **Failed** | Outbound 32 (28+4), wire 64 MiB, 2 read slots, 16 deferred, the Composer 256 KiB cap, the single-slot clipboard job and its deadline are bounded and measured. `HistoryWindow` still tracks but does not enforce a 32 MiB body budget and never evicts, the Composer 8 MiB all-drafts budget has no owner, and the 48 MiB layout cache is not enforced, so this criterion fails. |
 | REF-51 | Existing CJK/IME/mouse/scrollbar/Terminal restore preserved | **Passed** | `ui::*`, `tests/terminal_restore.rs`, `tests/rail_fixtures.rs`. |
 | REF-52 | Common command table/completion/help consistent | **Failed** | Three separate lists still diverge; `/refresh` missing. D |
 | REF-53 | No approval/plugin/Subagent/PTY/Git-write/auto-reconnect | **Passed** | Source audit: no such code. |
@@ -178,9 +178,9 @@ Still open in C1 (do not claim C1 complete):
 
 ## C2 progress (incomplete)
 
-C2 is not complete; this is the measured state of the first slice.
+C2 is not complete; this is the measured state of the landed slices.
 
-Landed and verified in `835c27c`:
+Landed and verified in `835c27c`, `c85bf03`, `7d4f4e2` and `3027899`:
 
 - `src/perf.rs` thread-local `PerfCounters` incremented at the real execution
   points (layout rebuilds, durable bytes cloned, owned rows materialized,
@@ -193,14 +193,17 @@ Landed and verified in `835c27c`:
   performs no full-buffer join (`composer_full_joins` unchanged).
 - `prepare_conversation` counts a durable layout rebuild only on a cache miss.
 
-Measured structure at this commit: a cached durable layout is not rebuilt, but
-each prepared frame still clones all durable rows (`historical_text_bytes_cloned`
-is non-zero). The C2 completion threshold therefore is **not** met; the
-remaining work is:
+Measured structure at this commit (`c2e-perf.log`): over a 51,101-row history,
+1000 installed frames and 251 live deltas rebuild the durable layout **0**
+times and copy **0** history text bytes; each frame materializes exactly its
+40-row window. The frame composes header + shared `Arc<PreparedDurable>` +
+live tail; section/copy strings are `Arc<str>`. The C2 completion threshold
+is still **not** met; the remaining work is:
 
-- `ConversationLayout` sections with integer prefix offsets and a
-  viewport+overscan `VisibleConversation` shared by draw/hit/copy/scrollbar
-  (spec §11.2/§11.7).
+- The per-frame durable metadata clone (sections and copy ranges Vecs) still
+  runs; the `ConversationLayout` section-Arc engine with integer prefix
+  offsets and the viewport+overscan `VisibleConversation` shared by
+  draw/hit/copy/scrollbar (spec §11.2/§11.7) is not built.
 - `HistoryWindow` 32 MiB body budget with eviction of confirmed content from
   inactive, far-from-viewport sessions (spec §6.5/§21).
 - Composer 8 MiB all-drafts budget with a real per-session draft owner

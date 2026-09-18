@@ -89,6 +89,28 @@ This proves the current UI admission path (`send().await`) can block
 (32-slot queue, 28 ordinary + 4 control) that returns immediately and keeps
 the input.
 
+## C2 measured (this commit, `c2e-perf.log`)
+
+`measure_c2_stable_layout_and_viewport_ownership` (release, ignored) installs
+1000 frames over a 51,101-row history with 251 real `output_delta` events:
+
+- `layout_calls` delta **0** and `historical_text_bytes_cloned` **0** across
+  the 1000 frames;
+- materialized rows exactly `frames * height` (40,000 = 1000 x 40), window
+  bytes 2,742,348 — the counters are read at the real clone point;
+- ~3.36 ms per installed frame at 50k rows, down from 5.24 ms before the
+  section/copy strings became `Arc<str>`.
+
+`measure_prepare_frame_path_over_50k_rows` measures a durable cache **miss**
+(no install between calls): 115.71 ms per build of the 51,101-row layout. In
+production this happens only when the durable revision changes, but it is the
+remaining layout-worker cost: a bounded background layout worker is not built
+yet.
+
+Residual per-frame cost at C2: the durable `sections` and `copy_ranges` Vecs
+are still cloned into every frame (metadata only, no text bytes). The
+section-Arc layout engine with integer prefix offsets must replace that clone.
+
 ## Not measured / not run
 
 - No three-platform numbers; only the remote Linux builder was used.
