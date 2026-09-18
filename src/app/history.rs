@@ -160,6 +160,80 @@ impl HistoryWindow {
         self.merge_range(index);
     }
 
+    /// Removes the oldest decoded item unless it is protected. Returns the
+    /// bytes released. `loaded_ranges` is split so the evicted index reads as
+    /// a real gap again (spec §6.5): a later read re-fetches it instead of
+    /// trusting a range that no longer has content.
+    pub fn evict_oldest(&mut self, protect_from: usize) -> Option<usize> {
+        let (&index, _) = self.items.iter().next()?;
+        if index >= protect_from {
+            return None;
+        }
+        let item = self.items.remove(&index)?;
+        let bytes = item_bytes(&item);
+        self.bytes = self.bytes.saturating_sub(bytes);
+        self.forget_loaded(index);
+        Some(bytes)
+    }
+
+    /// Evicts unprotected oldest items until the retained bytes fit `budget`
+    /// (or nothing left can be evicted). Returns the released bytes.
+    pub fn evict_to_budget(&mut self, budget: usize, protect_from: usize) -> usize {
+        let mut released = 0;
+        while self.bytes > budget {
+            match self.evict_oldest(protect_from) {
+                Some(bytes) => released += bytes,
+                None => break,
+            }
+        }
+        released
+    }
+
+    /// The lowest index that eviction must keep for a protected tail of
+    /// `tail` items. The pinned total is authoritative; when no pin is
+    /// installed yet, the highest loaded index still gives a real bound so a
+    /// content-free window cannot protect everything.
+    pub fn protect_from(&self, tail: usize) -> usize {
+        let last_loaded = self
+            .items
+            .keys()
+            .next_back()
+            .copied()
+            .into_iter()
+            .chain(self.large_items.keys().next_back().copied())
+            .max()
+            .map_or(0, |last| last + 1);
+        self.total().max(last_loaded).saturating_sub(tail)
+    }
+
+    /// True when the oldest decoded item is outside the protected tail, so
+    /// the budget pass can skip sessions that can no longer give anything up.
+    pub fn can_evict(&self, protect_from: usize) -> bool {
+        self.items
+            .keys()
+            .next()
+            .is_some_and(|&index| index < protect_from)
+    }
+
+    /// Drops `index` from the loaded ranges, splitting the range it was in so
+    /// the hole is reported honestly.
+    fn forget_loaded(&mut self, index: usize) {
+        let mut rebuilt = Vec::with_capacity(self.loaded_ranges.len() + 1);
+        for range in self.loaded_ranges.drain(..) {
+            if index < range.start || index >= range.end {
+                rebuilt.push(range);
+                continue;
+            }
+            if range.start < index {
+                rebuilt.push(range.start..index);
+            }
+            if index + 1 < range.end {
+                rebuilt.push(index + 1..range.end);
+            }
+        }
+        self.loaded_ranges = rebuilt;
+    }
+
     fn merge_range(&mut self, index: usize) {
         let mut start = index;
         let mut end = index + 1;
@@ -1681,5 +1755,204 @@ impl App {
             loop_id: loop_id.to_owned(),
         };
         self.on_steer_progress(&turn, request_index, applied_count);
+    }
+}
+
+impl App {
+    /// Retained decoded history bytes across every session.
+    pub(crate) fn history_body_bytes(&self) -> usize {
+        self.sessions
+            .known
+            .values()
+            .map(|view| view.transcript.window.bytes())
+            .sum()
+    }
+
+    /// Enforces the global history body budget (spec §21). Background
+    /// sessions are evicted before the active one, and the protected tail is
+    /// the viewport plus its neighbourhood, never the whole session. Work is
+    /// capped per pass so `App::update` cannot stall; the next event
+    /// continues where this one stopped.
+    pub(crate) fn enforce_history_budget(&mut self) -> usize {
+        self.enforce_history_budget_with(crate::limits::HISTORY_BODY_BYTES)
+    }
+
+    pub(crate) fn enforce_history_budget_with(&mut self, budget: usize) -> usize {
+        let mut total = self.history_body_bytes();
+        crate::perf::set(crate::perf::Counter::HistoryBodyBytes, total as u64);
+        if total <= budget {
+            return 0;
+        }
+        let active = self.sessions.active.clone();
+        let mut released = 0;
+        for _ in 0..crate::limits::HISTORY_EVICTIONS_PER_PASS {
+            if total <= budget {
+                break;
+            }
+            // Most-retained session wins; the active session is ranked last so
+            // background sessions give up their bodies first, and sessions
+            // whose protected tail leaves nothing to evict are skipped.
+            let victim = self
+                .sessions
+                .known
+                .iter()
+                .filter(|(_, view)| view.transcript.window.bytes() > 0)
+                .filter(|(id, view)| {
+                    let protect = if Some(id.as_str()) == active.as_deref() {
+                        crate::limits::HISTORY_PROTECT_TAIL_ITEMS
+                    } else {
+                        crate::limits::HISTORY_PROTECT_TAIL_ITEMS_BACKGROUND
+                    };
+                    view.transcript
+                        .window
+                        .can_evict(view.transcript.window.protect_from(protect))
+                })
+                .max_by_key(|(id, view)| {
+                    let active_rank = usize::from(Some(id.as_str()) == active.as_deref());
+                    (usize::MAX - active_rank, view.transcript.window.bytes())
+                })
+                .map(|(id, _)| id.clone());
+            let Some(id) = victim else {
+                break;
+            };
+            let protect = if Some(id.as_str()) == active.as_deref() {
+                crate::limits::HISTORY_PROTECT_TAIL_ITEMS
+            } else {
+                crate::limits::HISTORY_PROTECT_TAIL_ITEMS_BACKGROUND
+            };
+            let protect_from = self.sessions.known[&id]
+                .transcript
+                .window
+                .protect_from(protect);
+            let evicted = self
+                .sessions
+                .known
+                .get_mut(&id)
+                .expect("victim session exists")
+                .transcript
+                .window
+                .evict_oldest(protect_from);
+            match evicted {
+                Some(bytes) => {
+                    released += bytes;
+                    total = total.saturating_sub(bytes);
+                }
+                None => break,
+            }
+        }
+        crate::perf::set(crate::perf::Counter::HistoryBodyBytes, total as u64);
+        released
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    use crate::theme::ThemeKind;
+
+    fn item(bytes: usize) -> RawHistoryItem {
+        RawHistoryItem {
+            item: serde_json::from_value(serde_json::json!({
+                "type": "user",
+                "data": {
+                    "loop_id": "lup_1",
+                    "kind": "prompt",
+                    "input": {"text": "x".repeat(bytes)}
+                }
+            }))
+            .expect("valid runtime user item"),
+            timestamp: None,
+        }
+    }
+
+    fn window_with(count: usize, bytes: usize) -> HistoryWindow {
+        let mut window = HistoryWindow::default();
+        for index in 0..count {
+            window.insert(index, item(bytes));
+        }
+        window
+    }
+
+    /// Eviction removes the oldest unprotected items, keeps the protected
+    /// tail, accounts the released bytes, and reopens the evicted indexes as
+    /// real gaps so a later read re-fetches them.
+    #[test]
+    fn eviction_releases_body_bytes_and_reopens_the_loaded_range() {
+        let mut window = window_with(8, 100);
+        assert_eq!(window.bytes(), 800);
+        assert_eq!(window.loaded_ranges().to_vec(), vec![0..8]);
+
+        let released = window.evict_to_budget(300, 6);
+        assert_eq!(released, 500, "the five oldest items are released");
+        assert_eq!(window.bytes(), 300);
+        assert_eq!(window.loaded_ranges().to_vec(), vec![5..8]);
+        assert_eq!(
+            window.confirmed_prefix(),
+            0,
+            "the prefix restarts at the gap"
+        );
+        assert!(window.item(7).is_some(), "the protected tail stays");
+        assert!(window.item(0).is_none());
+    }
+
+    #[test]
+    fn eviction_never_removes_the_protected_tail() {
+        let mut window = window_with(4, 100);
+        let released = window.evict_to_budget(0, 1);
+        assert_eq!(released, 100);
+        assert_eq!(window.bytes(), 300);
+        assert_eq!(window.loaded_ranges().to_vec(), vec![1..4]);
+        assert_eq!(
+            window.evict_oldest(1),
+            None,
+            "the protected tail is bounded"
+        );
+    }
+
+    /// The app-level pass evicts background sessions before the active one
+    /// and leaves the active protected tail alone.
+    #[test]
+    fn app_budget_evicts_background_first_and_protects_the_active_tail() {
+        let mut app = crate::ui::testapp::open_with(
+            ThemeKind::Dark,
+            "ses_1",
+            Some("Active"),
+            "high",
+            Vec::new(),
+        );
+        crate::ui::testapp::open_session(&mut app, "ses_2");
+        app.sessions.active = Some("ses_1".to_owned());
+        for (session, count) in [("ses_1", 100usize), ("ses_2", 10usize)] {
+            let window = &mut app
+                .sessions
+                .known
+                .get_mut(session)
+                .unwrap()
+                .transcript
+                .window;
+            for index in 0..count {
+                window.insert(index, item(100));
+            }
+        }
+        assert_eq!(app.history_body_bytes(), 11_000);
+
+        let released = app.enforce_history_budget_with(6_500);
+        assert_eq!(released, 4_500, "background first, then the active oldest");
+        assert!(app.history_body_bytes() <= 6_500, "the budget is enforced");
+        let active_window = &app.sessions.known["ses_1"].transcript.window;
+        assert!(
+            active_window.item(99).is_some(),
+            "the active viewport tail is protected"
+        );
+        assert!(
+            active_window.item(0).is_none(),
+            "the active session is not pinned wholesale"
+        );
+        let background_window = &app.sessions.known["ses_2"].transcript.window;
+        assert_eq!(
+            background_window.bytes(),
+            0,
+            "the background session gave up its bodies first"
+        );
     }
 }

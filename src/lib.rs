@@ -20,6 +20,7 @@ pub mod error;
 pub mod event;
 pub mod jobs;
 pub mod keymap;
+pub mod limits;
 pub mod markdown;
 pub mod perf;
 pub mod protocol;

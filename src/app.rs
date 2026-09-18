@@ -1133,6 +1133,8 @@ impl App {
         if let Some((was_dirty, deadline)) = idle_tick_before {
             self.dirty = was_dirty || deadline != self.scrollbar.hide_at || !commands.is_empty();
         }
+        // Cache budgets are enforced once per event pass, off the draw path.
+        self.enforce_history_budget();
         commands
     }
 

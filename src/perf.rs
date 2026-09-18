@@ -156,6 +156,23 @@ pub fn count(counter: Counter) {
     add(counter, 1);
 }
 
+/// Stores an absolute gauge value (retained bytes) at the point it is known.
+pub fn set(counter: Counter, value: u64) {
+    with(|perf| {
+        let target = match counter {
+            Counter::LayoutCalls => &perf.layout_calls,
+            Counter::HistoricalTextBytesCloned => &perf.historical_text_bytes_cloned,
+            Counter::ViewportRowsMaterialized => &perf.viewport_rows_materialized,
+            Counter::ViewportTextBytesCloned => &perf.viewport_text_bytes_cloned,
+            Counter::ComposerFullJoins => &perf.composer_full_joins,
+            Counter::ToolIndexLookups => &perf.tool_index_lookups,
+            Counter::ToolLinearScans => &perf.tool_linear_scans,
+            Counter::HistoryBodyBytes => &perf.history_body_bytes,
+        };
+        target.store(value, Ordering::Relaxed);
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
