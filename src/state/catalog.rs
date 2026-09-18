@@ -16,6 +16,11 @@ pub struct CatalogState {
     pub next_model: Option<String>,
     pub next_reasoning: Option<Reasoning>,
     pub default_workspace: PathBuf,
+    /// Monotone catalog generation. A local create/open/rename/close/delete
+    /// bumps it, so a `session.list` response issued before that mutation is
+    /// discarded instead of resurrecting an old title or a deleted row
+    /// (spec §3.5).
+    pub session_list_generation: u64,
 }
 
 impl CatalogState {

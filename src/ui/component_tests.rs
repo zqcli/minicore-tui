@@ -2665,9 +2665,8 @@ fn session_panel_rename_uses_id_and_waits_for_complete_ack() {
         )
     ));
 
-    // A session.list response that was already in flight must not roll the
-    // acknowledged title back. The next refresh is then allowed to accept a
-    // genuinely newer Agent title.
+    // A refresh issued AFTER the rename is a new catalog authority: the old
+    // permanent title override is gone, so the Agent row is applied as-is.
     let commands = app.update(AppEvent::Terminal(CrosstermEvent::Key(
         crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::F(5),
@@ -2689,7 +2688,8 @@ fn session_panel_rename_uses_id_and_waits_for_complete_ack() {
     );
     assert_eq!(
         app.sessions.known["ses_main"].info.title.as_deref(),
-        Some("新し")
+        Some("stale"),
+        "a list issued after the rename is the newer authority"
     );
 }
 

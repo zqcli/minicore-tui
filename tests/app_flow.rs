@@ -2641,7 +2641,7 @@ fn catalog_staging_does_not_touch_the_running_session_view() {
     {
         let view = &driver.app.sessions.known["ses_1"];
         assert_eq!(
-            view.state.as_ref().map(|state| state.status.clone()),
+            view.state.as_ref().map(|state| state.status),
             Some(SessionStatusWire::Running)
         );
         assert_eq!(
@@ -2654,16 +2654,16 @@ fn catalog_staging_does_not_touch_the_running_session_view() {
     }
     assert!(reload_stage_pending(&driver.app));
     assert!(
-        driver.queue.iter().all(|request| !matches!(
-            request.method,
-            "turn.send" | "turn.steer" | "session.state"
-        ))
+        driver
+            .queue
+            .iter()
+            .all(|request| !matches!(request.method, "turn.send" | "turn.steer" | "session.state"))
     );
 
     complete_public_reload(&mut driver, reload);
     let view = &driver.app.sessions.known["ses_1"];
     assert_eq!(
-        view.state.as_ref().map(|state| state.status.clone()),
+        view.state.as_ref().map(|state| state.status),
         Some(SessionStatusWire::Running),
         "reload must not replace the live state projection"
     );
@@ -2854,11 +2854,13 @@ fn slash_reload_without_retained_turn_enqueues_no_wait() {
         driver.app.pending_request_kind(reload.id),
         Some(RequestKind::Reload { .. })
     ));
-    assert!(!driver
-        .app
-        .pending_requests
-        .values()
-        .any(|kind| matches!(kind, RequestKind::WaitTurn(_))));
+    assert!(
+        !driver
+            .app
+            .pending_requests
+            .values()
+            .any(|kind| matches!(kind, RequestKind::WaitTurn(_)))
+    );
 }
 #[test]
 fn a_wait_sent_before_a_reload_failure_stays_on_its_original_session() {
@@ -3008,11 +3010,13 @@ fn a_catalog_reload_leaves_no_stale_wait_for_a_settled_turn() {
     );
     assert_eq!(t2_loaded_count, 2);
     assert!(after.live.is_none());
-    assert!(after
-        .transcript
-        .window
-        .items()
-        .any(|(_, item)| item.item.loop_id() == Some("loop_t2")));
+    assert!(
+        after
+            .transcript
+            .window
+            .items()
+            .any(|(_, item)| item.item.loop_id() == Some("loop_t2"))
+    );
 
     assert_eq!(driver.app.sessions.active.as_deref(), Some("ses_1"));
     assert_eq!(after.usage_projection.usage, t2_usage);
@@ -3083,10 +3087,8 @@ fn a_stale_wait_send_failure_does_not_clear_a_sealed_loop_steer() {
         session_id: "ses_1".to_owned(),
         loop_id: "loop_t_old".to_owned(),
     };
-    let stale_request = OutgoingRequest::wait_turn(
-        minicore_tui::protocol::RequestId(80_020),
-        &stale_turn,
-    );
+    let stale_request =
+        OutgoingRequest::wait_turn(minicore_tui::protocol::RequestId(80_020), &stale_turn);
     driver.app.pending_requests.insert(
         stale_request.id,
         minicore_tui::app::RequestKind::WaitTurn(stale_turn.clone()),

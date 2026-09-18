@@ -169,9 +169,6 @@ pub struct SessionsState {
     /// A successful close acknowledged by this TUI process. A stale session
     /// list cannot mark the session loaded again until a later open ACK.
     pub closed: HashSet<SessionId>,
-    /// Metadata acknowledged by a local mutation. A stale session.list
-    /// response cannot roll an acknowledged rename back to its old title.
-    pub title_overrides: HashMap<SessionId, Option<String>>,
 }
 
 /// Per-session UI state.

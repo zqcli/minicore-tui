@@ -18,9 +18,9 @@ use crate::protocol::{
     AgentEventWire, EventMetaWire, IncomingFrame, METHOD_LIST_MODELS, METHOD_LIST_PROFILES,
     METHOD_LIST_SESSIONS, ModelInfo, OutgoingRequest, OutputChannelWire, ProfileInfo,
     READ_PAGE_LIMIT, READ_PAGE_MAX_BYTES, Reasoning, RequestId, RpcNotification, RpcResponse,
-    RpcResponseError, SessionInfo, SessionStateWire, SessionStatusWire,
-    ToolDisplayWire, ToolOutcomeWire, ToolProgressWire, TurnAvailability, TurnPersistenceWire,
-    TurnRef, UserMessageKindWire, validate_backend,
+    RpcResponseError, SessionInfo, SessionStateWire, SessionStatusWire, ToolDisplayWire,
+    ToolOutcomeWire, ToolProgressWire, TurnAvailability, TurnPersistenceWire, TurnRef,
+    UserMessageKindWire, validate_backend,
 };
 use crate::rpc::{RpcError, SendClass};
 use crate::state::catalog::CatalogState;
@@ -446,6 +446,9 @@ pub struct App {
     /// Coalesced retries for requests refused by the bounded outbound FIFO.
     /// Bounded by [`MAX_RPC_RETRIES`]; drains on the next progress event.
     pending_retries: std::collections::BTreeMap<RetryKey, RetryEntry>,
+    /// Catalog generation captured when each `session.list` request was
+    /// issued; a response older than the current generation is discarded.
+    session_list_requests: std::collections::BTreeMap<RequestId, u64>,
     /// Refusal count per exact retry target, so retries are bounded and the
     /// counter can be cleared when the request finally settles.
     retry_attempts: std::collections::BTreeMap<RetryKey, u8>,
@@ -569,6 +572,7 @@ impl App {
                 next_model: None,
                 next_reasoning: None,
                 default_workspace,
+                session_list_generation: 0,
             },
             sessions: SessionsState::default(),
             notices: VecDeque::new(),
@@ -609,6 +613,7 @@ impl App {
             now: SystemTime::now,
             pending_requests: HashMap::new(),
             pending_retries: std::collections::BTreeMap::new(),
+            session_list_requests: std::collections::BTreeMap::new(),
             retry_attempts: std::collections::BTreeMap::new(),
             selection_revision: 0,
             queries: crate::app::queries::QuerySlots::new(),
@@ -1329,6 +1334,10 @@ impl App {
     }
 
     fn upsert_session_list(&mut self, session: SessionInfo) {
+        // A local lifecycle mutation makes every in-flight catalog response
+        // stale, so a late list can never resurrect this old title or a
+        // deleted row (spec §3.5).
+        self.bump_session_list_generation();
         let mut session = session;
         if self.sessions.deleted.contains(&session.session_id)
             || self.sessions.pending_deletes.contains(&session.session_id)
@@ -1337,9 +1346,6 @@ impl App {
         }
         if self.sessions.closed.contains(&session.session_id) {
             session.loaded = false;
-        }
-        if let Some(title) = self.sessions.title_overrides.get(&session.session_id) {
-            session.title = title.clone();
         }
         if let Some(existing) = self
             .sessions
@@ -5140,7 +5146,7 @@ impl App {
                         RequestKind::ReloadProfiles { generation },
                         OutgoingRequest::list_profiles,
                     ),
-                    self.request(
+                    self.request_session_catalog(
                         RequestKind::ReloadSessions { generation },
                         OutgoingRequest::list_sessions,
                     ),
@@ -5253,14 +5259,7 @@ impl App {
             }
         };
         let mut ids = HashSet::new();
-        let sessions: Vec<SessionInfo> = result
-            .sessions
-            .into_iter()
-            .filter(|session| {
-                !self.sessions.deleted.contains(&session.session_id)
-                    && !self.sessions.pending_deletes.contains(&session.session_id)
-            })
-            .collect();
+        let sessions: Vec<SessionInfo> = result.sessions;
         if sessions
             .iter()
             .any(|session| !ids.insert(session.session_id.clone()))
@@ -5351,23 +5350,7 @@ impl App {
         self.catalogs.loaded = true;
         self.refresh_catalog_seats();
 
-        let rename_pending: HashSet<SessionId> = self
-            .pending_requests
-            .values()
-            .filter_map(|kind| match kind {
-                RequestKind::RenameSession { session_id } => Some(session_id.clone()),
-                _ => None,
-            })
-            .collect();
-        let mut sessions: Vec<SessionInfo> = reload
-            .sessions
-            .expect("complete reload has sessions")
-            .into_iter()
-            .filter(|session| {
-                !self.sessions.deleted.contains(&session.session_id)
-                    && !self.sessions.pending_deletes.contains(&session.session_id)
-            })
-            .collect();
+        let mut sessions: Vec<SessionInfo> = reload.sessions.expect("complete reload has sessions");
         for session in &mut sessions {
             let preserve_info = self
                 .sessions
@@ -5382,9 +5365,6 @@ impl App {
                 }
             } else if self.sessions.closed.contains(&session.session_id) {
                 session.loaded = false;
-            }
-            if let Some(title) = self.sessions.title_overrides.get(&session.session_id) {
-                session.title = title.clone();
             }
         }
         for session in &sessions {
@@ -5410,12 +5390,9 @@ impl App {
             }
         }
         self.sessions.list = sessions;
-        self.sessions.title_overrides.retain(|session_id, _| {
-            rename_pending.contains(session_id)
-        });
         self.reconcile_session_selection(true);
 
-        let mut commands = self.resume_uncalibrated_sessions();
+        let commands = self.resume_uncalibrated_sessions();
         self.prepared_conversation = None;
         self.notice(
             NoticeLevel::Info,
@@ -5604,10 +5581,8 @@ impl App {
             .iter()
             .filter_map(|(id, kind)| {
                 let belongs = Self::request_session_id(kind) == Some(session_id.as_str());
-                let keep_exact_turn = matches!(
-                    kind,
-                    RequestKind::WaitTurn(_) | RequestKind::TurnResult(_)
-                );
+                let keep_exact_turn =
+                    matches!(kind, RequestKind::WaitTurn(_) | RequestKind::TurnResult(_));
                 (belongs && !keep_exact_turn).then_some(*id)
             })
             .collect();
@@ -5726,6 +5701,51 @@ impl App {
         AppCommand::Rpc(request)
     }
 
+    /// Issues a session catalog request while recording the current catalog
+    /// generation, so a late response can be recognized as stale.
+    fn request_session_catalog(
+        &mut self,
+        kind: RequestKind,
+        build: impl FnOnce(RequestId) -> OutgoingRequest,
+    ) -> AppCommand {
+        let command = self.request(kind, build);
+        if let AppCommand::Rpc(request) = &command {
+            let issued = self.catalogs.session_list_generation;
+            self.session_list_requests.insert(request.id, issued);
+        }
+        command
+    }
+
+    /// Whether a session-list response may be applied: it must have been
+    /// issued at the current catalog generation. A stale response is dropped
+    /// and its caller re-issues a fresh list request.
+    fn session_catalog_is_current(&mut self, id: RequestId) -> bool {
+        match self.session_list_requests.remove(&id) {
+            Some(issued) => issued == self.catalogs.session_list_generation,
+            None => true,
+        }
+    }
+
+    /// A local catalog mutation invalidates every in-flight `session.list`
+    /// response (spec §3.5).
+    fn bump_session_list_generation(&mut self) {
+        self.catalogs.session_list_generation = self
+            .catalogs
+            .session_list_generation
+            .checked_add(1)
+            .expect("session catalog generations exhausted");
+    }
+
+    /// Re-issues a plain catalog list after a stale response was discarded.
+    fn refresh_session_catalog(&mut self) -> Vec<AppCommand> {
+        if !self.can_send_requests() {
+            return Vec::new();
+        }
+        vec![
+            self.request_session_catalog(RequestKind::ListSessions, OutgoingRequest::list_sessions),
+        ]
+    }
+
     pub(crate) fn notice(&mut self, level: NoticeLevel, text: impl Into<String>) {
         self.push_notice(Notice::at(level, text.into(), false, self.instant_now()));
     }
@@ -5797,7 +5817,8 @@ impl App {
         let ping = self.request(RequestKind::Ping, OutgoingRequest::ping);
         let models = self.request(RequestKind::ListModels, OutgoingRequest::list_models);
         let profiles = self.request(RequestKind::ListProfiles, OutgoingRequest::list_profiles);
-        let sessions = self.request(RequestKind::ListSessions, OutgoingRequest::list_sessions);
+        let sessions =
+            self.request_session_catalog(RequestKind::ListSessions, OutgoingRequest::list_sessions);
         vec![ping, models, profiles, sessions]
     }
 
@@ -5968,7 +5989,7 @@ impl App {
         if let Some(state) = self.session_selector_state_mut() {
             state.error = None;
         }
-        vec![self.request(
+        vec![self.request_session_catalog(
             RequestKind::RefreshSessions {
                 selected_session_id,
             },
@@ -6364,9 +6385,9 @@ impl App {
                 self.sessions.pending_deletes.remove(session_id);
                 self.sessions.deleted.insert(session_id.clone());
                 self.sessions.closed.remove(session_id);
-                self.sessions.title_overrides.remove(session_id);
                 self.sessions.known.remove(session_id);
                 self.sessions.list.retain(|s| &s.session_id != session_id);
+                self.bump_session_list_generation();
                 if self.sessions.active.as_deref() == Some(session_id.as_str()) {
                     ui_actions::cancel_scrollbar_drag(self);
                     ui_actions::clear_selection(self);
@@ -6515,44 +6536,25 @@ impl App {
                 return Vec::new();
             }
         };
-        let rename_pending: std::collections::HashSet<SessionId> = self
-            .pending_requests
-            .values()
-            .filter_map(|kind| match kind {
-                RequestKind::RenameSession { session_id } => Some(session_id.clone()),
-                _ => None,
-            })
-            .collect();
         let mut visible = Vec::with_capacity(result.sessions.len());
         for mut session in result.sessions {
             let session_id = session.session_id.clone();
-            if self.sessions.pending_deletes.contains(&session_id)
-                || self.sessions.deleted.contains(&session_id)
-            {
-                continue;
-            }
             if self.sessions.closed.contains(&session_id) {
                 session.loaded = false;
             }
-            if let Some(title) = self.sessions.title_overrides.get(&session_id) {
-                session.title = title.clone();
-            }
-            if !rename_pending.contains(&session_id) {
-                if let Some(view) = self.sessions.known.get_mut(&session_id) {
-                    view.info = session.clone();
-                    if !session.loaded {
-                        view.latest_state_query = None;
-                    }
-                } else {
-                    self.sessions
-                        .known
-                        .insert(session_id.clone(), SessionView::new(session.clone()));
+            if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                view.info = session.clone();
+                if !session.loaded {
+                    view.latest_state_query = None;
                 }
+            } else {
+                self.sessions
+                    .known
+                    .insert(session_id.clone(), SessionView::new(session.clone()));
             }
             visible.push(session);
         }
         self.sessions.list = visible;
-        self.sessions.title_overrides.clear();
         self.reconcile_session_selection(true);
         if let Some(state) = self.session_selector_state_mut() {
             state.error = None;
@@ -6613,9 +6615,6 @@ impl App {
         if self.reload.is_some() {
             self.mark_session_uncalibrated(&session_id);
         }
-        self.sessions
-            .title_overrides
-            .insert(session_id.clone(), session.title.clone());
         self.upsert_session_list(session);
         let mut returned_to_browse = false;
         if let Dock::SessionSelector(state) = &mut self.dock {
@@ -8143,9 +8142,7 @@ impl App {
         let Some(turn) = self.retained_turn(session_id) else {
             return Vec::new();
         };
-        self.request_wait(turn)
-            .into_iter()
-            .collect()
+        self.request_wait(turn).into_iter().collect()
     }
 
     fn request_wait(&mut self, turn: TurnRef) -> Option<AppCommand> {
@@ -8869,10 +8866,7 @@ impl App {
                 }
             }
             if !self.pending_wait_for(turn) {
-                return self
-                    .request_wait(turn.clone())
-                    .into_iter()
-                    .collect();
+                return self.request_wait(turn.clone()).into_iter().collect();
             }
             return Vec::new();
         }
@@ -9782,9 +9776,7 @@ impl App {
         if self.connection == ConnectionState::ShuttingDown
             && !matches!(
                 kind,
-                RequestKind::Shutdown
-                    | RequestKind::WaitTurn(_)
-                    | RequestKind::SendTurn { .. }
+                RequestKind::Shutdown | RequestKind::WaitTurn(_) | RequestKind::SendTurn { .. }
             )
         {
             return Vec::new();
@@ -9836,32 +9828,60 @@ impl App {
                 self.on_reload_profiles_response(generation, &response)
             }
             RequestKind::ReloadSessions { generation } => {
+                if !self.session_catalog_is_current(response.id) {
+                    if self
+                        .reload
+                        .as_ref()
+                        .is_some_and(|reload| reload.generation == generation)
+                    {
+                        return vec![self.request_session_catalog(
+                            RequestKind::ReloadSessions { generation },
+                            OutgoingRequest::list_sessions,
+                        )];
+                    }
+                    return Vec::new();
+                }
                 self.on_reload_sessions_response(generation, &response)
             }
-            RequestKind::ListSessions => match response.parse_sessions() {
-                Ok(result) => {
-                    let sessions: Vec<_> = result
-                        .sessions
-                        .into_iter()
-                        .filter(|session| {
-                            !self.sessions.deleted.contains(&session.session_id)
-                                && !self.sessions.pending_deletes.contains(&session.session_id)
-                        })
-                        .collect();
-                    self.sessions.list = sessions.clone();
-                    for session in sessions {
-                        let session_id = session.session_id.clone();
-                        self.sessions
-                            .known
-                            .entry(session_id)
-                            .or_insert_with(|| SessionView::new(session));
-                    }
-                    self.bootstrap_progress(BootstrapPart::Sessions);
-                    Vec::new()
+            RequestKind::ListSessions => {
+                if !self.session_catalog_is_current(response.id) {
+                    return self.refresh_session_catalog();
                 }
-                Err(error) => self.bootstrap_failure(METHOD_LIST_SESSIONS, error),
-            },
-            RequestKind::RefreshSessions { .. } => self.on_refresh_sessions_response(&response),
+                match response.parse_sessions() {
+                    Ok(result) => {
+                        let sessions = result.sessions;
+                        self.sessions.list = sessions.clone();
+                        for session in sessions {
+                            let session_id = session.session_id.clone();
+                            self.sessions
+                                .known
+                                .entry(session_id)
+                                .or_insert_with(|| SessionView::new(session));
+                        }
+                        self.bootstrap_progress(BootstrapPart::Sessions);
+                        Vec::new()
+                    }
+                    Err(error) => self.bootstrap_failure(METHOD_LIST_SESSIONS, error),
+                }
+            }
+            RequestKind::RefreshSessions {
+                selected_session_id,
+            } => {
+                if !self.session_catalog_is_current(response.id) {
+                    // The response predates a local create/open/rename/close/
+                    // delete: re-issue instead of resurrecting old metadata.
+                    if !self.can_send_requests() {
+                        return Vec::new();
+                    }
+                    return vec![self.request_session_catalog(
+                        RequestKind::RefreshSessions {
+                            selected_session_id,
+                        },
+                        OutgoingRequest::list_sessions,
+                    )];
+                }
+                self.on_refresh_sessions_response(&response)
+            }
             RequestKind::CreateSession { draft } => self.on_create_response(draft, &response),
             RequestKind::OpenSession {
                 session_id,
@@ -11970,7 +11990,7 @@ mod tests {
             app.sessions.known["ses_1"]
                 .state
                 .as_ref()
-                .map(|state| state.status.clone()),
+                .map(|state| state.status),
             Some(SessionStatusWire::Running)
         );
     }
@@ -12443,9 +12463,11 @@ mod tests {
             .find(|request| request.method == "turn.wait")
             .cloned()
             .expect("the send ACK registers one wait");
-        assert!(after_ack
-            .iter()
-            .all(|request| request.method != "turn.send" && request.method != "turn.steer"));
+        assert!(
+            after_ack
+                .iter()
+                .all(|request| request.method != "turn.send" && request.method != "turn.steer")
+        );
 
         let after_wait = take_requests(respond(
             &mut app,
@@ -12470,9 +12492,11 @@ mod tests {
             .find(|request| request.method == "session.read")
             .cloned()
             .expect("completion requests terminal history");
-        assert!(after_wait
-            .iter()
-            .all(|request| request.method != "turn.send" && request.method != "turn.steer"));
+        assert!(
+            after_wait
+                .iter()
+                .all(|request| request.method != "turn.send" && request.method != "turn.steer")
+        );
 
         take_requests(respond(&mut app, &wait_state, state_json("ses_1", "idle")));
         let after_history = take_requests(respond(
@@ -12487,9 +12511,11 @@ mod tests {
                 2,
             ),
         ));
-        assert!(after_history
-            .iter()
-            .all(|request| request.method != "turn.send" && request.method != "turn.steer"));
+        assert!(
+            after_history
+                .iter()
+                .all(|request| request.method != "turn.send" && request.method != "turn.steer")
+        );
         assert_eq!(app.sessions.known["ses_1"].steer_queue.len(), 1);
         assert_eq!(app.sessions.known["ses_1"].steer_queue[0].text, "queued B");
         assert_eq!(
@@ -12844,9 +12870,11 @@ mod tests {
             &create,
             json!({"session": session_info("ses_created_after_reload")}),
         ));
-        assert!(reads
-            .iter()
-            .any(|request| request.method == "session.state"));
+        assert!(
+            reads
+                .iter()
+                .any(|request| request.method == "session.state")
+        );
         let history = reads
             .iter()
             .find(|request| request.method == "session.read")
@@ -12892,6 +12920,178 @@ mod tests {
             recovery
                 .iter()
                 .any(|request| request.method == "session.read")
+        );
+    }
+
+    /// Builds a `session.list` row with an explicit title.
+    fn titled_session_info(session_id: &str, title: &str) -> Value {
+        let mut value = session_info(session_id);
+        value["title"] = json!(title);
+        value
+    }
+
+    fn request_rename(app: &mut App, session_id: &str, title: &str) -> OutgoingRequest {
+        match app.request(
+            RequestKind::RenameSession {
+                session_id: session_id.to_owned(),
+            },
+            |id| OutgoingRequest::session_rename(id, session_id, title),
+        ) {
+            AppCommand::Rpc(request) => request,
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn a_late_session_list_cannot_resurrect_a_renamed_title() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+        let refresh = take_requests(app.update(AppEvent::OpenSessionSelector))
+            .into_iter()
+            .find(|request| request.method == "session.list")
+            .expect("opening the session selector issues a session.list request");
+        assert_eq!(refresh.method, "session.list");
+
+        // A rename ACK lands while the list response is in flight.
+        let rename = request_rename(&mut app, "ses_1", "renamed");
+        take_requests(respond(
+            &mut app,
+            &rename,
+            json!({"session": titled_session_info("ses_1", "renamed")}),
+        ));
+        assert_eq!(
+            app.sessions.known["ses_1"].info.title.as_deref(),
+            Some("renamed")
+        );
+
+        // The stale list still carries the old title: it is discarded and a
+        // fresh list is requested instead.
+        let after_stale = take_requests(respond(
+            &mut app,
+            &refresh,
+            json!({"sessions": [titled_session_info("ses_1", "old title")]}),
+        ));
+        assert_eq!(after_stale.len(), 1);
+        assert_eq!(after_stale[0].method, "session.list");
+        assert_eq!(
+            app.sessions.known["ses_1"].info.title.as_deref(),
+            Some("renamed"),
+            "a pre-rename catalog response never overwrites the new title"
+        );
+        assert!(
+            app.sessions
+                .list
+                .iter()
+                .all(|session| session.title.as_deref() != Some("old title"))
+        );
+
+        // The re-issued list is authoritative.
+        take_requests(respond(
+            &mut app,
+            &after_stale[0],
+            json!({"sessions": [titled_session_info("ses_1", "renamed")]}),
+        ));
+        assert_eq!(
+            app.sessions.known["ses_1"].info.title.as_deref(),
+            Some("renamed")
+        );
+    }
+
+    #[test]
+    fn a_late_session_list_cannot_resurrect_a_deleted_session() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+        let refresh = take_requests(app.update(AppEvent::OpenSessionSelector))
+            .into_iter()
+            .find(|request| request.method == "session.list")
+            .expect("opening the session selector issues a session.list request");
+
+        let delete = match app.request(
+            RequestKind::DeleteSession {
+                session_id: "ses_1".to_owned(),
+            },
+            |id| OutgoingRequest::session_delete(id, "ses_1"),
+        ) {
+            AppCommand::Rpc(request) => request,
+            _ => unreachable!(),
+        };
+        take_requests(respond(&mut app, &delete, json!({"ok": true})));
+        assert!(!app.sessions.known.contains_key("ses_1"));
+        assert!(app.sessions.deleted.contains("ses_1"));
+
+        let after_stale = take_requests(respond(
+            &mut app,
+            &refresh,
+            json!({"sessions": [titled_session_info("ses_1", "deleted row")]}),
+        ));
+        assert_eq!(after_stale.len(), 1);
+        assert_eq!(after_stale[0].method, "session.list");
+        assert!(
+            !app.sessions.known.contains_key("ses_1"),
+            "a pre-delete catalog response never resurrects the session"
+        );
+        assert!(
+            app.sessions
+                .list
+                .iter()
+                .all(|session| session.session_id != "ses_1")
+        );
+    }
+
+    #[test]
+    fn a_stale_reload_list_is_reissued_before_the_reload_completes() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+
+        let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
+        let catalogs = take_requests(respond(&mut app, &reload, json!({"ok": true})));
+        let models = catalogs
+            .iter()
+            .find(|request| request.method == "model.list")
+            .unwrap();
+        let profiles = catalogs
+            .iter()
+            .find(|request| request.method == "profile.list")
+            .unwrap();
+        let sessions = catalogs
+            .iter()
+            .find(|request| request.method == "session.list")
+            .unwrap();
+        take_requests(respond(&mut app, profiles, json!({"profiles": []})));
+        take_requests(respond(&mut app, models, json!({"models": []})));
+
+        // A local rename lands before the reload's session list arrives.
+        let rename = request_rename(&mut app, "ses_1", "renamed during reload");
+        take_requests(respond(
+            &mut app,
+            &rename,
+            json!({"session": titled_session_info("ses_1", "renamed during reload")}),
+        ));
+
+        let after_stale = take_requests(respond(
+            &mut app,
+            sessions,
+            json!({"sessions": [titled_session_info("ses_1", "old title")]}),
+        ));
+        assert_eq!(after_stale.len(), 1);
+        assert_eq!(after_stale[0].method, "session.list");
+        assert!(
+            app.reload.is_some(),
+            "the reload waits for the fresh catalog instead of installing a stale one"
+        );
+
+        take_requests(respond(
+            &mut app,
+            &after_stale[0],
+            json!({"sessions": [titled_session_info("ses_1", "renamed during reload")]}),
+        ));
+        assert!(app.reload.is_none());
+        assert_eq!(
+            app.sessions.known["ses_1"].info.title.as_deref(),
+            Some("renamed during reload")
         );
     }
 
