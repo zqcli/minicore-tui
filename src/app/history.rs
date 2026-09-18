@@ -2036,12 +2036,18 @@ impl App {
     }
 
     pub(crate) fn layout_cache_bytes(&self) -> usize {
-        self.sessions
+        let cached = self
+            .sessions
             .known
             .values()
             .filter_map(|view| view.transcript.render_cache.as_ref())
             .map(|cache| cache.retained_bytes())
-            .sum()
+            .sum::<usize>();
+        cached
+            + self
+                .layout_partial
+                .as_ref()
+                .map_or(0, |(_, layout)| layout.retained_bytes())
     }
 
     pub(crate) fn enforce_layout_budget(&mut self) -> usize {
@@ -2049,8 +2055,17 @@ impl App {
         if total <= crate::limits::LAYOUT_CACHE_BYTES {
             return 0;
         }
-        let active = self.sessions.active.clone();
         let mut released = 0;
+        if let Some((_, layout)) = self.layout_partial.take() {
+            let bytes = layout.retained_bytes();
+            self.prepared_conversation = None;
+            total = total.saturating_sub(bytes);
+            released += bytes;
+            if total <= crate::limits::LAYOUT_CACHE_BYTES {
+                return released;
+            }
+        }
+        let active = self.sessions.active.clone();
         while total > crate::limits::LAYOUT_CACHE_BYTES {
             let victim = self
                 .sessions
