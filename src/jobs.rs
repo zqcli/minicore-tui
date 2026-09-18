@@ -119,14 +119,20 @@ impl LocalJobs {
                     },
                     layout,
                 });
-                let _ = layout_events.try_send(AppEvent::DurableLayoutPrepared(
-                    crate::ui::transcript::DurableLayoutResult {
-                        identity,
-                        durable,
-                        changed_sections,
-                        tool_index_lookups,
-                    },
-                ));
+                if layout_events
+                    .send(AppEvent::DurableLayoutPrepared(
+                        crate::ui::transcript::DurableLayoutResult {
+                            identity,
+                            durable,
+                            changed_sections,
+                            tool_index_lookups,
+                        },
+                    ))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
             }
         });
         Self {
@@ -275,15 +281,18 @@ impl LocalJobs {
     /// child, so this waits for local cleanup but never for a hung helper
     /// indefinitely.
     ///
-    /// While joining, any completion result is drained so a full channel can
-    /// never wedge the worker (there is one job and two slots, but shutdown
-    /// must not depend on that arithmetic to be correct).
+    /// While joining, completion results are drained so a bounded channel can
+    /// never wedge either owned worker during shutdown.
     pub async fn shutdown(&mut self) {
         if let Some(cancel) = self.layout_cancel.take() {
             cancel.store(true, Ordering::Relaxed);
         }
         self.layout_tx.take();
         if let Some(task) = self.layout_task.take() {
+            while !task.is_finished() {
+                while self.events_rx.try_recv().is_ok() {}
+                tokio::task::yield_now().await;
+            }
             let _ = task.await;
         }
         let Some(handle) = self.clipboard.take() else {
