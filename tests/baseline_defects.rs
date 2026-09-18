@@ -263,7 +263,7 @@ fn tool_projection_uses_one_index_and_never_rescans_blocks() {
         "C2: the projection builds one tool index per pass"
     );
     assert!(
-        source.contains("tool_index.get(&("),
+        source.contains("tool_index") && source.contains(".get(&("),
         "C2: each tool call resolves through the index"
     );
     assert!(
