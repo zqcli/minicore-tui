@@ -33,16 +33,6 @@ impl DurableCacheKey {
     }
 }
 
-/// Immutable history rows, shared by the installed snapshot and its session.
-#[derive(Debug)]
-pub struct PreparedDurable {
-    pub key: DurableCacheKey,
-    pub lines: Vec<Line<'static>>,
-    pub sections: Vec<SectionRange>,
-    pub copy_ranges: Vec<CopyRange>,
-    pub link_cells: Vec<Vec<std::ops::Range<usize>>>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum SectionKind {
     User,
@@ -80,6 +70,150 @@ pub struct SectionId {
     pub ordinal: u32,
     pub tool_call_id: Option<Arc<str>>,
     pub history_index: Option<usize>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct LayoutKey {
+    pub section: SectionId,
+    pub revision: u64,
+    pub width: u16,
+    pub theme: crate::theme::ThemeKind,
+    pub folded: bool,
+}
+
+/// One immutable, independently reusable section layout. Rows and all source
+/// metadata are shared by frame snapshots; changing another section does not
+/// copy this section's text or links.
+#[derive(Debug)]
+pub struct SectionLayout {
+    pub key: LayoutKey,
+    pub rows: Arc<Vec<Line<'static>>>,
+    pub source: Arc<str>,
+    pub copy_ranges: Arc<Vec<CopyRange>>,
+    pub link_cells: Arc<Vec<LinkRow>>,
+    pub content_columns: std::ops::Range<usize>,
+    pub collapsible: bool,
+    pub folded: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct SectionPlacement {
+    pub layout: Arc<SectionLayout>,
+    /// Global rows within the conversation layout. The local section may
+    /// start at one because adjacent vertical padding is shared.
+    pub rows: std::ops::Range<usize>,
+    pub local_start: usize,
+}
+
+/// Stable section placements plus integer row prefixes. Row lookup never
+/// scans the historical sections and never materializes a full line array.
+#[derive(Debug)]
+pub struct ConversationLayout {
+    pub sections: Arc<Vec<SectionPlacement>>,
+    pub offsets: Arc<Vec<usize>>,
+    pub total_rows: usize,
+    blank: Line<'static>,
+}
+
+impl ConversationLayout {
+    pub fn from_sections(sections: Vec<Arc<SectionLayout>>) -> Self {
+        let mut placements = Vec::with_capacity(sections.len());
+        let mut offsets = Vec::with_capacity(sections.len());
+        let mut total_rows = 0;
+        let mut previous_kind = None;
+        let mut previous_ends_blank = false;
+        for layout in sections {
+            if layout.rows.is_empty() {
+                continue;
+            }
+            if previous_kind == Some(SectionKind::User)
+                && layout.key.section.kind == SectionKind::User
+            {
+                total_rows += 1;
+            }
+            let local_start = usize::from(
+                previous_ends_blank
+                    && layout.rows.first().is_some_and(|line| line.spans.is_empty()),
+            );
+            let start = total_rows;
+            let end = start + layout.rows.len().saturating_sub(local_start);
+            placements.push(SectionPlacement {
+                layout: Arc::clone(&layout),
+                rows: start..end,
+                local_start,
+            });
+            offsets.push(end);
+            total_rows = end;
+            previous_kind = Some(layout.key.section.kind);
+            previous_ends_blank = layout
+                .rows
+                .last()
+                .is_some_and(|line| line.spans.is_empty());
+        }
+        Self {
+            sections: Arc::new(placements),
+            offsets: Arc::new(offsets),
+            total_rows,
+            blank: Line::default(),
+        }
+    }
+
+    pub fn row(&self, row: usize) -> Option<&Line<'static>> {
+        if row >= self.total_rows {
+            return None;
+        }
+        let index = self.offsets.partition_point(|end| *end <= row);
+        let placement = self.sections.get(index)?;
+        if row < placement.rows.start {
+            return Some(&self.blank);
+        }
+        placement
+            .layout
+            .rows
+            .get(placement.local_start + row - placement.rows.start)
+    }
+
+    pub fn links_at(&self, row: usize) -> &[std::ops::Range<usize>] {
+        const EMPTY: &[std::ops::Range<usize>] = &[];
+        if row >= self.total_rows {
+            return EMPTY;
+        }
+        let index = self.offsets.partition_point(|end| *end <= row);
+        let Some(placement) = self.sections.get(index) else {
+            return EMPTY;
+        };
+        if row < placement.rows.start {
+            return EMPTY;
+        }
+        placement
+            .layout
+            .link_cells
+            .get(placement.local_start + row - placement.rows.start)
+            .map_or(EMPTY, Vec::as_slice)
+    }
+
+    pub fn window(&self, offset: usize, rows: usize) -> Vec<Line<'static>> {
+        let start = offset.min(self.total_rows);
+        let end = start.saturating_add(rows).min(self.total_rows);
+        let mut window = Vec::with_capacity(end.saturating_sub(start));
+        let mut bytes = 0usize;
+        for row in start..end {
+            if let Some(line) = self.row(row) {
+                bytes += line
+                    .spans
+                    .iter()
+                    .map(|span| span.content.len())
+                    .sum::<usize>();
+                window.push(line.clone());
+            }
+        }
+        crate::perf::add(
+            crate::perf::Counter::ViewportRowsMaterialized,
+            window.len() as u64,
+        );
+        crate::perf::add(crate::perf::Counter::ViewportTextBytesCloned, bytes as u64);
+        window
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -171,6 +305,137 @@ impl ConversationSelection {
 /// Per-row link cell ranges, parallel to the rows of one frame part.
 pub type LinkRow = Vec<std::ops::Range<usize>>;
 
+/// Immutable history layout shared by the session cache and frame snapshots.
+#[derive(Debug)]
+pub struct PreparedDurable {
+    pub key: DurableCacheKey,
+    pub layout: Arc<ConversationLayout>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SectionView {
+    pub id: SectionId,
+    pub rows: std::ops::Range<usize>,
+    pub content_columns: std::ops::Range<usize>,
+    pub collapsible: bool,
+    pub folded: bool,
+}
+
+impl SectionView {
+    pub fn contains_row(&self, row: usize) -> bool {
+        self.rows.contains(&row)
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SectionIndex {
+    pub durable: Option<Arc<ConversationLayout>>,
+    pub durable_base: usize,
+    pub durable_skip: usize,
+    pub live: Arc<Vec<SectionRange>>,
+}
+
+impl SectionIndex {
+    pub fn iter(&self) -> impl Iterator<Item = SectionView> + '_ {
+        let durable = self
+            .durable
+            .as_ref()
+            .into_iter()
+            .flat_map(|layout| layout.sections.iter())
+            .filter_map(move |placement| {
+                let start = placement.rows.start.saturating_sub(self.durable_skip)
+                    + self.durable_base;
+                let end = placement.rows.end.saturating_sub(self.durable_skip)
+                    + self.durable_base;
+                (end > start).then_some(SectionView {
+                    id: placement.layout.key.section.clone(),
+                    rows: start..end,
+                    content_columns: placement.layout.content_columns.clone(),
+                    collapsible: placement.layout.collapsible,
+                    folded: placement.layout.folded,
+                })
+            });
+        durable.chain(self.live.iter().map(|section| SectionView {
+            id: section.id.clone(),
+            rows: section.rows.clone(),
+            content_columns: section.content_columns.clone(),
+            collapsible: section.collapsible,
+            folded: section.folded,
+        }))
+    }
+
+    pub fn first(&self) -> Option<SectionView> {
+        self.iter().next()
+    }
+}
+
+impl IntoIterator for SectionIndex {
+    type Item = SectionView;
+    type IntoIter = std::vec::IntoIter<SectionView>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter().collect::<Vec<_>>().into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a SectionIndex {
+    type Item = SectionView;
+    type IntoIter = Box<dyn Iterator<Item = SectionView> + 'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Box::new(self.iter())
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct CopyIndex {
+    pub durable: Option<Arc<ConversationLayout>>,
+    pub durable_base: usize,
+    pub durable_skip: usize,
+    pub live_base: usize,
+    pub live: Arc<Vec<CopyRange>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CopyView<'a> {
+    pub row: usize,
+    pub columns: &'a std::ops::Range<usize>,
+    pub text: &'a str,
+    pub decorative: bool,
+}
+
+impl CopyIndex {
+    pub fn iter(&self) -> impl Iterator<Item = CopyView<'_>> {
+        let durable = self
+            .durable
+            .as_ref()
+            .into_iter()
+            .flat_map(|layout| layout.sections.iter())
+            .flat_map(move |placement| {
+                placement.layout.copy_ranges.iter().filter_map(move |copy| {
+                    let local_row = copy.row;
+                    (local_row >= placement.local_start).then_some(CopyView {
+                        row: placement.rows.start + local_row - placement.local_start
+                            + self.durable_base.saturating_sub(self.durable_skip),
+                        columns: &copy.columns,
+                        text: copy.text.as_ref(),
+                        decorative: copy.decorative,
+                    })
+                })
+            });
+        durable.chain(self.live.iter().map(move |copy| CopyView {
+            row: copy.row + self.live_base,
+            columns: &copy.columns,
+            text: copy.text.as_ref(),
+            decorative: copy.decorative,
+        }))
+    }
+
+    pub fn row(&self, row: usize) -> Option<CopyView<'_>> {
+        self.iter().find(|copy| copy.row == row)
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PreparedConversation {
     /// Content width used to build the rows. It is the width after the App
@@ -195,8 +460,8 @@ pub struct PreparedConversation {
     /// Rows after the durable block: notices, live sections, busy status.
     pub live: Vec<Line<'static>>,
     pub live_links: Vec<LinkRow>,
-    pub sections: Vec<SectionRange>,
-    pub copy_ranges: Vec<CopyRange>,
+    pub sections: SectionIndex,
+    pub copy_ranges: CopyIndex,
 }
 
 impl PreparedConversation {
@@ -207,7 +472,7 @@ impl PreparedConversation {
     /// Durable rows actually visible in this frame (the skip is excluded).
     pub fn durable_rows(&self) -> usize {
         self.durable.as_ref().map_or(0, |durable| {
-            durable.lines.len().saturating_sub(self.durable_skip)
+            durable.layout.total_rows.saturating_sub(self.durable_skip)
         })
     }
 
@@ -232,8 +497,8 @@ impl PreparedConversation {
             return self
                 .durable
                 .as_ref()?
-                .lines
-                .get(self.durable_skip.checked_add(row)?);
+                .layout
+                .row(self.durable_skip.checked_add(row)?);
         }
         self.live.get(row - durable)
     }
@@ -252,8 +517,9 @@ impl PreparedConversation {
             return self
                 .durable
                 .as_ref()
-                .and_then(|durable| durable.link_cells.get(self.durable_skip + row))
-                .map_or(EMPTY, Vec::as_slice);
+                .map_or(EMPTY, |durable| {
+                    durable.layout.links_at(self.durable_skip + row)
+                });
         }
         self.live_links
             .get(row - durable)
@@ -316,8 +582,8 @@ impl PreparedConversation {
         self.durable_skip = 0;
         self.live.clear();
         self.live_links.clear();
-        self.sections.clear();
-        self.copy_ranges.clear();
+        self.sections = SectionIndex::default();
+        self.copy_ranges = CopyIndex::default();
     }
 
     /// Stable identity of the shared historical frame; retention tests compare
@@ -328,14 +594,11 @@ impl PreparedConversation {
 
     /// Copy metadata for one absolute row, if any. `copy_ranges` is ordered by
     /// row, so this is a lookup, not a scan.
-    pub fn copy_row(&self, row: usize) -> Option<&CopyRange> {
-        self.copy_ranges
-            .binary_search_by_key(&row, |copy| copy.row)
-            .ok()
-            .map(|index| &self.copy_ranges[index])
+    pub fn copy_row(&self, row: usize) -> Option<CopyView<'_>> {
+        self.copy_ranges.row(row)
     }
 
-    pub fn section_at(&self, row: usize, column: usize) -> Option<&SectionRange> {
+    pub fn section_at(&self, row: usize, column: usize) -> Option<SectionView> {
         self.sections
             .iter()
             .find(|section| section.contains_row(row) && section.content_columns.contains(&column))

@@ -32,6 +32,8 @@ pub use turn::{
     UnsavedLoop,
 };
 pub use view::{
-    ConversationSelection, CopyRange, FoldOverride, PreparedConversation, ReasoningKey, SectionId,
-    SectionKind, SectionRange, SelectionGranularity, SelectionPoint,
+    ConversationLayout, ConversationSelection, CopyIndex, CopyRange, CopyView, DurableCacheKey,
+    FoldOverride,
+    LayoutKey, PreparedConversation, PreparedDurable, ReasoningKey, SectionId, SectionIndex,
+    SectionKind, SectionLayout, SectionRange, SectionView, SelectionGranularity, SelectionPoint,
 };

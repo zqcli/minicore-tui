@@ -1,6 +1,6 @@
 //! The transcript/history scroll view: durable blocks and the live loop tail (spec r2).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use ratatui::Frame;
@@ -16,19 +16,12 @@ use crate::markdown::wrap_plain;
 use crate::state::session::SessionView;
 use crate::state::transcript::{ToolBlock, TranscriptBlock};
 use crate::state::view::{
-    ConversationSelection, CopyRange, DurableCacheKey, FoldOverride, PreparedConversation,
-    PreparedDurable, SectionId, SectionKind, SectionRange,
+    ConversationLayout, ConversationSelection, CopyIndex, CopyRange, DurableCacheKey,
+    FoldOverride, LayoutKey, PreparedConversation, PreparedDurable, SectionId, SectionIndex,
+    SectionKind, SectionLayout, SectionRange,
 };
 use crate::theme::Theme;
 use crate::ui::{assistant, header, layout, reasoning, tool, user};
-
-struct PreparedSection {
-    id: SectionId,
-    lines: Vec<Line<'static>>,
-    link_cells: Vec<Vec<std::ops::Range<usize>>>,
-    collapsible: bool,
-    folded: bool,
-}
 
 /// Builds one complete immutable conversation snapshot. The same rows and
 /// metadata are consumed by measurement, rendering, hit testing, selection,
@@ -47,35 +40,47 @@ pub fn prepare_conversation(app: &App, width: u16) -> PreparedConversation {
         }
         // A cache miss is the only point that rebuilds the durable layout;
         // a cache hit below must not count (spec §25.1).
-        crate::perf::count(crate::perf::Counter::LayoutCalls);
-        let (lines, sections, copy_ranges, link_cells) =
-            build_durable_prepared(&theme, view, width as usize, app.reasoning_visible);
-        Arc::new(PreparedDurable {
-            key,
-            lines,
-            sections,
-            copy_ranges,
-            link_cells,
-        })
+        let previous = view.transcript.render_cache.as_deref();
+        let (layout, changed_sections) = build_durable_layout(
+            &theme,
+            app.theme,
+            view,
+            width,
+            app.reasoning_visible,
+            previous,
+        );
+        crate::perf::add(crate::perf::Counter::LayoutCalls, changed_sections as u64);
+        Arc::new(PreparedDurable { key, layout })
     });
     let header = header::lines(&theme, app);
     let header_rows = header.len();
-    let durable_lines = durable.as_ref().map_or(&[][..], |d| d.lines.as_slice());
     // The shared durable frame is never copied: the frame only records how
-    // many leading rows the header boundary drops (`layout::append_section_ref`
-    // rule), and the live tail starts after it.
+    // many leading rows the header boundary drops, and the live tail starts
+    // after it.
     let durable_skip = usize::from(
         header.last().is_some_and(layout::line_is_blank)
-            && durable_lines.first().is_some_and(layout::line_is_blank),
+            && durable
+                .as_ref()
+                .and_then(|durable| durable.layout.row(0))
+                .is_some_and(layout::line_is_blank),
     );
-    let durable_rows = durable_lines.len().saturating_sub(durable_skip);
-    let durable_last_row_blank = durable_lines.last().map_or_else(
-        || header.last().is_some_and(layout::line_is_blank),
-        |line| layout::line_is_blank(line),
-    );
-    let last_kind = durable
+    let durable_rows = durable.as_ref().map_or(0, |durable| {
+        durable.layout.total_rows.saturating_sub(durable_skip)
+    });
+    let durable_last_row_blank = durable
         .as_ref()
-        .and_then(|d| d.sections.last().map(|section| section.id.kind));
+        .and_then(|durable| durable.layout.row(durable.layout.total_rows.saturating_sub(1)))
+        .map_or_else(
+            || header.last().is_some_and(layout::line_is_blank),
+            |line| layout::line_is_blank(line),
+        );
+    let last_kind = durable.as_ref().and_then(|durable| {
+        durable
+            .layout
+            .sections
+            .last()
+            .map(|section| section.layout.key.section.kind)
+    });
     let mut live_sections = Vec::new();
     let (mut live, mut live_links) = build_live_tail(
         &theme,
@@ -108,7 +113,6 @@ pub fn prepare_conversation(app: &App, width: u16) -> PreparedConversation {
         live.push(Line::default());
         live_links.push(Vec::new());
     }
-    let durable_base = header_rows - durable_skip;
     let live_base = header_rows + durable_rows - live_skip;
     let copy_start_for_live: Vec<(std::ops::Range<usize>, usize)> = live_sections
         .iter()
@@ -124,7 +128,7 @@ pub fn prepare_conversation(app: &App, width: u16) -> PreparedConversation {
                     .expect("live copy row belongs to a live section");
                 let text = section_copy_text(section, row, &live, *copy_start);
                 CopyRange {
-                    row: row + live_base,
+                    row,
                     columns: *copy_start..width as usize,
                     decorative: section_copy_is_decorative(section, row, &text),
                     text: text.into(),
@@ -132,29 +136,13 @@ pub fn prepare_conversation(app: &App, width: u16) -> PreparedConversation {
             })
         })
         .collect();
-    let mut sections: Vec<SectionRange> = durable
-        .as_ref()
+    let live_sections: Vec<SectionRange> = live_sections
         .into_iter()
-        .flat_map(|d| d.sections.iter().cloned())
         .map(|mut section| {
-            section.rows = section.rows.start + durable_base..section.rows.end + durable_base;
+            section.rows = section.rows.start + live_base..section.rows.end + live_base;
             section
         })
         .collect();
-    sections.extend(live_sections.into_iter().map(|mut section| {
-        section.rows = section.rows.start + live_base..section.rows.end + live_base;
-        section
-    }));
-    let mut copy_ranges: Vec<CopyRange> = durable
-        .as_ref()
-        .into_iter()
-        .flat_map(|d| d.copy_ranges.iter().cloned())
-        .map(|mut range| {
-            range.row += durable_base;
-            range
-        })
-        .collect();
-    copy_ranges.extend(live_copy);
     PreparedConversation {
         width,
         session_id: app.active_view().map(|view| view.info.session_id.clone()),
@@ -167,9 +155,58 @@ pub fn prepare_conversation(app: &App, width: u16) -> PreparedConversation {
         header_links: vec![Vec::new(); header_rows],
         live,
         live_links,
-        sections,
-        copy_ranges,
+        sections: SectionIndex {
+            durable: durable.as_ref().map(|durable| Arc::clone(&durable.layout)),
+            durable_base: header_rows,
+            durable_skip,
+            live: Arc::new(live_sections),
+        },
+        copy_ranges: CopyIndex {
+            durable: durable.as_ref().map(|durable| Arc::clone(&durable.layout)),
+            durable_base: header_rows,
+            durable_skip,
+            live_base,
+            live: Arc::new(live_copy),
+        },
     }
+}
+
+fn section_revision(view: &SessionView, id: &SectionId) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut hasher);
+    if let Some(index) = id.history_index {
+        if let Some(block) = view
+            .transcript
+            .blocks
+            .iter()
+            .find(|block| block.index() == Some(index))
+        {
+            (Arc::as_ptr(block) as usize).hash(&mut hasher);
+        }
+    }
+    if let Some(tool_call_id) = id.tool_call_id.as_deref() {
+        view.tool_presentations
+            .get(&crate::state::tool::ToolKey::new(
+                &view.info.session_id,
+                id.loop_id.as_deref().unwrap_or_default(),
+                id.request_index.unwrap_or_default(),
+                tool_call_id,
+            ))
+            .map(|presentation| {
+                presentation.display.detail.hash(&mut hasher);
+                presentation.display.expanded_input.hash(&mut hasher);
+                presentation.display.hidden_line_count.hash(&mut hasher);
+                presentation.display.truncated.hash(&mut hasher);
+            });
+    }
+    if id.kind == SectionKind::User {
+        id.history_index
+            .and_then(|index| view.user_timestamps.get(&index))
+            .hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 /// Returns the transcript content rows available in `height`.
@@ -233,26 +270,15 @@ pub fn all_lines(_theme: &Theme, app: &App, width: usize) -> Vec<Line<'static>> 
 /// Per rendered line, the content-cell ranges inside a markdown link.
 type LinkRow = Vec<std::ops::Range<usize>>;
 
-fn build_durable_prepared(
+fn build_durable_layout(
     theme: &Theme,
+    theme_kind: crate::theme::ThemeKind,
     view: &SessionView,
-    width: usize,
+    width: u16,
     reasoning_visible: bool,
-) -> (
-    Vec<Line<'static>>,
-    Vec<SectionRange>,
-    Vec<CopyRange>,
-    Vec<LinkRow>,
-) {
-    let mut lines = Vec::new();
-    let mut sections = Vec::new();
-    let mut copy_ranges = Vec::new();
-    let mut link_cells = Vec::new();
-    let mut rendered_tools = HashSet::new();
-    // One projection index for the whole pass (spec §11.3): a tool call is
-    // resolved in O(1), never by scanning every block for each tool.
-    let mut tool_index: std::collections::HashMap<(&str, u32, &str), &ToolBlock> =
-        std::collections::HashMap::new();
+    previous: Option<&PreparedDurable>,
+) -> (Arc<ConversationLayout>, usize) {
+    let mut tool_index: HashMap<(&str, u32, &str), &ToolBlock> = HashMap::new();
     for block in view.transcript.blocks.iter() {
         if let TranscriptBlock::Tool(tool) = block.as_ref() {
             tool_index.insert(
@@ -265,32 +291,44 @@ fn build_durable_prepared(
             );
         }
     }
+    let cached: HashMap<LayoutKey, Arc<SectionLayout>> = previous
+        .map(|previous| {
+            previous
+                .layout
+                .sections
+                .iter()
+                .map(|placement| {
+                    (
+                        placement.layout.key.clone(),
+                        Arc::clone(&placement.layout),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut sections = Vec::new();
+    let mut rendered_tools = HashSet::new();
+    let mut changed = 0;
+
     for (ordinal, block) in view.transcript.blocks.iter().enumerate() {
         if let TranscriptBlock::Assistant(assistant_block) = block.as_ref() {
-            for assistant_section in assistant::sections_with_folds(
-                theme,
+            for input in assistant::section_inputs(
                 assistant_block,
-                width,
                 reasoning_visible,
                 &view.reasoning_folds,
             ) {
-                if let Some(call) = assistant_section.tool_call {
-                    let key = crate::state::tool::ToolKey::new(
-                        &view.info.session_id,
-                        &assistant_block.loop_id,
-                        assistant_block.request_index,
-                        &call.tool_call_id,
-                    );
-                    let tool = match tool_index.get(&(
-                        assistant_block.loop_id.as_str(),
-                        assistant_block.request_index,
-                        call.tool_call_id.as_str(),
-                    )) {
-                        Some(tool) => {
+                if let Some(call) = &input.tool_call {
+                    let tool = tool_index
+                        .get(&(
+                            assistant_block.loop_id.as_str(),
+                            assistant_block.request_index,
+                            call.tool_call_id.as_str(),
+                        ))
+                        .map(|tool| {
                             crate::perf::count(crate::perf::Counter::ToolIndexLookups);
                             (*tool).clone()
-                        }
-                        None => ToolBlock {
+                        })
+                        .unwrap_or_else(|| ToolBlock {
                             index: None,
                             loop_id: assistant_block.loop_id.clone(),
                             request_index: assistant_block.request_index,
@@ -301,197 +339,187 @@ fn build_durable_prepared(
                             live_status: None,
                             progress: None,
                             expanded: false,
-                        },
-                    };
-                    rendered_tools.insert(key);
-                    let folded = !effective_tool_expanded(view, &tool);
-                    append_prepared_section(
-                        &mut lines,
-                        &mut sections,
-                        &mut copy_ranges,
-                        &mut link_cells,
-                        PreparedSection {
-                            id: SectionId {
-                                session_id: view.info.session_id.clone().into(),
-                                loop_id: Some(tool.loop_id.clone().into()),
-                                request_index: Some(tool.request_index),
-                                kind: SectionKind::Tool,
-                                ordinal: 0,
-                                tool_call_id: Some(tool.tool_call_id.clone().into()),
-                                // Keep the assistant/tool relationship stable while a
-                                // result arrives and supplies its own history index.
-                                history_index: Some(assistant_block.index),
-                            },
-                            lines: durable_block_lines(
-                                theme,
-                                view,
-                                &TranscriptBlock::Tool(tool.clone()),
-                                width,
-                                reasoning_visible,
-                            ),
-                            link_cells: Vec::new(),
-                            collapsible: true,
-                            folded,
-                        },
-                        width,
+                        });
+                    let tool_key = crate::state::tool::ToolKey::new(
+                        &view.info.session_id,
+                        &tool.loop_id,
+                        tool.request_index,
+                        &tool.tool_call_id,
                     );
+                    rendered_tools.insert(tool_key);
+                    let id = SectionId {
+                        session_id: view.info.session_id.clone().into(),
+                        loop_id: Some(tool.loop_id.clone().into()),
+                        request_index: Some(tool.request_index),
+                        kind: SectionKind::Tool,
+                        ordinal: 0,
+                        tool_call_id: Some(tool.tool_call_id.clone().into()),
+                        history_index: Some(assistant_block.index),
+                    };
+                    let folded = !effective_tool_expanded(view, &tool);
+                    let key = LayoutKey {
+                        section: id.clone(),
+                        revision: section_revision(view, &id),
+                        width,
+                        theme: theme_kind,
+                        folded,
+                    };
+                    if let Some(layout) = cached.get(&key) {
+                        sections.push(Arc::clone(layout));
+                        continue;
+                    }
+                    let lines = durable_block_lines(
+                        theme,
+                        view,
+                        &TranscriptBlock::Tool(tool),
+                        width as usize,
+                        reasoning_visible,
+                    );
+                    if let Some(layout) = make_section_layout(
+                        key,
+                        lines,
+                        Vec::new(),
+                        true,
+                        folded,
+                    ) {
+                        sections.push(layout);
+                        changed += 1;
+                    }
                     continue;
                 }
-                append_prepared_section(
-                    &mut lines,
-                    &mut sections,
-                    &mut copy_ranges,
-                    &mut link_cells,
-                    PreparedSection {
-                        id: SectionId {
-                            session_id: view.info.session_id.clone().into(),
-                            loop_id: Some(assistant_block.loop_id.clone().into()),
-                            request_index: Some(assistant_block.request_index),
-                            kind: assistant_section.kind,
-                            ordinal: assistant_section.ordinal,
-                            tool_call_id: None,
-                            history_index: Some(assistant_block.index),
-                        },
-                        lines: assistant_section.lines,
-                        link_cells: assistant_section.link_cells,
-                        collapsible: assistant_section.collapsible,
-                        folded: assistant_section.folded,
-                    },
+
+                let id = SectionId {
+                    session_id: view.info.session_id.clone().into(),
+                    loop_id: Some(assistant_block.loop_id.clone().into()),
+                    request_index: Some(assistant_block.request_index),
+                    kind: input.kind,
+                    ordinal: input.ordinal,
+                    tool_call_id: None,
+                    history_index: Some(assistant_block.index),
+                };
+                let key = LayoutKey {
+                    section: id.clone(),
+                    revision: section_revision(view, &id),
                     width,
+                    theme: theme_kind,
+                    folded: input.folded,
+                };
+                if let Some(layout) = cached.get(&key) {
+                    sections.push(Arc::clone(layout));
+                    continue;
+                }
+                let rendered = assistant::render_section(
+                    theme,
+                    &input,
+                    width as usize,
+                    reasoning_visible,
                 );
+                if let Some(layout) = make_section_layout(
+                    key,
+                    rendered.lines,
+                    rendered.link_cells,
+                    rendered.collapsible,
+                    rendered.folded,
+                ) {
+                    sections.push(layout);
+                    changed += 1;
+                }
             }
             continue;
         }
+
         if let TranscriptBlock::Tool(tool) = block.as_ref() {
+            let tool_key = crate::state::tool::ToolKey::new(
+                &view.info.session_id,
+                &tool.loop_id,
+                tool.request_index,
+                &tool.tool_call_id,
+            );
+            if rendered_tools.contains(&tool_key) {
+                continue;
+            }
+        }
+        let id = section_id(&view.info.session_id, block, ordinal as u32);
+        let folded = matches!(block.as_ref(), TranscriptBlock::Tool(tool) if {
             let key = crate::state::tool::ToolKey::new(
                 &view.info.session_id,
                 &tool.loop_id,
                 tool.request_index,
                 &tool.tool_call_id,
             );
-            if rendered_tools.contains(&key) {
-                continue;
-            }
-        }
-        let section = durable_block_lines(theme, view, block, width, reasoning_visible);
-        if section.is_empty() {
+            matches!(view.tool_folds.get(&key), Some(FoldOverride::Collapsed))
+                || !effective_tool_expanded(view, tool)
+        });
+        let key = LayoutKey {
+            section: id.clone(),
+            revision: section_revision(view, &id),
+            width,
+            theme: theme_kind,
+            folded,
+        };
+        if let Some(layout) = cached.get(&key) {
+            sections.push(Arc::clone(layout));
             continue;
         }
-        let id = section_id(&view.info.session_id, block, ordinal as u32);
-        append_user_gap(
-            &mut lines,
-            &mut link_cells,
-            sections.last().map(|section| section.id.kind),
-            id.kind,
-        );
-        let before = lines.len();
-        layout::append_section(&mut lines, section);
-        let after = lines.len();
-        // Non-markdown blocks never carry links, but link row alignment must
-        // stay exact with the line array.
-        while link_cells.len() < lines.len() {
-            link_cells.push(Vec::new());
-        }
-        sections.push(SectionRange {
-            id,
-            rows: before..after,
-            content_columns: content_columns_for(block, width),
-            collapsible: matches!(block.as_ref(), TranscriptBlock::Tool(_)),
-            folded: matches!(block.as_ref(), TranscriptBlock::Tool(tool) if {
-                let key = crate::state::tool::ToolKey::new(
-                    &view.info.session_id,
-                    &tool.loop_id,
-                    tool.request_index,
-                    &tool.tool_call_id,
-                );
-                matches!(view.tool_folds.get(&key), Some(FoldOverride::Collapsed))
-                    || !effective_tool_expanded(view, tool)
-            }),
-        });
-        let copy_start = copy_start_for_kind(&sections.last().unwrap().id.kind);
-        for row in before..after {
-            let section = sections.last().expect("section was just appended");
-            let text = section_copy_text(section, row, &lines, copy_start);
-            let decorative = section_copy_is_decorative(section, row, &text);
-            copy_ranges.push(CopyRange {
-                row,
-                columns: copy_start..width,
-                text: text.into(),
-                decorative,
-            });
+        let lines = durable_block_lines(theme, view, block, width as usize, reasoning_visible);
+        let collapsible = matches!(block.as_ref(), TranscriptBlock::Tool(_));
+        if let Some(layout) = make_section_layout(key, lines, Vec::new(), collapsible, folded) {
+            sections.push(layout);
+            changed += 1;
         }
     }
-    (lines, sections, copy_ranges, link_cells)
+    (Arc::new(ConversationLayout::from_sections(sections)), changed)
 }
 
-fn append_prepared_section(
-    lines: &mut Vec<Line<'static>>,
-    sections: &mut Vec<SectionRange>,
-    copy_ranges: &mut Vec<CopyRange>,
-    link_cells: &mut Vec<Vec<std::ops::Range<usize>>>,
-    prepared: PreparedSection,
-    width: usize,
-) {
-    let PreparedSection {
-        id,
-        lines: section,
-        link_cells: section_links,
+fn make_section_layout(
+    key: LayoutKey,
+    lines: Vec<Line<'static>>,
+    mut link_cells: Vec<Vec<std::ops::Range<usize>>>,
+    collapsible: bool,
+    folded: bool,
+) -> Option<Arc<SectionLayout>> {
+    if lines.is_empty() {
+        return None;
+    }
+    link_cells.resize_with(lines.len(), Vec::new);
+    let range = SectionRange {
+        id: key.section.clone(),
+        rows: 0..lines.len(),
+        content_columns: content_columns_for_kind(&key.section.kind, key.width as usize),
         collapsible,
         folded,
-    } = prepared;
-    if section.is_empty() {
-        return;
-    }
-    append_user_gap(
-        lines,
-        link_cells,
-        sections.last().map(|section| section.id.kind),
-        id.kind,
-    );
-    let before = lines.len();
-    layout::append_section(lines, section);
-    let after = lines.len();
-    // A shared blank boundary row may have been dropped from the front; it is
-    // always blank so its link rows (empty) can be discarded with it.
-    let added = after - before;
-    let section_links = &section_links[section_links.len().saturating_sub(added)..];
-    link_cells.extend(section_links.iter().cloned());
-    let content_columns = content_columns_for_kind(&id.kind, width);
-    let copy_start = copy_start_for_kind(&id.kind);
-    sections.push(SectionRange {
-        id,
-        rows: before..after,
-        content_columns,
+    };
+    let copy_ranges = (0..lines.len())
+        .map(|row| {
+            let text = section_copy_text(&range, row, &lines, range.content_columns.start);
+            CopyRange {
+                row,
+                columns: range.content_columns.clone(),
+                decorative: section_copy_is_decorative(&range, row, &text),
+                text: Arc::from(text),
+            }
+        })
+        .collect::<Vec<_>>();
+    let source = copy_ranges
+        .iter()
+        .filter(|copy| !copy.decorative)
+        .map(|copy| copy.text.as_ref())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(Arc::new(SectionLayout {
+        key,
+        rows: Arc::new(lines),
+        source: Arc::from(source),
+        copy_ranges: Arc::new(copy_ranges),
+        link_cells: Arc::new(link_cells),
+        content_columns: range.content_columns,
         collapsible,
         folded,
-    });
-    for row in before..after {
-        let section = sections.last().expect("section was just appended");
-        let text = section_copy_text(section, row, lines, copy_start);
-        let decorative = section_copy_is_decorative(section, row, &text);
-        copy_ranges.push(CopyRange {
-            row,
-            columns: copy_start..width,
-            text: text.into(),
-            decorative,
-        });
-    }
+    }))
 }
 
 fn needs_user_gap(previous: Option<SectionKind>, current: SectionKind) -> bool {
     previous == Some(SectionKind::User) && current == SectionKind::User
-}
-
-fn append_user_gap(
-    lines: &mut Vec<Line<'static>>,
-    link_cells: &mut Vec<LinkRow>,
-    previous: Option<SectionKind>,
-    current: SectionKind,
-) {
-    if needs_user_gap(previous, current) {
-        lines.push(Line::default());
-        link_cells.push(Vec::new());
-    }
 }
 
 /// The single decorative row inside a section whose content never enters a
@@ -627,7 +655,7 @@ fn apply_selection(
     lines: Vec<Line<'static>>,
     row_offset: usize,
     selection: Option<&ConversationSelection>,
-    sections: &[SectionRange],
+    sections: &SectionIndex,
     theme: &Theme,
     clip_end: usize,
 ) -> Vec<Line<'static>> {
@@ -644,8 +672,12 @@ fn apply_selection(
                 return line;
             }
             let section = sections.iter().find(|section| section.rows.contains(&row));
-            let content_start = section.map_or(0, |section| section.content_columns.start);
-            let content_end = section.map_or(usize::MAX, |section| section.content_columns.end);
+            let content_start = section
+                .as_ref()
+                .map_or(0, |section| section.content_columns.start);
+            let content_end = section
+                .as_ref()
+                .map_or(usize::MAX, |section| section.content_columns.end);
             let from = (if row == start.row { start.column } else { 0 }).max(content_start);
             let to = (if row == end.row {
                 end.column.saturating_add(1)
@@ -690,18 +722,6 @@ fn copy_start_for_kind(kind: &SectionKind) -> usize {
         SectionKind::AssistantText | SectionKind::Thinking => 1,
         SectionKind::Summary | SectionKind::Notice => 0,
     }
-}
-
-fn content_columns_for(block: &TranscriptBlock, width: usize) -> std::ops::Range<usize> {
-    let kind = match block {
-        TranscriptBlock::User(_) => SectionKind::User,
-        TranscriptBlock::Assistant(_) => SectionKind::AssistantText,
-        TranscriptBlock::Tool(_) => SectionKind::Tool,
-        TranscriptBlock::Summary(_) | TranscriptBlock::HistoryPlaceholder(_) => {
-            SectionKind::Summary
-        }
-    };
-    content_columns_for_kind(&kind, width)
 }
 
 fn content_columns_for_kind(kind: &SectionKind, width: usize) -> std::ops::Range<usize> {
@@ -1458,7 +1478,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
         prepared.window(offset, budget),
         offset,
         app.selection.as_ref(),
-        prepared.sections.as_slice(),
+        &prepared.sections,
         theme,
         width.saturating_sub(usize::from(app.scrollbar_visible(total, height))),
     );

@@ -424,7 +424,11 @@ fn theme_width_and_visibility_reject_stale_cache() {
     app.update(AppEvent::ToggleReasoning);
     assert!(app.prepared_conversation(WIDTH - 20).is_none());
     let _ = prepare_conversation(&app, WIDTH - 20);
-    assert!(parse_count() > 0);
+    assert_eq!(
+        parse_count(),
+        0,
+        "changing reasoning visibility must not reparse text-only sections"
+    );
 }
 
 #[test]
@@ -674,7 +678,9 @@ fn assert_user_gap(app: &App, expected: &str) {
     let gap_row = users[0].rows.end;
     assert!(prepared.row(gap_row).unwrap().spans.is_empty());
     let durable = prepared.durable.as_ref().expect("durable frame");
-    assert_eq!(durable.link_cells.len(), durable.lines.len());
+    assert!(durable.layout.sections.iter().all(|section| {
+        section.layout.link_cells.len() == section.layout.rows.len()
+    }));
     assert!(prepared.links_at(gap_row).is_empty());
     assert!(prepared.sections.iter().all(|s| !s.rows.contains(&gap_row)));
     assert!(

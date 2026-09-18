@@ -1080,7 +1080,7 @@ fn durable_tool_fold_override_is_honored_by_the_prepared_transcript() {
         .filter(|section| section.id.kind == crate::state::view::SectionKind::Tool)
         .collect();
     assert_eq!(tool_sections.len(), 3);
-    let expanded_section = tool_sections[0]; // call-1 has a 60-line result
+    let expanded_section = &tool_sections[0]; // call-1 has a 60-line result
     assert!(
         expanded_section.rows.len() > 10,
         "expanded durable card must expose full rows, got {:?}",
