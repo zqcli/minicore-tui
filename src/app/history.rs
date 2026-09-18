@@ -10,8 +10,10 @@ use std::collections::{BTreeMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 
+use crate::protocol::TurnRef;
 use crate::protocol::read::{
     Assembled, ChunkAssembler, RawHistoryItem, ReadCursor, ReadError, RuntimeItem, SnapshotPin,
+    TurnResultPage,
 };
 
 /// Why the read chain cannot continue with the pin it holds.
@@ -32,6 +34,7 @@ pub enum PinError {
 pub struct HistoryWindow {
     pin: Option<SnapshotPin>,
     items: BTreeMap<usize, Arc<RawHistoryItem>>,
+    large_items: BTreeMap<usize, usize>,
     loaded_ranges: Vec<Range<usize>>,
     bytes: usize,
     pub trailing_incomplete: bool,
@@ -51,16 +54,20 @@ impl HistoryWindow {
         self.items.get(&index)
     }
 
+    pub fn large_item(&self, index: usize) -> Option<usize> {
+        self.large_items.get(&index).copied()
+    }
+
     pub fn items(&self) -> impl Iterator<Item = (&usize, &Arc<RawHistoryItem>)> {
         self.items.iter()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
+        self.items.is_empty() && self.large_items.is_empty()
     }
 
     pub fn len(&self) -> usize {
-        self.items.len()
+        self.items.len() + self.large_items.len()
     }
 
     pub fn loaded_ranges(&self) -> &[Range<usize>] {
@@ -88,12 +95,13 @@ impl HistoryWindow {
     }
 
     pub fn has_items(&self) -> bool {
-        !self.items.is_empty()
+        !self.items.is_empty() || !self.large_items.is_empty()
     }
 
     pub fn reset(&mut self) {
         self.pin = None;
         self.items.clear();
+        self.large_items.clear();
         self.loaded_ranges.clear();
         self.bytes = 0;
         self.trailing_incomplete = false;
@@ -115,10 +123,19 @@ impl HistoryWindow {
     /// Inserts one decoded item, returning its `Arc` for the display bridge.
     pub fn insert(&mut self, index: usize, item: RawHistoryItem) -> Arc<RawHistoryItem> {
         let item = Arc::new(item);
+        self.large_items.remove(&index);
         self.bytes += item_bytes(&item);
         self.items.insert(index, item.clone());
         self.merge_range(index);
         item
+    }
+
+    pub fn insert_placeholder(&mut self, index: usize, total_bytes: usize) {
+        if self.items.contains_key(&index) {
+            return;
+        }
+        self.large_items.insert(index, total_bytes);
+        self.merge_range(index);
     }
 
     fn merge_range(&mut self, index: usize) {
@@ -184,11 +201,135 @@ impl ReadPage {
     }
 }
 
+/// A paged `turn.result` body. Its indexes remain local to the Turn and are
+/// never inserted into the session-global history window.
+#[derive(Debug)]
+pub struct TurnResultWindow {
+    pub turn: TurnRef,
+    pub cursor: ReadCursor,
+    pub assembler: ChunkAssembler,
+    pub total: Option<usize>,
+    pub items: BTreeMap<usize, Arc<RawHistoryItem>>,
+    pub large_items: BTreeMap<usize, usize>,
+    pub complete: bool,
+}
+
+impl TurnResultWindow {
+    pub fn new(turn: TurnRef) -> Self {
+        Self {
+            turn,
+            cursor: ReadCursor::start(),
+            assembler: ChunkAssembler::new(),
+            total: None,
+            items: BTreeMap::new(),
+            large_items: BTreeMap::new(),
+            complete: false,
+        }
+    }
+
+    pub fn apply_page(&mut self, page: &TurnResultPage) -> Result<(), ReadError> {
+        if page.turn != self.turn {
+            return Err(ReadError::NonContiguous {
+                expected: self.cursor.item,
+                found: page.total,
+            });
+        }
+        if let Some(expected) = self.total {
+            if expected != page.total {
+                return Err(ReadError::TurnTotalMismatch {
+                    expected,
+                    found: page.total,
+                });
+            }
+        } else {
+            self.total = Some(page.total);
+        }
+
+        let mut expected = self.cursor.item;
+        for chunk in &page.items {
+            match self.assembler.push(chunk.clone())? {
+                Assembled::Pending => {}
+                Assembled::Item { index, item } => {
+                    if index != expected {
+                        return Err(ReadError::NonContiguous {
+                            expected,
+                            found: index,
+                        });
+                    }
+                    expected = index.saturating_add(1);
+                    if let Some(existing) = self.items.get(&index) {
+                        if existing.as_ref() != &item {
+                            return Err(ReadError::ItemChanged { index });
+                        }
+                    } else {
+                        self.large_items.remove(&index);
+                        self.items.insert(index, Arc::new(item));
+                    }
+                }
+                Assembled::LargeItem { index, total_bytes } => {
+                    if index != expected {
+                        return Err(ReadError::NonContiguous {
+                            expected,
+                            found: index,
+                        });
+                    }
+                    expected = index.saturating_add(1);
+                    if !self.items.contains_key(&index) {
+                        self.large_items.insert(index, total_bytes);
+                    }
+                }
+            }
+        }
+
+        if let Some(next) = page.next_cursor {
+            if next.item != expected {
+                return Err(ReadError::CursorStalled {
+                    item: self.cursor.item,
+                });
+            }
+            if let Some(partial) = self.assembler.next_cursor() {
+                if next != partial {
+                    return Err(ReadError::CursorOffsetMismatch {
+                        expected: partial.offset,
+                        found: next.offset,
+                    });
+                }
+            } else if next.offset != 0 {
+                return Err(ReadError::CursorOffsetMismatch {
+                    expected: 0,
+                    found: next.offset,
+                });
+            }
+            self.cursor = next;
+        } else {
+            if self.assembler.current_index().is_some() {
+                return Err(ReadError::CursorStalled { item: expected });
+            }
+            let loaded = self.items.len() + self.large_items.len();
+            if loaded != page.total {
+                return Err(ReadError::NonContiguous {
+                    expected: loaded,
+                    found: page.total,
+                });
+            }
+            self.cursor = ReadCursor {
+                item: page.total,
+                offset: 0,
+            };
+            self.complete = true;
+        }
+        Ok(())
+    }
+}
+
 /// What one applied page contributed.
 #[derive(Debug)]
 pub struct AppliedPage {
     /// Newly decoded items in page order.
     pub inserted: Vec<(usize, Arc<RawHistoryItem>)>,
+    /// Items over the automatic decode budget. Their bytes are not retained,
+    /// but their indexes remain visible as bounded placeholders.
+    pub placeholders: Vec<(usize, usize)>,
     /// The backend-provided cursor for the next page, if any.
     pub next: Option<ReadCursor>,
     /// A `ReadChunk` that was refused (protocol error), with its index.
@@ -212,6 +353,7 @@ pub fn apply_page(
     page: &mut ReadPage,
     result: &crate::protocol::ReadSessionResult,
 ) -> Result<ReadApply, ReadError> {
+    result.pin().validate()?;
     // A continuation carries the pin it was issued with and must see the same
     // prefix. A fresh chain has no pin by design (spec §6.4): it opens a new
     // generation, so it may not regress the known total but is allowed a new
@@ -222,7 +364,7 @@ pub fn apply_page(
         {
             return Ok(ReadApply::Stale(PinError::RevisionChanged));
         }
-        if result.total < want.total {
+        if result.total != want.total {
             return Ok(ReadApply::Stale(PinError::TotalRegressed {
                 known: want.total,
                 found: result.total,
@@ -238,6 +380,7 @@ pub fn apply_page(
     }
 
     let mut inserted = Vec::new();
+    let mut placeholders = Vec::new();
     // The page must be contiguous from the requested cursor, and its items must
     // advance by exactly one; a gap is a protocol violation, never spliced.
     let mut expected = page.cursor.item;
@@ -253,6 +396,7 @@ pub fn apply_page(
                     if existing.as_ref() != &item {
                         return Ok(ReadApply::Ok(AppliedPage {
                             inserted,
+                            placeholders,
                             next: None,
                             error: Some(ReadError::ItemChanged { index }),
                         }));
@@ -261,6 +405,7 @@ pub fn apply_page(
                 if index != expected {
                     return Ok(ReadApply::Ok(AppliedPage {
                         inserted,
+                        placeholders,
                         next: None,
                         error: Some(ReadError::NonContiguous {
                             expected,
@@ -276,14 +421,18 @@ pub fn apply_page(
                 inserted.push((index, item));
             }
             Ok(Assembled::LargeItem { index, total_bytes }) => {
-                // A visible placeholder belongs to the display model; stage C
-                // renders it. The bytes are intentionally not retained.
-                let _ = (index, total_bytes);
+                // The bytes are intentionally not retained, but the item must
+                // remain visible and count toward the loaded range.
+                if index >= page.window_start && window.item(index).is_none() {
+                    window.insert_placeholder(index, total_bytes);
+                    placeholders.push((index, total_bytes));
+                }
                 expected = index.saturating_add(1);
             }
             Err(error) => {
                 return Ok(ReadApply::Ok(AppliedPage {
                     inserted,
+                    placeholders,
                     next: result.next_cursor,
                     error: Some(error),
                 }));
@@ -297,6 +446,7 @@ pub fn apply_page(
         if next.item != expected {
             return Ok(ReadApply::Ok(AppliedPage {
                 inserted,
+                placeholders,
                 next: None,
                 error: Some(ReadError::CursorStalled {
                     item: page.cursor.item,
@@ -309,6 +459,7 @@ pub fn apply_page(
     window.records_truncated |= result.records_truncated;
     Ok(ReadApply::Ok(AppliedPage {
         inserted,
+        placeholders,
         next: result.next_cursor,
         error: None,
     }))

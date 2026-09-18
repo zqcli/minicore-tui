@@ -71,6 +71,9 @@ fn busy_label(app: &App) -> String {
     let Some(view) = app.active_view() else {
         return "Working".to_owned();
     };
+    if view.is_preparing() {
+        return "Preparing".to_owned();
+    }
     if let Some(state) = view.state.as_ref() {
         match state.status {
             crate::protocol::SessionStatusWire::WaitingForInput => {

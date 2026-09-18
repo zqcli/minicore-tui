@@ -100,6 +100,10 @@ pub struct SessionView {
     pub live: Option<LiveLoop>,
     pub unsaved_loop: Option<UnsavedLoop>,
     pub scroll: ScrollState,
+    /// A local generation identifies one pinned history chain. It changes at
+    /// lifecycle boundaries so an old in-flight read can retain its slot while
+    /// a fresh recovery chain uses a distinct query key.
+    pub history_query_generation: u64,
     /// A history chain is being fetched page by page.
     pub loading: bool,
     /// The in-flight `session.read` page, if any. Owns the chunk assembler so
@@ -169,6 +173,7 @@ impl SessionView {
             last_result: None,
             usage_projection: UsageProjection::default(),
             live_request_usage: HashMap::new(),
+            history_query_generation: 0,
             retired_loop: None,
             result_unconfirmed: false,
             transcript: TranscriptState::default(),
@@ -203,6 +208,15 @@ impl SessionView {
             .is_some_and(|s| s.status == crate::protocol::SessionStatusWire::Blocked)
     }
 
+    /// Automatic or manual context preparation owns the Session even when the
+    /// backend reports its ordinary status as idle. It is a visible busy state,
+    /// not permission to admit another turn.
+    pub fn is_preparing(&self) -> bool {
+        self.state
+            .as_ref()
+            .is_some_and(|state| state.compaction.is_some())
+    }
+
     /// Whether the retained completion belongs to the currently live loop.
     /// A pending new prompt keeps the previous result as an event fence, but
     /// it must not take precedence over the new live display.
@@ -217,7 +231,7 @@ impl SessionView {
     }
 
     pub fn is_running(&self) -> bool {
-        if self.closing {
+        if self.closing || self.is_preparing() {
             return false;
         }
         match self.state.as_ref().map(|state| state.status) {

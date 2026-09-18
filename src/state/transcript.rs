@@ -1,5 +1,5 @@
-//! Durable history/transcript blocks (spec r2). Blocks are built from
-//! `session.history` pages; the live loop is never folded into them.
+//! Durable history/transcript blocks (spec r2). Blocks are projected from
+//! authoritative `session.read` items; the live loop is never folded into them.
 //! There are no synthetic terminal blocks: past history is rendered strictly
 //! from durable items.
 
@@ -16,17 +16,19 @@ pub enum TranscriptBlock {
     Assistant(AssistantBlock),
     Tool(ToolBlock),
     Summary(SummaryBlock),
+    HistoryPlaceholder(HistoryPlaceholderBlock),
 }
 
 impl TranscriptBlock {
     /// The durable item index, when this block came from a
-    /// `session.history` entry; `None` for locally created blocks.
+    /// `session.read` entry; `None` for locally created blocks.
     pub fn index(&self) -> Option<usize> {
         match self {
             Self::User(block) => block.index,
             Self::Assistant(block) => Some(block.index),
             Self::Tool(block) => block.index,
             Self::Summary(block) => Some(block.index),
+            Self::HistoryPlaceholder(block) => Some(block.index),
         }
     }
 }
@@ -80,6 +82,12 @@ pub struct ToolBlock {
 pub struct SummaryBlock {
     pub index: usize,
     pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryPlaceholderBlock {
+    pub index: usize,
+    pub total_bytes: usize,
 }
 
 /// The accumulated durable history of one session.

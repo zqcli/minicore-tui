@@ -630,7 +630,9 @@ fn content_columns_for(block: &TranscriptBlock, width: usize) -> std::ops::Range
         TranscriptBlock::User(_) => SectionKind::User,
         TranscriptBlock::Assistant(_) => SectionKind::AssistantText,
         TranscriptBlock::Tool(_) => SectionKind::Tool,
-        TranscriptBlock::Summary(_) => SectionKind::Summary,
+        TranscriptBlock::Summary(_) | TranscriptBlock::HistoryPlaceholder(_) => {
+            SectionKind::Summary
+        }
     };
     content_columns_for_kind(&kind, width)
 }
@@ -686,6 +688,14 @@ fn durable_block_lines(
             tool::durable_with_display(theme, &render_tool, width, false, display)
         }
         TranscriptBlock::Summary(summary) => summary_lines(theme, width, &summary.content),
+        TranscriptBlock::HistoryPlaceholder(placeholder) => summary_lines(
+            theme,
+            width,
+            &format!(
+                "[large history item {}: {} bytes; read explicitly to decode]",
+                placeholder.index, placeholder.total_bytes
+            ),
+        ),
     }
 }
 
@@ -729,6 +739,15 @@ fn section_id(session_id: &str, block: &TranscriptBlock, _ordinal: u32) -> Secti
             ordinal: 0,
             tool_call_id: None,
             history_index: Some(_summary.index),
+        },
+        TranscriptBlock::HistoryPlaceholder(placeholder) => SectionId {
+            session_id: session_id.to_owned(),
+            loop_id: None,
+            request_index: None,
+            kind: SectionKind::Summary,
+            ordinal: 0,
+            tool_call_id: None,
+            history_index: Some(placeholder.index),
         },
     }
 }

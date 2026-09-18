@@ -207,6 +207,7 @@ pub fn screen_layout(app: &App, area: Rect) -> ScreenLayout {
 pub fn busy(app: &App) -> bool {
     app.active_view().is_some_and(|view| {
         view.live.is_some()
+            || view.is_preparing()
             || view
                 .state
                 .as_ref()

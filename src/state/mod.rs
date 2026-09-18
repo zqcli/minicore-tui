@@ -22,8 +22,8 @@ pub use session::{
 };
 pub use tool::{LiveTool, ToolKey, ToolPresentationState, ToolStatus};
 pub use transcript::{
-    AssistantBlock, AssistantPart, SummaryBlock, ToolBlock, ToolExpansion, TranscriptBlock,
-    TranscriptState, UserBlock,
+    AssistantBlock, AssistantPart, HistoryPlaceholderBlock, SummaryBlock, ToolBlock, ToolExpansion,
+    TranscriptBlock, TranscriptState, UserBlock,
 };
 pub use turn::{
     AppliedSteer, LiveLoop, LivePart, LiveRequest, LocalSubmissionId, PendingSteer,

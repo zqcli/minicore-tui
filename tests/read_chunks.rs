@@ -6,9 +6,10 @@
 
 use std::path::PathBuf;
 
+use minicore_tui::app::history::TurnResultWindow;
 use minicore_tui::protocol::read::{
     Assembled, ChunkAssembler, ReadError, ReadSessionResult, RuntimeAssistantPart, RuntimeItem,
-    RuntimeUserKind, TurnAvailability, TurnResultPage,
+    RuntimeUserKind, SnapshotPin, TurnAvailability, TurnResultPage,
 };
 use serde_json::Value;
 
@@ -188,7 +189,7 @@ fn oversized_item_becomes_a_placeholder() {
         offset: head.len(),
         total_bytes: total,
         encoding: "utf8_json".into(),
-        data: "x".into(),
+        data: "x".repeat(total - head.len()),
         complete: true,
     };
     match assembler.push(last).unwrap() {
@@ -233,6 +234,41 @@ fn unknown_encoding_is_refused() {
         complete: true,
     };
     assert!(matches!(assembler.push(chunk), Err(ReadError::Encoding(_))));
+}
+
+/// `turn.result` availability covers pending/live/stored, and its item indices
+/// are turn-local. The stored page must decode to a real Runtime item.
+#[test]
+fn valid_snapshot_pins_require_the_agent_revision_shape() {
+    assert!(
+        SnapshotPin {
+            captured_end: 0,
+            history_revision: "a".repeat(64),
+            total: 0,
+        }
+        .validate()
+        .is_ok()
+    );
+    assert!(
+        SnapshotPin {
+            captured_end: 0,
+            history_revision: "fixture-revision".to_owned(),
+            total: 0,
+        }
+        .validate()
+        .is_err()
+    );
+}
+
+#[test]
+fn turn_result_window_keeps_turn_local_indexes_outside_session_history() {
+    let page: TurnResultPage =
+        serde_json::from_value(fixture("turn-result-stored")["result"].clone()).unwrap();
+    let mut window = TurnResultWindow::new(page.turn.clone());
+    window.apply_page(&page).unwrap();
+    assert!(window.complete);
+    assert_eq!(window.items.keys().copied().collect::<Vec<_>>(), vec![0, 1]);
+    assert_eq!(window.cursor.item, page.total);
 }
 
 /// `turn.result` availability covers pending/live/stored, and its item indices

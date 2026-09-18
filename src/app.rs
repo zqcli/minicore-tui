@@ -33,7 +33,8 @@ use crate::state::selection::{
 use crate::state::session::{SessionId, SessionView, SessionsState};
 use crate::state::tool::{LiveTool, ToolKey, ToolPresentationState, ToolStatus};
 use crate::state::transcript::{
-    AssistantBlock, AssistantPart, SummaryBlock, ToolBlock, TranscriptBlock, UserBlock,
+    AssistantBlock, AssistantPart, HistoryPlaceholderBlock, SummaryBlock, ToolBlock,
+    TranscriptBlock, UserBlock,
 };
 use crate::state::turn::{
     AppliedSteer, LiveLoop, LivePart, LocalSubmissionId, PendingSteer, PendingSteerState,
@@ -57,6 +58,7 @@ pub const MAX_AGENT_LOG_LINES: usize = 200;
 pub const MAX_STEER_QUEUE_LEN: usize = 8;
 
 const MAX_NOTICES: usize = 32;
+const MAX_RETAINED_TURN_RESULTS: usize = 32;
 
 /// How long a transient notice stays before `Tick` removes it (spec 33.2).
 const NOTICE_TTL: Duration = Duration::from_secs(5);
@@ -220,11 +222,6 @@ pub enum RequestKind {
     History {
         session_id: SessionId,
         read: ReadRequest,
-    },
-    ReloadHistory {
-        session_id: SessionId,
-        read: ReadRequest,
-        generation: u64,
     },
     SendTurn {
         session_id: SessionId,
@@ -392,6 +389,12 @@ pub struct App {
     /// The two read-only in-flight slots (spec §5.3). Execution waits are
     /// counted separately and never take a slot.
     pub queries: crate::app::queries::QuerySlots,
+    /// Paged authoritative result bodies keyed by their exact TurnRef. Their
+    /// item indexes are turn-local and never enter the session history window.
+    turn_results: HashMap<TurnRef, crate::app::history::TurnResultWindow>,
+    /// Exact wait/result summaries retained across reload/reopen boundaries.
+    retained_results: HashMap<TurnRef, crate::protocol::TurnResultViewWire>,
+    retained_result_order: VecDeque<TurnRef>,
     /// A coalesced refresh that must be dispatched after the current response's
     /// own commands, so a follow-up read never overtakes the response handling.
     pending_query_followups: Vec<AppCommand>,
@@ -402,7 +405,8 @@ pub struct App {
     next_steer_id: u64,
     next_reload_generation: u64,
     /// Lifecycle responses crossing a reload boundary must start from fresh
-    /// session state/history authority.
+    /// session state authority; the existing history window is not staged or
+    /// replaced by configuration reload.
     reload_fenced_create_drafts: HashSet<u64>,
     reload_fenced_open_sessions: HashSet<SessionId>,
     bootstrap: BootstrapProgress,
@@ -446,25 +450,16 @@ enum NextChain {
     Done,
 }
 
-struct ReloadHistoryStage {
-    window: crate::app::history::HistoryWindow,
-    next_cursor: Option<crate::protocol::ReadCursor>,
-    gap_revision: u64,
-}
-
 struct ReloadProgress {
     generation: u64,
     acknowledged: bool,
     active_session_id: Option<SessionId>,
-    session_reads_started: bool,
     state_query: Option<u64>,
     models: Option<Vec<ModelInfo>>,
     profiles: Option<Vec<ProfileInfo>>,
     sessions: Option<Vec<SessionInfo>>,
     state: Option<SessionStateWire>,
     presentation: Option<SessionPresentationWire>,
-    history: Option<ReloadHistoryStage>,
-    history_complete: bool,
 }
 
 impl ReloadProgress {
@@ -472,16 +467,13 @@ impl ReloadProgress {
         Self {
             generation,
             acknowledged: false,
-            history_complete: active_session_id.is_none(),
             active_session_id,
-            session_reads_started: false,
             state_query: None,
             models: None,
             profiles: None,
             sessions: None,
             state: None,
             presentation: None,
-            history: None,
         }
     }
 }
@@ -553,6 +545,9 @@ impl App {
             now: SystemTime::now,
             pending_requests: HashMap::new(),
             queries: crate::app::queries::QuerySlots::new(),
+            turn_results: HashMap::new(),
+            retained_results: HashMap::new(),
+            retained_result_order: VecDeque::new(),
             pending_query_followups: Vec::new(),
             next_request_id: RequestId(0),
             next_state_query: 0,
@@ -1355,7 +1350,6 @@ impl App {
                 | RequestKind::ReloadSessions { .. }
                 | RequestKind::ReloadState { .. }
                 | RequestKind::ReloadPresentation { .. }
-                | RequestKind::ReloadHistory { .. }
                 | RequestKind::ReloadWaitTurn(_)
         )
     }
@@ -4018,6 +4012,45 @@ impl App {
         self.next_request_id
     }
 
+    fn retain_result_summary(&mut self, result: crate::protocol::TurnResultViewWire) {
+        let turn = result.turn.clone();
+        if !self.retained_results.contains_key(&turn) {
+            self.retained_result_order.push_back(turn.clone());
+        }
+        self.retained_results.insert(turn, result);
+        while self.retained_result_order.len() > MAX_RETAINED_TURN_RESULTS {
+            if let Some(oldest) = self.retained_result_order.pop_front() {
+                self.retained_results.remove(&oldest);
+                self.turn_results.remove(&oldest);
+            }
+        }
+    }
+
+    fn request_turn_result_page(
+        &mut self,
+        turn: TurnRef,
+        cursor: crate::protocol::ReadCursor,
+    ) -> Option<AppCommand> {
+        let key = crate::app::queries::QueryKey::TurnResult {
+            session_id: turn.session_id.clone(),
+            loop_id: turn.loop_id.clone(),
+        };
+        let id = self.next_request_id();
+        if self.queries.request_query(key, id) != crate::app::queries::QueryAdmission::Admitted {
+            return None;
+        }
+        let request = OutgoingRequest::turn_result(
+            id,
+            &turn,
+            Some(cursor),
+            READ_PAGE_LIMIT,
+            READ_PAGE_MAX_BYTES,
+        );
+        self.pending_requests
+            .insert(id, RequestKind::TurnResult(turn));
+        Some(AppCommand::Rpc(request))
+    }
+
     /// Releases the read-only slot owned by a finished request. A key that was
     /// asked to refresh while in flight runs once more, so a burst of requests
     /// coalesces into at most one follow-up read (spec §5.3).
@@ -4028,10 +4061,29 @@ impl App {
         if !refresh {
             return;
         }
-        if let crate::app::queries::QueryKey::History(session_id) = key {
-            let session_id = session_id.clone();
-            if self.sessions.known.contains_key(&session_id) {
-                if let Some(command) = self.request_history(&session_id) {
+        match key {
+            crate::app::queries::QueryKey::History { session_id, .. } => {
+                if self.sessions.known.contains_key(&session_id) {
+                    if let Some(command) = self.request_history(&session_id) {
+                        self.pending_query_followups.push(command);
+                    }
+                }
+            }
+            crate::app::queries::QueryKey::TurnResult {
+                session_id,
+                loop_id,
+            } => {
+                let turn = TurnRef {
+                    session_id,
+                    loop_id,
+                };
+                if let Some(command) = self
+                    .turn_results
+                    .get(&turn)
+                    .filter(|window| !window.complete)
+                    .map(|window| (turn.clone(), window.cursor))
+                    .and_then(|(turn, cursor)| self.request_turn_result_page(turn, cursor))
+                {
                     self.pending_query_followups.push(command);
                 }
             }
@@ -4094,9 +4146,7 @@ impl App {
         self.pending_requests.values().any(|kind| {
             matches!(
                 kind,
-                RequestKind::History { session_id: pending, .. }
-                    | RequestKind::ReloadHistory { session_id: pending, .. }
-                    if pending == session_id
+                RequestKind::History { session_id: pending, .. } if pending == session_id
             )
         })
     }
@@ -4110,7 +4160,15 @@ impl App {
         let cursor = read.cursor;
         let pin = read.pin.clone();
         let probe = read.probe;
-        let key = crate::app::queries::QueryKey::History(session_id.clone());
+        let generation = self
+            .sessions
+            .known
+            .get(session_id)
+            .map_or(0, |view| view.history_query_generation);
+        let key = crate::app::queries::QueryKey::History {
+            session_id: session_id.clone(),
+            generation,
+        };
         let build = move |id: RequestId| {
             let (limit, max_bytes) = if probe {
                 (
@@ -4138,8 +4196,10 @@ impl App {
         // The slot is claimed before the request is built so a full budget
         // never leaks a registered request id.
         let id = self.next_request_id();
-        if self.queries.request_query(key, id) == crate::app::queries::QueryAdmission::Busy {
-            return None;
+        match self.queries.request_query(key, id) {
+            crate::app::queries::QueryAdmission::Admitted => {}
+            crate::app::queries::QueryAdmission::Coalesced
+            | crate::app::queries::QueryAdmission::Busy => return None,
         }
         let request = build(id);
         self.pending_requests.insert(
@@ -4275,9 +4335,7 @@ impl App {
                 RequestKind::OpenSession { session_id: pending, .. } if pending == session_id
             ) || matches!(
                 kind,
-                RequestKind::History { session_id: pending, .. }
-                    | RequestKind::ReloadHistory { session_id: pending, .. }
-                    if pending == session_id
+                RequestKind::History { session_id: pending, .. } if pending == session_id
             )
         })
     }
@@ -4295,8 +4353,7 @@ impl App {
             | RequestKind::History { session_id, .. }
             | RequestKind::SessionState { session_id, .. }
             | RequestKind::ReloadState { session_id, .. }
-            | RequestKind::ReloadPresentation { session_id, .. }
-            | RequestKind::ReloadHistory { session_id, .. } => Some(session_id),
+            | RequestKind::ReloadPresentation { session_id, .. } => Some(session_id),
             RequestKind::SessionPresentation { session_id } => Some(session_id),
             RequestKind::WaitTurn(turn)
             | RequestKind::ReloadWaitTurn(turn)
@@ -4348,8 +4405,7 @@ impl App {
             | RequestKind::ReloadProfiles { generation }
             | RequestKind::ReloadSessions { generation }
             | RequestKind::ReloadState { generation, .. }
-            | RequestKind::ReloadPresentation { generation, .. }
-            | RequestKind::ReloadHistory { generation, .. } => Some(*generation),
+            | RequestKind::ReloadPresentation { generation, .. } => Some(*generation),
             _ => None,
         }
     }
@@ -4504,6 +4560,10 @@ impl App {
         self.prepared_conversation = None;
         for view in self.sessions.known.values_mut() {
             view.transcript.render_cache = None;
+            view.history_query_generation = view
+                .history_query_generation
+                .checked_add(1)
+                .expect("history query generations exhausted");
         }
         self.reload = Some(ReloadProgress::new(generation, active_session));
         let mut commands =
@@ -4542,8 +4602,6 @@ impl App {
             reload.state_query = None;
             reload.state = None;
             reload.presentation = None;
-            reload.history = None;
-            reload.history_complete = true;
         }
     }
 
@@ -4555,10 +4613,7 @@ impl App {
             return Vec::new();
         }
         let acknowledged = reload.acknowledged;
-        let mark_active = reload.acknowledged
-            || reload.session_reads_started
-            || reload.state.is_some()
-            || reload.history.is_some();
+        let mark_active = reload.acknowledged || reload.state.is_some();
         let staged_active = reload.active_session_id.clone();
         let mut sessions_to_mark = self.pending_lifecycle_session_ids();
         if mark_active {
@@ -4768,21 +4823,14 @@ impl App {
                     && !self.sessions.pending_deletes.contains(session_id)
             })
         });
-        let (active_session_id, start_reads) = {
+        {
             let Some(reload) = self.reload.as_mut() else {
                 return Vec::new();
             };
             reload.sessions = Some(sessions.clone());
-            let start_reads = !reload.session_reads_started;
-            reload.session_reads_started = true;
             if active_session_id.is_none() {
                 reload.active_session_id = None;
-                reload.history_complete = true;
             }
-            (active_session_id, start_reads)
-        };
-        if !start_reads {
-            return self.maybe_finish_reload();
         }
         let Some(session_id) = active_session_id else {
             return self.maybe_finish_reload();
@@ -4862,45 +4910,10 @@ impl App {
                         ),
                     );
                 }
-                let gap_revision = self
-                    .sessions
-                    .known
-                    .get(&session_id)
-                    .map_or(0, |view| view.gap_revision);
                 if let Some(reload) = self.reload.as_mut() {
                     reload.state = Some(state);
-                    reload.history_complete = false;
-                    reload.history = Some(ReloadHistoryStage {
-                        window: crate::app::history::HistoryWindow::default(),
-                        next_cursor: None,
-                        gap_revision,
-                    });
                 }
-                vec![self.request(
-                    RequestKind::ReloadHistory {
-                        session_id: session_id.clone(),
-                        read: ReadRequest {
-                            cursor: crate::protocol::ReadCursor::start(),
-                            pin: None,
-                            window_start: 0,
-                            replacement: true,
-                            reconcile: false,
-                            probe: true,
-                            gap_revision,
-                        },
-                        generation,
-                    },
-                    |id| {
-                        OutgoingRequest::session_read(
-                            id,
-                            &session_id,
-                            Some(crate::protocol::ReadCursor::start()),
-                            READ_PAGE_LIMIT,
-                            READ_PAGE_MAX_BYTES,
-                            None,
-                        )
-                    },
-                )]
+                self.maybe_finish_reload()
             }
             Ok(_) => self.reload_failed(
                 generation,
@@ -4946,127 +4959,6 @@ impl App {
         }
     }
 
-    fn on_reload_history_response(
-        &mut self,
-        session_id: SessionId,
-        read: &ReadRequest,
-        generation: u64,
-        response: &RpcResponse,
-    ) -> Vec<AppCommand> {
-        let valid = self.reload.as_ref().is_some_and(|reload| {
-            reload.generation == generation
-                && reload.active_session_id.as_ref() == Some(&session_id)
-        });
-        if !valid {
-            return Vec::new();
-        }
-        let page = match response.parse_session_read() {
-            Ok(page) => page,
-            Err(error) => {
-                return self.reload_failed(
-                    generation,
-                    format!("configuration reload history read failed: {error}"),
-                );
-            }
-        };
-        let mut failure = None;
-        let mut next = None;
-        {
-            let Some(reload) = self.reload.as_mut() else {
-                return Vec::new();
-            };
-            if let Some(stage) = reload.history.as_mut() {
-                if stage.gap_revision != read.gap_revision {
-                    failure = Some("configuration reload history gap moved mid-read".to_owned());
-                } else if let Some(existing) = stage.window.pin() {
-                    if existing.captured_end != page.captured_end
-                        || existing.history_revision != page.history_revision
-                    {
-                        failure = Some(
-                            "configuration reload history revision changed mid-read".to_owned(),
-                        );
-                    } else if page.total < existing.total {
-                        failure = Some(
-                            "configuration reload history total regressed mid-read".to_owned(),
-                        );
-                    }
-                }
-                if failure.is_none() {
-                    let mut page_state = crate::app::history::ReadPage::new(
-                        read.cursor,
-                        read.pin.clone(),
-                        read.window_start,
-                    );
-                    match crate::app::history::apply_page(&mut stage.window, &mut page_state, &page)
-                    {
-                        Ok(crate::app::history::ReadApply::Stale(error)) => {
-                            failure = Some(format!(
-                                "configuration reload history became stale: {error}"
-                            ));
-                        }
-                        Ok(crate::app::history::ReadApply::Ok(applied)) => {
-                            if let Some(error) = applied.error {
-                                failure = Some(format!(
-                                    "configuration reload history is not decodable: {error}"
-                                ));
-                            } else {
-                                stage.next_cursor = applied.next;
-                                if applied.next.is_none() {
-                                    reload.history_complete = true;
-                                }
-                                next = applied.next;
-                            }
-                        }
-                        Err(error) => {
-                            failure = Some(format!(
-                                "configuration reload history is not decodable: {error}"
-                            ));
-                        }
-                    }
-                }
-            } else {
-                failure =
-                    Some("configuration reload history arrived before its read stage".to_owned());
-            }
-        }
-        if let Some(failure) = failure {
-            return self.reload_failed(generation, failure);
-        }
-        if next.is_some() {
-            let stage_next = self
-                .reload
-                .as_ref()
-                .and_then(|reload| reload.history.as_ref())
-                .and_then(|stage| stage.next_cursor);
-            return vec![self.request(
-                RequestKind::ReloadHistory {
-                    session_id: session_id.clone(),
-                    read: ReadRequest {
-                        cursor: stage_next.unwrap_or(crate::protocol::ReadCursor::start()),
-                        pin: None,
-                        window_start: 0,
-                        replacement: false,
-                        reconcile: false,
-                        probe: false,
-                        gap_revision: read.gap_revision,
-                    },
-                    generation,
-                },
-                |id| {
-                    OutgoingRequest::session_read(
-                        id,
-                        &session_id,
-                        stage_next,
-                        READ_PAGE_LIMIT,
-                        READ_PAGE_MAX_BYTES,
-                        None,
-                    )
-                },
-            )];
-        }
-        self.maybe_finish_reload()
-    }
-
     fn maybe_finish_reload(&mut self) -> Vec<AppCommand> {
         let complete = self.reload.as_ref().is_some_and(|reload| {
             reload.models.is_some()
@@ -5074,11 +4966,7 @@ impl App {
                 && reload.sessions.is_some()
                 && match reload.active_session_id {
                     None => true,
-                    Some(_) => {
-                        reload.state.is_some()
-                            && reload.presentation.is_some()
-                            && reload.history_complete
-                    }
+                    Some(_) => reload.state.is_some() && reload.presentation.is_some(),
                 }
         });
         if !complete {
@@ -5140,8 +5028,8 @@ impl App {
     }
 
     fn apply_reload(&mut self, reload: ReloadProgress) -> Vec<AppCommand> {
-        // A turn may have caused a normal read while the staged reload was in
-        // flight. Fence that read before installing the candidate snapshot;
+        // A turn may have caused a normal read while the reload was in
+        // flight. Fence that read before installing the candidate catalogs;
         // the execution request itself is never touched.
         self.fence_pending_reload_reads();
 
@@ -5231,37 +5119,12 @@ impl App {
             if self.sessions.active.as_ref() == Some(&session_id)
                 && self.sessions.known.contains_key(&session_id)
             {
-                let history_safe = self.sessions.known.get(&session_id).is_some_and(|view| {
-                    view.info.loaded
-                        && view.live.is_none()
-                        && view.unsaved_loop.is_none()
-                        && !view.result_unconfirmed
-                        && !view.event_gap
-                        && !view.loading
-                        && !view.reconcile_inflight
-                        && !view.closing
-                        && state.status == SessionStatusWire::Idle
-                        && state.active_loop.is_none()
-                        && state.block_reason.is_none()
-                });
-                let mut install_history = reload
-                    .history
-                    .as_ref()
-                    .filter(|history| {
-                        history_safe
-                            && self
-                                .sessions
-                                .known
-                                .get(&session_id)
-                                .is_some_and(|view| view.gap_revision == history.gap_revision)
-                    })
-                    .map(|history| history.window.clone());
+                // Reload refreshes execution/catalog authority only. The
+                // existing pinned history window remains the display source;
+                // a normal session.read chain is used only when its own gap
+                // or post-wait state requires reconciliation.
                 self.install_reload_state(&session_id, &state);
                 if let Some(view) = self.sessions.known.get_mut(&session_id) {
-                    // The reload read is staged evidence, not the normal
-                    // state authority used for Steer. Pair the installed
-                    // projection with a fresh response after the reload
-                    // barrier, including when the staged state is Running.
                     view.steer_state_unconfirmed = true;
                 }
                 commands.push(self.request_session_state(&session_id));
@@ -5271,12 +5134,6 @@ impl App {
                         view.presentation = Some(presentation);
                         view.presentation_pending = false;
                         view.presentation_refresh_pending = false;
-                        if let Some(history) = install_history.take() {
-                            Self::install_reload_history(view, history);
-                            // A staged reload replaces the authority fence only
-                            // after both state and complete History are aligned.
-                            view.close_verification_unknown = false;
-                        }
                         view.recompute_usage_projection();
                         refresh
                     } else {
@@ -5561,53 +5418,6 @@ impl App {
         }
     }
 
-    fn install_reload_history(view: &mut SessionView, window: crate::app::history::HistoryWindow) {
-        let pending_users: Vec<UserBlock> = view
-            .transcript
-            .blocks
-            .iter()
-            .filter_map(|block| match block {
-                TranscriptBlock::User(user) if user.pending => Some(user.clone()),
-                _ => None,
-            })
-            .collect();
-        view.transcript.blocks.clear();
-        view.transcript.render_cache = None;
-        view.user_timestamps.clear();
-        view.tool_presentations.clear();
-        view.transcript.window = window;
-        view.transcript.next_cursor = None;
-        // Project every decoded item in index order so tool results pair with
-        // the preceding assistant call.
-        let indexes: Vec<usize> = view
-            .transcript
-            .window
-            .items()
-            .map(|(index, _)| *index)
-            .collect();
-        for index in indexes {
-            let item = view.transcript.window.item(index).cloned();
-            if let Some(item) = item {
-                install_history_item(view, index, &item);
-            }
-        }
-        for pending in pending_users {
-            let matched = view.transcript.blocks.iter().any(|block| {
-                matches!(
-                    block,
-                    TranscriptBlock::User(user)
-                        if !user.pending
-                            && pending.loop_id.is_some()
-                            && user.loop_id == pending.loop_id
-                )
-            });
-            if !matched {
-                view.transcript.blocks.push(TranscriptBlock::User(pending));
-            }
-        }
-        view.transcript.invalidate();
-    }
-
     /// Retires the current loop for event routing without discarding a wait
     /// that may still complete before the new session.open response.
     fn retire_reopened_session(&mut self, session_id: &SessionId) {
@@ -5630,8 +5440,27 @@ impl App {
     /// fence blocks already-buffered old events without retaining an unbounded
     /// registry.
     fn invalidate_reopened_session(&mut self, session_id: &SessionId) {
-        self.pending_requests
-            .retain(|_, kind| Self::request_session_id(kind) != Some(session_id.as_str()));
+        // Keep retired request ids registered as StaleRead so their late
+        // responses still release the read slot they own. Dropping the ids
+        // here would make the response look unknown and leak capacity.
+        for kind in self.pending_requests.values_mut() {
+            let belongs = Self::request_session_id(kind) == Some(session_id.as_str());
+            let keep_exact_turn = matches!(
+                kind,
+                RequestKind::WaitTurn(_)
+                    | RequestKind::ReloadWaitTurn(_)
+                    | RequestKind::TurnResult(_)
+            );
+            if belongs && !keep_exact_turn {
+                *kind = RequestKind::StaleRead;
+            }
+        }
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            view.history_query_generation = view
+                .history_query_generation
+                .checked_add(1)
+                .expect("history query generations exhausted");
+        }
         self.retire_reopened_session(session_id);
     }
 
@@ -5686,6 +5515,7 @@ impl App {
     }
 
     fn mark_history_unconfirmed(view: &mut SessionView) {
+        view.read_page = None;
         view.loading = false;
         view.reconcile_inflight = false;
         view.event_gap = true;
@@ -6427,8 +6257,8 @@ impl App {
 
         if self.reload.is_some() {
             // The lifecycle ACK crossed the reload boundary. The response
-            // supplies metadata only; state and history still need fresh
-            // post-reload authority.
+            // supplies metadata only; state still needs fresh post-reload
+            // authority while the existing history window remains intact.
             self.mark_session_uncalibrated(&session_id);
             return Vec::new();
         }
@@ -6688,18 +6518,23 @@ impl App {
         // Reopen is a lifecycle boundary. Retire old request ids before
         // rebuilding the view so late responses cannot mutate the new load.
         self.invalidate_reopened_session(&session_id);
+        let retained_after_reopen = previous_retired_loop
+            .as_ref()
+            .and_then(|turn| self.retained_results.get(turn))
+            .cloned();
         if let Some(view) = self.sessions.known.get_mut(&session_id) {
             // Rebuild from history offset 0; never compare the new total with
             // the old local projection.
             let preserving_gap = view.event_gap;
             view.transcript.clear_blocks();
+            view.read_page = None;
             view.loading = false;
             view.reconcile_inflight = preserving_gap;
             view.needs_post_wait_history = false;
             view.closing = false;
             view.live = None;
             view.unsaved_loop = None;
-            view.last_result = None;
+            view.last_result = retained_after_reopen;
             view.usage_projection = crate::state::session::UsageProjection::default();
             view.last_request = None;
             view.config_update = None;
@@ -6712,7 +6547,10 @@ impl App {
             view.live_user_time_accepted = false;
             view.tool_presentations.clear();
             view.completed_steers.clear();
-            view.result_unconfirmed = false;
+            view.result_unconfirmed = view
+                .last_result
+                .as_ref()
+                .is_some_and(|result| result.persistence == TurnPersistenceWire::Failed);
         }
         let opened_id = session_id.clone();
         let during_reload = self.reload.is_some();
@@ -7081,6 +6919,9 @@ impl App {
                     for (index, item) in &applied.inserted {
                         install_history_item(view, *index, item);
                     }
+                    for (index, total_bytes) in &applied.placeholders {
+                        install_history_placeholder(view, *index, *total_bytes);
+                    }
                     // A probe that already delivered the whole prefix (a short
                     // history) needs no further read.
                     if applied.next.is_none() {
@@ -7170,6 +7011,9 @@ impl App {
         // Project newly decoded Runtime items into the display bridge.
         for (index, item) in &applied.inserted {
             install_history_item(view, *index, item);
+        }
+        for (index, total_bytes) in &applied.placeholders {
+            install_history_placeholder(view, *index, *total_bytes);
         }
 
         if let Some(error) = applied.error {
@@ -7453,6 +7297,18 @@ impl App {
             );
             return Vec::new();
         }
+        if self
+            .sessions
+            .known
+            .get(&session_id)
+            .is_some_and(|view| view.is_preparing())
+        {
+            self.notice(
+                NoticeLevel::Info,
+                "session is preparing context; wait for preparation to finish",
+            );
+            return Vec::new();
+        }
         // A known-invalid state authority or durable history gap blocks a new
         // turn. A pending normal state read or an incomplete history read
         // without a gap retains the legacy admission behavior.
@@ -7646,13 +7502,11 @@ impl App {
     /// be read back without rerunning any tool. Only one read per turn is in
     /// flight, and an already-complete live result is not re-fetched.
     fn recover_turn(&mut self, turn: TurnRef) -> Option<AppCommand> {
-        if !self.can_send_requests() {
-            return None;
-        }
-        if self
-            .pending_requests
-            .values()
-            .any(|kind| matches!(kind, RequestKind::TurnResult(pending) if pending == &turn))
+        if !self.can_send_requests()
+            || self
+                .pending_requests
+                .values()
+                .any(|kind| matches!(kind, RequestKind::TurnResult(pending) if pending == &turn))
         {
             return None;
         }
@@ -7667,18 +7521,19 @@ impl App {
                     r.turn == turn && r.persistence == TurnPersistenceWire::Persisted
                 })
             })
+            || self
+                .retained_results
+                .get(&turn)
+                .is_some_and(|result| result.persistence == TurnPersistenceWire::Persisted)
         {
             return None;
         }
-        Some(self.request(RequestKind::TurnResult(turn.clone()), |id| {
-            OutgoingRequest::turn_result(
-                id,
-                &turn,
-                Some(crate::protocol::ReadCursor::start()),
-                READ_PAGE_LIMIT,
-                READ_PAGE_MAX_BYTES,
-            )
-        }))
+        let cursor = self
+            .turn_results
+            .entry(turn.clone())
+            .or_insert_with(|| crate::app::history::TurnResultWindow::new(turn.clone()))
+            .cursor;
+        self.request_turn_result_page(turn, cursor)
     }
 
     fn on_send_response(
@@ -7901,13 +7756,30 @@ impl App {
     fn on_wait_response(&mut self, turn: TurnRef, response: &RpcResponse) -> Vec<AppCommand> {
         let parsed = response.parse_turn_wait();
         let mismatched_turn = parsed.as_ref().is_ok_and(|result| result.turn != turn);
-        let (persistence_failed, result, duplicate) = {
-            let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
-                return Vec::new();
-            };
-            if !Self::wait_targets_current_turn(view, &turn) {
-                return Vec::new();
+        if let Ok(result) = parsed.as_ref() {
+            if result.turn == turn {
+                self.retain_result_summary(result.clone());
             }
+        }
+        let current_turn = self
+            .sessions
+            .known
+            .get(&turn.session_id)
+            .is_some_and(|view| Self::wait_targets_current_turn(view, &turn));
+        if !current_turn {
+            if parsed.as_ref().is_ok_and(|result| {
+                result.turn == turn && result.persistence == TurnPersistenceWire::Failed
+            }) {
+                return self.recover_turn(turn).into_iter().collect();
+            }
+            return Vec::new();
+        }
+        let (persistence_failed, result, duplicate) = {
+            let view = self
+                .sessions
+                .known
+                .get_mut(&turn.session_id)
+                .expect("current turn session exists");
             let old_result = view.last_result.clone();
             let live_matches = view
                 .live
@@ -8018,7 +7890,7 @@ impl App {
                     view.recompute_usage_projection();
                 }
             }
-            return Vec::new();
+            return self.recover_turn(turn).into_iter().collect();
         }
 
         if duplicate {
@@ -8031,10 +7903,78 @@ impl App {
         commands
     }
 
-    /// Settles an authoritative `turn.result` read-back (spec §7.2). The
-    /// result is merged by exact `TurnRef`; `stored`/`live` fill in the
-    /// retained report, `pending` keeps the existing wait, and a `turn`
-    /// mismatch is refused rather than applied to another loop.
+    fn turn_result_view(
+        page: &crate::protocol::read::TurnResultPage,
+    ) -> Option<crate::protocol::TurnResultViewWire> {
+        Some(crate::protocol::TurnResultViewWire {
+            turn: page.turn.clone(),
+            outcome: page.outcome.clone()?,
+            usage: page.usage.unwrap_or_default(),
+            requests: page.requests.unwrap_or(0),
+            tool_rounds: page.tool_rounds.unwrap_or(0),
+            final_config_revision: page.final_config_revision.unwrap_or(0),
+            persistence: page.persistence?,
+            accepted_at: page.completed_at.clone(),
+        })
+    }
+
+    fn pending_wait_for(&self, turn: &TurnRef) -> bool {
+        self.pending_requests.values().any(|kind| {
+            matches!(
+                kind,
+                RequestKind::WaitTurn(pending) | RequestKind::ReloadWaitTurn(pending)
+                    if pending == turn
+            )
+        })
+    }
+
+    fn retain_failed_result_on_view(
+        &mut self,
+        turn: &TurnRef,
+        result: &crate::protocol::TurnResultViewWire,
+    ) {
+        let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
+            return;
+        };
+        if !Self::wait_targets_current_turn(view, turn) {
+            return;
+        }
+        view.result_unconfirmed = true;
+        if let Some(state) = view.state.as_mut() {
+            state.status = SessionStatusWire::Blocked;
+            state.active_loop = None;
+            state.block_reason = Some(crate::protocol::SessionBlockReasonWire::Persistence);
+        } else {
+            view.state = Some(SessionStateWire {
+                session_id: turn.session_id.clone(),
+                status: SessionStatusWire::Blocked,
+                active_loop: None,
+                block_reason: Some(crate::protocol::SessionBlockReasonWire::Persistence),
+                compaction: None,
+            });
+        }
+        if view.unsaved_loop.is_none() {
+            if let Some(live) = view.live.as_ref() {
+                view.unsaved_loop = Some(UnsavedLoop {
+                    turn: turn.clone(),
+                    user_text: live.user_text.clone(),
+                    requests: live.requests.clone(),
+                    result: Some(result.clone()),
+                    event_gap: live.event_gap,
+                });
+            }
+        } else if let Some(unsaved) = view.unsaved_loop.as_mut() {
+            unsaved.result = Some(result.clone());
+        }
+        Self::mark_pending_steers_unconfirmed(view);
+        view.recompute_usage_projection();
+    }
+
+    /// Settles an authoritative `turn.result` read-back (spec §7.2). Pages
+    /// are assembled in a turn-local window; only the final retained summary
+    /// may be projected into a SessionView. A late response can therefore
+    /// survive reload/reopen without confusing its local item indexes with the
+    /// session-global indexes returned by `session.read`.
     fn on_turn_result_response(
         &mut self,
         turn: &TurnRef,
@@ -8060,57 +8000,91 @@ impl App {
             self.connection_terminated("turn.result response does not match the requested turn");
             return Vec::new();
         }
-        // Only a terminal, persisted outcome clears the unconfirmed fence; a
-        // pending/live report keeps it so nothing downstream treats it as saved.
-        let terminal_persisted = page.availability != TurnAvailability::Pending
-            && page.persistence == Some(TurnPersistenceWire::Persisted)
-            && page.outcome.is_some();
-        if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
-            if terminal_persisted {
-                view.result_unconfirmed = false;
-                // Materialize the retained report from the authoritative page so
-                // the live loop can settle through the same reducer as a wait.
-                if let (Some(outcome), Some(persistence)) = (page.outcome, page.persistence) {
-                    let result = crate::protocol::TurnResultViewWire {
-                        turn: page.turn.clone(),
-                        outcome,
-                        usage: page.usage.unwrap_or_default(),
-                        requests: page.requests.unwrap_or(0),
-                        tool_rounds: page.tool_rounds.unwrap_or(0),
-                        final_config_revision: page.final_config_revision.unwrap_or(0),
-                        persistence,
-                        accepted_at: page.completed_at.clone(),
-                    };
-                    if view.last_result.as_ref() != Some(&result) {
-                        view.last_result = Some(result.clone());
-                        if let Some(live) = view.live.as_mut() {
-                            if live.reference.as_ref() == Some(turn) {
-                                live.last_result = Some(result.clone());
-                                live.waiting = true;
-                            }
-                        }
-                        view.recompute_usage_projection();
-                    }
-                }
+
+        let apply_result = self
+            .turn_results
+            .entry(turn.clone())
+            .or_insert_with(|| crate::app::history::TurnResultWindow::new(turn.clone()))
+            .apply_page(&page);
+        if let Err(error) = apply_result {
+            if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
+                view.result_unconfirmed = true;
+                Self::mark_pending_steers_unconfirmed(view);
             }
-            if let Some(live) = view.live.as_mut() {
-                if live.reference.as_ref() == Some(turn) && !terminal_persisted {
-                    live.waiting = true;
-                }
-            }
-        }
-        if !terminal_persisted {
             self.notice(
-                NoticeLevel::Info,
+                NoticeLevel::Warning,
                 format!(
-                    "result for {}/{} is not yet saved; the loop stays unconfirmed",
+                    "result read-back for {}/{} is not decodable ({error}); outcome remains unconfirmed",
                     turn.session_id, turn.loop_id
                 ),
             );
             return Vec::new();
         }
-        // A confirmed persisted result reconciles the live loop exactly like a
-        // successful wait: the same reducer, no tool rerun.
+
+        if let Some(result) = Self::turn_result_view(&page) {
+            self.retain_result_summary(result.clone());
+            if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
+                if Self::wait_targets_current_turn(view, turn) {
+                    view.last_result = Some(result.clone());
+                    view.result_unconfirmed = result.persistence != TurnPersistenceWire::Persisted;
+                    if let Some(live) = view.live.as_mut() {
+                        if live.reference.as_ref() == Some(turn) {
+                            live.last_result = Some(result.clone());
+                            live.waiting = true;
+                        }
+                    }
+                    view.recompute_usage_projection();
+                }
+            }
+        }
+
+        let (complete, next_cursor) = self
+            .turn_results
+            .get(turn)
+            .map(|window| (window.complete, (!window.complete).then_some(window.cursor)))
+            .unwrap_or((false, None));
+        if !complete {
+            let Some(cursor) = next_cursor else {
+                return Vec::new();
+            };
+            return self
+                .request_turn_result_page(turn.clone(), cursor)
+                .into_iter()
+                .collect();
+        }
+
+        if page.availability == TurnAvailability::Pending {
+            if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
+                if Self::wait_targets_current_turn(view, turn) {
+                    view.result_unconfirmed = true;
+                    if let Some(live) = view.live.as_mut() {
+                        live.waiting = true;
+                    }
+                }
+            }
+            if !self.pending_wait_for(turn) {
+                return self
+                    .request_wait(turn.clone(), WaitOrigin::Normal)
+                    .into_iter()
+                    .collect();
+            }
+            return Vec::new();
+        }
+
+        let Some(result) = Self::turn_result_view(&page) else {
+            return Vec::new();
+        };
+        if result.persistence == TurnPersistenceWire::Failed {
+            self.retain_failed_result_on_view(turn, &result);
+            self.notice(
+                NoticeLevel::Error,
+                format!(
+                    "Turn {}/{} completed but persistence is still unconfirmed.",
+                    turn.session_id, turn.loop_id
+                ),
+            );
+            return Vec::new();
+        }
         self.reconcile_after_wait(turn)
     }
 
@@ -8124,7 +8098,7 @@ impl App {
         if !self.can_send_requests() {
             return Vec::new();
         }
-        // Closed or not-loaded session view must not issue session.state or session.history.
+        // Closed or not-loaded session view must not issue session.state or session.read.
         // Wait itself has already recorded the result and kept live temporarily visible.
         if let Some(view) = self.sessions.known.get(&turn.session_id) {
             if !view.info.loaded || view.closing {
@@ -8809,8 +8783,7 @@ impl App {
             | RequestKind::ReloadProfiles { generation }
             | RequestKind::ReloadSessions { generation }
             | RequestKind::ReloadState { generation, .. }
-            | RequestKind::ReloadPresentation { generation, .. }
-            | RequestKind::ReloadHistory { generation, .. } => {
+            | RequestKind::ReloadPresentation { generation, .. } => {
                 commands.extend(self.reload_failed(
                     generation,
                     format!("configuration reload request failed: {error}"),
@@ -9096,11 +9069,6 @@ impl App {
             RequestKind::History { session_id, read } => {
                 self.on_history_response(&session_id, &read, &response)
             }
-            RequestKind::ReloadHistory {
-                session_id,
-                read,
-                generation,
-            } => self.on_reload_history_response(session_id, &read, generation, &response),
             RequestKind::SendTurn {
                 session_id,
                 local_submission,
@@ -10203,6 +10171,18 @@ fn has_item_index(blocks: &[TranscriptBlock], index: usize) -> bool {
     blocks.iter().any(|block| block.index() == Some(index))
 }
 
+fn install_history_placeholder(view: &mut SessionView, index: usize, total_bytes: usize) {
+    if has_item_index(&view.transcript.blocks, index) {
+        return;
+    }
+    view.transcript
+        .blocks
+        .push(TranscriptBlock::HistoryPlaceholder(
+            HistoryPlaceholderBlock { index, total_bytes },
+        ));
+    view.transcript.invalidate();
+}
+
 /// Projects one decoded Runtime item into the display bridge. This is the
 /// stage-C-removable short-term adapter (spec §11.1): the durable authority is
 /// `view.transcript.window`, and these blocks only drive the current
@@ -10522,7 +10502,7 @@ mod tests {
             "total": total,
             "records": [],
             "records_truncated": false,
-            "history_revision": "unit-revision",
+            "history_revision": "0000000000000000000000000000000000000000000000000000000000000000",
             "captured_end": total as u64,
             "trailing_incomplete": false
         });
@@ -10803,13 +10783,13 @@ mod tests {
             presentation,
             json!({"session_id": "ses_1", "context": {"kind": "unknown"}}),
         ));
-        let history = take_requests(respond(&mut app, state, state_json("ses_1", "idle")));
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].method, "session.read");
+        let after_reload = take_requests(respond(&mut app, state, state_json("ses_1", "idle")));
+        assert_eq!(after_reload.len(), 1);
+        assert_eq!(after_reload[0].method, "session.state");
         take_requests(respond(
             &mut app,
-            &history[0],
-            read_page_json(vec![], None, 0),
+            &after_reload[0],
+            state_json("ses_1", "idle"),
         ));
 
         assert!(app.reload.is_none());
@@ -10866,28 +10846,10 @@ mod tests {
             .find(|request| request.method == "session.presentation")
             .unwrap();
         take_requests(respond(&mut app, state, state_json("ses_1", "idle")));
-        let history = app
-            .pending_requests
-            .iter()
-            .find_map(|(id, kind)| matches!(kind, RequestKind::ReloadHistory { .. }).then_some(*id))
-            .unwrap();
-        let history_request = OutgoingRequest::session_read(
-            history,
-            "ses_1",
-            Some(crate::protocol::ReadCursor::start()),
-            20,
-            262144,
-            None,
-        );
         take_requests(respond(
             &mut app,
             presentation,
             json!({"session_id": "ses_1", "context": {"kind": "unknown"}}),
-        ));
-        take_requests(respond(
-            &mut app,
-            &history_request,
-            read_page_json(vec![], None, 0),
         ));
 
         let view = &app.sessions.known["ses_1"];
@@ -11204,19 +11166,13 @@ mod tests {
             presentation,
             json!({"session_id": "ses_1", "context": {"kind": "unknown"}}),
         ));
-        let history = take_requests(respond(
+        let after_reload = take_requests(respond(
             &mut app,
             state,
             running_state_json("ses_1", "loop_live"),
         ));
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].method, "session.read");
-
-        let after_reload = take_requests(respond(
-            &mut app,
-            &history[0],
-            read_page_json(vec![], None, 0),
-        ));
+        assert_eq!(after_reload.len(), 1);
+        assert_eq!(after_reload[0].method, "session.state");
         assert!(
             after_reload
                 .iter()
@@ -11242,8 +11198,8 @@ mod tests {
         assert_eq!(after_state[0].method, "turn.steer");
         assert!(!app.sessions.known["ses_1"].steer_state_unconfirmed);
 
-        // The reload completion and staged reads do not release the deferred
-        // FIFO advance; the fresh normal Running response does.
+        // Reload completion does not release the deferred FIFO advance; the
+        // fresh normal Running response does.
         let next = take_requests(app.update(AppEvent::Tick));
         assert!(next.is_empty());
     }
@@ -11344,7 +11300,16 @@ mod tests {
             .pending_requests
             .iter()
             .find_map(|(id, kind)| matches!(kind, RequestKind::History { .. }).then_some(*id))
-            .map(|id| OutgoingRequest::session_history(id, "ses_1", Some(0), Some(20)))
+            .map(|id| {
+                OutgoingRequest::session_read(
+                    id,
+                    "ses_1",
+                    Some(crate::protocol::ReadCursor::start()),
+                    READ_PAGE_LIMIT,
+                    READ_PAGE_MAX_BYTES,
+                    None,
+                )
+            })
             .expect("reload failure starts a fresh history reconciliation");
         take_requests(respond(&mut app, &retry, read_page_json(vec![], None, 0)));
         assert!(!app.sessions.known["ses_1"].event_gap);
@@ -11643,26 +11608,17 @@ mod tests {
             presentation,
             json!({"session_id": "ses_1", "context": {"kind": "unknown"}}),
         ));
-        let history = take_requests(respond(
+        let after_reload = take_requests(respond(
             &mut app,
             staged_state,
             running_state_json("ses_1", "loop_live"),
         ));
-        assert_eq!(history.len(), 1);
-        take_requests(respond(
-            &mut app,
-            &history[0],
-            read_page_json(Vec::new(), None, 0),
-        ));
+        assert_eq!(after_reload.len(), 1);
+        assert_eq!(after_reload[0].method, "session.state");
 
         assert!(app.sessions.known["ses_1"].event_gap);
         assert!(app.sessions.known["ses_1"].steer_state_unconfirmed);
-        let fresh_state = app
-            .pending_requests
-            .iter()
-            .find_map(|(id, kind)| matches!(kind, RequestKind::SessionState { .. }).then_some(*id))
-            .map(|id| OutgoingRequest::session_state(id, "ses_1"))
-            .expect("reload requests fresh normal state authority");
+        let fresh_state = after_reload[0].clone();
         let steer = take_requests(respond(
             &mut app,
             &fresh_state,
@@ -11733,30 +11689,18 @@ mod tests {
             presentation,
             json!({"session_id": "ses_1", "context": {"kind": "unknown"}}),
         ));
-        let history = take_requests(respond(
+        let after_reload = take_requests(respond(
             &mut app,
             staged_state,
             running_state_json("ses_1", "loop_after_reload"),
-        ));
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].method, "session.read");
-        let after_reload = take_requests(respond(
-            &mut app,
-            &history[0],
-            read_page_json(Vec::new(), None, 0),
         ));
         let fresh_state = after_reload
             .iter()
             .find(|request| request.method == "session.state")
             .cloned()
             .expect("reload schedules one normal state read");
-        assert_eq!(
-            after_reload
-                .iter()
-                .filter(|request| request.method == "session.state")
-                .count(),
-            1
-        );
+        assert_eq!(after_reload.len(), 1);
+        assert_eq!(after_reload[0].method, "session.state");
         assert!(app.reload.is_none());
         assert!(app.sessions.known["ses_1"].steer_state_unconfirmed);
         assert!(app.pending_request_kind(send.id).is_some());
@@ -11898,17 +11842,10 @@ mod tests {
             presentation,
             json!({"session_id": "ses_1", "context": {"kind": "unknown"}}),
         ));
-        let staged_history = take_requests(respond(
+        let after_reload = take_requests(respond(
             &mut app,
             staged_state,
             running_state_json("ses_1", "loop_a"),
-        ));
-        assert_eq!(staged_history.len(), 1);
-        let staged_history = staged_history[0].clone();
-        let after_reload = take_requests(respond(
-            &mut app,
-            &staged_history,
-            read_page_json(Vec::new(), None, 0),
         ));
         let reload_state = after_reload
             .iter()
@@ -12365,14 +12302,7 @@ mod tests {
             presentation,
             json!({"session_id": "ses_1", "context": {"kind": "unknown"}}),
         ));
-        let history = take_requests(respond(&mut app, state, state_json("ses_1", "idle")));
-        assert_eq!(history.len(), 1);
-
-        let recovery = take_requests(respond(
-            &mut app,
-            &history[0],
-            read_page_json(vec![], None, 0),
-        ));
+        let recovery = take_requests(respond(&mut app, state, state_json("ses_1", "idle")));
         assert!(
             recovery
                 .iter()
@@ -12386,11 +12316,17 @@ mod tests {
         assert!(app.sessions.known["ses_1"].event_gap);
         assert!(!app.sessions.known["ses_1"].transcript.complete);
 
-        let recovery = recovery
+        if let Some(fresh_state) = recovery
+            .iter()
+            .find(|request| request.method == "session.state")
+        {
+            take_requests(respond(&mut app, fresh_state, state_json("ses_1", "idle")));
+        }
+        let history = recovery
             .iter()
             .find(|request| request.method == "session.read")
             .unwrap();
-        take_requests(respond(&mut app, recovery, read_page_json(vec![], None, 0)));
+        take_requests(respond(&mut app, history, read_page_json(vec![], None, 0)));
         assert!(!app.sessions.known["ses_1"].event_gap);
         assert!(app.sessions.known["ses_1"].transcript.complete);
     }
@@ -12644,7 +12580,9 @@ mod tests {
                     cursor: crate::protocol::ReadCursor { item: 2, offset: 0 },
                     pin: Some(crate::protocol::SnapshotPin {
                         captured_end: 3,
-                        history_revision: "unit-revision".to_owned(),
+                        history_revision:
+                            "0000000000000000000000000000000000000000000000000000000000000000"
+                                .to_owned(),
                         total: 3,
                     }),
                     window_start: 2,
@@ -14567,7 +14505,7 @@ mod steer_receipt_tests {
             "total": total,
             "records": [],
             "records_truncated": false,
-            "history_revision": "unit-revision",
+            "history_revision": "0000000000000000000000000000000000000000000000000000000000000000",
             "captured_end": total as u64,
             "trailing_incomplete": false
         });

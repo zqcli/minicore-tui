@@ -289,19 +289,15 @@ fn turn_result_recovery_exists_and_is_settled_by_exact_turn() {
     assert_eq!(request.params["turn"]["loop_id"], "loop_1");
 }
 
-/// Defect: `agent.reload` stages a full-history replacement. Stage B/C
-/// replaces it with a catalog/metadata refresh only.
+/// B1 migration: `agent.reload` refreshes catalogs and metadata without a
+/// second staged history authority. Existing execution/result/history state is
+/// kept, and any needed history read uses the normal chain after the barrier.
 #[test]
-fn baseline_reload_stages_a_full_history_replacement() {
+fn reload_does_not_stage_a_full_history_replacement() {
     let source = include_str!("../src/app.rs");
-    assert!(
-        source.contains("struct ReloadHistoryStage"),
-        "BASELINE: reload carries a staged history replacement"
-    );
-    assert!(
-        source.contains("fn apply_reload"),
-        "BASELINE: apply_reload installs the staged history"
-    );
+    assert!(!source.contains("struct ReloadHistoryStage"));
+    assert!(!source.contains("fn install_reload_history"));
+    assert!(source.contains("fn apply_reload"));
 }
 
 /// Defect (REF-48): the markdown display boundary passes raw control

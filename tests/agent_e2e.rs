@@ -851,7 +851,6 @@ fn e2e_configuration_reload_refreshes_catalogs_and_active_session() {
                         | RequestKind::ReloadSessions { .. }
                         | RequestKind::ReloadState { .. }
                         | RequestKind::ReloadPresentation { .. }
-                        | RequestKind::ReloadHistory { .. }
                 )
             }) && a.notices().back().is_some_and(|notice| {
                 notice.text == "Agent configuration and read-only state reloaded"
@@ -1173,7 +1172,7 @@ fn e2e_session_panel_rename_and_delete_against_current_agent() {
 }
 
 /// Spec 61.2 E2E-B: Basic Turn Flow
-/// Tests session.create, turn.send, turn.wait, and session.history reconciliation.
+/// Tests session.create, turn.send, turn.wait, and session.read reconciliation.
 #[test]
 #[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
 fn e2e_scenario_b_basic_turn() {

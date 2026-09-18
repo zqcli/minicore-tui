@@ -5,7 +5,8 @@
 //! legacy `session.history` display DTO ([`crate::protocol::HistoryItemViewWire`])
 //! because the two wire shapes differ: a runtime `User` item carries `input`,
 //! an `Assistant` item carries `content`, and tool output is a nested object.
-//! Stage B is the only migration; there is no dual stack (spec §4).
+//! Stage B is the only main-history migration; the legacy DTO remains only for
+//! compatibility fixtures/diagnostics and is not used by the app read path.
 
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -40,6 +41,22 @@ pub struct SnapshotPin {
     pub captured_end: u64,
     pub history_revision: String,
     pub total: usize,
+}
+
+impl SnapshotPin {
+    pub fn validate(&self) -> Result<(), ReadError> {
+        if self.history_revision.len() != 64
+            || !self
+                .history_revision
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(ReadError::InvalidPin {
+                detail: "history_revision is not a 64-character hexadecimal digest".to_owned(),
+            });
+        }
+        Ok(())
+    }
 }
 
 /// One returned chunk of one item's canonical JSON (spec §6.1).
@@ -348,6 +365,12 @@ pub enum ReadError {
     CursorStalled { item: usize },
     #[error("item {index} changed after it was already loaded")]
     ItemChanged { index: usize },
+    #[error("invalid history snapshot pin: {detail}")]
+    InvalidPin { detail: String },
+    #[error("turn result total changed from {expected} to {found}")]
+    TurnTotalMismatch { expected: usize, found: usize },
+    #[error("turn result cursor offset {found} does not continue at {expected}")]
+    CursorOffsetMismatch { expected: usize, found: usize },
 }
 
 /// Reassembles raw item chunks into Runtime items (spec §6.2). It buffers at
@@ -373,6 +396,14 @@ impl ChunkAssembler {
         self.active.then_some(self.index)
     }
 
+    /// The next cursor accepted by this assembler for a partial item.
+    pub fn next_cursor(&self) -> Option<ReadCursor> {
+        self.active.then_some(ReadCursor {
+            item: self.index,
+            offset: self.next_offset,
+        })
+    }
+
     /// Drops the buffered partial item. Used when a page lands outside the
     /// requested window, so its partial bytes are never mistaken for loaded
     /// content (spec §6.3).
@@ -394,15 +425,13 @@ impl ChunkAssembler {
         let delivered = chunk.data.len();
 
         if self.active && chunk.index != self.index {
-            // A new item may only start once the previous one is complete.
-            if !self.skipping_large && self.next_offset != 0 && self.buffer.is_empty() {
-                // Previous item ended without an explicit complete flag.
-                return Err(ReadError::IndexOutOfOrder {
-                    expected: self.index,
-                    found: chunk.index,
-                });
-            }
-            self.begin(chunk.index, chunk.total_bytes);
+            // `discard` runs as soon as a complete item is emitted. An active
+            // assembler therefore always owns an incomplete item; accepting a
+            // new index here would silently drop its prefix.
+            return Err(ReadError::IndexOutOfOrder {
+                expected: self.index,
+                found: chunk.index,
+            });
         } else if !self.active {
             if chunk.offset != 0 {
                 return Err(ReadError::OffsetMismatch {
@@ -426,8 +455,22 @@ impl ChunkAssembler {
         }
 
         if self.skipping_large {
-            self.next_offset += delivered;
+            self.next_offset = self.next_offset.saturating_add(delivered);
+            if self.next_offset > self.total_bytes {
+                return Err(ReadError::ByteCountMismatch {
+                    index: self.index,
+                    declared: self.total_bytes,
+                    delivered: self.next_offset,
+                });
+            }
             if chunk.complete {
+                if self.next_offset != self.total_bytes {
+                    return Err(ReadError::ByteCountMismatch {
+                        index: self.index,
+                        declared: self.total_bytes,
+                        delivered: self.next_offset,
+                    });
+                }
                 let total = self.total_bytes;
                 let index = self.index;
                 self.discard();
@@ -441,8 +484,22 @@ impl ChunkAssembler {
 
         if self.total_bytes > MAX_AUTO_ITEM_BYTES {
             self.skipping_large = true;
-            self.next_offset += delivered;
+            self.next_offset = self.next_offset.saturating_add(delivered);
+            if self.next_offset > self.total_bytes {
+                return Err(ReadError::ByteCountMismatch {
+                    index: self.index,
+                    declared: self.total_bytes,
+                    delivered: self.next_offset,
+                });
+            }
             if chunk.complete {
+                if self.next_offset != self.total_bytes {
+                    return Err(ReadError::ByteCountMismatch {
+                        index: self.index,
+                        declared: self.total_bytes,
+                        delivered: self.next_offset,
+                    });
+                }
                 let total = self.total_bytes;
                 let index = self.index;
                 self.discard();
@@ -455,7 +512,14 @@ impl ChunkAssembler {
         }
 
         self.buffer.push_str(&chunk.data);
-        self.next_offset += delivered;
+        self.next_offset = self.next_offset.saturating_add(delivered);
+        if self.next_offset > self.total_bytes {
+            return Err(ReadError::ByteCountMismatch {
+                index: self.index,
+                declared: self.total_bytes,
+                delivered: self.next_offset,
+            });
+        }
 
         if !chunk.complete {
             return Ok(Assembled::Pending);

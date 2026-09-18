@@ -108,7 +108,7 @@ fn page_json(items: Vec<Value>, complete: bool) -> Value {
         "total": total,
         "records": [],
         "records_truncated": false,
-        "history_revision": "unit-revision",
+        "history_revision": "0000000000000000000000000000000000000000000000000000000000000000",
         "captured_end": total as u64,
         "trailing_incomplete": false
     });

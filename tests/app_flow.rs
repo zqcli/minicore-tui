@@ -170,7 +170,7 @@ fn read(items: &[Value], next_cursor: Option<Value>, total: usize) -> Value {
         "total": total,
         "records": [],
         "records_truncated": false,
-        "history_revision": "fixture-revision",
+        "history_revision": "0000000000000000000000000000000000000000000000000000000000000000",
         "captured_end": total as u64,
         "trailing_incomplete": false,
     });
@@ -575,7 +575,6 @@ fn reload_stage_pending(app: &App) -> bool {
                 | RequestKind::ReloadSessions { .. }
                 | RequestKind::ReloadState { .. }
                 | RequestKind::ReloadPresentation { .. }
-                | RequestKind::ReloadHistory { .. }
         )
     })
 }
@@ -696,8 +695,16 @@ fn complete_public_reload_with_running_turn(
             }),
         ),
     );
-    let staged_history = driver.request("session.read");
-    driver.respond(staged_history, history(Vec::new(), None, 0));
+    if driver
+        .queue
+        .iter()
+        .any(|request| request.method == "session.presentation")
+    {
+        driver.respond_method(
+            "session.presentation",
+            json!({"session_id": "ses_1", "context": {"kind": "unknown"}}),
+        );
+    }
     assert_reload_staging_finished(driver);
 }
 
@@ -717,8 +724,16 @@ fn complete_public_reload_with_idle_view(driver: &mut Driver, reload: OutgoingRe
     driver.respond_method("session.list", json!({"sessions": [session("ses_1")]}));
     let staged_state = driver.request("session.state");
     driver.respond(staged_state, state("ses_1", "idle", Value::Null));
-    let staged_history = driver.request("session.read");
-    driver.respond(staged_history, history(Vec::new(), None, 0));
+    if driver
+        .queue
+        .iter()
+        .any(|request| request.method == "session.presentation")
+    {
+        driver.respond_method(
+            "session.presentation",
+            json!({"session_id": "ses_1", "context": {"kind": "unknown"}}),
+        );
+    }
     assert_reload_staging_finished(driver);
 }
 
@@ -3042,10 +3057,12 @@ fn late_reload_wait_cannot_overwrite_new_completed_turn() {
     let t2_usage = before.usage_projection.usage;
     let t2_loaded_count = before.transcript.loaded_count;
     assert_eq!(t2_last_result.turn.loop_id, "loop_t2");
+    assert_eq!(
+        t2_last_result.persistence,
+        minicore_tui::protocol::TurnPersistenceWire::Persisted
+    );
     assert_eq!(t2_last_result.usage.input_tokens, Some(22));
     assert_eq!(t2_last_result.usage.output_tokens, Some(7));
-    assert_eq!(t2_usage.input_tokens, Some(22));
-    assert_eq!(t2_usage.output_tokens, Some(7));
     assert_eq!(t2_loaded_count, 2);
     assert!(before.live.is_none());
     assert!(
@@ -3750,7 +3767,7 @@ fn regression_scenario_a_wait_internal_error_does_not_loop_history_or_clear_gap(
     let mut driver = Driver::new();
     bootstrap(&mut driver);
 
-    // Open session: sends session.open, session.state, and initial session.history
+    // Open session: sends session.open, session.state, and initial session.read
     driver.step(AppEvent::OpenSession {
         session_id: "ses_1".into(),
     });
@@ -3833,7 +3850,7 @@ fn regression_scenario_b_wait_persisted_post_wait_history_and_no_infinite_retry(
     let mut driver = Driver::new();
     bootstrap(&mut driver);
 
-    // Open session: requests session.open, session.state, and initial session.history
+    // Open session: requests session.open, session.state, and initial session.read
     driver.step(AppEvent::OpenSession {
         session_id: "ses_1".into(),
     });
@@ -3943,10 +3960,10 @@ fn regression_scenario_c_failed_wait_does_not_reconcile_and_idempotent() {
     let wait = driver.request("turn.wait");
     driver.respond(wait, wait_result("ses_1", "loop_C", "failed"));
 
-    // failed wait MUST NOT automatically reconcile this loop via session.history
+    // failed wait MUST NOT automatically reconcile this loop via session.read
     assert!(
         driver.queue.iter().all(|r| r.method != "session.read"),
-        "failed wait must not dispatch session.history to reconcile"
+        "failed wait must not dispatch session.read to reconcile"
     );
 
     let view = &driver.app.sessions.known["ses_1"];
@@ -3978,7 +3995,7 @@ fn regression_scenario_c_failed_wait_does_not_reconcile_and_idempotent() {
 
     assert!(
         driver.queue.iter().all(|r| r.method != "session.read"),
-        "duplicate wait must not dispatch session.history"
+        "duplicate wait must not dispatch session.read"
     );
     let view_after = &driver.app.sessions.known["ses_1"];
     assert!(view_after.is_blocked());
@@ -5292,11 +5309,13 @@ fn deleted_session_id_rejects_late_lifecycle_responses_and_events() {
         },
     );
     driver.respond(
-        minicore_tui::protocol::OutgoingRequest::session_history(
+        minicore_tui::protocol::OutgoingRequest::session_read(
             late_history_id,
             "ses_1",
-            Some(0),
-            Some(100),
+            Some(minicore_tui::protocol::ReadCursor::start()),
+            minicore_tui::protocol::READ_PAGE_LIMIT,
+            minicore_tui::protocol::READ_PAGE_MAX_BYTES,
+            None,
         ),
         history(Vec::new(), None, 0),
     );
@@ -5433,10 +5452,10 @@ fn close_success_before_wait_response_processes_result_without_extra_state_or_hi
     assert!(view.last_result.is_some());
     assert!(view.live.is_some());
 
-    // Crucial assertion: ZERO extra session.state or session.history requests emitted!
+    // Crucial assertion: ZERO extra session.state or session.read requests emitted!
     assert!(
         driver.queue.is_empty(),
-        "closed view must not emit extra session.state or session.history requests"
+        "closed view must not emit extra session.state or session.read requests"
     );
 }
 

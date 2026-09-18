@@ -1,13 +1,9 @@
-//! Stage-A "Preparing" baseline (Spec §8.2, §8.4).
+//! Preparing-state migration checks (Spec §8.2, §8.4).
 //!
-//! v0.2.8 has no visible preparation state and no operation identity for a
-//! deferred `turn.send`. These tests pin the current (defective) behavior so
-//! stage B's `session.context`/`session.compact.cancel`/`turn.result` work has
-//! a concrete before/after:
-//!
-//! * a submitted turn that has not received its TurnRef cannot be cancelled;
-//! * there is no way to observe an in-flight preparation;
-//! * a late `turn.send` response is treated as the only admission signal.
+//! B1 makes an active compaction/preparation state visible and blocks a new
+//! turn. Operation controls and `session.context` remain B2 work, so the two
+//! legacy checks below stay as explicit scope markers rather than being
+//! deleted.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -111,7 +107,7 @@ fn read_page(id: &str) -> Value {
         "total": 0,
         "records": [],
         "records_truncated": false,
-        "history_revision": "unit-revision",
+        "history_revision": "0000000000000000000000000000000000000000000000000000000000000000",
         "captured_end": 0,
         "trailing_incomplete": false
     })
@@ -184,16 +180,12 @@ fn wait_is_registered_once_and_turn_result_recovery_exists() {
     );
 }
 
-/// Defect: the old status surface has no Preparing/Compacting text.
+/// B1 exposes the preparation state in the busy status surface. The
+/// operation-specific controls remain deliberately out of scope for B2.
 #[test]
-fn baseline_status_text_has_no_preparing_or_compacting() {
-    for source in [
-        include_str!("../src/ui/status.rs"),
-        include_str!("../src/ui/footer.rs"),
-    ] {
-        assert!(
-            !source.contains("Preparing") && !source.contains("Compacting"),
-            "BASELINE: no Preparing/Compacting status text exists"
-        );
-    }
+fn preparing_status_is_visible() {
+    assert!(
+        include_str!("../src/ui/status.rs").contains("Preparing"),
+        "B1 must expose a Preparing status label"
+    );
 }

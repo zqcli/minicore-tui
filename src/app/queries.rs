@@ -19,7 +19,7 @@ use crate::protocol::RequestId;
 pub enum QueryKey {
     /// A `session.read` page chain for one session (main history and its
     /// read-back share the key so a second chain cannot start for one view).
-    History(String),
+    History { session_id: String, generation: u64 },
     /// An authoritative `turn.result` read-back, keyed by the exact turn.
     TurnResult { session_id: String, loop_id: String },
 }
@@ -118,7 +118,7 @@ impl QueryScope {
         match self {
             Self::All => true,
             Self::Session(session_id) => match key {
-                QueryKey::History(id) => id == session_id,
+                QueryKey::History { session_id: id, .. } => id == session_id,
                 QueryKey::TurnResult { session_id: id, .. } => id == session_id,
             },
         }
@@ -130,7 +130,10 @@ mod tests {
     use super::*;
 
     fn history(session: &str) -> QueryKey {
-        QueryKey::History(session.to_owned())
+        QueryKey::History {
+            session_id: session.to_owned(),
+            generation: 0,
+        }
     }
 
     #[test]
@@ -151,6 +154,23 @@ mod tests {
             Some((history("ses_1"), true))
         );
         assert_eq!(slots.on_query_finished(RequestId(1)), None);
+    }
+
+    #[test]
+    fn a_coalesced_read_does_not_emit_a_second_remote_request() {
+        let mut slots = QuerySlots::new();
+        let key = history("ses_1");
+        assert_eq!(
+            slots.request_query(key.clone(), RequestId(1)),
+            QueryAdmission::Admitted
+        );
+        assert_eq!(
+            slots.request_query(key, RequestId(2)),
+            QueryAdmission::Coalesced
+        );
+        assert_eq!(slots.in_flight_len(), 1);
+        assert_eq!(slots.on_query_finished(RequestId(2)), None);
+        assert_eq!(slots.in_flight_len(), 1);
     }
 
     #[test]
