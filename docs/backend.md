@@ -202,7 +202,7 @@ python3 scripts/generate_agent_v1_fixtures.py \
 cargo test --release --locked --test performance -- --ignored --nocapture
 ```
 
-Last stage-A result: `fmt` 0, `test` 563 passed / 0 failed / 23 ignored,
+Last stage-A result: `fmt` 0, `test` 566 passed / 0 failed / 23 ignored,
 `clippy -D warnings` 0. Raw logs are kept on the builder as
 `/root/minicore-tui-v03-refactor/final-{fmt,test,clippy}.log` and
 `perf-baseline.log`. The pinned Agent 0.5.0 E2E run fails at bootstrap with
