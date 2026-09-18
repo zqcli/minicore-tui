@@ -164,3 +164,47 @@ files on disk before exiting.
 
 `tests/agent_v1_fixtures.rs` decodes the fixtures and asserts the raw item
 envelope shape; it is the stage-B migration's starting contract.
+
+## Reproduction
+
+The exact source under test is the remote checkout at
+`/root/minicore-tui-v03-refactor/tui` on host `192.168.20.199`. Stage A did not
+build or test locally. The helper scripts below are session scratch under
+`/tmp` and are **not** part of the repository; they hold the host password and
+so are never committed.
+
+- Sync local -> remote (excludes `.git/`, `target/`, `snapshots/`,
+  `tests/fixtures/agent-v1/`, `*.log`): `/tmp/mctui-sync.sh`.
+- Pull regenerated fixtures remote -> local: `/tmp/mctui-pull-fixtures.sh`.
+- SSH helper used by both: `ssh-exec` skill at
+  `/Users/zzq/.pi/agent/skills/ssh-exec/scripts/ssh-exec.sh`.
+
+Fixed inputs:
+
+```text
+agent  binary  /root/minicore-tui-v03-refactor/agent-target/debug/minicore-agent  (0.5.0)
+agent  head    061743369459299e66be97bf97d2b27352a39914
+runtime head   6cd2bdbc634437dea925495c61c7eb0be10ba171
+tui    head    9d11ee69c4efa02ef1e5bff143662b48dc3194de (stage-A base)
+CARGO_TARGET_DIR=/root/minicore-tui-v03-refactor/tui-target
+```
+
+Verification commands:
+
+```bash
+cd /root/minicore-tui-v03-refactor/tui
+cargo fmt --all -- --check
+cargo test --locked --all-targets
+cargo clippy --locked --all-targets -- -D warnings
+python3 scripts/generate_agent_v1_fixtures.py \
+  --agent-bin /root/minicore-tui-v03-refactor/agent-target/debug/minicore-agent \
+  --out tests/fixtures/agent-v1
+cargo test --release --locked --test performance -- --ignored --nocapture
+```
+
+Last stage-A result: `fmt` 0, `test` 563 passed / 0 failed / 23 ignored,
+`clippy -D warnings` 0. Raw logs are kept on the builder as
+`/root/minicore-tui-v03-refactor/final-{fmt,test,clippy}.log` and
+`perf-baseline.log`. The pinned Agent 0.5.0 E2E run fails at bootstrap with
+`unsupported agent version '0.5.0'`; that is `REF-01` and is expected to stay
+red until stage B.
