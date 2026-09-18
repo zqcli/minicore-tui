@@ -2,7 +2,7 @@
  "fixture": "workspace-status-unavailable",
  "method": "workspace.status",
  "request": {
-  "session_id": "ses_99b76a65c58701d05b1d52ed15588760"
+  "session_id": "ses_7b7dcafa3cbf80dfcf611d5d9b8e09e5"
  },
  "result": {
   "branch": null,
@@ -12,7 +12,7 @@
   "detached": false,
   "entries": [],
   "head_oid": null,
-  "observed_at_unix_ms": 1789712652021,
+  "observed_at_unix_ms": 1789720709584,
   "repo_available": false,
   "skipped_paths": 0,
   "staged": 0,

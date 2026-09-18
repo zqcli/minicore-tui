@@ -2,12 +2,12 @@
  "fixture": "session-state-idle",
  "method": "session.state",
  "request": {
-  "session_id": "ses_ad0fee94fecc678df6c21163a02f5bb9"
+  "session_id": "ses_7880a3746e1bf8e66ff3eb8cc88fbc24"
  },
  "result": {
   "active_loop": null,
   "block_reason": null,
-  "session_id": "ses_ad0fee94fecc678df6c21163a02f5bb9",
+  "session_id": "ses_7880a3746e1bf8e66ff3eb8cc88fbc24",
   "status": "idle"
  }
 }

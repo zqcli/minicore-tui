@@ -2,10 +2,10 @@
  "fixture": "tool-read-awaiting-policy",
  "method": "tool.read",
  "request": {
-  "loop_id": "lup_89d2b4cf20f1b8e927a3f71a354c554e",
+  "loop_id": "lup_47782afd9db0cf5f8905b6c94845fe37",
   "max_bytes": 262144,
   "request_index": 0,
-  "session_id": "ses_063b4ab81ae07c5414723d1208e266a4",
+  "session_id": "ses_a124086489987dc66c3207ddbd43b35e",
   "tool_call_id": "call_fixture_write"
  },
  "result": {
@@ -20,9 +20,9 @@
    "result_truncated": false,
    "state": "awaiting_policy",
    "tool_ref": {
-    "loop_id": "lup_89d2b4cf20f1b8e927a3f71a354c554e",
+    "loop_id": "lup_47782afd9db0cf5f8905b6c94845fe37",
     "request_index": 0,
-    "session_id": "ses_063b4ab81ae07c5414723d1208e266a4",
+    "session_id": "ses_a124086489987dc66c3207ddbd43b35e",
     "tool_call_id": "call_fixture_write"
    }
   },
@@ -40,9 +40,9 @@
    },
    "subject_truncated": false,
    "tool_ref": {
-    "loop_id": "lup_89d2b4cf20f1b8e927a3f71a354c554e",
+    "loop_id": "lup_47782afd9db0cf5f8905b6c94845fe37",
     "request_index": 0,
-    "session_id": "ses_063b4ab81ae07c5414723d1208e266a4",
+    "session_id": "ses_a124086489987dc66c3207ddbd43b35e",
     "tool_call_id": "call_fixture_write"
    }
   }

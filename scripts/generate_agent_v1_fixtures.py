@@ -167,6 +167,10 @@ class Agent:
         )
         self._next_id = 0
         self._captured: dict[str, dict[str, Any]] = {}
+        # Every `agent.event` notification seen while awaiting a response, in
+        # order. Kept so a captured event's real wire shape can be asserted
+        # instead of reconstructed by hand.
+        self.events: list[dict[str, Any]] = []
 
     def send(self, method: str, params: dict[str, Any] | None = None) -> int:
         self._next_id += 1
@@ -187,6 +191,9 @@ class Agent:
             if not line:
                 raise RuntimeError("agent stdout closed early")
             frame = json.loads(line)
+            if frame.get("method") == "agent.event":
+                self.events.append(frame.get("params"))
+                continue
             if frame.get("id") == rid:
                 return frame
         raise TimeoutError(f"no response for request {rid}")
@@ -295,10 +302,13 @@ def write_fixture(out: Path, entry: dict[str, Any], root: Path) -> None:
     (out / f"{name}.json").write_text(payload + "\n", encoding="utf-8")
 
 
-def git_head(path: Path) -> str:
+def git_head(path: Path, fallback: str) -> str:
     result = subprocess.run(["git", "-C", str(path), "rev-parse", "HEAD"],
                             capture_output=True, text=True)
-    return result.stdout.strip() or "unknown"
+    head = result.stdout.strip()
+    # A source snapshot without `.git` still has to name the pinned revision;
+    # never record "unknown" as if it were a real head.
+    return head if re.fullmatch(r"[0-9a-f]{40}", head or "") else fallback
 
 
 # ---------------------------------------------------------------------------
@@ -506,6 +516,24 @@ def capture_tool_facts(workdir: Path, agent_bin: str, out: Path) -> dict[str, di
     scenario.mock.enqueue(text_sse("command finished"))
     gate.set()
     agent.call("turn.wait", {"session_id": sid, "loop_id": turn["loop_id"]})
+    # The live tool facts this TUI now decodes. Only the event envelopes are
+    # kept (no input/output bodies): the real shapes, not a reconstruction.
+    tool_events = [
+        e for e in agent.events
+        if isinstance(e, dict)
+        and e.get("type") in {"tool_invocation", "tool_execution", "tool_process"}
+    ]
+    by_type: dict[str, dict[str, Any]] = {}
+    for event in tool_events:
+        by_type.setdefault(event["type"], event)
+    for name in ["tool_invocation", "tool_execution", "tool_process"]:
+        if name in by_type:
+            captured[f"event-{name.replace('_', '-')}"] = {
+                "fixture": f"event-{name.replace('_', '-')}",
+                "method": "agent.event",
+                "event": name,
+                "notification": by_type[name],
+            }
     time.sleep(0.3)
     captured["tool-read-terminal"] = {
         "fixture": "tool-read-terminal", "method": "tool.read",
@@ -965,8 +993,8 @@ def main() -> int:
             captured[name] = entry
             write_fixture(out, entry, workdir)
 
-    agent_head = git_head(args.agent_source) if args.agent_source else AGENT_HEAD
-    runtime_head = git_head(args.runtime_source) if args.runtime_source else RUNTIME_HEAD
+    agent_head = git_head(args.agent_source, AGENT_HEAD) if args.agent_source else AGENT_HEAD
+    runtime_head = git_head(args.runtime_source, RUNTIME_HEAD) if args.runtime_source else RUNTIME_HEAD
 
     # Source-deterministic classes the real wire cannot be driven to emit.
     # Every one derives from a captured fixture and says so in its provenance.

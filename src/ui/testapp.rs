@@ -81,14 +81,41 @@ fn state_json(session_id: &str, status: &str) -> Value {
     })
 }
 
+/// Encodes Runtime item envelopes as a one-chunk-per-item Protocol v1
+/// `session.read` page.
 fn page_json(items: Vec<Value>, complete: bool) -> Value {
-    let next_offset = if complete { None } else { Some(items.len()) };
     let total = items.len();
-    json!({
-        "items": items,
-        "next_offset": next_offset,
-        "total": total
-    })
+    let chunks: Vec<Value> = items
+        .iter()
+        .map(|envelope| {
+            let index = envelope.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let item = envelope.get("item").cloned().unwrap_or(Value::Null);
+            let data = serde_json::to_string(&json!({"item": item})).unwrap();
+            let total_bytes = data.len();
+            json!({
+                "index": index,
+                "offset": 0,
+                "total_bytes": total_bytes,
+                "encoding": "utf8_json",
+                "data": data,
+                "complete": true
+            })
+        })
+        .collect();
+    let mut page = json!({
+        "session": session_info("ses_1", None, "high"),
+        "items": chunks,
+        "total": total,
+        "records": [],
+        "records_truncated": false,
+        "history_revision": "unit-revision",
+        "captured_end": total as u64,
+        "trailing_incomplete": false
+    });
+    if !complete {
+        page["next_cursor"] = json!({"item": total, "offset": 0});
+    }
+    page
 }
 
 pub(crate) fn user_entry(index: usize, loop_id: &str, text: &str) -> Value {
@@ -99,7 +126,7 @@ pub(crate) fn user_entry(index: usize, loop_id: &str, text: &str) -> Value {
             "data": {
                 "loop_id": loop_id,
                 "kind": "prompt",
-                "text": text
+                "input": {"text": text}
             }
         }
     })
@@ -112,6 +139,23 @@ fn assistant_entry_with(
     reasoning: Option<&str>,
     tool_calls: Value,
 ) -> Value {
+    let mut content: Vec<Value> = Vec::new();
+    if let Some(reasoning) = reasoning.filter(|reasoning| !reasoning.is_empty()) {
+        content.push(json!({"type": "reasoning", "data": {"text": reasoning}}));
+    }
+    if !text.is_empty() {
+        content.push(json!({"type": "text", "data": text}));
+    }
+    if let Some(calls) = tool_calls.as_array() {
+        for call in calls {
+            content.push(json!({"type": "tool_call", "data": {
+                "tool_call_id": call.get("tool_call_id").cloned().unwrap_or(json!("")),
+                "name": call.get("name").cloned().unwrap_or(json!("")),
+                "arguments": {},
+                "call_index": call.get("call_index").cloned().unwrap_or(json!(0)),
+            }}));
+        }
+    }
     json!({
         "index": index,
         "item": {
@@ -120,10 +164,8 @@ fn assistant_entry_with(
                 "loop_id": loop_id,
                 "request_index": 0,
                 "model": "deep",
-                "reasoning_level": "high",
-                "text": text,
-                "reasoning": reasoning.unwrap_or(""),
-                "tool_calls": tool_calls,
+                "reasoning": "high",
+                "content": content,
                 "usage": {},
                 "finish_reason": "stop"
             }
@@ -146,10 +188,10 @@ fn tool_result_entry(
             "data": {
                 "loop_id": loop_id,
                 "request_index": 0,
-                "tool_call_id": call_id,
+                "call_id": call_id,
                 "tool_name": name,
                 "outcome": outcome,
-                "content": content
+                "output": {"content": content}
             }
         }
     })
@@ -175,7 +217,11 @@ pub(crate) fn open_with(
     let requests = take_requests(app.update(AppEvent::Bootstrap));
     for request in &requests {
         let result = match request.method {
-            "agent.ping" => json!({"version": "0.3.0"}),
+            "agent.ping" => json!({
+                "version": "0.5.0",
+                "protocol_version": 1,
+                "capabilities": crate::protocol::REQUIRED_CAPABILITIES,
+            }),
             "model.list" => json!({"models": []}),
             "profile.list" => json!({"profiles": []}),
             "session.list" => json!({"sessions": []}),
@@ -197,7 +243,7 @@ pub(crate) fn open_with(
         .unwrap();
     let history = requests
         .iter()
-        .find(|r| r.method == "session.history")
+        .find(|r| r.method == "session.read")
         .unwrap();
     let presentation = requests
         .iter()
@@ -374,7 +420,11 @@ pub fn ready_catalog(
     let requests = take_requests(app.update(AppEvent::Bootstrap));
     for request in &requests {
         let result = match request.method {
-            "agent.ping" => json!({"version": "0.3.0"}),
+            "agent.ping" => json!({
+                "version": "0.5.0",
+                "protocol_version": 1,
+                "capabilities": crate::protocol::REQUIRED_CAPABILITIES,
+            }),
             "model.list" => json!({"models": models.clone()}),
             "profile.list" => json!({"profiles": profiles.clone()}),
             "session.list" => json!({"sessions": sessions.clone()}),
@@ -430,7 +480,11 @@ pub fn luna_session(theme: ThemeKind) -> App {
     let requests = take_requests(app.update(AppEvent::Bootstrap));
     for request in &requests {
         let result = match request.method {
-            "agent.ping" => json!({"version": "0.3.0"}),
+            "agent.ping" => json!({
+                "version": "0.5.0",
+                "protocol_version": 1,
+                "capabilities": crate::protocol::REQUIRED_CAPABILITIES,
+            }),
             "model.list" => json!({"models": models.clone()}),
             "profile.list" => json!({"profiles": []}),
             "session.list" => json!({"sessions": []}),
@@ -459,7 +513,7 @@ pub fn luna_session(theme: ThemeKind) -> App {
         .unwrap();
     let history = requests
         .iter()
-        .find(|r| r.method == "session.history")
+        .find(|r| r.method == "session.read")
         .unwrap();
     if let Some(presentation) = requests.iter().find(|r| r.method == "session.presentation") {
         take_requests(respond(
@@ -494,7 +548,7 @@ pub fn open_session(app: &mut App, session_id: &str) {
         .unwrap();
     let history = requests
         .iter()
-        .find(|r| r.method == "session.history")
+        .find(|r| r.method == "session.read")
         .unwrap();
     if let Some(presentation) = requests.iter().find(|r| r.method == "session.presentation") {
         take_requests(respond(

@@ -7,7 +7,7 @@
   "directory": "",
   "limit": 1,
   "recursive": true,
-  "session_id": "ses_c40e87e3bb457a2f18feec830f5694df"
+  "session_id": "ses_a5a252b997e9b371ecc0f33609be14f7"
  },
  "result": {
   "consistency": "live",
@@ -21,9 +21,9 @@
   ],
   "next_cursor": {
    "entry": 2,
-   "scope": "f5059d31c98a517f"
+   "scope": "770c29138b20eb3a"
   },
-  "observed_at_unix_ms": 1789712651931,
+  "observed_at_unix_ms": 1789720709493,
   "scan_complete": false,
   "skipped_count": 0,
   "stopped_by": "deadline",

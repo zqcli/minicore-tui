@@ -24,7 +24,7 @@ pub fn visible(app: &App) -> bool {
                 && state.block_reason.is_none()
         }) && view.transcript.complete
             && !view.loading
-            && view.transcript.items.is_empty()
+            && view.transcript.window.is_empty()
             && view.transcript.blocks.is_empty()
             && view.live.is_none()
             && !view.event_gap

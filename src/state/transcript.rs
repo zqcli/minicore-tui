@@ -86,16 +86,18 @@ pub struct SummaryBlock {
 #[derive(Debug, Default)]
 pub struct TranscriptState {
     pub blocks: Vec<TranscriptBlock>,
-    /// Raw indexed history items are the pagination authority. Render blocks
+    /// The authoritative pinned window of decoded Runtime items. Render blocks
     /// may expand one item into several cards, so their length is unrelated.
-    pub items: Vec<crate::protocol::IndexedHistoryItemWire>,
-    /// Number of contiguous durable items loaded so far. Used as `offset` in pagination.
+    pub window: crate::app::history::HistoryWindow,
+    /// The backend-provided cursor for the next read page, if the window is
+    /// not yet complete (spec §6.3). Never computed from local item count.
+    pub next_cursor: Option<crate::protocol::ReadCursor>,
+    /// Number of contiguous durable items loaded so far. Mirrors
+    /// `window.confirmed_prefix()` for the display bridge.
     pub loaded_count: usize,
-    /// The next page's `offset` cursor while pagination is incomplete.
-    pub next_offset: Option<usize>,
-    /// Total items count reported by the last `session.history` page.
+    /// Total readable items in the pinned prefix (mirrors `window.total()`).
     pub total: usize,
-    /// The last fetched page reported `complete` or loaded all items.
+    /// True when the whole prefix is loaded and no page remains.
     pub complete: bool,
     /// Durable content/display generation: history, folds and tool metadata
     /// invalidate it; live deltas and viewport-only events do not.
@@ -104,6 +106,13 @@ pub struct TranscriptState {
 }
 
 impl TranscriptState {
+    /// Refreshes the display-bridge counters from the authoritative window.
+    pub fn sync_from_window(&mut self) {
+        self.loaded_count = self.window.confirmed_prefix();
+        self.total = self.window.total();
+        self.complete = self.next_cursor.is_none() && self.window.complete();
+    }
+
     /// Increments the render generation used by prepared conversation
     /// snapshots.
     pub fn invalidate(&mut self) {
@@ -114,9 +123,9 @@ impl TranscriptState {
     /// Clears blocks and invalidates prepared conversation metadata.
     pub fn clear_blocks(&mut self) {
         self.blocks.clear();
-        self.items.clear();
+        self.window.reset();
+        self.next_cursor = None;
         self.loaded_count = 0;
-        self.next_offset = None;
         self.total = 0;
         self.complete = false;
         self.invalidate();

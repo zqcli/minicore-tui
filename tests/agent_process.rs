@@ -198,7 +198,11 @@ fn serve(mode: &str) -> ExitCode {
                 if mode == "crash" {
                     return ExitCode::from(1);
                 }
-                let result = json!({"version": "0.3.0"});
+                let result = json!({
+                    "version": "0.5.0",
+                    "protocol_version": 1,
+                    "capabilities": minicore_tui::protocol::REQUIRED_CAPABILITIES,
+                });
                 if mode == "out_of_order" {
                     buffered.push((id, result));
                     if buffered.len() == 2 {

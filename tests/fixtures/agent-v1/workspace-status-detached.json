@@ -2,7 +2,7 @@
  "fixture": "workspace-status-detached",
  "method": "workspace.status",
  "request": {
-  "session_id": "ses_5fbdb10f2f1d051141ba50991044d5d1"
+  "session_id": "ses_d0882de7c7212c70fbbebbd3fe9d7ad6"
  },
  "result": {
   "branch": null,
@@ -11,8 +11,8 @@
   "consistency": "live",
   "detached": true,
   "entries": [],
-  "head_oid": "6c8fa9511cb5bb19cf8dba47ae5eb7f4b13366f1",
-  "observed_at_unix_ms": 1789712652007,
+  "head_oid": "6263cc42656e3e89c76ee8383c270bbda5bab406",
+  "observed_at_unix_ms": 1789720709570,
   "repo_available": true,
   "skipped_paths": 0,
   "staged": 0,

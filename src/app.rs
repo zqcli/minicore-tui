@@ -15,12 +15,12 @@ use crate::command::{AppCommand, CommandIssue, LocalCommand, is_slash_command, p
 use crate::event::{AppEvent, RpcEvent};
 use crate::keymap::{self, Action, EditorCursor};
 use crate::protocol::{
-    AgentEventWire, AssistantDisplayPartWire, DEFAULT_HISTORY_LIMIT, EventMetaWire,
-    HistoryItemWire, HistoryPageWire, IncomingFrame, IndexedHistoryItemWire, METHOD_LIST_MODELS,
-    METHOD_LIST_PROFILES, METHOD_LIST_SESSIONS, ModelInfo, OutgoingRequest, OutputChannelWire,
-    ProfileInfo, Reasoning, RequestId, RpcNotification, RpcResponse, RpcResponseError, SessionInfo,
-    SessionPresentationWire, SessionStateWire, SessionStatusWire, ToolDisplayWire, ToolOutcomeWire,
-    ToolProgressWire, TurnPersistenceWire, TurnRef, UserMessageKindWire, validate_backend,
+    AgentEventWire, EventMetaWire, IncomingFrame, METHOD_LIST_MODELS, METHOD_LIST_PROFILES,
+    METHOD_LIST_SESSIONS, ModelInfo, OutgoingRequest, OutputChannelWire, ProfileInfo,
+    READ_PAGE_LIMIT, READ_PAGE_MAX_BYTES, Reasoning, RequestId, RpcNotification, RpcResponse,
+    RpcResponseError, SessionInfo, SessionPresentationWire, SessionStateWire, SessionStatusWire,
+    ToolDisplayWire, ToolOutcomeWire, ToolProgressWire, TurnPersistenceWire, TurnRef,
+    UserMessageKindWire, validate_backend,
 };
 use crate::rpc::RpcError;
 use crate::state::catalog::CatalogState;
@@ -44,6 +44,7 @@ use crate::state::view::{
 };
 use crate::theme::ThemeKind;
 
+pub mod history;
 pub mod ui_actions;
 pub use self::ui_actions::SlashCompletionState;
 use self::ui_actions::{EditorSelection, SelectionDrag};
@@ -217,15 +218,11 @@ pub enum RequestKind {
     },
     History {
         session_id: SessionId,
-        offset: usize,
-        limit: usize,
-        gap_revision: Option<u64>,
+        read: ReadRequest,
     },
     ReloadHistory {
         session_id: SessionId,
-        offset: usize,
-        limit: usize,
-        gap_revision: u64,
+        read: ReadRequest,
         generation: u64,
     },
     SendTurn {
@@ -269,6 +266,21 @@ pub enum RequestKind {
 enum WaitOrigin {
     Normal,
     Reload,
+}
+
+/// One `session.read` chain step (spec §6.3). `window_start` drops a reused
+/// first-page chunk that falls below the requested window, and `replacement`
+/// marks a re-pin that replaces the view instead of appending.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadRequest {
+    pub cursor: crate::protocol::ReadCursor,
+    pub pin: Option<crate::protocol::SnapshotPin>,
+    pub window_start: usize,
+    pub replacement: bool,
+    pub reconcile: bool,
+    /// The local gap revision when the request was issued; a response cannot
+    /// clear a gap observed after the request left.
+    pub gap_revision: u64,
 }
 
 /// CLI preferences injected at construction (spec 6.1). They only seed the
@@ -410,15 +422,19 @@ enum BootstrapPart {
 
 /// What a completed history chain should do next.
 enum NextChain {
-    Page { offset: usize },
-    Reconcile { offset: usize },
+    /// The window is incomplete; request the next page (the cursor comes from
+    /// the backend, not a local offset).
+    Page,
+    /// The gap fence advanced while a page was in flight; re-read the tail
+    /// under the newer revision before releasing it.
+    Reconcile,
     LoopNotContained(String),
     Done,
 }
 
 struct ReloadHistoryStage {
-    items: Vec<IndexedHistoryItemWire>,
-    total: Option<usize>,
+    window: crate::app::history::HistoryWindow,
+    next_cursor: Option<crate::protocol::ReadCursor>,
     gap_revision: u64,
 }
 
@@ -3724,8 +3740,7 @@ impl App {
             view.reconcile_inflight = reconciling_gap;
             view.loading = true;
         }
-        let offset = 0;
-        vec![self.request_history(&active, offset, DEFAULT_HISTORY_LIMIT)]
+        vec![self.request_history(&active)]
     }
 
     fn field_char(&mut self, c: char) -> Vec<AppCommand> {
@@ -4047,34 +4062,66 @@ impl App {
         })
     }
 
-    /// Every history request captures the current local gap revision. Normal
-    /// initial loads carry revision zero too, so an in-flight response cannot
-    /// clear a gap that was observed after the request was issued.
-    fn request_history(
-        &mut self,
-        session_id: &SessionId,
-        offset: usize,
-        limit: usize,
-    ) -> AppCommand {
+    /// Issues the next `session.read` page for one session. The cursor is
+    /// always the request's own, never recomputed from local item count
+    /// (spec §6.3).
+    fn request_read(&mut self, session_id: &SessionId, read: ReadRequest) -> AppCommand {
+        let cursor = read.cursor;
+        let pin = read.pin.clone();
+        let build = move |id: RequestId| {
+            OutgoingRequest::session_read(
+                id,
+                session_id,
+                Some(cursor),
+                READ_PAGE_LIMIT,
+                READ_PAGE_MAX_BYTES,
+                pin.as_ref(),
+            )
+        };
         if self.reload.is_some() {
-            return self.request(RequestKind::StaleRead, |id| {
-                OutgoingRequest::session_history(id, session_id, Some(offset), Some(limit))
-            });
+            return self.request(RequestKind::StaleRead, build);
         }
+        let kind = RequestKind::History {
+            session_id: session_id.clone(),
+            read,
+        };
+        self.request(kind, build)
+    }
+
+    /// The next read for a chain that is either starting fresh or continuing
+    /// from the backend's own cursor. A fresh chain never carries the old window
+    /// pin: after a new turn the revision has moved and §6.4 requires a new pin.
+    fn request_history(&mut self, session_id: &SessionId) -> AppCommand {
+        let (cursor, pin, window_start, replacement, reconcile) = self
+            .sessions
+            .known
+            .get(session_id)
+            .map(|view| {
+                let next = view.transcript.next_cursor;
+                (
+                    next.unwrap_or(crate::protocol::ReadCursor::start()),
+                    next.and(view.transcript.window.pin().cloned()),
+                    view.transcript.window.confirmed_prefix(),
+                    view.transcript.window.is_empty(),
+                    view.event_gap,
+                )
+            })
+            .unwrap_or((crate::protocol::ReadCursor::start(), None, 0, true, false));
         let gap_revision = self
             .sessions
             .known
             .get(session_id)
-            .expect("history request requires a known session")
-            .gap_revision;
-        self.request(
-            RequestKind::History {
-                session_id: session_id.clone(),
-                offset,
-                limit,
-                gap_revision: Some(gap_revision),
+            .map_or(0, |view| view.gap_revision);
+        self.request_read(
+            session_id,
+            ReadRequest {
+                cursor,
+                pin,
+                window_start,
+                replacement,
+                reconcile,
+                gap_revision,
             },
-            |id| OutgoingRequest::session_history(id, session_id, Some(offset), Some(limit)),
         )
     }
 
@@ -4129,17 +4176,11 @@ impl App {
             }
         };
         if fetch {
-            let offset = self
-                .sessions
-                .known
-                .get(session_id)
-                .map(|view| view.transcript.loaded_count)
-                .unwrap_or(0);
             if let Some(view) = self.sessions.known.get_mut(session_id) {
                 view.loading = true;
                 view.reconcile_inflight = reconciling_gap;
             }
-            commands.push(self.request_history(session_id, offset, DEFAULT_HISTORY_LIMIT));
+            commands.push(self.request_history(session_id));
         }
         commands
     }
@@ -4752,25 +4793,32 @@ impl App {
                     reload.state = Some(state);
                     reload.history_complete = false;
                     reload.history = Some(ReloadHistoryStage {
-                        items: Vec::new(),
-                        total: None,
+                        window: crate::app::history::HistoryWindow::default(),
+                        next_cursor: None,
                         gap_revision,
                     });
                 }
                 vec![self.request(
                     RequestKind::ReloadHistory {
                         session_id: session_id.clone(),
-                        offset: 0,
-                        limit: DEFAULT_HISTORY_LIMIT,
-                        gap_revision,
+                        read: ReadRequest {
+                            cursor: crate::protocol::ReadCursor::start(),
+                            pin: None,
+                            window_start: 0,
+                            replacement: true,
+                            reconcile: false,
+                            gap_revision,
+                        },
                         generation,
                     },
                     |id| {
-                        OutgoingRequest::session_history(
+                        OutgoingRequest::session_read(
                             id,
                             &session_id,
-                            Some(0),
-                            Some(DEFAULT_HISTORY_LIMIT),
+                            Some(crate::protocol::ReadCursor::start()),
+                            READ_PAGE_LIMIT,
+                            READ_PAGE_MAX_BYTES,
+                            None,
                         )
                     },
                 )]
@@ -4822,9 +4870,7 @@ impl App {
     fn on_reload_history_response(
         &mut self,
         session_id: SessionId,
-        offset: usize,
-        limit: usize,
-        gap_revision: u64,
+        read: &ReadRequest,
         generation: u64,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
@@ -4835,7 +4881,7 @@ impl App {
         if !valid {
             return Vec::new();
         }
-        let page = match response.parse_history() {
+        let page = match response.parse_session_read() {
             Ok(page) => page,
             Err(error) => {
                 return self.reload_failed(
@@ -4845,51 +4891,59 @@ impl App {
             }
         };
         let mut failure = None;
-        let mut next_offset = None;
+        let mut next = None;
         {
             let Some(reload) = self.reload.as_mut() else {
                 return Vec::new();
             };
             if let Some(stage) = reload.history.as_mut() {
-                let expected_offset = stage.items.len();
-                if stage.gap_revision != gap_revision || expected_offset != offset {
-                    failure = Some(format!(
-                        "configuration reload history cursor changed at offset {offset}"
-                    ));
-                } else if page.items.len() > limit {
-                    failure = Some(format!(
-                        "configuration reload history page exceeded its limit at offset {offset}"
-                    ));
-                } else if stage.total.is_some_and(|total| total != page.total) {
-                    failure =
-                        Some("configuration reload history total changed mid-read".to_owned());
-                } else if !page.items.iter().enumerate().all(|(index, item)| {
-                    offset
-                        .checked_add(index)
-                        .is_some_and(|expected| expected == item.index)
-                }) {
-                    failure = Some(format!(
-                        "configuration reload history is not contiguous at offset {offset}"
-                    ));
-                } else if let Some(new_len) = offset.checked_add(page.items.len()) {
-                    let next_valid = match page.next_offset {
-                        Some(next) => next > offset && next == new_len && next <= page.total,
-                        None => new_len == page.total,
-                    };
-                    if !next_valid {
-                        failure = Some(format!(
-                            "configuration reload history did not advance from offset {offset}"
-                        ));
-                    } else {
-                        stage.total = Some(page.total);
-                        stage.items.extend(page.items.iter().cloned());
-                        next_offset = page.next_offset;
-                        if next_offset.is_none() {
-                            reload.history_complete = true;
+                if stage.gap_revision != read.gap_revision {
+                    failure = Some("configuration reload history gap moved mid-read".to_owned());
+                } else if let Some(existing) = stage.window.pin() {
+                    if existing.captured_end != page.captured_end
+                        || existing.history_revision != page.history_revision
+                    {
+                        failure = Some(
+                            "configuration reload history revision changed mid-read".to_owned(),
+                        );
+                    } else if page.total < existing.total {
+                        failure = Some(
+                            "configuration reload history total regressed mid-read".to_owned(),
+                        );
+                    }
+                }
+                if failure.is_none() {
+                    let mut page_state = crate::app::history::ReadPage::new(
+                        read.cursor,
+                        read.pin.clone(),
+                        read.window_start,
+                    );
+                    match crate::app::history::apply_page(&mut stage.window, &mut page_state, &page)
+                    {
+                        Ok(crate::app::history::ReadApply::Stale(error)) => {
+                            failure = Some(format!(
+                                "configuration reload history became stale: {error}"
+                            ));
+                        }
+                        Ok(crate::app::history::ReadApply::Ok(applied)) => {
+                            if let Some(error) = applied.error {
+                                failure = Some(format!(
+                                    "configuration reload history is not decodable: {error}"
+                                ));
+                            } else {
+                                stage.next_cursor = applied.next;
+                                if applied.next.is_none() {
+                                    reload.history_complete = true;
+                                }
+                                next = applied.next;
+                            }
+                        }
+                        Err(error) => {
+                            failure = Some(format!(
+                                "configuration reload history is not decodable: {error}"
+                            ));
                         }
                     }
-                } else {
-                    failure = Some("configuration reload history offset overflowed".to_owned());
                 }
             } else {
                 failure =
@@ -4899,21 +4953,33 @@ impl App {
         if let Some(failure) = failure {
             return self.reload_failed(generation, failure);
         }
-        if let Some(next_offset) = next_offset {
+        if next.is_some() {
+            let stage_next = self
+                .reload
+                .as_ref()
+                .and_then(|reload| reload.history.as_ref())
+                .and_then(|stage| stage.next_cursor);
             return vec![self.request(
                 RequestKind::ReloadHistory {
                     session_id: session_id.clone(),
-                    offset: next_offset,
-                    limit,
-                    gap_revision,
+                    read: ReadRequest {
+                        cursor: stage_next.unwrap_or(crate::protocol::ReadCursor::start()),
+                        pin: None,
+                        window_start: 0,
+                        replacement: false,
+                        reconcile: false,
+                        gap_revision: read.gap_revision,
+                    },
                     generation,
                 },
                 |id| {
-                    OutgoingRequest::session_history(
+                    OutgoingRequest::session_read(
                         id,
                         &session_id,
-                        Some(next_offset),
-                        Some(limit),
+                        stage_next,
+                        READ_PAGE_LIMIT,
+                        READ_PAGE_MAX_BYTES,
+                        None,
                     )
                 },
             )];
@@ -5098,7 +5164,7 @@ impl App {
                         && state.active_loop.is_none()
                         && state.block_reason.is_none()
                 });
-                let install_history = reload
+                let mut install_history = reload
                     .history
                     .as_ref()
                     .filter(|history| {
@@ -5109,7 +5175,7 @@ impl App {
                                 .get(&session_id)
                                 .is_some_and(|view| view.gap_revision == history.gap_revision)
                     })
-                    .map(|history| history.items.clone());
+                    .map(|history| history.window.clone());
                 self.install_reload_state(&session_id, &state);
                 if let Some(view) = self.sessions.known.get_mut(&session_id) {
                     // The reload read is staged evidence, not the normal
@@ -5125,7 +5191,7 @@ impl App {
                         view.presentation = Some(presentation);
                         view.presentation_pending = false;
                         view.presentation_refresh_pending = false;
-                        if let Some(history) = install_history.as_deref() {
+                        if let Some(history) = install_history.take() {
                             Self::install_reload_history(view, history);
                             // A staged reload replaces the authority fence only
                             // after both state and complete History are aligned.
@@ -5201,17 +5267,16 @@ impl App {
                 && view.unsaved_loop.is_none()
         });
         if fetch_history {
-            let (offset, reconcile_gap) = self
+            let reconcile_gap = self
                 .sessions
                 .known
                 .get(session_id)
-                .map(|view| (view.transcript.loaded_count, view.event_gap))
-                .unwrap_or((0, false));
+                .is_some_and(|view| view.event_gap);
             if let Some(view) = self.sessions.known.get_mut(session_id) {
                 view.loading = true;
                 view.reconcile_inflight = reconcile_gap;
             }
-            commands.push(self.request_history(session_id, offset, DEFAULT_HISTORY_LIMIT));
+            commands.push(self.request_history(session_id));
         }
         commands
     }
@@ -5223,7 +5288,7 @@ impl App {
         {
             return Vec::new();
         }
-        let (offset, state_needed) = {
+        let state_needed = {
             let Some(view) = self.sessions.known.get(session_id) else {
                 return Vec::new();
             };
@@ -5241,10 +5306,7 @@ impl App {
             {
                 return Vec::new();
             }
-            (
-                view.transcript.loaded_count,
-                view.latest_state_query.is_none(),
-            )
+            view.latest_state_query.is_none()
         };
         if let Some(view) = self.sessions.known.get_mut(session_id) {
             view.needs_post_wait_history = false;
@@ -5255,7 +5317,7 @@ impl App {
         if state_needed {
             commands.push(self.request_session_state(session_id));
         }
-        commands.push(self.request_history(session_id, offset, 20));
+        commands.push(self.request_history(session_id));
         commands
     }
 
@@ -5419,7 +5481,7 @@ impl App {
         }
     }
 
-    fn install_reload_history(view: &mut SessionView, items: &[IndexedHistoryItemWire]) {
+    fn install_reload_history(view: &mut SessionView, window: crate::app::history::HistoryWindow) {
         let pending_users: Vec<UserBlock> = view
             .transcript
             .blocks
@@ -5430,16 +5492,25 @@ impl App {
             })
             .collect();
         view.transcript.blocks.clear();
-        view.transcript.items.clear();
-        view.transcript.loaded_count = 0;
-        view.transcript.next_offset = None;
-        view.transcript.total = 0;
-        view.transcript.complete = false;
         view.transcript.render_cache = None;
         view.user_timestamps.clear();
         view.tool_presentations.clear();
-        merge_history_items(view, items);
-
+        view.transcript.window = window;
+        view.transcript.next_cursor = None;
+        // Project every decoded item in index order so tool results pair with
+        // the preceding assistant call.
+        let indexes: Vec<usize> = view
+            .transcript
+            .window
+            .items()
+            .map(|(index, _)| *index)
+            .collect();
+        for index in indexes {
+            let item = view.transcript.window.item(index).cloned();
+            if let Some(item) = item {
+                install_history_item(view, index, &item);
+            }
+        }
         for pending in pending_users {
             let matched = view.transcript.blocks.iter().any(|block| {
                 matches!(
@@ -5454,10 +5525,6 @@ impl App {
                 view.transcript.blocks.push(TranscriptBlock::User(pending));
             }
         }
-        view.transcript.loaded_count = items.len();
-        view.transcript.total = items.len();
-        view.transcript.next_offset = None;
-        view.transcript.complete = true;
         view.transcript.invalidate();
     }
 
@@ -5502,9 +5569,9 @@ impl App {
                 .is_some_and(|unsaved| unsaved.turn.loop_id == loop_id)
             || view
                 .transcript
-                .items
-                .iter()
-                .any(|item| item.item.loop_id() == Some(loop_id))
+                .window
+                .items()
+                .any(|(_, item)| item.item.loop_id() == Some(loop_id))
     }
 
     fn history_proves_steer_not_recorded(
@@ -5524,16 +5591,16 @@ impl App {
             }))
             && view
                 .transcript
-                .items
-                .iter()
-                .any(|item| item.item.loop_id() == Some(loop_id))
-            && !view.transcript.items.iter().any(|item| {
+                .window
+                .items()
+                .any(|(_, item)| item.item.loop_id() == Some(loop_id))
+            && !view.transcript.window.items().any(|(_, item)| {
                 matches!(
                     &item.item,
-                    HistoryItemWire::User(user)
+                    crate::protocol::read::RuntimeItem::User(user)
                         if user.loop_id == loop_id
-                            && user.kind == UserMessageKindWire::Steering
-                            && user.text == steer_text
+                            && user.kind == crate::protocol::read::RuntimeUserKind::Steering
+                            && user.input.text == steer_text
                 )
             })
     }
@@ -6306,17 +6373,11 @@ impl App {
             }
         };
         if fetch {
-            let offset = self
-                .sessions
-                .known
-                .get(&session_id)
-                .map(|v| v.transcript.loaded_count)
-                .unwrap_or(0);
             if let Some(view) = self.sessions.known.get_mut(&session_id) {
                 view.loading = true;
                 view.reconcile_inflight = reconciling_gap;
             }
-            commands.push(self.request_history(&session_id, offset, 20));
+            commands.push(self.request_history(&session_id));
         }
         commands
     }
@@ -6833,8 +6894,7 @@ impl App {
     fn on_history_response(
         &mut self,
         session_id: &SessionId,
-        requested_offset: usize,
-        gap_revision: Option<u64>,
+        read: &ReadRequest,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
         if self.sessions.deleted.contains(session_id)
@@ -6842,7 +6902,7 @@ impl App {
         {
             return Vec::new();
         }
-        let page = match response.parse_history() {
+        let page = match response.parse_session_read() {
             Ok(page) => page,
             Err(error) => {
                 self.notice(
@@ -6855,15 +6915,17 @@ impl App {
                 return Vec::new();
             }
         };
-        self.continue_history_chain(session_id, requested_offset, gap_revision, &page)
+        self.continue_read_chain(session_id, read, &page)
     }
 
-    fn continue_history_chain(
+    /// Applies one `session.read` page to a session's window and reconciles the
+    /// live loop when the chain completes. The chunk assembler lives on the
+    /// view so an item spanning pages is never rebuilt from scratch.
+    fn continue_read_chain(
         &mut self,
         session_id: &SessionId,
-        requested_offset: usize,
-        gap_revision: Option<u64>,
-        page: &HistoryPageWire,
+        read: &ReadRequest,
+        page: &crate::protocol::ReadSessionResult,
     ) -> Vec<AppCommand> {
         if self.reload.is_some() {
             return Vec::new();
@@ -6877,343 +6939,100 @@ impl App {
             return Vec::new();
         }
 
-        // 1. Conflict detection & idempotent repetition filtering:
-        // Any incoming item with index existing locally must exactly match known item; otherwise conflict!
-        let has_conflict = self.sessions.known.get(session_id).is_some_and(|view| {
-            page.items.iter().any(|incoming| {
-                view.transcript
-                    .items
-                    .iter()
-                    .any(|known| known.index == incoming.index && known.item != incoming.item)
-            })
-        });
-
-        if has_conflict {
-            if let Some(view) = self.sessions.known.get_mut(session_id) {
-                Self::mark_history_unconfirmed(view);
-            }
-            self.notice(
-                NoticeLevel::Error,
-                format!("history for {session_id} changed at an existing item index"),
-            );
-            return Vec::new();
-        }
-
-        let loaded_count = self
-            .sessions
-            .known
-            .get(session_id)
-            .map(|view| view.transcript.loaded_count)
-            .unwrap_or(0);
-
-        // 2. Page contiguity: the first new item must begin at the requested
-        // offset, and items within a page must advance without gaps.
-        let page_contiguous = page
-            .items
-            .first()
-            .is_none_or(|first| first.index == requested_offset)
-            && page
-                .items
-                .windows(2)
-                .all(|w| w[0].index.checked_add(1) == Some(w[1].index));
-
-        if !page_contiguous {
-            if let Some(view) = self.sessions.known.get_mut(session_id) {
-                Self::mark_history_unconfirmed(view);
-            }
-            self.notice(
-                NoticeLevel::Warning,
-                format!("history for {session_id} is not contiguous at offset {requested_offset}"),
-            );
-            return Vec::new();
-        }
-
-        // Filter truly new items that advance our local loaded_count
-        let new_items: Vec<_> = page
-            .items
-            .iter()
-            .filter(|item| item.index >= loaded_count)
-            .cloned()
-            .collect();
-
-        // Check if new_items contiguously advance from loaded_count
-        let local_advances_contiguously = new_items
-            .iter()
-            .enumerate()
-            .all(|(pos, item)| loaded_count.checked_add(pos) == Some(item.index));
-
-        if !new_items.is_empty() && !local_advances_contiguously {
-            if let Some(view) = self.sessions.known.get_mut(session_id) {
-                Self::mark_history_unconfirmed(view);
-            }
-            self.notice(
-                NoticeLevel::Warning,
-                format!("history for {session_id} is not contiguous at offset {loaded_count}"),
-            );
-            return Vec::new();
-        }
-
-        let Some(new_loaded_count) = loaded_count.checked_add(new_items.len()) else {
-            if let Some(view) = self.sessions.known.get_mut(session_id) {
-                Self::mark_history_unconfirmed(view);
-            }
-            self.notice(
-                NoticeLevel::Warning,
-                format!(
-                    "history for {session_id} did not advance its offset from {requested_offset}"
-                ),
-            );
+        let Some(view) = self.sessions.known.get_mut(session_id) else {
             return Vec::new();
         };
-        let next_valid = match page.next_offset {
-            Some(next) => next > requested_offset && next == new_loaded_count && next <= page.total,
-            None => new_loaded_count == page.total,
-        };
 
-        if !next_valid {
-            let reason = format!(
-                "history for {session_id} did not advance its offset from {requested_offset}"
-            );
-            if let Some(view) = self.sessions.known.get_mut(session_id) {
-                Self::mark_history_unconfirmed(view);
-            }
-            self.notice(NoticeLevel::Warning, reason);
-            return Vec::new();
+        // A fresh read chain must start from a clean assembler; a re-pin
+        // replaces the window rather than merging two generations.
+        let mut page_state = view
+            .read_page
+            .take()
+            .unwrap_or_else(|| crate::app::history::ReadPage::new(read.cursor, None, 0));
+        page_state.cursor = read.cursor;
+        page_state.want_pin = read.pin.clone();
+        page_state.window_start = read.window_start;
+        page_state.replacement = read.replacement;
+        page_state.reconcile = read.reconcile;
+        if read.replacement && read.cursor == crate::protocol::ReadCursor::start() {
+            view.transcript.window.reset();
         }
 
-        let next = {
-            let Some(view) = self.sessions.known.get_mut(session_id) else {
+        let applied = match crate::app::history::apply_page(
+            &mut view.transcript.window,
+            &mut page_state,
+            page,
+        ) {
+            Err(error) => {
+                view.read_page = None;
+                Self::mark_history_unconfirmed(view);
+                self.notice(
+                    NoticeLevel::Error,
+                    format!("history for {session_id} is not decodable: {error}"),
+                );
                 return Vec::new();
-            };
-            merge_history_items(view, &new_items);
-            view.transcript.total = page.total;
-            view.transcript.loaded_count += new_items.len();
-            view.transcript.next_offset = page.next_offset;
-
-            let next = if let Some(next_offset) = page.next_offset {
-                NextChain::Page {
-                    offset: next_offset,
-                }
-            } else {
-                view.transcript.complete = true;
+            }
+            Ok(crate::app::history::ReadApply::Stale(error)) => {
+                view.read_page = None;
+                // The pinned prefix is gone; do not splice two generations.
+                view.event_gap = true;
                 view.loading = false;
-
-                let live_loop_id = view
-                    .live
-                    .as_ref()
-                    .and_then(|live| live.reference.as_ref())
-                    .map(|r| r.loop_id.clone());
-
-                let raw_items_contain_loop = match &live_loop_id {
-                    Some(id) => view
-                        .transcript
-                        .items
-                        .iter()
-                        .any(|item| item.item.loop_id() == Some(id.as_str())),
-                    None => false,
-                };
-
-                let loop_contained_in_history = match &live_loop_id {
-                    Some(id) => view.transcript.blocks.iter().any(|b| match b {
-                        TranscriptBlock::User(u) => !u.pending && u.loop_id.as_deref() == Some(id),
-                        TranscriptBlock::Assistant(a) => a.loop_id.as_str() == id.as_str(),
-                        TranscriptBlock::Tool(t) => t.loop_id.as_str() == id.as_str(),
-                        _ => false,
-                    }),
-                    None => false,
-                };
-
-                // Clear event_gap ONLY IF:
-                // - all pages complete (we are in the else branch)
-                // - no unsaved loop
-                // - gap revision matches or fully loaded
-                // - for live turn: valid same-turn persisted AND raw items contain loop
-                // - for no live turn: view.live.is_none()
-                let same_turn_persisted = match &live_loop_id {
-                    Some(id) => {
-                        view.last_result.as_ref().is_some_and(|r| {
-                            r.persistence == TurnPersistenceWire::Persisted && r.turn.loop_id == *id
-                        }) || view
-                            .live
-                            .as_ref()
-                            .and_then(|l| l.last_result.as_ref())
-                            .is_some_and(|r| {
-                                r.persistence == TurnPersistenceWire::Persisted
-                                    && r.turn.loop_id == *id
-                            })
-                    }
-                    None => true,
-                };
-
-                let turn_satisfied = if live_loop_id.is_some() {
-                    same_turn_persisted && raw_items_contain_loop
-                } else {
-                    view.live.is_none()
-                };
-
-                let gap_rev_matches =
-                    gap_revision.is_some_and(|revision| revision == view.gap_revision);
-                let needs_gap_reconcile = view.unsaved_loop.is_none()
-                    && view.event_gap
-                    && !gap_rev_matches
-                    && view
-                        .live
-                        .as_ref()
-                        .is_none_or(|live| live.last_result.is_some());
-
-                if view.unsaved_loop.is_none()
-                    && view.event_gap
-                    && turn_satisfied
-                    && gap_rev_matches
-                {
-                    view.event_gap = false;
-                }
-
                 view.reconcile_inflight = false;
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("history for {session_id} became stale: {error}; reload to continue"),
+                );
+                return Vec::new();
+            }
+            Ok(crate::app::history::ReadApply::Ok(applied)) => applied,
+        };
 
-                // Mark steer states based on history
-                let loop_id = live_loop_id.as_deref();
-                let mut persisted_steers: Vec<String> = view
-                    .transcript
-                    .blocks
-                    .iter()
-                    .filter_map(|block| match block {
-                        TranscriptBlock::User(user)
-                            if user.kind == UserMessageKindWire::Steering
-                                && loop_id.is_some_and(|loop_id| {
-                                    user.loop_id.as_deref() == Some(loop_id)
-                                }) =>
-                        {
-                            Some(user.text.clone())
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                let blocked = view.is_blocked();
-                let persistence_unconfirmed = view.unsaved_loop.is_some();
-                // Terminal-only reconciliation: only a FINISHED loop (its
-                // result observed) may downgrade an in-flight accepted steer;
-                // a mid-loop empty/stale History page never marks NotRecorded
-                // and a receipt race is never downgraded before the loop ends.
-                let terminal = view
-                    .live
-                    .as_ref()
-                    .is_some_and(|live| live.last_result.is_some());
-                if let Some(live) = view.live.as_mut() {
-                    for steer in &mut live.pending_steers {
-                        if matches!(
-                            steer.state,
-                            PendingSteerState::Sending
-                                | PendingSteerState::Queued
-                                | PendingSteerState::Unconfirmed
-                        ) {
-                            if let Some(position) =
-                                persisted_steers.iter().position(|text| text == &steer.text)
-                            {
-                                persisted_steers.remove(position);
-                                steer.state = if persistence_unconfirmed {
-                                    PendingSteerState::Unconfirmed
-                                } else {
-                                    PendingSteerState::Persisted
-                                };
-                            } else if steer.state == PendingSteerState::Queued && terminal {
-                                steer.state = if blocked {
-                                    PendingSteerState::Unconfirmed
-                                } else {
-                                    PendingSteerState::NotRecorded
-                                };
-                            } else if steer.state == PendingSteerState::Sending && terminal {
-                                steer.state = PendingSteerState::Unconfirmed;
-                            }
-                        }
-                    }
-                }
-                // Durable history replaces an applied steer card exactly once
-                // (duplicates consumed one-to-one by text).
-                view.applied_steers.retain(|applied| {
-                    if let Some(position) = persisted_steers
-                        .iter()
-                        .position(|text| text == &applied.text)
-                    {
-                        persisted_steers.remove(position);
-                        false
-                    } else {
-                        true
-                    }
-                });
+        // Project newly decoded Runtime items into the display bridge.
+        for (index, item) in &applied.inserted {
+            install_history_item(view, *index, item);
+        }
 
-                // If live turn has finished and is contained in history, take it
-                if view.unsaved_loop.is_none()
-                    && !view.is_blocked()
-                    && loop_contained_in_history
-                    && view
-                        .live
-                        .as_ref()
-                        .is_some_and(|live| live.last_result.is_some())
-                {
-                    if let Some(live) = view.live.take() {
-                        let current_loop = live
-                            .reference
-                            .as_ref()
-                            .map(|r| r.loop_id.clone())
-                            .unwrap_or_default();
-                        for steer in live.pending_steers {
-                            view.completed_steers.push(
-                                crate::state::session::CompletedSteerNotice {
-                                    session_id: session_id.clone(),
-                                    loop_id: current_loop.clone(),
-                                    local_id: steer.local_id,
-                                    text: steer.text,
-                                    state: steer.state,
-                                    accepted_at: steer.accepted_at,
-                                },
-                            );
-                        }
-                    }
+        if let Some(error) = applied.error {
+            view.read_page = None;
+            Self::mark_history_unconfirmed(view);
+            let message = match &error {
+                crate::protocol::ReadError::NonContiguous { expected, .. } => {
+                    format!("history for {session_id} is not contiguous at item {expected}")
                 }
-
-                if needs_gap_reconcile {
-                    // A dropped event advanced the fence while this page was
-                    // in flight. Keep the merged page, but fetch the tail
-                    // again under the newer revision before releasing it.
-                    view.needs_post_wait_history = false;
-                    view.loading = true;
-                    view.reconcile_inflight = true;
-                    NextChain::Reconcile {
-                        offset: view.transcript.loaded_count,
-                    }
-                } else if view.needs_post_wait_history {
-                    // Scenario B: We had an in-flight history when turn.wait completed.
-                    // Now that history has completed, if the loop is not yet contained in history,
-                    // we perform exactly ONE post-wait history fetch.
-                    view.needs_post_wait_history = false;
-                    if !loop_contained_in_history && view.live.is_some() {
-                        view.loading = true;
-                        view.reconcile_inflight = true;
-                        NextChain::Reconcile {
-                            offset: view.transcript.loaded_count,
-                        }
-                    } else {
-                        NextChain::Done
-                    }
-                } else if !loop_contained_in_history
-                    && view.live.as_ref().is_some_and(|l| l.last_result.is_some())
-                {
-                    // If a post-wait fetch already happened and the loop is still not in history,
-                    // do NOT retry infinitely. Emit a warning and retain live/gap.
-                    NextChain::LoopNotContained(live_loop_id.unwrap_or_default())
-                } else {
-                    NextChain::Done
+                crate::protocol::ReadError::CursorStalled { item } => {
+                    format!("history for {session_id} did not advance from item {item}")
                 }
+                crate::protocol::ReadError::ItemChanged { index } => {
+                    format!("history for {session_id} changed at an existing item index {index}")
+                }
+                _ => format!("history for {session_id} is not decodable: {error}"),
             };
-            view.recompute_usage_projection();
-            next
+            self.notice(NoticeLevel::Error, message);
+            return Vec::new();
+        }
+
+        // Persist the assembler for the next page (it may hold a partial item).
+        view.read_page = Some(page_state);
+        view.transcript.next_cursor = applied.next;
+
+        let next = match applied.next {
+            Some(_) => {
+                view.transcript.sync_from_window();
+                view.loading = true;
+                NextChain::Page
+            }
+            None => {
+                view.transcript.sync_from_window();
+                view.loading = false;
+                let next = Self::finish_read_chain(view, session_id, read);
+                view.read_page = None;
+                view.recompute_usage_projection();
+                next
+            }
         };
 
         match next {
-            NextChain::Page { offset } | NextChain::Reconcile { offset } => {
-                vec![self.request_history(session_id, offset, 20)]
-            }
+            NextChain::Page | NextChain::Reconcile => vec![self.request_history(session_id)],
             NextChain::LoopNotContained(loop_id) => {
                 self.notice(
                     NoticeLevel::Warning,
@@ -7227,6 +7046,185 @@ impl App {
         }
     }
 
+    /// Reconciles the live loop once the read chain is complete (spec §6.4,
+    /// §7.1). Returns the next chain step, if any.
+    fn finish_read_chain(
+        view: &mut SessionView,
+        session_id: &SessionId,
+        read: &ReadRequest,
+    ) -> NextChain {
+        let live_loop_id = view
+            .live
+            .as_ref()
+            .and_then(|live| live.reference.as_ref())
+            .map(|r| r.loop_id.clone());
+
+        let raw_items_contain_loop = live_loop_id.as_ref().is_some_and(|id| {
+            view.transcript
+                .window
+                .items()
+                .any(|(_, item)| item.item.loop_id() == Some(id.as_str()))
+        });
+
+        let loop_contained_in_history = match &live_loop_id {
+            Some(id) => view.transcript.blocks.iter().any(|b| match b {
+                TranscriptBlock::User(u) => !u.pending && u.loop_id.as_deref() == Some(id),
+                TranscriptBlock::Assistant(a) => a.loop_id.as_str() == id.as_str(),
+                TranscriptBlock::Tool(t) => t.loop_id.as_str() == id.as_str(),
+                _ => false,
+            }),
+            None => false,
+        };
+
+        let same_turn_persisted = match &live_loop_id {
+            Some(id) => {
+                view.last_result.as_ref().is_some_and(|r| {
+                    r.persistence == TurnPersistenceWire::Persisted && r.turn.loop_id == *id
+                }) || view
+                    .live
+                    .as_ref()
+                    .and_then(|l| l.last_result.as_ref())
+                    .is_some_and(|r| {
+                        r.persistence == TurnPersistenceWire::Persisted && r.turn.loop_id == *id
+                    })
+            }
+            None => true,
+        };
+
+        let turn_satisfied = if live_loop_id.is_some() {
+            same_turn_persisted && raw_items_contain_loop
+        } else {
+            view.live.is_none()
+        };
+
+        let gap_rev_matches = read.gap_revision == view.gap_revision;
+        let needs_gap_reconcile = view.unsaved_loop.is_none()
+            && view.event_gap
+            && !gap_rev_matches
+            && view
+                .live
+                .as_ref()
+                .is_none_or(|live| live.last_result.is_some());
+
+        if view.unsaved_loop.is_none() && view.event_gap && turn_satisfied && gap_rev_matches {
+            view.event_gap = false;
+        }
+
+        view.reconcile_inflight = false;
+
+        let loop_id = live_loop_id.as_deref();
+        let mut persisted_steers: Vec<String> = view
+            .transcript
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                TranscriptBlock::User(user)
+                    if user.kind == UserMessageKindWire::Steering
+                        && loop_id
+                            .is_some_and(|loop_id| user.loop_id.as_deref() == Some(loop_id)) =>
+                {
+                    Some(user.text.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        let blocked = view.is_blocked();
+        let persistence_unconfirmed = view.unsaved_loop.is_some();
+        let terminal = view
+            .live
+            .as_ref()
+            .is_some_and(|live| live.last_result.is_some());
+        if let Some(live) = view.live.as_mut() {
+            for steer in &mut live.pending_steers {
+                if matches!(
+                    steer.state,
+                    PendingSteerState::Sending
+                        | PendingSteerState::Queued
+                        | PendingSteerState::Unconfirmed
+                ) {
+                    if let Some(position) =
+                        persisted_steers.iter().position(|text| text == &steer.text)
+                    {
+                        persisted_steers.remove(position);
+                        steer.state = if persistence_unconfirmed {
+                            PendingSteerState::Unconfirmed
+                        } else {
+                            PendingSteerState::Persisted
+                        };
+                    } else if steer.state == PendingSteerState::Queued && terminal {
+                        steer.state = if blocked {
+                            PendingSteerState::Unconfirmed
+                        } else {
+                            PendingSteerState::NotRecorded
+                        };
+                    } else if steer.state == PendingSteerState::Sending && terminal {
+                        steer.state = PendingSteerState::Unconfirmed;
+                    }
+                }
+            }
+        }
+        view.applied_steers.retain(|applied| {
+            if let Some(position) = persisted_steers
+                .iter()
+                .position(|text| text == &applied.text)
+            {
+                persisted_steers.remove(position);
+                false
+            } else {
+                true
+            }
+        });
+
+        if view.unsaved_loop.is_none()
+            && !view.is_blocked()
+            && loop_contained_in_history
+            && view
+                .live
+                .as_ref()
+                .is_some_and(|live| live.last_result.is_some())
+        {
+            if let Some(live) = view.live.take() {
+                let current_loop = live
+                    .reference
+                    .as_ref()
+                    .map(|r| r.loop_id.clone())
+                    .unwrap_or_default();
+                for steer in live.pending_steers {
+                    view.completed_steers
+                        .push(crate::state::session::CompletedSteerNotice {
+                            session_id: session_id.clone(),
+                            loop_id: current_loop.clone(),
+                            local_id: steer.local_id,
+                            text: steer.text,
+                            state: steer.state,
+                            accepted_at: steer.accepted_at,
+                        });
+                }
+            }
+        }
+
+        if needs_gap_reconcile {
+            view.needs_post_wait_history = false;
+            view.loading = true;
+            view.reconcile_inflight = true;
+            NextChain::Reconcile
+        } else if view.needs_post_wait_history {
+            view.needs_post_wait_history = false;
+            if !loop_contained_in_history && view.live.is_some() {
+                view.loading = true;
+                view.reconcile_inflight = true;
+                NextChain::Reconcile
+            } else {
+                NextChain::Done
+            }
+        } else if !loop_contained_in_history
+            && view.live.as_ref().is_some_and(|l| l.last_result.is_some())
+        {
+            NextChain::LoopNotContained(live_loop_id.unwrap_or_default())
+        } else {
+            NextChain::Done
+        }
+    }
     fn submit_turn(&mut self, session_id: SessionId, text: String) -> Vec<AppCommand> {
         if !self.guard_ready() {
             return Vec::new();
@@ -7770,6 +7768,7 @@ impl App {
                             block_reason: Some(
                                 crate::protocol::SessionBlockReasonWire::Persistence,
                             ),
+                            compaction: None,
                         });
                     }
                     if let Some(live) = view.live.as_ref() {
@@ -7838,13 +7837,7 @@ impl App {
             }
         };
         if fetch {
-            let offset = self
-                .sessions
-                .known
-                .get(&turn.session_id)
-                .map(|view| view.transcript.loaded_count)
-                .unwrap_or(0);
-            commands.push(self.request_history(&turn.session_id, offset, 20));
+            commands.push(self.request_history(&turn.session_id));
         }
         commands
     }
@@ -8759,26 +8752,14 @@ impl App {
                 session_id,
                 generation,
             } => self.on_reload_presentation_response(session_id, generation, &response),
-            RequestKind::History {
-                session_id,
-                offset,
-                gap_revision,
-                ..
-            } => self.on_history_response(&session_id, offset, gap_revision, &response),
+            RequestKind::History { session_id, read } => {
+                self.on_history_response(&session_id, &read, &response)
+            }
             RequestKind::ReloadHistory {
                 session_id,
-                offset,
-                limit,
-                gap_revision,
+                read,
                 generation,
-            } => self.on_reload_history_response(
-                session_id,
-                offset,
-                limit,
-                gap_revision,
-                generation,
-                &response,
-            ),
+            } => self.on_reload_history_response(session_id, &read, generation, &response),
             RequestKind::SendTurn {
                 session_id,
                 local_submission,
@@ -8847,6 +8828,9 @@ impl App {
             AgentEventWire::ToolStarted { data } => Some(data.turn.clone()),
             AgentEventWire::ToolPresentation { data } => Some(data.turn.clone()),
             AgentEventWire::ToolProgress { data } => Some(data.turn.clone()),
+            AgentEventWire::ToolInvocation { data } => Some(data.turn.clone()),
+            AgentEventWire::ToolExecution { data } => Some(data.turn.clone()),
+            AgentEventWire::ToolProcess { data } => Some(data.turn.clone()),
             AgentEventWire::ToolFinished { data } => Some(data.turn.clone()),
             _ => None,
         }
@@ -8889,6 +8873,9 @@ impl App {
             AgentEventWire::ToolStarted { data } => Some(data.meta.session_id.as_str()),
             AgentEventWire::ToolPresentation { data } => Some(data.meta.session_id.as_str()),
             AgentEventWire::ToolProgress { data } => Some(data.meta.session_id.as_str()),
+            AgentEventWire::ToolInvocation { data } => Some(data.meta.session_id.as_str()),
+            AgentEventWire::ToolExecution { data } => Some(data.meta.session_id.as_str()),
+            AgentEventWire::ToolProcess { data } => Some(data.meta.session_id.as_str()),
             AgentEventWire::ToolFinished { data } => Some(data.meta.session_id.as_str()),
             AgentEventWire::InteractionRequested { data } => Some(data.meta.session_id.as_str()),
             AgentEventWire::InteractionResolved { data } => Some(data.meta.session_id.as_str()),
@@ -8953,6 +8940,15 @@ impl App {
                 (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
             }
             AgentEventWire::ToolProgress { data } => {
+                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
+            }
+            AgentEventWire::ToolInvocation { data } => {
+                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
+            }
+            AgentEventWire::ToolExecution { data } => {
+                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
+            }
+            AgentEventWire::ToolProcess { data } => {
                 (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
             }
             AgentEventWire::ToolFinished { data } => {
@@ -9092,6 +9088,19 @@ impl App {
                     &data.progress,
                 );
             }
+            // `tool_invocation`/`tool_execution`/`tool_process` extend the tool
+            // facts (subject, availability, raw streams). B1 decodes and
+            // gap-tracks them; their bodies are rendered in B2. They are never
+            // treated as errors, and a dropped one still marks the event gap.
+            AgentEventWire::ToolInvocation { data } => {
+                self.mark_gap(&data.meta);
+            }
+            AgentEventWire::ToolExecution { data } => {
+                self.mark_gap(&data.meta);
+            }
+            AgentEventWire::ToolProcess { data } => {
+                self.mark_gap(&data.meta);
+            }
             AgentEventWire::ToolFinished { data } => {
                 self.mark_gap(&data.meta);
                 self.on_tool_finished(
@@ -9140,7 +9149,7 @@ impl App {
             return Vec::new();
         }
         let history_pending = self.pending_history(session_id);
-        let (state_needed, history_needed, offset, defer_history) = {
+        let (state_needed, history_needed, defer_history) = {
             let Some(view) = self.sessions.known.get(session_id) else {
                 return Vec::new();
             };
@@ -9155,7 +9164,6 @@ impl App {
             (
                 state_needed,
                 !view.loading && !view.reconcile_inflight && !history_pending,
-                view.transcript.loaded_count,
                 view.live.is_some() || view.unsaved_loop.is_some(),
             )
         };
@@ -9168,7 +9176,7 @@ impl App {
                 view.loading = true;
                 view.reconcile_inflight = true;
             }
-            commands.push(self.request_history(session_id, offset, DEFAULT_HISTORY_LIMIT));
+            commands.push(self.request_history(session_id));
         }
         commands
     }
@@ -9829,53 +9837,6 @@ fn section_ids_match(
             || right.history_index.is_none())
 }
 
-fn assistant_parts(assistant: &crate::protocol::AssistantHistoryViewWire) -> Vec<AssistantPart> {
-    if let Some(parts) = &assistant.parts {
-        return parts
-            .iter()
-            .filter_map(|part| match part {
-                AssistantDisplayPartWire::Text { text } if !text.is_empty() => {
-                    Some(AssistantPart::Text(text.clone()))
-                }
-                AssistantDisplayPartWire::Reasoning { text } if !text.is_empty() => {
-                    Some(AssistantPart::Reasoning(text.clone()))
-                }
-                AssistantDisplayPartWire::ToolCall { tool_call_id, name } => {
-                    Some(AssistantPart::ToolCall(
-                        assistant
-                            .tool_calls
-                            .iter()
-                            .find(|call| call.tool_call_id == *tool_call_id)
-                            .cloned()
-                            .unwrap_or_else(|| crate::protocol::ToolCallViewWire {
-                                tool_call_id: tool_call_id.clone(),
-                                name: name.clone(),
-                                call_index: 0,
-                                display: None,
-                            }),
-                    ))
-                }
-                _ => None,
-            })
-            .collect();
-    }
-    let mut parts = Vec::new();
-    if !assistant.reasoning.is_empty() {
-        parts.push(AssistantPart::Reasoning(assistant.reasoning.clone()));
-    }
-    if !assistant.text.is_empty() {
-        parts.push(AssistantPart::Text(assistant.text.clone()));
-    }
-    parts.extend(
-        assistant
-            .tool_calls
-            .iter()
-            .cloned()
-            .map(AssistantPart::ToolCall),
-    );
-    parts
-}
-
 fn append_live_part(request: &mut crate::state::turn::LiveRequest, part: LivePart) {
     match (request.parts.last_mut(), part) {
         (Some(LivePart::Text(existing)), LivePart::Text(delta))
@@ -9901,205 +9862,214 @@ fn has_item_index(blocks: &[TranscriptBlock], index: usize) -> bool {
     blocks.iter().any(|block| block.index() == Some(index))
 }
 
-fn merge_history_items(view: &mut SessionView, items: &[IndexedHistoryItemWire]) {
-    for indexed in items {
-        if !view
-            .transcript
-            .items
-            .iter()
-            .any(|item| item.index == indexed.index)
-        {
-            view.transcript.items.push(indexed.clone());
-        }
-        let index = indexed.index;
-        match &indexed.item {
-            HistoryItemWire::User(user) => {
-                let replaced =
-                    view.transcript
-                        .blocks
-                        .iter_mut()
-                        .rev()
-                        .find_map(|block| match block {
-                            TranscriptBlock::User(card)
-                                if card.pending
-                                    && (card.loop_id.as_deref() == Some(&user.loop_id)
-                                        || card.text == user.text) =>
-                            {
-                                Some(card)
-                            }
-                            _ => None,
-                        });
-                if let Some(card) = replaced {
-                    card.index = Some(index);
-                    card.loop_id = Some(user.loop_id.clone());
-                    card.kind = user.kind;
-                    card.text = user.text.clone();
-                    card.pending = false;
-                    if let Some(timestamp) = &user.timestamp {
-                        view.user_timestamps.insert(index, timestamp.clone());
+/// Projects one decoded Runtime item into the display bridge. This is the
+/// stage-C-removable short-term adapter (spec §11.1): the durable authority is
+/// `view.transcript.window`, and these blocks only drive the current
+/// renderer. A pending local user card is promoted in place rather than
+/// duplicated; a tool result patches the matching card or creates one.
+fn install_history_item(
+    view: &mut SessionView,
+    index: usize,
+    item: &crate::protocol::read::RawHistoryItem,
+) {
+    use crate::protocol::read::{RuntimeAssistantPart, RuntimeItem, RuntimeUserKind};
+
+    match &item.item {
+        RuntimeItem::User(user) => {
+            let kind = match user.kind {
+                RuntimeUserKind::Prompt => UserMessageKindWire::Prompt,
+                RuntimeUserKind::Steering => UserMessageKindWire::Steering,
+            };
+            let replaced = view
+                .transcript
+                .blocks
+                .iter_mut()
+                .rev()
+                .find_map(|block| match block {
+                    TranscriptBlock::User(card)
+                        if card.pending
+                            && (card.loop_id.as_deref() == Some(&user.loop_id)
+                                || card.text == user.input.text) =>
+                    {
+                        Some(card)
                     }
-                    view.transcript.invalidate();
-                } else if !has_item_index(&view.transcript.blocks, index) {
-                    view.transcript
-                        .blocks
-                        .push(TranscriptBlock::User(UserBlock {
-                            index: Some(index),
-                            loop_id: Some(user.loop_id.clone()),
-                            kind: user.kind,
-                            text: user.text.clone(),
-                            pending: false,
-                        }));
-                    if let Some(timestamp) = &user.timestamp {
-                        view.user_timestamps.insert(index, timestamp.clone());
-                    }
-                    view.transcript.invalidate();
-                }
-            }
-            HistoryItemWire::Assistant(assistant) => {
-                if has_item_index(&view.transcript.blocks, index) {
-                    continue;
-                }
-                let parts = assistant_parts(assistant);
+                    _ => None,
+                });
+            if let Some(card) = replaced {
+                card.index = Some(index);
+                card.loop_id = Some(user.loop_id.clone());
+                card.kind = kind;
+                card.text = user.input.text.clone();
+                card.pending = false;
+            } else if !has_item_index(&view.transcript.blocks, index) {
                 view.transcript
                     .blocks
-                    .push(TranscriptBlock::Assistant(AssistantBlock {
-                        index,
+                    .push(TranscriptBlock::User(UserBlock {
+                        index: Some(index),
+                        loop_id: Some(user.loop_id.clone()),
+                        kind,
+                        text: user.input.text.clone(),
+                        pending: false,
+                    }));
+            } else {
+                return;
+            }
+            if let Some(timestamp) = &item.timestamp {
+                view.user_timestamps.insert(index, timestamp.clone());
+            }
+            view.transcript.invalidate();
+        }
+        RuntimeItem::Assistant(assistant) => {
+            if has_item_index(&view.transcript.blocks, index) {
+                return;
+            }
+            let mut parts = Vec::new();
+            let mut tool_calls = Vec::new();
+            for part in &assistant.content {
+                match part {
+                    RuntimeAssistantPart::Text(text) if !text.is_empty() => {
+                        parts.push(AssistantPart::Text(text.clone()));
+                    }
+                    RuntimeAssistantPart::Reasoning { text, summary, .. } => {
+                        let body = text.clone().or_else(|| summary.clone()).unwrap_or_default();
+                        if !body.is_empty() {
+                            parts.push(AssistantPart::Reasoning(body));
+                        }
+                    }
+                    RuntimeAssistantPart::Text(_) => {}
+                    RuntimeAssistantPart::ToolCall {
+                        tool_call_id,
+                        name,
+                        call_index,
+                        ..
+                    } => {
+                        let call = crate::protocol::ToolCallViewWire {
+                            tool_call_id: tool_call_id.clone(),
+                            name: name.clone(),
+                            call_index: *call_index,
+                            display: None,
+                        };
+                        parts.push(AssistantPart::ToolCall(call.clone()));
+                        tool_calls.push(call);
+                    }
+                }
+            }
+            let reasoning_level = assistant
+                .reasoning
+                .as_deref()
+                .and_then(|value| {
+                    serde_json::from_value::<Reasoning>(serde_json::Value::String(value.to_owned()))
+                        .ok()
+                })
+                .unwrap_or_default();
+            view.transcript
+                .blocks
+                .push(TranscriptBlock::Assistant(AssistantBlock {
+                    index,
+                    loop_id: assistant.loop_id.clone(),
+                    request_index: assistant.request_index,
+                    model: assistant.model.clone(),
+                    reasoning_level,
+                    parts,
+                    tool_calls: tool_calls.clone(),
+                    usage: assistant.usage,
+                    finish_reason: assistant.finish_reason.clone(),
+                    terminal_error: None,
+                }));
+            for call in &tool_calls {
+                view.transcript
+                    .blocks
+                    .push(TranscriptBlock::Tool(ToolBlock {
+                        index: None,
                         loop_id: assistant.loop_id.clone(),
                         request_index: assistant.request_index,
-                        model: assistant.model.clone(),
-                        reasoning_level: assistant.reasoning_level,
-                        parts,
-                        tool_calls: assistant.tool_calls.clone(),
-                        usage: assistant.usage,
-                        finish_reason: assistant.finish_reason.clone(),
-                        terminal_error: None,
-                    }));
-                for call in &assistant.tool_calls {
-                    if let Some(display) = &call.display {
-                        view.tool_presentations.insert(
-                            ToolKey::new(
+                        tool_call_id: call.tool_call_id.clone(),
+                        name: call.name.clone(),
+                        result: None,
+                        outcome: None,
+                        live_status: None,
+                        progress: None,
+                        expanded: view
+                            .tool_folds
+                            .get(&ToolKey::new(
                                 &view.info.session_id,
                                 &assistant.loop_id,
                                 assistant.request_index,
                                 &call.tool_call_id,
-                            ),
-                            ToolPresentationState {
-                                display: display.clone(),
-                                result: None,
-                                result_truncated: false,
-                            },
-                        );
+                            ))
+                            .is_some_and(FoldOverride::expanded),
+                    }));
+            }
+            view.transcript.invalidate();
+        }
+        RuntimeItem::ToolResult(result) => {
+            // A tool result answers a call in the most recent matching assistant
+            // item; several results may follow one assistant item, so pairing is
+            // by ToolKey and never by the immediately preceding item's shape.
+            let outcome = serde_json::from_value::<ToolOutcomeWire>(serde_json::Value::String(
+                result.outcome.clone(),
+            ))
+            .unwrap_or(ToolOutcomeWire::Unknown);
+            let patched = view
+                .transcript
+                .blocks
+                .iter_mut()
+                .rev()
+                .find_map(|block| match block {
+                    TranscriptBlock::Tool(tool)
+                        if tool.tool_call_id == result.call_id
+                            && tool.loop_id == result.loop_id
+                            && tool.request_index == result.request_index =>
+                    {
+                        Some(tool)
                     }
-                    view.transcript
-                        .blocks
-                        .push(TranscriptBlock::Tool(ToolBlock {
-                            index: None,
-                            loop_id: assistant.loop_id.clone(),
-                            request_index: assistant.request_index,
-                            tool_call_id: call.tool_call_id.clone(),
-                            name: call.name.clone(),
-                            result: None,
-                            outcome: None,
-                            live_status: None,
-                            progress: None,
-                            expanded: view
-                                .tool_folds
-                                .get(&ToolKey::new(
-                                    &view.info.session_id,
-                                    &assistant.loop_id,
-                                    assistant.request_index,
-                                    &call.tool_call_id,
-                                ))
-                                .is_some_and(FoldOverride::expanded),
-                        }));
-                }
-                view.transcript.invalidate();
-            }
-            HistoryItemWire::ToolResult(result) => {
-                if has_item_index(&view.transcript.blocks, index) {
-                    continue;
-                }
-                let patched =
-                    view.transcript
-                        .blocks
-                        .iter_mut()
-                        .rev()
-                        .find_map(|block| match block {
-                            TranscriptBlock::Tool(tool)
-                                if tool.tool_call_id == result.tool_call_id
-                                    && tool.loop_id == result.loop_id
-                                    && tool.request_index == result.request_index =>
-                            {
-                                Some(tool)
-                            }
-                            _ => None,
-                        });
-                if let Some(tool) = patched {
+                    _ => None,
+                });
+            if let Some(tool) = patched {
+                if tool.index.is_none() {
                     tool.index = Some(index);
-                    tool.result = Some(result.content.clone());
-                    tool.outcome = Some(result.outcome);
-                } else {
-                    view.transcript
-                        .blocks
-                        .push(TranscriptBlock::Tool(ToolBlock {
-                            index: Some(index),
-                            loop_id: result.loop_id.clone(),
-                            request_index: result.request_index,
-                            tool_call_id: result.tool_call_id.clone(),
-                            name: result.tool_name.clone(),
-                            result: Some(result.content.clone()),
-                            outcome: Some(result.outcome),
-                            live_status: None,
-                            progress: None,
-                            expanded: view
-                                .tool_folds
-                                .get(&ToolKey::new(
-                                    &view.info.session_id,
-                                    &result.loop_id,
-                                    result.request_index,
-                                    &result.tool_call_id,
-                                ))
-                                .is_some_and(FoldOverride::expanded),
-                        }));
                 }
-                let key = ToolKey::new(
-                    &view.info.session_id,
-                    &result.loop_id,
-                    result.request_index,
-                    &result.tool_call_id,
-                );
-                let presentation =
-                    view.tool_presentations
-                        .entry(key)
-                        .or_insert_with(|| ToolPresentationState {
-                            display: ToolDisplayWire {
-                                detail: result.tool_name.clone(),
-                                expanded_input: None,
-                                input_line_count: None,
-                                hidden_line_count: (!result.content.is_empty())
-                                    .then(|| result.content.split('\n').count()),
-                                truncated: result.content_truncated,
-                            },
-                            result: None,
-                            result_truncated: false,
-                        });
-                presentation.result = Some(result.content.clone());
-                presentation.result_truncated = result.content_truncated;
-                presentation.display.truncated |= result.content_truncated;
-                view.transcript.invalidate();
-            }
-            HistoryItemWire::Summary(summary) => {
-                if has_item_index(&view.transcript.blocks, index) {
-                    continue;
-                }
+                tool.result = Some(result.output.content.clone());
+                tool.outcome = Some(outcome);
+            } else if !has_item_index(&view.transcript.blocks, index) {
                 view.transcript
                     .blocks
-                    .push(TranscriptBlock::Summary(SummaryBlock {
-                        index,
-                        content: summary.content.clone(),
+                    .push(TranscriptBlock::Tool(ToolBlock {
+                        index: Some(index),
+                        loop_id: result.loop_id.clone(),
+                        request_index: result.request_index,
+                        tool_call_id: result.call_id.clone(),
+                        name: result.tool_name.clone(),
+                        result: Some(result.output.content.clone()),
+                        outcome: Some(outcome),
+                        live_status: None,
+                        progress: None,
+                        expanded: view
+                            .tool_folds
+                            .get(&ToolKey::new(
+                                &view.info.session_id,
+                                &result.loop_id,
+                                result.request_index,
+                                &result.call_id,
+                            ))
+                            .is_some_and(FoldOverride::expanded),
                     }));
-                view.transcript.invalidate();
+            } else {
+                return;
             }
+            view.transcript.invalidate();
+        }
+        RuntimeItem::Summary(summary) => {
+            if has_item_index(&view.transcript.blocks, index) {
+                return;
+            }
+            view.transcript
+                .blocks
+                .push(TranscriptBlock::Summary(SummaryBlock {
+                    index,
+                    content: summary.content.clone(),
+                }));
+            view.transcript.invalidate();
         }
     }
 }
@@ -10147,7 +10117,7 @@ mod tests {
         json!({"session_id": session, "dropped_before": dropped})
     }
 
-    fn session_info(session_id: &str) -> Value {
+    pub(super) fn session_info(session_id: &str) -> Value {
         json!({
             "session_id": session_id,
             "title": null,
@@ -10186,12 +10156,39 @@ mod tests {
         })
     }
 
-    fn history_page_json(items: Vec<Value>, next_offset: Option<usize>, total: usize) -> Value {
-        json!({
-            "items": items,
-            "next_offset": next_offset,
-            "total": total
-        })
+    /// Encodes a Runtime item envelope as a one-chunk Protocol v1 read page.
+    fn read_page_json(items: Vec<Value>, next_cursor: Option<usize>, total: usize) -> Value {
+        let chunks: Vec<Value> = items
+            .iter()
+            .map(|envelope| {
+                let index = envelope.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                let item = envelope.get("item").cloned().unwrap_or(Value::Null);
+                let data = serde_json::to_string(&json!({"item": item})).unwrap();
+                let total_bytes = data.len();
+                json!({
+                    "index": index,
+                    "offset": 0,
+                    "total_bytes": total_bytes,
+                    "encoding": "utf8_json",
+                    "data": data,
+                    "complete": true
+                })
+            })
+            .collect();
+        let mut page = json!({
+            "session": session_info("ses_1"),
+            "items": chunks,
+            "total": total,
+            "records": [],
+            "records_truncated": false,
+            "history_revision": "unit-revision",
+            "captured_end": total as u64,
+            "trailing_incomplete": false
+        });
+        if let Some(item) = next_cursor {
+            page["next_cursor"] = json!({"item": item, "offset": 0});
+        }
+        page
     }
 
     fn user_item(index: usize, loop_id: &str, text: &str) -> Value {
@@ -10202,7 +10199,7 @@ mod tests {
                 "data": {
                     "loop_id": loop_id,
                     "kind": "prompt",
-                    "text": text
+                    "input": {"text": text}
                 }
             }
         })
@@ -10217,7 +10214,7 @@ mod tests {
                 "data": {
                     "loop_id": loop_id,
                     "kind": "steering",
-                    "text": text
+                    "input": {"text": text}
                 }
             }
         })
@@ -10232,10 +10229,8 @@ mod tests {
                     "loop_id": loop_id,
                     "request_index": 0,
                     "model": "deep",
-                    "reasoning_level": "high",
-                    "text": text,
-                    "reasoning": "",
-                    "tool_calls": [],
+                    "reasoning": "high",
+                    "content": [{"type": "text", "data": text}],
                     "usage": {},
                     "finish_reason": "stop"
                 }
@@ -10258,10 +10253,10 @@ mod tests {
                 "data": {
                     "loop_id": loop_id,
                     "request_index": 0,
-                    "tool_call_id": call_id,
+                    "call_id": call_id,
                     "tool_name": name,
                     "outcome": outcome,
-                    "content": content
+                    "output": {"content": content}
                 }
             }
         })
@@ -10272,7 +10267,11 @@ mod tests {
         assert_eq!(requests.len(), 4);
         for request in &requests {
             let result = match request.method {
-                "agent.ping" => json!({"version": "0.3.0"}),
+                "agent.ping" => json!({
+                    "version": "0.5.0",
+                    "protocol_version": 1,
+                    "capabilities": crate::protocol::REQUIRED_CAPABILITIES,
+                }),
                 "model.list" => json!({"models": []}),
                 "profile.list" => json!({"profiles": []}),
                 "session.list" => json!({"sessions": []}),
@@ -10344,7 +10343,7 @@ mod tests {
             .unwrap();
         let history_req = requests
             .iter()
-            .find(|r| r.method == "session.history")
+            .find(|r| r.method == "session.read")
             .unwrap();
         take_requests(respond(app, state_req, state_json(session_id, "idle")));
         take_requests(respond(
@@ -10360,11 +10359,7 @@ mod tests {
                 "last_loop": null
             }),
         ));
-        take_requests(respond(
-            app,
-            history_req,
-            history_page_json(vec![], None, 0),
-        ));
+        take_requests(respond(app, history_req, read_page_json(vec![], None, 0)));
     }
 
     #[test]
@@ -10469,11 +10464,11 @@ mod tests {
         ));
         let history = take_requests(respond(&mut app, state, state_json("ses_1", "idle")));
         assert_eq!(history.len(), 1);
-        assert_eq!(history[0].method, "session.history");
+        assert_eq!(history[0].method, "session.read");
         take_requests(respond(
             &mut app,
             &history[0],
-            history_page_json(vec![], None, 0),
+            read_page_json(vec![], None, 0),
         ));
 
         assert!(app.reload.is_none());
@@ -10535,11 +10530,13 @@ mod tests {
             .iter()
             .find_map(|(id, kind)| matches!(kind, RequestKind::ReloadHistory { .. }).then_some(*id))
             .unwrap();
-        let history_request = OutgoingRequest::session_history(
+        let history_request = OutgoingRequest::session_read(
             history,
             "ses_1",
-            Some(0),
-            Some(DEFAULT_HISTORY_LIMIT),
+            Some(crate::protocol::ReadCursor::start()),
+            20,
+            262144,
+            None,
         );
         take_requests(respond(
             &mut app,
@@ -10549,7 +10546,7 @@ mod tests {
         take_requests(respond(
             &mut app,
             &history_request,
-            history_page_json(vec![], None, 0),
+            read_page_json(vec![], None, 0),
         ));
 
         let view = &app.sessions.known["ses_1"];
@@ -10663,7 +10660,7 @@ mod tests {
         assert!(
             recovery
                 .iter()
-                .any(|request| request.method == "session.history")
+                .any(|request| request.method == "session.read")
         );
     }
 
@@ -10693,11 +10690,7 @@ mod tests {
                 .iter()
                 .any(|request| request.method == "session.state")
         );
-        assert!(
-            reads
-                .iter()
-                .any(|request| request.method == "session.history")
-        );
+        assert!(reads.iter().any(|request| request.method == "session.read"));
     }
 
     #[test]
@@ -10733,7 +10726,7 @@ mod tests {
         assert!(
             recovery
                 .iter()
-                .any(|request| request.method == "session.history")
+                .any(|request| request.method == "session.read")
         );
     }
 
@@ -10876,12 +10869,12 @@ mod tests {
             running_state_json("ses_1", "loop_live"),
         ));
         assert_eq!(history.len(), 1);
-        assert_eq!(history[0].method, "session.history");
+        assert_eq!(history[0].method, "session.read");
 
         let after_reload = take_requests(respond(
             &mut app,
             &history[0],
-            history_page_json(vec![], None, 0),
+            read_page_json(vec![], None, 0),
         ));
         assert!(
             after_reload
@@ -10920,7 +10913,7 @@ mod tests {
         ready(&mut app);
         open_session(&mut app, "ses_1");
 
-        let old_history = match app.request_history(&"ses_1".to_owned(), 0, DEFAULT_HISTORY_LIMIT) {
+        let old_history = match app.request_history(&"ses_1".to_owned()) {
             AppCommand::Rpc(request) => request,
             _ => unreachable!(),
         };
@@ -10966,7 +10959,7 @@ mod tests {
         take_requests(respond(
             &mut app,
             &old_history,
-            history_page_json(vec![], None, 0),
+            read_page_json(vec![], None, 0),
         ));
         let failure = take_requests(respond(&mut app, &reload, json!({"ok": false})));
         assert!(
@@ -11012,11 +11005,7 @@ mod tests {
             .find_map(|(id, kind)| matches!(kind, RequestKind::History { .. }).then_some(*id))
             .map(|id| OutgoingRequest::session_history(id, "ses_1", Some(0), Some(20)))
             .expect("reload failure starts a fresh history reconciliation");
-        take_requests(respond(
-            &mut app,
-            &retry,
-            history_page_json(vec![], None, 0),
-        ));
+        take_requests(respond(&mut app, &retry, read_page_json(vec![], None, 0)));
         assert!(!app.sessions.known["ses_1"].event_gap);
         assert!(app.sessions.known["ses_1"].transcript.complete);
         assert!(app.sessions.known["ses_1"].state.is_none());
@@ -11079,11 +11068,11 @@ mod tests {
         take_requests(respond(&mut app, &fresh_state, state_json("ses_1", "idle")));
         let history = take_requests(app.start_gap_reconcile(&"ses_1".to_owned()));
         assert_eq!(history.len(), 1);
-        assert_eq!(history[0].method, "session.history");
+        assert_eq!(history[0].method, "session.read");
         take_requests(respond(
             &mut app,
             &history[0],
-            history_page_json(vec![], None, 0),
+            read_page_json(vec![], None, 0),
         ));
         assert!(!app.sessions.known["ses_1"].event_gap);
         assert!(app.sessions.known["ses_1"].transcript.complete);
@@ -11102,7 +11091,7 @@ mod tests {
         ready(&mut app);
         open_session(&mut app, "ses_1");
 
-        let old_history = match app.request_history(&"ses_1".to_owned(), 0, DEFAULT_HISTORY_LIMIT) {
+        let old_history = match app.request_history(&"ses_1".to_owned()) {
             AppCommand::Rpc(request) => request,
             _ => unreachable!(),
         };
@@ -11120,7 +11109,7 @@ mod tests {
             .expect("reload failure starts state recovery");
         let history = recovery
             .iter()
-            .find(|request| request.method == "session.history")
+            .find(|request| request.method == "session.read")
             .cloned()
             .expect("reload failure starts history recovery");
 
@@ -11140,7 +11129,7 @@ mod tests {
         take_requests(respond(
             &mut app,
             &history,
-            history_page_json(Vec::new(), None, 0),
+            read_page_json(Vec::new(), None, 0),
         ));
         assert!(!app.sessions.known["ses_1"].event_gap);
         assert!(app.sessions.known["ses_1"].transcript.complete);
@@ -11193,7 +11182,7 @@ mod tests {
         ready(&mut app);
         open_session(&mut app, "ses_1");
 
-        let old_history = match app.request_history(&"ses_1".to_owned(), 0, DEFAULT_HISTORY_LIMIT) {
+        let old_history = match app.request_history(&"ses_1".to_owned()) {
             AppCommand::Rpc(request) => request,
             _ => unreachable!(),
         };
@@ -11210,7 +11199,7 @@ mod tests {
             .expect("reload failure starts state recovery");
         let history = recovery
             .iter()
-            .find(|request| request.method == "session.history")
+            .find(|request| request.method == "session.read")
             .cloned()
             .expect("reload failure starts history recovery");
 
@@ -11234,7 +11223,7 @@ mod tests {
         take_requests(respond(
             &mut app,
             &history,
-            history_page_json(Vec::new(), None, 0),
+            read_page_json(Vec::new(), None, 0),
         ));
         assert!(!app.sessions.known["ses_1"].event_gap);
         assert!(app.sessions.known["ses_1"].transcript.complete);
@@ -11322,7 +11311,7 @@ mod tests {
         take_requests(respond(
             &mut app,
             &history[0],
-            history_page_json(Vec::new(), None, 0),
+            read_page_json(Vec::new(), None, 0),
         ));
 
         assert!(app.sessions.known["ses_1"].event_gap);
@@ -11409,11 +11398,11 @@ mod tests {
             running_state_json("ses_1", "loop_after_reload"),
         ));
         assert_eq!(history.len(), 1);
-        assert_eq!(history[0].method, "session.history");
+        assert_eq!(history[0].method, "session.read");
         let after_reload = take_requests(respond(
             &mut app,
             &history[0],
-            history_page_json(Vec::new(), None, 0),
+            read_page_json(Vec::new(), None, 0),
         ));
         let fresh_state = after_reload
             .iter()
@@ -11578,7 +11567,7 @@ mod tests {
         let after_reload = take_requests(respond(
             &mut app,
             &staged_history,
-            history_page_json(Vec::new(), None, 0),
+            read_page_json(Vec::new(), None, 0),
         ));
         let reload_state = after_reload
             .iter()
@@ -11658,7 +11647,7 @@ mod tests {
             .expect("A completion requests one fresh idle state");
         let history = after_wait
             .iter()
-            .find(|request| request.method == "session.history")
+            .find(|request| request.method == "session.read")
             .cloned()
             .expect("A completion requests terminal history");
         assert!(
@@ -11682,7 +11671,7 @@ mod tests {
         let after_history = take_requests(respond(
             &mut app,
             &history,
-            history_page_json(
+            read_page_json(
                 vec![
                     user_item(0, "loop_a", "original user input"),
                     assistant_item(1, "loop_a", "A completed"),
@@ -11904,7 +11893,7 @@ mod tests {
         assert!(
             recovery
                 .iter()
-                .any(|request| request.method == "session.history")
+                .any(|request| request.method == "session.read")
         );
         assert!(
             recovery
@@ -11933,7 +11922,7 @@ mod tests {
             .clone();
         let recovery_history = recovery
             .iter()
-            .find(|request| request.method == "session.history")
+            .find(|request| request.method == "session.read")
             .unwrap()
             .clone();
         take_requests(respond(
@@ -11944,7 +11933,7 @@ mod tests {
         take_requests(respond(
             &mut app,
             &recovery_history,
-            history_page_json(Vec::new(), None, 0),
+            read_page_json(Vec::new(), None, 0),
         ));
         assert!(!app.sessions.known["ses_1"].event_gap);
         assert!(app.sessions.known["ses_1"].transcript.complete);
@@ -12041,12 +12030,12 @@ mod tests {
         let recovery = take_requests(respond(
             &mut app,
             &history[0],
-            history_page_json(vec![], None, 0),
+            read_page_json(vec![], None, 0),
         ));
         assert!(
             recovery
                 .iter()
-                .any(|request| request.method == "session.history")
+                .any(|request| request.method == "session.read")
         );
         assert!(
             recovery
@@ -12058,13 +12047,9 @@ mod tests {
 
         let recovery = recovery
             .iter()
-            .find(|request| request.method == "session.history")
+            .find(|request| request.method == "session.read")
             .unwrap();
-        take_requests(respond(
-            &mut app,
-            recovery,
-            history_page_json(vec![], None, 0),
-        ));
+        take_requests(respond(&mut app, recovery, read_page_json(vec![], None, 0)));
         assert!(!app.sessions.known["ses_1"].event_gap);
         assert!(app.sessions.known["ses_1"].transcript.complete);
     }
@@ -12098,15 +12083,12 @@ mod tests {
         );
         let history = reads
             .iter()
-            .find(|request| request.method == "session.history")
+            .find(|request| request.method == "session.read")
             .expect("late create ACK starts a history read");
         let kind = app.pending_requests.get(&history.id);
         assert!(matches!(
             kind,
-            Some(RequestKind::History {
-                gap_revision: Some(1),
-                ..
-            })
+            Some(RequestKind::History { read, .. }) if read.gap_revision == 1
         ));
     }
 
@@ -12144,7 +12126,7 @@ mod tests {
         assert!(
             recovery
                 .iter()
-                .any(|request| request.method == "session.history")
+                .any(|request| request.method == "session.read")
         );
     }
 
@@ -12187,33 +12169,63 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_rejects_version_0_2_0_and_latches_failed() {
+    fn bootstrap_rejects_a_non_v1_protocol_and_latches_failed() {
         let mut app = test_app();
         let requests = take_requests(app.update(AppEvent::Bootstrap));
         let ping_req = requests.iter().find(|r| r.method == "agent.ping").unwrap();
-        respond(&mut app, ping_req, json!({"version": "0.2.0"}));
+        respond(
+            &mut app,
+            ping_req,
+            json!({
+                "version": "0.5.0",
+                "protocol_version": 0,
+                "capabilities": crate::protocol::REQUIRED_CAPABILITIES,
+            }),
+        );
         assert!(matches!(app.connection, ConnectionState::Failed(_)));
         let notice = app.notices.back().unwrap();
         assert_eq!(notice.level, NoticeLevel::Error);
-        assert!(notice.text.contains("0.2.0"));
+        assert!(
+            notice.text.contains("protocol_version"),
+            "notice names the protocol mismatch: {}",
+            notice.text
+        );
     }
 
     #[test]
-    fn bootstrap_rejects_version_0_4_0_and_latches_failed() {
+    fn bootstrap_rejects_a_backend_missing_required_capabilities() {
         let mut app = test_app();
         let requests = take_requests(app.update(AppEvent::Bootstrap));
         let ping_req = requests.iter().find(|r| r.method == "agent.ping").unwrap();
-        respond(&mut app, ping_req, json!({"version": "0.4.0"}));
+        respond(
+            &mut app,
+            ping_req,
+            json!({
+                "version": "0.5.0",
+                "protocol_version": 1,
+                "capabilities": ["session.read"],
+            }),
+        );
         assert!(matches!(app.connection, ConnectionState::Failed(_)));
+        let notice = app.notices.back().unwrap();
+        assert!(
+            notice.text.contains("tool.read"),
+            "notice names a missing capability: {}",
+            notice.text
+        );
     }
 
     #[test]
-    fn bootstrap_accepts_prerelease_0_3_1_rc_1() {
+    fn bootstrap_accepts_a_v1_backend_with_the_full_capability_set() {
         let mut app = test_app();
         let requests = take_requests(app.update(AppEvent::Bootstrap));
         for req in &requests {
             let res = match req.method {
-                "agent.ping" => json!({"version": "0.3.1-rc.1"}),
+                "agent.ping" => json!({
+                    "version": "0.5.0",
+                    "protocol_version": 1,
+                    "capabilities": crate::protocol::REQUIRED_CAPABILITIES,
+                }),
                 "model.list" => json!({"models": []}),
                 "profile.list" => json!({"profiles": []}),
                 "session.list" => json!({"sessions": []}),
@@ -12221,11 +12233,7 @@ mod tests {
             };
             take_requests(respond(&mut app, req, res));
         }
-        if cfg!(debug_assertions) {
-            assert_eq!(app.connection, ConnectionState::Ready);
-        } else {
-            assert!(matches!(app.connection, ConnectionState::Failed(_)));
-        }
+        assert_eq!(app.connection, ConnectionState::Ready);
     }
 
     #[test]
@@ -12251,7 +12259,7 @@ mod tests {
             .unwrap();
         let history_request = requests
             .iter()
-            .find(|r| r.method == "session.history")
+            .find(|r| r.method == "session.read")
             .unwrap();
         let presentation_request = requests
             .iter()
@@ -12275,7 +12283,7 @@ mod tests {
         ));
 
         // Page 1 is partial
-        let page1 = history_page_json(
+        let page1 = read_page_json(
             vec![
                 user_item(0, "loop_1", "hello"),
                 assistant_item(1, "loop_1", "hi back"),
@@ -12286,14 +12294,23 @@ mod tests {
         let commands = respond(&mut app, history_request, page1);
         let requests = take_requests(commands);
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].method, "session.history");
+        assert_eq!(requests[0].method, "session.read");
         assert_eq!(
             app.pending_requests.get(&requests[0].id),
             Some(&RequestKind::History {
                 session_id: "ses_1".into(),
-                offset: 2,
-                limit: 20,
-                gap_revision: Some(0),
+                read: ReadRequest {
+                    cursor: crate::protocol::ReadCursor { item: 2, offset: 0 },
+                    pin: Some(crate::protocol::SnapshotPin {
+                        captured_end: 3,
+                        history_revision: "unit-revision".to_owned(),
+                        total: 3,
+                    }),
+                    window_start: 2,
+                    replacement: false,
+                    reconcile: false,
+                    gap_revision: 0,
+                },
             })
         );
         assert!(app.sessions.known["ses_1"].loading);
@@ -12302,7 +12319,7 @@ mod tests {
         let commands = respond(
             &mut app,
             &requests[0],
-            history_page_json(vec![user_item(2, "loop_1", "follow up")], None, 3),
+            read_page_json(vec![user_item(2, "loop_1", "follow up")], None, 3),
         );
         assert!(take_requests(commands).is_empty());
         let view = &app.sessions.known["ses_1"];
@@ -12772,7 +12789,7 @@ mod tests {
         ];
 
         let req = take_requests(app.clear_transcript());
-        respond(&mut app, &req[0], history_page_json(items, None, 4));
+        respond(&mut app, &req[0], read_page_json(items, None, 4));
 
         let view = &app.sessions.known["ses_1"];
         assert_eq!(view.transcript.blocks.len(), 4); // user, assistant, orphan tool_result, summary
@@ -13841,10 +13858,11 @@ mod tests {
                     "loop_id": "loop_1",
                     "request_index": 0,
                     "model": "deep",
-                    "reasoning_level": "high",
-                    "text": "See [docs](https://example.com/doc) then read.",
-                    "reasoning": "",
-                    "tool_calls": [{"tool_call_id": "call-1", "name": "read", "call_index": 0}],
+                    "reasoning": "high",
+                    "content": [
+                        {"type": "text", "data": "See [docs](https://example.com/doc) then read."},
+                        {"type": "tool_call", "data": {"tool_call_id": "call-1", "name": "read", "arguments": {}, "call_index": 0}}
+                    ],
                     "usage": {},
                     "finish_reason": "tool_calls"
                 }
@@ -13854,7 +13872,7 @@ mod tests {
         respond(
             &mut app,
             &holes[0],
-            history_page_json(
+            read_page_json(
                 vec![
                     user_item(0, "loop_1", "run the tools"),
                     assistant,
@@ -14029,10 +14047,11 @@ mod tests {
                     "loop_id": "loop_1",
                     "request_index": 0,
                     "model": "deep",
-                    "reasoning_level": "high",
-                    "text": "See [`inline`](https://e.com/code) and **bold [link](https://e.com/b)** and plain.",
-                    "reasoning": "",
-                    "tool_calls": [{"tool_call_id": "call-1", "name": "read", "call_index": 0}],
+                    "reasoning": "high",
+                    "content": [
+                        {"type": "text", "data": "See [`inline`](https://e.com/code) and **bold [link](https://e.com/b)** and plain."},
+                        {"type": "tool_call", "data": {"tool_call_id": "call-1", "name": "read", "arguments": {}, "call_index": 0}}
+                    ],
                     "usage": {},
                     "finish_reason": "tool_calls"
                 }
@@ -14042,7 +14061,7 @@ mod tests {
         respond(
             &mut app,
             &holes[0],
-            history_page_json(
+            read_page_json(
                 vec![
                     user_item(0, "loop_1", "run"),
                     assistant,
@@ -14179,6 +14198,73 @@ mod steer_receipt_tests {
                 error: None,
             },
         ))))
+    }
+
+    /// Encodes a Runtime item envelope as a one-chunk Protocol v1 read page.
+    fn read_page_json(items: Vec<Value>, next_cursor: Option<usize>, total: usize) -> Value {
+        let chunks: Vec<Value> = items
+            .iter()
+            .map(|envelope| {
+                let index = envelope.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                let item = envelope.get("item").cloned().unwrap_or(Value::Null);
+                let data = serde_json::to_string(&json!({"item": item})).unwrap();
+                let total_bytes = data.len();
+                json!({
+                    "index": index,
+                    "offset": 0,
+                    "total_bytes": total_bytes,
+                    "encoding": "utf8_json",
+                    "data": data,
+                    "complete": true
+                })
+            })
+            .collect();
+        let mut page = json!({
+            "session": super::tests::session_info("ses_1"),
+            "items": chunks,
+            "total": total,
+            "records": [],
+            "records_truncated": false,
+            "history_revision": "unit-revision",
+            "captured_end": total as u64,
+            "trailing_incomplete": false
+        });
+        if let Some(item) = next_cursor {
+            page["next_cursor"] = json!({"item": item, "offset": 0});
+        }
+        page
+    }
+
+    fn user_item(index: usize, loop_id: &str, text: &str) -> Value {
+        json!({
+            "index": index,
+            "item": {
+                "type": "user",
+                "data": {
+                    "loop_id": loop_id,
+                    "kind": "prompt",
+                    "input": {"text": text}
+                }
+            }
+        })
+    }
+
+    fn assistant_item(index: usize, loop_id: &str, text: &str) -> Value {
+        json!({
+            "index": index,
+            "item": {
+                "type": "assistant",
+                "data": {
+                    "loop_id": loop_id,
+                    "request_index": 0,
+                    "model": "deep",
+                    "reasoning": "high",
+                    "content": [{"type": "text", "data": text}],
+                    "usage": {},
+                    "finish_reason": "stop"
+                }
+            }
+        })
     }
 
     /// Submits one steer; returns the issued turn.steer request when the
@@ -14344,18 +14430,24 @@ mod steer_receipt_tests {
         // MID-LOOP history page (live still present, no last_result): the
         // accepted steer missing from the page must stay Queued (never a
         // mid-loop NotRecorded downgrade).
+        let read = ReadRequest {
+            cursor: crate::protocol::ReadCursor::start(),
+            pin: None,
+            window_start: 0,
+            replacement: true,
+            reconcile: true,
+            gap_revision: 0,
+        };
         let mid_loop = RpcResponse {
             id: RequestId(1),
-            result: Some(serde_json::json!({
-                "items": [
-                    {"index": 0, "item": {"type": "user", "data": {"loop_id": "loop_live", "kind": "prompt", "text": "stream me"}}}
-                ],
-                "next_offset": null,
-                "total": 1
-            })),
+            result: Some(read_page_json(
+                vec![user_item(0, "loop_live", "stream me")],
+                None,
+                1,
+            )),
             error: None,
         };
-        app.on_history_response(&"ses_1".into(), 0, None, &mid_loop);
+        app.on_history_response(&"ses_1".into(), &read, &mid_loop);
         assert_eq!(
             app.sessions.known["ses_1"]
                 .live
@@ -14391,17 +14483,17 @@ mod steer_receipt_tests {
         }
         let terminal = RpcResponse {
             id: RequestId(1),
-            result: Some(serde_json::json!({
-                "items": [
-                    {"index": 0, "item": {"type": "user", "data": {"loop_id": "loop_live", "kind": "prompt", "text": "stream me"}}},
-                    {"index": 1, "item": {"type": "assistant", "data": {"loop_id": "loop_live", "request_index": 0, "model": "deep", "text": "answer", "reasoning": ""}}}
+            result: Some(read_page_json(
+                vec![
+                    user_item(0, "loop_live", "stream me"),
+                    assistant_item(1, "loop_live", "answer"),
                 ],
-                "next_offset": null,
-                "total": 2
-            })),
+                None,
+                2,
+            )),
             error: None,
         };
-        app.on_history_response(&"ses_1".into(), 0, None, &terminal);
+        app.on_history_response(&"ses_1".into(), &read, &terminal);
         let view = &app.sessions.known["ses_1"];
         let terminal_state = view
             .live

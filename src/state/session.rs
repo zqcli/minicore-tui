@@ -102,6 +102,9 @@ pub struct SessionView {
     pub scroll: ScrollState,
     /// A history chain is being fetched page by page.
     pub loading: bool,
+    /// The in-flight `session.read` page, if any. Owns the chunk assembler so
+    /// a page outside the window never contaminates the window.
+    pub read_page: Option<crate::app::history::ReadPage>,
     /// Durable history is unconfirmed after a dropped event or history
     /// failure; destructive lifecycle actions must wait for aligned history.
     pub event_gap: bool,
@@ -173,6 +176,7 @@ impl SessionView {
             unsaved_loop: None,
             scroll: ScrollState::default(),
             loading: false,
+            read_page: None,
             event_gap: false,
             reconcile_inflight: false,
             needs_post_wait_history: false,

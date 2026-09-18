@@ -4,12 +4,12 @@
  "method": "session.state",
  "provenance": "source_deterministic",
  "request": {
-  "session_id": "ses_b03cd2cff937713f4dde0811f508528c"
+  "session_id": "ses_e5a1c6dfefc7ceac4dbd6a3f289a533f"
  },
  "result": {
   "active_loop": {
    "config_revision": 0,
-   "loop_id": "lup_0fa876d821127ec8e3b3432ff339d63e",
+   "loop_id": "lup_e5dbadf997db79787de0fd958abf739f",
    "model": "deep",
    "pending_interaction": null,
    "request_index": 0,
@@ -22,7 +22,7 @@
    "phase": "summarizing",
    "retained_item_count": 0
   },
-  "session_id": "ses_b03cd2cff937713f4dde0811f508528c",
+  "session_id": "ses_e5a1c6dfefc7ceac4dbd6a3f289a533f",
   "status": "running"
  }
 }

@@ -510,3 +510,83 @@ fn session_context_separates_estimates_from_unknowns() {
     assert!(context["budget"]["estimated_request_context_tokens"].is_null());
     assert!(context["automatic"]["current"].is_null());
 }
+
+/// The extended tool facts are decoded from real captured `agent.event`
+/// notifications, not a hand-written DTO guess. This is the shape the pinned
+/// Agent 0.5.0 actually emits for `tool_invocation`, `tool_execution`, and
+/// `tool_process` (spec §7). Stage B1 decodes and gap-tracks them.
+#[test]
+fn tool_event_notifications_decode_from_the_real_agent_wire() {
+    use minicore_tui::protocol::{AgentEventWire, IncomingFrame, RpcNotification, parse_frame};
+
+    let decode = |name: &str| {
+        let value = fixture(name);
+        // The fixture keeps the recorded `agent.event` params; wrap them in the
+        // real envelope so the production frame parser is exercised.
+        let frame = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "agent.event",
+            "params": value["notification"],
+        });
+        let line = serde_json::to_vec(&frame).unwrap();
+        match parse_frame(&line) {
+            Ok(IncomingFrame::Notification(RpcNotification::AgentEvent(event))) => event,
+            other => panic!("{name} did not decode into a real agent event: {other:?}"),
+        }
+    };
+
+    match decode("event-tool-invocation") {
+        AgentEventWire::ToolInvocation { data } => {
+            assert_eq!(data.data.name, "bash");
+            assert_eq!(data.data.tool_ref.request_index, 0);
+            assert_eq!(data.data.tool_ref.tool_call_id, "call_fixture_bash");
+            // Real input is a bounded summary, never the full arguments again.
+            assert_eq!(data.data.input.encoding, "utf8_json");
+            assert!(data.data.input.total_bytes > 0);
+            match data.data.subject {
+                minicore_tui::protocol::ToolSubjectWire::Command { script, .. } => {
+                    assert!(script.contains("sleep"));
+                }
+                other => panic!("expected a command subject, got {other:?}"),
+            }
+            assert_eq!(data.meta.dropped_before, 0);
+        }
+        other => panic!("expected tool_invocation, got {other:?}"),
+    }
+
+    match decode("event-tool-execution") {
+        AgentEventWire::ToolExecution { data } => {
+            assert_eq!(
+                data.data.state,
+                minicore_tui::protocol::ToolExecutionStateWire::Succeeded
+            );
+            assert_eq!(
+                data.data.output_availability,
+                minicore_tui::protocol::ToolDataAvailabilityWire::Available
+            );
+            let command = data.data.command.expect("a real command result");
+            assert_eq!(
+                command.status,
+                minicore_tui::protocol::CommandStatusWire::Exited
+            );
+            assert_eq!(command.exit_code, Some(0));
+            // A real end of output is distinct from a truncation.
+            assert!(command.output_complete);
+            assert!(!command.output_truncated);
+        }
+        other => panic!("expected tool_execution, got {other:?}"),
+    }
+
+    match decode("event-tool-process") {
+        AgentEventWire::ToolProcess { data } => {
+            assert_eq!(data.data.tool_ref.tool_call_id, "call_fixture_bash");
+            // A chunk is optional: a process fact may carry only command state.
+            if let Some(chunk) = data.data.chunk {
+                assert_eq!(chunk.encoding, "base64");
+                // Offsets count raw bytes, never base64 positions.
+                assert!(chunk.next_offset >= chunk.base_offset);
+            }
+        }
+        other => panic!("expected tool_process, got {other:?}"),
+    }
+}

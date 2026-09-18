@@ -5,7 +5,7 @@
  "provenance": "source_deterministic",
  "request": {
   "operation_id": "fixture-noop-1",
-  "session_id": "ses_c9622265393bf7ada66966212021765d"
+  "session_id": "ses_21d1c729f9fe84220d00e0c57fa3ee13"
  },
  "result": {
   "covered_item_count": 0,

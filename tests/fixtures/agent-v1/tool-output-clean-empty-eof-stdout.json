@@ -2,11 +2,11 @@
  "fixture": "tool-output-clean-empty-eof-stdout",
  "method": "tool.output",
  "request": {
-  "loop_id": "lup_9c861fdb8f0e6454198839df4e07c9f4",
+  "loop_id": "lup_4c8acfcbfd4d6ad744fd175286a4339f",
   "max_bytes": 65536,
   "offset": 0,
   "request_index": 0,
-  "session_id": "ses_868653b86d9508f1de1007053a4b7aa3",
+  "session_id": "ses_c59689b577a306a6010d07108be7a89e",
   "stream": "stdout",
   "tool_call_id": "call_fixture_empty"
  },
@@ -20,9 +20,9 @@
   "observed_end": 0,
   "stream": "stdout",
   "tool_ref": {
-   "loop_id": "lup_9c861fdb8f0e6454198839df4e07c9f4",
+   "loop_id": "lup_4c8acfcbfd4d6ad744fd175286a4339f",
    "request_index": 0,
-   "session_id": "ses_868653b86d9508f1de1007053a4b7aa3",
+   "session_id": "ses_c59689b577a306a6010d07108be7a89e",
    "tool_call_id": "call_fixture_empty"
   },
   "truncated": false

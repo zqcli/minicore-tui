@@ -62,7 +62,14 @@ impl Driver {
     fn ready_session(&mut self, id: &str) {
         self.step(AppEvent::Bootstrap);
         for (method, result) in [
-            ("agent.ping", json!({"version": "0.3.0"})),
+            (
+                "agent.ping",
+                json!({
+                    "version": "0.5.0",
+                    "protocol_version": 1,
+                    "capabilities": minicore_tui::protocol::REQUIRED_CAPABILITIES,
+                }),
+            ),
             ("model.list", json!({"models": []})),
             ("profile.list", json!({"profiles": []})),
             ("session.list", json!({"sessions": []})),
@@ -91,12 +98,23 @@ impl Driver {
             &presentation,
             json!({"session_id": id, "context": {"kind": "unknown"}}),
         );
-        let history = self.request("session.history");
-        self.respond(
-            &history,
-            json!({"items": [], "next_offset": null, "total": 0}),
-        );
+        let history = self.request("session.read");
+        self.respond(&history, read_page(id));
     }
+}
+
+/// A complete, empty Protocol v1 read page for `id`.
+fn read_page(id: &str) -> Value {
+    json!({
+        "session": session(id),
+        "items": [],
+        "total": 0,
+        "records": [],
+        "records_truncated": false,
+        "history_revision": "unit-revision",
+        "captured_end": 0,
+        "trailing_incomplete": false
+    })
 }
 
 fn session(id: &str) -> Value {

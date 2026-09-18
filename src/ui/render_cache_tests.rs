@@ -644,7 +644,8 @@ fn user_gap_app(second_kind: &str) -> App {
             json!({
                 "index": 1,
                 "item": {"type": "user", "data": {
-                    "loop_id": "loop_2", "kind": second_kind, "text": "second message"
+                    "loop_id": "loop_2", "kind": second_kind,
+                    "input": {"text": "second message"}
                 }}
             }),
         ],

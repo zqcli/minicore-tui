@@ -2393,6 +2393,7 @@ fn event_gap_blocks_session_panel_close_and_delete_but_allows_rename() {
         status: crate::protocol::SessionStatusWire::Idle,
         active_loop: None,
         block_reason: None,
+        compaction: None,
     });
 
     let key =
@@ -2769,6 +2770,7 @@ fn session_selector_query_refresh_and_footer_actions_keep_filtered_target() {
                     status: crate::protocol::SessionStatusWire::Idle,
                     active_loop: None,
                     block_reason: None,
+                    compaction: None,
                 });
         }
         app.sessions.active = Some("ses_survivor".to_owned());
@@ -2983,6 +2985,7 @@ fn session_rename_dialog_freezes_target_and_reconciles_before_footer_actions() {
                     status: crate::protocol::SessionStatusWire::Idle,
                     active_loop: None,
                     block_reason: None,
+                    compaction: None,
                 });
         }
         testapp::open_session_selector(&mut app, session_list);
@@ -3208,6 +3211,7 @@ fn session_rename_ack_clears_hidden_target_when_query_has_no_matches() {
                 status: crate::protocol::SessionStatusWire::Idle,
                 active_loop: None,
                 block_reason: None,
+                compaction: None,
             });
     }
     testapp::open_session_selector(&mut app, sessions);
@@ -3335,6 +3339,7 @@ fn session_panel_cancel_reconciles_after_frozen_target_updates() {
                     status: crate::protocol::SessionStatusWire::Idle,
                     active_loop: None,
                     block_reason: None,
+                    compaction: None,
                 });
         }
         testapp::open_session_selector(&mut app, session_list);
@@ -3689,7 +3694,7 @@ fn help_and_logs_body_paging_does_not_scroll_the_transcript() {
             view.scroll.offset,
             view.scroll.follow_tail,
             view.scroll.new_content,
-            view.transcript.items.clone(),
+            (view.transcript.window.len(), view.transcript.window.total()),
             view.transcript.blocks.clone(),
         )
     };

@@ -8,15 +8,15 @@
   },
   "limit": 20,
   "max_bytes": 262144,
-  "session_id": "ses_b03cd2cff937713f4dde0811f508528c"
+  "session_id": "ses_e5a1c6dfefc7ceac4dbd6a3f289a533f"
  },
  "result": {
   "captured_end": 853,
-  "history_revision": "d190ab420369439ec652741d17489d8f64a058106c9d681563da2f48c38b287c",
+  "history_revision": "42185d7ace10793d23c829710c482d05f4b099bc27c6bc081d2985b21faddf05",
   "items": [
    {
     "complete": true,
-    "data": "{\"item\":{\"type\":\"user\",\"data\":{\"loop_id\":\"lup_0fa876d821127ec8e3b3432ff339d63e\",\"kind\":\"prompt\",\"input\":{\"text\":\"say hello\"}}},\"timestamp\":\"2026-09-18T06:24:06.324Z\"}",
+    "data": "{\"item\":{\"type\":\"user\",\"data\":{\"loop_id\":\"lup_e5dbadf997db79787de0fd958abf739f\",\"kind\":\"prompt\",\"input\":{\"text\":\"say hello\"}}},\"timestamp\":\"2026-09-18T08:38:23.882Z\"}",
     "encoding": "utf8_json",
     "index": 0,
     "offset": 0,
@@ -24,7 +24,7 @@
    },
    {
     "complete": true,
-    "data": "{\"item\":{\"type\":\"assistant\",\"data\":{\"loop_id\":\"lup_0fa876d821127ec8e3b3432ff339d63e\",\"request_index\":0,\"model\":\"deep\",\"reasoning\":\"high\",\"content\":[{\"type\":\"text\",\"data\":\"hello from the fixture loopback\"}],\"finish_reason\":\"stop\",\"usage\":{\"input_tokens\":10,\"output_tokens\":12,\"reasoning_tokens\":0,\"cache_read_tokens\":0,\"cache_write_tokens\":0,\"provider_total_tokens\":22}}}}",
+    "data": "{\"item\":{\"type\":\"assistant\",\"data\":{\"loop_id\":\"lup_e5dbadf997db79787de0fd958abf739f\",\"request_index\":0,\"model\":\"deep\",\"reasoning\":\"high\",\"content\":[{\"type\":\"text\",\"data\":\"hello from the fixture loopback\"}],\"finish_reason\":\"stop\",\"usage\":{\"input_tokens\":10,\"output_tokens\":12,\"reasoning_tokens\":0,\"cache_read_tokens\":0,\"cache_write_tokens\":0,\"provider_total_tokens\":22}}}}",
     "encoding": "utf8_json",
     "index": 1,
     "offset": 0,
@@ -34,9 +34,9 @@
   "next_cursor": null,
   "records": [
    {
-    "completed_at": "2026-09-18T06:24:06.329Z",
+    "completed_at": "2026-09-18T08:38:23.887Z",
     "final_config_revision": 0,
-    "loop_id": "lup_0fa876d821127ec8e3b3432ff339d63e",
+    "loop_id": "lup_e5dbadf997db79787de0fd958abf739f",
     "outcome": {
      "type": "completed"
     },
@@ -54,14 +54,14 @@
   ],
   "records_truncated": false,
   "session": {
-   "created_at": "2026-09-18T06:24:06.320Z",
+   "created_at": "2026-09-18T08:38:23.878Z",
    "loaded": true,
    "model": "deep",
    "profile": "coding",
    "reasoning": "high",
-   "session_id": "ses_b03cd2cff937713f4dde0811f508528c",
+   "session_id": "ses_e5a1c6dfefc7ceac4dbd6a3f289a533f",
    "title": null,
-   "updated_at": "2026-09-18T06:24:06.329Z",
+   "updated_at": "2026-09-18T08:38:23.887Z",
    "workspace": "<tmp>//basic/workspace"
   },
   "total": 2,

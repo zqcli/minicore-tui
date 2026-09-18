@@ -2,7 +2,7 @@
  "fixture": "session-context-idle",
  "method": "session.context",
  "request": {
-  "session_id": "ses_ad0fee94fecc678df6c21163a02f5bb9"
+  "session_id": "ses_7880a3746e1bf8e66ff3eb8cc88fbc24"
  },
  "result": {
   "automatic": {
@@ -29,6 +29,6 @@
   "current_operation": null,
   "last_prepare_failure": null,
   "last_result": null,
-  "session_id": "ses_ad0fee94fecc678df6c21163a02f5bb9"
+  "session_id": "ses_7880a3746e1bf8e66ff3eb8cc88fbc24"
  }
 }

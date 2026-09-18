@@ -2,14 +2,14 @@
  "fixture": "turn-send",
  "method": "turn.send",
  "request": {
-  "session_id": "ses_b03cd2cff937713f4dde0811f508528c",
+  "session_id": "ses_e5a1c6dfefc7ceac4dbd6a3f289a533f",
   "text": "<synthetic>"
  },
  "result": {
-  "accepted_at": "2026-09-18T06:24:06.324Z",
+  "accepted_at": "2026-09-18T08:38:23.882Z",
   "turn": {
-   "loop_id": "lup_0fa876d821127ec8e3b3432ff339d63e",
-   "session_id": "ses_b03cd2cff937713f4dde0811f508528c"
+   "loop_id": "lup_e5dbadf997db79787de0fd958abf739f",
+   "session_id": "ses_e5a1c6dfefc7ceac4dbd6a3f289a533f"
   }
  }
 }

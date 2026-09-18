@@ -21,9 +21,9 @@ use minicore_tui::app::{App, ConnectionState, RequestKind};
 use minicore_tui::command::AppCommand;
 use minicore_tui::event::{AppEvent, RpcEvent};
 use minicore_tui::protocol::{
-    AgentEventWire, CancelReasonWire, HistoryItemWire, IncomingFrame, LoopOutcomeWire,
-    OutgoingRequest, Reasoning, RequestId, RpcNotification, ToolCallViewWire, TurnPersistenceWire,
-    TurnRef, TurnResultViewWire, UserMessageKindWire,
+    AgentEventWire, CancelReasonWire, IncomingFrame, LoopOutcomeWire, OutgoingRequest, Reasoning,
+    RequestId, RpcNotification, RuntimeAssistantPart, RuntimeItem, RuntimeUserKind,
+    ToolCallViewWire, TurnPersistenceWire, TurnRef, TurnResultViewWire,
 };
 use minicore_tui::rpc::RpcProcess;
 use minicore_tui::state::session::ConfigUpdateState;
@@ -46,6 +46,42 @@ const MAX_HTTP_BODY_SIZE: usize = 1024 * 1024;
 fn require_agent_bin() -> String {
     std::env::var("MINICORE_AGENT_BIN")
         .expect("MINICORE_AGENT_BIN must be set to run agent_e2e tests; cannot silently pass")
+}
+
+/// Concatenates the visible text parts of a Runtime assistant item.
+fn assistant_text(item: &minicore_tui::protocol::RuntimeAssistantItem) -> String {
+    item.content
+        .iter()
+        .filter_map(|part| match part {
+            RuntimeAssistantPart::Text(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+/// Projects a Runtime assistant item's tool-call parts onto the display DTO
+/// the assertions were written against.
+fn assistant_tool_calls(
+    item: &minicore_tui::protocol::RuntimeAssistantItem,
+) -> Vec<ToolCallViewWire> {
+    item.content
+        .iter()
+        .filter_map(|part| match part {
+            RuntimeAssistantPart::ToolCall {
+                tool_call_id,
+                name,
+                call_index,
+                ..
+            } => Some(ToolCallViewWire {
+                tool_call_id: tool_call_id.clone(),
+                name: name.clone(),
+                call_index: *call_index,
+                display: None,
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 // ============================================================================
@@ -704,9 +740,9 @@ async fn wait_turn_landed(
             view.live.is_none()
                 && view
                     .transcript
-                    .items
-                    .iter()
-                    .any(|entry| matches!(&entry.item, HistoryItemWire::User(_)))
+                    .window
+                    .items()
+                    .any(|(_, entry)| matches!(&entry.item, RuntimeItem::User(_)))
         })
     })
     .await
@@ -1201,7 +1237,7 @@ fn e2e_scenario_b_basic_turn() {
         assert_eq!(reqs.len(), 1, "Expected exactly 1 HTTP request");
 
         let view = &app.sessions.known[&session_id];
-        assert!(!view.transcript.items.is_empty());
+        assert!(!view.transcript.window.is_empty());
 
         let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
         assert!(rep.shutdown_ok);
@@ -1394,9 +1430,9 @@ fn e2e_scenario_c_tool_execution() {
         let view = &app.sessions.known[&session_id];
         assert!(
             view.transcript
-                .items
-                .iter()
-                .any(|i| matches!(i.item, HistoryItemWire::ToolResult(_)))
+                .window
+                .items()
+                .any(|(_, i)| matches!(&i.item, RuntimeItem::ToolResult(_)))
         );
 
         let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
@@ -1523,8 +1559,8 @@ fn e2e_scenario_d_steer_turn() {
         );
 
         let view = &app.sessions.known[&session_id];
-        assert!(view.transcript.items.iter().any(|i| match &i.item {
-            HistoryItemWire::User(u) => u.kind == UserMessageKindWire::Steering,
+        assert!(view.transcript.window.items().any(|(_, i)| match &i.item {
+            RuntimeItem::User(u) => u.kind == RuntimeUserKind::Steering,
             _ => false,
         }));
 
@@ -1782,9 +1818,9 @@ fn e2e_two_consecutive_steers_both_reach_the_provider() {
                     } else if response.id == ack_b {
                         saw_b = true;
                     }
-                    let commands = app.update(AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Response(
-                        response,
-                    ))));
+                    let commands = app.update(AppEvent::Rpc(RpcEvent::Frame(
+                        IncomingFrame::Response(response),
+                    )));
                     for command in commands {
                         if let AppCommand::Rpc(request) = command {
                             process.send(request).await.unwrap();
@@ -1856,20 +1892,24 @@ fn e2e_two_consecutive_steers_both_reach_the_provider() {
         );
         let batched = user_texts_of(provider.last().unwrap());
         assert!(
-            batched.iter().any(|text| text == "taskA") && batched.iter().any(|text| text == "taskB"),
+            batched.iter().any(|text| text == "taskA")
+                && batched.iter().any(|text| text == "taskB"),
             "the single batched provider request must carry BOTH steers: {batched:?}"
         );
 
         let view = &app.sessions.known[&session_id];
         let steering_in_history = view
             .transcript
-            .items
-            .iter()
-            .filter(|entry| {
-                matches!(&entry.item, HistoryItemWire::User(u) if u.kind == UserMessageKindWire::Steering)
+            .window
+            .items()
+            .filter(|(_, entry)| {
+                matches!(&entry.item, RuntimeItem::User(u) if u.kind == RuntimeUserKind::Steering)
             })
             .count();
-        assert_eq!(steering_in_history, 2, "both steers persist in history once");
+        assert_eq!(
+            steering_in_history, 2,
+            "both steers persist in history once"
+        );
 
         let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
         assert!(rep.shutdown_ok);
@@ -1981,9 +2021,9 @@ fn e2e_fifo_steers_are_paced_until_receipt() {
         pump_until(&mut process, &mut app, |a| {
             a.sessions.known.get(&session_id).is_some_and(|v| {
                 v.steer_queue.iter().any(|item| item.text == "taskB")
-                    && v.live.as_ref().is_some_and(|l| {
-                        l.pending_steers.iter().any(|s| s.text == "taskA")
-                    })
+                    && v.live
+                        .as_ref()
+                        .is_some_and(|l| l.pending_steers.iter().any(|s| s.text == "taskA"))
             })
         })
         .await
@@ -2045,7 +2085,8 @@ fn e2e_fifo_steers_are_paced_until_receipt() {
         };
         let request1 = user_texts(provider[1]);
         assert!(
-            request1.iter().any(|text| text == "taskA") && !request1.iter().any(|text| text == "taskB"),
+            request1.iter().any(|text| text == "taskA")
+                && !request1.iter().any(|text| text == "taskB"),
             "request 1 must carry A and NOT B (pacing), got: {request1:?}"
         );
         let request2 = user_texts(provider[2]);
@@ -2057,13 +2098,16 @@ fn e2e_fifo_steers_are_paced_until_receipt() {
         let view = &app.sessions.known[&session_id];
         let steering_in_history = view
             .transcript
-            .items
-            .iter()
-            .filter(|entry| {
-                matches!(&entry.item, HistoryItemWire::User(u) if u.kind == UserMessageKindWire::Steering)
+            .window
+            .items()
+            .filter(|(_, entry)| {
+                matches!(&entry.item, RuntimeItem::User(u) if u.kind == RuntimeUserKind::Steering)
             })
             .count();
-        assert_eq!(steering_in_history, 2, "both steers persist in history once");
+        assert_eq!(
+            steering_in_history, 2,
+            "both steers persist in history once"
+        );
 
         let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
         assert!(rep.shutdown_ok);
@@ -2172,13 +2216,16 @@ fn e2e_fifo_duplicate_texts_are_paced_and_both_persist() {
         let view = &app.sessions.known[&session_id];
         let steering_in_history = view
             .transcript
-            .items
-            .iter()
-            .filter(|entry| {
-                matches!(&entry.item, HistoryItemWire::User(u) if u.kind == UserMessageKindWire::Steering)
+            .window
+            .items()
+            .filter(|(_, entry)| {
+                matches!(&entry.item, RuntimeItem::User(u) if u.kind == RuntimeUserKind::Steering)
             })
             .count();
-        assert_eq!(steering_in_history, 2, "both duplicate texts persist once each");
+        assert_eq!(
+            steering_in_history, 2,
+            "both duplicate texts persist once each"
+        );
 
         let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
         assert!(rep.shutdown_ok);
@@ -2378,26 +2425,30 @@ fn e2e_scenario_e_same_loop_update() {
         );
 
         // 3. Verify history sequence and labels
-        let items = &view.transcript.items;
-        assert_eq!(items.len(), 4, "Transcript must contain 4 items");
+        assert_eq!(
+            view.transcript.window.len(),
+            4,
+            "Transcript must contain 4 items"
+        );
+        let item = |index: usize| &view.transcript.window.item(index).unwrap().item;
 
-        assert!(matches!(&items[0].item, HistoryItemWire::User(_)));
+        assert!(matches!(item(0), RuntimeItem::User(_)));
 
         // Request 0: must retain original model label 'deep'
-        match &items[1].item {
-            HistoryItemWire::Assistant(a) => {
+        match item(1) {
+            RuntimeItem::Assistant(a) => {
                 assert_eq!(a.request_index, 0);
                 assert_eq!(a.model, "deep");
-                assert_eq!(a.tool_calls.len(), 1);
+                assert_eq!(assistant_tool_calls(a).len(), 1);
             }
             other => panic!("Expected Assistant for item 1, got {:?}", other),
         }
 
-        assert!(matches!(&items[2].item, HistoryItemWire::ToolResult(_)));
+        assert!(matches!(item(2), RuntimeItem::ToolResult(_)));
 
         // Request 1: must show updated model label 'fast'
-        match &items[3].item {
-            HistoryItemWire::Assistant(a) => {
+        match item(3) {
+            RuntimeItem::Assistant(a) => {
                 assert_eq!(a.request_index, 1);
                 assert_eq!(a.model, "fast");
             }
@@ -2748,11 +2799,12 @@ fn e2e_stress_six_loops_ten_requests_no_repeated_final_text() {
         let view = &app.sessions.known[&session_id];
         let finals: Vec<String> = view
             .transcript
-            .items
-            .iter()
-            .filter_map(|entry| match &entry.item {
-                HistoryItemWire::Assistant(text) if !text.text.is_empty() => {
-                    Some(text.text.clone())
+            .window
+            .items()
+            .filter_map(|(_, entry)| match &entry.item {
+                RuntimeItem::Assistant(assistant) => {
+                    let text = assistant_text(assistant);
+                    (!text.is_empty()).then_some(text)
                 }
                 _ => None,
             })
@@ -2846,13 +2898,13 @@ fn e2e_stress_second_tool_expansion_survives_background_generation() {
             .unwrap();
 
         let view = &app.sessions.known[&session_id];
-        let first_calls: Vec<&ToolCallViewWire> = view
+        let first_calls: Vec<ToolCallViewWire> = view
             .transcript
-            .items
-            .iter()
-            .filter_map(|entry| match &entry.item {
-                HistoryItemWire::Assistant(assistant) if assistant.request_index == 0 => {
-                    Some(assistant.tool_calls.as_slice())
+            .window
+            .items()
+            .filter_map(|(_, entry)| match &entry.item {
+                RuntimeItem::Assistant(assistant) if assistant.request_index == 0 => {
+                    Some(assistant_tool_calls(assistant))
                 }
                 _ => None,
             })
@@ -2861,10 +2913,10 @@ fn e2e_stress_second_tool_expansion_survives_background_generation() {
         assert_eq!(first_calls.len(), 2, "expected two tool calls in request 0");
         let first_loop_id = view
             .transcript
-            .items
-            .iter()
-            .find_map(|entry| match &entry.item {
-                HistoryItemWire::Assistant(assistant) => Some(assistant.loop_id.clone()),
+            .window
+            .items()
+            .find_map(|(_, entry)| match &entry.item {
+                RuntimeItem::Assistant(assistant) => Some(assistant.loop_id.clone()),
                 _ => None,
             })
             .unwrap();
@@ -3192,9 +3244,9 @@ fn e2e_stress_session_switch_preserves_tool_fold() {
         pump_until(&mut process, &mut app, |a| {
             a.sessions.known.get(&session_a).is_some_and(|view| {
                 view.transcript
-                    .items
-                    .iter()
-                    .any(|entry| matches!(&entry.item, HistoryItemWire::Assistant(_)))
+                    .window
+                    .items()
+                    .any(|(_, entry)| matches!(&entry.item, RuntimeItem::Assistant(_)))
             })
         })
         .await
@@ -3203,10 +3255,10 @@ fn e2e_stress_session_switch_preserves_tool_fold() {
         let view = &app.sessions.known[&session_a];
         let first_loop_id = view
             .transcript
-            .items
-            .iter()
-            .find_map(|entry| match &entry.item {
-                HistoryItemWire::Assistant(assistant) => Some(assistant.loop_id.clone()),
+            .window
+            .items()
+            .find_map(|(_, entry)| match &entry.item {
+                RuntimeItem::Assistant(assistant) => Some(assistant.loop_id.clone()),
                 _ => None,
             })
             .unwrap();

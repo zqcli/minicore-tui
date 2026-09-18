@@ -5,7 +5,7 @@
  "provenance": "source_deterministic",
  "request": {
   "query": "needle",
-  "session_id": "ses_c40e87e3bb457a2f18feec830f5694df"
+  "session_id": "ses_a5a252b997e9b371ecc0f33609be14f7"
  },
  "result": {
   "consistency": "live",
@@ -38,7 +38,7 @@
    }
   ],
   "next_cursor": null,
-  "observed_at_unix_ms": 1789712651935,
+  "observed_at_unix_ms": 1789720709498,
   "scan_complete": false,
   "skipped_files": 2,
   "stopped_by": "deadline",

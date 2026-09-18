@@ -1,0 +1,37 @@
+{
+ "event": "tool_process",
+ "fixture": "event-tool-process",
+ "method": "agent.event",
+ "notification": {
+  "data": {
+   "data": {
+    "command": {
+     "output_complete": false,
+     "output_truncated": false,
+     "status": "running",
+     "stderr_base_offset": 0,
+     "stderr_observed_end": 0,
+     "stdout_base_offset": 0,
+     "stdout_observed_end": 0,
+     "termination_confirmed": false
+    },
+    "tool_ref": {
+     "loop_id": "lup_357ffaa5fbfbe760735af6e79d419820",
+     "request_index": 0,
+     "session_id": "ses_8786dd1dd086cc5d6d246c32704586fe",
+     "tool_call_id": "call_fixture_bash"
+    }
+   },
+   "meta": {
+    "dropped_before": 0,
+    "loop_id": "lup_357ffaa5fbfbe760735af6e79d419820",
+    "session_id": "ses_8786dd1dd086cc5d6d246c32704586fe"
+   },
+   "turn": {
+    "loop_id": "lup_357ffaa5fbfbe760735af6e79d419820",
+    "session_id": "ses_8786dd1dd086cc5d6d246c32704586fe"
+   }
+  },
+  "type": "tool_process"
+ }
+}

@@ -84,7 +84,12 @@ fn assembled_item_round_trips_the_canonical_bytes() {
     }
     assert_eq!(decoded.len(), 2);
     // The user envelope carries its real acceptance timestamp.
-    assert!(decoded[0].timestamp.as_deref().is_some_and(|t| t.starts_with("20")));
+    assert!(
+        decoded[0]
+            .timestamp
+            .as_deref()
+            .is_some_and(|t| t.starts_with("20"))
+    );
     assert!(decoded[1].timestamp.is_none());
 }
 
@@ -125,7 +130,10 @@ fn continuation_offset_is_strict() {
     assert_eq!(fresh.push(head).unwrap(), Assembled::Pending);
     let mut jump = split.clone();
     jump.offset = long_chunk.offset + half + 1;
-    assert!(matches!(fresh.push(jump), Err(ReadError::OffsetMismatch { .. })));
+    assert!(matches!(
+        fresh.push(jump),
+        Err(ReadError::OffsetMismatch { .. })
+    ));
 }
 
 /// The long assistant item in the trailing-incomplete fixture is delivered
@@ -153,7 +161,8 @@ fn trailing_incomplete_tail_is_not_fabricated() {
 #[test]
 fn records_truncated_is_reported() {
     let page: ReadSessionResult =
-        serde_json::from_value(fixture("session-read-records-truncated")["result"].clone()).unwrap();
+        serde_json::from_value(fixture("session-read-records-truncated")["result"].clone())
+            .unwrap();
     assert!(page.records_truncated);
     assert!(!page.records.is_empty());
 }

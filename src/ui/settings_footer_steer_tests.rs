@@ -279,6 +279,13 @@ use crate::state::view::{
 use crate::ui::transcript;
 
 fn assistant_entry(index: usize, loop_id: &str, text: &str, reasoning: &str) -> serde_json::Value {
+    let mut content = Vec::new();
+    if !reasoning.is_empty() {
+        content.push(serde_json::json!({"type": "reasoning", "data": {"text": reasoning}}));
+    }
+    if !text.is_empty() {
+        content.push(serde_json::json!({"type": "text", "data": text}));
+    }
     serde_json::json!({
         "index": index,
         "item": {
@@ -287,10 +294,8 @@ fn assistant_entry(index: usize, loop_id: &str, text: &str, reasoning: &str) -> 
                 "loop_id": loop_id,
                 "request_index": 0,
                 "model": "deep",
-                "reasoning_level": "high",
-                "text": text,
-                "reasoning": reasoning,
-                "tool_calls": [],
+                "reasoning": "high",
+                "content": content,
                 "usage": {},
                 "finish_reason": "stop"
             }

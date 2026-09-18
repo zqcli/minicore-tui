@@ -2,7 +2,7 @@
  "fixture": "session-context-after-compact",
  "method": "session.context",
  "request": {
-  "session_id": "ses_5e45496824286b33b2d1698c49000864"
+  "session_id": "ses_95cdd8aacae0ccd1e9140947fc097130"
  },
  "result": {
   "automatic": {
@@ -12,7 +12,7 @@
     "before_tokens": 2343,
     "hard_tokens": 28952,
     "loop_id": null,
-    "operation_id": "admission-ses_5e45496824286b33b2d1698c49000864-3",
+    "operation_id": "admission-ses_95cdd8aacae0ccd1e9140947fc097130-3",
     "outcome": "started",
     "request_index": null,
     "target_tokens": 14476,
@@ -62,6 +62,6 @@
     }
    }
   },
-  "session_id": "ses_5e45496824286b33b2d1698c49000864"
+  "session_id": "ses_95cdd8aacae0ccd1e9140947fc097130"
  }
 }

@@ -232,8 +232,22 @@ impl<'de> Deserialize<'de> for RuntimeAssistantPart {
     }
 }
 
-/// Runtime `ToolResultHistory`: the call id field is `call_id` and the text is
-/// nested as `output.content`.
+impl RuntimeAssistantPart {
+    /// Bytes this part contributes to the display/body budget. The visible
+    /// text is charged once; opaque fields are not retained.
+    pub fn visible_bytes(&self) -> usize {
+        match self {
+            Self::Text(text) => text.len(),
+            Self::Reasoning { text, summary, .. } => {
+                text.as_ref().map_or(0, String::len) + summary.as_ref().map_or(0, String::len)
+            }
+            Self::ToolCall { arguments, .. } => arguments.to_string().len(),
+        }
+    }
+}
+
+/// A sanitized Runtime `ToolResultHistory`: the call id field is `call_id` and
+/// the text is nested as `output.content`.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct RuntimeToolResultItem {
     pub loop_id: String,
@@ -255,16 +269,16 @@ pub struct RuntimeSummaryItem {
     pub content: String,
 }
 
-/// The outcome of feeding one chunk to the assembler.
+/// The outcome of feeding one chunk to the assembler. `Item` is deliberately
+/// much larger than `Pending`: `Pending` is returned mid-item and allocating a
+/// box for every chunk would cost more than the size difference saves.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum Assembled {
     /// The item is still incomplete; feed the next chunk.
     Pending,
     /// One complete, contiguous item was decoded.
-    Item {
-        index: usize,
-        item: RawHistoryItem,
-    },
+    Item { index: usize, item: RawHistoryItem },
     /// The item exceeds [`MAX_AUTO_ITEM_BYTES`]. Its bytes were discarded; the
     /// caller shows a visible placeholder and can re-read it on demand. It is
     /// never reported as a complete item.
@@ -328,6 +342,12 @@ pub enum ReadError {
     },
     #[error("item {index} JSON is not a Runtime history item: {detail}")]
     MalformedItem { index: usize, detail: String },
+    #[error("page is not contiguous at item {expected}, found {found}")]
+    NonContiguous { expected: usize, found: usize },
+    #[error("page did not advance from cursor item {item}")]
+    CursorStalled { item: usize },
+    #[error("item {index} changed after it was already loaded")]
+    ItemChanged { index: usize },
 }
 
 /// Reassembles raw item chunks into Runtime items (spec §6.2). It buffers at
@@ -369,7 +389,9 @@ impl ChunkAssembler {
         if chunk.encoding != "utf8_json" {
             return Err(ReadError::Encoding(chunk.encoding));
         }
-        let delivered = chunk.data.as_bytes().len();
+        // `String::len` is the UTF-8 byte length, matching the backend's
+        // cursor arithmetic (spec §6.2); never the char count.
+        let delivered = chunk.data.len();
 
         if self.active && chunk.index != self.index {
             // A new item may only start once the previous one is complete.
@@ -446,10 +468,8 @@ impl ChunkAssembler {
             });
         }
         let index = self.index;
-        let item = decode_item(&self.buffer).map_err(|detail| ReadError::MalformedItem {
-            index,
-            detail,
-        })?;
+        let item = decode_item(&self.buffer)
+            .map_err(|detail| ReadError::MalformedItem { index, detail })?;
         self.discard();
         Ok(Assembled::Item { index, item })
     }

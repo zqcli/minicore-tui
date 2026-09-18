@@ -2,8 +2,8 @@
  "fixture": "turn-wait",
  "method": "turn.wait",
  "request": {
-  "loop_id": "lup_0fa876d821127ec8e3b3432ff339d63e",
-  "session_id": "ses_b03cd2cff937713f4dde0811f508528c"
+  "loop_id": "lup_e5dbadf997db79787de0fd958abf739f",
+  "session_id": "ses_e5a1c6dfefc7ceac4dbd6a3f289a533f"
  },
  "result": {
   "final_config_revision": 0,
@@ -14,8 +14,8 @@
   "requests": 1,
   "tool_rounds": 0,
   "turn": {
-   "loop_id": "lup_0fa876d821127ec8e3b3432ff339d63e",
-   "session_id": "ses_b03cd2cff937713f4dde0811f508528c"
+   "loop_id": "lup_e5dbadf997db79787de0fd958abf739f",
+   "session_id": "ses_e5a1c6dfefc7ceac4dbd6a3f289a533f"
   },
   "usage": {
    "cache_read_tokens": 0,

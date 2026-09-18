@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use minicore_tui::app::{App, ConnectionState};
 use minicore_tui::command::AppCommand;
 use minicore_tui::event::{AppEvent, RpcEvent};
-use minicore_tui::protocol::{IncomingFrame, OutgoingRequest, RpcResponse, SessionStatusWire};
+use minicore_tui::protocol::{IncomingFrame, OutgoingRequest, RpcResponse};
 use serde_json::json;
 
 fn ready_app() -> App {
@@ -93,7 +93,10 @@ fn bootstrap_rejects_a_backend_missing_required_capabilities() {
     );
     match &app.connection {
         ConnectionState::Failed(message) => {
-            assert!(message.contains("missing required capabilities"), "{message}");
+            assert!(
+                message.contains("missing required capabilities"),
+                "{message}"
+            );
         }
         other => panic!("expected Failed, got {other:?}"),
     }
@@ -154,22 +157,46 @@ fn baseline_has_no_inbound_wire_byte_budget() {
     );
 }
 
-/// Defect: the five-state projection has no `preparing`, the TUI never calls
-/// `session.context`/`turn.result`/`session.compact`, and a deferred
-/// `turn.send` is treated as immediate success. Stage B adds the visible
-/// preparation/compaction path.
+/// The five-state projection is a fixed Agent 0.5 wire fact; a running
+/// compaction is carried alongside it, so `preparing` is representable instead
+/// of being swallowed as idle (spec §7.3). The control methods the TUI needs
+/// for that path now exist. Formerly the RED baseline pin
+/// `baseline_has_no_preparing_state_or_control_methods`.
 #[test]
-fn baseline_has_no_preparing_state_or_control_methods() {
-    let states = [
-        SessionStatusWire::Idle,
-        SessionStatusWire::Running,
-        SessionStatusWire::WaitingForInput,
-        SessionStatusWire::Finishing,
-        SessionStatusWire::Blocked,
-    ];
-    assert_eq!(states.len(), 5, "BASELINE: no distinct preparing status");
+fn session_state_represents_compaction_and_control_methods_exist() {
+    let wire = serde_json::from_value::<minicore_tui::protocol::SessionStateWire>(json!({
+        "session_id": "ses_1",
+        "status": "running",
+        "active_loop": null,
+        "block_reason": null,
+        "compaction": {
+            "operation_id": "op_1",
+            "phase": "preparing",
+            "covered_item_count": 40,
+            "retained_item_count": 2
+        }
+    }))
+    .expect("a preparing compaction is decodable");
+    let progress = wire.compaction.expect("compaction is retained");
+    assert_eq!(
+        progress.phase,
+        minicore_tui::protocol::CompactionPhaseWire::Preparing
+    );
+    assert_eq!(progress.covered_item_count, 40);
+
+    // A state without the field stays valid (it is absent, not defaulted to a
+    // synthesised idle compaction).
+    let plain = serde_json::from_value::<minicore_tui::protocol::SessionStateWire>(json!({
+        "session_id": "ses_1",
+        "status": "idle",
+        "active_loop": null,
+        "block_reason": null
+    }))
+    .expect("a state without compaction decodes");
+    assert!(plain.compaction.is_none());
+
     let source = include_str!("../src/protocol.rs");
-    for absent in [
+    for present in [
         "METHOD_SESSION_CONTEXT",
         "METHOD_TURN_RESULT",
         "METHOD_SESSION_COMPACT",
@@ -179,27 +206,24 @@ fn baseline_has_no_preparing_state_or_control_methods() {
         "METHOD_SESSION_READ",
         "METHOD_WORKSPACE_READ",
     ] {
-        assert!(
-            !source.contains(absent),
-            "BASELINE: {absent} must not exist yet"
-        );
+        assert!(source.contains(present), "B1: {present} must exist");
     }
 }
 
-/// Defect: the history read path is the legacy `HistoryPageWire` display DTO;
-/// there is no chunked raw Runtime-item decoder. Stage B adds a distinct
-/// `ReadItemChunk`/assembler and never reuses the display DTO.
+/// The read path is a real chunked Runtime-item decoder: the legacy indexed
+/// display DTO is no longer the only history source, and the assembler
+/// advances by delivered UTF-8 bytes. Formerly the RED baseline pin
+/// `baseline_history_read_uses_the_legacy_display_dto`.
 #[test]
-fn baseline_history_read_uses_the_legacy_display_dto() {
-    let source = include_str!("../src/protocol.rs");
+fn history_read_uses_chunked_runtime_items_not_the_display_dto() {
+    let source = include_str!("../src/protocol/read.rs");
     assert!(
-        source.contains("pub struct IndexedHistoryItemWire"),
-        "BASELINE: legacy indexed history DTO is the only read path"
+        !source.contains("IndexedHistoryItemWire"),
+        "B1: the read decoder must not reuse the legacy display DTO"
     );
-    assert!(
-        !source.contains("ReadItemChunk") && !source.contains("ChunkAssembler"),
-        "BASELINE: no chunked raw-item decoder exists yet"
-    );
+    assert!(source.contains("struct ChunkAssembler"));
+    assert!(source.contains("pub struct ReadChunk"));
+    assert!(source.contains("pub enum Assembled"));
 }
 
 /// Defect: `all_lines` clones the full prepared conversation and

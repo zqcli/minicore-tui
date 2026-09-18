@@ -330,7 +330,11 @@ impl OutgoingRequest {
     }
 
     pub fn session_context(id: RequestId, session_id: &str) -> Self {
-        Self::new(id, METHOD_SESSION_CONTEXT, json!({"session_id": session_id}))
+        Self::new(
+            id,
+            METHOD_SESSION_CONTEXT,
+            json!({"session_id": session_id}),
+        )
     }
 
     pub fn session_compact(id: RequestId, session_id: &str, operation_id: &str) -> Self {
@@ -488,6 +492,8 @@ pub struct RpcErrorData {
     pub retryable: bool,
 }
 
+/// One decoded `agent.event`. The tool-fact variants box their payloads: they
+/// are the largest on the wire and are decoded once per frame.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEventWire {
@@ -523,6 +529,15 @@ pub enum AgentEventWire {
     },
     ToolProgress {
         data: ToolProgressDataWire,
+    },
+    ToolInvocation {
+        data: Box<ToolInvocationDataWire>,
+    },
+    ToolExecution {
+        data: Box<ToolExecutionDataWire>,
+    },
+    ToolProcess {
+        data: Box<ToolProcessDataWire>,
     },
     ToolFinished {
         data: ToolFinishedDataWire,
@@ -628,6 +643,195 @@ pub struct ToolProgressDataWire {
     pub tool_call_id: String,
     pub progress: ToolProgressWire,
     pub meta: EventMetaWire,
+}
+
+/// `tool_invocation` (spec §7): the sanitized call fact. Raw input is a bounded
+/// summary, never the full arguments again.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ToolInvocationDataWire {
+    pub turn: TurnRef,
+    pub data: ToolInvocationWire,
+    pub meta: EventMetaWire,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ToolInvocationWire {
+    pub tool_ref: ToolRefWire,
+    pub name: String,
+    pub subject: ToolSubjectWire,
+    pub subject_truncated: bool,
+    pub input: ToolInputSummaryWire,
+}
+
+/// `tool_execution` (spec §7): lifecycle state and per-stream availability.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ToolExecutionDataWire {
+    pub turn: TurnRef,
+    pub data: ToolExecutionWire,
+    pub meta: EventMetaWire,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ToolExecutionWire {
+    pub tool_ref: ToolRefWire,
+    pub name: String,
+    pub state: ToolExecutionStateWire,
+    #[serde(default)]
+    pub phase: Option<ToolPhaseWire>,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub finished_at: Option<String>,
+    #[serde(default)]
+    pub outcome: Option<ToolOutcomeWire>,
+    pub input_availability: ToolDataAvailabilityWire,
+    pub output_availability: ToolDataAvailabilityWire,
+    pub input_bytes: usize,
+    pub result_bytes: usize,
+    pub input_truncated: bool,
+    pub result_truncated: bool,
+    #[serde(default)]
+    pub command: Option<CommandResultWire>,
+    pub recording: ToolRecordingStateWire,
+}
+
+/// `tool_process` (spec §7): a raw stdout/stderr chunk notice. Offsets count
+/// raw bytes, never base64 positions.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ToolProcessDataWire {
+    pub turn: TurnRef,
+    pub data: ToolProcessWire,
+    pub meta: EventMetaWire,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ToolProcessWire {
+    pub tool_ref: ToolRefWire,
+    #[serde(default)]
+    pub chunk: Option<ToolProcessChunkWire>,
+    #[serde(default)]
+    pub command: Option<CommandResultWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ToolProcessChunkWire {
+    pub stream: ToolDataStreamWire,
+    pub encoding: String,
+    pub data: String,
+    pub base_offset: u64,
+    pub next_offset: u64,
+    pub observed_end: u64,
+    pub dropped: bool,
+    pub expired: bool,
+}
+
+/// The complete tool identity: session, loop, request, and call id. A tool name
+/// or path is never a key because all of those repeat (spec §7).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct ToolRefWire {
+    pub session_id: String,
+    pub loop_id: String,
+    pub request_index: u32,
+    pub tool_call_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ToolSubjectWire {
+    File { path: String },
+    Command { script: String, cwd: String },
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ToolInputSummaryWire {
+    pub total_bytes: usize,
+    pub preview: String,
+    pub truncated: bool,
+    pub encoding: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolExecutionStateWire {
+    Requested,
+    AwaitingPolicy,
+    Running,
+    Cancelling,
+    Succeeded,
+    Failed,
+    Denied,
+    Cancelled,
+    InputProvided,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolPhaseWire {
+    Reading,
+    Writing,
+    Matching,
+    Committing,
+    Running,
+}
+
+/// Per-stream availability. `unavailable` (never observed) is distinct from a
+/// real empty result, and `expired`/`partial` must not be reported as complete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolDataAvailabilityWire {
+    Pending,
+    Unavailable,
+    Available,
+    Partial,
+    Expired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolDataStreamWire {
+    Input,
+    Output,
+    Stdout,
+    Stderr,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolRecordingStateWire {
+    MemoryOnly,
+    Saved,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct CommandResultWire {
+    pub status: CommandStatusWire,
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub signal: Option<i32>,
+    pub termination_confirmed: bool,
+    pub stdout_base_offset: u64,
+    pub stdout_observed_end: u64,
+    pub stderr_base_offset: u64,
+    pub stderr_observed_end: u64,
+    /// True only when both streams reached a real end of output.
+    pub output_complete: bool,
+    /// True when bytes were dropped or observation was cut short.
+    pub output_truncated: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandStatusWire {
+    Running,
+    Cancelling,
+    Exited,
+    Cancelled,
+    TimedOut,
+    SpawnFailed,
+    Failed,
 }
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct ToolFinishedDataWire {
@@ -907,9 +1111,7 @@ pub enum BackendError {
         "unsupported agent protocol version {found}: minicore-tui requires protocol_version {required}"
     )]
     ProtocolVersion { found: u32, required: u32 },
-    #[error(
-        "agent {version} is missing required capabilities: {missing}"
-    )]
+    #[error("agent {version} is missing required capabilities: {missing}")]
     MissingCapabilities { version: String, missing: String },
 }
 
@@ -1050,6 +1252,31 @@ pub struct SessionStateWire {
     pub status: SessionStatusWire,
     pub active_loop: Option<LoopStateWire>,
     pub block_reason: Option<SessionBlockReasonWire>,
+    /// Present while automatic or manual compaction is running. Stage B1 only
+    /// represents it (so a preparing/compaction state is never swallowed or
+    /// misread as idle); B2 drives the visible controls.
+    #[serde(default)]
+    pub compaction: Option<CompactionProgressWire>,
+}
+
+/// The Runtime `CompactionProgress` a running compaction reports (spec §7.3).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct CompactionProgressWire {
+    pub operation_id: String,
+    pub phase: CompactionPhaseWire,
+    pub covered_item_count: usize,
+    pub retained_item_count: usize,
+}
+
+/// `preparing` means compaction has NOT started model work yet: the session is
+/// not idle and must not be treated as available for a new turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionPhaseWire {
+    Preparing,
+    Summarizing,
+    Merging,
+    Committing,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]

@@ -130,16 +130,99 @@ fn state(id: &str, status: &str, active_loop: Value) -> Value {
     json!({"session_id": id, "status": status, "active_loop": active_loop, "block_reason": null})
 }
 
-fn history(items: Vec<Value>, next_offset: Option<usize>, total: usize) -> Value {
-    json!({"items": items, "next_offset": next_offset, "total": total})
+/// The read request a fresh, unpinned first-page chain carries. `reconcile`
+/// is true when the chain exists to reconcile a known event gap.
+fn history_read_request(gap_revision: u64) -> minicore_tui::app::ReadRequest {
+    history_read_request_with(gap_revision, false)
 }
 
+fn history_read_request_with(gap_revision: u64, reconcile: bool) -> minicore_tui::app::ReadRequest {
+    minicore_tui::app::ReadRequest {
+        cursor: minicore_tui::protocol::ReadCursor::start(),
+        pin: None,
+        window_start: 0,
+        replacement: true,
+        reconcile,
+        gap_revision,
+    }
+}
+
+/// Builds a `session.read` result from already-encoded Runtime item JSON.
+/// Each item's canonical JSON is delivered as one `utf8_json` chunk, which is
+/// what the real backend does for a short item. `next_cursor` is the
+/// backend's own cursor; tests that need to prove local-offset inference is
+/// not used pass an explicit one.
+fn history(items: Vec<Value>, next_cursor: Option<Value>, total: usize) -> Value {
+    read(&items, next_cursor, total)
+}
+
+/// Encodes `items` (already Runtime `{item,timestamp}` envelopes) as a
+/// Protocol v1 `session.read` page. Each envelope carries a private `_index`
+/// used only by the test encoder to place the item at its session-global
+/// index, mirroring the backend's own ordering.
+fn read(items: &[Value], next_cursor: Option<Value>, total: usize) -> Value {
+    let chunks: Vec<Value> = items.iter().flat_map(encode_item).collect();
+    let mut page = json!({
+        "session": session("ses_1"),
+        "items": chunks,
+        "total": total,
+        "records": [],
+        "records_truncated": false,
+        "history_revision": "fixture-revision",
+        "captured_end": total as u64,
+        "trailing_incomplete": false,
+    });
+    if let Some(cursor) = next_cursor {
+        page["next_cursor"] = cursor;
+    }
+    page
+}
+
+/// Serializes one Runtime envelope into contiguous chunks no larger than
+/// `max` bytes, splitting only on a char boundary. This mirrors the backend's
+/// canonical-JSON chunking so the client assembler is genuinely exercised.
+fn encode_item(envelope: &Value) -> Vec<Value> {
+    let index = envelope.get("_index").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let item = envelope.get("item").cloned().unwrap_or(Value::Null);
+    let mut wire = json!({"item": item});
+    if let Some(timestamp) = envelope.get("timestamp") {
+        wire["timestamp"] = timestamp.clone();
+    }
+    let data = serde_json::to_string(&wire).expect("item envelope serializes");
+    let total = data.len();
+    const MAX: usize = 64;
+    if total <= MAX {
+        return vec![json!({
+            "index": index, "offset": 0, "total_bytes": total,
+            "encoding": "utf8_json", "data": data, "complete": true,
+        })];
+    }
+    let mut chunks = Vec::new();
+    let mut offset = 0usize;
+    while offset < total {
+        let mut end = (offset + MAX).min(total);
+        while !data.is_char_boundary(end) {
+            end -= 1;
+        }
+        let complete = end == total;
+        chunks.push(json!({
+            "index": index, "offset": offset, "total_bytes": total,
+            "encoding": "utf8_json", "data": &data[offset..end],
+            "complete": complete,
+        }));
+        offset = end;
+    }
+    chunks
+}
+
+/// The first argument is the intended session-global item index; the test
+/// encoder places the item there, so pagination assertions stay meaningful.
 fn user(index: usize, loop_id: &str, text: &str) -> Value {
-    json!({"index": index, "item": {"type": "user", "data": {"loop_id": loop_id, "kind": "prompt", "text": text}}})
+    json!({"_index": index, "item": {"type": "user", "data": {"loop_id": loop_id, "kind": "prompt", "input": {"text": text}}}})
 }
 
 fn user_steering(index: usize, loop_id: &str, text: &str) -> Value {
-    json!({"index": index, "item": {"type": "user", "data": {"loop_id": loop_id, "kind": "steering", "text": text}}})
+    json!({"_index": index, "item": {"type": "user", "data": {"loop_id": loop_id, "kind": "steering", "input": {"text": text}}}})
 }
 
 fn assistant(index: usize, loop_id: &str, request_index: u32, model: &str, text: &str) -> Value {
@@ -154,10 +237,56 @@ fn assistant_with_reasoning(
     text: &str,
     reasoning: &str,
 ) -> Value {
-    json!({"index": index, "item": {"type": "assistant", "data": {
+    let mut content = Vec::new();
+    if !reasoning.is_empty() {
+        content.push(json!({"type": "reasoning", "data": {"text": reasoning}}));
+    }
+    if !text.is_empty() {
+        content.push(json!({"type": "text", "data": text}));
+    }
+    json!({"_index": index, "item": {"type": "assistant", "data": {
         "loop_id": loop_id, "request_index": request_index, "model": model,
-        "reasoning_level": "high", "text": text, "reasoning": reasoning, "tool_calls": [],
+        "reasoning": "high", "content": content,
         "usage": {}, "finish_reason": "stop"
+    }}})
+}
+
+/// A Runtime `ToolResultHistory` answering the preceding assistant tool call.
+fn tool_result(
+    index: usize,
+    loop_id: &str,
+    request_index: u32,
+    call_id: &str,
+    tool_name: &str,
+    outcome: &str,
+    content: &str,
+) -> Value {
+    json!({"_index": index, "item": {"type": "tool_result", "data": {
+        "loop_id": loop_id, "request_index": request_index, "call_id": call_id,
+        "tool_name": tool_name, "outcome": outcome, "output": {"content": content}
+    }}})
+}
+
+/// A Runtime assistant item carrying one tool call in `content`.
+fn assistant_with_tool(
+    index: usize,
+    loop_id: &str,
+    request_index: u32,
+    call_id: &str,
+    name: &str,
+    text: &str,
+) -> Value {
+    let mut content = Vec::new();
+    if !text.is_empty() {
+        content.push(json!({"type": "text", "data": text}));
+    }
+    content.push(json!({"type": "tool_call", "data": {
+        "tool_call_id": call_id, "name": name, "arguments": {}, "call_index": 0
+    }}));
+    json!({"_index": index, "item": {"type": "assistant", "data": {
+        "loop_id": loop_id, "request_index": request_index, "model": "deep",
+        "reasoning": "high", "content": content,
+        "usage": {}, "finish_reason": "tool_calls"
     }}})
 }
 
@@ -376,7 +505,14 @@ fn assert_request_local_order(
 
 fn bootstrap(driver: &mut Driver) {
     driver.step(AppEvent::Bootstrap);
-    driver.respond_method("agent.ping", json!({"version": "0.3.0"}));
+    driver.respond_method(
+        "agent.ping",
+        json!({
+            "version": "0.5.0",
+            "protocol_version": 1,
+            "capabilities": minicore_tui::protocol::REQUIRED_CAPABILITIES,
+        }),
+    );
     driver.respond_method(
         "model.list",
         json!({"models": [
@@ -403,7 +539,7 @@ fn open_idle_with_history(driver: &mut Driver, id: &str, items: Vec<Value>) {
     driver.respond_method("session.open", json!({"session": session(id)}));
     driver.respond_method("session.state", state(id, "idle", Value::Null));
     let total = items.len();
-    let history_request = driver.request("session.history");
+    let history_request = driver.request("session.read");
     driver.respond(history_request, history(items, None, total));
 }
 
@@ -507,7 +643,7 @@ fn start_public_reload_with_settled_turn(
     let wait = driver.request("turn.wait");
     driver.respond(wait, result);
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    let history_request = driver.request("session.history");
+    let history_request = driver.request("session.read");
     let total = history_items.len();
     driver.respond(history_request, history(history_items, None, total));
     assert!(driver.app.sessions.known["ses_1"].live.is_none());
@@ -558,7 +694,7 @@ fn complete_public_reload_with_running_turn(
             }),
         ),
     );
-    let staged_history = driver.request("session.history");
+    let staged_history = driver.request("session.read");
     driver.respond(staged_history, history(Vec::new(), None, 0));
     assert_reload_staging_finished(driver);
 }
@@ -579,7 +715,7 @@ fn complete_public_reload_with_idle_view(driver: &mut Driver, reload: OutgoingRe
     driver.respond_method("session.list", json!({"sessions": [session("ses_1")]}));
     let staged_state = driver.request("session.state");
     driver.respond(staged_state, state("ses_1", "idle", Value::Null));
-    let staged_history = driver.request("session.history");
+    let staged_history = driver.request("session.read");
     driver.respond(staged_history, history(Vec::new(), None, 0));
     assert_reload_staging_finished(driver);
 }
@@ -660,7 +796,7 @@ fn new_session_and_empty_created_session_keep_startup_header() {
         "an empty history still loading must not look confirmed empty"
     );
 
-    driver.respond_method("session.history", history(Vec::new(), None, 0));
+    driver.respond_method("session.read", history(Vec::new(), None, 0));
     assert!(
         !rendered_text(&driver.app, 80, 24).contains("MINICORE  v0.2.8"),
         "empty history cannot confirm the header while session state is unknown"
@@ -840,23 +976,28 @@ fn history_pages_by_contiguous_item_index_not_render_block_count() {
     });
     driver.respond_method("session.create", json!({"session": session("ses_1")}));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    let first = driver.request("session.history");
-    driver.respond(first, history(vec![
-        user(0, "loop_1", "hello"),
-        assistant(1, "loop_1", 0, "deep", "answer"),
-        json!({"index": 2, "item": {"type": "tool_result", "data": {"loop_id": "loop_1", "request_index": 0, "tool_call_id": "call", "tool_name": "read", "outcome": "success", "content": "ok"}}}),
-    ], Some(3), 4));
-    let second = driver.request("session.history");
-    assert_eq!(second.params["offset"], 3);
+    let first = driver.request("session.read");
+    driver.respond(
+        first,
+        history(
+            vec![
+                user(0, "loop_1", "hello"),
+                assistant(1, "loop_1", 0, "deep", "answer"),
+                tool_result(2, "loop_1", 0, "call", "read", "success", "ok"),
+            ],
+            Some(json!({"item": 3, "offset": 0})),
+            4,
+        ),
+    );
+    let second = driver.request("session.read");
+    assert_eq!(second.params["cursor"]["item"], 3);
     driver.respond(
         second,
         history(vec![assistant(3, "loop_1", 1, "deep", "done")], None, 4),
     );
     let view = &driver.app.sessions.known["ses_1"];
     assert_eq!(view.transcript.loaded_count, 4);
-    assert_eq!(view.transcript.items.len(), 4);
-    // The presentation may expand an Assistant item with tool-call
-    // placeholders, but pagination remains driven by the raw item count.
+    assert_eq!(view.transcript.window.len(), 4);
     assert_eq!(view.transcript.blocks.len(), 4);
     assert!(view.transcript.complete);
 }
@@ -870,7 +1011,7 @@ fn history_validation_reports_stable_gap_and_stalled_cursor_errors() {
     });
     driver.respond_method("session.open", json!({"session": session("ses_1")}));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    let history_req = driver.request("session.history");
+    let history_req = driver.request("session.read");
     driver.respond(
         history_req,
         history(vec![user(1, "loop_1", "out of order")], None, 2),
@@ -878,19 +1019,22 @@ fn history_validation_reports_stable_gap_and_stalled_cursor_errors() {
     assert!(driver.app.notices().iter().any(|notice| {
         notice
             .text
-            .contains("history for ses_1 is not contiguous at offset 0")
+            .contains("history for ses_1 is not contiguous at item 0")
     }));
 
     driver.step(AppEvent::OpenSession {
         session_id: "ses_1".into(),
     });
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    let history_req = driver.request("session.history");
-    driver.respond(history_req, history(Vec::new(), Some(1), 1));
+    let history_req = driver.request("session.read");
+    driver.respond(
+        history_req,
+        history(Vec::new(), Some(json!({"item": 1, "offset": 0})), 1),
+    );
     assert!(driver.app.notices().iter().any(|notice| {
         notice
             .text
-            .contains("history for ses_1 did not advance its offset from 0")
+            .contains("history for ses_1 did not advance from item 0")
     }));
 }
 
@@ -914,7 +1058,7 @@ fn late_completed_loop_events_cannot_bind_a_new_prompt() {
     driver.respond(wait1, wait_result("ses_1", "loop_1", "persisted"));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
     driver.respond_method(
-        "session.history",
+        "session.read",
         history(
             vec![
                 user(0, "loop_1", "first"),
@@ -1065,7 +1209,7 @@ fn reopen_with_history(driver: &mut Driver, session_id: &str, loop_id: &str) {
     driver.respond_method("session.open", json!({"session": session(session_id)}));
     driver.respond_method("session.state", state(session_id, "idle", Value::Null));
     driver.respond_method(
-        "session.history",
+        "session.read",
         history(
             vec![
                 user(0, loop_id, "new prompt"),
@@ -1448,7 +1592,7 @@ fn first_open_running_placeholder_accepts_following_events() {
     });
     driver.respond_method("session.open", json!({"session": session("ses_1")}));
     let state_req = driver.request("session.state");
-    let _history = driver.request("session.history");
+    let _history = driver.request("session.read");
     driver.respond(
         state_req,
         state(
@@ -1591,7 +1735,7 @@ fn send_response_registers_direct_wait_and_durable_history_replaces_live() {
     driver.respond(wait, wait_result("ses_1", "loop_1", "persisted"));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
     driver.respond_method(
-        "session.history",
+        "session.read",
         history(
             vec![
                 user(0, "loop_1", "prompt"),
@@ -1665,7 +1809,7 @@ fn stale_session_state_response_cannot_regress_a_newer_query() {
     });
     driver.respond_method("session.open", json!({"session": session("ses_1")}));
     let old_state = driver.request("session.state");
-    driver.respond_method("session.history", history(Vec::new(), None, 0));
+    driver.respond_method("session.read", history(Vec::new(), None, 0));
 
     driver.step(AppEvent::SubmitTurn {
         session_id: "ses_1".into(),
@@ -1919,7 +2063,7 @@ fn persisted_reasoning_preserves_markdown_and_request_order_after_reopen() {
             &reasoning_markdown("history_r1"),
         ),
     ];
-    let history_request = driver.request("session.history");
+    let history_request = driver.request("session.read");
     driver.respond(history_request, history(history_items.clone(), None, 3));
     for request_index in 0..2 {
         driver.step(AppEvent::ToggleReasoningSection {
@@ -1951,7 +2095,7 @@ fn persisted_reasoning_preserves_markdown_and_request_order_after_reopen() {
     });
     driver.respond_method("session.open", json!({"session": session("ses_1")}));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    let reopened_history = driver.request("session.history");
+    let reopened_history = driver.request("session.read");
     driver.respond(reopened_history, history(history_items, None, 3));
 
     let lines = transcript_lines(&driver.app);
@@ -1990,7 +2134,7 @@ fn reasoning_rendering_keeps_hidden_cache_fallback_themes_and_cjk_width() {
     );
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
     let reasoning = "### 思考标题\n\n**思考粗体**\n\n- 中文项\n\n`代码`\n\n```text\n中文代码\n```";
-    let history_request = driver.request("session.history");
+    let history_request = driver.request("session.read");
     driver.respond(
         history_request,
         history(
@@ -2255,7 +2399,7 @@ fn slash_cancel_sends_exact_turn_cancel_and_wait_reconciles() {
     );
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
     driver.respond_method(
-        "session.history",
+        "session.read",
         history(
             vec![
                 user(0, "loop_cancel", "cancel me"),
@@ -2665,7 +2809,7 @@ fn late_reload_wait_response_waits_for_next_tick_before_fifo_advance() {
     let wait = driver.request("turn.wait");
     driver.respond(wait, wait_result("ses_1", "loop_reload_fifo", "persisted"));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    let history_request = driver.request("session.history");
+    let history_request = driver.request("session.read");
     driver.respond(
         history_request,
         history(
@@ -2826,7 +2970,7 @@ fn reload_wait_response_after_reload_failure_stays_on_original_session() {
     let open = driver.request("session.open");
     driver.respond(open, json!({"session": session("ses_2")}));
     driver.respond_method("session.state", state("ses_2", "idle", Value::Null));
-    let history_request = driver.request("session.history");
+    let history_request = driver.request("session.read");
     driver.respond(history_request, history(Vec::new(), None, 0));
     assert_eq!(driver.app.sessions.active.as_deref(), Some("ses_2"));
 
@@ -2878,7 +3022,7 @@ fn late_reload_wait_cannot_overwrite_new_completed_turn() {
     let t2_result = wait_result_with_usage("ses_1", "loop_t2", "persisted", 22, 7);
     driver.respond(t2_wait, t2_result.clone());
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    let t2_history = driver.request("session.history");
+    let t2_history = driver.request("session.read");
     driver.respond(
         t2_history,
         history(
@@ -2905,9 +3049,9 @@ fn late_reload_wait_cannot_overwrite_new_completed_turn() {
     assert!(
         before
             .transcript
-            .items
-            .iter()
-            .any(|item| item.item.loop_id() == Some("loop_t2"))
+            .window
+            .items()
+            .any(|(_, item)| item.item.loop_id() == Some("loop_t2"))
     );
 
     driver.respond(t1_wait, t1_result);
@@ -2920,9 +3064,9 @@ fn late_reload_wait_cannot_overwrite_new_completed_turn() {
     assert!(
         after
             .transcript
-            .items
-            .iter()
-            .any(|item| item.item.loop_id() == Some("loop_t2"))
+            .window
+            .items()
+            .any(|(_, item)| item.item.loop_id() == Some("loop_t2"))
     );
     assert!(
         driver.queue.is_empty(),
@@ -2988,7 +3132,7 @@ fn stale_reload_wait_failure_does_not_clear_t2_handoff() {
         wait_result("ses_1", "loop_t2_handoff", "persisted"),
     );
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    let t2_history = driver.request("session.history");
+    let t2_history = driver.request("session.read");
     driver.respond(
         t2_history,
         history(
@@ -3173,61 +3317,23 @@ fn deterministic_same_loop_model_a_to_tool_to_model_b() {
         }),
     );
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    driver.respond_method("session.history", history(vec![
-        user(0, "loop_1", "start task"),
-        json!({
-            "index": 1,
-            "item": {
-                "type": "assistant",
-                "data": {
-                    "loop_id": "loop_1",
-                    "request_index": 0,
-                    "model": "deep",
-                    "reasoning_level": "high",
-                    "text": "",
-                    "reasoning": "",
-                    "tool_calls": [{"tool_call_id": "call_1", "name": "read", "call_index": 0}],
-                    "usage": {},
-                    "finish_reason": "tool_calls"
-                }
-            }
-        }),
-        json!({
-            "index": 2,
-            "item": {
-                "type": "tool_result",
-                "data": {
-                    "loop_id": "loop_1",
-                    "request_index": 0,
-                    "tool_call_id": "call_1",
-                    "tool_name": "read",
-                    "outcome": "success",
-                    "content": "file contents"
-                }
-            }
-        }),
-        json!({
-            "index": 3,
-            "item": {
-                "type": "assistant",
-                "data": {
-                    "loop_id": "loop_1",
-                    "request_index": 1,
-                    "model": "fast",
-                    "reasoning_level": "high",
-                    "text": "done with fast model",
-                    "reasoning": "",
-                    "tool_calls": [],
-                    "usage": {},
-                    "finish_reason": "stop"
-                }
-            }
-        }),
-    ], None, 4));
+    driver.respond_method(
+        "session.read",
+        history(
+            vec![
+                user(0, "loop_1", "start task"),
+                assistant_with_tool(1, "loop_1", 0, "call_1", "read", ""),
+                tool_result(2, "loop_1", 0, "call_1", "read", "success", "file contents"),
+                assistant(3, "loop_1", 1, "fast", "done with fast model"),
+            ],
+            None,
+            4,
+        ),
+    );
 
     let view = &driver.app.sessions.known["ses_1"];
     assert!(view.live.is_none());
-    assert_eq!(view.transcript.items.len(), 4);
+    assert_eq!(view.transcript.window.len(), 4);
     assert_eq!(view.info.model, "fast");
 }
 
@@ -3375,16 +3481,23 @@ fn update_and_steer_fifo_duplicate_text_history_reconciliation() {
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
 
     // History returns two steering items matching FIFO (exact-once replace).
-    driver.respond_method("session.history", history(vec![
-        user(0, "loop_1", "prompt"),
-        json!({"index": 1, "item": {"type": "user", "data": {"loop_id": "loop_1", "kind": "steering", "text": "retry"}}}),
-        json!({"index": 2, "item": {"type": "user", "data": {"loop_id": "loop_1", "kind": "steering", "text": "retry"}}}),
-        assistant(3, "loop_1", 1, "deep", "finished"),
-    ], None, 4));
+    driver.respond_method(
+        "session.read",
+        history(
+            vec![
+                user(0, "loop_1", "prompt"),
+                user_steering(1, "loop_1", "retry"),
+                user_steering(2, "loop_1", "retry"),
+                assistant(3, "loop_1", 1, "deep", "finished"),
+            ],
+            None,
+            4,
+        ),
+    );
 
     let view = &driver.app.sessions.known["ses_1"];
     assert!(view.live.is_none());
-    assert_eq!(view.transcript.items.len(), 4);
+    assert_eq!(view.transcript.window.len(), 4);
     assert!(
         view.applied_steers.is_empty(),
         "durable history replaced all applied steer cards exactly once"
@@ -3459,7 +3572,7 @@ fn steering_history_not_recorded_vs_unconfirmed() {
     driver.respond(wait, wait_result("ses_1", "loop_1", "persisted"));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
     driver.respond_method(
-        "session.history",
+        "session.read",
         history(
             vec![
                 user(0, "loop_1", "prompt"),
@@ -3642,7 +3755,7 @@ fn regression_scenario_a_wait_internal_error_does_not_loop_history_or_clear_gap(
     driver.respond_method("session.open", json!({"session": session("ses_1")}));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
     // Leave the initial history request strictly in-flight!
-    let inflight_history = driver.request("session.history");
+    let inflight_history = driver.request("session.read");
 
     // Submit turn while initial history is in-flight
     driver.step(AppEvent::SubmitTurn {
@@ -3696,7 +3809,7 @@ fn regression_scenario_a_wait_internal_error_does_not_loop_history_or_clear_gap(
 
     // Assert: Absolutely NO further history request emitted (no infinite while/drain)!
     assert!(
-        driver.queue.iter().all(|r| r.method != "session.history"),
+        driver.queue.iter().all(|r| r.method != "session.read"),
         "must not loop or emit further history requests"
     );
 
@@ -3725,7 +3838,7 @@ fn regression_scenario_b_wait_persisted_post_wait_history_and_no_infinite_retry(
     driver.respond_method("session.open", json!({"session": session("ses_1")}));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
     // Leave the initial history request in flight!
-    let inflight_history = driver.request("session.history");
+    let inflight_history = driver.request("session.read");
 
     // Submit turn while old history is in-flight
     driver.step(AppEvent::SubmitTurn {
@@ -3766,7 +3879,7 @@ fn regression_scenario_b_wait_persisted_post_wait_history_and_no_infinite_retry(
     );
     assert!(view.event_gap, "event_gap must be retained");
 
-    let post_hist_req = driver.request("session.history");
+    let post_hist_req = driver.request("session.read");
 
     // Now respond with a fresh post-wait history page containing real loop_B items
     let correct_history = history(
@@ -3790,7 +3903,7 @@ fn regression_scenario_b_wait_persisted_post_wait_history_and_no_infinite_retry(
         "event_gap must be cleared after same-turn persisted history arrives"
     );
     assert!(
-        driver.queue.iter().all(|r| r.method != "session.history"),
+        driver.queue.iter().all(|r| r.method != "session.read"),
         "no infinite history polling"
     );
 }
@@ -3830,7 +3943,7 @@ fn regression_scenario_c_failed_wait_does_not_reconcile_and_idempotent() {
 
     // failed wait MUST NOT automatically reconcile this loop via session.history
     assert!(
-        driver.queue.iter().all(|r| r.method != "session.history"),
+        driver.queue.iter().all(|r| r.method != "session.read"),
         "failed wait must not dispatch session.history to reconcile"
     );
 
@@ -3862,7 +3975,7 @@ fn regression_scenario_c_failed_wait_does_not_reconcile_and_idempotent() {
     driver.respond(repeat_wait, wait_result("ses_1", "loop_C", "failed"));
 
     assert!(
-        driver.queue.iter().all(|r| r.method != "session.history"),
+        driver.queue.iter().all(|r| r.method != "session.read"),
         "duplicate wait must not dispatch session.history"
     );
     let view_after = &driver.app.sessions.known["ses_1"];
@@ -3878,7 +3991,7 @@ fn late_steer_ack_after_complete_history_marks_missing_steer_not_recorded() {
     // deliberately omits the steering item, so the local entry is unconfirmed.
     driver.respond(wait, wait_result("ses_1", "loop_steer", "persisted"));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    let history_req = driver.request("session.history");
+    let history_req = driver.request("session.read");
     driver.respond(
         history_req,
         history(
@@ -3918,7 +4031,7 @@ fn late_steer_ack_respects_recorded_and_uncertain_history() {
     let (mut recorded, wait, steer, steer_id) = delayed_steer_driver();
     recorded.respond(wait, wait_result("ses_1", "loop_steer", "persisted"));
     recorded.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    let history_req = recorded.request("session.history");
+    let history_req = recorded.request("session.read");
     recorded.respond(
         history_req,
         history(
@@ -3956,7 +4069,7 @@ fn late_steer_ack_respects_recorded_and_uncertain_history() {
     let (mut uncertain, wait, steer, steer_id) = delayed_steer_driver();
     uncertain.respond(wait, wait_result("ses_1", "loop_steer", "persisted"));
     uncertain.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    let history_req = uncertain.request("session.history");
+    let history_req = uncertain.request("session.read");
     uncertain.respond_error(history_req, -32603, "history unavailable");
     let view = &uncertain.app.sessions.known["ses_1"];
     assert_eq!(
@@ -4066,7 +4179,7 @@ fn regression_scenario_d_steer_retention_single_render_and_late_response_correla
 
     // Complete wait with persisted
     driver.respond(wait, wait_result("ses_1", "loop_D", "persisted"));
-    let hist_req = driver.request("session.history");
+    let hist_req = driver.request("session.read");
 
     // History contains ONLY ONE "steer text" entry (the accepted one)
     driver.respond(
@@ -4136,11 +4249,15 @@ fn regression_scenario_e_stale_wait_and_history_paging_idempotence() {
 
     // Turn 1 completes normally with persisted outcome and history
     driver.respond(wait1.clone(), wait_result("ses_1", "loop_1", "persisted"));
-    let hist1 = driver.request("session.history");
+    let hist1 = driver.request("session.read");
     // Return page 1: offset 0, next_offset 1, total 2
     driver.respond(
         hist1,
-        history(vec![user(0, "loop_1", "prompt 1")], Some(1), 2),
+        history(
+            vec![user(0, "loop_1", "prompt 1")],
+            Some(json!({"item": 1, "offset": 0})),
+            2,
+        ),
     );
     assert_eq!(
         driver.app.sessions.known["ses_1"].transcript.loaded_count,
@@ -4148,7 +4265,7 @@ fn regression_scenario_e_stale_wait_and_history_paging_idempotence() {
     );
 
     // Automated paging fetches next page starting at offset 1
-    let hist_page2 = driver.request("session.history");
+    let hist_page2 = driver.request("session.read");
     driver.respond(
         hist_page2,
         history(vec![assistant(1, "loop_1", 0, "deep", "answer 1")], None, 2),
@@ -4227,10 +4344,14 @@ fn regression_scenario_e_stale_wait_and_history_paging_idempotence() {
     });
     driver.respond_method("session.open", json!({"session": session("ses_2")}));
     driver.respond_method("session.state", state("ses_2", "idle", Value::Null));
-    let ses2_hist1 = driver.request("session.history");
+    let ses2_hist1 = driver.request("session.read");
     driver.respond(
         ses2_hist1,
-        history(vec![user(0, "loop_x", "initial item")], Some(1), 2),
+        history(
+            vec![user(0, "loop_x", "initial item")],
+            Some(json!({"item": 1, "offset": 0})),
+            2,
+        ),
     );
     assert_eq!(
         driver.app.sessions.known["ses_2"].transcript.loaded_count,
@@ -4238,7 +4359,7 @@ fn regression_scenario_e_stale_wait_and_history_paging_idempotence() {
     );
 
     // Next page request arrives
-    let ses2_hist2 = driver.request("session.history");
+    let ses2_hist2 = driver.request("session.read");
     // Incoming page contains conflict on already loaded item 0
     let conflict_items = vec![
         user(0, "loop_conflict", "changed item"),
@@ -4269,7 +4390,7 @@ fn regression_test_close_wait_correlation_and_guards() {
     });
     driver.respond_method("session.open", json!({"session": session("ses_1")}));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    driver.respond_method("session.history", history(Vec::new(), None, 0));
+    driver.respond_method("session.read", history(Vec::new(), None, 0));
 
     // Submit turn -> send_turn
     driver.step(AppEvent::SubmitTurn {
@@ -4361,7 +4482,7 @@ fn regression_test_pending_config_update_loop_scoping_and_no_rollback() {
     });
     driver.respond_method("session.open", json!({"session": session("ses_1")}));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    driver.respond_method("session.history", history(Vec::new(), None, 0));
+    driver.respond_method("session.read", history(Vec::new(), None, 0));
 
     // Submit turn 1
     driver.step(AppEvent::SubmitTurn {
@@ -4434,11 +4555,7 @@ fn regression_test_pending_config_update_loop_scoping_and_no_rollback() {
             "meta": {"session_id": "ses_1", "loop_id": "loop_1", "dropped_before": 0}
         }
     })));
-    if let Some(pos) = driver
-        .queue
-        .iter()
-        .position(|r| r.method == "session.history")
-    {
+    if let Some(pos) = driver.queue.iter().position(|r| r.method == "session.read") {
         let req = driver.queue.remove(pos).unwrap();
         driver.respond(req, history(hist_items, None, 1));
     }
@@ -4466,7 +4583,7 @@ fn regression_test_close_agent_error_single_state_check_and_store_error() {
     });
     driver.respond_method("session.open", json!({"session": session("ses_1")}));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    driver.respond_method("session.history", history(Vec::new(), None, 0));
+    driver.respond_method("session.read", history(Vec::new(), None, 0));
 
     // Submit turn
     driver.step(AppEvent::SubmitTurn {
@@ -4829,14 +4946,12 @@ fn history_failure_clear_and_reopen_keep_destructive_actions_guarded() {
         session_id: "ses_1".into(),
     });
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    let failed_history = driver.request("session.history");
+    let failed_history = driver.request("session.read");
     assert_eq!(
         driver.app.pending_requests.get(&failed_history.id),
         Some(&minicore_tui::app::RequestKind::History {
             session_id: "ses_1".into(),
-            offset: 0,
-            limit: 20,
-            gap_revision: Some(0),
+            read: history_read_request(0),
         })
     );
     let failed_revision = driver.app.sessions.known["ses_1"].gap_revision;
@@ -4852,14 +4967,12 @@ fn history_failure_clear_and_reopen_keep_destructive_actions_guarded() {
 
     // `/clear` starts a new history read but must not erase the safety fence.
     submit_command(&mut driver, "/clear");
-    let clear_history = driver.request("session.history");
+    let clear_history = driver.request("session.read");
     assert_eq!(
         driver.app.pending_requests.get(&clear_history.id),
         Some(&minicore_tui::app::RequestKind::History {
             session_id: "ses_1".into(),
-            offset: 0,
-            limit: 20,
-            gap_revision: Some(failed_revision),
+            read: history_read_request_with(failed_revision, true),
         })
     );
     let view = &driver.app.sessions.known["ses_1"];
@@ -4923,14 +5036,12 @@ fn history_failure_clear_and_reopen_keep_destructive_actions_guarded() {
     });
     let open = reopen.request("session.open");
     reopen.respond(open, json!({"session": session("ses_1")}));
-    let history = reopen.request("session.history");
+    let history = reopen.request("session.read");
     assert_eq!(
         reopen.app.pending_requests.get(&history.id),
         Some(&minicore_tui::app::RequestKind::History {
             session_id: "ses_1".into(),
-            offset: 0,
-            limit: 20,
-            gap_revision: Some(reopen_revision),
+            read: history_read_request_with(reopen_revision, true),
         })
     );
     assert!(reopen.app.sessions.known["ses_1"].event_gap);
@@ -4947,14 +5058,12 @@ fn inflight_history_gap_reconciles_new_revision_before_lifecycle_actions() {
     let open = driver.request("session.open");
     driver.respond(open, json!({"session": session("ses_1")}));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    let initial_history = driver.request("session.history");
+    let initial_history = driver.request("session.read");
     assert_eq!(
         driver.app.pending_requests.get(&initial_history.id),
         Some(&RequestKind::History {
             session_id: "ses_1".into(),
-            offset: 0,
-            limit: 20,
-            gap_revision: Some(0),
+            read: history_read_request(0),
         })
     );
 
@@ -4993,14 +5102,12 @@ fn inflight_history_gap_reconciles_new_revision_before_lifecycle_actions() {
     assert!(driver.queue.iter().all(|request| {
         request.method != "session.close" && request.method != "session.delete"
     }));
-    let retry = driver.request("session.history");
+    let retry = driver.request("session.read");
     assert_eq!(
         driver.app.pending_requests.get(&retry.id),
         Some(&RequestKind::History {
             session_id: "ses_1".into(),
-            offset: 0,
-            limit: 20,
-            gap_revision: Some(1),
+            read: history_read_request_with(1, true),
         })
     );
     assert!(driver.app.sessions.known["ses_1"].event_gap);
@@ -5031,7 +5138,7 @@ fn inflight_history_gap_reconciles_new_revision_before_lifecycle_actions() {
 }
 
 #[test]
-fn legacy_none_history_reply_cannot_release_a_new_event_gap() {
+fn stale_gap_revision_history_reply_cannot_release_a_new_event_gap() {
     let mut driver = Driver::new();
     bootstrap(&mut driver);
     driver.step(AppEvent::OpenSession {
@@ -5040,14 +5147,14 @@ fn legacy_none_history_reply_cannot_release_a_new_event_gap() {
     let open = driver.request("session.open");
     driver.respond(open, json!({"session": session("ses_1")}));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    let old_history = driver.request("session.history");
+    let old_history = driver.request("session.read");
 
-    // Model a request created by the pre-revision protocol: its response has
-    // no captured revision. This must remain unsafe after a newer gap.
-    if let Some(RequestKind::History { gap_revision, .. }) =
+    // Model a request whose captured gap revision is already stale: its
+    // response must remain unsafe after a newer gap.
+    if let Some(RequestKind::History { read, .. }) =
         driver.app.pending_requests.get_mut(&old_history.id)
     {
-        *gap_revision = None;
+        read.gap_revision = 0;
     }
     driver.step(agent_event(json!({
         "type": "session_state",
@@ -5063,14 +5170,12 @@ fn legacy_none_history_reply_cannot_release_a_new_event_gap() {
     driver.respond(old_history, history(Vec::new(), None, 0));
 
     assert!(driver.app.sessions.known["ses_1"].event_gap);
-    let retry = driver.request("session.history");
+    let retry = driver.request("session.read");
     assert_eq!(
         driver.app.pending_requests.get(&retry.id),
         Some(&RequestKind::History {
             session_id: "ses_1".into(),
-            offset: 0,
-            limit: 20,
-            gap_revision: Some(1),
+            read: history_read_request_with(1, true),
         })
     );
 }
@@ -5118,9 +5223,7 @@ fn deleted_session_id_rejects_late_lifecycle_responses_and_events() {
             minicore_tui::protocol::RequestId(80_013),
             minicore_tui::app::RequestKind::History {
                 session_id: "ses_1".into(),
-                offset: 0,
-                limit: 100,
-                gap_revision: None,
+                read: history_read_request(0),
             },
         ),
     ] {
@@ -5183,9 +5286,7 @@ fn deleted_session_id_rejects_late_lifecycle_responses_and_events() {
         late_history_id,
         minicore_tui::app::RequestKind::History {
             session_id: "ses_1".into(),
-            offset: 0,
-            limit: 100,
-            gap_revision: None,
+            read: history_read_request(0),
         },
     );
     driver.respond(
@@ -5225,7 +5326,7 @@ fn session_update_response_after_loop_finished_retains_info_and_saved_next_turn(
     });
     driver.respond_method("session.open", json!({"session": session("ses_1")}));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    driver.respond_method("session.history", history(Vec::new(), None, 0));
+    driver.respond_method("session.read", history(Vec::new(), None, 0));
 
     // Submit turn 1
     driver.step(AppEvent::SubmitTurn {
@@ -5257,7 +5358,7 @@ fn session_update_response_after_loop_finished_retains_info_and_saved_next_turn(
             "meta": {"session_id": "ses_1", "loop_id": "loop_1", "dropped_before": 0}
         }
     })));
-    let hist_req = driver.request("session.history");
+    let hist_req = driver.request("session.read");
     driver.respond(hist_req, history(hist_items, None, 1));
     let state_req = driver.request("session.state");
     driver.respond(state_req, state("ses_1", "idle", Value::Null));
@@ -5297,7 +5398,7 @@ fn close_success_before_wait_response_processes_result_without_extra_state_or_hi
     });
     driver.respond_method("session.open", json!({"session": session("ses_1")}));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    driver.respond_method("session.history", history(Vec::new(), None, 0));
+    driver.respond_method("session.read", history(Vec::new(), None, 0));
 
     // Submit turn
     driver.step(AppEvent::SubmitTurn {
@@ -5347,7 +5448,7 @@ fn shutdown_send_turn_in_flight_response_registers_wait() {
     });
     driver.respond_method("session.open", json!({"session": session("ses_1")}));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    driver.respond_method("session.history", history(Vec::new(), None, 0));
+    driver.respond_method("session.read", history(Vec::new(), None, 0));
 
     // Submit turn
     driver.step(AppEvent::SubmitTurn {
@@ -5516,29 +5617,20 @@ fn failed_tool_survives_live_finished_wait_and_history_with_folded_geometry() {
     );
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
     driver.respond_method(
-        "session.history",
+        "session.read",
         history(
             vec![
                 user(0, "loop_failed_tool", "run the failing tool"),
-                json!({
-                    "index": 1,
-                    "item": {"type": "assistant", "data": {
-                        "loop_id": "loop_failed_tool", "request_index": 0,
-                        "model": "deep", "reasoning_level": "high", "text": "",
-                        "reasoning": "", "tool_calls": [{
-                            "tool_call_id": "call_failed", "name": "bash", "call_index": 0
-                        }], "usage": {}, "finish_reason": "tool_calls"
-                    }}
-                }),
-                json!({
-                    "index": 2,
-                    "item": {"type": "tool_result", "data": {
-                        "loop_id": "loop_failed_tool", "request_index": 0,
-                        "tool_call_id": "call_failed", "tool_name": "bash",
-                        "outcome": "failed", "content": "tool failed",
-                        "content_truncated": false
-                    }}
-                }),
+                assistant_with_tool(1, "loop_failed_tool", 0, "call_failed", "bash", ""),
+                tool_result(
+                    2,
+                    "loop_failed_tool",
+                    0,
+                    "call_failed",
+                    "bash",
+                    "failed",
+                    "tool failed",
+                ),
             ],
             None,
             3,
@@ -5667,7 +5759,7 @@ fn turn_result_completed_and_persistence_failed() {
     });
     driver.respond_method("session.open", json!({"session": session("ses_1")}));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    driver.respond_method("session.history", history(Vec::new(), None, 0));
+    driver.respond_method("session.read", history(Vec::new(), None, 0));
 
     driver.step(AppEvent::SubmitTurn {
         session_id: "ses_1".into(),
@@ -5720,7 +5812,7 @@ fn turn_result_failed_and_persisted_with_model_error() {
     });
     driver.respond_method("session.open", json!({"session": session("ses_1")}));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    driver.respond_method("session.history", history(Vec::new(), None, 0));
+    driver.respond_method("session.read", history(Vec::new(), None, 0));
 
     driver.step(AppEvent::SubmitTurn {
         session_id: "ses_1".into(),
@@ -5755,7 +5847,7 @@ fn turn_result_failed_and_persisted_with_model_error() {
         }),
     );
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    driver.respond_method("session.history", history(Vec::new(), None, 0));
+    driver.respond_method("session.read", history(Vec::new(), None, 0));
 
     let view = driver.app.sessions.known.get("ses_1").unwrap();
     assert!(view.unsaved_loop.is_none());
@@ -5779,7 +5871,7 @@ fn turn_result_cancelled_user_and_unknown() {
     });
     driver.respond_method("session.open", json!({"session": session("ses_1")}));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    driver.respond_method("session.history", history(Vec::new(), None, 0));
+    driver.respond_method("session.read", history(Vec::new(), None, 0));
 
     // Case 1: Cancelled (user)
     driver.step(AppEvent::SubmitTurn {
@@ -5807,7 +5899,7 @@ fn turn_result_cancelled_user_and_unknown() {
     );
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
     driver.respond_method(
-        "session.history",
+        "session.read",
         history(
             vec![
                 user(0, "loop_1", "cancel me"),
@@ -5853,7 +5945,7 @@ fn turn_result_cancelled_user_and_unknown() {
     );
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
     driver.respond_method(
-        "session.history",
+        "session.read",
         history(
             vec![
                 user(2, "loop_2", "cancel unknown"),
@@ -5994,7 +6086,7 @@ fn shutdown_ok_after_known_failed_preserves_unsaved_and_last_result() {
     });
     driver.respond_method("session.open", json!({"session": session("ses_1")}));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    driver.respond_method("session.history", history(Vec::new(), None, 0));
+    driver.respond_method("session.read", history(Vec::new(), None, 0));
 
     driver.step(AppEvent::SubmitTurn {
         session_id: "ses_1".into(),
@@ -6388,11 +6480,11 @@ fn handoff_setup(driver: &mut Driver) -> OutgoingRequest {
     driver.respond(wait, wait_result("ses_1", "loop_1", "persisted"));
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
     driver.respond_method(
-        "session.history",
+        "session.read",
         history(
             vec![
                 user(0, "loop_1", "prompt"),
-                json!({"index": 1, "item": {"type": "user", "data": {"loop_id": "loop_1", "kind": "steering", "text": "first"}}}),
+                user_steering(1, "loop_1", "first"),
                 assistant(2, "loop_1", 1, "deep", "done"),
             ],
             None,

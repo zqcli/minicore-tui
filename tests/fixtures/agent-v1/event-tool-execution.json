@@ -1,0 +1,51 @@
+{
+ "event": "tool_execution",
+ "fixture": "event-tool-execution",
+ "method": "agent.event",
+ "notification": {
+  "data": {
+   "data": {
+    "command": {
+     "exit_code": 0,
+     "output_complete": true,
+     "output_truncated": false,
+     "status": "exited",
+     "stderr_base_offset": 0,
+     "stderr_observed_end": 3,
+     "stdout_base_offset": 0,
+     "stdout_observed_end": 3,
+     "termination_confirmed": true
+    },
+    "finished_at": "2026-09-18T08:38:27.437Z",
+    "input_availability": "available",
+    "input_bytes": 49,
+    "input_truncated": false,
+    "name": "bash",
+    "outcome": "success",
+    "output_availability": "available",
+    "phase": "running",
+    "recording": "memory_only",
+    "result_bytes": 36,
+    "result_truncated": false,
+    "started_at": "2026-09-18T08:38:25.429Z",
+    "state": "succeeded",
+    "tool_ref": {
+     "loop_id": "lup_357ffaa5fbfbe760735af6e79d419820",
+     "request_index": 0,
+     "session_id": "ses_8786dd1dd086cc5d6d246c32704586fe",
+     "tool_call_id": "call_fixture_bash"
+    }
+   },
+   "meta": {
+    "dropped_before": 0,
+    "loop_id": "lup_357ffaa5fbfbe760735af6e79d419820",
+    "session_id": "ses_8786dd1dd086cc5d6d246c32704586fe"
+   },
+   "turn": {
+    "loop_id": "lup_357ffaa5fbfbe760735af6e79d419820",
+    "session_id": "ses_8786dd1dd086cc5d6d246c32704586fe"
+   }
+  },
+  "type": "tool_execution"
+ }
+}

@@ -2,10 +2,10 @@
  "fixture": "tool-read-clean-empty",
  "method": "tool.read",
  "request": {
-  "loop_id": "lup_9c861fdb8f0e6454198839df4e07c9f4",
+  "loop_id": "lup_4c8acfcbfd4d6ad744fd175286a4339f",
   "max_bytes": 262144,
   "request_index": 0,
-  "session_id": "ses_868653b86d9508f1de1007053a4b7aa3",
+  "session_id": "ses_c59689b577a306a6010d07108be7a89e",
   "tool_call_id": "call_fixture_empty"
  },
  "result": {
@@ -21,7 +21,7 @@
     "stdout_observed_end": 0,
     "termination_confirmed": true
    },
-   "finished_at": "2026-09-18T06:24:13.857Z",
+   "finished_at": "2026-09-18T08:38:31.506Z",
    "input_availability": "available",
    "input_bytes": 18,
    "input_truncated": false,
@@ -32,12 +32,12 @@
    "recording": "saved",
    "result_bytes": 29,
    "result_truncated": false,
-   "started_at": "2026-09-18T06:24:13.852Z",
+   "started_at": "2026-09-18T08:38:31.500Z",
    "state": "succeeded",
    "tool_ref": {
-    "loop_id": "lup_9c861fdb8f0e6454198839df4e07c9f4",
+    "loop_id": "lup_4c8acfcbfd4d6ad744fd175286a4339f",
     "request_index": 0,
-    "session_id": "ses_868653b86d9508f1de1007053a4b7aa3",
+    "session_id": "ses_c59689b577a306a6010d07108be7a89e",
     "tool_call_id": "call_fixture_empty"
    }
   },
@@ -56,9 +56,9 @@
    },
    "subject_truncated": false,
    "tool_ref": {
-    "loop_id": "lup_9c861fdb8f0e6454198839df4e07c9f4",
+    "loop_id": "lup_4c8acfcbfd4d6ad744fd175286a4339f",
     "request_index": 0,
-    "session_id": "ses_868653b86d9508f1de1007053a4b7aa3",
+    "session_id": "ses_c59689b577a306a6010d07108be7a89e",
     "tool_call_id": "call_fixture_empty"
    }
   }

@@ -2,7 +2,7 @@
  "fixture": "workspace-status",
  "method": "workspace.status",
  "request": {
-  "session_id": "ses_c40e87e3bb457a2f18feec830f5694df"
+  "session_id": "ses_a5a252b997e9b371ecc0f33609be14f7"
  },
  "result": {
   "branch": "master",
@@ -19,8 +19,8 @@
     "worktree_status": "M"
    }
   ],
-  "head_oid": "ceacfa202864ddb474f6b1d5c8d8001d2dec3992",
-  "observed_at_unix_ms": 1789712651936,
+  "head_oid": "6f47160dbbf4cfa124780f3d9d98f9011d483dea",
+  "observed_at_unix_ms": 1789720709498,
   "repo_available": true,
   "skipped_paths": 0,
   "staged": 0,

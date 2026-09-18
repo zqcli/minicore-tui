@@ -1,0 +1,40 @@
+{
+ "event": "tool_invocation",
+ "fixture": "event-tool-invocation",
+ "method": "agent.event",
+ "notification": {
+  "data": {
+   "data": {
+    "input": {
+     "encoding": "utf8_json",
+     "preview": "{\"command\":\"sleep 2; printf out; printf err >&2\"}",
+     "total_bytes": 49,
+     "truncated": false
+    },
+    "name": "bash",
+    "subject": {
+     "cwd": ".",
+     "kind": "command",
+     "script": "sleep 2; printf out; printf err >&2"
+    },
+    "subject_truncated": false,
+    "tool_ref": {
+     "loop_id": "lup_357ffaa5fbfbe760735af6e79d419820",
+     "request_index": 0,
+     "session_id": "ses_8786dd1dd086cc5d6d246c32704586fe",
+     "tool_call_id": "call_fixture_bash"
+    }
+   },
+   "meta": {
+    "dropped_before": 0,
+    "loop_id": "lup_357ffaa5fbfbe760735af6e79d419820",
+    "session_id": "ses_8786dd1dd086cc5d6d246c32704586fe"
+   },
+   "turn": {
+    "loop_id": "lup_357ffaa5fbfbe760735af6e79d419820",
+    "session_id": "ses_8786dd1dd086cc5d6d246c32704586fe"
+   }
+  },
+  "type": "tool_invocation"
+ }
+}

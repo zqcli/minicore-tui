@@ -3,13 +3,13 @@
  "method": "workspace.read",
  "request": {
   "path": "src/main.rs",
-  "session_id": "ses_c40e87e3bb457a2f18feec830f5694df"
+  "session_id": "ses_a5a252b997e9b371ecc0f33609be14f7"
  },
  "result": {
   "content": "fn main() {\n    println!(\"changed\");\n}\n",
   "encoding": "utf8",
   "file_bytes": 39,
-  "file_modified_unix_ms": 1789712651916,
+  "file_modified_unix_ms": 1789720709476,
   "line_truncated": false,
   "next_range": null,
   "path": "src/main.rs",
