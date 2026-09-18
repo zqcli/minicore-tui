@@ -1,0 +1,483 @@
+//! Authoritative Protocol v1 read DTOs and the chunk decoder (spec §6).
+//!
+//! These types are the *raw* Runtime item envelopes returned by `session.read`
+//! and `turn.result`. They are deliberately **different types** from the
+//! legacy `session.history` display DTO ([`crate::protocol::HistoryItemViewWire`])
+//! because the two wire shapes differ: a runtime `User` item carries `input`,
+//! an `Assistant` item carries `content`, and tool output is a nested object.
+//! Stage B is the only migration; there is no dual stack (spec §4).
+
+use serde::{Deserialize, Deserializer, Serialize};
+
+use super::{LoopOutcomeWire, SessionInfo, UsageWire};
+
+/// Default auto-decode ceiling for a single raw item (spec §6.2). A larger
+/// item is surfaced as a [`Assembled::LargeItem`] placeholder rather than being
+/// silently truncated and reported complete.
+pub const MAX_AUTO_ITEM_BYTES: usize = 8 * 1024 * 1024;
+
+/// A read position: `item` is the session-global item index and `offset` is
+/// the UTF-8 byte offset inside that item's canonical JSON encoding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReadCursor {
+    pub item: usize,
+    #[serde(default)]
+    pub offset: usize,
+}
+
+impl ReadCursor {
+    pub const fn start() -> Self {
+        Self { item: 0, offset: 0 }
+    }
+}
+
+/// The fixed snapshot prefix a read chain is pinned to (spec §6.1). `total` is
+/// the number of *readable items* in the prefix; `captured_end` is the backend
+/// JSONL byte boundary and is never computed client-side.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SnapshotPin {
+    pub captured_end: u64,
+    pub history_revision: String,
+    pub total: usize,
+}
+
+/// One returned chunk of one item's canonical JSON (spec §6.1).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct ReadChunk {
+    pub index: usize,
+    pub offset: usize,
+    pub total_bytes: usize,
+    pub encoding: String,
+    pub data: String,
+    pub complete: bool,
+}
+
+/// The result envelope of one `session.read` page.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct ReadSessionResult {
+    pub session: SessionInfo,
+    pub items: Vec<ReadChunk>,
+    #[serde(default)]
+    pub next_cursor: Option<ReadCursor>,
+    pub total: usize,
+    #[serde(default)]
+    pub records: Vec<ReadTurnSummary>,
+    #[serde(default)]
+    pub records_truncated: bool,
+    pub history_revision: String,
+    pub captured_end: u64,
+    #[serde(default)]
+    pub trailing_incomplete: bool,
+}
+
+impl ReadSessionResult {
+    pub fn pin(&self) -> SnapshotPin {
+        SnapshotPin {
+            captured_end: self.captured_end,
+            history_revision: self.history_revision.clone(),
+            total: self.total,
+        }
+    }
+}
+
+/// A sanitized turn summary attached to a read page. `records` only covers the
+/// turns intersecting the returned chunks; it never implies all turns were
+/// read (spec §6.1).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct ReadTurnSummary {
+    pub loop_id: String,
+    pub outcome: LoopOutcomeWire,
+    #[serde(default)]
+    pub usage: UsageWire,
+    pub requests: u32,
+    pub tool_rounds: u16,
+    pub final_config_revision: u64,
+    pub completed_at: String,
+}
+
+/// One decoded raw Runtime `HistoryItem` plus its optional acceptance time.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RawHistoryItem {
+    pub item: RuntimeItem,
+    pub timestamp: Option<String>,
+}
+
+/// A sanitized Runtime `HistoryItem`, decoded from its canonical JSON.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum RuntimeItem {
+    User(RuntimeUserItem),
+    Assistant(RuntimeAssistantItem),
+    ToolResult(RuntimeToolResultItem),
+    Summary(RuntimeSummaryItem),
+}
+
+impl RuntimeItem {
+    /// The loop this item belongs to, when it belongs to one.
+    pub fn loop_id(&self) -> Option<&str> {
+        match self {
+            Self::User(item) => Some(&item.loop_id),
+            Self::Assistant(item) => Some(&item.loop_id),
+            Self::ToolResult(item) => Some(&item.loop_id),
+            Self::Summary(_) => None,
+        }
+    }
+}
+
+/// Runtime `UserHistory`: the input is `input.text`, not the legacy `text`.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct RuntimeUserItem {
+    pub loop_id: String,
+    pub kind: RuntimeUserKind,
+    pub input: RuntimeUserInput,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct RuntimeUserInput {
+    pub text: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeUserKind {
+    Prompt,
+    Steering,
+}
+
+/// Runtime `AssistantHistory`: ordered `content` parts, not legacy
+/// `text`/`reasoning` aggregate strings.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct RuntimeAssistantItem {
+    pub loop_id: String,
+    pub request_index: u32,
+    pub model: String,
+    #[serde(default)]
+    pub reasoning: Option<String>,
+    pub content: Vec<RuntimeAssistantPart>,
+    pub finish_reason: String,
+    #[serde(default)]
+    pub usage: UsageWire,
+}
+
+/// A sanitized Runtime `AssistantPart`. Reasoning text is a nested object;
+/// `encrypted`/`signature` opaque fields are retained as opaque strings.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RuntimeAssistantPart {
+    Text(String),
+    Reasoning {
+        text: Option<String>,
+        summary: Option<String>,
+        encrypted: Option<String>,
+        signature: Option<String>,
+    },
+    ToolCall {
+        tool_call_id: String,
+        name: String,
+        arguments: serde_json::Value,
+        call_index: u32,
+    },
+}
+
+impl<'de> Deserialize<'de> for RuntimeAssistantPart {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(tag = "type", content = "data", rename_all = "snake_case")]
+        enum Wire {
+            Text(String),
+            Reasoning {
+                #[serde(default)]
+                text: Option<String>,
+                #[serde(default)]
+                summary: Option<String>,
+                #[serde(default)]
+                encrypted: Option<String>,
+                #[serde(default)]
+                signature: Option<String>,
+            },
+            ToolCall {
+                tool_call_id: String,
+                name: String,
+                #[serde(default)]
+                arguments: serde_json::Value,
+                #[serde(default)]
+                call_index: u32,
+            },
+        }
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::Text(text) => Self::Text(text),
+            Wire::Reasoning {
+                text,
+                summary,
+                encrypted,
+                signature,
+            } => Self::Reasoning {
+                text,
+                summary,
+                encrypted,
+                signature,
+            },
+            Wire::ToolCall {
+                tool_call_id,
+                name,
+                arguments,
+                call_index,
+            } => Self::ToolCall {
+                tool_call_id,
+                name,
+                arguments,
+                call_index,
+            },
+        })
+    }
+}
+
+/// Runtime `ToolResultHistory`: the call id field is `call_id` and the text is
+/// nested as `output.content`.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct RuntimeToolResultItem {
+    pub loop_id: String,
+    pub request_index: u32,
+    pub call_id: String,
+    pub tool_name: String,
+    pub outcome: String,
+    pub output: RuntimeToolOutput,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct RuntimeToolOutput {
+    pub content: String,
+}
+
+/// Runtime `SummaryHistory`: the body is nested at `content.content`.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct RuntimeSummaryItem {
+    pub content: String,
+}
+
+/// The outcome of feeding one chunk to the assembler.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Assembled {
+    /// The item is still incomplete; feed the next chunk.
+    Pending,
+    /// One complete, contiguous item was decoded.
+    Item {
+        index: usize,
+        item: RawHistoryItem,
+    },
+    /// The item exceeds [`MAX_AUTO_ITEM_BYTES`]. Its bytes were discarded; the
+    /// caller shows a visible placeholder and can re-read it on demand. It is
+    /// never reported as a complete item.
+    LargeItem { index: usize, total_bytes: usize },
+}
+
+/// `turn.result` availability: a turn may still be running, may only exist as
+/// the in-process retained report, or may be stored (spec §7.2).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnAvailability {
+    Pending,
+    Live,
+    Stored,
+}
+
+/// One `turn.result` page (spec §7.2). `index` on items is **turn-local**, not
+/// a session-global history index.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct TurnResultPage {
+    pub turn: super::TurnRef,
+    pub availability: TurnAvailability,
+    #[serde(default)]
+    pub outcome: Option<LoopOutcomeWire>,
+    #[serde(default)]
+    pub persistence: Option<super::TurnPersistenceWire>,
+    #[serde(default)]
+    pub usage: Option<UsageWire>,
+    #[serde(default)]
+    pub requests: Option<u32>,
+    #[serde(default)]
+    pub tool_rounds: Option<u16>,
+    #[serde(default)]
+    pub final_config_revision: Option<u64>,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+    #[serde(default)]
+    pub items: Vec<ReadChunk>,
+    #[serde(default)]
+    pub next_cursor: Option<ReadCursor>,
+    #[serde(default)]
+    pub total: usize,
+}
+
+/// Reasons a chunk stream is not a well-formed canonical item.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum ReadError {
+    #[error("unexpected read encoding '{0}', expected utf8_json")]
+    Encoding(String),
+    #[error("read chunk index {found} does not follow item {expected}")]
+    IndexOutOfOrder { expected: usize, found: usize },
+    #[error("read chunk offset {found} does not continue at {expected}")]
+    OffsetMismatch { expected: usize, found: usize },
+    #[error("read chunk total_bytes {found} disagrees with {expected}")]
+    TotalBytesMismatch { expected: usize, found: usize },
+    #[error("item {index} declared {declared} bytes but delivered {delivered}")]
+    ByteCountMismatch {
+        index: usize,
+        declared: usize,
+        delivered: usize,
+    },
+    #[error("item {index} JSON is not a Runtime history item: {detail}")]
+    MalformedItem { index: usize, detail: String },
+}
+
+/// Reassembles raw item chunks into Runtime items (spec §6.2). It buffers at
+/// most one incomplete item, advances only by real `data.as_bytes().len()`,
+/// and never preallocates from the declared `total_bytes`.
+#[derive(Debug, Default)]
+pub struct ChunkAssembler {
+    index: usize,
+    next_offset: usize,
+    total_bytes: usize,
+    buffer: String,
+    active: bool,
+    skipping_large: bool,
+}
+
+impl ChunkAssembler {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The index of the item currently being assembled, if any.
+    pub fn current_index(&self) -> Option<usize> {
+        self.active.then_some(self.index)
+    }
+
+    /// Drops the buffered partial item. Used when a page lands outside the
+    /// requested window, so its partial bytes are never mistaken for loaded
+    /// content (spec §6.3).
+    pub fn discard(&mut self) {
+        self.index = 0;
+        self.next_offset = 0;
+        self.total_bytes = 0;
+        self.buffer.clear();
+        self.active = false;
+        self.skipping_large = false;
+    }
+
+    pub fn push(&mut self, chunk: ReadChunk) -> Result<Assembled, ReadError> {
+        if chunk.encoding != "utf8_json" {
+            return Err(ReadError::Encoding(chunk.encoding));
+        }
+        let delivered = chunk.data.as_bytes().len();
+
+        if self.active && chunk.index != self.index {
+            // A new item may only start once the previous one is complete.
+            if !self.skipping_large && self.next_offset != 0 && self.buffer.is_empty() {
+                // Previous item ended without an explicit complete flag.
+                return Err(ReadError::IndexOutOfOrder {
+                    expected: self.index,
+                    found: chunk.index,
+                });
+            }
+            self.begin(chunk.index, chunk.total_bytes);
+        } else if !self.active {
+            if chunk.offset != 0 {
+                return Err(ReadError::OffsetMismatch {
+                    expected: 0,
+                    found: chunk.offset,
+                });
+            }
+            self.begin(chunk.index, chunk.total_bytes);
+        } else if chunk.total_bytes != self.total_bytes {
+            return Err(ReadError::TotalBytesMismatch {
+                expected: self.total_bytes,
+                found: chunk.total_bytes,
+            });
+        }
+
+        if chunk.offset != self.next_offset {
+            return Err(ReadError::OffsetMismatch {
+                expected: self.next_offset,
+                found: chunk.offset,
+            });
+        }
+
+        if self.skipping_large {
+            self.next_offset += delivered;
+            if chunk.complete {
+                let total = self.total_bytes;
+                let index = self.index;
+                self.discard();
+                return Ok(Assembled::LargeItem {
+                    index,
+                    total_bytes: total,
+                });
+            }
+            return Ok(Assembled::Pending);
+        }
+
+        if self.total_bytes > MAX_AUTO_ITEM_BYTES {
+            self.skipping_large = true;
+            self.next_offset += delivered;
+            if chunk.complete {
+                let total = self.total_bytes;
+                let index = self.index;
+                self.discard();
+                return Ok(Assembled::LargeItem {
+                    index,
+                    total_bytes: total,
+                });
+            }
+            return Ok(Assembled::Pending);
+        }
+
+        self.buffer.push_str(&chunk.data);
+        self.next_offset += delivered;
+
+        if !chunk.complete {
+            return Ok(Assembled::Pending);
+        }
+        if self.next_offset != self.total_bytes {
+            return Err(ReadError::ByteCountMismatch {
+                index: self.index,
+                declared: self.total_bytes,
+                delivered: self.next_offset,
+            });
+        }
+        let index = self.index;
+        let item = decode_item(&self.buffer).map_err(|detail| ReadError::MalformedItem {
+            index,
+            detail,
+        })?;
+        self.discard();
+        Ok(Assembled::Item { index, item })
+    }
+
+    fn begin(&mut self, index: usize, total_bytes: usize) {
+        self.index = index;
+        self.next_offset = 0;
+        self.total_bytes = total_bytes;
+        self.buffer.clear();
+        self.active = true;
+        self.skipping_large = false;
+    }
+}
+
+/// A decoded raw item is exactly `{ "item": <RuntimeItem>, "timestamp": ? }`.
+/// The `data` field already went through outer JSON decoding, so it must not
+/// be unescaped again.
+#[derive(Deserialize)]
+struct Envelope {
+    item: RuntimeItem,
+    #[serde(default)]
+    timestamp: Option<String>,
+}
+
+fn decode_item(raw: &str) -> Result<RawHistoryItem, String> {
+    let envelope: Envelope = serde_json::from_str(raw).map_err(|error| error.to_string())?;
+    Ok(RawHistoryItem {
+        item: envelope.item,
+        timestamp: envelope.timestamp,
+    })
+}

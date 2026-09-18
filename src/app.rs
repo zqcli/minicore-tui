@@ -20,8 +20,7 @@ use crate::protocol::{
     METHOD_LIST_PROFILES, METHOD_LIST_SESSIONS, ModelInfo, OutgoingRequest, OutputChannelWire,
     ProfileInfo, Reasoning, RequestId, RpcNotification, RpcResponse, RpcResponseError, SessionInfo,
     SessionPresentationWire, SessionStateWire, SessionStatusWire, ToolDisplayWire, ToolOutcomeWire,
-    ToolProgressWire, TurnPersistenceWire, TurnRef, UserMessageKindWire,
-    is_supported_agent_version,
+    ToolProgressWire, TurnPersistenceWire, TurnRef, UserMessageKindWire, validate_backend,
 };
 use crate::rpc::RpcError;
 use crate::state::catalog::CatalogState;
@@ -8674,11 +8673,8 @@ impl App {
             RequestKind::Ping => {
                 match response.parse_ping() {
                     Ok(pong) => {
-                        if !is_supported_agent_version(&pong.version) {
-                            let msg = format!(
-                                "unsupported agent version '{}': minicore-tui requires agent 0.3.x",
-                                pong.version
-                            );
+                        if let Err(error) = validate_backend(&pong) {
+                            let msg = error.to_string();
                             self.notice(NoticeLevel::Error, &msg);
                             self.connection = ConnectionState::Failed(msg);
                             return Vec::new();

@@ -1,14 +1,28 @@
-//! Wire DTOs for minicore-agent 0.3.x over stdio JSON-RPC.
+//! Wire DTOs for the fixed minicore-agent 0.5 / Protocol v1 backend over
+//! stdio JSON-RPC.
 //!
 //! Responses intentionally ignore unknown fields so patch releases can add
 //! read-only data. Outbound request structs are explicit and only serialize
 //! fields owned by this client.
+//!
+//! The authoritative read DTOs and chunk decoder live in [`read`]; the legacy
+//! `session.history` display DTOs remain only for compatibility display and
+//! are not a second main-history path.
 
 use std::fmt;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+pub mod read;
+
+pub use read::{
+    Assembled, ChunkAssembler, MAX_AUTO_ITEM_BYTES, RawHistoryItem, ReadChunk, ReadCursor,
+    ReadError, ReadSessionResult, ReadTurnSummary, RuntimeAssistantItem, RuntimeAssistantPart,
+    RuntimeItem, RuntimeSummaryItem, RuntimeToolOutput, RuntimeToolResultItem, RuntimeUserInput,
+    RuntimeUserItem, RuntimeUserKind, SnapshotPin, TurnAvailability, TurnResultPage,
+};
 
 pub const JSONRPC_VERSION: &str = "2.0";
 
@@ -31,7 +45,26 @@ pub const METHOD_TURN_SEND: &str = "turn.send";
 pub const METHOD_TURN_CANCEL: &str = "turn.cancel";
 pub const METHOD_TURN_WAIT: &str = "turn.wait";
 pub const METHOD_TURN_STEER: &str = "turn.steer";
+pub const METHOD_TURN_RESULT: &str = "turn.result";
+pub const METHOD_SESSION_READ: &str = "session.read";
+pub const METHOD_SESSION_CONTEXT: &str = "session.context";
+pub const METHOD_SESSION_COMPACT: &str = "session.compact";
+pub const METHOD_SESSION_COMPACT_CANCEL: &str = "session.compact.cancel";
+pub const METHOD_TOOL_READ: &str = "tool.read";
+pub const METHOD_TOOL_OUTPUT: &str = "tool.output";
+pub const METHOD_WORKSPACE_READ: &str = "workspace.read";
+pub const METHOD_WORKSPACE_FILES: &str = "workspace.files";
+pub const METHOD_WORKSPACE_SEARCH: &str = "workspace.search";
+pub const METHOD_WORKSPACE_STATUS: &str = "workspace.status";
+pub const METHOD_CHANGES_LIST: &str = "changes.list";
+pub const METHOD_CHANGES_DIFF: &str = "changes.diff";
 pub const METHOD_SHUTDOWN: &str = "agent.shutdown";
+
+/// Default page for the main history / result reads (spec §6.3).
+pub const READ_PAGE_LIMIT: usize = 20;
+pub const READ_PAGE_MAX_BYTES: usize = 262_144;
+/// The tail window opened by default for a long session (spec §6.3).
+pub const READ_TAIL_ITEMS: usize = 200;
 
 pub const PARSE_ERROR: i64 = -32_700;
 pub const INVALID_REQUEST: i64 = -32_600;
@@ -255,6 +288,67 @@ impl OutgoingRequest {
         Self::new(id, METHOD_SHUTDOWN, json!({}))
     }
 
+    /// `session.read` (spec §6.3). A non-zero cursor requires the pin fields,
+    /// so callers that start mid-history must pass the pin they are pinned to.
+    pub fn session_read(
+        id: RequestId,
+        session_id: &str,
+        cursor: Option<ReadCursor>,
+        limit: usize,
+        max_bytes: usize,
+        pin: Option<&SnapshotPin>,
+    ) -> Self {
+        let mut params = serde_json::Map::new();
+        params.insert("session_id".into(), json!(session_id));
+        if let Some(cursor) = cursor {
+            params.insert("cursor".into(), json!(cursor));
+        }
+        params.insert("limit".into(), json!(limit));
+        params.insert("max_bytes".into(), json!(max_bytes));
+        if let Some(pin) = pin {
+            params.insert("captured_end".into(), json!(pin.captured_end));
+            params.insert("history_revision".into(), json!(pin.history_revision));
+        }
+        Self::new(id, METHOD_SESSION_READ, Value::Object(params))
+    }
+
+    pub fn turn_result(
+        id: RequestId,
+        turn: &TurnRef,
+        cursor: Option<ReadCursor>,
+        limit: usize,
+        max_bytes: usize,
+    ) -> Self {
+        let mut params = serde_json::Map::new();
+        params.insert("turn".into(), json!(turn));
+        if let Some(cursor) = cursor {
+            params.insert("cursor".into(), json!(cursor));
+        }
+        params.insert("limit".into(), json!(limit));
+        params.insert("max_bytes".into(), json!(max_bytes));
+        Self::new(id, METHOD_TURN_RESULT, Value::Object(params))
+    }
+
+    pub fn session_context(id: RequestId, session_id: &str) -> Self {
+        Self::new(id, METHOD_SESSION_CONTEXT, json!({"session_id": session_id}))
+    }
+
+    pub fn session_compact(id: RequestId, session_id: &str, operation_id: &str) -> Self {
+        Self::new(
+            id,
+            METHOD_SESSION_COMPACT,
+            json!({"session_id": session_id, "operation_id": operation_id}),
+        )
+    }
+
+    pub fn session_compact_cancel(id: RequestId, session_id: &str, operation_id: &str) -> Self {
+        Self::new(
+            id,
+            METHOD_SESSION_COMPACT_CANCEL,
+            json!({"session_id": session_id, "operation_id": operation_id}),
+        )
+    }
+
     // Descriptive aliases used by callers that name the RPC operation first.
     pub fn create_session(
         id: RequestId,
@@ -333,6 +427,12 @@ impl RpcResponse {
         self.result_as()
     }
     pub fn parse_history(&self) -> Result<HistoryPageWire, RpcResponseError> {
+        self.result_as()
+    }
+    pub fn parse_session_read(&self) -> Result<ReadSessionResult, RpcResponseError> {
+        self.result_as()
+    }
+    pub fn parse_turn_result_page(&self) -> Result<TurnResultPage, RpcResponseError> {
         self.result_as()
     }
     pub fn parse_session_presentation(&self) -> Result<SessionPresentationWire, RpcResponseError> {
@@ -769,31 +869,72 @@ fn parse_wire_error(value: Value) -> Result<RpcError, FrameError> {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct PingResult {
     pub version: String,
+    /// Required by the pinned backend; a response without it is a protocol
+    /// error, not a fallback to the legacy Agent 0.3 behavior (spec §4.1).
+    pub protocol_version: u32,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
 }
 
-pub fn is_supported_agent_version(version: &str) -> bool {
-    let version = version.trim();
-    #[cfg(not(debug_assertions))]
-    {
-        if version.contains('-') || version.contains('+') {
-            return false;
-        }
+/// The protocol version this TUI speaks (spec §4.1).
+pub const PROTOCOL_VERSION: u32 = 1;
+
+/// Capabilities the TUI requires before it will execute anything. The list is
+/// fixed by the pinned Agent 0.5 baseline; `session.compact` is deliberately
+/// absent because the backend does not advertise it as a capability and this
+/// TUI must not invent one (spec §4.1).
+pub const REQUIRED_CAPABILITIES: &[&str] = &[
+    "session.read",
+    "turn.result",
+    "session.context",
+    "tool.read",
+    "tool.output",
+    "workspace.read",
+    "workspace.files",
+    "workspace.search",
+    "workspace.status",
+    "changes.list",
+    "changes.diff",
+    "deferred.waiter_limit",
+];
+
+/// Why the connected backend cannot be used. Every variant is a definite
+/// incompatibility: the TUI reports it and stops rather than falling back to a
+/// different protocol generation (spec §4.1).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum BackendError {
+    #[error(
+        "unsupported agent protocol version {found}: minicore-tui requires protocol_version {required}"
+    )]
+    ProtocolVersion { found: u32, required: u32 },
+    #[error(
+        "agent {version} is missing required capabilities: {missing}"
+    )]
+    MissingCapabilities { version: String, missing: String },
+}
+
+/// Validates the `agent.ping` handshake against the fixed baseline. The
+/// package `version` is advisory; compatibility is decided by
+/// `protocol_version` plus the required capability set (spec §4.1).
+pub fn validate_backend(ping: &PingResult) -> Result<(), BackendError> {
+    if ping.protocol_version != PROTOCOL_VERSION {
+        return Err(BackendError::ProtocolVersion {
+            found: ping.protocol_version,
+            required: PROTOCOL_VERSION,
+        });
     }
-    let core = version
-        .split_once('-')
-        .or_else(|| version.split_once('+'))
-        .map_or(version, |(core, _)| core);
-    let mut parts = core.split('.');
-    let (Some(major), Some(minor), Some(patch)) = (parts.next(), parts.next(), parts.next()) else {
-        return false;
-    };
-    if parts.next().is_some() {
-        return false;
+    let missing: Vec<&str> = REQUIRED_CAPABILITIES
+        .iter()
+        .copied()
+        .filter(|required| !ping.capabilities.iter().any(|have| have == required))
+        .collect();
+    if !missing.is_empty() {
+        return Err(BackendError::MissingCapabilities {
+            version: ping.version.clone(),
+            missing: missing.join(", "),
+        });
     }
-    if major != "0" || minor != "3" {
-        return false;
-    }
-    !patch.is_empty() && patch.chars().all(|c| c.is_ascii_digit())
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1291,25 +1432,53 @@ mod tests {
     }
 
     #[test]
-    fn version_gate_is_exactly_0_3_major_minor() {
-        assert!(is_supported_agent_version("0.3.0"));
-        assert_eq!(
-            is_supported_agent_version("0.3.1-rc.1"),
-            cfg!(debug_assertions)
-        );
-        assert!(!is_supported_agent_version("0.2.9"));
-        assert!(!is_supported_agent_version("0.4.0"));
-        assert!(!is_supported_agent_version("0.3.x"));
+    fn backend_validation_requires_protocol_v1_and_required_capabilities() {
+        let full = |capabilities: Vec<&str>| PingResult {
+            version: "0.5.0".into(),
+            protocol_version: 1,
+            capabilities: capabilities.into_iter().map(str::to_owned).collect(),
+        };
+        let all: Vec<&str> = REQUIRED_CAPABILITIES.to_vec();
+        assert_eq!(validate_backend(&full(all.clone())), Ok(()));
+
+        // The pinned 0.5 baseline: protocol 1 with the capability set passes
+        // even though the package version is not 0.3.x.
+        let ping: PingResult = serde_json::from_value(json!({
+            "version": "0.5.0",
+            "protocol_version": 1,
+            "capabilities": REQUIRED_CAPABILITIES,
+        }))
+        .unwrap();
+        assert_eq!(validate_backend(&ping), Ok(()));
+
+        let wrong_protocol = PingResult {
+            version: "0.5.0".into(),
+            protocol_version: 2,
+            capabilities: all.clone().into_iter().map(str::to_owned).collect(),
+        };
+        assert!(matches!(
+            validate_backend(&wrong_protocol),
+            Err(BackendError::ProtocolVersion {
+                found: 2,
+                required: 1
+            })
+        ));
+
+        let mut missing = all.clone();
+        missing.retain(|capability| *capability != "turn.result");
+        assert!(matches!(
+            validate_backend(&full(missing)),
+            Err(BackendError::MissingCapabilities { .. })
+        ));
     }
+
     #[test]
-    fn version_gate_prerelease_policy() {
-        if cfg!(debug_assertions) {
-            assert!(is_supported_agent_version("0.3.0-alpha.1"));
-            assert!(is_supported_agent_version("0.3.1-rc.2+build.42"));
-        } else {
-            assert!(!is_supported_agent_version("0.3.0-alpha.1"));
-            assert!(!is_supported_agent_version("0.3.1-rc.2+build.42"));
-        }
+    fn ping_requires_protocol_version_in_the_wire_result() {
+        let bare: Result<PingResult, _> = serde_json::from_value(json!({"version": "0.5.0"}));
+        assert!(
+            bare.is_err(),
+            "a ping without protocol_version must be a protocol error"
+        );
     }
     #[test]
     fn ping_request_has_the_documented_shape() {

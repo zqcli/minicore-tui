@@ -48,11 +48,38 @@ fn respond(
     )
 }
 
-/// Defect: the 0.3.x-only version gate rejects the fixed Agent 0.5.0 even
-/// though it speaks Protocol v1. Stage B replaces this with
-/// `validate_backend(protocol_version, capabilities)`.
+/// The pinned Agent 0.5 handshake (protocol_version 1 + required
+/// capabilities) must bootstrap successfully. Formerly a RED baseline pin of
+/// the 0.3.x-only gate; stage B flipped it to the contract the new code must
+/// satisfy (spec §4.1).
 #[test]
-fn baseline_bootstrap_rejects_agent_0_5_protocol_v1() {
+fn bootstrap_accepts_the_pinned_agent_0_5_protocol_v1() {
+    let mut app = ready_app();
+    let requests = take_requests(app.update(AppEvent::Bootstrap));
+    let ping = requests
+        .iter()
+        .find(|request| request.method == "agent.ping")
+        .expect("bootstrap sends agent.ping");
+    let capabilities: Vec<&str> = minicore_tui::protocol::REQUIRED_CAPABILITIES.to_vec();
+    let _ = respond(
+        &mut app,
+        ping,
+        json!({
+            "version": "0.5.0",
+            "protocol_version": 1,
+            "capabilities": capabilities,
+        }),
+    );
+    assert!(
+        !matches!(app.connection, ConnectionState::Failed(_)),
+        "protocol v1 with all required capabilities must pass the handshake"
+    );
+}
+
+/// A backend that is missing a required capability is a definite
+/// incompatibility: the app stops instead of falling back to Agent 0.3.
+#[test]
+fn bootstrap_rejects_a_backend_missing_required_capabilities() {
     let mut app = ready_app();
     let requests = take_requests(app.update(AppEvent::Bootstrap));
     let ping = requests
@@ -62,28 +89,33 @@ fn baseline_bootstrap_rejects_agent_0_5_protocol_v1() {
     let _ = respond(
         &mut app,
         ping,
-        json!({"version": "0.5.0", "protocol_version": 1, "capabilities": []}),
+        json!({"version": "0.5.0", "protocol_version": 1, "capabilities": ["session.read"]}),
     );
-    assert!(
-        matches!(app.connection, ConnectionState::Failed(_)),
-        "BASELINE: the 0.3.x-only gate rejects the fixed Agent 0.5.0"
-    );
+    match &app.connection {
+        ConnectionState::Failed(message) => {
+            assert!(message.contains("missing required capabilities"), "{message}");
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
 }
 
-/// Defect: `PingResult` only carries `version`; it discards
-/// `protocol_version` and `capabilities`. Stage B consumes both.
+/// The handshake now consumes `protocol_version` and `capabilities`; the
+/// legacy bare-version DTO no longer exists.
 #[test]
-fn baseline_ping_result_ignores_protocol_version_and_capabilities() {
-    let ping: minicore_tui::protocol::PingResult =
-        serde_json::from_value(json!({"version": "0.5.0"}))
-            .expect("legacy PingResult accepts a bare version");
+fn ping_result_carries_protocol_version_and_capabilities() {
+    let ping: minicore_tui::protocol::PingResult = serde_json::from_value(json!({
+        "version": "0.5.0",
+        "protocol_version": 1,
+        "capabilities": ["session.read", "turn.result"],
+    }))
+    .expect("pinned ping result parses");
     assert_eq!(ping.version, "0.5.0");
-    // There is no protocol_version/capabilities field on the current DTO; the
-    // struct only exposes `version`. Stage B adds both fields.
-    let debug = format!("{ping:?}");
+    assert_eq!(ping.protocol_version, 1);
+    assert_eq!(ping.capabilities.len(), 2);
     assert!(
-        !debug.contains("protocol_version"),
-        "BASELINE: PingResult has no protocol_version field yet"
+        serde_json::from_value::<minicore_tui::protocol::PingResult>(json!({"version": "0.3.0"}))
+            .is_err(),
+        "a ping without protocol_version is a protocol error"
     );
 }
 
