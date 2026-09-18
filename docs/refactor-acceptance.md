@@ -16,7 +16,7 @@ python3 scripts/generate_agent_v1_fixtures.py --agent-bin <agent-0.5.0> --out te
 
 | ID | Required behavior | Stage-A status | Evidence / stage |
 |---|---|---|---|
-| REF-01 | Fixed Agent 0.5 / Protocol 1, no Agent/Runtime crate dependency | Passed (facts pinned) | `tests/agent_v1_fixtures.rs::manifest_pins_the_fixed_backend_and_protocol`; Cargo.toml has no backend dep |
+| REF-01 | Fixed Agent 0.5 / Protocol 1, no Agent/Runtime crate dependency | Passed (facts pinned; E2E gap measured) | `tests/agent_v1_fixtures.rs::manifest_pins_the_fixed_backend_and_protocol`; Cargo.toml has no backend dep. **Measured:** running `tests/agent_e2e.rs` against the fixed Agent 0.5.0 binary fails at bootstrap with `unsupported agent version '0.5.0'`; every one of the 18 scenarios is currently blocked by the old gate |
 | REF-02 | Protocol version + capability check; no 0.3 fallback | Not run (stage B) | RED baseline `tests/baseline_defects.rs::baseline_bootstrap_rejects_agent_0_5_protocol_v1`; B adds positive |
 | REF-03 | Extended reasoning kept, no silent downgrade | Not run (stage B) | E2E 5 exists; B re-points it |
 | REF-04 | Response/Event interleave; partial frame and EOF | Passed (existing) | `src/rpc.rs` transport tests |
@@ -69,7 +69,7 @@ python3 scripts/generate_agent_v1_fixtures.py --agent-bin <agent-0.5.0> --out te
 | REF-51 | Existing CJK/IME/mouse/scrollbar/Terminal restore preserved | Passed | `ui::*`, `tests/terminal_restore.rs`, `tests/rail_fixtures.rs` |
 | REF-52 | Common command table/completion/help consistent | Not run (stage D) | D |
 | REF-53 | No approval/plugin/Subagent/PTY/Git-write/auto-reconnect | Passed (existing, stage A) | source audit; no such code |
-| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | Not run (partial) | E2E exists (18) but no read/compact/file/diff scenario yet; B/E |
+| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | Not run (blocked, stage B) | 18 E2E scenarios exist but all fail at bootstrap against Agent 0.5.0 (measured); no read/compact/file/diff scenario yet; B unblocks and E adds the rest |
 | REF-55 | Rust 1.85/stable, three-platform original tests pass | Not run | Stage A ran only remote Linux 1.97.1; no 1.85/3-platform run |
 | REF-56 | Release perf before/after with real data, not faked | Not run (partial) | before-data recorded in `docs/performance.md`; after pending |
 
@@ -81,3 +81,7 @@ python3 scripts/generate_agent_v1_fixtures.py --agent-bin <agent-0.5.0> --out te
   multi-toolchain/multi-platform CI runs.
 - No row is marked **Failed**: the RED baseline tests intentionally assert the
   *old* defect and pass on the old code; they are not refactor failures.
+- **Measured stage-A blocker**: the existing real-Agent E2E suite does not run
+  against the pinned Agent 0.5.0; it fails at bootstrap with
+  `unsupported agent version '0.5.0'`. Stage B must remove the 0.3.x gate
+  before any E2E can pass.

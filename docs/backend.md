@@ -44,6 +44,12 @@ package-minor gate (`minor == 3`) is deleted in stage B and replaced by
 necessary but not sufficient condition; the fixed Agent 0.5.0 build plus this
 repository's fixtures/E2E remain the release gate.
 
+**Measured stage-A fact:** running the current real-Agent E2E suite against the
+fixed Agent 0.5.0 binary fails immediately at bootstrap with
+`unsupported agent version '0.5.0': minicore-tui requires agent 0.3.x`. Every
+E2E scenario is blocked until stage B removes the 0.3.x gate. This is the
+concrete, reproduced reason the gate must go.
+
 ## Method surface (33 methods)
 
 `agent.ping`, `agent.reload`, `agent.shutdown`,
