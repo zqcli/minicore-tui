@@ -20,6 +20,9 @@
 //! the task closes this process's pipe end, so no writer thread can outlive
 //! its owner and `shutdown` never detaches one.
 
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -41,9 +44,10 @@ pub enum CopyAdmission {
     Busy,
 }
 
-/// The completion channel holds at most one unconsumed result; two slots make
-/// a worker send infallible even if the app has not polled the previous one.
-const JOB_EVENTS_CAPACITY: usize = 2;
+/// The completion channel is bounded for the one clipboard owner and the one
+/// layout owner; four slots cover one current result plus stale transitions
+/// without allowing an unbounded completion backlog.
+const JOB_EVENTS_CAPACITY: usize = 4;
 
 /// Owns every local job for this process: at most one clipboard write.
 pub struct LocalJobs {
@@ -51,6 +55,9 @@ pub struct LocalJobs {
     clipboard: Option<JoinHandle<()>>,
     events_tx: mpsc::Sender<AppEvent>,
     events_rx: mpsc::Receiver<AppEvent>,
+    layout_tx: Option<mpsc::Sender<crate::ui::transcript::DurableLayoutRequest>>,
+    layout_task: Option<JoinHandle<()>>,
+    layout_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Default for LocalJobs {
@@ -62,11 +69,98 @@ impl Default for LocalJobs {
 impl LocalJobs {
     pub fn new() -> Self {
         let (events_tx, events_rx) = mpsc::channel(JOB_EVENTS_CAPACITY);
+        let (layout_tx, mut layout_rx) =
+            mpsc::channel::<crate::ui::transcript::DurableLayoutRequest>(1);
+        let layout_events = events_tx.clone();
+        let layout_task = tokio::spawn(async move {
+            while let Some(request) = layout_rx.recv().await {
+                let mut request = request;
+                while let Ok(newer) = layout_rx.try_recv() {
+                    request = newer;
+                }
+                if request.cancel.load(Ordering::Relaxed) {
+                    continue;
+                }
+                let identity = request.identity.clone();
+                let theme_kind = request.identity.theme;
+                let snapshot = request.snapshot;
+                let tools_expanded = snapshot.tools_expanded;
+                let previous = request.previous;
+                let cancel = Arc::clone(&request.cancel);
+                let cancel_for_build = Arc::clone(&cancel);
+                let build_identity = identity.clone();
+                let Ok(Some((layout, changed_sections, tool_index_lookups))) =
+                    tokio::task::spawn_blocking(move || {
+                        let theme = theme_kind.theme();
+                        crate::ui::transcript::build_durable_layout(
+                            &theme,
+                            theme_kind,
+                            &snapshot,
+                            build_identity.width,
+                            build_identity.reasoning_visible,
+                            previous.as_deref(),
+                            Some(&cancel_for_build),
+                        )
+                    })
+                    .await
+                else {
+                    continue;
+                };
+                if cancel.load(Ordering::Relaxed) {
+                    continue;
+                }
+                let durable = Arc::new(crate::state::view::PreparedDurable {
+                    key: crate::state::view::DurableCacheKey {
+                        revision: identity.transcript_revision,
+                        width: identity.width,
+                        theme: identity.theme,
+                        reasoning_visible: identity.reasoning_visible,
+                        tools_expanded,
+                    },
+                    layout,
+                });
+                let _ = layout_events.try_send(AppEvent::DurableLayoutPrepared(
+                    crate::ui::transcript::DurableLayoutResult {
+                        identity,
+                        durable,
+                        changed_sections,
+                        tool_index_lookups,
+                    },
+                ));
+            }
+        });
         Self {
             next_id: 0,
             clipboard: None,
             events_tx,
             events_rx,
+            layout_tx: Some(layout_tx),
+            layout_task: Some(layout_task),
+            layout_cancel: None,
+        }
+    }
+
+    /// Schedules the only production layout worker. The queue has one slot;
+    /// a newer resize/generation replaces an idle queued request, while an
+    /// active request is cooperatively cancelled through its token.
+    pub fn try_schedule_layout(
+        &mut self,
+        mut request: crate::ui::transcript::DurableLayoutRequest,
+    ) -> bool {
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        request.cancel = Arc::clone(&cancel);
+        let Some(sender) = self.layout_tx.as_ref() else {
+            return false;
+        };
+        match sender.try_send(request) {
+            Ok(()) => {
+                if let Some(previous) = self.layout_cancel.replace(cancel) {
+                    previous.store(true, Ordering::Relaxed);
+                }
+                true
+            }
+            Err(mpsc::error::TrySendError::Full(_))
+            | Err(mpsc::error::TrySendError::Closed(_)) => false,
         }
     }
 
@@ -184,6 +278,13 @@ impl LocalJobs {
     /// never wedge the worker (there is one job and two slots, but shutdown
     /// must not depend on that arithmetic to be correct).
     pub async fn shutdown(&mut self) {
+        if let Some(cancel) = self.layout_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        self.layout_tx.take();
+        if let Some(task) = self.layout_task.take() {
+            let _ = task.await;
+        }
         let Some(handle) = self.clipboard.take() else {
             return;
         };

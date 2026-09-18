@@ -43,9 +43,12 @@ use crate::state::turn::{
     PendingSteerState, SteerQueueState, Submission, UnsavedLoop,
 };
 use crate::state::view::{
-    ConversationSelection, FoldOverride, PreparedConversation, SelectionPoint,
+    ConversationSelection, FoldOverride, PreparedConversation, PreparedDurable, SelectionPoint,
 };
 use crate::theme::ThemeKind;
+use crate::ui::transcript::{
+    DurableLayoutIdentity, DurableLayoutRequest, DurableLayoutResult, DurableLayoutSnapshot,
+};
 
 pub mod history;
 pub mod queries;
@@ -410,6 +413,11 @@ pub struct App {
     /// The single prepared conversation snapshot shared by measurement,
     /// rendering, hit testing, selection, and copying.
     prepared_conversation: Option<PreparedConversation>,
+    /// Production rendering never rebuilds a durable layout synchronously;
+    /// the main loop requests it from the single owned worker instead.
+    async_layout: bool,
+    layout_pending: Option<DurableLayoutIdentity>,
+    next_layout_generation: u64,
     /// Current transcript selection. It is presentation-only and is rebased
     /// by stable section identity when a prepared snapshot changes.
     pub selection: Option<ConversationSelection>,
@@ -597,6 +605,9 @@ impl App {
             selection_drag: None,
             editor_selection: None,
             prepared_conversation: None,
+            async_layout: false,
+            layout_pending: None,
+            next_layout_generation: 0,
             selection: None,
             selection_copied_until: None,
             spinner_next_due: None,
@@ -919,7 +930,7 @@ impl App {
             if !matches!(mouse.kind, crossterm::event::MouseEventKind::ScrollUp | crossterm::event::MouseEventKind::ScrollDown))
         {
             let width = self.terminal_content_width();
-            if self.prepared_conversation(width).is_none() {
+            if !self.async_layout && self.prepared_conversation(width).is_none() {
                 let prepared = crate::ui::transcript::prepare_conversation(self, width);
                 self.install_conversation(prepared);
             }
@@ -1096,6 +1107,10 @@ impl App {
                 self.install_conversation(prepared);
                 Vec::new()
             }
+            AppEvent::DurableLayoutPrepared(result) => {
+                self.install_durable_layout(result);
+                Vec::new()
+            }
         };
         if header_visible_before != crate::ui::header::visible(self) {
             self.prepared_conversation = None;
@@ -1171,6 +1186,120 @@ impl App {
         })
     }
 
+    pub fn cached_durable(&self, width: u16) -> Option<Arc<PreparedDurable>> {
+        let view = self.active_view()?;
+        let key = crate::state::view::DurableCacheKey::new(
+            view,
+            width,
+            self.theme,
+            self.reasoning_visible,
+        );
+        view.transcript
+            .render_cache
+            .as_ref()
+            .filter(|durable| durable.key == key)
+            .cloned()
+    }
+
+    pub fn enable_async_layout(&mut self) {
+        self.async_layout = true;
+        self.prepared_conversation = None;
+        self.layout_pending = None;
+    }
+
+    pub fn async_layout_enabled(&self) -> bool {
+        self.async_layout
+    }
+
+    pub fn layout_request(&mut self, width: u16) -> Option<DurableLayoutRequest> {
+        let (session_id, transcript_revision, snapshot, previous) = {
+            let view = self.active_view()?;
+            if self.layout_pending.as_ref().is_some_and(|pending| {
+                pending.session_id == view.info.session_id
+                    && pending.session_epoch == view.session_epoch
+                    && pending.transcript_revision == view.transcript.render_revision
+                    && pending.width == width
+                    && pending.theme == self.theme
+                    && pending.reasoning_visible == self.reasoning_visible
+            }) {
+                return None;
+            }
+            if view.transcript.render_cache.as_ref().is_some_and(|durable| {
+                durable.key
+                    == crate::state::view::DurableCacheKey::new(
+                        view,
+                        width,
+                        self.theme,
+                        self.reasoning_visible,
+                    )
+            }) {
+                return None;
+            }
+            (
+                view.info.session_id.clone(),
+                view.transcript.render_revision,
+                DurableLayoutSnapshot::from_view(view),
+                view.transcript.render_cache.clone(),
+            )
+        };
+        self.next_layout_generation = self.next_layout_generation.wrapping_add(1);
+        let identity = DurableLayoutIdentity {
+            generation: self.next_layout_generation,
+            session_id,
+            session_epoch: snapshot.session_epoch,
+            transcript_revision,
+            width,
+            theme: self.theme,
+            reasoning_visible: self.reasoning_visible,
+        };
+        Some(DurableLayoutRequest {
+            identity,
+            snapshot,
+            previous,
+            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        })
+    }
+
+    pub fn mark_layout_pending(&mut self, identity: DurableLayoutIdentity) {
+        self.layout_pending = Some(identity);
+    }
+
+    pub fn clear_layout_pending(&mut self) {
+        self.layout_pending = None;
+    }
+
+    fn install_durable_layout(&mut self, result: DurableLayoutResult) {
+        if self.layout_pending.as_ref() != Some(&result.identity) {
+            return;
+        }
+        self.layout_pending = None;
+        let Some(view) = self.active_view() else {
+            return;
+        };
+        if view.info.session_id != result.identity.session_id
+            || view.session_epoch != result.identity.session_epoch
+            || view.transcript.render_revision != result.identity.transcript_revision
+            || self.theme != result.identity.theme
+            || self.reasoning_visible != result.identity.reasoning_visible
+        {
+            return;
+        }
+        crate::perf::add(
+            crate::perf::Counter::LayoutCalls,
+            result.changed_sections as u64,
+        );
+        crate::perf::add(
+            crate::perf::Counter::ToolIndexLookups,
+            result.tool_index_lookups as u64,
+        );
+        let prepared = crate::ui::transcript::prepare_conversation_with_durable(
+            self,
+            result.identity.width,
+            Some(result.durable),
+        );
+        self.install_conversation(prepared);
+    }
+
     pub fn selection_copied(&self) -> bool {
         self.selection_copied_until
             .is_some_and(|deadline| self.instant_now() < deadline)
@@ -1183,7 +1312,26 @@ impl App {
         self.prepared_conversation(width)
             .map(std::borrow::Cow::Borrowed)
             .unwrap_or_else(|| {
-                std::borrow::Cow::Owned(crate::ui::transcript::prepare_conversation(self, width))
+                if self.async_layout {
+                    if let Some(durable) = self.cached_durable(width) {
+                        std::borrow::Cow::Owned(
+                            crate::ui::transcript::prepare_conversation_with_durable(
+                                self,
+                                width,
+                                Some(durable),
+                            ),
+                        )
+                    } else {
+                        std::borrow::Cow::Owned(PreparedConversation::placeholder(
+                            self.active_view(),
+                            width,
+                        ))
+                    }
+                } else {
+                    std::borrow::Cow::Owned(
+                        crate::ui::transcript::prepare_conversation(self, width),
+                    )
+                }
             })
     }
 

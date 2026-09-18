@@ -1,9 +1,8 @@
-//! Stage-A performance baseline measurement (Spec §25).
+//! C2b structural performance probes (Spec §11 and §25).
 //!
-//! These tests measure the *current* v0.2.8 structure. They are not pass/fail
-//! budgets for the old code; every assertion pins a fact the stage C
-//! performance work must preserve or improve. Run the ignored timing tests
-//! with:
+//! The baseline helpers intentionally use the synchronous test harness. The
+//! production path is exercised separately through `LocalJobs`' single owned
+//! layout worker. Run the ignored acceptance probes with:
 //!
 //! ```text
 //! cargo test --release --locked --test performance -- --ignored --nocapture
@@ -15,20 +14,19 @@
 //!
 //! Two paths are distinguished deliberately:
 //!
-//! * **production frame path** — `main::prepare_frame` calls
-//!   `ui::transcript::prepare_conversation` once per changed frame and installs
-//!   the result through `AppEvent::ConversationPrepared`. A live delta therefore
-//!   rebuilds a full `PreparedConversation` when the durable revision changes.
+//! * **production frame path** — `main::prepare_frame_with_jobs` requests a
+//!   bounded worker result and installs it through `AppEvent::DurableLayoutPrepared`;
+//!   a live-only delta reuses the immutable durable cache and composes only the
+//!   live tail.
 //! * **diagnostic helper** — `ui::transcript::all_lines` clones the already
 //!   prepared rows. It is not the per-frame cost; it is a measurement and test
 //!   helper. Do not cite it as the production frame cost.
-//!
-//! Stage C must make both proportional to the viewport, not the total history.
 
 use std::path::PathBuf;
 
 use minicore_tui::app::{App, ConnectionState};
 use minicore_tui::event::{AppEvent, RpcEvent};
+use minicore_tui::jobs::LocalJobs;
 use minicore_tui::protocol::{IncomingFrame, RpcNotification, TurnRef};
 use minicore_tui::state::session::SessionView;
 use minicore_tui::state::transcript::{AssistantBlock, AssistantPart, TranscriptBlock};
@@ -107,6 +105,138 @@ fn push_live_deltas(app: &mut App, turn: &TurnRef, count: usize) {
     }
 }
 
+async fn install_worker_layout(app: &mut App, jobs: &mut LocalJobs, width: u16) {
+    let request = app
+        .layout_request(width)
+        .expect("the durable cache must miss before the worker request");
+    let identity = request.identity.clone();
+    assert!(jobs.try_schedule_layout(request));
+    app.mark_layout_pending(identity);
+    loop {
+        let event = jobs.events().recv().await.expect("layout worker event");
+        if matches!(event, AppEvent::DurableLayoutPrepared(_)) {
+            app.update(event);
+            break;
+        }
+    }
+    assert!(app.prepared_conversation(width).is_some());
+}
+
+/// Production-path smoke test: the first durable layout is prepared by the
+/// owned worker, while the App only installs the result and composes the
+/// small live tail. No synchronous durable fallback is permitted in this
+/// mode.
+#[tokio::test]
+async fn production_layout_worker_installs_current_width_only() {
+    let mut app = app_with_history(64, 240);
+    app.enable_async_layout();
+    assert!(app.prepared_conversation(WIDTH).is_none());
+    assert_eq!(total_lines(&app, WIDTH), 0);
+
+    let mut jobs = LocalJobs::new();
+    install_worker_layout(&mut app, &mut jobs, WIDTH).await;
+    assert_eq!(app.prepared_conversation(WIDTH).unwrap().width, WIDTH);
+    assert!(app.prepared_conversation(WIDTH + 1).is_none());
+    assert!(app.layout_request(WIDTH + 1).is_some());
+    jobs.shutdown().await;
+}
+
+#[tokio::test]
+async fn production_layout_worker_fences_stale_theme_result() {
+    let mut app = app_with_history(64, 240);
+    app.enable_async_layout();
+    let mut jobs = LocalJobs::new();
+
+    let first = app.layout_request(WIDTH).expect("initial layout request");
+    let first_identity = first.identity.clone();
+    assert!(jobs.try_schedule_layout(first));
+    app.mark_layout_pending(first_identity);
+    let stale = jobs.events().recv().await.expect("first layout result");
+
+    app.update(AppEvent::SetTheme(minicore_tui::theme::ThemeKind::Light));
+    let second = app
+        .layout_request(WIDTH)
+        .expect("theme change must request a new generation");
+    let second_identity = second.identity.clone();
+    assert!(jobs.try_schedule_layout(second));
+    app.mark_layout_pending(second_identity);
+
+    app.update(stale);
+    assert!(app.prepared_conversation(WIDTH).is_none());
+    let current = jobs.events().recv().await.expect("current layout result");
+    assert!(matches!(current, AppEvent::DurableLayoutPrepared(_)));
+    app.update(current);
+    assert!(app.prepared_conversation(WIDTH).is_some());
+    assert_eq!(app.theme, minicore_tui::theme::ThemeKind::Light);
+    jobs.shutdown().await;
+}
+
+/// C2b acceptance probe: a real 50k-row durable history and 1000 real
+/// `output_delta` notifications use the installed immutable layout. The
+/// ignored marker keeps the normal suite quick; this is the command-line
+/// acceptance evidence for the worker path.
+#[tokio::test]
+#[ignore = "C2b acceptance; run with --ignored --nocapture"]
+async fn measure_c2b_worker_over_50k_rows_and_1000_output_deltas() {
+    const HEIGHT: usize = 40;
+    let mut app = app_with_history(7300, 240);
+    app.enable_async_layout();
+    let mut jobs = LocalJobs::new();
+    install_worker_layout(&mut app, &mut jobs, WIDTH).await;
+    let initial = app.prepared_conversation(WIDTH).unwrap();
+    let initial_rows = initial.total_rows();
+    assert!(initial_rows >= 50_000);
+
+    app.update(AppEvent::SubmitTurn {
+        session_id: "ses_perf".into(),
+        text: "live turn".into(),
+    });
+    // The local pending user card is a durable section change. Settle that
+    // one worker result before measuring the following live-only deltas.
+    let turn = TurnRef {
+        session_id: "ses_perf".into(),
+        loop_id: "lup_live".into(),
+    };
+    install_worker_layout(&mut app, &mut jobs, WIDTH).await;
+    // The first event binds the pending card to the real Loop and therefore
+    // is also a durable identity change. Settle that transition out of band.
+    push_live_deltas(&mut app, &turn, 1);
+    install_worker_layout(&mut app, &mut jobs, WIDTH).await;
+    let base = minicore_tui::perf::snapshot();
+    let mut window_rows = 0usize;
+    for index in 0..1000 {
+        push_live_deltas(&mut app, &turn, 1);
+        let prepared = minicore_tui::ui::transcript::prepare_conversation_with_durable(
+            &app,
+            WIDTH,
+            app.cached_durable(WIDTH),
+        );
+        window_rows += prepared
+            .window(prepared.total_rows().saturating_sub(HEIGHT), HEIGHT)
+            .len();
+        app.update(AppEvent::ConversationPrepared(prepared));
+        if index % 250 == 0 {
+            assert!(app.cached_durable(WIDTH).is_some());
+        }
+    }
+    let after = minicore_tui::perf::snapshot();
+    println!(
+        "c2b_worker: durable_rows={initial_rows} deltas=1000 layout_calls={} history_bytes_cloned={} viewport_rows={} viewport_bytes={}",
+        after.layout_calls - base.layout_calls,
+        after.historical_text_bytes_cloned - base.historical_text_bytes_cloned,
+        after.viewport_rows_materialized - base.viewport_rows_materialized,
+        after.viewport_text_bytes_cloned - base.viewport_text_bytes_cloned,
+    );
+    assert_eq!(after.layout_calls - base.layout_calls, 0);
+    assert_eq!(
+        after.historical_text_bytes_cloned - base.historical_text_bytes_cloned,
+        0
+    );
+    assert_eq!(window_rows as u64, after.viewport_rows_materialized - base.viewport_rows_materialized);
+    assert!(after.viewport_rows_materialized <= 1000 * HEIGHT as u64);
+    jobs.shutdown().await;
+}
+
 /// Defect: the total prepared row count for a long history grows with the
 /// number of messages. A viewport-only composition (stage C) must produce a
 /// row count proportional to the viewport, not this total.
@@ -145,10 +275,9 @@ fn baseline_all_lines_materializes_full_transcript() {
     println!("baseline all_lines rows: {}", lines.len());
 }
 
-/// Ignored: the production frame path over a 50,000-row history. For each
-/// changed frame `prepare_frame` rebuilds a full `PreparedConversation`, so
-/// preparation scales with total history. The measured per-call time and row
-/// count are recorded in `docs/performance.md`.
+/// Ignored diagnostic: synchronous preparation over a 50,000-row history.
+/// Production C2b uses the worker acceptance probe below; this helper remains
+/// useful for comparing the explicit test-only fallback.
 #[test]
 #[ignore = "manual performance measurement; run with --ignored --nocapture"]
 fn measure_prepare_frame_path_over_50k_rows() {
@@ -174,9 +303,9 @@ fn measure_prepare_frame_path_over_50k_rows() {
     let _ = rows;
 }
 
-/// Real live-delta baseline: start a loop, then push 1000 real `output_delta`
-/// events and measure how the prepared row count/preparation changes. Stage C
-/// must rebuild only the live tail.
+/// Diagnostic live-delta baseline: start a loop, then push 1000 real
+/// `output_delta` events and measure the synchronous helper. The production
+/// worker/cache contract is asserted by the C2b probe above.
 #[test]
 #[ignore = "manual performance measurement; run with --ignored --nocapture"]
 fn measure_live_delta_rebuild_cost() {

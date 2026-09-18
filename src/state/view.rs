@@ -79,6 +79,7 @@ pub struct LayoutKey {
     pub width: u16,
     pub theme: crate::theme::ThemeKind,
     pub folded: bool,
+    pub reasoning_visible: bool,
 }
 
 /// One immutable, independently reusable section layout. Rows and all source
@@ -465,6 +466,18 @@ pub struct PreparedConversation {
 }
 
 impl PreparedConversation {
+    pub fn placeholder(
+        active: Option<&crate::state::session::SessionView>,
+        width: u16,
+    ) -> Self {
+        Self {
+            width,
+            session_id: active.map(|view| view.info.session_id.clone()),
+            transcript_revision: active.map_or(0, |view| view.transcript.render_revision),
+            ..Self::default()
+        }
+    }
+
     pub fn header_rows(&self) -> usize {
         self.header.len()
     }

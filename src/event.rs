@@ -218,6 +218,8 @@ pub enum AppEvent {
     /// when the active session and content width still match. Rows, section
     /// ranges, copy ranges, and total height are one immutable snapshot.
     ConversationPrepared(PreparedConversation),
+    /// A durable section layout produced by the single owned layout worker.
+    DurableLayoutPrepared(crate::ui::transcript::DurableLayoutResult),
 }
 
 /// The result of one owned local job (clipboard now; export and the draft

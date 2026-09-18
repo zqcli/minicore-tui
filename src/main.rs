@@ -179,6 +179,7 @@ async fn run_fullscreen(
     };
     let mut app = App::with_cli_prefs(workspace, prefs);
     app.update(AppEvent::SetTheme(opts.theme));
+    app.enable_async_layout();
     // `--debug` owns one writer thread with a bounded queue; the UI path only
     // enqueues a line (spec 13/§5.5). Dropping it at the end joins the writer.
     let debug_log = DebugLog::new(opts.debug);
@@ -310,7 +311,11 @@ async fn run_fullscreen(
             }
             Selected::Render => {
                 let size = terminal.size()?;
-                prepare_frame(&mut app, Rect::new(0, 0, size.width, size.height));
+                prepare_frame_with_jobs(
+                    &mut app,
+                    jobs,
+                    Rect::new(0, 0, size.width, size.height),
+                );
                 terminal.draw(|frame| ui::render(frame, &app))?;
                 last_render = Instant::now();
                 app.update(AppEvent::Rendered);
@@ -329,7 +334,11 @@ async fn run_fullscreen(
         // Rendered event clears the dirty flag so idle frames never draw.
         if app.dirty && last_render.elapsed() >= RENDER_INTERVAL {
             let size = terminal.size()?;
-            prepare_frame(&mut app, Rect::new(0, 0, size.width, size.height));
+            prepare_frame_with_jobs(
+                &mut app,
+                jobs,
+                Rect::new(0, 0, size.width, size.height),
+            );
             terminal.draw(|frame| ui::render(frame, &app))?;
             last_render = Instant::now();
             app.update(AppEvent::Rendered);
@@ -338,16 +347,41 @@ async fn run_fullscreen(
 }
 
 /// Layout is coalesced with drawing, not repeated for every queued input/delta.
-fn prepare_frame(app: &mut App, area: Rect) {
+fn prepare_frame_with_jobs(app: &mut App, jobs: &mut LocalJobs, area: Rect) {
     if ui::layout::is_too_small(area) {
         return;
     }
     let screen = ui::layout::screen_layout(app, area);
-    prepare_conversation(app, screen.content.width);
-    let total = app
-        .prepared_conversation(screen.content.width)
-        .expect("conversation was prepared")
-        .total_rows();
+    let width = screen.content.width;
+    if app.prepared_conversation(width).is_none() {
+        if app.async_layout_enabled() && app.active_view().is_some() {
+            if let Some(durable) = app.cached_durable(width) {
+                let prepared = ui::transcript::prepare_conversation_with_durable(
+                    app,
+                    width,
+                    Some(durable),
+                );
+                app.update(AppEvent::ConversationPrepared(prepared));
+            } else if let Some(request) = app.layout_request(width) {
+                let identity = request.identity.clone();
+                if jobs.try_schedule_layout(request) {
+                    app.mark_layout_pending(identity);
+                }
+            }
+        } else {
+            prepare_conversation(app, width);
+        }
+    }
+    let Some(prepared) = app.prepared_conversation(width) else {
+        if app.viewport != (0, 0) {
+            app.update(AppEvent::Viewport {
+                total_lines: 0,
+                visible_rows: 0,
+            });
+        }
+        return;
+    };
+    let total = prepared.total_rows();
     let visible = ui::transcript::visible_rows(app, total, screen.transcript.height);
     if app.viewport != (total, visible) {
         app.update(AppEvent::Viewport {
@@ -666,6 +700,25 @@ impl Drop for DebugLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn prepare_frame(app: &mut App, area: Rect) {
+        if ui::layout::is_too_small(area) {
+            return;
+        }
+        let screen = ui::layout::screen_layout(app, area);
+        prepare_conversation(app, screen.content.width);
+        let Some(prepared) = app.prepared_conversation(screen.content.width) else {
+            return;
+        };
+        let total = prepared.total_rows();
+        let visible = ui::transcript::visible_rows(app, total, screen.transcript.height);
+        if app.viewport != (total, visible) {
+            app.update(AppEvent::Viewport {
+                total_lines: total,
+                visible_rows: visible,
+            });
+        }
+    }
 
     #[test]
     fn debug_log_lines_are_content_free_and_the_disabled_log_is_a_noop() {

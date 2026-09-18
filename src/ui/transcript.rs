@@ -1,6 +1,7 @@
 //! The transcript/history scroll view: durable blocks and the live loop tail (spec r2).
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use ratatui::Frame;
@@ -15,6 +16,7 @@ use crate::app::App;
 use crate::markdown::wrap_plain;
 use crate::state::session::SessionView;
 use crate::state::transcript::{ToolBlock, TranscriptBlock};
+use crate::state::tool::{ToolKey, ToolPresentationState};
 use crate::state::view::{
     ConversationLayout, ConversationSelection, CopyIndex, CopyRange, DurableCacheKey,
     FoldOverride, LayoutKey, PreparedConversation, PreparedDurable, SectionId, SectionIndex,
@@ -23,13 +25,187 @@ use crate::state::view::{
 use crate::theme::Theme;
 use crate::ui::{assistant, header, layout, reasoning, tool, user};
 
+#[derive(Clone)]
+pub struct DurableLayoutSnapshot {
+    pub session_id: String,
+    pub session_epoch: u64,
+    pub blocks: Arc<Vec<Arc<TranscriptBlock>>>,
+    pub reasoning_folds: HashMap<crate::state::view::ReasoningKey, FoldOverride>,
+    pub tool_folds: HashMap<ToolKey, FoldOverride>,
+    pub tool_presentations: HashMap<ToolKey, ToolPresentationState>,
+    pub tools_expanded: bool,
+    pub user_timestamps: HashMap<usize, String>,
+    pub live_user_timestamp: Option<String>,
+    pub live_user_time_accepted: bool,
+    pub live_user_loop_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DurableLayoutIdentity {
+    pub generation: u64,
+    pub session_id: String,
+    pub session_epoch: u64,
+    pub transcript_revision: u64,
+    pub width: u16,
+    pub theme: crate::theme::ThemeKind,
+    pub reasoning_visible: bool,
+}
+
+pub struct DurableLayoutRequest {
+    pub identity: DurableLayoutIdentity,
+    pub snapshot: DurableLayoutSnapshot,
+    pub previous: Option<Arc<PreparedDurable>>,
+    pub cancel: Arc<AtomicBool>,
+}
+
+#[derive(Debug)]
+pub struct DurableLayoutResult {
+    pub identity: DurableLayoutIdentity,
+    pub durable: Arc<PreparedDurable>,
+    pub changed_sections: usize,
+    pub tool_index_lookups: usize,
+}
+
+impl DurableLayoutSnapshot {
+    pub fn from_view(view: &SessionView) -> Self {
+        Self {
+            session_id: view.info.session_id.clone(),
+            session_epoch: view.session_epoch,
+            blocks: Arc::clone(&view.transcript.blocks),
+            reasoning_folds: view.reasoning_folds.clone(),
+            tool_folds: view.tool_folds.clone(),
+            tool_presentations: view.tool_presentations.clone(),
+            tools_expanded: view.tools_expanded,
+            user_timestamps: view.user_timestamps.clone(),
+            live_user_timestamp: view.live_user_timestamp.clone(),
+            live_user_time_accepted: view.live_user_time_accepted,
+            live_user_loop_id: view
+                .live
+                .as_ref()
+                .and_then(|live| live.reference.as_ref())
+                .map(|turn| turn.loop_id.clone()),
+        }
+    }
+}
+
+pub(crate) trait DurableLayoutSource {
+    fn session_id(&self) -> &str;
+    fn blocks(&self) -> &[Arc<TranscriptBlock>];
+    fn reasoning_folds(&self) -> &HashMap<crate::state::view::ReasoningKey, FoldOverride>;
+    fn tool_folds(&self) -> &HashMap<ToolKey, FoldOverride>;
+    fn tool_presentations(&self) -> &HashMap<ToolKey, ToolPresentationState>;
+    fn tools_expanded(&self) -> bool;
+    fn user_timestamps(&self) -> &HashMap<usize, String>;
+    fn live_user_timestamp(&self) -> Option<&str>;
+    fn live_user_time_accepted(&self) -> bool;
+    fn live_user_loop_id(&self) -> Option<&str>;
+}
+
+impl DurableLayoutSource for SessionView {
+    fn session_id(&self) -> &str {
+        &self.info.session_id
+    }
+
+    fn blocks(&self) -> &[Arc<TranscriptBlock>] {
+        &self.transcript.blocks
+    }
+
+    fn reasoning_folds(&self) -> &HashMap<crate::state::view::ReasoningKey, FoldOverride> {
+        &self.reasoning_folds
+    }
+
+    fn tool_folds(&self) -> &HashMap<ToolKey, FoldOverride> {
+        &self.tool_folds
+    }
+
+    fn tool_presentations(&self) -> &HashMap<ToolKey, ToolPresentationState> {
+        &self.tool_presentations
+    }
+
+    fn tools_expanded(&self) -> bool {
+        self.tools_expanded
+    }
+
+    fn user_timestamps(&self) -> &HashMap<usize, String> {
+        &self.user_timestamps
+    }
+
+    fn live_user_timestamp(&self) -> Option<&str> {
+        self.live_user_timestamp.as_deref()
+    }
+
+    fn live_user_time_accepted(&self) -> bool {
+        self.live_user_time_accepted
+    }
+
+    fn live_user_loop_id(&self) -> Option<&str> {
+        self.live
+            .as_ref()
+            .and_then(|live| live.reference.as_ref())
+            .map(|turn| turn.loop_id.as_str())
+    }
+}
+
+impl DurableLayoutSource for DurableLayoutSnapshot {
+    fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    fn blocks(&self) -> &[Arc<TranscriptBlock>] {
+        &self.blocks
+    }
+
+    fn reasoning_folds(&self) -> &HashMap<crate::state::view::ReasoningKey, FoldOverride> {
+        &self.reasoning_folds
+    }
+
+    fn tool_folds(&self) -> &HashMap<ToolKey, FoldOverride> {
+        &self.tool_folds
+    }
+
+    fn tool_presentations(&self) -> &HashMap<ToolKey, ToolPresentationState> {
+        &self.tool_presentations
+    }
+
+    fn tools_expanded(&self) -> bool {
+        self.tools_expanded
+    }
+
+    fn user_timestamps(&self) -> &HashMap<usize, String> {
+        &self.user_timestamps
+    }
+
+    fn live_user_timestamp(&self) -> Option<&str> {
+        self.live_user_timestamp.as_deref()
+    }
+
+    fn live_user_time_accepted(&self) -> bool {
+        self.live_user_time_accepted
+    }
+
+    fn live_user_loop_id(&self) -> Option<&str> {
+        self.live_user_loop_id.as_deref()
+    }
+}
+
 /// Builds one complete immutable conversation snapshot. The same rows and
 /// metadata are consumed by measurement, rendering, hit testing, selection,
 /// and copying; callers install the result through `App::update`.
 pub fn prepare_conversation(app: &App, width: u16) -> PreparedConversation {
+    prepare_conversation_with_durable(app, width, None)
+}
+
+pub fn prepare_conversation_with_durable(
+    app: &App,
+    width: u16,
+    ready_durable: Option<Arc<PreparedDurable>>,
+) -> PreparedConversation {
     let theme = app.theme.theme();
     let durable = app.active_view().map(|view| {
         let key = DurableCacheKey::new(view, width, app.theme, app.reasoning_visible);
+        if let Some(ready) = ready_durable.as_ref().filter(|ready| ready.key == key) {
+            return Arc::clone(ready);
+        }
         if let Some(cached) = view
             .transcript
             .render_cache
@@ -41,15 +217,21 @@ pub fn prepare_conversation(app: &App, width: u16) -> PreparedConversation {
         // A cache miss is the only point that rebuilds the durable layout;
         // a cache hit below must not count (spec §25.1).
         let previous = view.transcript.render_cache.as_deref();
-        let (layout, changed_sections) = build_durable_layout(
+        let (layout, changed_sections, tool_index_lookups) = build_durable_layout(
             &theme,
             app.theme,
             view,
             width,
             app.reasoning_visible,
             previous,
-        );
+            None,
+        )
+        .expect("synchronous test layout cannot be cancelled");
         crate::perf::add(crate::perf::Counter::LayoutCalls, changed_sections as u64);
+        crate::perf::add(
+            crate::perf::Counter::ToolIndexLookups,
+            tool_index_lookups as u64,
+        );
         Arc::new(PreparedDurable { key, layout })
     });
     let header = header::lines(&theme, app);
@@ -171,25 +353,16 @@ pub fn prepare_conversation(app: &App, width: u16) -> PreparedConversation {
     }
 }
 
-fn section_revision(view: &SessionView, id: &SectionId) -> u64 {
+fn section_revision<V: DurableLayoutSource>(view: &V, id: &SectionId, block_revision: u64) -> u64 {
     use std::hash::{Hash, Hasher};
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     id.hash(&mut hasher);
-    if let Some(index) = id.history_index {
-        if let Some(block) = view
-            .transcript
-            .blocks
-            .iter()
-            .find(|block| block.index() == Some(index))
-        {
-            (Arc::as_ptr(block) as usize).hash(&mut hasher);
-        }
-    }
+    block_revision.hash(&mut hasher);
     if let Some(tool_call_id) = id.tool_call_id.as_deref() {
-        view.tool_presentations
-            .get(&crate::state::tool::ToolKey::new(
-                &view.info.session_id,
+        view.tool_presentations()
+            .get(&ToolKey::new(
+                view.session_id(),
                 id.loop_id.as_deref().unwrap_or_default(),
                 id.request_index.unwrap_or_default(),
                 tool_call_id,
@@ -203,8 +376,72 @@ fn section_revision(view: &SessionView, id: &SectionId) -> u64 {
     }
     if id.kind == SectionKind::User {
         id.history_index
-            .and_then(|index| view.user_timestamps.get(&index))
+            .and_then(|index| view.user_timestamps().get(&index))
             .hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn block_content_revision(block: &TranscriptBlock) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::mem::discriminant(block).hash(&mut hasher);
+    match block {
+        TranscriptBlock::User(block) => {
+            block.index.hash(&mut hasher);
+            block.loop_id.hash(&mut hasher);
+            std::mem::discriminant(&block.kind).hash(&mut hasher);
+            block.text.hash(&mut hasher);
+            block.pending.hash(&mut hasher);
+        }
+        TranscriptBlock::Assistant(block) => {
+            block.index.hash(&mut hasher);
+            block.loop_id.hash(&mut hasher);
+            block.request_index.hash(&mut hasher);
+            for part in &block.parts {
+                std::mem::discriminant(part).hash(&mut hasher);
+                match part {
+                    crate::state::transcript::AssistantPart::Text(text)
+                    | crate::state::transcript::AssistantPart::Reasoning(text) => {
+                        text.hash(&mut hasher)
+                    }
+                    crate::state::transcript::AssistantPart::ToolCall(call) => {
+                        call.tool_call_id.hash(&mut hasher);
+                        call.name.hash(&mut hasher);
+                        call.call_index.hash(&mut hasher);
+                    }
+                }
+            }
+            block.finish_reason.hash(&mut hasher);
+            block.terminal_error.hash(&mut hasher);
+        }
+        TranscriptBlock::Tool(block) => {
+            block.index.hash(&mut hasher);
+            block.loop_id.hash(&mut hasher);
+            block.request_index.hash(&mut hasher);
+            block.tool_call_id.hash(&mut hasher);
+            block.name.hash(&mut hasher);
+            block.result.hash(&mut hasher);
+            block
+                .outcome
+                .map(|outcome| std::mem::discriminant(&outcome))
+                .hash(&mut hasher);
+            block
+                .live_status
+                .map(|status| std::mem::discriminant(&status))
+                .hash(&mut hasher);
+            block.progress.hash(&mut hasher);
+            block.expanded.hash(&mut hasher);
+        }
+        TranscriptBlock::Summary(block) => {
+            block.index.hash(&mut hasher);
+            block.content.hash(&mut hasher);
+        }
+        TranscriptBlock::HistoryPlaceholder(block) => {
+            block.index.hash(&mut hasher);
+            block.total_bytes.hash(&mut hasher);
+        }
     }
     hasher.finish()
 }
@@ -253,6 +490,11 @@ pub fn visible_rows(app: &App, total_lines: usize, height: u16) -> usize {
 
 /// Pure measure for the main loop: the wrapped transcript line count at `width`.
 pub fn total_lines(app: &App, width: u16) -> usize {
+    if app.async_layout_enabled() {
+        return app
+            .prepared_conversation(width)
+            .map_or(0, PreparedConversation::total_rows);
+    }
     app.prepared_conversation(width).map_or_else(
         || prepare_conversation(app, width).total_rows(),
         PreparedConversation::total_rows,
@@ -261,6 +503,11 @@ pub fn total_lines(app: &App, width: u16) -> usize {
 
 /// Builds every transcript row (startup header, durable blocks, live tail).
 pub fn all_lines(_theme: &Theme, app: &App, width: usize) -> Vec<Line<'static>> {
+    if app.async_layout_enabled() {
+        return app
+            .prepared_conversation(width as u16)
+            .map_or_else(Vec::new, PreparedConversation::lines);
+    }
     app.prepared_conversation(width as u16).map_or_else(
         || prepare_conversation(app, width as u16).lines(),
         PreparedConversation::lines,
@@ -270,16 +517,26 @@ pub fn all_lines(_theme: &Theme, app: &App, width: usize) -> Vec<Line<'static>> 
 /// Per rendered line, the content-cell ranges inside a markdown link.
 type LinkRow = Vec<std::ops::Range<usize>>;
 
-fn build_durable_layout(
+pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
     theme: &Theme,
     theme_kind: crate::theme::ThemeKind,
-    view: &SessionView,
+    view: &V,
     width: u16,
     reasoning_visible: bool,
     previous: Option<&PreparedDurable>,
-) -> (Arc<ConversationLayout>, usize) {
+    cancel: Option<&AtomicBool>,
+) -> Option<(Arc<ConversationLayout>, usize, usize)> {
     let mut tool_index: HashMap<(&str, u32, &str), &ToolBlock> = HashMap::new();
-    for block in view.transcript.blocks.iter() {
+    let block_revisions: HashMap<usize, u64> = view
+        .blocks()
+        .iter()
+        .filter_map(|block| {
+            block
+                .index()
+                .map(|index| (index, block_content_revision(block)))
+        })
+        .collect();
+    for block in view.blocks() {
         if let TranscriptBlock::Tool(tool) = block.as_ref() {
             tool_index.insert(
                 (
@@ -309,13 +566,21 @@ fn build_durable_layout(
     let mut sections = Vec::new();
     let mut rendered_tools = HashSet::new();
     let mut changed = 0;
+    let mut tool_index_lookups = 0;
 
-    for (ordinal, block) in view.transcript.blocks.iter().enumerate() {
+    for (ordinal, block) in view.blocks().iter().enumerate() {
+        if cancel.is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Relaxed)) {
+            return None;
+        }
+        let block_revision = block
+            .index()
+            .and_then(|index| block_revisions.get(&index).copied())
+            .unwrap_or_else(|| block_content_revision(block));
         if let TranscriptBlock::Assistant(assistant_block) = block.as_ref() {
             for input in assistant::section_inputs(
                 assistant_block,
                 reasoning_visible,
-                &view.reasoning_folds,
+                view.reasoning_folds(),
             ) {
                 if let Some(call) = &input.tool_call {
                     let tool = tool_index
@@ -325,7 +590,7 @@ fn build_durable_layout(
                             call.tool_call_id.as_str(),
                         ))
                         .map(|tool| {
-                            crate::perf::count(crate::perf::Counter::ToolIndexLookups);
+                            tool_index_lookups += 1;
                             (*tool).clone()
                         })
                         .unwrap_or_else(|| ToolBlock {
@@ -340,15 +605,15 @@ fn build_durable_layout(
                             progress: None,
                             expanded: false,
                         });
-                    let tool_key = crate::state::tool::ToolKey::new(
-                        &view.info.session_id,
+                    let tool_key = ToolKey::new(
+                        view.session_id(),
                         &tool.loop_id,
                         tool.request_index,
                         &tool.tool_call_id,
                     );
                     rendered_tools.insert(tool_key);
                     let id = SectionId {
-                        session_id: view.info.session_id.clone().into(),
+                        session_id: view.session_id().into(),
                         loop_id: Some(tool.loop_id.clone().into()),
                         request_index: Some(tool.request_index),
                         kind: SectionKind::Tool,
@@ -356,13 +621,14 @@ fn build_durable_layout(
                         tool_call_id: Some(tool.tool_call_id.clone().into()),
                         history_index: Some(assistant_block.index),
                     };
-                    let folded = !effective_tool_expanded(view, &tool);
+                    let folded = !effective_tool_expanded_for(view, &tool);
                     let key = LayoutKey {
                         section: id.clone(),
-                        revision: section_revision(view, &id),
+                        revision: section_revision(view, &id, block_revision),
                         width,
                         theme: theme_kind,
                         folded,
+                        reasoning_visible: true,
                     };
                     if let Some(layout) = cached.get(&key) {
                         sections.push(Arc::clone(layout));
@@ -389,7 +655,7 @@ fn build_durable_layout(
                 }
 
                 let id = SectionId {
-                    session_id: view.info.session_id.clone().into(),
+                    session_id: view.session_id().into(),
                     loop_id: Some(assistant_block.loop_id.clone().into()),
                     request_index: Some(assistant_block.request_index),
                     kind: input.kind,
@@ -399,10 +665,12 @@ fn build_durable_layout(
                 };
                 let key = LayoutKey {
                     section: id.clone(),
-                    revision: section_revision(view, &id),
+                    revision: section_revision(view, &id, block_revision),
                     width,
                     theme: theme_kind,
                     folded: input.folded,
+                    reasoning_visible: input.kind == SectionKind::Thinking
+                        && reasoning_visible,
                 };
                 if let Some(layout) = cached.get(&key) {
                     sections.push(Arc::clone(layout));
@@ -429,8 +697,8 @@ fn build_durable_layout(
         }
 
         if let TranscriptBlock::Tool(tool) = block.as_ref() {
-            let tool_key = crate::state::tool::ToolKey::new(
-                &view.info.session_id,
+            let tool_key = ToolKey::new(
+                view.session_id(),
                 &tool.loop_id,
                 tool.request_index,
                 &tool.tool_call_id,
@@ -439,23 +707,24 @@ fn build_durable_layout(
                 continue;
             }
         }
-        let id = section_id(&view.info.session_id, block, ordinal as u32);
+        let id = section_id(view.session_id(), block, ordinal as u32);
         let folded = matches!(block.as_ref(), TranscriptBlock::Tool(tool) if {
-            let key = crate::state::tool::ToolKey::new(
-                &view.info.session_id,
+            let key = ToolKey::new(
+                view.session_id(),
                 &tool.loop_id,
                 tool.request_index,
                 &tool.tool_call_id,
             );
-            matches!(view.tool_folds.get(&key), Some(FoldOverride::Collapsed))
-                || !effective_tool_expanded(view, tool)
+            matches!(view.tool_folds().get(&key), Some(FoldOverride::Collapsed))
+                || !effective_tool_expanded_for(view, tool)
         });
         let key = LayoutKey {
             section: id.clone(),
-            revision: section_revision(view, &id),
+            revision: section_revision(view, &id, block_revision),
             width,
             theme: theme_kind,
             folded,
+            reasoning_visible: true,
         };
         if let Some(layout) = cached.get(&key) {
             sections.push(Arc::clone(layout));
@@ -468,7 +737,11 @@ fn build_durable_layout(
             changed += 1;
         }
     }
-    (Arc::new(ConversationLayout::from_sections(sections)), changed)
+    Some((
+        Arc::new(ConversationLayout::from_sections(sections)),
+        changed,
+        tool_index_lookups,
+    ))
 }
 
 fn make_section_layout(
@@ -732,9 +1005,9 @@ fn content_columns_for_kind(kind: &SectionKind, width: usize) -> std::ops::Range
     start..width
 }
 
-fn durable_block_lines(
+fn durable_block_lines<V: DurableLayoutSource>(
     theme: &Theme,
-    view: &SessionView,
+    view: &V,
     block: &TranscriptBlock,
     width: usize,
     reasoning_visible: bool,
@@ -746,31 +1019,26 @@ fn durable_block_lines(
             width,
             user_block
                 .index
-                .and_then(|index| view.user_timestamps.get(&index).map(String::as_str))
+                .and_then(|index| view.user_timestamps().get(&index).map(String::as_str))
                 .or_else(|| {
                     user_block.loop_id.as_ref().and_then(|loop_id| {
-                        view.live_user_timestamp.as_deref().filter(|_| {
-                            view.live.as_ref().is_some_and(|live| {
-                                live.reference
-                                    .as_ref()
-                                    .is_some_and(|turn| &turn.loop_id == loop_id)
-                            })
-                        })
+                        view.live_user_timestamp()
+                            .filter(|_| view.live_user_loop_id() == Some(loop_id.as_str()))
                     })
                 }),
             user_block.pending
-                && !view.live_user_time_accepted
-                && view.live_user_timestamp.is_none(),
+                && !view.live_user_time_accepted()
+                && view.live_user_timestamp().is_none(),
         ),
         TranscriptBlock::Assistant(assistant_block) => assistant::lines_with_folds(
             theme,
             assistant_block,
             width,
             reasoning_visible,
-            &view.reasoning_folds,
+            view.reasoning_folds(),
         ),
         TranscriptBlock::Tool(tool_block) => {
-            let render_tool = effective_tool_block(view, tool_block);
+            let render_tool = effective_tool_block_for(view, tool_block);
             let display = tool_display(view, tool_block);
             tool::durable_with_display(theme, &render_tool, width, false, display)
         }
@@ -839,13 +1107,13 @@ fn section_id(session_id: &str, block: &TranscriptBlock, _ordinal: u32) -> Secti
     }
 }
 
-fn tool_display<'a>(
-    view: &'a SessionView,
+fn tool_display<'a, V: DurableLayoutSource>(
+    view: &'a V,
     tool: &ToolBlock,
 ) -> Option<&'a crate::protocol::ToolDisplayWire> {
-    view.tool_presentations
-        .get(&crate::state::tool::ToolKey::new(
-            &view.info.session_id,
+    view.tool_presentations()
+        .get(&ToolKey::new(
+            view.session_id(),
             &tool.loop_id,
             tool.request_index,
             &tool.tool_call_id,
@@ -867,13 +1135,17 @@ fn tool_hidden_line_count(
 }
 
 pub(crate) fn effective_tool_expanded(view: &SessionView, tool: &ToolBlock) -> bool {
-    let key = crate::state::tool::ToolKey::new(
-        &view.info.session_id,
+    effective_tool_expanded_for(view, tool)
+}
+
+fn effective_tool_expanded_for<V: DurableLayoutSource>(view: &V, tool: &ToolBlock) -> bool {
+    let key = ToolKey::new(
+        view.session_id(),
         &tool.loop_id,
         tool.request_index,
         &tool.tool_call_id,
     );
-    resolve_tool_expanded(
+    resolve_tool_expanded_for(
         view,
         &key,
         tool.expanded,
@@ -906,18 +1178,30 @@ pub(crate) fn resolve_tool_expanded(
     name: &str,
     hidden_line_count: Option<usize>,
 ) -> bool {
-    match view.tool_folds.get(key) {
+    resolve_tool_expanded_for(view, key, base_expanded, name, hidden_line_count)
+}
+
+fn resolve_tool_expanded_for<V: DurableLayoutSource>(
+    view: &V,
+    key: &crate::state::tool::ToolKey,
+    base_expanded: bool,
+    name: &str,
+    hidden_line_count: Option<usize>,
+) -> bool {
+    match view.tool_folds().get(key) {
         Some(crate::state::view::FoldOverride::Expanded) => true,
         Some(crate::state::view::FoldOverride::Collapsed) => false,
         None => {
-            base_expanded || view.tools_expanded || tool::default_expanded(name, hidden_line_count)
+            base_expanded
+                || view.tools_expanded()
+                || tool::default_expanded(name, hidden_line_count)
         }
     }
 }
 
-fn effective_tool_block(view: &SessionView, tool: &ToolBlock) -> ToolBlock {
+fn effective_tool_block_for<V: DurableLayoutSource>(view: &V, tool: &ToolBlock) -> ToolBlock {
     let mut render_tool = tool.clone();
-    render_tool.expanded = effective_tool_expanded(view, tool);
+    render_tool.expanded = effective_tool_expanded_for(view, tool);
     render_tool
 }
 
@@ -1457,6 +1741,15 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
     let width = area.width as usize;
     let height = area.height as usize;
     if width == 0 || height == 0 {
+        return;
+    }
+    if app.async_layout_enabled() && app.prepared_conversation(area.width).is_none() {
+        let line = layout::filled(
+            "Preparing conversation...",
+            width,
+            Style::new().fg(theme.muted).bg(theme.page_bg),
+        );
+        frame.render_widget(ratatui::widgets::Paragraph::new(line), area);
         return;
     }
     let fallback;
