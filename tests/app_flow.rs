@@ -6820,3 +6820,110 @@ fn long_session_opens_at_the_tail_two_hundred_window() {
         "an out-of-window item is never faked as loaded"
     );
 }
+
+/// §7.2: a lost/malformed `turn.wait` result triggers one authoritative
+/// `turn.result` read-back. A `pending` report keeps the loop unconfirmed; a
+/// `stored` persisted report settles it and reconciles history without
+/// rerunning any tool.
+#[test]
+fn lost_wait_result_recovers_through_turn_result() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+    driver.step(AppEvent::SubmitTurn {
+        session_id: "ses_1".into(),
+        text: "say hello".into(),
+    });
+    let send = driver.request("turn.send");
+    driver.respond(
+        send,
+        json!({"turn": {"session_id": "ses_1", "loop_id": "loop_1"}}),
+    );
+    let wait = driver.request("turn.wait");
+
+    // The wait response is lost: the client must not assume the turn never ran.
+    driver.respond_error(wait, minicore_tui::protocol::INTERNAL_ERROR, "wait lost");
+    let recover = driver.request("turn.result");
+    assert_eq!(recover.params["turn"]["loop_id"], "loop_1");
+    {
+        let view = &driver.app.sessions.known["ses_1"];
+        assert!(view.result_unconfirmed, "a lost wait keeps the fence");
+    }
+
+    // `stored`: the turn really completed and was saved, so the authoritative
+    // report settles the loop and reconciles history through the normal
+    // post-wait path without rerunning any tool.
+    driver.respond(
+        recover,
+        json!({
+            "turn": {"session_id": "ses_1", "loop_id": "loop_1"},
+            "availability": "stored",
+            "outcome": {"type": "completed"},
+            "persistence": "persisted",
+            "usage": {},
+            "requests": 1,
+            "tool_rounds": 0,
+            "final_config_revision": 0,
+            "completed_at": "2026-01-02T03:04:06Z",
+            "items": [],
+            "total": 0,
+        }),
+    );
+    let view = &driver.app.sessions.known["ses_1"];
+    assert!(
+        !view.result_unconfirmed,
+        "a stored persisted report clears the fence"
+    );
+    assert_eq!(
+        view.last_result.as_ref().map(|r| r.turn.loop_id.as_str()),
+        Some("loop_1")
+    );
+    assert!(driver.queue.iter().any(|r| r.method == "session.state"));
+    assert!(driver.queue.iter().any(|r| r.method == "session.read"));
+    assert!(
+        driver.queue.iter().all(|r| r.method != "turn.send"),
+        "recovery must never rerun the turn"
+    );
+}
+
+/// A `pending` recovery report must NOT clear the unconfirmed fence: the turn
+/// may still be running, so nothing is treated as saved.
+#[test]
+fn pending_turn_result_keeps_the_unconfirmed_fence() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+    driver.step(AppEvent::SubmitTurn {
+        session_id: "ses_1".into(),
+        text: "still running".into(),
+    });
+    let send = driver.request("turn.send");
+    driver.respond(
+        send,
+        json!({"turn": {"session_id": "ses_1", "loop_id": "loop_1"}}),
+    );
+    let wait = driver.request("turn.wait");
+    driver.respond_error(wait, minicore_tui::protocol::INTERNAL_ERROR, "wait lost");
+    let recover = driver.request("turn.result");
+    driver.respond(
+        recover,
+        json!({
+            "turn": {"session_id": "ses_1", "loop_id": "loop_1"},
+            "availability": "pending",
+            "items": [],
+            "total": 0,
+        }),
+    );
+    let view = &driver.app.sessions.known["ses_1"];
+    assert!(view.result_unconfirmed, "pending keeps the fence");
+    assert!(view.last_result.is_none(), "no result is fabricated");
+    assert!(
+        view.live
+            .as_ref()
+            .is_some_and(|live| live.waiting && live.last_result.is_none())
+    );
+    assert!(
+        driver.queue.iter().all(|r| r.method != "turn.send"),
+        "pending recovery must never rerun the turn"
+    );
+}

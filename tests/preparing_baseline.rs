@@ -167,18 +167,20 @@ fn baseline_no_context_observation_for_preparation() {
     );
 }
 
-/// Defect: after `turn.send` the App registers exactly one `turn.wait` and
-/// nothing else; there is no `turn.result` recovery for pending/live/stored.
+/// After `turn.send` the App still registers exactly one `turn.wait` for the
+/// normal path, and now also has an authoritative `turn.result` read-back for
+/// a lost/unconfirmed result. Formerly the RED baseline pin
+/// `baseline_only_registers_turn_wait_after_send`.
 #[test]
-fn baseline_only_registers_turn_wait_after_send() {
+fn wait_is_registered_once_and_turn_result_recovery_exists() {
     let source = include_str!("../src/app.rs");
     assert!(
         source.contains("RequestKind::WaitTurn("),
-        "BASELINE: a single wait path exists"
+        "the normal path registers a single wait"
     );
     assert!(
-        !source.contains("TurnAvailability") && !source.contains(".availability"),
-        "BASELINE: no turn.result availability handling exists"
+        source.contains("TurnAvailability") && source.contains("recover_turn"),
+        "the retained report can be read back by availability"
     );
 }
 

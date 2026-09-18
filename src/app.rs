@@ -19,8 +19,8 @@ use crate::protocol::{
     METHOD_LIST_SESSIONS, ModelInfo, OutgoingRequest, OutputChannelWire, ProfileInfo,
     READ_PAGE_LIMIT, READ_PAGE_MAX_BYTES, Reasoning, RequestId, RpcNotification, RpcResponse,
     RpcResponseError, SessionInfo, SessionPresentationWire, SessionStateWire, SessionStatusWire,
-    ToolDisplayWire, ToolOutcomeWire, ToolProgressWire, TurnPersistenceWire, TurnRef,
-    UserMessageKindWire, validate_backend,
+    ToolDisplayWire, ToolOutcomeWire, ToolProgressWire, TurnAvailability, TurnPersistenceWire,
+    TurnRef, UserMessageKindWire, validate_backend,
 };
 use crate::rpc::RpcError;
 use crate::state::catalog::CatalogState;
@@ -233,6 +233,9 @@ pub enum RequestKind {
     /// A reload-origin exact-turn wait. It shares the normal wait reducer but
     /// is not part of staged reload completion or stale-read fencing.
     ReloadWaitTurn(TurnRef),
+    /// Authoritative result read-back for a turn whose wait result was lost or
+    /// unconfirmed (spec §7.2). Settled by exact `TurnRef`.
+    TurnResult(TurnRef),
     SteerTurn {
         session_id: SessionId,
         loop_id: String,
@@ -4249,6 +4252,7 @@ impl App {
             RequestKind::SessionPresentation { session_id } => Some(session_id),
             RequestKind::WaitTurn(turn)
             | RequestKind::ReloadWaitTurn(turn)
+            | RequestKind::TurnResult(turn)
             | RequestKind::CancelTurn(turn) => Some(&turn.session_id),
             RequestKind::Reload { .. }
             | RequestKind::StaleRead
@@ -7584,6 +7588,46 @@ impl App {
         Some(self.request(kind, |id| OutgoingRequest::wait_turn(id, &turn)))
     }
 
+    /// Reads a turn's authoritative result once (spec §7.2). Used when a `wait`
+    /// result was lost or its save is unconfirmed, so the retained report can
+    /// be read back without rerunning any tool. Only one read per turn is in
+    /// flight, and an already-complete live result is not re-fetched.
+    fn recover_turn(&mut self, turn: TurnRef) -> Option<AppCommand> {
+        if !self.can_send_requests() {
+            return None;
+        }
+        if self
+            .pending_requests
+            .values()
+            .any(|kind| matches!(kind, RequestKind::TurnResult(pending) if pending == &turn))
+        {
+            return None;
+        }
+        if self
+            .sessions
+            .known
+            .get(&turn.session_id)
+            .is_some_and(|view| {
+                view.live.as_ref().is_some_and(|live| {
+                    live.reference.as_ref() == Some(&turn) && live.last_result.is_some()
+                }) || view.last_result.as_ref().is_some_and(|r| {
+                    r.turn == turn && r.persistence == TurnPersistenceWire::Persisted
+                })
+            })
+        {
+            return None;
+        }
+        Some(self.request(RequestKind::TurnResult(turn.clone()), |id| {
+            OutgoingRequest::turn_result(
+                id,
+                &turn,
+                Some(crate::protocol::ReadCursor::start()),
+                READ_PAGE_LIMIT,
+                READ_PAGE_MAX_BYTES,
+            )
+        }))
+    }
+
     fn on_send_response(
         &mut self,
         session_id: &SessionId,
@@ -7870,7 +7914,16 @@ impl App {
                 }
             };
             self.notice(NoticeLevel::Warning, message);
-            return Vec::new();
+            // The wait itself was lost: read the authoritative result back once
+            // instead of assuming the turn never completed (spec §7.2/§8.4).
+            // This never reruns a tool.
+            if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
+                view.result_unconfirmed = true;
+                if let Some(live) = view.live.as_mut() {
+                    live.waiting = true;
+                }
+            }
+            return self.recover_turn(turn).into_iter().collect();
         }
 
         if persistence_failed {
@@ -7923,6 +7976,89 @@ impl App {
             commands.push(command);
         }
         commands
+    }
+
+    /// Settles an authoritative `turn.result` read-back (spec §7.2). The
+    /// result is merged by exact `TurnRef`; `stored`/`live` fill in the
+    /// retained report, `pending` keeps the existing wait, and a `turn`
+    /// mismatch is refused rather than applied to another loop.
+    fn on_turn_result_response(
+        &mut self,
+        turn: &TurnRef,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
+        let page = match response.parse_turn_result_page() {
+            Ok(page) => page,
+            Err(error) => {
+                if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
+                    Self::mark_pending_steers_unconfirmed(view);
+                }
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!(
+                        "result read-back for {}/{} failed ({error}); outcome remains unconfirmed",
+                        turn.session_id, turn.loop_id
+                    ),
+                );
+                return Vec::new();
+            }
+        };
+        if page.turn != *turn {
+            self.connection_terminated("turn.result response does not match the requested turn");
+            return Vec::new();
+        }
+        // Only a terminal, persisted outcome clears the unconfirmed fence; a
+        // pending/live report keeps it so nothing downstream treats it as saved.
+        let terminal_persisted = page.availability != TurnAvailability::Pending
+            && page.persistence == Some(TurnPersistenceWire::Persisted)
+            && page.outcome.is_some();
+        if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
+            if terminal_persisted {
+                view.result_unconfirmed = false;
+                // Materialize the retained report from the authoritative page so
+                // the live loop can settle through the same reducer as a wait.
+                if let (Some(outcome), Some(persistence)) = (page.outcome, page.persistence) {
+                    let result = crate::protocol::TurnResultViewWire {
+                        turn: page.turn.clone(),
+                        outcome,
+                        usage: page.usage.unwrap_or_default(),
+                        requests: page.requests.unwrap_or(0),
+                        tool_rounds: page.tool_rounds.unwrap_or(0),
+                        final_config_revision: page.final_config_revision.unwrap_or(0),
+                        persistence,
+                        accepted_at: page.completed_at.clone(),
+                    };
+                    if view.last_result.as_ref() != Some(&result) {
+                        view.last_result = Some(result.clone());
+                        if let Some(live) = view.live.as_mut() {
+                            if live.reference.as_ref() == Some(turn) {
+                                live.last_result = Some(result.clone());
+                                live.waiting = true;
+                            }
+                        }
+                        view.recompute_usage_projection();
+                    }
+                }
+            }
+            if let Some(live) = view.live.as_mut() {
+                if live.reference.as_ref() == Some(turn) && !terminal_persisted {
+                    live.waiting = true;
+                }
+            }
+        }
+        if !terminal_persisted {
+            self.notice(
+                NoticeLevel::Info,
+                format!(
+                    "result for {}/{} is not yet saved; the loop stays unconfirmed",
+                    turn.session_id, turn.loop_id
+                ),
+            );
+            return Vec::new();
+        }
+        // A confirmed persisted result reconciles the live loop exactly like a
+        // successful wait: the same reducer, no tool rerun.
+        self.reconcile_after_wait(turn)
     }
 
     fn reconcile_after_wait(&mut self, turn: &TurnRef) -> Vec<AppCommand> {
@@ -8416,6 +8552,26 @@ impl App {
                     format!("turn wait send failed: {error}; result/save unconfirmed"),
                 );
             }
+            RequestKind::TurnResult(turn) => {
+                let result_is_current = self
+                    .sessions
+                    .known
+                    .get(&turn.session_id)
+                    .is_some_and(|view| Self::wait_targets_current_turn(view, &turn));
+                if result_is_current {
+                    if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
+                        view.result_unconfirmed = true;
+                        Self::mark_pending_steers_unconfirmed(view);
+                    }
+                }
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!(
+                        "result read-back for {}/{} could not be sent: {error}; outcome remains unconfirmed",
+                        turn.session_id, turn.loop_id
+                    ),
+                );
+            }
             RequestKind::SteerTurn {
                 session_id,
                 loop_id,
@@ -8787,6 +8943,7 @@ impl App {
         }
         match kind {
             RequestKind::StaleRead => Vec::new(),
+            RequestKind::TurnResult(turn) => self.on_turn_result_response(&turn, &response),
             RequestKind::Reload { generation } => self.on_reload_response(generation, &response),
             RequestKind::Ping => {
                 match response.parse_ping() {

@@ -261,20 +261,32 @@ fn baseline_run_commands_awaits_send_and_clipboard() {
     );
 }
 
-/// Defect: an unconfirmed `turn.send` response has no authoritative
-/// `turn.result` recovery; the App only latches `result_unconfirmed`. Stage B
-/// adds `recover_turn`.
+/// An unconfirmed wait/lost event now recovers through an authoritative
+/// `turn.result` read-back. Formerly the RED baseline pin
+/// `baseline_has_no_turn_result_recovery`; stage B1 adds `recover_turn` and the
+/// behaviour is exercised end-to-end by
+/// `tests/app_flow.rs::lost_wait_result_recovers_through_turn_result` and
+/// `pending_turn_result_keeps_the_unconfirmed_fence`.
 #[test]
-fn baseline_has_no_turn_result_recovery() {
+fn turn_result_recovery_exists_and_is_settled_by_exact_turn() {
     let source = include_str!("../src/app.rs");
+    assert!(source.contains("fn recover_turn"));
     assert!(
-        source.contains("result_unconfirmed"),
-        "BASELINE: current recovery is a boolean latch"
+        source.contains("RequestKind::TurnResult"),
+        "the read-back is routed by exact TurnRef, not by name or recency"
     );
-    assert!(
-        !source.contains("fn recover_turn"),
-        "BASELINE: no turn.result recovery function exists yet"
+    let request = minicore_tui::protocol::OutgoingRequest::turn_result(
+        minicore_tui::protocol::RequestId(7),
+        &minicore_tui::protocol::TurnRef {
+            session_id: "ses_1".to_owned(),
+            loop_id: "loop_1".to_owned(),
+        },
+        Some(minicore_tui::protocol::ReadCursor::start()),
+        20,
+        262_144,
     );
+    assert_eq!(request.method, "turn.result");
+    assert_eq!(request.params["turn"]["loop_id"], "loop_1");
 }
 
 /// Defect: `agent.reload` stages a full-history replacement. Stage B/C
