@@ -1,0 +1,38 @@
+{
+ "fixture": "changes-list-workspace",
+ "method": "changes.list",
+ "request": {
+  "scope": "workspace",
+  "session_id": "ses_f4e4f611638979907579605166ac5ef8"
+ },
+ "result": {
+  "complete": true,
+  "consistency": "live",
+  "next_cursor": null,
+  "observed_at_unix_ms": 1789711301074,
+  "records": [
+   {
+    "after": {
+     "kind": "unknown"
+    },
+    "before": {
+     "kind": "unknown"
+    },
+    "change_ref": "workspace:WyJzZXNfZjRlNGY2MTE2Mzg5Nzk5MDc1Nzk2MDUxNjZhYzVlZjgiLCI3ZjVmZDk1MjQzOTJkNjg0N2NkYWViNTY1NmYyOTYwM2IxNTRhOWNlIix7InBhdGgiOiJzcmMvbWFpbi5ycyIsImtpbmQiOiJvcmRpbmFyeSIsImluZGV4X3N0YXR1cyI6Ii4iLCJ3b3JrdHJlZV9zdGF0dXMiOiJNIiwib3JpZ2luYWxfcGF0aCI6bnVsbH1d",
+    "commit_state": "unknown",
+    "coverage": "unavailable",
+    "details_available": false,
+    "kind": "modified",
+    "origin": "workspace_unknown",
+    "path": "src/main.rs"
+   }
+  ],
+  "scope": "workspace",
+  "session_id": "ses_f4e4f611638979907579605166ac5ef8",
+  "stale": false,
+  "total": 1,
+  "warnings": [
+   "details_unavailable"
+  ]
+ }
+}

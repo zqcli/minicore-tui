@@ -1,0 +1,45 @@
+{
+ "cursor_offsets": [
+  {
+   "complete": true,
+   "data_bytes": 168,
+   "index": 0,
+   "offset": 0,
+   "total_bytes": 168
+  },
+  {
+   "complete": false,
+   "data_bytes": 2317,
+   "index": 1,
+   "offset": 0,
+   "total_bytes": 9938
+  },
+  {
+   "complete": false,
+   "data_bytes": 2531,
+   "index": 1,
+   "offset": 2745,
+   "total_bytes": 9938
+  },
+  {
+   "complete": false,
+   "data_bytes": 2533,
+   "index": 1,
+   "offset": 5784,
+   "total_bytes": 9938
+  },
+  {
+   "complete": true,
+   "data_bytes": 957,
+   "index": 1,
+   "offset": 8822,
+   "total_bytes": 9938
+  }
+ ],
+ "fixture": "session-read-continuation-cursor",
+ "method": "session.read",
+ "request": {
+  "max_bytes": 4096,
+  "session_id": "ses_3d7906e5c754587f0e72dfc274f96db7"
+ }
+}

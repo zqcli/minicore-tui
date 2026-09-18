@@ -1,0 +1,45 @@
+{
+ "fixture": "workspace-search",
+ "method": "workspace.search",
+ "request": {
+  "query": "needle",
+  "session_id": "ses_f4e4f611638979907579605166ac5ef8"
+ },
+ "result": {
+  "consistency": "live",
+  "matches": [
+   {
+    "line_number": 1,
+    "line_text": "let needle_one = 1;",
+    "line_text_byte_offset": 0,
+    "line_truncated": false,
+    "match_byte_ranges": [
+     {
+      "end": 10,
+      "start": 4
+     }
+    ],
+    "path": "needles.txt"
+   },
+   {
+    "line_number": 2,
+    "line_text": "let needle_two = 2;",
+    "line_text_byte_offset": 0,
+    "line_truncated": false,
+    "match_byte_ranges": [
+     {
+      "end": 10,
+      "start": 4
+     }
+    ],
+    "path": "needles.txt"
+   }
+  ],
+  "next_cursor": null,
+  "observed_at_unix_ms": 1789711301063,
+  "scan_complete": true,
+  "skipped_files": 2,
+  "stopped_by": "end",
+  "truncated": false
+ }
+}

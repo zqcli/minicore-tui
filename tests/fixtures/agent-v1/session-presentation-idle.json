@@ -1,0 +1,21 @@
+{
+ "fixture": "session-presentation-idle",
+ "method": "session.presentation",
+ "request": {
+  "session_id": "ses_cae39f42d4818af89247030aa5a2d3c0"
+ },
+ "result": {
+  "context": {
+   "kind": "unknown",
+   "percent": null,
+   "tokens": null,
+   "window": null
+  },
+  "cost_usd": null,
+  "git_branch": null,
+  "last_loop": null,
+  "model_label": "deep",
+  "session_id": "ses_cae39f42d4818af89247030aa5a2d3c0",
+  "using_subscription": null
+ }
+}

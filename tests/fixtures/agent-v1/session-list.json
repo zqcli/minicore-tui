@@ -1,0 +1,8 @@
+{
+ "fixture": "session-list",
+ "method": "session.list",
+ "request": {},
+ "result": {
+  "sessions": []
+ }
+}

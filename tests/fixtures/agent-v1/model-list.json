@@ -1,0 +1,24 @@
+{
+ "fixture": "model-list",
+ "method": "model.list",
+ "request": {},
+ "result": {
+  "models": [
+   {
+    "context_window": 28952,
+    "id": "deep",
+    "model_ref": "deep",
+    "supported_reasoning": [
+     "auto",
+     "disabled",
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ],
+    "supports_tools": true
+   }
+  ]
+ }
+}

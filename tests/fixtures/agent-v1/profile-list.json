@@ -1,0 +1,19 @@
+{
+ "fixture": "profile-list",
+ "method": "profile.list",
+ "request": {},
+ "result": {
+  "profiles": [
+   {
+    "approval": "auto",
+    "id": "coding",
+    "model": "deep",
+    "reasoning": "high",
+    "tools": [
+     "read",
+     "write"
+    ]
+   }
+  ]
+ }
+}

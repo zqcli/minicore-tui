@@ -1,0 +1,66 @@
+{
+ "fixture": "tool-read-terminal",
+ "method": "tool.read",
+ "request": {
+  "loop_id": "lup_a37c332df92a3d15cd6082a12157505d",
+  "max_bytes": 262144,
+  "request_index": 0,
+  "session_id": "ses_69830499d097ee30dff75d8655a3a4bc",
+  "tool_call_id": "call_fixture_bash"
+ },
+ "result": {
+  "execution": {
+   "command": {
+    "exit_code": 0,
+    "output_complete": true,
+    "output_truncated": false,
+    "status": "exited",
+    "stderr_base_offset": 0,
+    "stderr_observed_end": 3,
+    "stdout_base_offset": 0,
+    "stdout_observed_end": 3,
+    "termination_confirmed": true
+   },
+   "finished_at": "2026-09-18T06:01:39.004Z",
+   "input_availability": "available",
+   "input_bytes": 49,
+   "input_truncated": false,
+   "name": "bash",
+   "outcome": "success",
+   "output_availability": "available",
+   "phase": "running",
+   "recording": "saved",
+   "result_bytes": 36,
+   "result_truncated": false,
+   "started_at": "2026-09-18T06:01:36.995Z",
+   "state": "succeeded",
+   "tool_ref": {
+    "loop_id": "lup_a37c332df92a3d15cd6082a12157505d",
+    "request_index": 0,
+    "session_id": "ses_69830499d097ee30dff75d8655a3a4bc",
+    "tool_call_id": "call_fixture_bash"
+   }
+  },
+  "invocation": {
+   "input": {
+    "encoding": "utf8_json",
+    "preview": "{\"command\":\"sleep 2; printf out; printf err >&2\"}",
+    "total_bytes": 49,
+    "truncated": false
+   },
+   "name": "bash",
+   "subject": {
+    "cwd": ".",
+    "kind": "command",
+    "script": "sleep 2; printf out; printf err >&2"
+   },
+   "subject_truncated": false,
+   "tool_ref": {
+    "loop_id": "lup_a37c332df92a3d15cd6082a12157505d",
+    "request_index": 0,
+    "session_id": "ses_69830499d097ee30dff75d8655a3a4bc",
+    "tool_call_id": "call_fixture_bash"
+   }
+  }
+ }
+}

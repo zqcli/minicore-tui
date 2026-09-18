@@ -1,0 +1,34 @@
+{
+ "fixture": "session-context-idle",
+ "method": "session.context",
+ "request": {
+  "session_id": "ses_cae39f42d4818af89247030aa5a2d3c0"
+ },
+ "result": {
+  "automatic": {
+   "current": null,
+   "last": null
+  },
+  "budget": {
+   "estimated_history_bytes": 0,
+   "estimated_history_items": 0,
+   "estimated_history_tokens": 0,
+   "estimated_request_context_tokens": null,
+   "input_budget_tokens": 28952,
+   "max_history_bytes": 2097152,
+   "max_history_items": 4096,
+   "target_tokens": 14476,
+   "trigger_tokens": 23161,
+   "within_runtime_limits": true
+  },
+  "coverage": {
+   "covered_item_count": 0,
+   "covered_loop_count": 0,
+   "retained_item_count": 0
+  },
+  "current_operation": null,
+  "last_prepare_failure": null,
+  "last_result": null,
+  "session_id": "ses_cae39f42d4818af89247030aa5a2d3c0"
+ }
+}

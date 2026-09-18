@@ -1,0 +1,24 @@
+{
+ "fixture": "turn-result-pending",
+ "method": "turn.result",
+ "request": {
+  "cursor": {
+   "item": 0,
+   "offset": 0
+  },
+  "limit": 20,
+  "loop_id": "lup_0647032e6a5b9888c333b1c51d77f202",
+  "max_bytes": 262144,
+  "session_id": "ses_1dd3da1c65beb951172005acc1c936e8"
+ },
+ "result": {
+  "availability": "pending",
+  "items": [],
+  "next_cursor": null,
+  "total": 0,
+  "turn": {
+   "loop_id": "lup_0647032e6a5b9888c333b1c51d77f202",
+   "session_id": "ses_1dd3da1c65beb951172005acc1c936e8"
+  }
+ }
+}

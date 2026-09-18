@@ -1,0 +1,70 @@
+{
+ "fixture": "session-read-first-page",
+ "method": "session.read",
+ "request": {
+  "cursor": {
+   "item": 0,
+   "offset": 0
+  },
+  "limit": 20,
+  "max_bytes": 262144,
+  "session_id": "ses_1dd3da1c65beb951172005acc1c936e8"
+ },
+ "result": {
+  "captured_end": 853,
+  "history_revision": "7bea1e5eb91f1a2405e8a099b9ca1e372f82c555989aece645e8d3b9b4fac648",
+  "items": [
+   {
+    "complete": true,
+    "data": "{\"item\":{\"type\":\"user\",\"data\":{\"loop_id\":\"lup_0647032e6a5b9888c333b1c51d77f202\",\"kind\":\"prompt\",\"input\":{\"text\":\"say hello\"}}},\"timestamp\":\"2026-09-18T06:01:35.447Z\"}",
+    "encoding": "utf8_json",
+    "index": 0,
+    "offset": 0,
+    "total_bytes": 166
+   },
+   {
+    "complete": true,
+    "data": "{\"item\":{\"type\":\"assistant\",\"data\":{\"loop_id\":\"lup_0647032e6a5b9888c333b1c51d77f202\",\"request_index\":0,\"model\":\"deep\",\"reasoning\":\"high\",\"content\":[{\"type\":\"text\",\"data\":\"hello from the fixture loopback\"}],\"finish_reason\":\"stop\",\"usage\":{\"input_tokens\":10,\"output_tokens\":12,\"reasoning_tokens\":0,\"cache_read_tokens\":0,\"cache_write_tokens\":0,\"provider_total_tokens\":22}}}}",
+    "encoding": "utf8_json",
+    "index": 1,
+    "offset": 0,
+    "total_bytes": 371
+   }
+  ],
+  "next_cursor": null,
+  "records": [
+   {
+    "completed_at": "2026-09-18T06:01:35.452Z",
+    "final_config_revision": 0,
+    "loop_id": "lup_0647032e6a5b9888c333b1c51d77f202",
+    "outcome": {
+     "type": "completed"
+    },
+    "requests": 1,
+    "tool_rounds": 0,
+    "usage": {
+     "cache_read_tokens": 0,
+     "cache_write_tokens": 0,
+     "input_tokens": 10,
+     "output_tokens": 12,
+     "provider_total_tokens": 22,
+     "reasoning_tokens": 0
+    }
+   }
+  ],
+  "records_truncated": false,
+  "session": {
+   "created_at": "2026-09-18T06:01:35.443Z",
+   "loaded": true,
+   "model": "deep",
+   "profile": "coding",
+   "reasoning": "high",
+   "session_id": "ses_1dd3da1c65beb951172005acc1c936e8",
+   "title": null,
+   "updated_at": "2026-09-18T06:01:35.453Z",
+   "workspace": "<tmp>//basic/workspace"
+  },
+  "total": 2,
+  "trailing_incomplete": false
+ }
+}

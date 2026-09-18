@@ -1,0 +1,20 @@
+{
+ "fixture": "session-state-running",
+ "method": "session.state",
+ "request": {
+  "session_id": "ses_1dd3da1c65beb951172005acc1c936e8"
+ },
+ "result": {
+  "active_loop": {
+   "config_revision": 0,
+   "loop_id": "lup_0647032e6a5b9888c333b1c51d77f202",
+   "model": "deep",
+   "pending_interaction": null,
+   "request_index": 0,
+   "status": "running_model"
+  },
+  "block_reason": null,
+  "session_id": "ses_1dd3da1c65beb951172005acc1c936e8",
+  "status": "running"
+ }
+}

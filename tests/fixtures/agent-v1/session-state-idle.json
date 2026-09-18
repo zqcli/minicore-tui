@@ -1,0 +1,13 @@
+{
+ "fixture": "session-state-idle",
+ "method": "session.state",
+ "request": {
+  "session_id": "ses_cae39f42d4818af89247030aa5a2d3c0"
+ },
+ "result": {
+  "active_loop": null,
+  "block_reason": null,
+  "session_id": "ses_cae39f42d4818af89247030aa5a2d3c0",
+  "status": "idle"
+ }
+}

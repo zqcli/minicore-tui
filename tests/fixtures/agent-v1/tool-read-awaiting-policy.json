@@ -1,0 +1,50 @@
+{
+ "fixture": "tool-read-awaiting-policy",
+ "method": "tool.read",
+ "request": {
+  "loop_id": "lup_749641d691c2a4ca474a87789328907a",
+  "max_bytes": 262144,
+  "request_index": 0,
+  "session_id": "ses_c4ccd1db7dd717666a42be4e5ab65f75",
+  "tool_call_id": "call_fixture_write"
+ },
+ "result": {
+  "execution": {
+   "input_availability": "available",
+   "input_bytes": 41,
+   "input_truncated": false,
+   "name": "write",
+   "output_availability": "pending",
+   "recording": "memory_only",
+   "result_bytes": 0,
+   "result_truncated": false,
+   "state": "awaiting_policy",
+   "tool_ref": {
+    "loop_id": "lup_749641d691c2a4ca474a87789328907a",
+    "request_index": 0,
+    "session_id": "ses_c4ccd1db7dd717666a42be4e5ab65f75",
+    "tool_call_id": "call_fixture_write"
+   }
+  },
+  "invocation": {
+   "input": {
+    "encoding": "utf8_json",
+    "preview": "{\"content\":\"synthetic\",\"path\":\"note.txt\"}",
+    "total_bytes": 41,
+    "truncated": false
+   },
+   "name": "write",
+   "subject": {
+    "kind": "file",
+    "path": "note.txt"
+   },
+   "subject_truncated": false,
+   "tool_ref": {
+    "loop_id": "lup_749641d691c2a4ca474a87789328907a",
+    "request_index": 0,
+    "session_id": "ses_c4ccd1db7dd717666a42be4e5ab65f75",
+    "tool_call_id": "call_fixture_write"
+   }
+  }
+ }
+}

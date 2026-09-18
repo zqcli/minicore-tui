@@ -1,0 +1,78 @@
+{
+ "fixture": "changes-diff-fragments",
+ "method": "changes.diff",
+ "request": {
+  "change_ref": "<opaque>",
+  "max_bytes": 2048,
+  "session_id": "ses_f4e4f611638979907579605166ac5ef8"
+ },
+ "result": {
+  "availability": "available",
+  "base_version": {
+   "bytes": 37,
+   "kind": "content",
+   "sha256": "35e0393811f794547c34763eb5773d6cddb295dc4f372180ed4aae67da3ea45f"
+  },
+  "binary": false,
+  "change_ref": "workspace:WyJzZXNfZjRlNGY2MTE2Mzg5Nzk5MDc1Nzk2MDUxNjZhYzVlZjgiLCI3ZjVmZDk1MjQzOTJkNjg0N2NkYWViNTY1NmYyOTYwM2IxNTRhOWNlIix7InBhdGgiOiJzcmMvbWFpbi5ycyIsImtpbmQiOiJvcmRpbmFyeSIsImluZGV4X3N0YXR1cyI6Ii4iLCJ3b3JrdHJlZV9zdGF0dXMiOiJNIiwib3JpZ2luYWxfcGF0aCI6bnVsbH1d",
+  "commit_state": "unknown",
+  "comparison": "index_to_worktree",
+  "complete": true,
+  "coverage": "complete",
+  "hunks": [
+   {
+    "lines": [
+     {
+      "kind": "context",
+      "line_byte_len": 12,
+      "line_byte_offset": 0,
+      "line_complete": true,
+      "new_index": 0,
+      "old_index": 0,
+      "text": "fn main() {\n"
+     },
+     {
+      "kind": "removed",
+      "line_byte_len": 23,
+      "line_byte_offset": 0,
+      "line_complete": true,
+      "old_index": 1,
+      "text": "    println!(\"hello\");\n"
+     },
+     {
+      "kind": "added",
+      "line_byte_len": 25,
+      "line_byte_offset": 0,
+      "line_complete": true,
+      "new_index": 1,
+      "text": "    println!(\"changed\");\n"
+     },
+     {
+      "kind": "context",
+      "line_byte_len": 2,
+      "line_byte_offset": 0,
+      "line_complete": true,
+      "new_index": 2,
+      "old_index": 2,
+      "text": "}\n"
+     }
+    ],
+    "new_count": 3,
+    "new_start": 0,
+    "old_count": 3,
+    "old_start": 0
+   }
+  ],
+  "kind": "modified",
+  "origin": "workspace_unknown",
+  "path": "src/main.rs",
+  "stale": false,
+  "target_version": {
+   "bytes": 39,
+   "kind": "content",
+   "sha256": "2958d8fd681f95153261b822e0961f7105ebaeb59969911cd2bf10b5b3e67b31"
+  },
+  "truncated": false,
+  "versions_refreshed": true
+ }
+}

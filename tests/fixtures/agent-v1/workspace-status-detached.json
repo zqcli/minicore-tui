@@ -1,0 +1,23 @@
+{
+ "fixture": "workspace-status-detached",
+ "method": "workspace.status",
+ "request": {
+  "session_id": "ses_bb32eaee85d6a45c02f91969c92479c4"
+ },
+ "result": {
+  "branch": null,
+  "complete": true,
+  "conflicted": 0,
+  "consistency": "live",
+  "detached": true,
+  "entries": [],
+  "head_oid": "8e83257b7fdc5953f12fc856931b419b9d7c5ec3",
+  "observed_at_unix_ms": 1789711301134,
+  "repo_available": true,
+  "skipped_paths": 0,
+  "staged": 0,
+  "unstaged": 0,
+  "untracked": 0,
+  "warnings": []
+ }
+}

@@ -1,0 +1,31 @@
+{
+ "fixture": "workspace-status",
+ "method": "workspace.status",
+ "request": {
+  "session_id": "ses_f4e4f611638979907579605166ac5ef8"
+ },
+ "result": {
+  "branch": "master",
+  "complete": true,
+  "conflicted": 0,
+  "consistency": "live",
+  "detached": false,
+  "entries": [
+   {
+    "index_status": ".",
+    "kind": "ordinary",
+    "original_path": null,
+    "path": "src/main.rs",
+    "worktree_status": "M"
+   }
+  ],
+  "head_oid": "7f5fd9524392d6847cdaeb5656f29603b154a9ce",
+  "observed_at_unix_ms": 1789711301064,
+  "repo_available": true,
+  "skipped_paths": 0,
+  "staged": 0,
+  "unstaged": 1,
+  "untracked": 0,
+  "warnings": []
+ }
+}

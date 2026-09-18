@@ -1,0 +1,31 @@
+{
+ "fixture": "session-state-waiting-for-input",
+ "method": "session.state",
+ "request": {
+  "session_id": "ses_c4ccd1db7dd717666a42be4e5ab65f75"
+ },
+ "result": {
+  "active_loop": {
+   "config_revision": 0,
+   "loop_id": "lup_749641d691c2a4ca474a87789328907a",
+   "model": "deep",
+   "pending_interaction": {
+    "interaction_id": "int_88528677029b51b21cdd7869d5ccfcd7",
+    "kind": {
+     "data": {
+      "prompt": "Allow tool `write` for this call?",
+      "risk": "medium"
+     },
+     "type": "approval"
+    },
+    "tool_call_id": "call_fixture_write",
+    "tool_name": "write"
+   },
+   "request_index": 0,
+   "status": "waiting_for_input"
+  },
+  "block_reason": null,
+  "session_id": "ses_c4ccd1db7dd717666a42be4e5ab65f75",
+  "status": "waiting_for_input"
+ }
+}

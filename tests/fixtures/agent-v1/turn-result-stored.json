@@ -1,0 +1,57 @@
+{
+ "fixture": "turn-result-stored",
+ "method": "turn.result",
+ "request": {
+  "cursor": {
+   "item": 0,
+   "offset": 0
+  },
+  "limit": 20,
+  "loop_id": "lup_0647032e6a5b9888c333b1c51d77f202",
+  "max_bytes": 262144,
+  "session_id": "ses_1dd3da1c65beb951172005acc1c936e8"
+ },
+ "result": {
+  "availability": "stored",
+  "completed_at": "2026-09-18T06:01:35.452Z",
+  "final_config_revision": 0,
+  "items": [
+   {
+    "complete": true,
+    "data": "{\"item\":{\"type\":\"user\",\"data\":{\"loop_id\":\"lup_0647032e6a5b9888c333b1c51d77f202\",\"kind\":\"prompt\",\"input\":{\"text\":\"say hello\"}}}}",
+    "encoding": "utf8_json",
+    "index": 0,
+    "offset": 0,
+    "total_bytes": 127
+   },
+   {
+    "complete": true,
+    "data": "{\"item\":{\"type\":\"assistant\",\"data\":{\"loop_id\":\"lup_0647032e6a5b9888c333b1c51d77f202\",\"request_index\":0,\"model\":\"deep\",\"reasoning\":\"high\",\"content\":[{\"type\":\"text\",\"data\":\"hello from the fixture loopback\"}],\"finish_reason\":\"stop\",\"usage\":{\"input_tokens\":10,\"output_tokens\":12,\"reasoning_tokens\":0,\"cache_read_tokens\":0,\"cache_write_tokens\":0,\"provider_total_tokens\":22}}}}",
+    "encoding": "utf8_json",
+    "index": 1,
+    "offset": 0,
+    "total_bytes": 371
+   }
+  ],
+  "next_cursor": null,
+  "outcome": {
+   "type": "completed"
+  },
+  "persistence": "persisted",
+  "requests": 1,
+  "tool_rounds": 0,
+  "total": 2,
+  "turn": {
+   "loop_id": "lup_0647032e6a5b9888c333b1c51d77f202",
+   "session_id": "ses_1dd3da1c65beb951172005acc1c936e8"
+  },
+  "usage": {
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 0,
+   "input_tokens": 10,
+   "output_tokens": 12,
+   "provider_total_tokens": 22,
+   "reasoning_tokens": 0
+  }
+ }
+}

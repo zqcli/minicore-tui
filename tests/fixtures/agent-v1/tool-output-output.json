@@ -1,0 +1,30 @@
+{
+ "fixture": "tool-output-output",
+ "method": "tool.output",
+ "request": {
+  "loop_id": "lup_a37c332df92a3d15cd6082a12157505d",
+  "max_bytes": 65536,
+  "offset": 0,
+  "request_index": 0,
+  "session_id": "ses_69830499d097ee30dff75d8655a3a4bc",
+  "stream": "output",
+  "tool_call_id": "call_fixture_bash"
+ },
+ "result": {
+  "availability": "available",
+  "base_offset": 0,
+  "data": "exit_code: 0\nstdout:\nout\nstderr:\nerr",
+  "encoding": "utf8",
+  "eof": true,
+  "next_offset": 36,
+  "observed_end": 36,
+  "stream": "output",
+  "tool_ref": {
+   "loop_id": "lup_a37c332df92a3d15cd6082a12157505d",
+   "request_index": 0,
+   "session_id": "ses_69830499d097ee30dff75d8655a3a4bc",
+   "tool_call_id": "call_fixture_bash"
+  },
+  "truncated": false
+ }
+}

@@ -1,0 +1,114 @@
+{
+ "agent": {
+  "head": "061743369459299e66be97bf97d2b27352a39914",
+  "package_version": "0.5.0"
+ },
+ "capabilities": [
+  "session.read",
+  "session.context",
+  "turn.result",
+  "tool.read",
+  "tool.output",
+  "session.history",
+  "workspace.read",
+  "workspace.files",
+  "workspace.search",
+  "workspace.status",
+  "changes.list",
+  "changes.diff",
+  "deferred.waiter_limit"
+ ],
+ "description": "Desensitized protocol fixtures captured from a real pinned minicore-agent process driven over stdio JSON-RPC against a loopback OpenAI-Responses mock. No real provider, credential, user text, tool output body, or real workspace path is included.",
+ "fixtures": [
+  "changes-diff-fragments",
+  "changes-diff-workspace",
+  "changes-list-workspace",
+  "model-list",
+  "ping",
+  "profile-list",
+  "session-context-idle",
+  "session-create",
+  "session-list",
+  "session-open",
+  "session-presentation-idle",
+  "session-read-continuation-cursor",
+  "session-read-first-page",
+  "session-read-paged-chunks",
+  "session-read-trailing-incomplete",
+  "session-state-idle",
+  "session-state-running-preparing",
+  "session-state-waiting-for-input",
+  "tool-output-input",
+  "tool-output-output",
+  "tool-output-stderr",
+  "tool-output-stdout",
+  "tool-output-stdout-pending",
+  "tool-read-awaiting-policy",
+  "tool-read-running",
+  "tool-read-terminal",
+  "turn-result-pending",
+  "turn-result-stored",
+  "turn-send",
+  "turn-wait",
+  "workspace-files",
+  "workspace-files-paged",
+  "workspace-read-binary",
+  "workspace-read-changed",
+  "workspace-read-line-partial",
+  "workspace-read-ok",
+  "workspace-read-too-large",
+  "workspace-search",
+  "workspace-status",
+  "workspace-status-detached",
+  "workspace-status-unavailable"
+ ],
+ "generator": "scripts/generate_agent_v1_fixtures.py",
+ "generator_agent_binary_sha256": "6b2e82281607c9bf65900369dbb29aefc5468744d7eebc0faf82a245ead79ada",
+ "manifest_version": 1,
+ "not_reproducible_against_the_real_process": [
+  {
+   "fixture": "session-state-preparing",
+   "reason": "automatic preparation completes too fast against the loopback mock to observe reliably; synthesize deterministically in stage B unit tests"
+  },
+  {
+   "fixture": "session-state-compaction",
+   "reason": "manual compaction requires a real utility-generation round trip; the compacted/noop/failed/unknown_write results need fault injection"
+  },
+  {
+   "fixture": "session-state-blocked",
+   "reason": "blocked requires a store append failure, which needs a fault-injected store rather than the real process"
+  },
+  {
+   "fixture": "tool-output-gap-expired-partial",
+   "reason": "stream eviction/gap/partial require the 1 MiB tail window to overflow or the owner to stop mid-stream; reproduce with a bounded tail + fault injection in stage B stream tests"
+  },
+  {
+   "fixture": "tool-output-clean-empty-eof",
+   "reason": "a genuinely empty captured stdout page is indistinguishable from an unobserved one over a single run; stage B tests the decoder directly"
+  },
+  {
+   "fixture": "workspace-files-search-deadline",
+   "reason": "the 10s scan deadline is not reachable on a small synthetic tree"
+  },
+  {
+   "fixture": "changes-stale-partial",
+   "reason": "stale cursors need a live concurrent observation change; stage B synthesizes the cursor response deterministically"
+  },
+  {
+   "fixture": "records-truncated",
+   "reason": "requires >64 stored turn summaries in one page; stage B synthesizes"
+  }
+ ],
+ "protocol_version": 1,
+ "redaction": {
+  "ids": "ses_/lup_/call_ ids are opaque entropy from the captured run",
+  "prompt_text": "replaced with <synthetic> in recorded requests",
+  "store": "synthetic temp data_dir created by the generator, never a user store",
+  "tool_bodies": "tool.output stdout/stderr kept only as the real base64 wire page",
+  "workspace_paths": "absolute temp roots replaced with <tmp>"
+ },
+ "runtime": {
+  "head": "6cd2bdbc634437dea925495c61c7eb0be10ba171",
+  "package_version": "0.4.1"
+ }
+}

@@ -1,0 +1,20 @@
+{
+ "fixture": "session-create",
+ "method": "session.create",
+ "request": {
+  "workspace": "<workspace>"
+ },
+ "result": {
+  "session": {
+   "created_at": "2026-09-18T06:01:34.941Z",
+   "loaded": true,
+   "model": "deep",
+   "profile": "coding",
+   "reasoning": "high",
+   "session_id": "ses_cae39f42d4818af89247030aa5a2d3c0",
+   "title": null,
+   "updated_at": "2026-09-18T06:01:34.941Z",
+   "workspace": "<tmp>//discovery/workspace"
+  }
+ }
+}

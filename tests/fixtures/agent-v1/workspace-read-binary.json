@@ -1,0 +1,22 @@
+{
+ "fixture": "workspace-read-binary",
+ "method": "workspace.read",
+ "request": {
+  "path": "binary.dat",
+  "session_id": "ses_f4e4f611638979907579605166ac5ef8"
+ },
+ "result": {
+  "content": "",
+  "encoding": "unknown",
+  "file_bytes": 13,
+  "file_modified_unix_ms": 1789711301012,
+  "line_truncated": false,
+  "next_range": null,
+  "path": "binary.dat",
+  "returned_lines": 0,
+  "revision": "7b47413370b1a88e951edce52518be09501cd961f648de1e588b1af1865785d8",
+  "start_line": 1,
+  "status": "binary",
+  "truncated": false
+ }
+}

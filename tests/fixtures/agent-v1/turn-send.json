@@ -1,0 +1,15 @@
+{
+ "fixture": "turn-send",
+ "method": "turn.send",
+ "request": {
+  "session_id": "ses_1dd3da1c65beb951172005acc1c936e8",
+  "text": "<synthetic>"
+ },
+ "result": {
+  "accepted_at": "2026-09-18T06:01:35.447Z",
+  "turn": {
+   "loop_id": "lup_0647032e6a5b9888c333b1c51d77f202",
+   "session_id": "ses_1dd3da1c65beb951172005acc1c936e8"
+  }
+ }
+}

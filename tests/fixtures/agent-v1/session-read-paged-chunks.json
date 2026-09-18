@@ -1,0 +1,228 @@
+{
+ "fixture": "session-read-paged-chunks",
+ "method": "session.read",
+ "pages": [
+  {
+   "captured_end": 10422,
+   "history_revision": "d37eb76ad8cd65048c9fbc386b341b139e6152eda5a545f35fcda54ba273c2c8",
+   "items": [
+    {
+     "complete": true,
+     "data": "{\"item\":{\"type\":\"user\",\"data\":{\"loop_id\":\"lup_447308b024a987f1614fc42880aa2552\",\"kind\":\"prompt\",\"input\":{\"text\":\"long answer\"}}},\"timestamp\":\"2026-09-18T06:01:35.968Z\"}",
+     "encoding": "utf8_json",
+     "index": 0,
+     "offset": 0,
+     "total_bytes": 168
+    },
+    {
+     "complete": false,
+     "data": "{\"item\":{\"type\":\"assistant\",\"data\":{\"loop_id\":\"lup_447308b024a987f1614fc42880aa2552\",\"request_index\":0,\"model\":\"deep\",\"reasoning\":\"high\",\"content\":[{\"type\":\"text\",\"data\":\"alpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha ",
+     "encoding": "utf8_json",
+     "index": 1,
+     "offset": 0,
+     "total_bytes": 9938
+    }
+   ],
+   "next_cursor": {
+    "item": 1,
+    "offset": 2745
+   },
+   "records": [
+    {
+     "completed_at": "2026-09-18T06:01:35.974Z",
+     "final_config_revision": 0,
+     "loop_id": "lup_447308b024a987f1614fc42880aa2552",
+     "outcome": {
+      "type": "completed"
+     },
+     "requests": 1,
+     "tool_rounds": 0,
+     "usage": {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "input_tokens": 10,
+      "output_tokens": 12,
+      "provider_total_tokens": 22,
+      "reasoning_tokens": 0
+     }
+    }
+   ],
+   "records_truncated": false,
+   "session": {
+    "created_at": "2026-09-18T06:01:35.964Z",
+    "loaded": true,
+    "model": "deep",
+    "profile": "coding",
+    "reasoning": "high",
+    "session_id": "ses_3d7906e5c754587f0e72dfc274f96db7",
+    "title": null,
+    "updated_at": "2026-09-18T06:01:35.976Z",
+    "workspace": "<tmp>//chunks/workspace"
+   },
+   "total": 2,
+   "trailing_incomplete": false
+  },
+  {
+   "captured_end": 10422,
+   "history_revision": "d37eb76ad8cd65048c9fbc386b341b139e6152eda5a545f35fcda54ba273c2c8",
+   "items": [
+    {
+     "complete": false,
+     "data": "\u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamm",
+     "encoding": "utf8_json",
+     "index": 1,
+     "offset": 2745,
+     "total_bytes": 9938
+    }
+   ],
+   "next_cursor": {
+    "item": 1,
+    "offset": 5784
+   },
+   "records": [
+    {
+     "completed_at": "2026-09-18T06:01:35.974Z",
+     "final_config_revision": 0,
+     "loop_id": "lup_447308b024a987f1614fc42880aa2552",
+     "outcome": {
+      "type": "completed"
+     },
+     "requests": 1,
+     "tool_rounds": 0,
+     "usage": {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "input_tokens": 10,
+      "output_tokens": 12,
+      "provider_total_tokens": 22,
+      "reasoning_tokens": 0
+     }
+    }
+   ],
+   "records_truncated": false,
+   "session": {
+    "created_at": "2026-09-18T06:01:35.964Z",
+    "loaded": true,
+    "model": "deep",
+    "profile": "coding",
+    "reasoning": "high",
+    "session_id": "ses_3d7906e5c754587f0e72dfc274f96db7",
+    "title": null,
+    "updated_at": "2026-09-18T06:01:35.976Z",
+    "workspace": "<tmp>//chunks/workspace"
+   },
+   "total": 2,
+   "trailing_incomplete": false
+  },
+  {
+   "captured_end": 10422,
+   "history_revision": "d37eb76ad8cd65048c9fbc386b341b139e6152eda5a545f35fcda54ba273c2c8",
+   "items": [
+    {
+     "complete": false,
+     "data": "a\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta",
+     "encoding": "utf8_json",
+     "index": 1,
+     "offset": 5784,
+     "total_bytes": 9938
+    }
+   ],
+   "next_cursor": {
+    "item": 1,
+    "offset": 8822
+   },
+   "records": [
+    {
+     "completed_at": "2026-09-18T06:01:35.974Z",
+     "final_config_revision": 0,
+     "loop_id": "lup_447308b024a987f1614fc42880aa2552",
+     "outcome": {
+      "type": "completed"
+     },
+     "requests": 1,
+     "tool_rounds": 0,
+     "usage": {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "input_tokens": 10,
+      "output_tokens": 12,
+      "provider_total_tokens": 22,
+      "reasoning_tokens": 0
+     }
+    }
+   ],
+   "records_truncated": false,
+   "session": {
+    "created_at": "2026-09-18T06:01:35.964Z",
+    "loaded": true,
+    "model": "deep",
+    "profile": "coding",
+    "reasoning": "high",
+    "session_id": "ses_3d7906e5c754587f0e72dfc274f96db7",
+    "title": null,
+    "updated_at": "2026-09-18T06:01:35.976Z",
+    "workspace": "<tmp>//chunks/workspace"
+   },
+   "total": 2,
+   "trailing_incomplete": false
+  },
+  {
+   "captured_end": 10422,
+   "history_revision": "d37eb76ad8cd65048c9fbc386b341b139e6152eda5a545f35fcda54ba273c2c8",
+   "items": [
+    {
+     "complete": true,
+     "data": " \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\\nalpha \u03b2eta \ud83d\ude42 gamma\"}],\"finish_reason\":\"stop\",\"usage\":{\"input_tokens\":10,\"output_tokens\":12,\"reasoning_tokens\":0,\"cache_read_tokens\":0,\"cache_write_tokens\":0,\"provider_total_tokens\":22}}}}",
+     "encoding": "utf8_json",
+     "index": 1,
+     "offset": 8822,
+     "total_bytes": 9938
+    }
+   ],
+   "next_cursor": null,
+   "records": [
+    {
+     "completed_at": "2026-09-18T06:01:35.974Z",
+     "final_config_revision": 0,
+     "loop_id": "lup_447308b024a987f1614fc42880aa2552",
+     "outcome": {
+      "type": "completed"
+     },
+     "requests": 1,
+     "tool_rounds": 0,
+     "usage": {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "input_tokens": 10,
+      "output_tokens": 12,
+      "provider_total_tokens": 22,
+      "reasoning_tokens": 0
+     }
+    }
+   ],
+   "records_truncated": false,
+   "session": {
+    "created_at": "2026-09-18T06:01:35.964Z",
+    "loaded": true,
+    "model": "deep",
+    "profile": "coding",
+    "reasoning": "high",
+    "session_id": "ses_3d7906e5c754587f0e72dfc274f96db7",
+    "title": null,
+    "updated_at": "2026-09-18T06:01:35.976Z",
+    "workspace": "<tmp>//chunks/workspace"
+   },
+   "total": 2,
+   "trailing_incomplete": false
+  }
+ ],
+ "request": {
+  "cursor": {
+   "item": 0,
+   "offset": 0
+  },
+  "limit": 20,
+  "max_bytes": 4096,
+  "session_id": "ses_3d7906e5c754587f0e72dfc274f96db7"
+ }
+}

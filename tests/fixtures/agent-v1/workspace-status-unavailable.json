@@ -1,0 +1,25 @@
+{
+ "fixture": "workspace-status-unavailable",
+ "method": "workspace.status",
+ "request": {
+  "session_id": "ses_f5b871d9da40c41c41e73e01051f5c7f"
+ },
+ "result": {
+  "branch": null,
+  "complete": false,
+  "conflicted": 0,
+  "consistency": "live",
+  "detached": false,
+  "entries": [],
+  "head_oid": null,
+  "observed_at_unix_ms": 1789711301148,
+  "repo_available": false,
+  "skipped_paths": 0,
+  "staged": 0,
+  "unstaged": 0,
+  "untracked": 0,
+  "warnings": [
+   "status_failed"
+  ]
+ }
+}
