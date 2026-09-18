@@ -160,6 +160,17 @@ async fn production_layout_worker_installs_current_width_only() {
     jobs.shutdown().await;
 }
 
+#[test]
+fn durable_layout_snapshot_shares_tool_presentation_storage() {
+    let app = app_with_history(1, 240);
+    let view = app.active_view().expect("active performance view");
+    let snapshot = minicore_tui::ui::transcript::DurableLayoutSnapshot::from_view(view);
+    assert!(std::sync::Arc::ptr_eq(
+        &snapshot.tool_presentations,
+        &view.tool_presentations
+    ));
+}
+
 #[tokio::test]
 async fn production_layout_worker_fences_stale_theme_result() {
     let mut app = app_with_history(64, 240);

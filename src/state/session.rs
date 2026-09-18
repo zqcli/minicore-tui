@@ -1,6 +1,7 @@
 //! Sessions, their views, and the scroll state (spec r2).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::protocol::{
     CompactResultWire, Reasoning, SessionContextWire, SessionInfo, SessionPresentationWire,
@@ -269,7 +270,9 @@ pub struct SessionView {
     /// Toggle-all tools preview state.
     pub tools_expanded: bool,
     /// Live/history bounded tool display data keyed by the full tool identity.
-    pub tool_presentations: HashMap<ToolKey, ToolPresentationState>,
+    /// COW map whose values remain individually shared. Layout snapshots can
+    /// retain the table without cloning large tool result/display strings.
+    pub tool_presentations: Arc<HashMap<ToolKey, Arc<ToolPresentationState>>>,
     /// Stable per-section fold choices. These are local UI state only.
     pub tool_folds: HashMap<ToolKey, FoldOverride>,
     pub reasoning_folds: HashMap<ReasoningKey, FoldOverride>,
@@ -316,7 +319,7 @@ impl SessionView {
             steer_receipt: None,
             gap_revision: 0,
             tools_expanded: false,
-            tool_presentations: HashMap::new(),
+            tool_presentations: Arc::new(HashMap::new()),
             tool_folds: HashMap::new(),
             reasoning_folds: HashMap::new(),
         }

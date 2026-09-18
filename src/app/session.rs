@@ -1654,7 +1654,7 @@ impl App {
             view.user_timestamps.clear();
             view.live_user_timestamp = None;
             view.live_user_time_accepted = false;
-            view.tool_presentations.clear();
+            view.tool_presentations = std::sync::Arc::new(std::collections::HashMap::new());
             view.completed_steers.clear();
             // A store record is a read fact: the outcome is Confirmed. A
             // failed save stays visible through `last_result.persistence` and

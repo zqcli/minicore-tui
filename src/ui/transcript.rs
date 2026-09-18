@@ -32,7 +32,7 @@ pub struct DurableLayoutSnapshot {
     pub blocks: Arc<Vec<Arc<TranscriptBlock>>>,
     pub reasoning_folds: HashMap<crate::state::view::ReasoningKey, FoldOverride>,
     pub tool_folds: HashMap<ToolKey, FoldOverride>,
-    pub tool_presentations: HashMap<ToolKey, ToolPresentationState>,
+    pub tool_presentations: Arc<HashMap<ToolKey, Arc<ToolPresentationState>>>,
     pub tools_expanded: bool,
     pub user_timestamps: HashMap<usize, String>,
     pub live_user_timestamp: Option<String>,
@@ -74,7 +74,7 @@ impl DurableLayoutSnapshot {
             blocks: Arc::clone(&view.transcript.blocks),
             reasoning_folds: view.reasoning_folds.clone(),
             tool_folds: view.tool_folds.clone(),
-            tool_presentations: view.tool_presentations.clone(),
+            tool_presentations: Arc::clone(&view.tool_presentations),
             tools_expanded: view.tools_expanded,
             user_timestamps: view.user_timestamps.clone(),
             live_user_timestamp: view.live_user_timestamp.clone(),
@@ -93,7 +93,7 @@ pub(crate) trait DurableLayoutSource {
     fn blocks(&self) -> &[Arc<TranscriptBlock>];
     fn reasoning_folds(&self) -> &HashMap<crate::state::view::ReasoningKey, FoldOverride>;
     fn tool_folds(&self) -> &HashMap<ToolKey, FoldOverride>;
-    fn tool_presentations(&self) -> &HashMap<ToolKey, ToolPresentationState>;
+    fn tool_presentations(&self) -> &HashMap<ToolKey, Arc<ToolPresentationState>>;
     fn tools_expanded(&self) -> bool;
     fn user_timestamps(&self) -> &HashMap<usize, String>;
     fn live_user_timestamp(&self) -> Option<&str>;
@@ -118,8 +118,8 @@ impl DurableLayoutSource for SessionView {
         &self.tool_folds
     }
 
-    fn tool_presentations(&self) -> &HashMap<ToolKey, ToolPresentationState> {
-        &self.tool_presentations
+    fn tool_presentations(&self) -> &HashMap<ToolKey, Arc<ToolPresentationState>> {
+        self.tool_presentations.as_ref()
     }
 
     fn tools_expanded(&self) -> bool {
@@ -163,8 +163,8 @@ impl DurableLayoutSource for DurableLayoutSnapshot {
         &self.tool_folds
     }
 
-    fn tool_presentations(&self) -> &HashMap<ToolKey, ToolPresentationState> {
-        &self.tool_presentations
+    fn tool_presentations(&self) -> &HashMap<ToolKey, Arc<ToolPresentationState>> {
+        self.tool_presentations.as_ref()
     }
 
     fn tools_expanded(&self) -> bool {

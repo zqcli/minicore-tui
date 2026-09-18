@@ -5195,7 +5195,9 @@ impl App {
             .map(|tool| tool.name.clone())
             .unwrap_or_else(|| "(unknown tool)".to_owned());
         let key = ToolKey::new(&turn.session_id, &turn.loop_id, request_index, tool_call_id);
-        if let Some(presentation) = view.tool_presentations.get_mut(&key) {
+        let presentations = std::sync::Arc::make_mut(&mut view.tool_presentations);
+        if let Some(presentation) = presentations.get_mut(&key) {
+            let presentation = std::sync::Arc::make_mut(presentation);
             // A completed ToolPresentation event carries the authoritative
             // input+result hidden count. If it arrived before ToolFinished,
             // leave that count intact; the later result event only fills the
@@ -5211,9 +5213,9 @@ impl App {
                 .as_deref()
                 .filter(|text| !text.is_empty())
                 .map(|text| text.split('\n').count());
-            view.tool_presentations.insert(
+            presentations.insert(
                 key,
-                ToolPresentationState {
+                std::sync::Arc::new(ToolPresentationState {
                     display: ToolDisplayWire {
                         detail: fallback_name,
                         expanded_input: None,
@@ -5223,7 +5225,7 @@ impl App {
                     },
                     result: content,
                     result_truncated: content_truncated,
-                },
+                }),
             );
         }
         if view.transcript.blocks.iter().any(|block| {
@@ -5266,10 +5268,9 @@ impl App {
                     .find(|tool| tool.tool_call_id == tool_call_id)
             })
             .map(|tool| (tool.result.clone(), tool.result_truncated));
-        let state = view
-            .tool_presentations
-            .entry(key)
-            .or_insert_with(|| ToolPresentationState {
+        let presentations = std::sync::Arc::make_mut(&mut view.tool_presentations);
+        let state = presentations.entry(key).or_insert_with(|| {
+            std::sync::Arc::new(ToolPresentationState {
                 display: display.clone(),
                 result: existing_result
                     .as_ref()
@@ -5277,7 +5278,9 @@ impl App {
                 result_truncated: existing_result
                     .as_ref()
                     .is_some_and(|(_, truncated)| *truncated),
-            });
+            })
+        });
+        let state = std::sync::Arc::make_mut(state);
         state.display = display.clone();
         let display_for_live = display.clone();
         let _ = state;
