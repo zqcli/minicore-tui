@@ -17,6 +17,21 @@ use minicore_tui::event::{AppEvent, RpcEvent};
 use minicore_tui::protocol::{IncomingFrame, OutgoingRequest, RpcResponse};
 use serde_json::json;
 
+/// The app state machine is split across `app.rs` and its child modules;
+/// these structural assertions read them as one source so each invariant
+/// keeps being checked wherever the implementation lives.
+fn app_modules_source() -> String {
+    [
+        include_str!("../src/app.rs"),
+        include_str!("../src/app/history.rs"),
+        include_str!("../src/app/session.rs"),
+        include_str!("../src/app/turn.rs"),
+        include_str!("../src/app/queries.rs"),
+        include_str!("../src/app/ui_actions.rs"),
+    ]
+    .join("\n")
+}
+
 fn ready_app() -> App {
     // Leave `connection == Starting` so `Bootstrap` is admitted.
     App::new(PathBuf::from("/project"))
@@ -288,7 +303,7 @@ fn run_commands_admits_synchronously_and_owns_the_clipboard() {
 /// `pending_turn_result_keeps_the_unconfirmed_fence`.
 #[test]
 fn turn_result_recovery_exists_and_is_settled_by_exact_turn() {
-    let source = include_str!("../src/app.rs");
+    let source = app_modules_source();
     assert!(source.contains("fn recover_turn"));
     assert!(
         source.contains("RequestKind::TurnResult"),
@@ -313,7 +328,7 @@ fn turn_result_recovery_exists_and_is_settled_by_exact_turn() {
 /// kept, and any needed history read uses the normal chain after the barrier.
 #[test]
 fn reload_does_not_stage_a_full_history_replacement() {
-    let source = include_str!("../src/app.rs");
+    let source = app_modules_source();
     assert!(!source.contains("struct ReloadHistoryStage"));
     assert!(!source.contains("fn install_reload_history"));
     assert!(source.contains("fn apply_reload"));
@@ -373,7 +388,7 @@ fn agent_stderr_is_never_stored_as_content() {
         !event.contains("AgentLogLine"),
         "no content-carrying stderr variant remains"
     );
-    let app = include_str!("../src/app.rs");
+    let app = app_modules_source();
     assert!(
         app.contains("fn push_stderr(&mut self, bytes: usize, dropped: usize)"),
         "the app records counts, not text"

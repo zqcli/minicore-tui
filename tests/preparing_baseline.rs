@@ -12,6 +12,21 @@ use minicore_tui::event::{AppEvent, RpcEvent};
 use minicore_tui::protocol::{IncomingFrame, OutgoingRequest, RpcResponse};
 use serde_json::{Value, json};
 
+/// The app state machine is split across `app.rs` and its child modules;
+/// these structural assertions read them as one source so each invariant
+/// keeps being checked wherever the implementation lives.
+fn app_modules_source() -> String {
+    [
+        include_str!("../src/app.rs"),
+        include_str!("../src/app/history.rs"),
+        include_str!("../src/app/session.rs"),
+        include_str!("../src/app/turn.rs"),
+        include_str!("../src/app/queries.rs"),
+        include_str!("../src/app/ui_actions.rs"),
+    ]
+    .join("\n")
+}
+
 struct Driver {
     app: App,
     queue: VecDeque<OutgoingRequest>,
@@ -150,7 +165,7 @@ fn baseline_cannot_cancel_a_preparing_submission_before_turn_ref() {
 /// inventing a local identity for cancellation.
 #[test]
 fn preparation_observes_context_and_operation_identity() {
-    let app_source = include_str!("../src/app.rs");
+    let app_source = app_modules_source();
     let protocol_source = include_str!("../src/protocol.rs");
     assert!(
         app_source.contains("request_session_context")
@@ -174,7 +189,7 @@ fn preparation_observes_context_and_operation_identity() {
 /// `baseline_only_registers_turn_wait_after_send`.
 #[test]
 fn wait_is_registered_once_and_turn_result_recovery_exists() {
-    let source = include_str!("../src/app.rs");
+    let source = app_modules_source();
     assert!(
         source.contains("RequestKind::WaitTurn("),
         "the normal path registers a single wait"

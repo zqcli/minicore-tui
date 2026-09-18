@@ -149,11 +149,18 @@ Landed and verified (each commit was tested remotely on Rust 1.85):
    pin/assembler/paging chain, gap reconciliation and `turn.result`
    recovery) moved out of `app.rs` into `pub(super)` methods in
    `app/history.rs`.
-9. This commit — the session lifecycle group (45 methods, ~2.1k lines:
+9. The session lifecycle group (45 methods, ~2.1k lines:
    create/open/close/delete/rename, the state/presentation/context reads and
    responses, and the catalog generation that owns `session.list`) moved into
-   `pub(super)` methods in `app/session.rs`; `app.rs` is now 12.6k lines and
-   keeps the owner, the event router, navigation and the small clocks.
+   `pub(super)` methods in `app/session.rs`.
+10. This commit — the turn state machine (47 methods, ~2.4k lines:
+   submission, the bounded steer queue, deferred `turn.wait`/`turn.result`
+   slots, cancellation, manual compaction and the local clipboard/stderr
+   jobs) moved into `pub(super)` methods in `app/turn.rs`; the
+   source-scanning baseline tests now read all app module files as one
+   source so they keep checking the same invariants. `app.rs` is now 10.1k
+   lines and keeps the owner, the event router, navigation and the small
+   clocks.
 
 Verified evidence at `c91a686`: `fmt` clean, `620 passed / 0 failed / 26
 ignored`, `clippy -D warnings` clean, tree md5
@@ -163,11 +170,11 @@ ignored`, `clippy -D warnings` clean, tree md5
 
 Still open in C1 (do not claim C1 complete):
 
-- `src/app.rs` (12.6k lines) is partially split: the read/result chain lives
-  in `app/history.rs` and the session lifecycle in `app/session.rs`, both as
-  real `pub(super)` methods. `app/turn.rs` (submit/steer/cancel/update
-  reducers) and the remaining `app/queries.rs` group are still inside
-  `app.rs`.
+- `src/app.rs` (10.1k lines) is partially split: the read/result chain
+  (`app/history.rs`), the session lifecycle (`app/session.rs`) and the turn
+  state machine (`app/turn.rs`) live as real `pub(super)` methods. The
+  query-slot/context-poll group is only half-out (`app/queries.rs` owns the
+  types) and the remaining reducers still sit in `app.rs`.
 - No real-Agent automatic-preparation E2E scenario has been added; the 21
   scenarios cover manual compaction but not `session.context.current_operation`
   preparation-on-submit.
