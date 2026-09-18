@@ -16,7 +16,7 @@ use unicode_segmentation::UnicodeSegmentation;
 /// Per-process cap on remembered submitted messages (spec 22.2/43.7).
 pub const MAX_HISTORY: usize = 100;
 /// Maximum UTF-8 bytes accepted by the prompt/steering composer.
-pub const MAX_COMPOSER_BYTES: usize = 256 * 1024;
+pub const MAX_COMPOSER_BYTES: usize = crate::limits::COMPOSER_DRAFT_BYTES;
 /// Fixed undo capacity keeps old snapshots from bypassing the draft budget.
 pub const MAX_COMPOSER_HISTORIES: usize = 128;
 
@@ -506,6 +506,11 @@ impl Composer {
         if self.history.back().is_none_or(|last| last != submitted) {
             self.history.push_back(submitted.to_owned());
             while self.history.len() > MAX_HISTORY {
+                self.history.pop_front();
+            }
+            while self.history.iter().map(String::len).sum::<usize>()
+                > crate::limits::COMPOSER_ALL_DRAFTS_BYTES
+            {
                 self.history.pop_front();
             }
         }
