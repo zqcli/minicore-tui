@@ -151,10 +151,9 @@ impl LocalJobs {
     /// active request is cooperatively cancelled through its token.
     pub fn try_schedule_layout(
         &mut self,
-        mut request: crate::ui::transcript::DurableLayoutRequest,
+        request: crate::ui::transcript::DurableLayoutRequest,
     ) -> bool {
-        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        request.cancel = Arc::clone(&cancel);
+        let cancel = Arc::clone(&request.cancel);
         let Some(sender) = self.layout_tx.as_ref() else {
             return false;
         };

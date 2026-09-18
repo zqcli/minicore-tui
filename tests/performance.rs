@@ -138,6 +138,25 @@ async fn production_layout_worker_installs_current_width_only() {
     assert_eq!(app.prepared_conversation(WIDTH).unwrap().width, WIDTH);
     assert!(app.prepared_conversation(WIDTH + 1).is_none());
     assert!(app.layout_request(WIDTH + 1).is_some());
+
+    app.update(AppEvent::Terminal(crossterm::event::Event::Key(
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('x'),
+            crossterm::event::KeyModifiers::empty(),
+        ),
+    )));
+    assert_eq!(app.composer.content(), "x");
+    assert!(app.prepared_conversation(WIDTH).is_some());
+
+    app.update(AppEvent::TerminalSize {
+        width: 100,
+        height: 24,
+    });
+    assert!(app.prepared_conversation(WIDTH).is_none());
+    let resized = WIDTH - 1;
+    install_worker_layout(&mut app, &mut jobs, resized).await;
+    assert_eq!(app.prepared_conversation(resized).unwrap().width, resized);
+    assert!(app.prepared_conversation(WIDTH).is_none());
     jobs.shutdown().await;
 }
 
@@ -149,6 +168,7 @@ async fn production_layout_worker_fences_stale_theme_result() {
 
     let first = app.layout_request(WIDTH).expect("initial layout request");
     let first_identity = first.identity.clone();
+    let first_cancel = std::sync::Arc::clone(&first.cancel);
     assert!(jobs.try_schedule_layout(first));
     app.mark_layout_pending(first_identity);
     let stale = jobs.events().recv().await.expect("first layout result");
@@ -160,6 +180,7 @@ async fn production_layout_worker_fences_stale_theme_result() {
     let second_identity = second.identity.clone();
     assert!(jobs.try_schedule_layout(second));
     app.mark_layout_pending(second_identity);
+    assert!(first_cancel.load(std::sync::atomic::Ordering::Relaxed));
 
     app.update(stale);
     assert!(app.prepared_conversation(WIDTH).is_none());
