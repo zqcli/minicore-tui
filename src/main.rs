@@ -960,7 +960,7 @@ mod tests {
             loop_id: "loop_unknown".to_owned(),
         });
         unknown.live = Some(unknown_live);
-        unknown.result_unconfirmed = true;
+        unknown.result_confirmation = minicore_tui::state::session::ResultConfirmation::NeedsRead;
 
         let mut known_failed = SessionView::new(info("known-failed"));
         known_failed.last_result = Some(
@@ -1067,7 +1067,7 @@ mod tests {
             loop_id: "loop_unknown".to_owned(),
         });
         unknown.live = Some(unknown_live);
-        unknown.result_unconfirmed = true;
+        unknown.result_confirmation = minicore_tui::state::session::ResultConfirmation::NeedsRead;
         let mut known_failed = SessionView::new(info("known-failed"));
         let mut known_live = LiveLoop::new(LocalSubmissionId(2), "known turn".to_owned());
         known_live.reference = Some(TurnRef {

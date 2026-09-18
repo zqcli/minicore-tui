@@ -82,7 +82,7 @@ pub fn render(frame: &mut Frame, app: &App) {
                 known_result: known_result.as_deref(),
                 unconfirmed: app
                     .active_view()
-                    .is_some_and(|view| view.result_unconfirmed),
+                    .is_some_and(|view| view.needs_result_confirmation()),
             },
         );
         return;

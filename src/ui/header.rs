@@ -31,7 +31,7 @@ pub fn visible(app: &App) -> bool {
             && !view.history_read.is_reconciling()
             && !view.history_read.post_wait_pending()
             && view.unsaved_loop.is_none()
-            && !view.result_unconfirmed
+            && view.result_confirmation == crate::state::session::ResultConfirmation::Confirmed
             && !view.closing
             && !view.close_verification_unknown
             && view.latest_state_query.is_none()

@@ -890,7 +890,7 @@ fn confirmed_empty_header_requires_known_idle_and_clean_lifecycle() {
         "history_reconcile",
         "history_post_wait",
         "unsaved_loop",
-        "result_unconfirmed",
+        "result_unknown",
     ] {
         let view = driver.app.sessions.known.get_mut("ses_1").unwrap();
         match fence {
@@ -909,7 +909,9 @@ fn confirmed_empty_header_requires_known_idle_and_clean_lifecycle() {
                     event_gap: false,
                 });
             }
-            "result_unconfirmed" => view.result_unconfirmed = true,
+            "result_unknown" => {
+                view.result_confirmation = minicore_tui::state::session::ResultConfirmation::Unknown
+            }
             _ => unreachable!(),
         }
         assert_startup_header(&driver.app, false);
@@ -917,7 +919,7 @@ fn confirmed_empty_header_requires_known_idle_and_clean_lifecycle() {
         view.event_gap = false;
         view.history_read.reset();
         view.unsaved_loop = None;
-        view.result_unconfirmed = false;
+        view.result_confirmation = minicore_tui::state::session::ResultConfirmation::Confirmed;
     }
     assert_startup_header(&driver.app, true);
 }
@@ -5962,7 +5964,7 @@ fn turn_result_cancelled_user_and_unknown() {
 }
 
 #[test]
-fn agent_exit_marks_live_result_unconfirmed_without_overwriting_known_result() {
+fn agent_exit_marks_the_outcome_unknown_without_overwriting_a_known_failure() {
     let mut driver = Driver::new();
     bootstrap(&mut driver);
     open_idle(&mut driver, "ses_1");
@@ -5980,7 +5982,11 @@ fn agent_exit_marks_live_result_unconfirmed_without_overwriting_known_result() {
     driver.step(AppEvent::Rpc(RpcEvent::Exited(None)));
 
     let view = &driver.app.sessions.known["ses_1"];
-    assert!(view.result_unconfirmed);
+    assert_eq!(
+        view.result_confirmation,
+        minicore_tui::state::session::ResultConfirmation::Unknown,
+        "transport loss leaves no read-back source"
+    );
     assert!(view.live.as_ref().is_some_and(|live| live.waiting));
     assert!(view.last_result.is_none());
     assert!(
@@ -6010,7 +6016,11 @@ fn agent_exit_marks_live_result_unconfirmed_without_overwriting_known_result() {
     known.respond(wait, wait_result("ses_1", "loop_failed", "failed"));
     known.step(AppEvent::Rpc(RpcEvent::Exited(None)));
     let view = &known.app.sessions.known["ses_1"];
-    assert!(!view.result_unconfirmed);
+    assert_eq!(
+        view.result_confirmation,
+        minicore_tui::state::session::ResultConfirmation::Confirmed,
+        "a known persistence failure is not transport uncertainty"
+    );
     assert!(view.last_result.is_some());
     assert!(view.unsaved_loop.is_some());
 }
@@ -6882,7 +6892,11 @@ fn lost_wait_result_recovers_through_turn_result() {
     assert_eq!(recover.params["turn"]["loop_id"], "loop_1");
     {
         let view = &driver.app.sessions.known["ses_1"];
-        assert!(view.result_unconfirmed, "a lost wait keeps the fence");
+        assert_eq!(
+            view.result_confirmation,
+            minicore_tui::state::session::ResultConfirmation::NeedsRead,
+            "a lost wait needs a read-back for the exact turn"
+        );
     }
 
     // `stored`: the turn really completed and was saved, so the authoritative
@@ -6905,9 +6919,10 @@ fn lost_wait_result_recovers_through_turn_result() {
         }),
     );
     let view = &driver.app.sessions.known["ses_1"];
-    assert!(
-        !view.result_unconfirmed,
-        "a stored persisted report clears the fence"
+    assert_eq!(
+        view.result_confirmation,
+        minicore_tui::state::session::ResultConfirmation::Confirmed,
+        "a stored persisted report settles the turn"
     );
     assert_eq!(
         view.last_result.as_ref().map(|r| r.turn.loop_id.as_str()),
@@ -6950,7 +6965,11 @@ fn pending_turn_result_keeps_the_unconfirmed_fence() {
         }),
     );
     let view = &driver.app.sessions.known["ses_1"];
-    assert!(view.result_unconfirmed, "pending keeps the fence");
+    assert_eq!(
+        view.result_confirmation,
+        minicore_tui::state::session::ResultConfirmation::NeedsRead,
+        "a pending report keeps the read chain"
+    );
     assert!(view.last_result.is_none(), "no result is fabricated");
     assert!(
         view.live
@@ -7012,7 +7031,17 @@ fn failed_turn_result_projects_authoritative_body_when_live_deltas_are_missing()
 
     let view = &driver.app.sessions.known["ses_1"];
     assert!(view.is_blocked());
-    assert!(view.result_unconfirmed);
+    assert_eq!(
+        view.result_confirmation,
+        minicore_tui::state::session::ResultConfirmation::Confirmed,
+        "the read reported the outcome; only the save is unconfirmed"
+    );
+    assert_eq!(
+        view.last_result
+            .as_ref()
+            .and_then(|result| result.persistence),
+        Some(minicore_tui::protocol::TurnPersistenceWire::Failed)
+    );
     assert_eq!(
         view.live.as_ref().unwrap().requests[0].text,
         "authoritative result body"

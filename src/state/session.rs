@@ -14,6 +14,28 @@ use crate::state::view::{FoldOverride, ReasoningKey};
 /// Session identity on the wire; a plain string like `"ses_1"`.
 pub type SessionId = String;
 
+/// How the final outcome of a live or retired turn is known.
+///
+/// This is a provenance type, not a boolean: each variant names the evidence
+/// that produced it and the action that can settle it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ResultConfirmation {
+    /// A `turn.wait` response or `turn.result` read-back reported the outcome.
+    /// `persistence = failed` is still a *known* failure: it is carried by the
+    /// result itself and never relabeled as transport uncertainty.
+    #[default]
+    Confirmed,
+    /// A read owns the question but has not answered it yet: the wait was
+    /// lost, the wait/read omitted `persistence`, the page was undecodable, or
+    /// the turn is still `pending`. Recovery: continue the `turn.result` chain
+    /// for the exact `TurnRef` and reconcile history when it settles.
+    NeedsRead,
+    /// The transport or the loop ended before any read-back could be trusted.
+    /// Recovery: a fresh `session.state` + `turn.result`/history read after
+    /// reconnecting; never `turn.send`.
+    Unknown,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UsageCompleteness {
     #[default]
@@ -198,8 +220,11 @@ pub struct SessionView {
     /// One bounded fence for events from the loop retired by close/reopen.
     /// This is not a result registry.
     pub retired_loop: Option<TurnRef>,
-    /// Set when transport loss prevents confirming the live turn result.
-    pub result_unconfirmed: bool,
+    /// Whether the last turn outcome is known, and from which source
+    /// (spec §3.4 `Confirmation`). Replaces the old `result_unconfirmed`
+    /// boolean so a failed save is no longer conflated with an unknown
+    /// outcome.
+    pub result_confirmation: ResultConfirmation,
     pub transcript: TranscriptState,
     pub live: Option<LiveLoop>,
     pub unsaved_loop: Option<UnsavedLoop>,
@@ -279,7 +304,7 @@ impl SessionView {
             live_request_usage: HashMap::new(),
             history_query_generation: 0,
             retired_loop: None,
-            result_unconfirmed: false,
+            result_confirmation: ResultConfirmation::default(),
             transcript: TranscriptState::default(),
             live: None,
             unsaved_loop: None,
@@ -301,6 +326,17 @@ impl SessionView {
             tool_folds: HashMap::new(),
             reasoning_folds: HashMap::new(),
         }
+    }
+
+    /// Whether the last known result still needs the user's attention before a
+    /// destructive lifecycle action: an unread outcome (`NeedsRead`/`Unknown`)
+    /// or a known failed save. This is not "history is fully loaded".
+    pub fn needs_result_confirmation(&self) -> bool {
+        self.result_confirmation != ResultConfirmation::Confirmed
+            || self
+                .last_result
+                .as_ref()
+                .is_some_and(|result| result.persistence == Some(TurnPersistenceWire::Failed))
     }
 
     /// Whether the session is currently blocked.

@@ -31,7 +31,7 @@ use crate::state::selection::{
     filtered_sessions, supported_reasoning,
 };
 use crate::state::session::{
-    HistoryTrigger, ManualCompactState, SessionId, SessionView, SessionsState,
+    HistoryTrigger, ManualCompactState, ResultConfirmation, SessionId, SessionView, SessionsState,
 };
 use crate::state::tool::{LiveTool, ToolKey, ToolPresentationState, ToolStatus};
 use crate::state::transcript::{
@@ -786,7 +786,7 @@ impl App {
                     .is_some_and(|result| result.persistence == Some(TurnPersistenceWire::Failed))
         });
         let unconfirmed = self.sessions.known.values().any(|view| {
-            view.result_unconfirmed
+            view.needs_result_confirmation()
                 || view.live.as_ref().is_some_and(|live| {
                     live.last_result
                         .as_ref()
@@ -2133,7 +2133,7 @@ impl App {
         if view.closing
             || view.live.is_some()
             || view.unsaved_loop.is_some()
-            || view.result_unconfirmed
+            || view.needs_result_confirmation()
             || view.is_blocked()
             || view
                 .state
@@ -5957,7 +5957,7 @@ impl App {
         let preserve_projection = self.sessions.known.get(session_id).is_some_and(|view| {
             view.live.is_some()
                 || view.unsaved_loop.is_some()
-                || view.result_unconfirmed
+                || view.needs_result_confirmation()
                 || view.event_gap
                 || view.closing
                 || view.close_verification_unknown
@@ -6574,7 +6574,7 @@ impl App {
                 Some(view) => (
                     view.is_blocked(),
                     view.unsaved_loop.is_some(),
-                    view.result_unconfirmed,
+                    view.needs_result_confirmation(),
                     view.live.is_some()
                         || view
                             .state
@@ -7335,10 +7335,10 @@ impl App {
             view.live_user_time_accepted = false;
             view.tool_presentations.clear();
             view.completed_steers.clear();
-            view.result_unconfirmed = view
-                .last_result
-                .as_ref()
-                .is_some_and(|result| result.persistence == Some(TurnPersistenceWire::Failed));
+            // A store record is a read fact: the outcome is Confirmed. A
+            // failed save stays visible through `last_result.persistence` and
+            // `needs_result_confirmation()`.
+            view.result_confirmation = ResultConfirmation::Confirmed;
         }
         let opened_id = session_id.clone();
         let during_reload = self.reload.is_some();
@@ -8533,7 +8533,7 @@ impl App {
             // result that does not belong to the live loop.
             view.last_request = None;
             view.completed_steers.clear();
-            view.result_unconfirmed = false;
+            view.result_confirmation = ResultConfirmation::Confirmed;
             if view.config_update.as_ref().is_some_and(|u| {
                 u.loop_id.is_some() || u.state == crate::state::session::ConfigUpdateState::Applied
             }) {
@@ -8872,7 +8872,7 @@ impl App {
                             {
                                 view.last_result = None;
                             }
-                            view.result_unconfirmed = false;
+                            view.result_confirmation = ResultConfirmation::Confirmed;
                             live.reference = Some(result.turn.clone());
                             view.live_user_timestamp = result.accepted_at.clone();
                             view.live_user_time_accepted = true;
@@ -9142,7 +9142,7 @@ impl App {
             // instead of assuming the turn never completed (spec §7.2/§8.4).
             // This never reruns a tool.
             if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
-                view.result_unconfirmed = true;
+                view.result_confirmation = ResultConfirmation::NeedsRead;
                 if let Some(live) = view.live.as_mut() {
                     live.waiting = true;
                 }
@@ -9156,7 +9156,7 @@ impl App {
                 "turn.wait did not report persistence; result remains unconfirmed",
             );
             if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
-                view.result_unconfirmed = true;
+                view.result_confirmation = ResultConfirmation::NeedsRead;
             }
             return self.recover_turn(turn).into_iter().collect();
         }
@@ -9252,7 +9252,9 @@ impl App {
         if !Self::wait_targets_current_turn(view, turn) {
             return;
         }
-        view.result_unconfirmed = true;
+        // The read-back itself reported `persistence = failed`: the failure is
+        // known, so the outcome is Confirmed and only the save is unconfirmed.
+        view.result_confirmation = ResultConfirmation::Confirmed;
         if let Some(state) = view.state.as_mut() {
             state.status = SessionStatusWire::Blocked;
             state.active_loop = None;
@@ -9372,7 +9374,7 @@ impl App {
             .apply_page(&page);
         if let Err(error) = apply_result {
             if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
-                view.result_unconfirmed = true;
+                view.result_confirmation = ResultConfirmation::NeedsRead;
                 Self::mark_pending_steers_unconfirmed(view);
             }
             self.notice(
@@ -9390,8 +9392,13 @@ impl App {
             if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
                 if Self::wait_targets_current_turn(view, turn) {
                     view.last_result = Some(result.clone());
-                    view.result_unconfirmed =
-                        result.persistence != Some(TurnPersistenceWire::Persisted);
+                    // Any reported persistence (including `failed`) is
+                    // evidence about the outcome; a page that omits it is not.
+                    view.result_confirmation = if result.persistence.is_none() {
+                        ResultConfirmation::NeedsRead
+                    } else {
+                        ResultConfirmation::Confirmed
+                    };
                     if let Some(live) = view.live.as_mut() {
                         if live.reference.as_ref() == Some(turn) {
                             live.last_result = Some(result.clone());
@@ -9437,7 +9444,7 @@ impl App {
         if page.availability == TurnAvailability::Pending {
             if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
                 if Self::wait_targets_current_turn(view, turn) {
-                    view.result_unconfirmed = true;
+                    view.result_confirmation = ResultConfirmation::NeedsRead;
                     if let Some(live) = view.live.as_mut() {
                         live.waiting = true;
                     }
@@ -9457,7 +9464,7 @@ impl App {
         };
         if result.persistence.is_none() {
             if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
-                view.result_unconfirmed = true;
+                view.result_confirmation = ResultConfirmation::NeedsRead;
             }
             self.notice(
                 NoticeLevel::Warning,
@@ -9937,10 +9944,7 @@ impl App {
                     .get(&turn.session_id)
                     .is_some_and(|view| Self::wait_targets_current_turn(view, &turn));
                 if result_is_current {
-                    if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
-                        view.result_unconfirmed = true;
-                        Self::mark_pending_steers_unconfirmed(view);
-                    }
+                    self.mark_result_read_failed(&turn.session_id);
                 }
                 self.notice(
                     NoticeLevel::Warning,
@@ -10242,6 +10246,20 @@ impl App {
         }
     }
 
+    /// A read-back request could not be issued at all: a live loop still needs
+    /// a read (the chain retries when the transport returns), while a retired
+    /// loop can only be settled by a fresh read after reconnecting.
+    fn mark_result_read_failed(&mut self, session_id: &SessionId) {
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            view.result_confirmation = if view.live.is_some() {
+                ResultConfirmation::NeedsRead
+            } else {
+                ResultConfirmation::Unknown
+            };
+            Self::mark_pending_steers_unconfirmed(view);
+        }
+    }
+
     fn on_rpc_channel_ended(&mut self) -> Vec<AppCommand> {
         if self.connection == ConnectionState::ShuttingDown {
             self.shutdown_child_exited = true;
@@ -10295,7 +10313,7 @@ impl App {
                 if let Some(live) = view.live.as_mut() {
                     if live.last_result.is_none() {
                         live.waiting = true;
-                        view.result_unconfirmed = true;
+                        view.result_confirmation = ResultConfirmation::Unknown;
                         unconfirmed = true;
                     }
                 }
