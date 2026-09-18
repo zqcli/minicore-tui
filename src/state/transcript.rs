@@ -3,6 +3,8 @@
 //! There are no synthetic terminal blocks: past history is rendered strictly
 //! from durable items.
 
+use std::sync::Arc;
+
 use crate::protocol::{
     Reasoning, ToolCallViewWire, ToolOutcomeWire, UsageWire, UserMessageKindWire,
 };
@@ -93,7 +95,10 @@ pub struct HistoryPlaceholderBlock {
 /// The accumulated durable history of one session.
 #[derive(Debug, Default)]
 pub struct TranscriptState {
-    pub blocks: Vec<TranscriptBlock>,
+    /// Durable transcript blocks. `Arc` so a layout request can snapshot the
+    /// whole transcript with one refcount bump instead of copying every
+    /// string; mutation is copy-on-write through [`Self::blocks_mut`].
+    pub blocks: Arc<Vec<TranscriptBlock>>,
     /// The authoritative pinned window of decoded Runtime items. Render blocks
     /// may expand one item into several cards, so their length is unrelated.
     pub window: crate::app::history::HistoryWindow,
@@ -128,9 +133,15 @@ impl TranscriptState {
         self.render_cache = None;
     }
 
+    /// Copy-on-write access to the durable blocks. A layout job that holds a
+    /// snapshot `Arc` keeps its own copy; the next mutation clones once.
+    pub fn blocks_mut(&mut self) -> &mut Vec<TranscriptBlock> {
+        Arc::make_mut(&mut self.blocks)
+    }
+
     /// Clears blocks and invalidates prepared conversation metadata.
     pub fn clear_blocks(&mut self) {
-        self.blocks.clear();
+        self.blocks_mut().clear();
         self.window.reset();
         self.next_cursor = None;
         self.loaded_count = 0;

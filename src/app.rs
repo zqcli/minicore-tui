@@ -5312,7 +5312,7 @@ fn install_history_placeholder(view: &mut SessionView, index: usize, total_bytes
         return;
     }
     view.transcript
-        .blocks
+        .blocks_mut()
         .push(TranscriptBlock::HistoryPlaceholder(
             HistoryPlaceholderBlock { index, total_bytes },
         ));
@@ -5339,7 +5339,7 @@ fn install_history_item(
             };
             let replaced = view
                 .transcript
-                .blocks
+                .blocks_mut()
                 .iter_mut()
                 .rev()
                 .find_map(|block| match block {
@@ -5360,7 +5360,7 @@ fn install_history_item(
                 card.pending = false;
             } else if !has_item_index(&view.transcript.blocks, index) {
                 view.transcript
-                    .blocks
+                    .blocks_mut()
                     .push(TranscriptBlock::User(UserBlock {
                         index: Some(index),
                         loop_id: Some(user.loop_id.clone()),
@@ -5420,7 +5420,7 @@ fn install_history_item(
                 })
                 .unwrap_or_default();
             view.transcript
-                .blocks
+                .blocks_mut()
                 .push(TranscriptBlock::Assistant(AssistantBlock {
                     index,
                     loop_id: assistant.loop_id.clone(),
@@ -5435,7 +5435,7 @@ fn install_history_item(
                 }));
             for call in &tool_calls {
                 view.transcript
-                    .blocks
+                    .blocks_mut()
                     .push(TranscriptBlock::Tool(ToolBlock {
                         index: None,
                         loop_id: assistant.loop_id.clone(),
@@ -5467,21 +5467,21 @@ fn install_history_item(
                 result.outcome.clone(),
             ))
             .unwrap_or(ToolOutcomeWire::Unknown);
-            let patched = view
-                .transcript
-                .blocks
-                .iter_mut()
-                .rev()
-                .find_map(|block| match block {
-                    TranscriptBlock::Tool(tool)
-                        if tool.tool_call_id == result.call_id
-                            && tool.loop_id == result.loop_id
-                            && tool.request_index == result.request_index =>
-                    {
-                        Some(tool)
-                    }
-                    _ => None,
-                });
+            let patched =
+                view.transcript
+                    .blocks_mut()
+                    .iter_mut()
+                    .rev()
+                    .find_map(|block| match block {
+                        TranscriptBlock::Tool(tool)
+                            if tool.tool_call_id == result.call_id
+                                && tool.loop_id == result.loop_id
+                                && tool.request_index == result.request_index =>
+                        {
+                            Some(tool)
+                        }
+                        _ => None,
+                    });
             if let Some(tool) = patched {
                 if tool.index.is_none() {
                     tool.index = Some(index);
@@ -5490,7 +5490,7 @@ fn install_history_item(
                 tool.outcome = Some(outcome);
             } else if !has_item_index(&view.transcript.blocks, index) {
                 view.transcript
-                    .blocks
+                    .blocks_mut()
                     .push(TranscriptBlock::Tool(ToolBlock {
                         index: Some(index),
                         loop_id: result.loop_id.clone(),
@@ -5521,7 +5521,7 @@ fn install_history_item(
                 return;
             }
             view.transcript
-                .blocks
+                .blocks_mut()
                 .push(TranscriptBlock::Summary(SummaryBlock {
                     index,
                     content: summary.content.clone(),
@@ -8842,7 +8842,7 @@ mod tests {
             let view = app.sessions.known.get_mut("ses_1").unwrap();
             for index in 0..24 {
                 view.transcript
-                    .blocks
+                    .blocks_mut()
                     .push(TranscriptBlock::Assistant(AssistantBlock {
                         index,
                         loop_id: format!("history_{index}"),

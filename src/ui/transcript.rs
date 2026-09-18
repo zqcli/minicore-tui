@@ -253,7 +253,7 @@ fn build_durable_prepared(
     // resolved in O(1), never by scanning every block for each tool.
     let mut tool_index: std::collections::HashMap<(&str, u32, &str), &ToolBlock> =
         std::collections::HashMap::new();
-    for block in &view.transcript.blocks {
+    for block in view.transcript.blocks.iter() {
         if let TranscriptBlock::Tool(tool) = block {
             tool_index.insert(
                 (

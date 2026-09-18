@@ -1616,7 +1616,7 @@ pub(super) fn set_all_tools_expanded(view: &mut SessionView, expanded: bool) {
             _ => None,
         })
         .collect::<Vec<_>>();
-    for block in &mut view.transcript.blocks {
+    for block in view.transcript.blocks_mut() {
         if let TranscriptBlock::Tool(tool) = block {
             tool.expanded = expanded;
         }
@@ -1887,7 +1887,7 @@ pub(super) fn toggle_tool(
         )
     });
     let expanded = !current;
-    for block in &mut view.transcript.blocks {
+    for block in view.transcript.blocks_mut() {
         if let TranscriptBlock::Tool(tool) = block {
             if tool.loop_id == loop_id
                 && tool.request_index == request_index

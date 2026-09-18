@@ -489,7 +489,7 @@ fn steer_identity_app(count: u32, steer_id: u32) -> crate::app::App {
     if let Some(view) = app.sessions.known.get_mut("ses_1") {
         for index in 0..count {
             view.transcript
-                .blocks
+                .blocks_mut()
                 .push(TranscriptBlock::User(UserBlock {
                     index: Some(index as usize),
                     loop_id: Some("loop_live".to_owned()),
@@ -586,7 +586,7 @@ fn provisional_steer_selection_never_rebases_onto_a_wrong_durable_user() {
     // matching applied (receipt-proven) provisional card is removed.
     if let Some(view) = app.sessions.known.get_mut("ses_1") {
         view.transcript
-            .blocks
+            .blocks_mut()
             .push(TranscriptBlock::User(UserBlock {
                 index: Some(8),
                 loop_id: Some("loop_live".to_owned()),

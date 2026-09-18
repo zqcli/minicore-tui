@@ -317,7 +317,7 @@ fn stale_durable_tool_toggle_cannot_mutate_the_current_live_card() {
         .unwrap()
         .expanded = true;
     view.transcript
-        .blocks
+        .blocks_mut()
         .push(TranscriptBlock::Tool(ToolBlock {
             index: Some(99),
             loop_id: "loop_old".to_owned(),
@@ -359,7 +359,7 @@ fn prepared_section_ids_survive_tool_result_updates() {
         .map(|section| section.id)
         .collect();
     let view = app.sessions.known.get_mut("ses_1").unwrap();
-    for block in &mut view.transcript.blocks {
+    for block in view.transcript.blocks_mut() {
         if let TranscriptBlock::Tool(tool) = block {
             if tool.tool_call_id == "call-1" {
                 tool.result = Some("a changed result\nwith another line".to_owned());
@@ -406,7 +406,7 @@ fn selection_rebases_when_older_history_prepends_rows() {
     app.update(AppEvent::ConversationPrepared(first));
 
     let view = app.sessions.known.get_mut("ses_1").unwrap();
-    view.transcript.blocks.insert(
+    view.transcript.blocks_mut().insert(
         0,
         TranscriptBlock::User(UserBlock {
             index: Some(99),
@@ -908,7 +908,7 @@ fn cached_and_fallback_transcripts_have_identical_section_spacing() {
         .get_mut("ses_1")
         .unwrap()
         .transcript
-        .blocks = vec![
+        .blocks = std::sync::Arc::new(vec![
         TranscriptBlock::User(UserBlock {
             index: Some(1),
             loop_id: Some("turn".to_owned()),
@@ -944,7 +944,7 @@ fn cached_and_fallback_transcripts_have_identical_section_spacing() {
             progress: None,
             expanded: false,
         }),
-    ];
+    ]);
 
     let fallback = transcript::all_lines(&theme, &app, 80);
     let prepared = transcript::prepare_conversation(&app, 80);

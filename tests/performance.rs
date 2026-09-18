@@ -67,7 +67,7 @@ fn app_with_history(messages: usize, bytes_per_message: usize) -> App {
     let body = "lorem ipsum dolor sit amet ".repeat(bytes_per_message / 27 + 1);
     for index in 0..messages {
         view.transcript
-            .blocks
+            .blocks_mut()
             .push(TranscriptBlock::Assistant(AssistantBlock {
                 index,
                 loop_id: format!("lup_perf_{index}"),

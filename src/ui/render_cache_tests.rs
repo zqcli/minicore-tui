@@ -89,7 +89,7 @@ fn make_test_app(item_count: usize) -> App {
     );
     for i in 0..item_count {
         view.transcript
-            .blocks
+            .blocks_mut()
             .push(TranscriptBlock::Assistant(AssistantBlock {
                 index: i,
                 loop_id: format!("loop_{i}"),
@@ -246,7 +246,7 @@ fn durable_history_mutation_invalidates_and_reparses() {
     // Mutate durable history
     let view = app.sessions.known.get_mut("ses_test").unwrap();
     view.transcript
-        .blocks
+        .blocks_mut()
         .push(TranscriptBlock::Assistant(AssistantBlock {
             index: 1,
             loop_id: "loop_1".into(),
@@ -483,7 +483,7 @@ fn live_tool_fold_survives_presentation_finish_wait_and_history_replacement() {
     {
         let view = app.sessions.known.get_mut("ses_1").unwrap();
         view.transcript
-            .blocks
+            .blocks_mut()
             .push(TranscriptBlock::Assistant(AssistantBlock {
                 index: 0,
                 loop_id: "old_loop".to_owned(),
@@ -566,7 +566,7 @@ fn live_tool_fold_survives_presentation_finish_wait_and_history_replacement() {
         });
         view.live = None;
         view.transcript
-            .blocks
+            .blocks_mut()
             .push(TranscriptBlock::Tool(ToolBlock {
                 index: Some(1),
                 loop_id: "loop_live".to_owned(),
@@ -737,7 +737,7 @@ fn consecutive_user_cards_keep_one_transparent_gap_across_all_user_paths() {
 
     let mut live = user_gap_app("prompt");
     let view = live.sessions.known.get_mut("ses_1").unwrap();
-    view.transcript.blocks.pop();
+    view.transcript.blocks_mut().pop();
     add_live(view, 1);
     view.applied_steers.push(AppliedSteer {
         local_id: 1,
