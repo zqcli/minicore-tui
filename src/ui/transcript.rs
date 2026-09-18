@@ -955,13 +955,18 @@ fn make_section_layout(
         .join("\n")
         .into();
     let mut offset = 0;
-    let hard_break_rows = source_hint.is_some_and(|source| source.contains('\n'));
     let last_content_row = row_texts
         .iter()
         .enumerate()
         .rev()
         .find(|(_, (text, decorative))| !*decorative && !text.is_empty())
         .map_or(0, |(row, _)| row);
+    let hard_break_rows = hard_break_rows(
+        source_hint,
+        &row_texts,
+        range.content_columns.end.saturating_sub(range.content_columns.start),
+        last_content_row,
+    );
     let copy_ranges: Vec<CopyRange> = row_texts
         .into_iter()
         .enumerate()
@@ -975,7 +980,7 @@ fn make_section_layout(
                 columns: range.content_columns.clone(),
                 source: Arc::clone(&source),
                 source_range: start..end,
-                hard_break_after: hard_break_rows || row == last_content_row,
+                hard_break_after: hard_break_rows.get(row).copied().unwrap_or(false),
                 decorative,
             }
         })
@@ -1005,6 +1010,55 @@ fn make_section_layout(
         collapsible,
         folded,
     }))
+}
+
+fn hard_break_rows(
+    source: Option<&str>,
+    rows: &[(String, bool)],
+    width: usize,
+    last_content_row: usize,
+) -> Vec<bool> {
+    let mut breaks = vec![false; rows.len()];
+    let content_rows: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(row, (text, decorative))| (!*decorative && !text.is_empty()).then_some(row))
+        .collect();
+    let Some(source) = source else {
+        if last_content_row < breaks.len() {
+            breaks[last_content_row] = true;
+        }
+        return breaks;
+    };
+    if !source.contains('\n') {
+        if last_content_row < breaks.len() {
+            breaks[last_content_row] = true;
+        }
+        return breaks;
+    }
+    let mut cursor = 0;
+    for logical_line in source.split('\n') {
+        if cursor >= content_rows.len() {
+            break;
+        }
+        let visual_rows = wrap_plain(
+            logical_line,
+            width.max(1),
+            Style::default(),
+        )
+        .len()
+        .max(1);
+        let end = cursor
+            .saturating_add(visual_rows)
+            .saturating_sub(1)
+            .min(content_rows.len().saturating_sub(1));
+        breaks[content_rows[end]] = true;
+        cursor = end.saturating_add(1);
+    }
+    if last_content_row < breaks.len() {
+        breaks[last_content_row] = true;
+    }
+    breaks
 }
 
 fn needs_user_gap(previous: Option<SectionKind>, current: SectionKind) -> bool {
