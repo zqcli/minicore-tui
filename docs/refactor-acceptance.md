@@ -17,8 +17,9 @@ Status legend:
 
 ## Current evidence (commit `d47d837`)
 
-Raw logs are on the builder at `/root/minicore-tui-v03-refactor/`; the three
-C1 logs are `c1-io-tests4.log`, `c1-history-tests.log` and `c1-io-clippy.log`.
+Raw logs are on the builder at `/root/minicore-tui-v03-refactor/`. The
+verification of this exact tree is `c1-final-tests4.log`; the per-slice logs
+are `c1-io-tests4.log`, `c1-history-tests.log` and `c1-io-clippy.log`.
 
 ```bash
 # remote /root/minicore-tui-v03-refactor/tui, RUSTUP_TOOLCHAIN=1.85.0

@@ -223,11 +223,17 @@ python3 scripts/generate_agent_v1_fixtures.py \
 cargo test --release --locked --test performance -- --ignored --nocapture
 ```
 
-Last verified result (C1, commit `d47d837`): `fmt` clean, `test` 610 passed /
-0 failed / 23 ignored, `clippy -D warnings` clean, all under Rust 1.85. Raw
-logs: `/root/minicore-tui-v03-refactor/c1-io-tests4.log`,
-`c1-history-tests.log`, `c1-io-clippy.log`. Earlier B1/B2 logs are
-`b1-*.log` / `b2-*.log`.
+Last verified result (C1, commit `d47d837`, log `c1-final-tests4.log`): `fmt`
+clean, `test` 610 passed / 0 failed / 23 ignored, `clippy -D warnings` clean,
+all under Rust 1.85. Per-slice logs: `c1-io-tests4.log`, `c1-history-tests.log`,
+`c1-io-clippy.log`; earlier B1/B2 logs are `b1-*.log` / `b2-*.log`. The 18
+real-Agent E2E scenarios were also run against the pinned binary and all pass
+(`c1-agent-e2e.log`).
+
+When reusing the existing `tui-target` directory after an rsync, run
+`cargo clean -p minicore-tui` (or touch the sources) before the build: rsync
+preserves source mtimes, and a newer stale rlib otherwise shadows the synced
+source, producing confusing "variant not found" errors.
 
 The 23 ignored tests are the 18 real-Agent E2E scenarios plus 5 release/perf
 tests; they are not evidence. `docs/refactor-acceptance.md` tracks which
