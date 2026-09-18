@@ -2,7 +2,7 @@
  "fixture": "session-presentation-idle",
  "method": "session.presentation",
  "request": {
-  "session_id": "ses_cae39f42d4818af89247030aa5a2d3c0"
+  "session_id": "ses_ad0fee94fecc678df6c21163a02f5bb9"
  },
  "result": {
   "context": {
@@ -15,7 +15,7 @@
   "git_branch": null,
   "last_loop": null,
   "model_label": "deep",
-  "session_id": "ses_cae39f42d4818af89247030aa5a2d3c0",
+  "session_id": "ses_ad0fee94fecc678df6c21163a02f5bb9",
   "using_subscription": null
  }
 }

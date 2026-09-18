@@ -4,7 +4,7 @@
  "request": {
   "change_ref": "<opaque>",
   "max_bytes": 2048,
-  "session_id": "ses_f4e4f611638979907579605166ac5ef8"
+  "session_id": "ses_c40e87e3bb457a2f18feec830f5694df"
  },
  "result": {
   "availability": "available",
@@ -14,7 +14,7 @@
    "sha256": "35e0393811f794547c34763eb5773d6cddb295dc4f372180ed4aae67da3ea45f"
   },
   "binary": false,
-  "change_ref": "workspace:WyJzZXNfZjRlNGY2MTE2Mzg5Nzk5MDc1Nzk2MDUxNjZhYzVlZjgiLCI3ZjVmZDk1MjQzOTJkNjg0N2NkYWViNTY1NmYyOTYwM2IxNTRhOWNlIix7InBhdGgiOiJzcmMvbWFpbi5ycyIsImtpbmQiOiJvcmRpbmFyeSIsImluZGV4X3N0YXR1cyI6Ii4iLCJ3b3JrdHJlZV9zdGF0dXMiOiJNIiwib3JpZ2luYWxfcGF0aCI6bnVsbH1d",
+  "change_ref": "workspace:WyJzZXNfYzQwZTg3ZTNiYjQ1N2EyZjE4ZmVlYzgzMGY1Njk0ZGYiLCJjZWFjZmEyMDI4NjRkZGI0NzRmNmIxZDVjOGQ4MDAxZDJkZWMzOTkyIix7InBhdGgiOiJzcmMvbWFpbi5ycyIsImtpbmQiOiJvcmRpbmFyeSIsImluZGV4X3N0YXR1cyI6Ii4iLCJ3b3JrdHJlZV9zdGF0dXMiOiJNIiwib3JpZ2luYWxfcGF0aCI6bnVsbH1d",
   "commit_state": "unknown",
   "comparison": "index_to_worktree",
   "complete": true,

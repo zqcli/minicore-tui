@@ -28,6 +28,84 @@ fn manifest() -> Value {
     serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
 }
 
+/// Every fixture the manifest lists must exist on disk, and no extra JSON
+/// fixture may exist. This is what caught the earlier
+/// `session-state-running-preparing` mismatch.
+#[test]
+fn manifest_fixtures_match_the_files_on_disk() {
+    let manifest = manifest();
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/agent-v1");
+    let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|entry| {
+            let entry = entry.unwrap();
+            let name = entry.file_name().into_string().unwrap();
+            (name.ends_with(".json") && name != "manifest.json")
+                .then(|| name.trim_end_matches(".json").to_owned())
+        })
+        .collect();
+    on_disk.sort();
+    let mut listed: Vec<String> = manifest["fixtures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_owned())
+        .collect();
+    listed.sort();
+    assert_eq!(
+        listed, on_disk,
+        "manifest `fixtures` must equal the JSON files on disk"
+    );
+
+    // Every disclosed gap names a class that is really absent.
+    for gap in manifest["not_reproducible_against_the_real_process"]
+        .as_array()
+        .unwrap()
+    {
+        let name = gap["fixture"].as_str().unwrap();
+        assert!(
+            !on_disk.iter().any(|file| file == name),
+            "disclosed gap {name} must not also ship as a fixture"
+        );
+        assert!(
+            !gap["reason"].as_str().unwrap().is_empty(),
+            "gap {name} must state why it is absent"
+        );
+    }
+
+    // The provenance partition must exactly partition the fixtures, and every
+    // synthetic fixture must name the real fixture it derives from.
+    let provenance = &manifest["provenance"];
+    let real: Vec<String> = provenance["real_process"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_owned())
+        .collect();
+    let synthetic: Vec<String> = provenance["source_deterministic"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_owned())
+        .collect();
+    let mut union: Vec<String> = real.iter().chain(&synthetic).cloned().collect();
+    union.sort();
+    assert_eq!(union, on_disk, "provenance must partition the fixtures");
+    assert!(
+        !synthetic.is_empty(),
+        "the source-deterministic set must be labelled"
+    );
+    for name in &synthetic {
+        let entry = fixture(name);
+        assert_eq!(entry["provenance"], "source_deterministic");
+        let derived = entry["derived_from"].as_str().unwrap();
+        assert!(
+            real.contains(&derived.to_owned()),
+            "{name} must derive from a real fixture"
+        );
+    }
+}
+
 #[test]
 fn manifest_pins_the_fixed_backend_and_protocol() {
     let manifest = manifest();
@@ -204,27 +282,7 @@ fn tool_output_streams_use_raw_byte_offsets() {
     assert_eq!(stdout["encoding"], "base64");
     assert_eq!(stdout["stream"], "stdout");
     // base64 data length is not the offset: `next_offset` counts decoded bytes.
-    let decoded = {
-        use std::io::Read;
-        // No base64 crate dependency in stage A; manual decode via a tiny table.
-        const TABLE: &[u8; 64] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let text = stdout["data"].as_str().unwrap().trim_end_matches('=');
-        let mut out = Vec::new();
-        let mut buffer = 0u32;
-        let mut bits = 0u32;
-        for byte in text.bytes() {
-            let value = TABLE.iter().position(|b| *b == byte).unwrap() as u32;
-            buffer = (buffer << 6) | value;
-            bits += 6;
-            if bits >= 8 {
-                bits -= 8;
-                out.push((buffer >> bits) as u8);
-            }
-        }
-        let _ = &mut std::io::empty().read(&mut []);
-        out
-    };
+    let decoded = decode_base64(stdout["data"].as_str().unwrap());
     assert_eq!(
         decoded.len() as u64,
         stdout["next_offset"].as_u64().unwrap()
@@ -238,6 +296,120 @@ fn tool_output_streams_use_raw_byte_offsets() {
         output["next_offset"].as_u64().unwrap() as usize,
         output["data"].as_str().unwrap().len()
     );
+}
+
+/// Minimal standard-alphabet base64 decode for the wire assertions, without
+/// adding a dependency in stage A.
+fn decode_base64(text: &str) -> Vec<u8> {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let text = text.trim_end_matches('=');
+    let mut out = Vec::new();
+    let mut buffer = 0u32;
+    let mut bits = 0u32;
+    for byte in text.bytes() {
+        let value = TABLE.iter().position(|b| *b == byte).unwrap() as u32;
+        buffer = (buffer << 6) | value;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buffer >> bits) as u8);
+        }
+    }
+    out
+}
+
+/// A genuinely empty stdout stream that reached EOF is `available`, not
+/// "no output". This is a real captured page from `bash true`.
+#[test]
+fn empty_stdout_reaches_clean_eof_not_a_fabricated_absence() {
+    let stdout = &fixture("tool-output-clean-empty-eof-stdout")["result"];
+    assert_eq!(stdout["availability"], "available");
+    assert_eq!(stdout["data"], "");
+    assert_eq!(stdout["eof"], true);
+    assert_eq!(stdout["next_offset"], 0);
+    assert_eq!(stdout["observed_end"], 0);
+
+    let exec = &fixture("tool-read-clean-empty")["result"]["execution"];
+    assert_eq!(exec["state"], "succeeded");
+    assert_eq!(exec["output_availability"], "available");
+}
+
+/// Real manual compaction: `noop` on empty history and `compacted` after a
+/// utility summary reduces the estimate. Both are real Agent results.
+#[test]
+fn manual_compaction_reports_noop_and_compacted() {
+    let noop = &fixture("session-compact-noop")["result"];
+    assert_eq!(noop["status"], "noop");
+    assert!(noop["utility_usage"].is_null());
+
+    let compacted = &fixture("session-compact-compacted")["result"];
+    assert_eq!(compacted["status"], "compacted");
+    assert!(
+        compacted["before_tokens"].as_u64().unwrap() > compacted["after_tokens"].as_u64().unwrap()
+    );
+    assert_eq!(compacted["utility_usage"]["complete"], true);
+
+    let context = &fixture("session-context-after-compact")["result"];
+    assert!(context["coverage"]["covered_loop_count"].as_u64().unwrap() > 0);
+    assert_eq!(context["last_result"]["status"], "compacted");
+}
+
+/// A stale changes cursor is reported as stale, never silently spliced.
+#[test]
+fn stale_changes_cursor_is_reported_not_continued() {
+    let page = &fixture("changes-list-page")["result"];
+    assert!(page["next_cursor"].is_object());
+    let stale = &fixture("changes-list-stale")["result"];
+    assert_eq!(stale["stale"], true);
+    assert!(stale["records"].as_array().unwrap().is_empty());
+    assert!(stale["next_cursor"].is_null());
+    assert_eq!(stale["complete"], false);
+}
+
+/// Source-deterministic fixtures stay within the pinned Agent's documented
+/// wire shapes: the impossible-to-sample states are still exact DTOs.
+#[test]
+fn synthetic_states_use_documented_wire_shapes() {
+    let preparing = &fixture("session-context-preparing")["result"];
+    assert_eq!(preparing["current_operation"]["phase"], "preparing");
+    assert!(preparing["current_operation"]["operation_id"].is_string());
+
+    let blocked = &fixture("session-state-blocked")["result"];
+    assert_eq!(blocked["block_reason"], "persistence");
+
+    let readonly = &fixture("session-state-compaction")["result"];
+    assert_eq!(readonly["compaction"]["phase"], "summarizing");
+
+    let failed = &fixture("session-compact-failed")["result"];
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(failed["failure_kind"], "context_uncompressible");
+    assert_eq!(failed["utility_usage"]["complete"], false);
+
+    let unknown = &fixture("session-compact-unknown-write")["result"];
+    assert_eq!(unknown["status"], "unknown_write");
+
+    let expired = &fixture("tool-output-expired")["result"];
+    assert_eq!(expired["availability"], "expired");
+    assert_eq!(expired["eof"], true);
+    assert_eq!(expired["next_offset"], expired["observed_end"]);
+
+    let partial = &fixture("tool-output-partial")["result"];
+    assert_eq!(partial["availability"], "partial");
+    assert_eq!(partial["truncated"], true);
+
+    for name in ["workspace-files-deadline", "workspace-search-deadline"] {
+        let deadline = &fixture(name)["result"];
+        assert_eq!(deadline["stopped_by"], "deadline");
+        assert_eq!(deadline["scan_complete"], false);
+    }
+
+    let truncated = &fixture("session-read-records-truncated")["result"];
+    assert_eq!(truncated["records_truncated"], true);
+
+    let live_failed = &fixture("turn-result-live-failed")["result"];
+    assert_eq!(live_failed["availability"], "live");
+    assert_eq!(live_failed["persistence"], "failed");
+    assert!(live_failed["completed_at"].is_null());
 }
 
 #[test]
@@ -306,12 +478,13 @@ fn changes_list_and_diff_keep_opaque_refs_and_structured_hunks() {
     assert_eq!(list["scope"], "workspace");
     let record = &list["records"][0];
     assert_eq!(record["origin"], "workspace_unknown");
-    // The token is opaque base64url; the fixture must not have parsed it.
+    // The ref is opaque: assert only that it is a non-empty string the client
+    // can pass back unchanged, not that it has any parseable prefix.
+    let change_ref = record["change_ref"].as_str().unwrap();
+    assert!(!change_ref.is_empty());
     assert!(
-        record["change_ref"]
-            .as_str()
-            .unwrap()
-            .starts_with("workspace:")
+        change_ref.is_ascii(),
+        "opaque change_ref must be transmittable verbatim"
     );
 
     let diff = &fixture("changes-diff-workspace")["result"];

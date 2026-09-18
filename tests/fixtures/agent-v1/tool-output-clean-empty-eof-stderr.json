@@ -1,0 +1,30 @@
+{
+ "fixture": "tool-output-clean-empty-eof-stderr",
+ "method": "tool.output",
+ "request": {
+  "loop_id": "lup_9c861fdb8f0e6454198839df4e07c9f4",
+  "max_bytes": 65536,
+  "offset": 0,
+  "request_index": 0,
+  "session_id": "ses_868653b86d9508f1de1007053a4b7aa3",
+  "stream": "stderr",
+  "tool_call_id": "call_fixture_empty"
+ },
+ "result": {
+  "availability": "available",
+  "base_offset": 0,
+  "data": "",
+  "encoding": "base64",
+  "eof": true,
+  "next_offset": 0,
+  "observed_end": 0,
+  "stream": "stderr",
+  "tool_ref": {
+   "loop_id": "lup_9c861fdb8f0e6454198839df4e07c9f4",
+   "request_index": 0,
+   "session_id": "ses_868653b86d9508f1de1007053a4b7aa3",
+   "tool_call_id": "call_fixture_empty"
+  },
+  "truncated": false
+ }
+}

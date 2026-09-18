@@ -1,6 +1,8 @@
 {
- "fixture": "tool-output-stdout-pending",
+ "derived_from": "tool-output-stdout",
+ "fixture": "tool-output-partial",
  "method": "tool.output",
+ "provenance": "source_deterministic",
  "request": {
   "loop_id": "lup_6b4c38afca1c5ec8f618dd324106f201",
   "max_bytes": 65536,
@@ -11,13 +13,13 @@
   "tool_call_id": "call_fixture_bash"
  },
  "result": {
-  "availability": "pending",
+  "availability": "partial",
   "base_offset": 0,
-  "data": "",
+  "data": "b3V0",
   "encoding": "base64",
-  "eof": false,
-  "next_offset": 0,
-  "observed_end": 0,
+  "eof": true,
+  "next_offset": 3,
+  "observed_end": 3,
   "stream": "stdout",
   "tool_ref": {
    "loop_id": "lup_6b4c38afca1c5ec8f618dd324106f201",
@@ -25,6 +27,6 @@
    "session_id": "ses_a8f1ef08945b565c027f707754bb8b60",
    "tool_call_id": "call_fixture_bash"
   },
-  "truncated": false
+  "truncated": true
  }
 }

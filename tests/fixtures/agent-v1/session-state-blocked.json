@@ -1,12 +1,14 @@
 {
- "fixture": "session-state-idle",
+ "derived_from": "session-state-idle",
+ "fixture": "session-state-blocked",
  "method": "session.state",
+ "provenance": "source_deterministic",
  "request": {
   "session_id": "ses_ad0fee94fecc678df6c21163a02f5bb9"
  },
  "result": {
   "active_loop": null,
-  "block_reason": null,
+  "block_reason": "persistence",
   "session_id": "ses_ad0fee94fecc678df6c21163a02f5bb9",
   "status": "idle"
  }

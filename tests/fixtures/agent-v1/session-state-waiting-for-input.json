@@ -2,15 +2,15 @@
  "fixture": "session-state-waiting-for-input",
  "method": "session.state",
  "request": {
-  "session_id": "ses_c4ccd1db7dd717666a42be4e5ab65f75"
+  "session_id": "ses_063b4ab81ae07c5414723d1208e266a4"
  },
  "result": {
   "active_loop": {
    "config_revision": 0,
-   "loop_id": "lup_749641d691c2a4ca474a87789328907a",
+   "loop_id": "lup_89d2b4cf20f1b8e927a3f71a354c554e",
    "model": "deep",
    "pending_interaction": {
-    "interaction_id": "int_88528677029b51b21cdd7869d5ccfcd7",
+    "interaction_id": "int_335ed5f74af11495559a9c32747c6cf8",
     "kind": {
      "data": {
       "prompt": "Allow tool `write` for this call?",
@@ -25,7 +25,7 @@
    "status": "waiting_for_input"
   },
   "block_reason": null,
-  "session_id": "ses_c4ccd1db7dd717666a42be4e5ab65f75",
+  "session_id": "ses_063b4ab81ae07c5414723d1208e266a4",
   "status": "waiting_for_input"
  }
 }

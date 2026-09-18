@@ -1,0 +1,29 @@
+{
+ "fixture": "session-compact-compacted",
+ "method": "session.compact",
+ "request": {
+  "operation_id": "fixture-compacted-1",
+  "session_id": "ses_5e45496824286b33b2d1698c49000864"
+ },
+ "result": {
+  "after_tokens": 458,
+  "before_tokens": 3571,
+  "covered_item_count": 6,
+  "covered_loop_count": 3,
+  "operation_id": "fixture-compacted-1",
+  "retained_item_count": 0,
+  "status": "compacted",
+  "utility_usage": {
+   "call_count": 1,
+   "complete": true,
+   "usage": {
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "input_tokens": 10,
+    "output_tokens": 12,
+    "provider_total_tokens": 22,
+    "reasoning_tokens": 0
+   }
+  }
+ }
+}

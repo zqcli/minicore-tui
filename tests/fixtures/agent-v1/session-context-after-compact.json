@@ -1,0 +1,67 @@
+{
+ "fixture": "session-context-after-compact",
+ "method": "session.context",
+ "request": {
+  "session_id": "ses_5e45496824286b33b2d1698c49000864"
+ },
+ "result": {
+  "automatic": {
+   "current": null,
+   "last": {
+    "after_tokens": 2343,
+    "before_tokens": 2343,
+    "hard_tokens": 28952,
+    "loop_id": null,
+    "operation_id": "admission-ses_5e45496824286b33b2d1698c49000864-3",
+    "outcome": "started",
+    "request_index": null,
+    "target_tokens": 14476,
+    "trigger_tokens": 23161,
+    "utility_after_tokens": null,
+    "utility_before_tokens": null,
+    "utility_usage": null
+   }
+  },
+  "budget": {
+   "estimated_history_bytes": 0,
+   "estimated_history_items": 0,
+   "estimated_history_tokens": 0,
+   "estimated_request_context_tokens": 2343,
+   "input_budget_tokens": 28952,
+   "max_history_bytes": 2097152,
+   "max_history_items": 4096,
+   "target_tokens": 14476,
+   "trigger_tokens": 23161,
+   "within_runtime_limits": true
+  },
+  "coverage": {
+   "covered_item_count": 6,
+   "covered_loop_count": 3,
+   "retained_item_count": 0
+  },
+  "current_operation": null,
+  "last_prepare_failure": null,
+  "last_result": {
+   "after_tokens": 458,
+   "before_tokens": 3571,
+   "covered_item_count": 6,
+   "covered_loop_count": 3,
+   "operation_id": "fixture-compacted-1",
+   "retained_item_count": 0,
+   "status": "compacted",
+   "utility_usage": {
+    "call_count": 1,
+    "complete": true,
+    "usage": {
+     "cache_read_tokens": 0,
+     "cache_write_tokens": 0,
+     "input_tokens": 10,
+     "output_tokens": 12,
+     "provider_total_tokens": 22,
+     "reasoning_tokens": 0
+    }
+   }
+  },
+  "session_id": "ses_5e45496824286b33b2d1698c49000864"
+ }
+}

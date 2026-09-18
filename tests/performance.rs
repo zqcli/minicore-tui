@@ -6,16 +6,30 @@
 //! with:
 //!
 //! ```text
-//! cargo test --locked --test performance -- --ignored --nocapture
+//! cargo test --release --locked --test performance -- --ignored --nocapture
 //! ```
 //!
-//! The structural numbers here feed `docs/performance.md`. Counts are
-//! measured through public behavior (prepared row counts, clone byte totals),
-//! never through a hidden telemetry hook.
+//! The structural numbers here feed `docs/performance.md`. Counts are measured
+//! through public behavior (prepared row counts, live-delta preparation row
+//! counts), never through a hidden telemetry hook.
+//!
+//! Two paths are distinguished deliberately:
+//!
+//! * **production frame path** — `main::prepare_frame` calls
+//!   `ui::transcript::prepare_conversation` once per changed frame and installs
+//!   the result through `AppEvent::ConversationPrepared`. A live delta therefore
+//!   rebuilds a full `PreparedConversation` when the durable revision changes.
+//! * **diagnostic helper** — `ui::transcript::all_lines` clones the already
+//!   prepared rows. It is not the per-frame cost; it is a measurement and test
+//!   helper. Do not cite it as the production frame cost.
+//!
+//! Stage C must make both proportional to the viewport, not the total history.
 
 use std::path::PathBuf;
 
-use minicore_tui::app::App;
+use minicore_tui::app::{App, ConnectionState};
+use minicore_tui::event::{AppEvent, RpcEvent};
+use minicore_tui::protocol::{IncomingFrame, RpcNotification, TurnRef};
 use minicore_tui::state::session::SessionView;
 use minicore_tui::state::transcript::{AssistantBlock, AssistantPart, TranscriptBlock};
 use minicore_tui::ui::transcript::{all_lines, prepare_conversation, total_lines};
@@ -23,11 +37,11 @@ use serde_json::json;
 
 const WIDTH: u16 = 79;
 
-/// Builds an active session whose durable transcript has `messages`
+/// Builds an active, loaded session whose durable transcript has `messages`
 /// assistant blocks, each a Markdown paragraph of roughly `bytes_per_message`.
 fn app_with_history(messages: usize, bytes_per_message: usize) -> App {
     let mut app = App::new(PathBuf::from("/project"));
-    app.connection = minicore_tui::app::ConnectionState::Ready;
+    app.connection = ConnectionState::Ready;
     let info = serde_json::from_value(json!({
         "session_id": "ses_perf",
         "title": "Performance",
@@ -74,7 +88,27 @@ fn app_with_history(messages: usize, bytes_per_message: usize) -> App {
     app
 }
 
-/// Baseline: the total prepared row count for a long history grows with the
+/// Appends `count` real `output_delta` events to the active live loop.
+fn push_live_deltas(app: &mut App, turn: &TurnRef, count: usize) {
+    for index in 0..count {
+        let part = format!("delta-{index} ");
+        let event = json!({
+            "type": "output_delta",
+            "data": {
+                "turn": {"session_id": turn.session_id, "loop_id": turn.loop_id},
+                "request_index": 0,
+                "channel": "text",
+                "delta": part,
+                "meta": {"session_id": turn.session_id, "dropped_before": 0}
+            }
+        });
+        app.update(AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Notification(
+            RpcNotification::AgentEvent(serde_json::from_value(event).unwrap()),
+        ))));
+    }
+}
+
+/// Defect: the total prepared row count for a long history grows with the
 /// number of messages. A viewport-only composition (stage C) must produce a
 /// row count proportional to the viewport, not this total.
 #[test]
@@ -91,8 +125,9 @@ fn baseline_prepared_rows_scale_with_total_history() {
     println!("baseline rows: 20 msgs={small_rows} 200 msgs={large_rows}");
 }
 
-/// Baseline: `all_lines` materializes the full transcript as owned rows.
-/// Stage C must keep viewport preparation proportional to the viewport.
+/// Baseline: `all_lines` materializes the full transcript as owned rows. This
+/// is the **diagnostic helper**, not the production frame path; it is recorded
+/// so stage C removes the full clone from both.
 #[test]
 fn baseline_all_lines_materializes_full_transcript() {
     let app = app_with_history(200, 240);
@@ -111,15 +146,73 @@ fn baseline_all_lines_materializes_full_transcript() {
     println!("baseline all_lines rows: {}", lines.len());
 }
 
-/// Ignored timing probe: repeated `all_lines` on a large history. Records
-/// wall-clock per call; the number itself is machine-dependent and is not a
-/// CI assertion. It exists so `docs/performance.md` can be reproduced.
+/// Ignored: the production frame path over a 50,000-row history. For each
+/// changed frame `prepare_frame` rebuilds a full `PreparedConversation`, so
+/// preparation scales with total history. The measured per-call time and row
+/// count are recorded in `docs/performance.md`.
 #[test]
 #[ignore = "manual performance measurement; run with --ignored --nocapture"]
-fn measure_all_lines_rebuild_latency() {
+fn measure_prepare_frame_path_over_50k_rows() {
+    // ~7 rows per 240-byte message; 7200 messages reaches ~50k rows.
+    let app = app_with_history(7300, 240);
+    let first = prepare_conversation(&app, WIDTH);
+    assert!(
+        first.total_rows() >= 50_000,
+        "fixture must reach 50k rows, got {}",
+        first.total_rows()
+    );
+    let start = std::time::Instant::now();
+    let mut rows = 0;
+    for _ in 0..5 {
+        rows += prepare_conversation(&app, WIDTH).total_rows();
+    }
+    let elapsed = start.elapsed();
+    println!(
+        "measure_prepare_frame_path_over_50k_rows: total_rows={} per_call_ms={:.2}",
+        first.total_rows(),
+        elapsed.as_secs_f64() * 1000.0 / 5.0
+    );
+    let _ = rows;
+}
+
+/// Real live-delta baseline: start a loop, then push 1000 real `output_delta`
+/// events and measure how the prepared row count/preparation changes. Stage C
+/// must rebuild only the live tail.
+#[test]
+#[ignore = "manual performance measurement; run with --ignored --nocapture"]
+fn measure_live_delta_rebuild_cost() {
+    let mut app = app_with_history(7300, 240);
+    let theme = minicore_tui::theme::Theme::dark();
+    let before_rows = all_lines(&theme, &app, WIDTH as usize).len();
+
+    app.update(AppEvent::SubmitTurn {
+        session_id: "ses_perf".into(),
+        text: "live turn".into(),
+    });
+    let turn = TurnRef {
+        session_id: "ses_perf".into(),
+        loop_id: "lup_live".into(),
+    };
+    let start = std::time::Instant::now();
+    push_live_deltas(&mut app, &turn, 1000);
+    let elapsed = start.elapsed();
+    let after_rows = all_lines(&theme, &app, WIDTH as usize).len();
+
+    println!(
+        "measure_live_delta_rebuild_cost: deltas=1000 history_rows_before={before_rows} \
+         history_rows_after={after_rows} delta_rows={} push_ms={:.2}",
+        after_rows as i64 - before_rows as i64,
+        elapsed.as_secs_f64() * 1000.0
+    );
+}
+
+/// Ignored timing probe retained for the diagnostic helper, clearly labelled
+/// as `all_lines` (not the production frame path).
+#[test]
+#[ignore = "manual performance measurement; run with --ignored --nocapture"]
+fn measure_all_lines_clone_latency() {
     let app = app_with_history(1000, 240);
     let theme = minicore_tui::theme::Theme::dark();
-    // Warm the durable cache once.
     let _ = all_lines(&theme, &app, WIDTH as usize);
     let start = std::time::Instant::now();
     let mut rows = 0;
@@ -128,26 +221,7 @@ fn measure_all_lines_rebuild_latency() {
     }
     let elapsed = start.elapsed();
     println!(
-        "measure_all_lines_rebuild_latency: 20 rebuilds rows_total={rows} per_call_us={}",
-        elapsed.as_micros() / 20
-    );
-}
-
-/// Ignored timing probe: append one live delta to a large history and count
-/// how many rows are rebuilt. Stage C should rebuild only the live tail.
-#[test]
-#[ignore = "manual performance measurement; run with --ignored --nocapture"]
-fn measure_live_delta_rebuild_cost() {
-    let mut app = app_with_history(1000, 240);
-    let theme = minicore_tui::theme::Theme::dark();
-    let before = all_lines(&theme, &app, WIDTH as usize).len();
-    app.update(minicore_tui::event::AppEvent::SubmitTurn {
-        session_id: "ses_perf".into(),
-        text: "live".into(),
-    });
-    let after = all_lines(&theme, &app, WIDTH as usize).len();
-    println!(
-        "measure_live_delta_rebuild_cost: rows_before={before} rows_after={after} delta={}",
-        after as i64 - before as i64
+        "measure_all_lines_clone_latency: helper 20 clones rows_total={rows} per_call_ms={:.2}",
+        elapsed.as_secs_f64() * 1000.0 / 20.0
     );
 }

@@ -1,6 +1,8 @@
 {
- "fixture": "session-read-first-page",
+ "derived_from": "session-read-first-page",
+ "fixture": "session-read-records-truncated",
  "method": "session.read",
+ "provenance": "source_deterministic",
  "request": {
   "cursor": {
    "item": 0,
@@ -52,7 +54,7 @@
     }
    }
   ],
-  "records_truncated": false,
+  "records_truncated": true,
   "session": {
    "created_at": "2026-09-18T06:24:06.320Z",
    "loaded": true,

@@ -3,13 +3,13 @@
  "method": "workspace.read",
  "request": {
   "path": "binary.dat",
-  "session_id": "ses_f4e4f611638979907579605166ac5ef8"
+  "session_id": "ses_c40e87e3bb457a2f18feec830f5694df"
  },
  "result": {
   "content": "",
   "encoding": "unknown",
   "file_bytes": 13,
-  "file_modified_unix_ms": 1789711301012,
+  "file_modified_unix_ms": 1789712651888,
   "line_truncated": false,
   "next_range": null,
   "path": "binary.dat",

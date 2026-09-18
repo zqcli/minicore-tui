@@ -1,6 +1,8 @@
 {
- "fixture": "workspace-search",
+ "derived_from": "workspace-search",
+ "fixture": "workspace-search-deadline",
  "method": "workspace.search",
+ "provenance": "source_deterministic",
  "request": {
   "query": "needle",
   "session_id": "ses_c40e87e3bb457a2f18feec830f5694df"
@@ -37,9 +39,9 @@
   ],
   "next_cursor": null,
   "observed_at_unix_ms": 1789712651935,
-  "scan_complete": true,
+  "scan_complete": false,
   "skipped_files": 2,
-  "stopped_by": "end",
-  "truncated": false
+  "stopped_by": "deadline",
+  "truncated": true
  }
 }

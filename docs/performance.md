@@ -15,21 +15,37 @@ budget; the stage C structural counters and timing runs are still pending.
 | Build | `cargo test --release --locked` |
 | Date | 2026-09-18 |
 
-The wall-clock numbers are machine-dependent and are **not** CI assertions. They
-exist so the same fixture can be rerun for an apples-to-apples before/after.
+The wall-clock numbers are machine-dependent and are **not** CI assertions.
+They exist so the same fixture can be rerun for an apples-to-apples
+before/after. The raw run logs are kept on the builder at
+`/root/minicore-tui-v03-refactor/perf-baseline.log`.
+
+## Two distinct paths
+
+The baseline measures two different code paths deliberately:
+
+- **production frame path** — `main::prepare_frame` calls
+  `ui::transcript::prepare_conversation` once per changed frame and installs the
+  result via `AppEvent::ConversationPrepared`. This is what a live frame and a
+  new history page cost.
+- **diagnostic helper** — `ui::transcript::all_lines` clones the already
+  prepared rows. This is a test/measurement helper, **not** the per-frame cost,
+  and is never cited as the production frame cost.
 
 ## Structural baseline
 
 Measured through public behavior (no hidden telemetry hook):
 
-| Metric | 20 msgs × ~240 B | 200 msgs × ~240 B | Note |
-|---|---:|---:|---|
-| prepared transcript rows (`total_lines`) | 701 | 7001 | `tests/performance.rs::baseline_prepared_rows_scale_with_total_history` |
-| owned rows from `all_lines` | — | 7001 | equals the full prepared row set; `baseline_all_lines_materializes_full_transcript` |
+| Metric | Value | Test |
+|---|---:|---|
+| prepared rows, 20 msgs × ~240 B | 701 | `baseline_prepared_rows_scale_with_total_history` |
+| prepared rows, 200 msgs × ~240 B | 7001 | same |
+| owned rows from `all_lines`, 200 msgs | 7001 | `baseline_all_lines_materializes_full_transcript` |
 
-The current renderer materializes the entire durable transcript into one owned
-`Vec<Line>` on every preparation. Stage C must make a viewport preparation
-proportional to the viewport plus overscan, not the total history.
+`prepared rows` scale with the number of messages: the renderer materializes
+the entire durable transcript into one owned `Vec<Line>` on every preparation.
+Stage C must make a viewport preparation proportional to the viewport plus
+overscan, not the total history.
 
 ## Timing baseline (Release, ignored tests)
 
@@ -41,12 +57,24 @@ cargo test --release --locked --test performance -- --ignored --nocapture
 
 | Probe | Result |
 |---|---|
-| `measure_all_lines_rebuild_latency` (1000 msgs, 20 rebuilds) | 7001 rows/call, **≈15.2 ms/call** |
-| `measure_live_delta_rebuild_cost` (1000 msgs, one live delta) | 7001 → 7006 rows, delta 5 rows |
+| `measure_prepare_frame_path_over_50k_rows` (7300 msgs, 5 calls) | **51,101 rows, ≈121.2 ms/call** on the production frame path |
+| `measure_live_delta_rebuild_cost` (7300 msgs, 1000 real `output_delta`, 51,101 rows) | history rows 51,101 → 51,234 (+133 visible), live-push loop ≈11.1 ms total |
+| `measure_all_lines_clone_latency` (1000 msgs, diagnostic helper, 20 clones) | 7001 rows/call, ≈17.3 ms/call |
 
-The single-delta probe shows the current live path still rebuilds the whole
-row vector internally even though the visible delta is small. Stage C removes
-the full-history clone and stale-block re-layout.
+The live-delta probe pushes 1000 real `output_delta` events into an active
+loop and shows the visible delta is small (+133 rows) while the underlying
+preparation still rebuilds the full history on each durable-revision change.
+Stage C removes the full-history clone and stale-block re-layout.
+
+### What the numbers do and do not cover
+
+- **Covered:** production-path preparation time and materialized row counts at
+  50k+ rows; a 1000-delta live update; the diagnostic clone helper.
+- **Not covered:** cloned *bytes* and layout-call *counts* through a dedicated
+  counter — the stage C `PerfCounters` will add those and re-measure. Stage A
+  did not measure them and does not claim them.
+- The 1000-delta probe appends to a live loop held in one process; it is a
+  structural probe, not the Spec §25.2 fixed-workstation P95/P99 stream test.
 
 ## Backpressure baseline
 

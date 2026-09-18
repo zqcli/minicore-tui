@@ -1,0 +1,24 @@
+{
+ "fixture": "changes-list-stale",
+ "method": "changes.list",
+ "request": {
+  "cursor": "<from changes-list-page>",
+  "scope": "workspace",
+  "session_id": "ses_4c91469d9ca5cea1999f926aa7e3d6f2"
+ },
+ "result": {
+  "complete": false,
+  "consistency": "live",
+  "next_cursor": null,
+  "observed_at_unix_ms": 1789712654414,
+  "records": [],
+  "scope": "workspace",
+  "session_id": "ses_4c91469d9ca5cea1999f926aa7e3d6f2",
+  "stale": true,
+  "total": 5,
+  "warnings": [
+   "details_unavailable",
+   "stale_cursor"
+  ]
+ }
+}

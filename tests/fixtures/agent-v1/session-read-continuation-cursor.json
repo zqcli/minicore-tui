@@ -40,6 +40,6 @@
  "method": "session.read",
  "request": {
   "max_bytes": 4096,
-  "session_id": "ses_3d7906e5c754587f0e72dfc274f96db7"
+  "session_id": "ses_de4ac7ddeb5a4df485e6a8e7b2e3c90d"
  }
 }

@@ -1,6 +1,8 @@
 {
- "fixture": "workspace-files-paged",
+ "derived_from": "workspace-files-paged",
+ "fixture": "workspace-files-deadline",
  "method": "workspace.files",
+ "provenance": "source_deterministic",
  "request": {
   "directory": "",
   "limit": 1,
@@ -24,7 +26,7 @@
   "observed_at_unix_ms": 1789712651931,
   "scan_complete": false,
   "skipped_count": 0,
-  "stopped_by": "page",
+  "stopped_by": "deadline",
   "truncated": true
  }
 }

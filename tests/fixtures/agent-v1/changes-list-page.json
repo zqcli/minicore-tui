@@ -1,0 +1,44 @@
+{
+ "fixture": "changes-list-page",
+ "method": "changes.list",
+ "request": {
+  "limit": 1,
+  "scope": "workspace",
+  "session_id": "ses_4c91469d9ca5cea1999f926aa7e3d6f2"
+ },
+ "result": {
+  "complete": true,
+  "consistency": "live",
+  "next_cursor": {
+   "observation": "976852624cbd0838fcb0ad49292da1e0a41ba78a5cebd75a72418ad96b3ec509",
+   "offset": 1,
+   "scope": "workspace",
+   "session_id": "ses_4c91469d9ca5cea1999f926aa7e3d6f2"
+  },
+  "observed_at_unix_ms": 1789712654402,
+  "records": [
+   {
+    "after": {
+     "kind": "unknown"
+    },
+    "before": {
+     "kind": "unknown"
+    },
+    "change_ref": "workspace:WyJzZXNfNGM5MTQ2OWQ5Y2E1Y2VhMTk5OWY5MjZhYTdlM2Q2ZjIiLCIzYWIyNmY4M2IyYTJiOGU1ZjViMjc2YjU1YWJkNTFlZDAyN2MxMGE5Iix7InBhdGgiOiJSRUFETUUubWQiLCJraW5kIjoib3JkaW5hcnkiLCJpbmRleF9zdGF0dXMiOiIuIiwid29ya3RyZWVfc3RhdHVzIjoiTSIsIm9yaWdpbmFsX3BhdGgiOm51bGx9XQ",
+    "commit_state": "unknown",
+    "coverage": "unavailable",
+    "details_available": false,
+    "kind": "modified",
+    "origin": "workspace_unknown",
+    "path": "README.md"
+   }
+  ],
+  "scope": "workspace",
+  "session_id": "ses_4c91469d9ca5cea1999f926aa7e3d6f2",
+  "stale": false,
+  "total": 4,
+  "warnings": [
+   "details_unavailable"
+  ]
+ }
+}

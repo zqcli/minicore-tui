@@ -1,12 +1,12 @@
 {
- "fixture": "tool-read-terminal",
+ "fixture": "tool-read-clean-empty",
  "method": "tool.read",
  "request": {
-  "loop_id": "lup_6b4c38afca1c5ec8f618dd324106f201",
+  "loop_id": "lup_9c861fdb8f0e6454198839df4e07c9f4",
   "max_bytes": 262144,
   "request_index": 0,
-  "session_id": "ses_a8f1ef08945b565c027f707754bb8b60",
-  "tool_call_id": "call_fixture_bash"
+  "session_id": "ses_868653b86d9508f1de1007053a4b7aa3",
+  "tool_call_id": "call_fixture_empty"
  },
  "result": {
   "execution": {
@@ -16,50 +16,50 @@
     "output_truncated": false,
     "status": "exited",
     "stderr_base_offset": 0,
-    "stderr_observed_end": 3,
+    "stderr_observed_end": 0,
     "stdout_base_offset": 0,
-    "stdout_observed_end": 3,
+    "stdout_observed_end": 0,
     "termination_confirmed": true
    },
-   "finished_at": "2026-09-18T06:24:09.879Z",
+   "finished_at": "2026-09-18T06:24:13.857Z",
    "input_availability": "available",
-   "input_bytes": 49,
+   "input_bytes": 18,
    "input_truncated": false,
    "name": "bash",
    "outcome": "success",
    "output_availability": "available",
    "phase": "running",
    "recording": "saved",
-   "result_bytes": 36,
+   "result_bytes": 29,
    "result_truncated": false,
-   "started_at": "2026-09-18T06:24:07.872Z",
+   "started_at": "2026-09-18T06:24:13.852Z",
    "state": "succeeded",
    "tool_ref": {
-    "loop_id": "lup_6b4c38afca1c5ec8f618dd324106f201",
+    "loop_id": "lup_9c861fdb8f0e6454198839df4e07c9f4",
     "request_index": 0,
-    "session_id": "ses_a8f1ef08945b565c027f707754bb8b60",
-    "tool_call_id": "call_fixture_bash"
+    "session_id": "ses_868653b86d9508f1de1007053a4b7aa3",
+    "tool_call_id": "call_fixture_empty"
    }
   },
   "invocation": {
    "input": {
     "encoding": "utf8_json",
-    "preview": "{\"command\":\"sleep 2; printf out; printf err >&2\"}",
-    "total_bytes": 49,
+    "preview": "{\"command\":\"true\"}",
+    "total_bytes": 18,
     "truncated": false
    },
    "name": "bash",
    "subject": {
     "cwd": ".",
     "kind": "command",
-    "script": "sleep 2; printf out; printf err >&2"
+    "script": "true"
    },
    "subject_truncated": false,
    "tool_ref": {
-    "loop_id": "lup_6b4c38afca1c5ec8f618dd324106f201",
+    "loop_id": "lup_9c861fdb8f0e6454198839df4e07c9f4",
     "request_index": 0,
-    "session_id": "ses_a8f1ef08945b565c027f707754bb8b60",
-    "tool_call_id": "call_fixture_bash"
+    "session_id": "ses_868653b86d9508f1de1007053a4b7aa3",
+    "tool_call_id": "call_fixture_empty"
    }
   }
  }

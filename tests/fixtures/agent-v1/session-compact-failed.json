@@ -1,0 +1,23 @@
+{
+ "derived_from": "session-compact-noop",
+ "fixture": "session-compact-failed",
+ "method": "session.compact",
+ "provenance": "source_deterministic",
+ "request": {
+  "operation_id": "fixture-noop-1",
+  "session_id": "ses_c9622265393bf7ada66966212021765d"
+ },
+ "result": {
+  "covered_item_count": 0,
+  "covered_loop_count": 0,
+  "failure_kind": "context_uncompressible",
+  "operation_id": "fixture-noop-1",
+  "retained_item_count": 0,
+  "status": "failed",
+  "utility_usage": {
+   "call_count": 1,
+   "complete": false,
+   "usage": null
+  }
+ }
+}

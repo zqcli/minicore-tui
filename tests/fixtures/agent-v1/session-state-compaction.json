@@ -1,6 +1,8 @@
 {
- "fixture": "session-state-running",
+ "derived_from": "session-state-running",
+ "fixture": "session-state-compaction",
  "method": "session.state",
+ "provenance": "source_deterministic",
  "request": {
   "session_id": "ses_b03cd2cff937713f4dde0811f508528c"
  },
@@ -14,6 +16,12 @@
    "status": "running_model"
   },
   "block_reason": null,
+  "compaction": {
+   "covered_item_count": 0,
+   "operation_id": "compact_fixture_running",
+   "phase": "summarizing",
+   "retained_item_count": 0
+  },
   "session_id": "ses_b03cd2cff937713f4dde0811f508528c",
   "status": "running"
  }

@@ -1,6 +1,8 @@
 {
- "fixture": "session-context-idle",
+ "derived_from": "session-context-idle",
+ "fixture": "session-context-preparing",
  "method": "session.context",
+ "provenance": "source_deterministic",
  "request": {
   "session_id": "ses_ad0fee94fecc678df6c21163a02f5bb9"
  },
@@ -26,7 +28,12 @@
    "covered_loop_count": 0,
    "retained_item_count": 0
   },
-  "current_operation": null,
+  "current_operation": {
+   "covered_item_count": 0,
+   "operation_id": "compact_fixture_preparing",
+   "phase": "preparing",
+   "retained_item_count": 0
+  },
   "last_prepare_failure": null,
   "last_result": null,
   "session_id": "ses_ad0fee94fecc678df6c21163a02f5bb9"

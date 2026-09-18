@@ -1,6 +1,8 @@
 {
- "fixture": "turn-result-stored",
+ "derived_from": "turn-result-stored",
+ "fixture": "turn-result-live-failed",
  "method": "turn.result",
+ "provenance": "source_deterministic",
  "request": {
   "cursor": {
    "item": 0,
@@ -12,8 +14,8 @@
   "session_id": "ses_b03cd2cff937713f4dde0811f508528c"
  },
  "result": {
-  "availability": "stored",
-  "completed_at": "2026-09-18T06:24:06.329Z",
+  "availability": "live",
+  "completed_at": null,
   "final_config_revision": 0,
   "items": [
    {
@@ -37,7 +39,7 @@
   "outcome": {
    "type": "completed"
   },
-  "persistence": "persisted",
+  "persistence": "failed",
   "requests": 1,
   "tool_rounds": 0,
   "total": 2,

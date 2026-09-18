@@ -139,11 +139,28 @@ real Agent 0.5.0 process by
 The generator starts a loopback OpenAI-Responses mock, a synthetic temp
 `data_dir` and workspace, drives the RPC methods, and records only result
 payloads (no prompts, credentials, tool bodies, or real paths).
-`manifest.json` records the pins, generator, capability list, and the fixture
-classes that cannot be reproduced against a healthy real process (preparing
-timing, compaction fault injection, store-blocked, stream gap/eviction, scan
-deadline, stale cursors, records-truncated). Those gaps are synthesized in
-stage B unit tests and disclosed rather than fabricated.
+`manifest.json` records the pins, generator, capability list, and a
+`provenance` partition:
+
+- `real_process` — payloads captured verbatim from the running 0.5.0 process
+  (49 fixtures, including real `session.compact` `noop`/`compacted`,
+  `session.context` after compaction, clean-empty-EOF `tool.output`, and a
+  stale `changes.list` cursor).
+- `source_deterministic` — states the healthy public wire cannot be driven to
+  emit, derived from a real captured envelope by changing only fields the
+  pinned Agent source documents (`session.context.current_operation`
+  `preparing`, `block_reason: persistence`, `CompactionPhase`
+  `summarizing`, `CompactionStatus` `failed`/`unknown_write`,
+  `ToolDataAvailability` `expired`/`partial`, `WorkspaceScanStop::Deadline`,
+  `records_truncated`). Each names its `derived_from` base fixture.
+- `not_reproducible_against_the_real_process` — the one class with no fixture
+  at all (`tool-output-gap`) and the exact reason; the stage-B stream tests
+  cover the decoder path with fault injection.
+
+Nothing is fabricated as if captured: every synthetic fixture carries
+`"provenance": "source_deterministic"` and `"derived_from"` in the fixture
+file itself. The generator asserts that the manifest lists exactly the JSON
+files on disk before exiting.
 
 `tests/agent_v1_fixtures.rs` decodes the fixtures and asserts the raw item
 envelope shape; it is the stage-B migration's starting contract.
