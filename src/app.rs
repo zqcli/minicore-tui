@@ -45,6 +45,7 @@ use crate::state::view::{
 use crate::theme::ThemeKind;
 
 pub mod history;
+pub mod queries;
 pub mod ui_actions;
 pub use self::ui_actions::SlashCompletionState;
 use self::ui_actions::{EditorSelection, SelectionDrag};
@@ -388,6 +389,12 @@ pub struct App {
     /// uses `Instant::now`; tests may inject a virtual clock at construction.
     monotonic_now: Arc<dyn Fn() -> Instant + Send + Sync>,
     pub pending_requests: HashMap<RequestId, RequestKind>,
+    /// The two read-only in-flight slots (spec §5.3). Execution waits are
+    /// counted separately and never take a slot.
+    pub queries: crate::app::queries::QuerySlots,
+    /// A coalesced refresh that must be dispatched after the current response's
+    /// own commands, so a follow-up read never overtakes the response handling.
+    pending_query_followups: Vec<AppCommand>,
     next_request_id: RequestId,
     next_state_query: u64,
     next_submission: u64,
@@ -545,6 +552,8 @@ impl App {
             open_new_session_on_ready: false,
             now: SystemTime::now,
             pending_requests: HashMap::new(),
+            queries: crate::app::queries::QuerySlots::new(),
+            pending_query_followups: Vec::new(),
             next_request_id: RequestId(0),
             next_state_query: 0,
             next_submission: 0,
@@ -1046,6 +1055,9 @@ impl App {
             let advance = self.advance_steer_queues();
             commands.extend(advance);
         }
+        // A coalesced read refresh waits until the response that freed the slot
+        // has been fully handled, so it can never overtake that reducer pass.
+        commands.append(&mut self.pending_query_followups);
         self.sync_spinner_deadline();
         if let Some((was_dirty, before)) = scroll_visual_before {
             self.dirty = was_dirty || before != self.scroll_visual_state() || !commands.is_empty();
@@ -3747,7 +3759,7 @@ impl App {
             view.reconcile_inflight = reconciling_gap;
             view.loading = true;
         }
-        vec![self.request_history(&active)]
+        self.request_history(&active).into_iter().collect()
     }
 
     fn field_char(&mut self, c: char) -> Vec<AppCommand> {
@@ -4006,6 +4018,26 @@ impl App {
         self.next_request_id
     }
 
+    /// Releases the read-only slot owned by a finished request. A key that was
+    /// asked to refresh while in flight runs once more, so a burst of requests
+    /// coalesces into at most one follow-up read (spec §5.3).
+    fn free_query_slot(&mut self, id: RequestId) {
+        let Some((key, refresh)) = self.queries.on_query_finished(id) else {
+            return;
+        };
+        if !refresh {
+            return;
+        }
+        if let crate::app::queries::QueryKey::History(session_id) = key {
+            let session_id = session_id.clone();
+            if self.sessions.known.contains_key(&session_id) {
+                if let Some(command) = self.request_history(&session_id) {
+                    self.pending_query_followups.push(command);
+                }
+            }
+        }
+    }
+
     fn request_session_state(&mut self, session_id: &SessionId) -> AppCommand {
         if self.reload.is_some() {
             return self.request(RequestKind::StaleRead, |id| {
@@ -4071,11 +4103,14 @@ impl App {
 
     /// Issues the next `session.read` page for one session. The cursor is
     /// always the request's own, never recomputed from local item count
-    /// (spec §6.3).
-    fn request_read(&mut self, session_id: &SessionId, read: ReadRequest) -> AppCommand {
+    /// (spec §6.3). Admission goes through the two read-only slots: a second
+    /// chain for the same view coalesces, and a third concurrent subject is
+    /// refused rather than queued (spec §5.3).
+    fn request_read(&mut self, session_id: &SessionId, read: ReadRequest) -> Option<AppCommand> {
         let cursor = read.cursor;
         let pin = read.pin.clone();
         let probe = read.probe;
+        let key = crate::app::queries::QueryKey::History(session_id.clone());
         let build = move |id: RequestId| {
             let (limit, max_bytes) = if probe {
                 (
@@ -4095,20 +4130,33 @@ impl App {
             )
         };
         if self.reload.is_some() {
-            return self.request(RequestKind::StaleRead, build);
+            let id = self.next_request_id();
+            let request = build(id);
+            self.pending_requests.insert(id, RequestKind::StaleRead);
+            return Some(AppCommand::Rpc(request));
         }
-        let kind = RequestKind::History {
-            session_id: session_id.clone(),
-            read,
-        };
-        self.request(kind, build)
+        // The slot is claimed before the request is built so a full budget
+        // never leaks a registered request id.
+        let id = self.next_request_id();
+        if self.queries.request_query(key, id) == crate::app::queries::QueryAdmission::Busy {
+            return None;
+        }
+        let request = build(id);
+        self.pending_requests.insert(
+            id,
+            RequestKind::History {
+                session_id: session_id.clone(),
+                read,
+            },
+        );
+        Some(AppCommand::Rpc(request))
     }
 
     /// The next read for a chain that is either starting fresh or continuing
     /// from the backend's own cursor. A fresh chain never carries the old window
     /// pin: after a new turn the revision has moved and §6.4 requires a new pin.
     /// A fresh window starts with the one-item §6.3 probe.
-    fn request_history(&mut self, session_id: &SessionId) -> AppCommand {
+    fn request_history(&mut self, session_id: &SessionId) -> Option<AppCommand> {
         let (cursor, pin, window_start, replacement, reconcile, probe) = self
             .sessions
             .known
@@ -4209,7 +4257,7 @@ impl App {
                 view.loading = true;
                 view.reconcile_inflight = reconciling_gap;
             }
-            commands.push(self.request_history(session_id));
+            commands.extend(self.request_history(session_id));
         }
         commands
     }
@@ -5308,7 +5356,7 @@ impl App {
                 view.loading = true;
                 view.reconcile_inflight = reconcile_gap;
             }
-            commands.push(self.request_history(session_id));
+            commands.extend(self.request_history(session_id));
         }
         commands
     }
@@ -5349,7 +5397,7 @@ impl App {
         if state_needed {
             commands.push(self.request_session_state(session_id));
         }
-        commands.push(self.request_history(session_id));
+        commands.extend(self.request_history(session_id));
         commands
     }
 
@@ -6409,7 +6457,7 @@ impl App {
                 view.loading = true;
                 view.reconcile_inflight = reconciling_gap;
             }
-            commands.push(self.request_history(&session_id));
+            commands.extend(self.request_history(&session_id));
         }
         commands
     }
@@ -7043,7 +7091,7 @@ impl App {
                         view.recompute_usage_projection();
                         return match next {
                             NextChain::Page | NextChain::Reconcile => {
-                                vec![self.request_history(session_id)]
+                                self.request_history(session_id).into_iter().collect()
                             }
                             NextChain::LoopNotContained(loop_id) => {
                                 self.notice(
@@ -7064,7 +7112,7 @@ impl App {
                         view.transcript.next_cursor = applied.next;
                         view.transcript.sync_from_window();
                         view.loading = true;
-                        return vec![self.request_history(session_id)];
+                        return self.request_history(session_id).into_iter().collect();
                     }
                 }
                 _ => {
@@ -7084,7 +7132,10 @@ impl App {
             next_request.pin = view.transcript.window.pin().cloned();
             view.transcript.sync_from_window();
             view.loading = true;
-            return vec![self.request_read(session_id, next_request)];
+            return self
+                .request_read(session_id, next_request)
+                .into_iter()
+                .collect();
         }
 
         let applied = match crate::app::history::apply_page(
@@ -7161,7 +7212,9 @@ impl App {
         };
 
         match next {
-            NextChain::Page | NextChain::Reconcile => vec![self.request_history(session_id)],
+            NextChain::Page | NextChain::Reconcile => {
+                self.request_history(session_id).into_iter().collect()
+            }
             NextChain::LoopNotContained(loop_id) => {
                 self.notice(
                     NoticeLevel::Warning,
@@ -8098,7 +8151,7 @@ impl App {
             }
         };
         if fetch {
-            commands.push(self.request_history(&turn.session_id));
+            commands.extend(self.request_history(&turn.session_id));
         }
         commands
     }
@@ -8471,6 +8524,7 @@ impl App {
                 return Vec::new();
             }
         };
+        self.free_query_slot(id);
         if Self::request_session_id(&kind)
             .is_some_and(|session_id| self.sessions.deleted.contains(session_id))
         {
@@ -8859,6 +8913,10 @@ impl App {
         self.reload_fenced_create_drafts.clear();
         self.reload_fenced_open_sessions.clear();
         self.pending_requests.clear();
+        // Every in-flight read slot is released with the connection; a late
+        // response for a retired request must not corrupt the counters.
+        self.queries = crate::app::queries::QuerySlots::new();
+        self.pending_query_followups.clear();
         for session_id in reload_sessions {
             self.mark_session_uncalibrated(&session_id);
         }
@@ -8924,6 +8982,7 @@ impl App {
                 return Vec::new();
             }
         };
+        self.free_query_slot(response.id);
         if Self::request_session_id(&kind)
             .is_some_and(|session_id| self.sessions.deleted.contains(session_id))
         {
@@ -9458,7 +9517,7 @@ impl App {
                 view.loading = true;
                 view.reconcile_inflight = true;
             }
-            commands.push(self.request_history(session_id));
+            commands.extend(self.request_history(session_id));
         }
         commands
     }
@@ -11196,7 +11255,7 @@ mod tests {
         open_session(&mut app, "ses_1");
 
         let old_history = match app.request_history(&"ses_1".to_owned()) {
-            AppCommand::Rpc(request) => request,
+            Some(AppCommand::Rpc(request)) => request,
             _ => unreachable!(),
         };
         if let Some(view) = app.sessions.known.get_mut("ses_1") {
@@ -11374,7 +11433,7 @@ mod tests {
         open_session(&mut app, "ses_1");
 
         let old_history = match app.request_history(&"ses_1".to_owned()) {
-            AppCommand::Rpc(request) => request,
+            Some(AppCommand::Rpc(request)) => request,
             _ => unreachable!(),
         };
         let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
@@ -11465,7 +11524,7 @@ mod tests {
         open_session(&mut app, "ses_1");
 
         let old_history = match app.request_history(&"ses_1".to_owned()) {
-            AppCommand::Rpc(request) => request,
+            Some(AppCommand::Rpc(request)) => request,
             _ => unreachable!(),
         };
         let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
