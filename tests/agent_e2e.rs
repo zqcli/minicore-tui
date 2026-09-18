@@ -792,11 +792,11 @@ async fn dispatch(process: &mut RpcProcess, app: &mut App, event: AppEvent) -> R
 }
 
 /// The reload path is deliberately exercised against the real Agent process:
-/// the RPC acknowledgement, fresh catalogs, active-session state, and full
-/// history chain must all settle before the TUI reports success.
+/// the RPC acknowledgement and the three catalog reads must settle before the
+/// TUI reports success; the active session view is deliberately not re-read.
 #[test]
 #[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
-fn e2e_configuration_reload_refreshes_catalogs_and_active_session() {
+fn e2e_configuration_reload_refreshes_catalogs_only() {
     let agent_bin = require_agent_bin();
     let (env, _) = E2eEnvironment::setup();
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -848,20 +848,32 @@ fn e2e_configuration_reload_refreshes_catalogs_and_active_session() {
                         | RequestKind::ReloadModels { .. }
                         | RequestKind::ReloadProfiles { .. }
                         | RequestKind::ReloadSessions { .. }
-                        | RequestKind::ReloadState { .. }
-                        | RequestKind::ReloadPresentation { .. }
                 )
             }) && a.notices().back().is_some_and(|notice| {
-                notice.text == "Agent configuration and read-only state reloaded"
+                notice.text == "Agent configuration and session metadata reloaded"
             })
         })
         .await
         .unwrap();
 
         assert_eq!(app.sessions.active.as_deref(), Some(session_id.as_str()));
+        assert!(
+            app.pending_requests.values().all(|kind| !matches!(
+                kind,
+                RequestKind::SessionState { .. }
+                    | RequestKind::SessionPresentation { .. }
+                    | RequestKind::History { .. }
+            )),
+            "a catalog reload must not stage a session view read"
+        );
         let view = app.sessions.known.get(&session_id).unwrap();
         assert!(view.info.loaded);
         assert!(view.transcript.complete);
+        assert_eq!(
+            view.result_confirmation,
+            minicore_tui::state::session::ResultConfirmation::Confirmed,
+            "reload must not mark the settled result as needing a read"
+        );
         assert!(app.catalogs.loaded);
         assert_eq!(
             app.catalogs
