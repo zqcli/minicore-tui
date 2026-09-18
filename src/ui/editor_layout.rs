@@ -280,10 +280,8 @@ fn wrapped_chunks(segments: &[VisualSegment], width: usize) -> Vec<(usize, usize
         if let Some(next) = segments.get(index + 1) {
             let current_is_whitespace = segment_is_whitespace(segment);
             let next_is_whitespace = segment_is_whitespace(next);
-            if !next_is_whitespace
-                && (current_is_whitespace
-                    || (!current_is_whitespace
-                        && (segment_is_cjk(segment) || segment_is_cjk(next))))
+            if (segment_is_cjk(next) || segment_is_cjk(segment) || current_is_whitespace)
+                && !next_is_whitespace
             {
                 wrap_opportunity = Some((index + 1, current_width));
             }

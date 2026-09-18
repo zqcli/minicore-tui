@@ -1,12 +1,31 @@
 //! The live (provisional) view of one running loop (turn) and multi-request states (spec r2).
 
-use crate::protocol::{Reasoning, TurnRef, TurnResultViewWire};
+use std::sync::Arc;
+
+use crate::protocol::{Reasoning, RequestId, TurnRef, TurnResultViewWire};
 use crate::state::tool::LiveTool;
 
 /// App-local id correlating a submitted turn with its send response; the
 /// wire only carries `TurnRef`s.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct LocalSubmissionId(pub u64);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationRef {
+    pub session_id: String,
+    pub operation_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Submission {
+    pub request_id: Option<RequestId>,
+    pub local_id: LocalSubmissionId,
+    pub session_epoch: u64,
+    pub editor_revision: u64,
+    pub text: Arc<str>,
+    pub preparation: Option<OperationRef>,
+    pub cancel_requested: bool,
+}
 
 /// One pending steering instruction queued or in flight.
 #[derive(Debug, Clone, PartialEq, Eq)]

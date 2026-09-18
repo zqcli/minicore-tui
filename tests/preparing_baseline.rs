@@ -1,9 +1,7 @@
 //! Preparing-state migration checks (Spec §8.2, §8.4).
 //!
-//! B1 makes an active compaction/preparation state visible and blocks a new
-//! turn. Operation controls and `session.context` remain B2 work, so the two
-//! legacy checks below stay as explicit scope markers rather than being
-//! deleted.
+//! Preparation is visible, cancellable by exact operation identity, and
+//! observed through the Protocol v1 context endpoint.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -148,18 +146,25 @@ fn baseline_cannot_cancel_a_preparing_submission_before_turn_ref() {
     drop(sent);
 }
 
-/// Defect: the App never issues `session.context`, so an in-flight automatic
-/// preparation is invisible and cannot be observed.
+/// Preparation polling must observe the backend operation instead of
+/// inventing a local identity for cancellation.
 #[test]
-fn baseline_no_context_observation_for_preparation() {
-    let source = include_str!("../src/app.rs");
+fn preparation_observes_context_and_operation_identity() {
+    let app_source = include_str!("../src/app.rs");
+    let protocol_source = include_str!("../src/protocol.rs");
     assert!(
-        !source.contains("session_context(") && !source.contains("METHOD_SESSION_CONTEXT"),
-        "BASELINE: no session.context observation exists"
+        app_source.contains("request_session_context")
+            && app_source.contains("ContextQueryOwner::Submission"),
+        "preparation uses session.context polling"
     );
     assert!(
-        !source.contains("operation_id") && !source.contains("OperationRef"),
-        "BASELINE: no preparation operation identity exists"
+        protocol_source.contains("METHOD_SESSION_CONTEXT")
+            && protocol_source.contains("pub fn session_context"),
+        "Protocol v1 session.context builder exists"
+    );
+    assert!(
+        app_source.contains("OperationRef") && app_source.contains("operation_id"),
+        "preparation retains the observed operation identity"
     );
 }
 
@@ -180,8 +185,7 @@ fn wait_is_registered_once_and_turn_result_recovery_exists() {
     );
 }
 
-/// B1 exposes the preparation state in the busy status surface. The
-/// operation-specific controls remain deliberately out of scope for B2.
+/// Preparation remains visible in the busy status surface.
 #[test]
 fn preparing_status_is_visible() {
     assert!(

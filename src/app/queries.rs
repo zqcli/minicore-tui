@@ -46,11 +46,15 @@ pub struct QuerySlots {
     refresh_needed: HashSet<QueryKey>,
     waiting: VecDeque<QueryKey>,
     waiting_set: HashSet<QueryKey>,
+    ready: HashSet<QueryKey>,
 }
 
 impl QuerySlots {
     /// The number of read-only slots (spec §5.3).
     pub const CAPACITY: usize = 2;
+    /// A finite backlog prevents a burst of background/session refreshes from
+    /// growing without bound while the two remote slots are occupied.
+    pub const MAX_WAITING: usize = 16;
 
     pub fn new() -> Self {
         Self::default()
@@ -58,6 +62,10 @@ impl QuerySlots {
 
     pub fn in_flight_len(&self) -> usize {
         self.in_flight.len()
+    }
+
+    pub fn waiting_len(&self) -> usize {
+        self.waiting.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -76,10 +84,28 @@ impl QuerySlots {
             self.refresh_needed.insert(key);
             return QueryAdmission::Coalesced;
         }
+        if self.ready.remove(&key) {
+            if self.in_flight.len() < Self::CAPACITY {
+                self.in_flight.push((request_id, key));
+                return QueryAdmission::Admitted;
+            }
+            self.ready.insert(key.clone());
+        }
         if self.waiting_set.contains(&key) {
             return QueryAdmission::Coalesced;
         }
+        if !self.waiting.is_empty() {
+            if self.waiting.len() >= Self::MAX_WAITING {
+                return QueryAdmission::Busy;
+            }
+            self.waiting_set.insert(key.clone());
+            self.waiting.push_back(key);
+            return QueryAdmission::Busy;
+        }
         if self.in_flight.len() >= Self::CAPACITY {
+            if self.waiting.len() >= Self::MAX_WAITING {
+                return QueryAdmission::Busy;
+            }
             self.waiting_set.insert(key.clone());
             self.waiting.push_back(key);
             return QueryAdmission::Busy;
@@ -104,6 +130,7 @@ impl QuerySlots {
         let ready = self.waiting.pop_front();
         if let Some(ready) = ready.as_ref() {
             self.waiting_set.remove(ready);
+            self.ready.insert(ready.clone());
         }
         Some((key, refresh, ready))
     }
@@ -113,6 +140,7 @@ impl QuerySlots {
     /// request keeps its slot until it actually finishes (spec §5.3).
     pub fn invalidate_scope(&mut self, scope: &QueryScope) {
         self.refresh_needed.retain(|key| !scope.matches(key));
+        self.ready.retain(|key| !scope.matches(key));
         let mut retained = VecDeque::new();
         while let Some(key) = self.waiting.pop_front() {
             if scope.matches(&key) {
@@ -195,6 +223,7 @@ mod tests {
             QueryAdmission::Coalesced
         );
         assert_eq!(slots.in_flight_len(), 1);
+        assert_eq!(slots.waiting_len(), 0);
         assert_eq!(slots.on_query_finished(RequestId(2)), None);
         assert_eq!(slots.in_flight_len(), 1);
     }
@@ -240,6 +269,46 @@ mod tests {
             slots.on_query_finished(RequestId(1)),
             Some((history("ses_1"), false, None)),
             "a closed view does not schedule a follow-up read"
+        );
+    }
+
+    #[test]
+    fn waiting_queue_is_bounded_and_fifo_fair() {
+        let mut slots = QuerySlots::new();
+        slots.request_query(history("ses_0"), RequestId(1));
+        slots.request_query(
+            QueryKey::TurnResult {
+                session_id: "ses_0".to_owned(),
+                loop_id: "loop_0".to_owned(),
+            },
+            RequestId(2),
+        );
+        for index in 1..=QuerySlots::MAX_WAITING {
+            assert_eq!(
+                slots.request_query(
+                    history(&format!("ses_{index}")),
+                    RequestId(10 + index as u64)
+                ),
+                QueryAdmission::Busy
+            );
+        }
+        assert_eq!(slots.waiting_len(), QuerySlots::MAX_WAITING);
+        assert_eq!(
+            slots.request_query(history("ses_overflow"), RequestId(99)),
+            QueryAdmission::Busy
+        );
+        assert_eq!(slots.waiting_len(), QuerySlots::MAX_WAITING);
+
+        slots.on_query_finished(RequestId(1));
+        assert_eq!(
+            slots.request_query(history("ses_1"), RequestId(100)),
+            QueryAdmission::Admitted,
+            "the oldest waiting key is admitted first"
+        );
+        assert_eq!(
+            slots.request_query(history("ses_0"), RequestId(101)),
+            QueryAdmission::Busy,
+            "a newer key cannot bypass the waiting FIFO"
         );
     }
 

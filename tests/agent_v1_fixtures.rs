@@ -511,6 +511,33 @@ fn session_context_separates_estimates_from_unknowns() {
     assert!(context["automatic"]["current"].is_null());
 }
 
+#[test]
+fn context_and_compact_fixtures_decode_as_the_b2_dtos() {
+    use minicore_tui::protocol::{CompactResultWire, CompactStatusWire, SessionContextWire};
+
+    let preparing: SessionContextWire =
+        serde_json::from_value(fixture("session-context-preparing")["result"].clone())
+            .expect("preparing context fixture decodes");
+    assert_eq!(
+        preparing
+            .current_operation
+            .as_ref()
+            .map(|operation| operation.operation_id.as_str()),
+        Some("compact_fixture_preparing")
+    );
+
+    let compacted: CompactResultWire =
+        serde_json::from_value(fixture("session-compact-compacted")["result"].clone())
+            .expect("compacted fixture decodes");
+    assert_eq!(compacted.status, CompactStatusWire::Compacted);
+    assert_eq!(compacted.utility_usage.as_ref().unwrap().call_count, 1);
+
+    let unknown: CompactResultWire =
+        serde_json::from_value(fixture("session-compact-unknown-write")["result"].clone())
+            .expect("unknown-write fixture decodes");
+    assert_eq!(unknown.status, CompactStatusWire::UnknownWrite);
+}
+
 /// The extended tool facts are decoded from real captured `agent.event`
 /// notifications, not a hand-written DTO guess. This is the shape the pinned
 /// Agent 0.5.0 actually emits for `tool_invocation`, `tool_execution`, and

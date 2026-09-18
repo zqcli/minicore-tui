@@ -15,8 +15,8 @@ use minicore_tui::app::{App, ConnectionState, RequestKind};
 use minicore_tui::command::AppCommand;
 use minicore_tui::event::{AppEvent, RpcEvent};
 use minicore_tui::protocol::{
-    IncomingFrame, OutgoingRequest, RpcNotification, RpcResponse, SessionStateWire,
-    SessionStatusWire, TurnRef,
+    CompactStatusWire, IncomingFrame, OutgoingRequest, RpcNotification, RpcResponse,
+    SessionStateWire, SessionStatusWire, TurnRef,
 };
 use minicore_tui::state::selection::Dock;
 use minicore_tui::state::tool::ToolStatus;
@@ -297,6 +297,22 @@ fn wait_result(session_id: &str, loop_id: &str, persistence: &str) -> Value {
         "turn": {"session_id": session_id, "loop_id": loop_id},
         "outcome": {"type": "completed"}, "usage": {}, "requests": 1,
         "tool_rounds": 0, "final_config_revision": 0, "persistence": persistence
+    })
+}
+
+fn context_result(id: &str, current_operation: Value, last_result: Value) -> Value {
+    json!({
+        "session_id": id,
+        "current_operation": current_operation,
+        "coverage": {
+            "covered_loop_count": 0,
+            "covered_item_count": 0,
+            "retained_item_count": 0
+        },
+        "last_result": last_result,
+        "budget": {},
+        "automatic": {"current": null, "last": null},
+        "last_prepare_failure": null
     })
 }
 
@@ -2810,7 +2826,7 @@ fn reload_staging_finishes_with_reload_wait_pending_and_late_wait_does_not_dupli
 }
 
 #[test]
-fn late_reload_wait_response_waits_for_next_tick_before_fifo_advance() {
+fn late_reload_wait_does_not_advance_sealed_loop_fifo() {
     let mut driver = Driver::new();
     bootstrap(&mut driver);
     open_idle(&mut driver, "ses_1");
@@ -2863,31 +2879,10 @@ fn late_reload_wait_response_waits_for_next_tick_before_fifo_advance() {
         });
 
     complete_public_reload_with_idle_view(&mut driver, reload);
-    assert!(driver.app.request_is_pending(refresh_wait.id));
     driver.respond(
         refresh_wait,
         wait_result("ses_1", "loop_reload_fifo", "persisted"),
     );
-    assert!(
-        driver
-            .queue
-            .iter()
-            .all(|request| { !matches!(request.method, "turn.wait" | "turn.send" | "turn.steer") })
-    );
-    assert_eq!(
-        driver.app.sessions.known["ses_1"].steer_queue.len(),
-        1,
-        "the reload wait response must not consume the queued fresh turn"
-    );
-
-    driver.step(AppEvent::Tick);
-    let fresh_send = driver.request("turn.send");
-    assert_eq!(
-        fresh_send.params,
-        json!({"session_id": "ses_1", "text": "queued fresh turn"})
-    );
-    assert!(driver.app.sessions.known["ses_1"].steer_queue[0].handoff);
-
     driver.step(AppEvent::Tick);
     assert!(
         driver
@@ -2895,6 +2890,10 @@ fn late_reload_wait_response_waits_for_next_tick_before_fifo_advance() {
             .iter()
             .all(|request| request.method != "turn.send")
     );
+    let view = &driver.app.sessions.known["ses_1"];
+    assert_eq!(view.steer_queue.len(), 1);
+    assert_eq!(view.steer_queue[0].state, SteerQueueState::Unsent);
+    assert!(!view.steer_queue[0].handoff);
 }
 
 #[test]
@@ -3101,7 +3100,7 @@ fn late_reload_wait_cannot_overwrite_new_completed_turn() {
 }
 
 #[test]
-fn stale_reload_wait_failure_does_not_clear_t2_handoff() {
+fn stale_reload_wait_failure_does_not_clear_sealed_loop_steer() {
     let mut driver = Driver::new();
     let (reload, t1_wait) = start_public_reload_with_settled_turn(
         &mut driver,
@@ -3131,63 +3130,28 @@ fn stale_reload_wait_failure_does_not_clear_t2_handoff() {
         });
 
     driver.step(AppEvent::Tick);
-    let t2_send = driver.request("turn.send");
-    assert!(driver.app.sessions.known["ses_1"].steer_queue[0].handoff);
     assert!(
-        driver.app.sessions.known["ses_1"]
-            .live
-            .as_ref()
-            .is_some_and(|live| live.reference.is_none())
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "turn.send")
     );
-
     driver.step(AppEvent::RpcSendFailed {
         id: t1_wait.id,
         error: minicore_tui::rpc::RpcError::Closed,
     });
-    assert!(driver.app.sessions.known["ses_1"].steer_queue[0].handoff);
-
-    driver.respond(
-        t2_send,
-        json!({"turn": {"session_id": "ses_1", "loop_id": "loop_t2_handoff"}}),
-    );
-    assert!(driver.app.sessions.known["ses_1"].steer_queue.is_empty());
-    let t2_wait = driver.request("turn.wait");
-    driver.respond(
-        t2_wait,
-        wait_result("ses_1", "loop_t2_handoff", "persisted"),
-    );
-    driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
-    let t2_history = driver.request("session.read");
-    driver.respond(
-        t2_history,
-        history(
-            vec![
-                user(0, "loop_t2_handoff", "T2 handoff"),
-                assistant(1, "loop_t2_handoff", 0, "deep", "t2 done"),
-            ],
-            None,
-            2,
-        ),
-    );
-
     let view = &driver.app.sessions.known["ses_1"];
-    assert!(view.live.is_none());
-    assert!(
-        view.steer_queue.is_empty(),
-        "B must be popped exactly once by T2 ACK"
-    );
-    assert_eq!(
-        view.last_result
-            .as_ref()
-            .map(|result| result.turn.loop_id.as_str()),
-        Some("loop_t2_handoff")
-    );
+    assert_eq!(view.steer_queue.len(), 1);
+    assert_eq!(view.steer_queue[0].text, "T2 handoff");
+    assert_eq!(view.steer_queue[0].state, SteerQueueState::Unsent);
+    assert!(!view.steer_queue[0].handoff);
+    assert!(view.steer_queue_paused);
     driver.step(AppEvent::Tick);
     assert!(
         driver
             .queue
             .iter()
-            .all(|request| { !matches!(request.method, "turn.send" | "turn.steer") })
+            .all(|request| request.method != "turn.send")
     );
 }
 
@@ -6450,11 +6414,10 @@ fn ambiguous_steer_response_keeps_unconfirmed_and_never_resends() {
 // ---- 0.2.4 LAST-FIX: fresh-turn handoff failure handling ----
 
 /// Completes a running loop that admitted two steers (first in flight, second
-/// FIFO-blocked unsent), settles the session to a completed+persisted+history
-/// idle state, lets the central advance re-submit the second steer as a
-/// fresh-turn handoff (`turn.send`, queue entry kept with `handoff=true`) and
-/// returns that request.
-fn handoff_setup(driver: &mut Driver) -> OutgoingRequest {
+/// FIFO-blocked unsent), then settles the session. B2 deliberately keeps the
+/// second message bound to the sealed loop; it is not converted into a fresh
+/// `turn.send` automatically.
+fn handoff_setup(driver: &mut Driver) {
     bootstrap(driver);
     open_idle(driver, "ses_1");
     driver.step(AppEvent::SubmitTurn {
@@ -6519,173 +6482,67 @@ fn handoff_setup(driver: &mut Driver) -> OutgoingRequest {
         ),
     );
 
-    // Settled idle: the central advance re-submits "second" as a fresh turn.
+    // Settled idle: the central advance must not submit "second" as a fresh
+    // turn. The user must withdraw it into the editor deliberately.
     driver.app.update(AppEvent::Tick);
-    let handoff = driver.request("turn.send");
-    assert_eq!(
-        handoff.params["text"], "second",
-        "handoff sends the queued text"
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "turn.send")
     );
-    {
-        let view = &driver.app.sessions.known["ses_1"];
-        assert_eq!(
-            view.steer_queue.len(),
-            1,
-            "entry kept while handoff in flight"
-        );
-        assert!(view.steer_queue[0].handoff, "handoff marker blocks FIFO");
-    }
-    handoff
+    let view = &driver.app.sessions.known["ses_1"];
+    assert_eq!(view.steer_queue.len(), 1);
+    assert_eq!(view.steer_queue[0].state, SteerQueueState::Unsent);
+    assert!(view.steer_queue_paused);
 }
 
 #[test]
-fn handoff_malformed_response_keeps_unconfirmed_blocks_advance_and_never_auto_resends() {
+fn sealed_loop_queue_is_not_resubmitted_after_tick_or_new_prompt() {
     let mut driver = Driver::new();
-    let handoff = handoff_setup(&mut driver);
-
-    // Malformed result payload: the request reached the Agent but its response
-    // cannot be decoded -> outcome is UNCERTAIN. It must never be treated as a
-    // definitive failure (auto-resend) nor as plain Unsent.
-    driver.step(AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Response(
-        RpcResponse {
-            id: handoff.id,
-            result: Some(json!({"bogus": true})),
-            error: None,
-        },
-    ))));
-    {
-        let view = &driver.app.sessions.known["ses_1"];
-        assert_eq!(
-            view.steer_queue[0].state,
-            minicore_tui::state::turn::SteerQueueState::Unconfirmed,
-            "uncertain handoff must be visibly unconfirmed, never Unsent"
-        );
-        assert!(
-            !view.steer_queue[0].handoff,
-            "handoff marker released once the outcome is final"
-        );
-        assert!(
-            view.steer_queue_paused,
-            "uncertain outcome pauses the queue"
-        );
-    }
-    assert!(
-        driver.app.composer.content().is_empty(),
-        "a handoff owns its queued text: NO composer copy (would duplicate on Enter)"
-    );
-
-    // Tick and a brand-new message must never re-send the original text.
+    handoff_setup(&mut driver);
     driver.app.update(AppEvent::Tick);
-    assert!(
-        driver.queue.iter().all(|r| r.method != "turn.send"),
-        "no auto-resend of the unconfirmed handoff on Tick"
-    );
-    driver.app.composer.set_text("new message");
-    let new_send = driver
-        .app
-        .submit_composer()
-        .into_iter()
-        .filter_map(|c| match c {
-            AppCommand::Rpc(r) => Some(r),
-            _ => None,
-        })
-        .find(|r| r.method == "turn.send")
-        .expect("deliberate new message still sends");
+    assert!(driver.queue.iter().all(|r| r.method != "turn.send"));
+    assert!(driver.app.composer.content().is_empty());
     assert_eq!(
-        new_send.params["text"], "new message",
-        "the deliberate new message is sent; the unconfirmed original is NOT"
+        driver.app.sessions.known["ses_1"].steer_queue[0].text,
+        "second"
     );
-    {
-        let view = &driver.app.sessions.known["ses_1"];
-        assert_eq!(view.steer_queue.len(), 1, "unconfirmed original retained");
-        assert_eq!(view.steer_queue[0].text, "second");
-        assert_eq!(
-            view.steer_queue[0].state,
-            minicore_tui::state::turn::SteerQueueState::Unconfirmed
-        );
-    }
-    // The unconfirmed item blocks the central queue advance even though the
-    // deliberate admission released the pause gate.
-    driver.app.update(AppEvent::Tick);
-    assert!(
-        driver.queue.iter().all(|r| r.method != "turn.send"),
-        "unconfirmed item blocks the queue advance"
-    );
+    assert!(driver.app.sessions.known["ses_1"].steer_queue_paused);
 }
 
 #[test]
-fn handoff_definite_reject_restores_unsent_paused_retained_once_no_composer_duplicate() {
+fn sealed_loop_steer_can_only_be_withdrawn_deliberately() {
     let mut driver = Driver::new();
-    let handoff = handoff_setup(&mut driver);
+    handoff_setup(&mut driver);
+    let view = &driver.app.sessions.known["ses_1"];
+    assert_eq!(view.steer_queue.len(), 1);
+    assert_eq!(view.steer_queue[0].state, SteerQueueState::Unsent);
+    assert!(view.steer_queue_paused);
+    assert!(driver.app.composer.content().is_empty());
 
-    // A decoded Agent rejection is a DEFINITIVE failure: the message is
-    // restored to the unsent queue, paused, retained exactly once, and the
-    // editor is never duplicated.
-    driver.respond_error(handoff, -32000, "rejected by agent");
-    {
-        let view = &driver.app.sessions.known["ses_1"];
-        assert_eq!(view.steer_queue.len(), 1, "rejected handoff retained once");
-        assert_eq!(
-            view.steer_queue[0].state,
-            minicore_tui::state::turn::SteerQueueState::Unsent
-        );
-        assert!(!view.steer_queue[0].handoff);
-        assert!(view.steer_queue_paused);
-    }
-    assert!(
-        driver.app.composer.content().is_empty(),
-        "handoff reject must not copy its queued text into the editor"
-    );
-
-    // Deliberate withdraw (Alt+Up) is the ONLY way to retry.
     assert!(driver.app.retrieve_next_queued_steer());
     assert_eq!(driver.app.composer.content(), "second");
-    assert!(
-        driver.app.sessions.known["ses_1"].steer_queue.is_empty(),
-        "withdrawals req đúngly empty the queue"
-    );
+    assert!(driver.app.sessions.known["ses_1"].steer_queue.is_empty());
 }
 
 #[test]
-fn handoff_send_failure_before_write_restores_unsent_paused_and_never_auto_resends() {
+fn sealed_loop_steer_remains_unsent_without_a_send_failure_path() {
     let mut driver = Driver::new();
-    let handoff = handoff_setup(&mut driver);
-
-    // The channel failed BEFORE anything reached the Agent: definitively not
-    // sent, so the text is safely retained as Unsent+paused and the editor is
-    // not duplicated.
-    driver.step(AppEvent::RpcSendFailed {
-        id: handoff.id,
-        error: minicore_tui::rpc::RpcError::Closed,
-    });
-    {
-        let view = &driver.app.sessions.known["ses_1"];
-        assert_eq!(view.steer_queue.len(), 1, "unsent text retained");
-        assert_eq!(
-            view.steer_queue[0].state,
-            minicore_tui::state::turn::SteerQueueState::Unsent
-        );
-        assert!(view.steer_queue_paused, "send failure pauses the queue");
-    }
-    assert!(
-        driver.app.composer.content().is_empty(),
-        "no composer duplicate for a handoff send failure"
-    );
+    handoff_setup(&mut driver);
+    let view = &driver.app.sessions.known["ses_1"];
+    assert_eq!(view.steer_queue.len(), 1);
+    assert_eq!(view.steer_queue[0].state, SteerQueueState::Unsent);
+    assert!(view.steer_queue_paused);
+    assert!(driver.app.composer.content().is_empty());
     driver.app.update(AppEvent::Tick);
-    assert!(
-        driver.queue.iter().all(|r| r.method != "turn.send"),
-        "never auto-resend after a pre-write send failure"
-    );
+    assert!(driver.queue.iter().all(|r| r.method != "turn.send"));
 }
 
 #[test]
-fn handoff_turn_started_already_proves_accept_keeps_loop_and_drops_entry() {
+fn late_turn_started_does_not_consume_sealed_loop_steer() {
     let mut driver = Driver::new();
-    let handoff = handoff_setup(&mut driver);
-
-    // The Agent already started the fresh loop (TurnStarted bound it): the
-    // accept is PROVEN, so a later malformed send response must not abandon
-    // the running loop nor retry the message.
+    handoff_setup(&mut driver);
     driver.step(agent_event(json!({
         "type": "turn_started",
         "data": {
@@ -6693,46 +6550,193 @@ fn handoff_turn_started_already_proves_accept_keeps_loop_and_drops_entry() {
             "meta": {"session_id": "ses_1", "dropped_before": 0}
         }
     })));
-    {
-        let view = &driver.app.sessions.known["ses_1"];
-        assert_eq!(
-            view.live
-                .as_ref()
-                .and_then(|l| l.reference.as_ref())
-                .map(|r| r.loop_id.as_str()),
-            Some("loop_2"),
-            "the started loop is bound"
-        );
-    }
-    driver.step(AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Response(
-        RpcResponse {
-            id: handoff.id,
-            result: Some(json!({"bogus": true})),
-            error: None,
-        },
-    ))));
-    {
-        let view = &driver.app.sessions.known["ses_1"];
-        assert!(
-            view.steer_queue.is_empty(),
-            "proven-accept handoff drops the queue entry (loop owns it)"
-        );
-        assert!(
-            view.live.is_some(),
-            "the running loop is preserved, never abandoned"
-        );
-    }
-    let wait = driver.request("turn.wait");
-    assert_eq!(wait.params["loop_id"], "loop_2");
+    let view = &driver.app.sessions.known["ses_1"];
+    assert_eq!(view.steer_queue.len(), 1);
+    assert_eq!(view.steer_queue[0].text, "second");
+    assert!(driver.queue.iter().all(|r| r.method != "turn.send"));
+}
+
+#[test]
+fn preparation_cancel_waits_for_the_observed_operation_id() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+
+    driver.step(AppEvent::SubmitTurn {
+        session_id: "ses_1".to_owned(),
+        text: "needs preparation".to_owned(),
+    });
+    let send = driver.request("turn.send");
+
+    // Esc/cancel before context observation records intent but cannot guess an
+    // operation id or cancel an unrelated compaction.
+    driver.step(AppEvent::CancelTurn {
+        session_id: "ses_1".to_owned(),
+    });
+    assert!(driver.queue.iter().all(|request| {
+        request.method != "session.compact.cancel" && request.method != "turn.cancel"
+    }));
+
+    // An explicit context read uses the existing submission-owned poll and
+    // therefore preserves its cancellation owner.
+    submit_command(&mut driver, "/context");
+    let context = driver.request("session.context");
+    driver.respond(
+        context,
+        json!({
+            "session_id": "ses_1",
+            "current_operation": {
+                "operation_id": "prep_exact",
+                "phase": "preparing",
+                "covered_item_count": 0,
+                "retained_item_count": 0
+            },
+            "coverage": {"covered_loop_count": 0, "covered_item_count": 0, "retained_item_count": 0},
+            "last_result": null,
+            "budget": {},
+            "automatic": {"current": null, "last": null},
+            "last_prepare_failure": null
+        }),
+    );
+    let cancel = driver.request("session.compact.cancel");
+    assert_eq!(cancel.params["session_id"], "ses_1");
+    assert_eq!(cancel.params["operation_id"], "prep_exact");
+    assert!(matches!(
+        driver.app.pending_request_kind(cancel.id),
+        Some(RequestKind::CompactCancel { operation_id, .. }) if operation_id == "prep_exact"
+    ));
+
+    // The deferred send is still owned by the original submission and is not
+    // resent while cancellation is being resolved.
+    assert!(driver.app.request_is_pending(send.id));
     assert!(
-        driver.app.composer.content().is_empty(),
-        "no composer duplicate for a proven-accept handoff"
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "turn.send")
     );
 }
 
 /// REF-33 baseline fact: completed tool events update the existing card in
 /// place by `tool_call_id` and never append a duplicate card or reorder the
 /// request's cards. This must keep holding after the stage-C rework.
+#[test]
+fn manual_compact_noop_finishes_without_retrying_or_blocking() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+
+    submit_command(&mut driver, "/compact");
+    let compact = driver.request("session.compact");
+    assert_eq!(compact.params["operation_id"], "tui-compact-0");
+    let initial_context = driver.request("session.context");
+    driver.respond(
+        initial_context,
+        context_result("ses_1", Value::Null, Value::Null),
+    );
+    driver.respond(
+        compact,
+        json!({"operation_id": "tui-compact-0", "status": "noop"}),
+    );
+    let refresh = driver.request("session.context");
+    driver.respond(refresh, context_result("ses_1", Value::Null, Value::Null));
+
+    let view = &driver.app.sessions.known["ses_1"];
+    assert_eq!(
+        view.manual_compact
+            .as_ref()
+            .and_then(|compact| compact.result.as_ref())
+            .map(|result| result.status),
+        Some(CompactStatusWire::Noop)
+    );
+    assert!(!view.is_preparing());
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "session.compact")
+    );
+}
+
+#[test]
+fn manual_compact_failed_preserves_history_without_retrying() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle_with_history(
+        &mut driver,
+        "ses_1",
+        vec![user(0, "loop_a", "before compact")],
+    );
+    let blocks_before = driver.app.sessions.known["ses_1"].transcript.blocks.len();
+
+    submit_command(&mut driver, "/compact");
+    let compact = driver.request("session.compact");
+    let initial_context = driver.request("session.context");
+    driver.respond(
+        initial_context,
+        context_result("ses_1", Value::Null, Value::Null),
+    );
+    driver.respond(
+        compact,
+        json!({
+            "operation_id": "tui-compact-0",
+            "status": "failed",
+            "failure_kind": "context_uncompressible"
+        }),
+    );
+    let refresh = driver.request("session.context");
+    driver.respond(refresh, context_result("ses_1", Value::Null, Value::Null));
+
+    let view = &driver.app.sessions.known["ses_1"];
+    assert_eq!(
+        view.manual_compact
+            .as_ref()
+            .and_then(|compact| compact.result.as_ref())
+            .map(|result| result.status),
+        Some(CompactStatusWire::Failed)
+    );
+    assert_eq!(view.transcript.blocks.len(), blocks_before);
+    assert!(!view.is_preparing());
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "session.compact")
+    );
+}
+
+#[test]
+fn manual_compact_unknown_write_requires_fresh_state_and_context() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+
+    submit_command(&mut driver, "/compact");
+    let compact = driver.request("session.compact");
+    let initial_context = driver.request("session.context");
+    driver.respond(
+        initial_context,
+        context_result("ses_1", Value::Null, Value::Null),
+    );
+    driver.respond(
+        compact,
+        json!({"operation_id": "tui-compact-0", "status": "unknown_write"}),
+    );
+
+    let state_refresh = driver.request("session.state");
+    let context_refresh = driver.request("session.context");
+    driver.respond(state_refresh, state("ses_1", "idle", Value::Null));
+    assert!(driver.app.sessions.known["ses_1"].manual_compact.is_some());
+    assert!(driver.app.sessions.known["ses_1"].is_preparing());
+
+    driver.respond(
+        context_refresh,
+        context_result("ses_1", Value::Null, Value::Null),
+    );
+    assert!(driver.app.sessions.known["ses_1"].manual_compact.is_none());
+    assert!(!driver.app.sessions.known["ses_1"].is_preparing());
+}
+
 #[test]
 fn tool_completion_updates_in_place_without_duplicate_or_reorder() {
     let mut driver = Driver::new();
@@ -6971,7 +6975,7 @@ fn failed_turn_result_projects_authoritative_body_when_live_deltas_are_missing()
     driver.respond_error(wait, minicore_tui::protocol::INTERNAL_ERROR, "wait lost");
     let recover = driver.request("turn.result");
 
-    let items = vec![
+    let items = [
         user(0, "loop_saved_failed", "recover the saved body"),
         assistant(
             1,

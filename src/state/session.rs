@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::protocol::{
-    Reasoning, SessionInfo, SessionPresentationWire, SessionStateWire, TurnPersistenceWire,
-    TurnRef, UsageWire,
+    CompactResultWire, Reasoning, SessionContextWire, SessionInfo, SessionPresentationWire,
+    SessionStateWire, TurnPersistenceWire, TurnRef, UsageWire,
 };
 use crate::state::tool::{ToolKey, ToolPresentationState};
 use crate::state::transcript::{TranscriptBlock, TranscriptState};
@@ -31,6 +31,17 @@ pub struct UsageProjection {
     pub completeness: UsageCompleteness,
     pub unsaved_usage: Option<UsageWire>,
     pub unsaved_completeness: UsageCompleteness,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ManualCompactState {
+    pub operation_id: String,
+    pub cancel_requested: bool,
+    pub result: Option<CompactResultWire>,
+    /// An unknown write outcome remains fenced until both fresh state and
+    /// context snapshots have been observed.
+    pub state_refresh_confirmed: bool,
+    pub context_refresh_confirmed: bool,
 }
 
 /// All sessions known to the app.
@@ -61,6 +72,15 @@ pub struct SessionsState {
 #[derive(Debug)]
 pub struct SessionView {
     pub info: SessionInfo,
+    /// Lifecycle epoch for submissions; an old deferred response cannot
+    /// restore text into a newer open/reopen draft.
+    pub session_epoch: u64,
+    /// The latest real `session.context` snapshot. It is separate from the
+    /// ordinary state DTO because context is also authoritative during
+    /// deferred preparation.
+    pub context: Option<SessionContextWire>,
+    pub context_query_generation: u64,
+    pub manual_compact: Option<ManualCompactState>,
     /// Read-only Agent presentation snapshot for the footer/detail surface.
     pub presentation: Option<SessionPresentationWire>,
     /// Coalesces the one in-flight `session.presentation` request.
@@ -160,6 +180,10 @@ impl SessionView {
     pub fn new(info: SessionInfo) -> Self {
         Self {
             info,
+            session_epoch: 0,
+            context: None,
+            context_query_generation: 0,
+            manual_compact: None,
             presentation: None,
             presentation_pending: false,
             presentation_refresh_pending: false,
@@ -215,6 +239,18 @@ impl SessionView {
         self.state
             .as_ref()
             .is_some_and(|state| state.compaction.is_some())
+            || self.context.as_ref().is_some_and(|context| {
+                context.current_operation.is_some() || context.automatic.current.is_some()
+            })
+            || self.manual_compact.as_ref().is_some_and(|compact| {
+                compact.result.as_ref().is_none_or(|result| {
+                    result.status == crate::protocol::CompactStatusWire::UnknownWrite
+                })
+            })
+            || self.live.as_ref().is_some_and(|live| {
+                live.reference.is_none()
+                    && live.local_submission != crate::state::turn::LocalSubmissionId(u64::MAX)
+            })
     }
 
     /// Whether the retained completion belongs to the currently live loop.

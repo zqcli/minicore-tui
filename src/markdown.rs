@@ -822,13 +822,12 @@ mod tests {
                     *cursor += unicode_width::UnicodeWidthStr::width(span.content.as_ref());
                     Some((start, span))
                 })
-                .find(|(start, span)| {
+                .any(|(start, span)| {
                     span.style.fg == Some(theme.md_link_url)
-                        && *start <= cell
+                        && start <= cell
                         && cell
                             < start + unicode_width::UnicodeWidthStr::width(span.content.as_ref())
                 })
-                .is_some()
         }));
         // Inline code inside a link is a link even though its fg is md_code,
         // and plain inline code outside a link is not.

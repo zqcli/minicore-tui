@@ -72,6 +72,10 @@ pub enum LocalCommand {
     Logs,
     /// Cancel the active loop through `turn.cancel`.
     Cancel,
+    /// Read the current context/preparation snapshot.
+    Context,
+    /// Start one manual compaction operation.
+    Compact,
     /// Reload Agent configuration and refresh safe read-only TUI state.
     Reload,
     /// Normal shutdown intent (`agent.shutdown` arrives in Phase 6).
@@ -96,6 +100,8 @@ pub const SLASH_COMMAND_NAMES: &[&str] = &[
     "help",
     "logs",
     "cancel",
+    "context",
+    "compact",
     "reload",
     "quit",
     "close",
@@ -226,6 +232,8 @@ pub fn parse_command(input: &str) -> Result<LocalCommand, CommandIssue> {
         "help" => no_args(LocalCommand::Help),
         "logs" => no_args(LocalCommand::Logs),
         "cancel" => no_args(LocalCommand::Cancel),
+        "context" => no_args(LocalCommand::Context),
+        "compact" => no_args(LocalCommand::Compact),
         "reload" => no_args(LocalCommand::Reload),
         "quit" => no_args(LocalCommand::Quit),
         "close" => match args {
@@ -275,6 +283,8 @@ mod tests {
         assert_eq!(parse_command("/help"), Ok(LocalCommand::Help));
         assert_eq!(parse_command("/logs"), Ok(LocalCommand::Logs));
         assert_eq!(parse_command("/cancel"), Ok(LocalCommand::Cancel));
+        assert_eq!(parse_command("/context"), Ok(LocalCommand::Context));
+        assert_eq!(parse_command("/compact"), Ok(LocalCommand::Compact));
         assert_eq!(parse_command("/reload"), Ok(LocalCommand::Reload));
         assert_eq!(
             parse_command("/refresh"),
@@ -324,6 +334,8 @@ mod tests {
     #[test]
     fn public_command_names_exclude_refresh_and_include_reload() {
         assert!(SLASH_COMMAND_NAMES.contains(&"reload"));
+        assert!(SLASH_COMMAND_NAMES.contains(&"context"));
+        assert!(SLASH_COMMAND_NAMES.contains(&"compact"));
         assert!(!SLASH_COMMAND_NAMES.contains(&"refresh"));
         assert_eq!(slash_command_candidates("ref"), Vec::<String>::new());
         assert_eq!(slash_command_candidates("rel"), vec!["/reload"]);

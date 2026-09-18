@@ -174,7 +174,7 @@ pub fn clip_cells(text: &str, width: usize) -> String {
     result
 }
 
-fn fit_spans<'a>(spans: Vec<Span<'a>>, width: usize) -> Vec<Span<'static>> {
+fn fit_spans(spans: Vec<Span<'_>>, width: usize) -> Vec<Span<'static>> {
     let mut used = 0;
     let mut fitted = Vec::new();
     for span in spans {

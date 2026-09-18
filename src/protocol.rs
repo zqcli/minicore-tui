@@ -423,6 +423,12 @@ impl RpcResponse {
     pub fn parse_session_state(&self) -> Result<SessionStateWire, RpcResponseError> {
         self.result_as()
     }
+    pub fn parse_session_context(&self) -> Result<SessionContextWire, RpcResponseError> {
+        self.result_as()
+    }
+    pub fn parse_session_compact(&self) -> Result<CompactResultWire, RpcResponseError> {
+        self.result_as()
+    }
     pub fn parse_session_update(&self) -> Result<SessionUpdateResult, RpcResponseError> {
         self.result_as()
     }
@@ -1271,6 +1277,141 @@ pub struct CompactionProgressWire {
     pub phase: CompactionPhaseWire,
     pub covered_item_count: usize,
     pub retained_item_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct ContextCoverageWire {
+    pub covered_loop_count: usize,
+    pub covered_item_count: usize,
+    pub retained_item_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct ContextBudgetWire {
+    #[serde(default)]
+    pub estimated_history_items: Option<u64>,
+    #[serde(default)]
+    pub estimated_history_bytes: Option<u64>,
+    #[serde(default)]
+    pub estimated_history_tokens: Option<u64>,
+    #[serde(default)]
+    pub estimated_request_context_tokens: Option<u64>,
+    #[serde(default)]
+    pub input_budget_tokens: Option<u64>,
+    #[serde(default)]
+    pub trigger_tokens: Option<u64>,
+    #[serde(default)]
+    pub target_tokens: Option<u64>,
+    #[serde(default)]
+    pub max_history_items: Option<u64>,
+    #[serde(default)]
+    pub max_history_bytes: Option<u64>,
+    #[serde(default)]
+    pub within_runtime_limits: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct AutomaticContextOperationWire {
+    #[serde(default)]
+    pub operation_id: Option<String>,
+    #[serde(default)]
+    pub loop_id: Option<String>,
+    #[serde(default)]
+    pub request_index: Option<u32>,
+    #[serde(default)]
+    pub outcome: Option<String>,
+    #[serde(default)]
+    pub before_tokens: Option<u64>,
+    #[serde(default)]
+    pub after_tokens: Option<u64>,
+    #[serde(default)]
+    pub hard_tokens: Option<u64>,
+    #[serde(default)]
+    pub trigger_tokens: Option<u64>,
+    #[serde(default)]
+    pub target_tokens: Option<u64>,
+    #[serde(default)]
+    pub utility_before_tokens: Option<u64>,
+    #[serde(default)]
+    pub utility_after_tokens: Option<u64>,
+    #[serde(default)]
+    pub utility_usage: Option<CompactUtilityUsageWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct AutomaticContextWire {
+    #[serde(default)]
+    pub current: Option<AutomaticContextOperationWire>,
+    #[serde(default)]
+    pub last: Option<AutomaticContextOperationWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct ContextRecoveryWire {
+    pub loop_id: String,
+    pub request_index: u32,
+    #[serde(default)]
+    pub before_tokens: Option<u64>,
+    #[serde(default)]
+    pub after_tokens: Option<u64>,
+    #[serde(default)]
+    pub utility_usage: Option<CompactUtilityUsageWire>,
+    pub outcome: String,
+    #[serde(default)]
+    pub failure_kind: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct SessionContextWire {
+    pub session_id: String,
+    #[serde(default)]
+    pub current_operation: Option<CompactionProgressWire>,
+    pub coverage: ContextCoverageWire,
+    #[serde(default)]
+    pub last_result: Option<CompactResultWire>,
+    pub budget: ContextBudgetWire,
+    pub automatic: AutomaticContextWire,
+    #[serde(default)]
+    pub last_prepare_failure: Option<String>,
+    #[serde(default)]
+    pub recovery: Option<ContextRecoveryWire>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactStatusWire {
+    Compacted,
+    Noop,
+    Failed,
+    UnknownWrite,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct CompactUtilityUsageWire {
+    pub call_count: u32,
+    pub complete: bool,
+    #[serde(default)]
+    pub usage: Option<UsageWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct CompactResultWire {
+    pub operation_id: String,
+    pub status: CompactStatusWire,
+    #[serde(default)]
+    pub before_tokens: Option<u64>,
+    #[serde(default)]
+    pub after_tokens: Option<u64>,
+    #[serde(default)]
+    pub covered_loop_count: Option<usize>,
+    #[serde(default)]
+    pub covered_item_count: Option<usize>,
+    #[serde(default)]
+    pub retained_item_count: Option<usize>,
+    #[serde(default)]
+    pub failure_kind: Option<String>,
+    #[serde(default)]
+    pub utility_usage: Option<CompactUtilityUsageWire>,
 }
 
 /// `preparing` means compaction has NOT started model work yet: the session is

@@ -18,7 +18,8 @@ pub use selection::{
     SessionPanelAction, SessionPanelMode, SessionSelectorState,
 };
 pub use session::{
-    ConfigUpdateState, PendingConfigUpdate, ScrollState, SessionId, SessionView, SessionsState,
+    ConfigUpdateState, ManualCompactState, PendingConfigUpdate, ScrollState, SessionId,
+    SessionView, SessionsState,
 };
 pub use tool::{LiveTool, ToolKey, ToolPresentationState, ToolStatus};
 pub use transcript::{
@@ -26,8 +27,9 @@ pub use transcript::{
     TranscriptBlock, TranscriptState, UserBlock,
 };
 pub use turn::{
-    AppliedSteer, LiveLoop, LivePart, LiveRequest, LocalSubmissionId, PendingSteer,
-    PendingSteerState, SteerQueueItem, SteerQueueState, SteerReceiptObserved, UnsavedLoop,
+    AppliedSteer, LiveLoop, LivePart, LiveRequest, LocalSubmissionId, OperationRef, PendingSteer,
+    PendingSteerState, SteerQueueItem, SteerQueueState, SteerReceiptObserved, Submission,
+    UnsavedLoop,
 };
 pub use view::{
     ConversationSelection, CopyRange, FoldOverride, PreparedConversation, ReasoningKey, SectionId,

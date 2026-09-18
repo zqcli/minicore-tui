@@ -112,20 +112,21 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
     let repeat = key.kind == KeyEventKind::Repeat;
     let typing = press || repeat;
     let cancellable = app.active_view().is_some_and(|view| {
-        view.live.as_ref().is_some_and(|live| {
-            (!live.waiting
-                || view.state.as_ref().is_some_and(|state| {
-                    state.status == crate::protocol::SessionStatusWire::WaitingForInput
-                }))
-                && view.state.as_ref().is_none_or(|state| {
-                    matches!(
-                        state.status,
-                        crate::protocol::SessionStatusWire::Idle
-                            | crate::protocol::SessionStatusWire::Running
-                            | crate::protocol::SessionStatusWire::WaitingForInput
-                    )
-                })
-        })
+        view.is_preparing()
+            || view.live.as_ref().is_some_and(|live| {
+                (!live.waiting
+                    || view.state.as_ref().is_some_and(|state| {
+                        state.status == crate::protocol::SessionStatusWire::WaitingForInput
+                    }))
+                    && view.state.as_ref().is_none_or(|state| {
+                        matches!(
+                            state.status,
+                            crate::protocol::SessionStatusWire::Idle
+                                | crate::protocol::SessionStatusWire::Running
+                                | crate::protocol::SessionStatusWire::WaitingForInput
+                        )
+                    })
+            })
     });
 
     if let Dock::SessionSelector(state) = &app.dock {

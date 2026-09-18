@@ -30,15 +30,15 @@ use crate::state::selection::{
     SessionPanelAction, SessionPanelMode, SessionSelectorState, filtered_models, filtered_profiles,
     filtered_sessions, supported_reasoning,
 };
-use crate::state::session::{SessionId, SessionView, SessionsState};
+use crate::state::session::{ManualCompactState, SessionId, SessionView, SessionsState};
 use crate::state::tool::{LiveTool, ToolKey, ToolPresentationState, ToolStatus};
 use crate::state::transcript::{
     AssistantBlock, AssistantPart, HistoryPlaceholderBlock, SummaryBlock, ToolBlock,
     TranscriptBlock, UserBlock,
 };
 use crate::state::turn::{
-    AppliedSteer, LiveLoop, LivePart, LocalSubmissionId, PendingSteer, PendingSteerState,
-    SteerQueueState, UnsavedLoop,
+    AppliedSteer, LiveLoop, LivePart, LocalSubmissionId, OperationRef, PendingSteer,
+    PendingSteerState, SteerQueueState, Submission, UnsavedLoop,
 };
 use crate::state::view::{
     ConversationSelection, FoldOverride, PreparedConversation, SelectionPoint,
@@ -56,6 +56,7 @@ pub const MAX_AGENT_LOG_LINES: usize = 200;
 /// Bound for the per-session local steer FIFO. Small by design; a full queue
 /// pauses and keeps the composer message rather than silently dropping.
 pub const MAX_STEER_QUEUE_LEN: usize = 8;
+pub const MAX_STEER_QUEUE_BYTES: usize = 256 * 1024;
 
 const MAX_NOTICES: usize = 32;
 const MAX_RETAINED_TURN_RESULTS: usize = 32;
@@ -215,6 +216,19 @@ pub enum RequestKind {
     SessionPresentation {
         session_id: SessionId,
     },
+    SessionContext {
+        session_id: SessionId,
+        generation: u64,
+        owner: ContextQueryOwner,
+    },
+    Compact {
+        session_id: SessionId,
+        operation_id: String,
+    },
+    CompactCancel {
+        session_id: SessionId,
+        operation_id: String,
+    },
     ReloadPresentation {
         session_id: SessionId,
         generation: u64,
@@ -267,6 +281,19 @@ pub enum RequestKind {
 enum WaitOrigin {
     Normal,
     Reload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContextQueryOwner {
+    Submission(LocalSubmissionId),
+    ManualCompact(String),
+    Explicit,
+}
+
+#[derive(Debug, Clone)]
+struct ContextPoll {
+    owner: ContextQueryOwner,
+    due: Instant,
 }
 
 /// One `session.read` chain step (spec §6.3). `window_start` drops a reused
@@ -395,6 +422,11 @@ pub struct App {
     /// Exact wait/result summaries retained across reload/reopen boundaries.
     retained_results: HashMap<TurnRef, crate::protocol::TurnResultViewWire>,
     retained_result_order: VecDeque<TurnRef>,
+    /// Deferred turn submissions retain their exact draft identity until the
+    /// Agent returns a real TurnRef or a preparation failure.
+    submissions: HashMap<LocalSubmissionId, Submission>,
+    context_polls: HashMap<SessionId, ContextPoll>,
+    next_operation_id: u64,
     /// Read keys whose slot became available while a response was being
     /// reduced. They are converted to requests only after the page/result
     /// handler has installed its newest cursor.
@@ -549,6 +581,9 @@ impl App {
             turn_results: HashMap::new(),
             retained_results: HashMap::new(),
             retained_result_order: VecDeque::new(),
+            submissions: HashMap::new(),
+            context_polls: HashMap::new(),
+            next_operation_id: 0,
             pending_query_followups: VecDeque::new(),
             next_request_id: RequestId(0),
             next_state_query: 0,
@@ -594,6 +629,7 @@ impl App {
     fn spinner_active(&self) -> bool {
         self.sessions.known.values().any(|view| {
             view.live.is_some()
+                || view.is_preparing()
                 || view
                     .state
                     .as_ref()
@@ -651,6 +687,10 @@ impl App {
         }
         if let Some(deadline) = self.selection_copied_until {
             let remaining = deadline.saturating_duration_since(now);
+            earliest = Some(earliest.map_or(remaining, |e| e.min(remaining)));
+        }
+        for poll in self.context_polls.values() {
+            let remaining = poll.due.saturating_duration_since(now);
             earliest = Some(earliest.map_or(remaining, |e| e.min(remaining)));
         }
         if self
@@ -911,7 +951,7 @@ impl App {
                 {
                     self.selection_copied_until = None;
                 }
-                Vec::new()
+                self.poll_contexts()
             }
             AppEvent::Rendered => unreachable!("handled before the match"),
             AppEvent::SetTheme(kind) => {
@@ -2510,6 +2550,13 @@ impl App {
             );
             return Vec::new();
         }
+        if self.active_view().is_some_and(SessionView::is_preparing) {
+            self.notice(
+                NoticeLevel::Info,
+                "session is preparing context; cannot update configuration",
+            );
+            return Vec::new();
+        }
         if self.active_view().is_some_and(|view| {
             view.event_gap || view.latest_state_query.is_some() || view.state.is_none()
         }) {
@@ -2648,6 +2695,13 @@ impl App {
             self.notice(
                 NoticeLevel::Error,
                 "session is blocked; cannot update configuration",
+            );
+            return Vec::new();
+        }
+        if self.active_view().is_some_and(SessionView::is_preparing) {
+            self.notice(
+                NoticeLevel::Info,
+                "session is preparing context; cannot update configuration",
             );
             return Vec::new();
         }
@@ -3266,6 +3320,12 @@ impl App {
         self.cancel_turn(&active)
     }
 
+    /// Routes cancellation to the exact operation currently owned by the
+    /// session: manual compact, deferred preparation, or a concrete TurnRef.
+    pub fn request_cancel(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
+        self.cancel_turn(session_id)
+    }
+
     fn open_dock(&mut self, dock: Dock) -> Vec<AppCommand> {
         if self.dock == dock {
             return self.cancel_dock();
@@ -3350,10 +3410,22 @@ impl App {
             Vec::new()
         } else {
             let submitted_text = text.clone();
-            let commands = self.submit_turn(active, text);
+            let commands = self.submit_turn(active.clone(), text);
             if !commands.is_empty() {
                 self.composer.submit_pushed(&submitted_text);
                 self.composer.clear();
+                let revision = self.composer.editor_revision();
+                let local_submission = self
+                    .sessions
+                    .known
+                    .get(&active)
+                    .and_then(|view| view.live.as_ref())
+                    .map(|live| live.local_submission);
+                if let Some(local_submission) = local_submission {
+                    if let Some(submission) = self.submissions.get_mut(&local_submission) {
+                        submission.editor_revision = revision;
+                    }
+                }
             }
             commands
         }
@@ -3417,20 +3489,36 @@ impl App {
             self.notice(NoticeLevel::Warning, "session is blocked; cannot steer");
             return Vec::new();
         }
+        if view.is_preparing() {
+            self.notice(
+                NoticeLevel::Info,
+                "session is preparing context; cannot steer",
+            );
+            return Vec::new();
+        }
         if !view.is_running() {
             self.notice(NoticeLevel::Warning, "session is not running; cannot steer");
             return Vec::new();
         }
         // FIFO admission: a bounded per-session queue. No silent Sending-guard
         // drop; a full queue keeps the editor text and pauses instead.
-        if view.steer_queue.len() >= MAX_STEER_QUEUE_LEN {
+        let queued_bytes = view
+            .steer_queue
+            .iter()
+            .map(|item| item.text.len())
+            .sum::<usize>();
+        if view.steer_queue.len() >= MAX_STEER_QUEUE_LEN
+            || queued_bytes.saturating_add(text.len()) > MAX_STEER_QUEUE_BYTES
+        {
             if let Some(view) = self.sessions.known.get_mut(session_id) {
                 view.steer_queue_paused = true;
             }
             self.notice(
                 NoticeLevel::Warning,
                 format!(
-                    "steer queue is full ({MAX_STEER_QUEUE_LEN}); keep the message and retry after the turn"
+                    "steer queue is full ({} messages / {} bytes); keep the message and retry after the turn",
+                    MAX_STEER_QUEUE_LEN,
+                    MAX_STEER_QUEUE_BYTES
                 ),
             );
             return Vec::new();
@@ -3575,54 +3663,19 @@ impl App {
                 },
             )]
         } else {
-            // Race fallback: the previous loop sealed before this unsent
-            // steer could be sent. Only after a normal completed+persisted,
-            // history-settled idle session does the head become a fresh turn
-            // (never a resend of an accepted message).
-            // Explicit normal completion gate: only a genuinely completed,
-            // persisted, history-settled idle session may start the next
-            // queued message as a fresh turn (never after cancel/refusal/
-            // error/blocked/unsaved, and never for an old loop).
-            let settled = view.live.is_none()
-                && view.last_result.as_ref().is_some_and(|result| {
-                    result.outcome == crate::protocol::LoopOutcomeWire::Completed
-                        && result.persistence == Some(TurnPersistenceWire::Persisted)
-                })
-                && view.transcript.complete
-                && !view.event_gap
-                && !view.is_blocked()
-                && view.unsaved_loop.is_none()
-                && !view.result_unconfirmed
-                && view.state.as_ref().map(|s| s.status) == Some(SessionStatusWire::Idle);
-            if !settled {
-                return Vec::new();
-            }
-            let head = view
-                .steer_queue
-                .iter()
-                .find(|item| {
-                    item.state == crate::state::turn::SteerQueueState::Unsent && !item.handoff
-                })
-                .cloned();
-            let Some(head) = head else {
-                return Vec::new();
-            };
-            let text = head.text.clone();
-            let commands = self.submit_turn(session_id.clone(), text);
-            if !commands.is_empty() {
-                // Keep the entry until the turn.send ACK (a send failure must
-                // not drop the text); the handoff marker blocks FIFO jump.
-                if let Some(view) = self.sessions.known.get_mut(session_id) {
-                    if let Some(item) = view
-                        .steer_queue
-                        .iter_mut()
-                        .find(|item| item.local_id == head.local_id)
-                    {
-                        item.handoff = true;
-                    }
+            // A sealed loop cannot turn an unsent steer into a new prompt.
+            // Keep it bounded and paused until the user deliberately
+            // withdraws it into the editor.
+            if let Some(view) = self.sessions.known.get_mut(session_id) {
+                if view
+                    .steer_queue
+                    .iter()
+                    .any(|item| item.state == SteerQueueState::Unsent)
+                {
+                    view.steer_queue_paused = true;
                 }
             }
-            commands
+            Vec::new()
         }
     }
 
@@ -3704,9 +3757,103 @@ impl App {
             LocalCommand::Help => self.open_dock(Dock::Help),
             LocalCommand::Logs => self.open_dock(Dock::Logs),
             LocalCommand::Cancel => self.cancel_active_turn(),
+            LocalCommand::Context => self.read_context_command(),
+            LocalCommand::Compact => self.start_manual_compact(),
             LocalCommand::Reload => self.reload(),
             LocalCommand::Quit => self.request_shutdown(),
         }
+    }
+
+    fn read_context_command(&mut self) -> Vec<AppCommand> {
+        let Some(session_id) = self.sessions.active.clone() else {
+            self.notice(NoticeLevel::Info, "no active session to inspect");
+            return Vec::new();
+        };
+        if !self
+            .sessions
+            .known
+            .get(&session_id)
+            .is_some_and(|view| view.info.loaded)
+        {
+            self.notice(
+                NoticeLevel::Info,
+                "open the session before inspecting context",
+            );
+            return Vec::new();
+        }
+        self.arm_context_poll(&session_id, ContextQueryOwner::Explicit, true)
+            .into_iter()
+            .collect()
+    }
+
+    fn start_manual_compact(&mut self) -> Vec<AppCommand> {
+        if !self.guard_ready() {
+            return Vec::new();
+        }
+        if self.reload.is_some() {
+            self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
+            return Vec::new();
+        }
+        let Some(session_id) = self.sessions.active.clone() else {
+            self.notice(NoticeLevel::Info, "no active session to compact");
+            return Vec::new();
+        };
+        let allowed = self.sessions.known.get(&session_id).is_some_and(|view| {
+            view.info.loaded
+                && !view.closing
+                && !view.is_blocked()
+                && !view.is_preparing()
+                && view.live.is_none()
+                && view.unsaved_loop.is_none()
+                && !view.event_gap
+                && view.transcript.complete
+                && view.state.as_ref().map(|state| state.status) == Some(SessionStatusWire::Idle)
+                && view
+                    .manual_compact
+                    .as_ref()
+                    .is_none_or(|compact| compact.result.is_some())
+        });
+        if !allowed {
+            self.notice(
+                NoticeLevel::Warning,
+                "manual compaction requires a loaded, idle, settled, unblocked session",
+            );
+            return Vec::new();
+        }
+        let counter = self.next_operation_id;
+        self.next_operation_id = self
+            .next_operation_id
+            .checked_add(1)
+            .expect("operation ids exhausted");
+        let operation_id = format!("tui-compact-{counter}");
+        if let Some(view) = self.sessions.known.get_mut(&session_id) {
+            view.manual_compact = Some(ManualCompactState {
+                operation_id: operation_id.clone(),
+                cancel_requested: false,
+                result: None,
+                state_refresh_confirmed: false,
+                context_refresh_confirmed: false,
+            });
+        }
+        let mut commands = vec![self.request(
+            RequestKind::Compact {
+                session_id: session_id.clone(),
+                operation_id: operation_id.clone(),
+            },
+            |id| OutgoingRequest::session_compact(id, &session_id, &operation_id),
+        )];
+        if let Some(command) = self.arm_context_poll(
+            &session_id,
+            ContextQueryOwner::ManualCompact(operation_id.clone()),
+            true,
+        ) {
+            commands.push(command);
+        }
+        self.notice(
+            NoticeLevel::Info,
+            format!("context compaction {operation_id} started"),
+        );
+        commands
     }
 
     /// `/clear` wipes only the local view of the active session and reloads
@@ -4060,11 +4207,11 @@ impl App {
         let Some((key, refresh, ready)) = self.queries.on_query_finished(id) else {
             return;
         };
-        if refresh {
-            self.pending_query_followups.push_back(key);
-        }
         if let Some(ready) = ready {
             self.pending_query_followups.push_back(ready);
+        }
+        if refresh {
+            self.pending_query_followups.push_back(key);
         }
     }
 
@@ -4091,12 +4238,114 @@ impl App {
                         .map(|window| (turn.clone(), window.cursor))
                         .and_then(|(turn, cursor)| self.request_turn_result_page(turn, cursor))
                 }
-                crate::app::queries::QueryKey::Context { .. } => None,
+                crate::app::queries::QueryKey::Context { session_id, .. } => {
+                    self.request_session_context(&session_id)
+                }
             };
             if let Some(command) = command {
                 commands.push(command);
             }
         }
+    }
+
+    fn context_interval(&self, session_id: &SessionId) -> Duration {
+        if self.sessions.active.as_ref() == Some(session_id) {
+            Duration::from_millis(500)
+        } else {
+            Duration::from_secs(2)
+        }
+    }
+
+    fn context_query_pending(&self, session_id: &SessionId) -> bool {
+        self.pending_requests.values().any(|kind| {
+            matches!(kind, RequestKind::SessionContext { session_id: pending, .. } if pending == session_id)
+        })
+    }
+
+    fn arm_context_poll(
+        &mut self,
+        session_id: &SessionId,
+        owner: ContextQueryOwner,
+        immediate: bool,
+    ) -> Option<AppCommand> {
+        let owner = if matches!(&owner, ContextQueryOwner::Explicit) {
+            self.context_polls
+                .get(session_id)
+                .filter(|poll| !matches!(&poll.owner, ContextQueryOwner::Explicit))
+                .map_or(owner.clone(), |poll| poll.owner.clone())
+        } else {
+            owner
+        };
+        let due = if immediate {
+            self.instant_now()
+        } else {
+            self.instant_now()
+                .checked_add(self.context_interval(session_id))
+                .expect("context poll deadline is representable")
+        };
+        self.context_polls
+            .insert(session_id.clone(), ContextPoll { owner, due });
+        if immediate {
+            self.request_session_context(session_id)
+        } else {
+            None
+        }
+    }
+
+    fn request_session_context(&mut self, session_id: &SessionId) -> Option<AppCommand> {
+        if self.reload.is_some() || !self.can_send_requests() {
+            return None;
+        }
+        let poll = self.context_polls.get(session_id).cloned()?;
+        let generation = self
+            .sessions
+            .known
+            .get(session_id)
+            .map_or(0, |view| view.context_query_generation);
+        let key = crate::app::queries::QueryKey::Context {
+            session_id: session_id.clone(),
+            generation,
+        };
+        let id = self.next_request_id();
+        if self.queries.request_query(key, id) != crate::app::queries::QueryAdmission::Admitted {
+            return None;
+        }
+        self.pending_requests.insert(
+            id,
+            RequestKind::SessionContext {
+                session_id: session_id.clone(),
+                generation,
+                owner: poll.owner,
+            },
+        );
+        Some(AppCommand::Rpc(OutgoingRequest::session_context(
+            id, session_id,
+        )))
+    }
+
+    fn poll_contexts(&mut self) -> Vec<AppCommand> {
+        let now = self.instant_now();
+        let due: Vec<SessionId> = self
+            .context_polls
+            .iter()
+            .filter_map(|(session_id, poll)| (poll.due <= now).then_some(session_id.clone()))
+            .collect();
+        let mut commands = Vec::new();
+        for session_id in due {
+            if self.context_query_pending(&session_id) {
+                continue;
+            }
+            if let Some(command) = self.request_session_context(&session_id) {
+                commands.push(command);
+            }
+            let interval = self.context_interval(&session_id);
+            if let Some(poll) = self.context_polls.get_mut(&session_id) {
+                poll.due = now
+                    .checked_add(interval)
+                    .expect("context poll deadline is representable");
+            }
+        }
+        commands
     }
 
     fn request_session_state(&mut self, session_id: &SessionId) -> AppCommand {
@@ -4361,6 +4610,9 @@ impl App {
             | RequestKind::RenameSession { session_id }
             | RequestKind::History { session_id, .. }
             | RequestKind::SessionState { session_id, .. }
+            | RequestKind::SessionContext { session_id, .. }
+            | RequestKind::Compact { session_id, .. }
+            | RequestKind::CompactCancel { session_id, .. }
             | RequestKind::ReloadState { session_id, .. }
             | RequestKind::ReloadPresentation { session_id, .. } => Some(session_id),
             RequestKind::SessionPresentation { session_id } => Some(session_id),
@@ -4428,6 +4680,7 @@ impl App {
                 | RequestKind::RefreshSessions { .. }
                 | RequestKind::SessionState { .. }
                 | RequestKind::SessionPresentation { .. }
+                | RequestKind::SessionContext { .. }
                 | RequestKind::CloseVerifyState { .. }
                 | RequestKind::History { .. }
         )
@@ -4467,6 +4720,16 @@ impl App {
                     self.mark_close_verification_unknown(session_id);
                 }
                 RequestKind::History { session_id, .. } => {
+                    self.mark_session_uncalibrated(session_id);
+                }
+                RequestKind::SessionContext { session_id, .. } => {
+                    if let Some(view) = self.sessions.known.get_mut(session_id) {
+                        view.context_query_generation = view
+                            .context_query_generation
+                            .checked_add(1)
+                            .expect("context query generations exhausted");
+                    }
+                    self.context_polls.remove(session_id);
                     self.mark_session_uncalibrated(session_id);
                 }
                 RequestKind::RefreshSessions {
@@ -5452,18 +5715,7 @@ impl App {
         // Keep retired request ids registered as StaleRead so their late
         // responses still release the read slot they own. Dropping the ids
         // here would make the response look unknown and leak capacity.
-        for kind in self.pending_requests.values_mut() {
-            let belongs = Self::request_session_id(kind) == Some(session_id.as_str());
-            let keep_exact_turn = matches!(
-                kind,
-                RequestKind::WaitTurn(_)
-                    | RequestKind::ReloadWaitTurn(_)
-                    | RequestKind::TurnResult(_)
-            );
-            if belongs && !keep_exact_turn {
-                *kind = RequestKind::StaleRead;
-            }
-        }
+        self.retire_session_operations(session_id);
         if let Some(view) = self.sessions.known.get_mut(session_id) {
             view.history_query_generation = view
                 .history_query_generation
@@ -5471,6 +5723,50 @@ impl App {
                 .expect("history query generations exhausted");
         }
         self.retire_reopened_session(session_id);
+    }
+
+    /// Retires operations that belong to a session which is no longer the
+    /// current loaded view. Exact wait/result requests remain registered so a
+    /// late authoritative outcome can still be retained; all other responses
+    /// are consumed as stale and their read slot is released normally.
+    fn retire_session_operations(&mut self, session_id: &SessionId) {
+        let stale_ids: Vec<RequestId> = self
+            .pending_requests
+            .iter()
+            .filter_map(|(id, kind)| {
+                let belongs = Self::request_session_id(kind) == Some(session_id.as_str());
+                let keep_exact_turn = matches!(
+                    kind,
+                    RequestKind::WaitTurn(_)
+                        | RequestKind::ReloadWaitTurn(_)
+                        | RequestKind::TurnResult(_)
+                );
+                (belongs && !keep_exact_turn).then_some(*id)
+            })
+            .collect();
+        let stale_submissions: Vec<LocalSubmissionId> = stale_ids
+            .iter()
+            .filter_map(|id| match self.pending_requests.get(id) {
+                Some(RequestKind::SendTurn {
+                    local_submission, ..
+                }) => Some(*local_submission),
+                _ => None,
+            })
+            .collect();
+        for local_submission in stale_submissions {
+            self.submissions.remove(&local_submission);
+        }
+        for id in stale_ids {
+            self.pending_requests.insert(id, RequestKind::StaleRead);
+        }
+        self.context_polls.remove(session_id);
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            view.context_query_generation = view
+                .context_query_generation
+                .checked_add(1)
+                .expect("context query generations exhausted");
+            view.manual_compact = None;
+        }
     }
 
     fn is_prior_loop(view: &SessionView, loop_id: &str) -> bool {
@@ -5907,6 +6203,7 @@ impl App {
     fn mark_session_closed(&mut self, session_id: &SessionId) {
         self.sessions.closed.insert(session_id.clone());
         self.invalidate_session_state_requests(session_id);
+        self.retire_session_operations(session_id);
         if let Some(view) = self.sessions.known.get_mut(session_id) {
             view.closing = false;
             view.close_verification_unknown = false;
@@ -6527,6 +6824,13 @@ impl App {
         // Reopen is a lifecycle boundary. Retire old request ids before
         // rebuilding the view so late responses cannot mutate the new load.
         self.invalidate_reopened_session(&session_id);
+        self.context_polls.remove(&session_id);
+        self.submissions.retain(|_, submission| {
+            submission
+                .preparation
+                .as_ref()
+                .is_none_or(|operation| operation.session_id != session_id)
+        });
         let retained_after_reopen = previous_retired_loop
             .as_ref()
             .and_then(|turn| self.retained_results.get(turn))
@@ -6548,6 +6852,16 @@ impl App {
             view.last_request = None;
             view.config_update = None;
             view.state = None;
+            view.context = None;
+            view.context_query_generation = view
+                .context_query_generation
+                .checked_add(1)
+                .expect("context query generations exhausted");
+            view.manual_compact = None;
+            view.session_epoch = view
+                .session_epoch
+                .checked_add(1)
+                .expect("session epochs exhausted");
             view.presentation = None;
             view.presentation_pending = false;
             view.presentation_refresh_pending = false;
@@ -6606,7 +6920,22 @@ impl App {
         }
         match response.parse_session_state() {
             Ok(state) if state.session_id.as_str() == session_id.as_str() => {
-                self.apply_session_state(&state, None, SessionStateSource::FreshResponse)
+                let commands =
+                    self.apply_session_state(&state, None, SessionStateSource::FreshResponse);
+                if let Some(view) = self.sessions.known.get_mut(session_id) {
+                    if view.manual_compact.as_ref().is_some_and(|compact| {
+                        compact.result.as_ref().is_some_and(|result| {
+                            result.status == crate::protocol::CompactStatusWire::UnknownWrite
+                        })
+                    }) {
+                        view.manual_compact
+                            .as_mut()
+                            .expect("manual compact was checked")
+                            .state_refresh_confirmed = true;
+                    }
+                }
+                self.maybe_clear_unknown_compact_fence(session_id);
+                commands
             }
             Ok(_) => {
                 self.mark_session_uncalibrated(session_id);
@@ -6623,6 +6952,33 @@ impl App {
                     format!("failed to fetch state for {session_id}: {error}"),
                 );
                 Vec::new()
+            }
+        }
+    }
+
+    fn maybe_clear_unknown_compact_fence(&mut self, session_id: &SessionId) {
+        let clear = self.sessions.known.get(session_id).is_some_and(|view| {
+            let unknown = view.manual_compact.as_ref().is_some_and(|compact| {
+                compact.result.as_ref().is_some_and(|result| {
+                    result.status == crate::protocol::CompactStatusWire::UnknownWrite
+                })
+            });
+            unknown
+                && view.manual_compact.as_ref().is_some_and(|compact| {
+                    compact.state_refresh_confirmed && compact.context_refresh_confirmed
+                })
+                && view
+                    .state
+                    .as_ref()
+                    .is_none_or(|state| state.compaction.is_none())
+                && view
+                    .context
+                    .as_ref()
+                    .is_none_or(|context| context.current_operation.is_none())
+        });
+        if clear {
+            if let Some(view) = self.sessions.known.get_mut(session_id) {
+                view.manual_compact = None;
             }
         }
     }
@@ -6687,6 +7043,316 @@ impl App {
         } else {
             Vec::new()
         }
+    }
+
+    fn on_session_context_response(
+        &mut self,
+        session_id: &SessionId,
+        generation: u64,
+        owner: ContextQueryOwner,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
+        let context = match response.parse_session_context() {
+            Ok(context) if context.session_id == *session_id => context,
+            Ok(_) => {
+                self.reschedule_context_poll(session_id, &owner);
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("session.context response does not match {session_id}"),
+                );
+                return Vec::new();
+            }
+            Err(error) => {
+                self.reschedule_context_poll(session_id, &owner);
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("failed to read context for {session_id}: {error}"),
+                );
+                return Vec::new();
+            }
+        };
+
+        let (current_operation, cancel_submission, cancel_manual, keep_polling) = {
+            let Some(view) = self.sessions.known.get_mut(session_id) else {
+                return Vec::new();
+            };
+            if view.context_query_generation != generation {
+                return Vec::new();
+            }
+            let current_operation = context.current_operation.clone();
+            let automatic_active = context.automatic.current.is_some();
+            view.context = Some(context);
+            if let Some(compact) = view.manual_compact.as_mut() {
+                if compact.result.as_ref().is_some_and(|result| {
+                    result.status == crate::protocol::CompactStatusWire::UnknownWrite
+                }) {
+                    compact.context_refresh_confirmed = true;
+                }
+            }
+            if let Some(state) = view.state.as_mut() {
+                state.compaction = current_operation.clone();
+            }
+            let cancel_submission = match &owner {
+                ContextQueryOwner::Submission(local_id) => self
+                    .submissions
+                    .get(local_id)
+                    .is_some_and(|submission| submission.cancel_requested),
+                _ => false,
+            };
+            let cancel_manual = match &owner {
+                ContextQueryOwner::ManualCompact(operation_id) => {
+                    view.manual_compact.as_ref().is_some_and(|compact| {
+                        compact.operation_id == *operation_id
+                            && compact.result.is_none()
+                            && compact.cancel_requested
+                    })
+                }
+                _ => false,
+            };
+            let keep_polling = current_operation.is_some()
+                || automatic_active
+                || matches!(owner, ContextQueryOwner::Submission(_))
+                    && self
+                        .submissions
+                        .keys()
+                        .any(|local_id| matches!(&owner, ContextQueryOwner::Submission(owner_id) if owner_id == local_id));
+            (
+                current_operation,
+                cancel_submission,
+                cancel_manual,
+                keep_polling,
+            )
+        };
+
+        self.maybe_clear_unknown_compact_fence(session_id);
+
+        if keep_polling {
+            let due = self
+                .instant_now()
+                .checked_add(self.context_interval(session_id))
+                .expect("context poll deadline is representable");
+            self.context_polls.insert(
+                session_id.clone(),
+                ContextPoll {
+                    owner: owner.clone(),
+                    due,
+                },
+            );
+        } else if !matches!(owner, ContextQueryOwner::Explicit) {
+            self.context_polls.remove(session_id);
+        }
+
+        if let Some(operation) = current_operation {
+            if let Some(submission) = match &owner {
+                ContextQueryOwner::Submission(local_id) => self.submissions.get_mut(local_id),
+                _ => None,
+            } {
+                submission.preparation = Some(OperationRef {
+                    session_id: session_id.clone(),
+                    operation_id: operation.operation_id.clone(),
+                });
+            }
+            if cancel_submission || cancel_manual {
+                return self
+                    .request_compact_cancel(session_id, &operation.operation_id)
+                    .into_iter()
+                    .collect();
+            }
+        }
+
+        Vec::new()
+    }
+
+    fn reschedule_context_poll(&mut self, session_id: &SessionId, owner: &ContextQueryOwner) {
+        if matches!(owner, ContextQueryOwner::Explicit) {
+            self.context_polls.remove(session_id);
+            return;
+        }
+        let due = self
+            .instant_now()
+            .checked_add(self.context_interval(session_id))
+            .expect("context poll deadline is representable");
+        self.context_polls.insert(
+            session_id.clone(),
+            ContextPoll {
+                owner: owner.clone(),
+                due,
+            },
+        );
+    }
+
+    fn on_compact_response(
+        &mut self,
+        session_id: &SessionId,
+        operation_id: &str,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
+        let result = match response.parse_session_compact() {
+            Ok(result) if result.operation_id == operation_id => result,
+            Ok(_) => {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("session.compact response does not match {operation_id}"),
+                );
+                return Vec::new();
+            }
+            Err(error) => {
+                self.finish_compact_failure(session_id, operation_id);
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("session.compact {operation_id} failed: {error}"),
+                );
+                return Vec::new();
+            }
+        };
+        let owns_operation = self.sessions.known.get(session_id).is_some_and(|view| {
+            view.manual_compact
+                .as_ref()
+                .is_some_and(|compact| compact.operation_id == operation_id)
+        });
+        if !owns_operation {
+            self.notice(
+                NoticeLevel::Warning,
+                format!("stale session.compact result ignored for {operation_id}"),
+            );
+            return Vec::new();
+        }
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            let compact = view
+                .manual_compact
+                .as_mut()
+                .expect("manual compact ownership was checked");
+            compact.result = Some(result.clone());
+            view.state
+                .as_mut()
+                .and_then(|state| state.compaction.take());
+            view.context_query_generation = view
+                .context_query_generation
+                .checked_add(1)
+                .expect("context query generations exhausted");
+        }
+        self.context_polls.remove(session_id);
+        match result.status {
+            crate::protocol::CompactStatusWire::Compacted
+            | crate::protocol::CompactStatusWire::Noop => {
+                self.notice(
+                    NoticeLevel::Info,
+                    format!("context compaction {operation_id} completed"),
+                );
+                self.arm_context_poll(session_id, ContextQueryOwner::Explicit, true)
+                    .into_iter()
+                    .collect()
+            }
+            crate::protocol::CompactStatusWire::Failed => {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!(
+                        "context compaction {operation_id} failed ({})",
+                        result.failure_kind.as_deref().unwrap_or("unknown failure")
+                    ),
+                );
+                self.arm_context_poll(session_id, ContextQueryOwner::Explicit, true)
+                    .into_iter()
+                    .collect()
+            }
+            crate::protocol::CompactStatusWire::UnknownWrite => {
+                self.notice(
+                    NoticeLevel::Error,
+                    format!(
+                        "context compaction {operation_id} has unknown write outcome; state/context reread required"
+                    ),
+                );
+                let mut commands = vec![self.request_session_state(session_id)];
+                if let Some(command) =
+                    self.arm_context_poll(session_id, ContextQueryOwner::Explicit, true)
+                {
+                    commands.push(command);
+                }
+                commands
+            }
+        }
+    }
+
+    fn finish_compact_failure(&mut self, session_id: &SessionId, operation_id: &str) {
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            if view
+                .manual_compact
+                .as_ref()
+                .is_some_and(|compact| compact.operation_id == operation_id)
+            {
+                view.manual_compact = None;
+                view.state
+                    .as_mut()
+                    .and_then(|state| state.compaction.take());
+                view.context_query_generation = view
+                    .context_query_generation
+                    .checked_add(1)
+                    .expect("context query generations exhausted");
+            }
+        }
+        self.context_polls.remove(session_id);
+    }
+
+    fn on_compact_cancel_response(
+        &mut self,
+        session_id: &SessionId,
+        operation_id: &str,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
+        let owns_operation = self.sessions.known.get(session_id).is_some_and(|view| {
+            view.manual_compact.as_ref().is_some_and(|compact| {
+                compact.operation_id == operation_id && compact.result.is_none()
+            })
+        });
+        if !owns_operation {
+            self.notice(
+                NoticeLevel::Warning,
+                format!("stale compaction cancel ignored for {operation_id}"),
+            );
+            return Vec::new();
+        }
+        match response.result_as::<crate::protocol::CancelledResult>() {
+            Ok(result) if result.cancelled => {
+                self.notice(
+                    NoticeLevel::Info,
+                    format!("cancellation requested for compaction {operation_id}"),
+                );
+            }
+            Ok(_) => self.notice(
+                NoticeLevel::Warning,
+                format!("compaction {operation_id} was not cancellable"),
+            ),
+            Err(error) => self.notice(
+                NoticeLevel::Warning,
+                format!("compaction cancel {operation_id} failed: {error}"),
+            ),
+        }
+        self.arm_context_poll(
+            session_id,
+            ContextQueryOwner::ManualCompact(operation_id.to_owned()),
+            true,
+        )
+        .into_iter()
+        .collect()
+    }
+
+    fn request_compact_cancel(
+        &mut self,
+        session_id: &SessionId,
+        operation_id: &str,
+    ) -> Option<AppCommand> {
+        if self.pending_requests.values().any(|kind| {
+            matches!(kind, RequestKind::CompactCancel { session_id: pending, operation_id: id } if pending == session_id && id == operation_id)
+        }) {
+            return None;
+        }
+        Some(self.request(
+            RequestKind::CompactCancel {
+                session_id: session_id.to_owned(),
+                operation_id: operation_id.to_owned(),
+            },
+            |id| OutgoingRequest::session_compact_cancel(id, session_id, operation_id),
+        ))
     }
 
     fn apply_session_state(
@@ -7332,6 +7998,18 @@ impl App {
             );
             return Vec::new();
         }
+        if self
+            .sessions
+            .known
+            .get(&session_id)
+            .is_some_and(|view| view.live.is_some())
+        {
+            self.notice(
+                NoticeLevel::Warning,
+                "session already has a submitted turn; wait for it to finish",
+            );
+            return Vec::new();
+        }
         // A known-invalid state authority or durable history gap blocks a new
         // turn. A pending normal state read or an incomplete history read
         // without a gap retains the legacy admission behavior.
@@ -7363,13 +8041,29 @@ impl App {
             .next_submission
             .checked_add(1)
             .expect("submission ids exhausted");
+        let editor_revision = self.composer.editor_revision();
+        let session_epoch = self
+            .sessions
+            .known
+            .get(&session_id)
+            .map_or(0, |view| view.session_epoch);
+        self.submissions.insert(
+            submission,
+            Submission {
+                request_id: None,
+                local_id: submission,
+                session_epoch,
+                editor_revision,
+                text: std::sync::Arc::<str>::from(trimmed),
+                preparation: None,
+                cancel_requested: false,
+            },
+        );
         {
             let Some(view) = self.sessions.known.get_mut(&session_id) else {
+                self.submissions.remove(&submission);
                 return Vec::new();
             };
-            if view.live.is_some() {
-                return Vec::new();
-            }
             // Keep the previous last_result as a bounded fence until this
             // new submission receives its own loop reference. The UI hides a
             // result that does not belong to the live loop.
@@ -7393,9 +8087,10 @@ impl App {
                 last_result: None,
             });
             view.steer_state_unconfirmed = false;
-            // A fresh loop resumes the local steer queue: receipts reset, and
-            // a paused queue may flow again (the user explicitly started it).
-            view.steer_queue_paused = false;
+            // A fresh loop never inherits unsent steering from the sealed
+            // loop. The user must withdraw an old item into the editor before
+            // it can become a new prompt.
+            view.steer_queue_paused = !view.steer_queue.is_empty();
             view.steer_receipt = None;
             view.applied_steers.clear();
             view.transcript
@@ -7409,20 +8104,55 @@ impl App {
                 }));
             view.transcript.invalidate();
         }
-        vec![self.request(
+        let send = self.request(
             RequestKind::SendTurn {
                 session_id: session_id.clone(),
                 local_submission: submission,
             },
             |id| OutgoingRequest::send_turn(id, &session_id, trimmed),
-        )]
+        );
+        if let AppCommand::Rpc(request) = &send {
+            if let Some(submission_state) = self.submissions.get_mut(&submission) {
+                submission_state.request_id = Some(request.id);
+            }
+        }
+        let mut commands = vec![send];
+        if let Some(command) = self.arm_context_poll(
+            &session_id,
+            ContextQueryOwner::Submission(submission),
+            false,
+        ) {
+            commands.push(command);
+        }
+        commands
     }
 
     fn cancel_turn(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
         if !self.guard_ready() {
             return Vec::new();
         }
-        let reference = {
+        let manual_operation = self
+            .sessions
+            .known
+            .get(session_id)
+            .and_then(|view| {
+                view.manual_compact
+                    .as_ref()
+                    .filter(|compact| compact.result.is_none())
+            })
+            .map(|compact| compact.operation_id.clone());
+        if let Some(operation_id) = manual_operation {
+            if let Some(view) = self.sessions.known.get_mut(session_id) {
+                if let Some(compact) = view.manual_compact.as_mut() {
+                    compact.cancel_requested = true;
+                }
+            }
+            return self
+                .request_compact_cancel(session_id, &operation_id)
+                .into_iter()
+                .collect();
+        }
+        let (reference, submission_id) = {
             let Some(view) = self.sessions.known.get_mut(session_id) else {
                 return Vec::new();
             };
@@ -7439,29 +8169,56 @@ impl App {
             }
             if let Some(live) = view.live.as_mut() {
                 live.cancel_requested = true;
-                live.reference.clone()
+                (live.reference.clone(), Some(live.local_submission))
             } else {
-                view.state.as_ref().and_then(|state| {
-                    state.active_loop.as_ref().map(|loop_state| TurnRef {
-                        session_id: session_id.clone(),
-                        loop_id: loop_state.loop_id.clone(),
-                    })
-                })
+                (
+                    view.state.as_ref().and_then(|state| {
+                        state.active_loop.as_ref().map(|loop_state| TurnRef {
+                            session_id: session_id.clone(),
+                            loop_id: loop_state.loop_id.clone(),
+                        })
+                    }),
+                    None,
+                )
             }
         };
-        match reference {
-            Some(turn) => {
-                // A cancellation pauses the unsent queue: never auto-send an
-                // ambiguous message after an explicit user cancel.
-                if let Some(view) = self.sessions.known.get_mut(session_id) {
-                    view.steer_queue_paused = true;
-                }
-                vec![self.request(RequestKind::CancelTurn(turn.clone()), |id| {
-                    OutgoingRequest::cancel_turn(id, &turn)
-                })]
+        let preparation = submission_id.and_then(|local_id| {
+            self.submissions.get_mut(&local_id).and_then(|submission| {
+                submission.cancel_requested = true;
+                submission.preparation.clone()
+            })
+        });
+        if reference.is_none() {
+            if let Some(operation) = preparation {
+                return self
+                    .request_compact_cancel(session_id, &operation.operation_id)
+                    .into_iter()
+                    .collect();
             }
-            None => Vec::new(),
+            if submission_id.is_some() {
+                self.notice(
+                    NoticeLevel::Info,
+                    "cancellation requested; waiting for the preparation operation identity",
+                );
+            }
+            return Vec::new();
         }
+        let turn = reference.expect("checked above");
+        // A cancellation pauses the unsent queue: never auto-send an
+        // ambiguous message after an explicit user cancel.
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            view.steer_queue_paused = true;
+        }
+        if self
+            .pending_requests
+            .values()
+            .any(|kind| matches!(kind, RequestKind::CancelTurn(pending) if pending == &turn))
+        {
+            return Vec::new();
+        }
+        vec![self.request(RequestKind::CancelTurn(turn.clone()), |id| {
+            OutgoingRequest::cancel_turn(id, &turn)
+        })]
     }
 
     fn retained_turn(&self, session_id: &SessionId) -> Option<TurnRef> {
@@ -7565,6 +8322,10 @@ impl App {
         local_submission: LocalSubmissionId,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
+        let submission_state = self.submissions.remove(&local_submission);
+        let submission_cancel_requested = submission_state
+            .as_ref()
+            .is_some_and(|submission| submission.cancel_requested);
         enum Plan {
             Wait {
                 turn: TurnRef,
@@ -7575,121 +8336,132 @@ impl App {
                 recovered: Option<String>,
                 error: RpcResponseError,
             },
+            Stale,
             Mismatch,
         }
         let plan = {
             let Some(view) = self.sessions.known.get_mut(session_id) else {
                 return Vec::new();
             };
-            let pending_user_text = view.transcript.blocks.iter().find_map(|block| match block {
-                TranscriptBlock::User(card) if card.pending => Some(card.text.clone()),
-                _ => None,
-            });
-            let Some(live) = view.live.as_mut() else {
-                return Vec::new();
-            };
-            let parsed = response.parse_turn_send();
-            if live.local_submission == LocalSubmissionId(u64::MAX)
-                && parsed.as_ref().is_ok_and(|result| {
-                    result.turn.session_id.as_str() == session_id.as_str()
-                        && live
-                            .reference
-                            .as_ref()
-                            .is_some_and(|reference| reference == &result.turn)
-                })
+            if submission_state
+                .as_ref()
+                .is_some_and(|submission| submission.session_epoch != view.session_epoch)
             {
-                live.local_submission = local_submission;
-                if live.user_text.is_empty() {
-                    live.user_text = pending_user_text.unwrap_or_default();
-                }
-            }
-            if live.local_submission != local_submission {
-                return Vec::new();
-            }
-            match parsed {
-                Ok(result) => {
-                    if result.turn.session_id.as_str() != session_id.as_str()
-                        || live
-                            .reference
-                            .as_ref()
-                            .is_some_and(|reference| reference != &result.turn)
-                    {
-                        Plan::Mismatch
-                    } else {
-                        let first_binding = live.reference.is_none();
-                        if view
-                            .last_result
-                            .as_ref()
-                            .is_some_and(|previous| previous.turn != result.turn)
-                        {
-                            view.last_result = None;
-                        }
-                        view.result_unconfirmed = false;
-                        live.reference = Some(result.turn.clone());
-                        view.live_user_timestamp = result.accepted_at.clone();
-                        view.live_user_time_accepted = true;
-                        let pending_user =
-                            view.transcript
-                                .blocks
-                                .iter_mut()
-                                .find_map(|block| match block {
-                                    TranscriptBlock::User(card) if card.pending => Some(card),
-                                    _ => None,
-                                });
-                        if let Some(card) = pending_user {
-                            card.loop_id = Some(result.turn.loop_id.clone());
-                        }
-                        view.transcript.invalidate();
-                        Plan::Wait {
-                            turn: result.turn,
-                            cancel: live.cancel_requested,
-                            first_binding,
-                        }
+                Plan::Stale
+            } else {
+                let pending_user_text =
+                    view.transcript.blocks.iter().find_map(|block| match block {
+                        TranscriptBlock::User(card) if card.pending => Some(card.text.clone()),
+                        _ => None,
+                    });
+                let Some(live) = view.live.as_mut() else {
+                    return Vec::new();
+                };
+                let parsed = response.parse_turn_send();
+                if live.local_submission == LocalSubmissionId(u64::MAX)
+                    && parsed.as_ref().is_ok_and(|result| {
+                        result.turn.session_id.as_str() == session_id.as_str()
+                            && live
+                                .reference
+                                .as_ref()
+                                .is_some_and(|reference| reference == &result.turn)
+                    })
+                {
+                    live.local_submission = local_submission;
+                    if live.user_text.is_empty() {
+                        live.user_text = pending_user_text.unwrap_or_default();
                     }
                 }
-                Err(error) => {
-                    let is_blocked_err = matches!(&error, crate::protocol::RpcResponseError::Agent(err) if err.code == -32004);
-                    // A fresh-turn handoff whose loop the Agent ALREADY started
-                    // (a TurnStarted event bound the reference) is a PROVEN
-                    // accept: keep the running loop and wait; never abandon an
-                    // accepted turn nor retry its message.
-                    let is_handoff_send = view.steer_queue.iter().any(|item| item.handoff);
-                    if is_handoff_send
-                        && view
-                            .live
-                            .as_ref()
-                            .is_some_and(|live| live.reference.is_some())
-                    {
-                        let turn = view
-                            .live
-                            .as_ref()
-                            .and_then(|live| live.reference.as_ref())
-                            .cloned()
-                            .expect("checked above");
-                        let cancel = view.live.as_ref().is_some_and(|live| live.cancel_requested);
-                        view.transcript.blocks.retain(
-                            |block| !matches!(block, TranscriptBlock::User(card) if card.pending),
-                        );
-                        view.transcript.invalidate();
-                        // The started loop owns the text: drop the queue entry
-                        // exactly like the accepted-Wait path.
-                        view.steer_queue.retain(|item| !item.handoff);
-                        Plan::Wait {
-                            turn,
-                            cancel,
-                            first_binding: false,
-                        }
-                    } else {
-                        let recovered = if view.is_blocked() || is_blocked_err {
-                            view.live.as_ref().map(|live| live.user_text.clone())
+                if live.local_submission != local_submission {
+                    return Vec::new();
+                }
+                match parsed {
+                    Ok(result) => {
+                        if result.turn.session_id.as_str() != session_id.as_str()
+                            || live
+                                .reference
+                                .as_ref()
+                                .is_some_and(|reference| reference != &result.turn)
+                        {
+                            Plan::Mismatch
                         } else {
-                            view.live.take().map(|live| live.user_text)
-                        };
-                        view.transcript.blocks.retain(
+                            let first_binding = live.reference.is_none();
+                            if view
+                                .last_result
+                                .as_ref()
+                                .is_some_and(|previous| previous.turn != result.turn)
+                            {
+                                view.last_result = None;
+                            }
+                            view.result_unconfirmed = false;
+                            live.reference = Some(result.turn.clone());
+                            view.live_user_timestamp = result.accepted_at.clone();
+                            view.live_user_time_accepted = true;
+                            let pending_user =
+                                view.transcript
+                                    .blocks
+                                    .iter_mut()
+                                    .find_map(|block| match block {
+                                        TranscriptBlock::User(card) if card.pending => Some(card),
+                                        _ => None,
+                                    });
+                            if let Some(card) = pending_user {
+                                card.loop_id = Some(result.turn.loop_id.clone());
+                            }
+                            view.transcript.invalidate();
+                            Plan::Wait {
+                                turn: result.turn,
+                                cancel: live.cancel_requested || submission_cancel_requested,
+                                first_binding,
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        let is_blocked_err = matches!(&error, crate::protocol::RpcResponseError::Agent(err) if err.code == -32004);
+                        // A fresh-turn handoff whose loop the Agent ALREADY started
+                        // (a TurnStarted event bound the reference) is a PROVEN
+                        // accept: keep the running loop and wait; never abandon an
+                        // accepted turn nor retry its message.
+                        let is_handoff_send = view.steer_queue.iter().any(|item| item.handoff);
+                        if is_handoff_send
+                            && view
+                                .live
+                                .as_ref()
+                                .is_some_and(|live| live.reference.is_some())
+                        {
+                            let turn = view
+                                .live
+                                .as_ref()
+                                .and_then(|live| live.reference.as_ref())
+                                .cloned()
+                                .expect("checked above");
+                            let cancel =
+                                view.live.as_ref().is_some_and(|live| live.cancel_requested)
+                                    || submission_cancel_requested;
+                            view.transcript.blocks.retain(
                             |block| !matches!(block, TranscriptBlock::User(card) if card.pending),
                         );
-                        view.transcript.invalidate();
-                        Plan::Failed { recovered, error }
+                            view.transcript.invalidate();
+                            // The started loop owns the text: drop the queue entry
+                            // exactly like the accepted-Wait path.
+                            view.steer_queue.retain(|item| !item.handoff);
+                            Plan::Wait {
+                                turn,
+                                cancel,
+                                first_binding: false,
+                            }
+                        } else {
+                            let recovered = if view.is_blocked() || is_blocked_err {
+                                view.live.as_ref().map(|live| live.user_text.clone())
+                            } else {
+                                view.live.take().map(|live| live.user_text)
+                            };
+                            view.transcript.blocks.retain(
+                            |block| !matches!(block, TranscriptBlock::User(card) if card.pending),
+                        );
+                            view.transcript.invalidate();
+                            Plan::Failed { recovered, error }
+                        }
                     }
                 }
             }
@@ -7743,7 +8515,13 @@ impl App {
                         crate::protocol::RpcResponseError::Parse(_)
                             | crate::protocol::RpcResponseError::Malformed
                     );
-                if self.sessions.active.as_ref() == Some(session_id) && !is_handoff_send {
+                let revision_unchanged = submission_state.as_ref().is_none_or(|submission| {
+                    submission.editor_revision == self.composer.editor_revision()
+                });
+                if self.sessions.active.as_ref() == Some(session_id)
+                    && !is_handoff_send
+                    && revision_unchanged
+                {
                     if let Some(text) =
                         recovered.filter(|_| self.composer.content().trim().is_empty())
                     {
@@ -7760,9 +8538,22 @@ impl App {
                         }
                     }
                     view.steer_queue_paused = true;
+                    view.state
+                        .as_mut()
+                        .and_then(|state| state.compaction.take());
                 }
+                self.context_polls.remove(session_id);
                 let message = if uncertain {
                     "turn send response could not be decoded; the queued steering is unconfirmed and will not be resubmitted automatically".to_owned()
+                } else if let crate::protocol::RpcResponseError::Agent(agent_error) = &error {
+                    if let Some(data) = agent_error.data.as_ref() {
+                        format!(
+                            "turn preparation failed ({}): {}",
+                            data.kind, agent_error.message
+                        )
+                    } else {
+                        format!("turn preparation failed: {agent_error}")
+                    }
                 } else {
                     format!("turn send failed: {error}")
                 };
@@ -7773,6 +8564,7 @@ impl App {
                 self.connection_terminated("turn.send response does not match the live loop");
                 Vec::new()
             }
+            Plan::Stale => Vec::new(),
         }
     }
 
@@ -8634,6 +9426,7 @@ impl App {
                 session_id,
                 local_submission,
             } => {
+                self.submissions.remove(&local_submission);
                 let recovered = {
                     let Some(view) = self.sessions.known.get_mut(&session_id) else {
                         return Vec::new();
@@ -8682,7 +9475,17 @@ impl App {
                         item.handoff = false;
                     }
                     view.steer_queue_paused = true;
+                    if view
+                        .live
+                        .as_ref()
+                        .is_some_and(|live| live.local_submission == local_submission)
+                    {
+                        view.state
+                            .as_mut()
+                            .and_then(|state| state.compaction.take());
+                    }
                 }
+                self.context_polls.remove(&session_id);
             }
             RequestKind::WaitTurn(turn) | RequestKind::ReloadWaitTurn(turn) => {
                 let wait_is_current = self
@@ -8721,6 +9524,49 @@ impl App {
                     format!(
                         "result read-back for {}/{} could not be sent: {error}; outcome remains unconfirmed",
                         turn.session_id, turn.loop_id
+                    ),
+                );
+            }
+            RequestKind::SessionContext { session_id, .. } => {
+                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    view.context_query_generation = view
+                        .context_query_generation
+                        .checked_add(1)
+                        .expect("context query generations exhausted");
+                }
+                self.context_polls.remove(&session_id);
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("session.context failed for {session_id}: {error}"),
+                );
+            }
+            RequestKind::Compact {
+                session_id,
+                operation_id,
+            } => {
+                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    if view
+                        .manual_compact
+                        .as_ref()
+                        .is_some_and(|compact| compact.operation_id == operation_id)
+                    {
+                        view.manual_compact = None;
+                    }
+                }
+                self.context_polls.remove(&session_id);
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("session.compact {operation_id} failed to send: {error}"),
+                );
+            }
+            RequestKind::CompactCancel {
+                session_id,
+                operation_id,
+            } => {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!(
+                        "cancel for compaction {operation_id} in {session_id} failed to send: {error}"
                     ),
                 );
             }
@@ -9186,6 +10032,19 @@ impl App {
             RequestKind::SessionPresentation { session_id } => {
                 self.on_session_presentation_response(&session_id, &response)
             }
+            RequestKind::SessionContext {
+                session_id,
+                generation,
+                owner,
+            } => self.on_session_context_response(&session_id, generation, owner, &response),
+            RequestKind::Compact {
+                session_id,
+                operation_id,
+            } => self.on_compact_response(&session_id, &operation_id, &response),
+            RequestKind::CompactCancel {
+                session_id,
+                operation_id,
+            } => self.on_compact_cancel_response(&session_id, &operation_id, &response),
             RequestKind::ReloadPresentation {
                 session_id,
                 generation,
@@ -12023,7 +12882,7 @@ mod tests {
     }
 
     #[test]
-    fn reload_queued_steer_waits_for_settled_idle_before_fresh_turn_handoff() {
+    fn reload_queued_steer_remains_paused_after_the_loop_settles() {
         let mut app = test_app();
         ready(&mut app);
         open_session(&mut app, "ses_1");
@@ -12196,49 +13055,23 @@ mod tests {
                 2,
             ),
         ));
-        assert_eq!(
-            after_history
-                .iter()
-                .filter(|request| request.method == "turn.send")
-                .count(),
-            1
-        );
-        let fresh_turn = after_history
-            .iter()
-            .find(|request| request.method == "turn.send")
-            .cloned()
-            .expect("settled A hands off queued B once");
-        assert_eq!(fresh_turn.params["text"], "queued B");
         assert!(
             after_history
-                .iter()
-                .all(|request| request.method != "turn.steer")
-        );
-        assert!(!app.sessions.known["ses_1"].steer_state_unconfirmed);
-
-        let after_b_ack = take_requests(respond(
-            &mut app,
-            &fresh_turn,
-            json!({"turn": turn_ref_json("ses_1", "loop_b")}),
-        ));
-        assert_eq!(
-            after_b_ack
-                .iter()
-                .filter(|request| request.method == "turn.wait")
-                .count(),
-            1
-        );
-        assert!(
-            after_b_ack
                 .iter()
                 .all(|request| request.method != "turn.send" && request.method != "turn.steer")
         );
+        assert!(app.sessions.known["ses_1"].steer_state_unconfirmed);
+        assert_eq!(app.sessions.known["ses_1"].steer_queue.len(), 1);
+        assert_eq!(app.sessions.known["ses_1"].steer_queue[0].text, "queued B");
         assert_eq!(
+            app.sessions.known["ses_1"].steer_queue[0].state,
+            SteerQueueState::Unsent
+        );
+        assert!(app.sessions.known["ses_1"].steer_queue_paused);
+        assert!(
             take_requests(app.update(AppEvent::Tick))
                 .iter()
-                .filter(|request| request.method == "turn.send" || request.method == "turn.steer")
-                .count(),
-            0
+                .all(|request| request.method != "turn.send" && request.method != "turn.steer")
         );
     }
 
