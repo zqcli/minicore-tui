@@ -69,6 +69,10 @@ const MAX_DEFERRED_REQUESTS: usize = 16;
 /// Bound for coalesced admission-failure retries. One intent per precise
 /// target keeps the map naturally small; the cap only prevents pathology.
 const MAX_RPC_RETRIES: usize = 64;
+/// How often one refused request may be re-emitted before the app gives up
+/// and restores the user's input. Bounded so a permanently full FIFO cannot
+/// ping-pong forever on progress signals (spec §5.2).
+const MAX_SEND_ATTEMPTS: u8 = 2;
 
 /// How long a transient notice stays before `Tick` removes it (spec 33.2).
 const NOTICE_TTL: Duration = Duration::from_secs(5);
@@ -460,6 +464,9 @@ pub struct App {
     /// Coalesced retries for requests refused by the bounded outbound FIFO.
     /// Bounded by [`MAX_RPC_RETRIES`]; drains on the next progress event.
     pending_retries: std::collections::BTreeMap<RetryKey, RetryEntry>,
+    /// Refusal count per exact retry target, so retries are bounded and the
+    /// counter can be cleared when the request finally settles.
+    retry_attempts: std::collections::BTreeMap<RetryKey, u8>,
     /// Monotonic identity for the current selection, so a clipboard job that
     /// finishes after the selection changed does not show stale feedback.
     selection_revision: u64,
@@ -628,6 +635,7 @@ impl App {
             now: SystemTime::now,
             pending_requests: HashMap::new(),
             pending_retries: std::collections::BTreeMap::new(),
+            retry_attempts: std::collections::BTreeMap::new(),
             selection_revision: 0,
             queries: crate::app::queries::QuerySlots::new(),
             turn_results: HashMap::new(),
@@ -4392,7 +4400,15 @@ impl App {
         }
         let entries = std::mem::take(&mut self.pending_retries);
         let mut commands = Vec::with_capacity(entries.len());
-        for (_, entry) in entries {
+        for (key, entry) in entries {
+            let attempts = self.retry_attempts.get(&key).copied().unwrap_or(0);
+            if attempts > MAX_SEND_ATTEMPTS {
+                // The FIFO stayed full for every attempt: stop retrying, tell
+                // the user, and put the input back where it belongs.
+                self.retry_attempts.remove(&key);
+                self.abandon_retry(entry);
+                continue;
+            }
             self.pending_requests.insert(entry.request.id, entry.kind);
             commands.push(AppCommand::Rpc(entry.request));
         }
@@ -4407,24 +4423,173 @@ impl App {
             return Vec::new();
         };
         self.free_query_slot(request.id);
-        if let Some(key) = Self::retry_key(&kind) {
-            if self.pending_retries.len() < MAX_RPC_RETRIES
-                || self.pending_retries.contains_key(&key)
-            {
-                self.pending_retries
-                    .insert(key, RetryEntry { kind, request });
-                self.notice(
-                    NoticeLevel::Info,
-                    "send queue is busy; the request stays pending locally",
-                );
-                return Vec::new();
+        let key = Self::retry_key(&kind);
+        let mut retry = false;
+        if let Some(key) = &key {
+            let attempts = self.retry_attempts.entry(key.clone()).or_insert(0);
+            *attempts = attempts.saturating_add(1);
+            retry = *attempts <= MAX_SEND_ATTEMPTS
+                && (self.pending_retries.len() < MAX_RPC_RETRIES
+                    || self.pending_retries.contains_key(key));
+            if !retry {
+                self.retry_attempts.remove(key);
             }
         }
-        self.notice(
-            NoticeLevel::Warning,
-            "send queue is full and this request cannot be retried automatically",
-        );
+        if retry {
+            let key = key.expect("retry implies a precise target");
+            self.pending_retries
+                .insert(key, RetryEntry { kind, request });
+            self.notice(
+                NoticeLevel::Info,
+                "send queue is busy; the request stays pending locally",
+            );
+            return Vec::new();
+        }
+        self.abandon_retry(RetryEntry { kind, request });
         Vec::new()
+    }
+
+    /// One request that was refused admission for the last time: restore the
+    /// user-visible input (never silently drop it) and say so.
+    fn abandon_retry(&mut self, entry: RetryEntry) {
+        match entry.kind {
+            RequestKind::SendTurn {
+                session_id,
+                local_submission,
+            } => {
+                self.restore_unsent_turn(&session_id, local_submission);
+                self.notice(
+                    NoticeLevel::Warning,
+                    "turn.send was never admitted; the text is back in the editor",
+                );
+            }
+            RequestKind::SteerTurn {
+                session_id,
+                steer_id,
+                ..
+            } => {
+                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    let returned = view.live.as_mut().and_then(|live| {
+                        let position = live
+                            .pending_steers
+                            .iter()
+                            .position(|steer| steer.local_id == steer_id)?;
+                        Some(live.pending_steers.remove(position))
+                    });
+                    if let Some(steer) = returned {
+                        view.steer_queue.insert(
+                            0,
+                            crate::state::turn::SteerQueueItem {
+                                local_id: steer.local_id,
+                                text: steer.text,
+                                state: crate::state::turn::SteerQueueState::Unsent,
+                                editor_revision: None,
+                                handoff: false,
+                            },
+                        );
+                    }
+                    // Never auto-resend a message the Agent never saw.
+                    view.steer_queue_paused = true;
+                }
+                self.notice(
+                    NoticeLevel::Warning,
+                    "steer was never admitted; it stays in the paused queue",
+                );
+            }
+            RequestKind::UpdateSession { session_id, .. } => {
+                if let Some(view) = self.sessions.known.get_mut(&session_id) {
+                    view.config_update = None;
+                }
+                self.notice(
+                    NoticeLevel::Warning,
+                    "model/reasoning update was never admitted; nothing changed",
+                );
+            }
+            RequestKind::History { session_id, .. }
+            | RequestKind::SessionState { session_id, .. }
+            | RequestKind::SessionPresentation { session_id }
+            | RequestKind::SessionContext { session_id, .. } => {
+                self.mark_session_uncalibrated(&session_id);
+                self.notice(
+                    NoticeLevel::Warning,
+                    "a read request was not admitted; the session stays uncalibrated",
+                );
+            }
+            _ => {
+                self.notice(
+                    NoticeLevel::Warning,
+                    "a request was never admitted and cannot be retried automatically",
+                );
+            }
+        }
+    }
+
+    /// A `turn.send` that was never written: remove its submission and pending
+    /// card, and return its text to the editor. An existing draft is kept and
+    /// the unsent prompt is appended, so neither copy is lost.
+    fn restore_unsent_turn(&mut self, session_id: &SessionId, local_submission: LocalSubmissionId) {
+        self.submissions.remove(&local_submission);
+        let recovered = {
+            let Some(view) = self.sessions.known.get_mut(session_id) else {
+                return;
+            };
+            let mut recovered = None;
+            let current_submission = view
+                .live
+                .as_ref()
+                .is_some_and(|live| live.local_submission == local_submission);
+            if current_submission {
+                if !view.is_blocked() {
+                    if let Some(live) = view.live.take() {
+                        recovered = Some(live.user_text);
+                    }
+                } else if let Some(live) = view.live.as_ref() {
+                    recovered = Some(live.user_text.clone());
+                }
+                view.transcript
+                    .blocks
+                    .retain(|block| !matches!(block, TranscriptBlock::User(card) if card.pending));
+                view.transcript.invalidate();
+            }
+            recovered
+        };
+        // A handoff item owns its queued text: only plain (non-queue)
+        // submissions restore the editor (a second copy would duplicate it on
+        // the next Enter).
+        let is_handoff = self
+            .sessions
+            .known
+            .get(session_id)
+            .is_some_and(|view| view.steer_queue.iter().any(|item| item.handoff));
+        if self.sessions.active.as_ref() == Some(session_id) && !is_handoff {
+            if let Some(text) = recovered {
+                let existing = self.composer.content();
+                if existing.trim().is_empty() {
+                    self.composer.set_text(&text);
+                } else {
+                    self.composer.set_text(&format!("{existing}\n{text}"));
+                }
+            }
+        }
+        // The fresh-turn handoff could not be written: keep its queued entry
+        // as Unsent, clear the handoff, and PAUSE (a definitive pre-write
+        // failure may only be deliberately re-sent).
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            for item in &mut view.steer_queue {
+                item.handoff = false;
+            }
+            view.steer_queue_paused = true;
+            if view
+                .live
+                .as_ref()
+                .is_some_and(|live| live.local_submission == local_submission)
+            {
+                view.state
+                    .as_mut()
+                    .and_then(|state| state.compaction.take());
+            }
+        }
+        self.context_polls.remove(session_id);
     }
 
     /// Outstanding deferred requests (`turn.send`, `turn.wait`,
@@ -9728,6 +9893,9 @@ impl App {
             }
         };
         self.free_query_slot(id);
+        if let Some(key) = Self::retry_key(&kind) {
+            self.retry_attempts.remove(&key);
+        }
         if Self::request_session_id(&kind)
             .is_some_and(|session_id| self.sessions.deleted.contains(session_id))
         {
@@ -9739,66 +9907,8 @@ impl App {
                 session_id,
                 local_submission,
             } => {
-                self.submissions.remove(&local_submission);
-                let recovered = {
-                    let Some(view) = self.sessions.known.get_mut(&session_id) else {
-                        return Vec::new();
-                    };
-                    let mut recovered = None;
-                    let current_submission = view
-                        .live
-                        .as_ref()
-                        .is_some_and(|live| live.local_submission == local_submission);
-                    if current_submission {
-                        if !view.is_blocked() {
-                            if let Some(live) = view.live.take() {
-                                recovered = Some(live.user_text);
-                            }
-                        } else if let Some(live) = view.live.as_ref() {
-                            recovered = Some(live.user_text.clone());
-                        }
-                        view.transcript.blocks.retain(
-                            |block| !matches!(block, TranscriptBlock::User(card) if card.pending),
-                        );
-                        view.transcript.invalidate();
-                    }
-                    recovered
-                };
-                // A handoff item owns its queued text: only plain (non-queue)
-                // submissions restore the editor (a second copy would
-                // duplicate it on the next Enter).
-                let is_handoff = self
-                    .sessions
-                    .known
-                    .get(&session_id)
-                    .is_some_and(|view| view.steer_queue.iter().any(|item| item.handoff));
-                if self.sessions.active.as_ref() == Some(&session_id) && !is_handoff {
-                    if let Some(text) =
-                        recovered.filter(|_| self.composer.content().trim().is_empty())
-                    {
-                        self.composer.set_text(&text);
-                    }
-                }
+                self.restore_unsent_turn(&session_id, local_submission);
                 self.notice(NoticeLevel::Warning, format!("turn send failed: {error}"));
-                // The fresh-turn handoff could not be written: keep its queued
-                // entry as Unsent, clear the handoff, and PAUSE (definitive
-                // pre-write failure, so it may only be deliberately re-sent).
-                if let Some(view) = self.sessions.known.get_mut(&session_id) {
-                    for item in &mut view.steer_queue {
-                        item.handoff = false;
-                    }
-                    view.steer_queue_paused = true;
-                    if view
-                        .live
-                        .as_ref()
-                        .is_some_and(|live| live.local_submission == local_submission)
-                    {
-                        view.state
-                            .as_mut()
-                            .and_then(|state| state.compaction.take());
-                    }
-                }
-                self.context_polls.remove(&session_id);
             }
             RequestKind::WaitTurn(turn) | RequestKind::ReloadWaitTurn(turn) => {
                 let wait_is_current = self
@@ -10238,6 +10348,9 @@ impl App {
                 return Vec::new();
             }
         };
+        if let Some(key) = Self::retry_key(&kind) {
+            self.retry_attempts.remove(&key);
+        }
         self.free_query_slot(response.id);
         if Self::request_session_id(&kind)
             .is_some_and(|session_id| self.sessions.deleted.contains(session_id))
@@ -14241,6 +14354,140 @@ mod tests {
         assert!(view.is_blocked());
         assert!(view.unsaved_loop.is_some());
         assert_eq!(view.unsaved_loop.as_ref().unwrap().turn.loop_id, "loop_42");
+    }
+
+    #[test]
+    fn a_queue_full_send_retries_twice_then_restores_the_prompt() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+        let mut request = take_requests(app.update(AppEvent::SubmitTurn {
+            session_id: "ses_1".to_owned(),
+            text: "never admitted".to_owned(),
+        }))
+        .remove(0);
+        assert_eq!(request.method, "turn.send");
+        // Initial refusal plus two bounded re-emissions, then the app stops.
+        for attempt in 0..3 {
+            let more = app.update(AppEvent::RpcQueueFull {
+                request: request.clone(),
+                class: SendClass::Normal,
+            });
+            assert!(
+                take_requests(more).is_empty(),
+                "a refusal never re-sends in the same reducer pass (attempt {attempt})"
+            );
+            if attempt < 2 {
+                let retried = take_requests(app.update(AppEvent::Tick));
+                assert_eq!(
+                    retried.len(),
+                    1,
+                    "exactly one bounded retry per progress signal"
+                );
+                request = retried[0].clone();
+                assert_eq!(request.method, "turn.send");
+            }
+        }
+        assert!(app.pending_retries.is_empty());
+        assert!(app.retry_attempts.is_empty());
+        let view = &app.sessions.known["ses_1"];
+        assert!(
+            view.live.is_none(),
+            "the never-sent live placeholder is removed"
+        );
+        assert_eq!(
+            app.composer.content(),
+            "never admitted",
+            "the prompt is back in the editor and was never dropped"
+        );
+        assert!(
+            app.notices()
+                .iter()
+                .any(|notice| notice.text.contains("never admitted")),
+            "the user is told the send was never admitted"
+        );
+    }
+
+    #[test]
+    fn a_rejected_send_keeps_an_existing_draft_and_appends_the_unsent_prompt() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+        app.composer.set_text("existing draft");
+        let request = take_requests(app.update(AppEvent::SubmitTurn {
+            session_id: "ses_1".to_owned(),
+            text: "unsent follow up".to_owned(),
+        }))
+        .remove(0);
+        app.update(AppEvent::RpcSendFailed {
+            id: request.id,
+            error: RpcError::RequestTooLarge {
+                actual_bytes: 2 * 1024 * 1024,
+                max_bytes: 1024 * 1024,
+            },
+        });
+        let content = app.composer.content();
+        assert!(
+            content.contains("existing draft"),
+            "the draft survives: {content}"
+        );
+        assert!(
+            content.contains("unsent follow up"),
+            "the never-sent prompt survives too: {content}"
+        );
+        assert!(app.sessions.known["ses_1"].live.is_none());
+    }
+
+    #[test]
+    fn a_queue_full_steer_returns_to_the_paused_queue() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+        let turn = make_turn("ses_1", "loop_1");
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        view.state = Some(
+            serde_json::from_value(running_state_json("ses_1", "loop_1")).expect("running state"),
+        );
+        view.live = Some(LiveLoop {
+            reference: Some(turn),
+            local_submission: LocalSubmissionId(1),
+            user_text: "prompt".into(),
+            requests: vec![],
+            pending_steers: vec![],
+            waiting: false,
+            cancel_requested: false,
+            event_gap: false,
+            last_result: None,
+        });
+        app.steer_turn(&"ses_1".to_owned(), "steer text".to_owned());
+        let mut request = take_requests(app.update(AppEvent::Tick)).remove(0);
+        assert_eq!(request.method, "turn.steer");
+        for attempt in 0..3 {
+            app.update(AppEvent::RpcQueueFull {
+                request: request.clone(),
+                class: SendClass::Normal,
+            });
+            if attempt < 2 {
+                request = take_requests(app.update(AppEvent::Tick)).remove(0);
+            }
+        }
+        let view = &app.sessions.known["ses_1"];
+        assert!(
+            view.steer_queue_paused,
+            "a never-sent steer never auto-resends"
+        );
+        assert!(view.live.as_ref().unwrap().pending_steers.is_empty());
+        assert_eq!(view.steer_queue.len(), 1);
+        assert_eq!(view.steer_queue[0].text, "steer text");
+        assert_eq!(
+            view.steer_queue[0].state,
+            crate::state::turn::SteerQueueState::Unsent
+        );
+        assert!(
+            app.notices()
+                .iter()
+                .any(|notice| notice.text.contains("steer was never admitted"))
+        );
     }
 
     #[test]

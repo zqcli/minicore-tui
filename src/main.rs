@@ -23,8 +23,8 @@ use ratatui::layout::Rect;
 use minicore_tui::app::{App, CliPrefs};
 use minicore_tui::args::{self, Args};
 use minicore_tui::command::AppCommand;
-use minicore_tui::event::{AppEvent, RpcEvent};
-use minicore_tui::jobs::LocalJobs;
+use minicore_tui::event::{AppEvent, JobOutcome, RpcEvent};
+use minicore_tui::jobs::{CopyAdmission, LocalJobs};
 use minicore_tui::protocol::{
     METHOD_SESSION_CLOSE, METHOD_SESSION_COMPACT_CANCEL, METHOD_SHUTDOWN, METHOD_TURN_CANCEL,
     OutgoingRequest,
@@ -179,6 +179,9 @@ async fn run_fullscreen(
     };
     let mut app = App::with_cli_prefs(workspace, prefs);
     app.update(AppEvent::SetTheme(opts.theme));
+    // `--debug` owns one writer thread with a bounded queue; the UI path only
+    // enqueues a line (spec 13/§5.5). Dropping it at the end joins the writer.
+    let debug_log = DebugLog::new(opts.debug);
 
     let terminal = guard.terminal_mut();
     // The application does not create a blocking input-reader thread.
@@ -192,7 +195,7 @@ async fn run_fullscreen(
 
     // Bootstrap fires the four discovery requests concurrently (spec 6).
     let commands = app.update(AppEvent::Bootstrap);
-    if run_commands(process, &mut app, jobs, commands, opts.debug).await? {
+    if run_commands(process, &mut app, jobs, commands, &debug_log).await? {
         return Ok(());
     }
 
@@ -252,12 +255,12 @@ async fn run_fullscreen(
                 }
             }
             Selected::Rpc(Some(event)) => {
-                let batch = run_rpc_batch(process, &mut app, jobs, event, opts.debug).await?;
+                let batch = run_rpc_batch(process, &mut app, jobs, event, &debug_log).await?;
                 if batch.exit {
                     exit = true;
                 } else if batch.channel_ended {
                     let commands = rpc_channel_ended(&mut rpc_open, &mut app);
-                    if run_commands(process, &mut app, jobs, commands, opts.debug).await? {
+                    if run_commands(process, &mut app, jobs, commands, &debug_log).await? {
                         exit = true;
                     }
                 } else {
@@ -266,7 +269,7 @@ async fn run_fullscreen(
             }
             Selected::Rpc(None) => {
                 let commands = rpc_channel_ended(&mut rpc_open, &mut app);
-                if run_commands(process, &mut app, jobs, commands, opts.debug).await? {
+                if run_commands(process, &mut app, jobs, commands, &debug_log).await? {
                     exit = true;
                 }
             }
@@ -277,7 +280,7 @@ async fn run_fullscreen(
             Selected::Job(Some(event)) => {
                 let commands = app.update(event);
                 jobs.reap_finished().await;
-                if run_commands(process, &mut app, jobs, commands, opts.debug).await? {
+                if run_commands(process, &mut app, jobs, commands, &debug_log).await? {
                     exit = true;
                 }
             }
@@ -288,7 +291,7 @@ async fn run_fullscreen(
             }
             Selected::Terminal(event) => {
                 let commands = app.update(AppEvent::Terminal(event));
-                if run_commands(process, &mut app, jobs, commands, opts.debug).await? {
+                if run_commands(process, &mut app, jobs, commands, &debug_log).await? {
                     exit = true;
                 }
             }
@@ -298,7 +301,7 @@ async fn run_fullscreen(
             Selected::Signal => {
                 signal_fired = true;
                 let commands = app.update(AppEvent::ShutdownRequested);
-                if run_commands(process, &mut app, jobs, commands, opts.debug).await? {
+                if run_commands(process, &mut app, jobs, commands, &debug_log).await? {
                     exit = true;
                 }
             }
@@ -396,7 +399,7 @@ async fn run_rpc_batch(
     app: &mut App,
     jobs: &mut LocalJobs,
     first: RpcEvent,
-    debug: bool,
+    debug_log: &DebugLog,
 ) -> io::Result<RpcBatchResult> {
     let started = Instant::now();
     let mut processed = 0usize;
@@ -405,7 +408,7 @@ async fn run_rpc_batch(
     while let Some(event) = pending {
         processed += 1;
         let commands = app.update(AppEvent::Rpc(event));
-        if run_commands(process, app, jobs, commands, debug).await? {
+        if run_commands(process, app, jobs, commands, debug_log).await? {
             return Ok(RpcBatchResult {
                 exit: true,
                 channel_ended: false,
@@ -527,16 +530,14 @@ async fn run_commands(
     app: &mut App,
     jobs: &mut LocalJobs,
     commands: Vec<AppCommand>,
-    debug: bool,
+    debug_log: &DebugLog,
 ) -> io::Result<bool> {
     let mut queue: VecDeque<AppCommand> = commands.into();
     while let Some(command) = queue.pop_front() {
         match command {
             AppCommand::Rpc(request) => {
                 let start = Instant::now();
-                if debug {
-                    debug_log_request(&request, start);
-                }
+                debug_log.record(debug_log_line(&request, start));
                 let class = send_class(&request);
                 match process.try_send(request.clone(), class) {
                     Ok(()) => {}
@@ -557,11 +558,27 @@ async fn run_commands(
             }
             AppCommand::KillChild => process.kill_child(),
             AppCommand::CopySelection(text) => {
-                jobs.copy_to_clipboard(
+                match jobs.copy_to_clipboard(
                     text.session_id(),
                     text.revision(),
                     text.as_str().to_owned(),
-                );
+                ) {
+                    CopyAdmission::Started(_) => {}
+                    CopyAdmission::Busy => {
+                        // A definite refusal: the selection is kept so the
+                        // user can retry, and no second thread/text is queued.
+                        let more = app.update(AppEvent::JobFinished(JobOutcome::Clipboard {
+                            session_id: text.session_id().to_owned(),
+                            revision: text.revision(),
+                            result: Err(
+                                "clipboard is already handling the previous copy; the selection \
+                                 is kept"
+                                    .to_owned(),
+                            ),
+                        }));
+                        queue.extend(more);
+                    }
+                }
             }
             AppCommand::Exit => return Ok(true),
         }
@@ -571,30 +588,105 @@ async fn run_commands(
 
 /// `--debug` records only method, id, serialized byte count and duration to
 /// a temp file (never message content, error text, reasoning, tool args, or
-/// raw frames, spec 13).
-fn debug_log_request(request: &OutgoingRequest, start: Instant) {
-    use std::io::Write;
+/// raw frames, spec 13). The UI path never touches the file: `record`
+/// enqueues one line into a bounded channel and a single writer thread owns
+/// the file for the whole run.
+struct DebugLog {
+    sender: Option<std::sync::mpsc::SyncSender<String>>,
+    writer: Option<std::thread::JoinHandle<()>>,
+}
+
+/// One debug log line; pure and bounded so it can be tested without IO.
+fn debug_log_line(request: &OutgoingRequest, start: Instant) -> String {
     let bytes = serde_json::to_string(request)
         .map(|line| line.len() + 1)
         .unwrap_or(0);
-    let line = format!(
+    format!(
         "id={} method={} bytes={} ms={:.1}\n",
         request.id.0,
         request.method,
         bytes,
         start.elapsed().as_secs_f64() * 1000.0
-    );
-    let path = std::env::temp_dir().join("minicore-tui-debug.log");
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .and_then(|mut file| file.write_all(line.as_bytes()));
+    )
+}
+
+impl DebugLog {
+    /// Log lines that cannot keep up are dropped instead of stalling the loop
+    /// or growing memory without bound.
+    const QUEUE_CAPACITY: usize = 256;
+
+    fn new(enabled: bool) -> Self {
+        if !enabled {
+            return Self {
+                sender: None,
+                writer: None,
+            };
+        }
+        let path = std::env::temp_dir().join("minicore-tui-debug.log");
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<String>(Self::QUEUE_CAPACITY);
+        let writer = std::thread::spawn(move || {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .ok();
+            for line in receiver {
+                let Some(file) = file.as_mut() else {
+                    break;
+                };
+                if file.write_all(line.as_bytes()).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            sender: Some(sender),
+            writer: Some(writer),
+        }
+    }
+
+    /// Enqueues one line; never blocks and never performs file IO.
+    fn record(&self, line: String) {
+        if let Some(sender) = &self.sender {
+            let _ = sender.try_send(line);
+        }
+    }
+}
+
+impl Drop for DebugLog {
+    fn drop(&mut self) {
+        self.sender = None;
+        if let Some(writer) = self.writer.take() {
+            let _ = writer.join();
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_log_lines_are_content_free_and_the_disabled_log_is_a_noop() {
+        let request = OutgoingRequest::new(
+            minicore_tui::protocol::RequestId(9),
+            "turn.send",
+            serde_json::json!({"text": "SECRET-PROMPT"}),
+        );
+        let line = debug_log_line(&request, Instant::now());
+        assert!(line.contains("id=9"));
+        assert!(line.contains("method=turn.send"));
+        assert!(line.contains("bytes="));
+        assert!(line.contains("ms="));
+        assert!(
+            !line.contains("SECRET-PROMPT"),
+            "debug logging must never record message content"
+        );
+        // The disabled logger allocates no thread and drops lines silently.
+        let disabled = DebugLog::new(false);
+        disabled.record("ignored".to_owned());
+    }
 
     #[test]
     fn prepare_frame_reuses_layout_and_reports_real_geometry() {
