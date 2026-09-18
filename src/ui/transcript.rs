@@ -964,7 +964,10 @@ fn make_section_layout(
     let hard_break_rows = hard_break_rows(
         source_hint,
         &row_texts,
-        range.content_columns.end.saturating_sub(range.content_columns.start),
+        range
+            .content_columns
+            .end
+            .saturating_sub(range.content_columns.start),
         last_content_row,
     );
     let copy_ranges: Vec<CopyRange> = row_texts
@@ -1041,13 +1044,9 @@ fn hard_break_rows(
         if cursor >= content_rows.len() {
             break;
         }
-        let visual_rows = wrap_plain(
-            logical_line,
-            width.max(1),
-            Style::default(),
-        )
-        .len()
-        .max(1);
+        let visual_rows = wrap_plain(logical_line, width.max(1), Style::default())
+            .len()
+            .max(1);
         let end = cursor
             .saturating_add(visual_rows)
             .saturating_sub(1)
