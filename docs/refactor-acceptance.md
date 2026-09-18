@@ -176,6 +176,25 @@ Still open in C1 (do not claim C1 complete):
   router, navigation/selector logic and the small clocks by design, so a
   further split is optional follow-up, not a C1 blocker.
 
+## C2 review findings not yet passed (recorded, not fixed)
+
+These are open and must not be reported as done:
+
+- `2e7d9df` budget enforcement releases only decoded `RawHistoryItem` bodies.
+  The `TranscriptBlock` bridge and the prepared durable layout still retain the
+  same text, so the accounting is not the real resident body release. The
+  corrected slice must make one source own the text and free it on eviction.
+- The eviction protection is a fixed 64-item tail, not the viewport: reading
+  earlier history can evict what the user is looking at. The corrected slice
+  must derive the protected range from the installed viewport plus its
+  overscan and nearby results.
+- The section-Arc layout engine (`src/state/layout.rs`) is landed with tests
+  for prefix binary search, bounded windows, fold-local keys and shared
+  `SectionRange` metadata, but it is **not yet wired into the production frame
+  path**, and the single owned layout worker (bounded queue, one in-flight,
+  generation-verified install, viewport-first batching) is not built. Frames
+  still read the `PreparedDurable` arrays.
+
 ## C2 progress (incomplete)
 
 C2 is not complete; this is the measured state of the landed slices.
