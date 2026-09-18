@@ -1,17 +1,17 @@
 //! Owned local side-effect jobs (spec §5.5).
 //!
-//! Every local effect has exactly one owner here: the native clipboard today,
-//! and the explicit export/draft-editor commands when they land. There is at
-//! most **one** clipboard job at a time, so the thread count, the retained
-//! text bytes, and the completion backlog are all bounded by construction. A
+//! Every local effect has exactly one owner here: the native clipboard and
+//! the single serialized durable-layout worker. There is at most **one**
+//! clipboard job and one layout build in flight, so the thread count, retained
+//! text bytes, request queue, and completion backlog are bounded by
+//! construction. A
 //! second copy while one is running is refused with [`CopyAdmission::Busy`]
 //! instead of spawning another blocking thread; the refused text is dropped
 //! and never overwrites a newer selection later.
 //!
-//! A job runs as one owned async task and its *only* way back into the app is
-//! an [`AppEvent::JobFinished`] result carrying the capture identity. The
-//! result channel is bounded (two slots for one job, so a send can never wedge
-//! a worker) and the main loop remains the single place that mutates app state.
+//! Jobs run as owned tasks and their *only* way back into the app is a bounded
+//! `AppEvent` completion channel; the main loop remains the single place that
+//! mutates app state.
 //!
 //! No blocking call happens in `App::update`, in draw, or in the RPC command
 //! dispatch: `run_commands` starts a job and returns. The clipboard adapter
@@ -49,7 +49,8 @@ pub enum CopyAdmission {
 /// without allowing an unbounded completion backlog.
 const JOB_EVENTS_CAPACITY: usize = 4;
 
-/// Owns every local job for this process: at most one clipboard write.
+/// Owns every local job for this process: one clipboard write and one
+/// serialized durable-layout worker.
 pub struct LocalJobs {
     next_id: JobId,
     clipboard: Option<JoinHandle<()>>,
