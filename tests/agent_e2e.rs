@@ -719,10 +719,9 @@ async fn wait_for_session_ready(
     session_id: &str,
 ) -> Result<(), String> {
     pump_until(process, app, |a| {
-        a.sessions
-            .known
-            .get(session_id)
-            .is_some_and(|view| view.info.loaded && view.transcript.complete && !view.loading)
+        a.sessions.known.get(session_id).is_some_and(|view| {
+            view.info.loaded && view.transcript.complete && !view.history_read.is_loading()
+        })
     })
     .await
 }

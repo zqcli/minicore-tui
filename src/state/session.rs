@@ -44,6 +44,90 @@ pub struct ManualCompactState {
     pub context_refresh_confirmed: bool,
 }
 
+/// Why one durable-history chain runs (spec §3.4/§6.3). The trigger is kept
+/// with the chain instead of in parallel booleans, so a fetch can never be
+/// "post-wait" and "refresh" at the same time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryTrigger {
+    /// First page or explicit refresh; nothing has to be aligned.
+    Refresh,
+    /// A dropped event or a preserved gap must be re-read.
+    Gap,
+    /// A finished turn must appear in the durable window.
+    PostWait,
+}
+
+/// The read side of one session's durable history.
+///
+/// At most one chain runs per session. `pending` records a chain that is owed
+/// but cannot start yet (a page is in flight, admission is deferred, or an
+/// open/reopen preserved a gap), which used to be two separate flags that
+/// could disagree with `active`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HistoryRead {
+    active: Option<HistoryTrigger>,
+    pending: Option<HistoryTrigger>,
+}
+
+impl HistoryRead {
+    pub fn is_loading(&self) -> bool {
+        self.active.is_some()
+    }
+
+    /// True while a gap or post-wait chain is running or owed. This is the
+    /// former `reconcile_inflight`: destructive or secondary readers stay
+    /// away until the authoritative window is aligned again.
+    pub fn is_reconciling(&self) -> bool {
+        matches!(
+            self.active,
+            Some(HistoryTrigger::Gap | HistoryTrigger::PostWait)
+        ) || self.pending == Some(HistoryTrigger::Gap)
+    }
+
+    /// A finished turn still owes a chain once the current one ends.
+    pub fn post_wait_pending(&self) -> bool {
+        self.pending == Some(HistoryTrigger::PostWait)
+    }
+
+    /// Starts a chain. A pending trigger of the same kind is satisfied by the
+    /// start; an unrelated pending trigger (a finished turn) is preserved so
+    /// its own chain still runs later.
+    pub fn begin(&mut self, trigger: HistoryTrigger) {
+        self.active = Some(trigger);
+        if self.pending == Some(trigger) {
+            self.pending = None;
+        }
+    }
+
+    /// Continues the current chain after a page; a chain with no recorded
+    /// trigger falls back to a refresh.
+    pub fn continue_loading(&mut self) {
+        if self.active.is_none() {
+            self.active = Some(HistoryTrigger::Refresh);
+        }
+    }
+
+    /// The chain ended: no page is in flight. A pending trigger survives for
+    /// the next chain.
+    pub fn finish(&mut self) {
+        self.active = None;
+    }
+
+    /// Records a chain that must start later.
+    pub fn defer(&mut self, trigger: HistoryTrigger) {
+        self.pending = Some(trigger);
+    }
+
+    /// Consumes the owed trigger, if any.
+    pub fn take_pending(&mut self) -> Option<HistoryTrigger> {
+        self.pending.take()
+    }
+
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// All sessions known to the app.
 #[derive(Debug, Default)]
 pub struct SessionsState {
@@ -124,20 +208,16 @@ pub struct SessionView {
     /// lifecycle boundaries so an old in-flight read can retain its slot while
     /// a fresh recovery chain uses a distinct query key.
     pub history_query_generation: u64,
-    /// A history chain is being fetched page by page.
-    pub loading: bool,
     /// The in-flight `session.read` page, if any. Owns the chunk assembler so
     /// a page outside the window never contaminates the window.
     pub read_page: Option<crate::app::history::ReadPage>,
     /// Durable history is unconfirmed after a dropped event or history
     /// failure; destructive lifecycle actions must wait for aligned history.
     pub event_gap: bool,
-    /// A history chain driven by a finished turn is being fetched; the
-    /// live turn is removed when it completes.
-    pub reconcile_inflight: bool,
-    /// A turn.wait completed while a previous history page was inflight;
-    /// requires a fresh history fetch after that page finishes.
-    pub needs_post_wait_history: bool,
+    /// The durable-history read state: what is loading and what chain is owed
+    /// (spec §3.4). Replaces the former `loading`/`reconcile_inflight`/
+    /// `needs_post_wait_history` triplet.
+    pub history_read: HistoryRead,
     /// Whether an explicit session.close is currently pending.
     pub closing: bool,
     /// The last close attempt ended without an authoritative unload proof or
@@ -204,11 +284,9 @@ impl SessionView {
             live: None,
             unsaved_loop: None,
             scroll: ScrollState::default(),
-            loading: false,
             read_page: None,
             event_gap: false,
-            reconcile_inflight: false,
-            needs_post_wait_history: false,
+            history_read: HistoryRead::default(),
             closing: false,
             close_verification_unknown: false,
             steer_state_unconfirmed: false,
@@ -360,7 +438,7 @@ impl SessionView {
             UsageCompleteness::Unknown
         } else if accumulator.has_unknown()
             || !self.transcript.complete
-            || self.loading
+            || self.history_read.is_loading()
             || self.event_gap
             || self.live.is_some()
             || self.unsaved_loop.is_some()

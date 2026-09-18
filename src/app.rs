@@ -30,7 +30,9 @@ use crate::state::selection::{
     SessionPanelAction, SessionPanelMode, SessionSelectorState, filtered_models, filtered_profiles,
     filtered_sessions, supported_reasoning,
 };
-use crate::state::session::{ManualCompactState, SessionId, SessionView, SessionsState};
+use crate::state::session::{
+    HistoryTrigger, ManualCompactState, SessionId, SessionView, SessionsState,
+};
 use crate::state::tool::{LiveTool, ToolKey, ToolPresentationState, ToolStatus};
 use crate::state::transcript::{
     AssistantBlock, AssistantPart, HistoryPlaceholderBlock, SummaryBlock, ToolBlock,
@@ -2138,7 +2140,11 @@ impl App {
         if loaded && view.state.is_none() {
             return SessionActionSafety::Unknown;
         }
-        if loaded && (view.loading || view.reconcile_inflight || self.pending_history(session_id)) {
+        if loaded
+            && (view.history_read.is_loading()
+                || view.history_read.is_reconciling()
+                || self.pending_history(session_id))
+        {
             return SessionActionSafety::Busy;
         }
         SessionActionSafety::Safe
@@ -3963,8 +3969,11 @@ impl App {
             view.transcript.clear_blocks();
             view.usage_projection = crate::state::session::UsageProjection::default();
             view.scroll = crate::state::session::ScrollState::default();
-            view.reconcile_inflight = reconciling_gap;
-            view.loading = true;
+            view.history_read.begin(if reconciling_gap {
+                HistoryTrigger::Gap
+            } else {
+                HistoryTrigger::Refresh
+            });
         }
         self.request_history(&active).into_iter().collect()
     }
@@ -4802,7 +4811,7 @@ impl App {
             let Some(view) = self.sessions.known.get(session_id) else {
                 return commands;
             };
-            if view.loading || self.pending_history(session_id) {
+            if view.history_read.is_loading() || self.pending_history(session_id) {
                 (false, false)
             } else if view.event_gap {
                 (true, true)
@@ -4814,8 +4823,11 @@ impl App {
         };
         if fetch {
             if let Some(view) = self.sessions.known.get_mut(session_id) {
-                view.loading = true;
-                view.reconcile_inflight = reconciling_gap;
+                view.history_read.begin(if reconciling_gap {
+                    HistoryTrigger::Gap
+                } else {
+                    HistoryTrigger::Refresh
+                });
             }
             commands.extend(self.request_history(session_id));
         }
@@ -5167,7 +5179,8 @@ impl App {
             .known
             .iter()
             .filter_map(|(session_id, view)| {
-                (view.event_gap || view.needs_post_wait_history).then_some(session_id.clone())
+                (view.event_gap || view.history_read.post_wait_pending())
+                    .then_some(session_id.clone())
             })
             .collect();
         let mut commands = Vec::new();
@@ -5661,8 +5674,8 @@ impl App {
             }
             let reconcile = self.sessions.known.get(&session_id).is_some_and(|view| {
                 view.event_gap
-                    && !view.loading
-                    && !view.reconcile_inflight
+                    && !view.history_read.is_loading()
+                    && !view.history_read.is_reconciling()
                     && view.live.is_none()
                     && view.unsaved_loop.is_none()
             });
@@ -5681,7 +5694,8 @@ impl App {
             .known
             .iter()
             .filter_map(|(session_id, view)| {
-                (view.event_gap || view.needs_post_wait_history).then_some(session_id.clone())
+                (view.event_gap || view.history_read.post_wait_pending())
+                    .then_some(session_id.clone())
             })
             .collect();
         for session_id in deferred_sessions {
@@ -5712,7 +5726,7 @@ impl App {
             commands.push(command);
         }
         let fetch_history = self.sessions.known.get(session_id).is_some_and(|view| {
-            !view.loading
+            !view.history_read.is_loading()
                 && (view.event_gap || !view.transcript.complete)
                 && view.live.is_none()
                 && view.unsaved_loop.is_none()
@@ -5724,8 +5738,11 @@ impl App {
                 .get(session_id)
                 .is_some_and(|view| view.event_gap);
             if let Some(view) = self.sessions.known.get_mut(session_id) {
-                view.loading = true;
-                view.reconcile_inflight = reconcile_gap;
+                view.history_read.begin(if reconcile_gap {
+                    HistoryTrigger::Gap
+                } else {
+                    HistoryTrigger::Refresh
+                });
             }
             commands.extend(self.request_history(session_id));
         }
@@ -5747,10 +5764,10 @@ impl App {
                 .live
                 .as_ref()
                 .is_some_and(|live| live.waiting && live.last_result.is_some());
-            if !view.needs_post_wait_history
+            if !view.history_read.post_wait_pending()
                 || !view.info.loaded
                 || view.closing
-                || view.loading
+                || view.history_read.is_loading()
                 || (view.live.is_some() && !terminal_live)
                 || view.unsaved_loop.is_some()
                 || self.pending_history(session_id)
@@ -5760,9 +5777,8 @@ impl App {
             view.latest_state_query.is_none()
         };
         if let Some(view) = self.sessions.known.get_mut(session_id) {
-            view.needs_post_wait_history = false;
-            view.loading = true;
-            view.reconcile_inflight = true;
+            view.history_read.take_pending();
+            view.history_read.begin(HistoryTrigger::Gap);
         }
         let mut commands = Vec::new();
         if state_needed {
@@ -6063,8 +6079,7 @@ impl App {
 
     fn mark_history_unconfirmed(view: &mut SessionView) {
         view.read_page = None;
-        view.loading = false;
-        view.reconcile_inflight = false;
+        view.history_read.finish();
         view.event_gap = true;
         view.transcript.complete = false;
         if let Some(live) = view.live.as_mut() {
@@ -6435,11 +6450,9 @@ impl App {
         let history_pending = self.pending_history(session_id);
         let history_incomplete = self.session_loaded(session_id) == Some(true)
             && (history_pending
-                || self
-                    .sessions
-                    .known
-                    .get(session_id)
-                    .is_some_and(|view| view.loading || view.reconcile_inflight));
+                || self.sessions.known.get(session_id).is_some_and(|view| {
+                    view.history_read.is_loading() || view.history_read.is_reconciling()
+                }));
         if history_incomplete {
             if let Some(state) = self.session_selector_state_mut() {
                 if state.selected_session_id.as_deref() == Some(session_id.as_str()) {
@@ -6860,7 +6873,7 @@ impl App {
             let Some(view) = self.sessions.known.get(&session_id) else {
                 return commands;
             };
-            if view.loading {
+            if view.history_read.is_loading() {
                 (false, false)
             } else if view.event_gap {
                 (true, true)
@@ -6872,8 +6885,11 @@ impl App {
         };
         if fetch {
             if let Some(view) = self.sessions.known.get_mut(&session_id) {
-                view.loading = true;
-                view.reconcile_inflight = reconciling_gap;
+                view.history_read.begin(if reconciling_gap {
+                    HistoryTrigger::Gap
+                } else {
+                    HistoryTrigger::Refresh
+                });
             }
             commands.extend(self.request_history(&session_id));
         }
@@ -7123,9 +7139,11 @@ impl App {
             let preserving_gap = view.event_gap;
             view.transcript.clear_blocks();
             view.read_page = None;
-            view.loading = false;
-            view.reconcile_inflight = preserving_gap;
-            view.needs_post_wait_history = false;
+            view.history_read.finish();
+            view.history_read.take_pending();
+            if preserving_gap {
+                view.history_read.defer(HistoryTrigger::Gap);
+            }
             view.closing = false;
             view.live = None;
             view.unsaved_loop = None;
@@ -7886,14 +7904,14 @@ impl App {
                         view.read_page = Some(page_state);
                         view.transcript.next_cursor = applied.next;
                         view.transcript.sync_from_window();
-                        view.loading = false;
+                        view.history_read.finish();
                         return Vec::new();
                     }
                     // A probe that already delivered the whole prefix (a short
                     // history) needs no further read.
                     if applied.next.is_none() {
                         view.transcript.sync_from_window();
-                        view.loading = false;
+                        view.history_read.finish();
                         view.read_page = None;
                         let next = Self::finish_read_chain(view, session_id, read);
                         view.recompute_usage_projection();
@@ -7919,7 +7937,7 @@ impl App {
                         view.read_page = Some(page_state);
                         view.transcript.next_cursor = applied.next;
                         view.transcript.sync_from_window();
-                        view.loading = true;
+                        view.history_read.continue_loading();
                         return self.request_history(session_id).into_iter().collect();
                     }
                 }
@@ -7939,7 +7957,7 @@ impl App {
             next_request.probe = false;
             next_request.pin = view.transcript.window.pin().cloned();
             view.transcript.sync_from_window();
-            view.loading = true;
+            view.history_read.continue_loading();
             return self
                 .request_read(session_id, next_request)
                 .into_iter()
@@ -7964,8 +7982,7 @@ impl App {
                 view.read_page = None;
                 // The pinned prefix is gone; do not splice two generations.
                 view.event_gap = true;
-                view.loading = false;
-                view.reconcile_inflight = false;
+                view.history_read.finish();
                 self.notice(
                     NoticeLevel::Warning,
                     format!("history for {session_id} became stale: {error}; reload to continue"),
@@ -8008,19 +8025,19 @@ impl App {
 
         if applied.explicit_large_item {
             view.transcript.sync_from_window();
-            view.loading = false;
+            view.history_read.finish();
             return Vec::new();
         }
 
         let next = match applied.next {
             Some(_) => {
                 view.transcript.sync_from_window();
-                view.loading = true;
+                view.history_read.continue_loading();
                 NextChain::Page
             }
             None => {
                 view.transcript.sync_from_window();
-                view.loading = false;
+                view.history_read.finish();
                 let next = Self::finish_read_chain(view, session_id, read);
                 view.read_page = None;
                 view.recompute_usage_projection();
@@ -8110,7 +8127,7 @@ impl App {
             view.event_gap = false;
         }
 
-        view.reconcile_inflight = false;
+        view.history_read.finish();
 
         let loop_id = live_loop_id.as_deref();
         let mut persisted_steers: Vec<String> = view
@@ -8204,15 +8221,12 @@ impl App {
         }
 
         if needs_gap_reconcile {
-            view.needs_post_wait_history = false;
-            view.loading = true;
-            view.reconcile_inflight = true;
+            view.history_read.take_pending();
+            view.history_read.begin(HistoryTrigger::Gap);
             NextChain::Reconcile
-        } else if view.needs_post_wait_history {
-            view.needs_post_wait_history = false;
+        } else if view.history_read.take_pending() == Some(HistoryTrigger::PostWait) {
             if !loop_contained_in_history && view.live.is_some() {
-                view.loading = true;
-                view.reconcile_inflight = true;
+                view.history_read.begin(HistoryTrigger::PostWait);
                 NextChain::Reconcile
             } else {
                 NextChain::Done
@@ -9307,7 +9321,7 @@ impl App {
     fn reconcile_after_wait(&mut self, turn: &TurnRef) -> Vec<AppCommand> {
         if self.reload.is_some() {
             if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
-                view.needs_post_wait_history = true;
+                view.history_read.defer(HistoryTrigger::PostWait);
             }
             return Vec::new();
         }
@@ -9329,14 +9343,13 @@ impl App {
             let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {
                 return commands;
             };
-            if view.loading || pending_history {
+            if view.history_read.is_loading() || pending_history {
                 // If a history fetch is already in flight, flag that a post-wait
                 // reconcile is required once the in-flight fetch completes (spec scenario B).
-                view.needs_post_wait_history = true;
+                view.history_read.defer(HistoryTrigger::PostWait);
                 false
             } else {
-                view.loading = true;
-                view.reconcile_inflight = true;
+                view.history_read.begin(HistoryTrigger::PostWait);
                 true
             }
         };
@@ -10745,7 +10758,7 @@ impl App {
             let Some(view) = self.sessions.known.get(session_id) else {
                 return Vec::new();
             };
-            if !view.event_gap && !view.needs_post_wait_history {
+            if !view.event_gap && !view.history_read.post_wait_pending() {
                 return Vec::new();
             }
             if view.closing {
@@ -10755,7 +10768,9 @@ impl App {
                 && view.latest_state_query.is_none();
             (
                 state_needed,
-                !view.loading && !view.reconcile_inflight && !history_pending,
+                !view.history_read.is_loading()
+                    && !view.history_read.is_reconciling()
+                    && !history_pending,
                 view.live.is_some() || view.unsaved_loop.is_some(),
             )
         };
@@ -10765,8 +10780,7 @@ impl App {
         }
         if history_needed && !defer_history {
             if let Some(view) = self.sessions.known.get_mut(session_id) {
-                view.loading = true;
-                view.reconcile_inflight = true;
+                view.history_read.begin(HistoryTrigger::Gap);
             }
             commands.extend(self.request_history(session_id));
         }
@@ -12622,8 +12636,7 @@ mod tests {
             _ => unreachable!(),
         };
         if let Some(view) = app.sessions.known.get_mut("ses_1") {
-            view.loading = true;
-            view.reconcile_inflight = true;
+            view.history_read.begin(HistoryTrigger::Gap);
         }
         let reload = take_requests(app.update(AppEvent::Reload)).remove(0);
         assert_eq!(
@@ -13924,7 +13937,7 @@ mod tests {
             .find(|r| r.method == "session.presentation")
             .unwrap();
         assert_eq!(app.sessions.active.as_deref(), Some("ses_1"));
-        assert!(app.sessions.known["ses_1"].loading);
+        assert!(app.sessions.known["ses_1"].history_read.is_loading());
 
         take_requests(respond(
             &mut app,
@@ -13974,7 +13987,7 @@ mod tests {
                 },
             })
         );
-        assert!(app.sessions.known["ses_1"].loading);
+        assert!(app.sessions.known["ses_1"].history_read.is_loading());
 
         // Page 2 completes chain
         let commands = respond(
@@ -13984,7 +13997,7 @@ mod tests {
         );
         assert!(take_requests(commands).is_empty());
         let view = &app.sessions.known["ses_1"];
-        assert!(!view.loading);
+        assert!(!view.history_read.is_loading());
         assert!(view.transcript.complete);
         assert_eq!(view.transcript.blocks.len(), 3);
     }
@@ -14001,7 +14014,7 @@ mod tests {
         assert_eq!(requests[0].method, "session.state");
         take_requests(respond(&mut app, &requests[0], state_json("ses_1", "idle")));
         let view = &app.sessions.known["ses_1"];
-        assert!(!view.loading);
+        assert!(!view.history_read.is_loading());
         assert!(view.transcript.complete);
     }
 

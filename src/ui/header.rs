@@ -23,13 +23,13 @@ pub fn visible(app: &App) -> bool {
                 && state.active_loop.is_none()
                 && state.block_reason.is_none()
         }) && view.transcript.complete
-            && !view.loading
+            && !view.history_read.is_loading()
             && view.transcript.window.is_empty()
             && view.transcript.blocks.is_empty()
             && view.live.is_none()
             && !view.event_gap
-            && !view.reconcile_inflight
-            && !view.needs_post_wait_history
+            && !view.history_read.is_reconciling()
+            && !view.history_read.post_wait_pending()
             && view.unsaved_loop.is_none()
             && !view.result_unconfirmed
             && !view.closing

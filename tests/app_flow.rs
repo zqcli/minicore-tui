@@ -19,6 +19,7 @@ use minicore_tui::protocol::{
     SessionStateWire, SessionStatusWire, TurnRef,
 };
 use minicore_tui::state::selection::Dock;
+use minicore_tui::state::session::HistoryTrigger;
 use minicore_tui::state::tool::ToolStatus;
 use minicore_tui::state::turn::{PendingSteerState, SteerQueueItem, SteerQueueState, UnsavedLoop};
 use minicore_tui::state::{AssistantPart, TranscriptBlock};
@@ -886,16 +887,16 @@ fn confirmed_empty_header_requires_known_idle_and_clean_lifecycle() {
 
     for fence in [
         "event_gap",
-        "reconcile_inflight",
-        "needs_post_wait_history",
+        "history_reconcile",
+        "history_post_wait",
         "unsaved_loop",
         "result_unconfirmed",
     ] {
         let view = driver.app.sessions.known.get_mut("ses_1").unwrap();
         match fence {
             "event_gap" => view.event_gap = true,
-            "reconcile_inflight" => view.reconcile_inflight = true,
-            "needs_post_wait_history" => view.needs_post_wait_history = true,
+            "history_reconcile" => view.history_read.begin(HistoryTrigger::Gap),
+            "history_post_wait" => view.history_read.defer(HistoryTrigger::PostWait),
             "unsaved_loop" => {
                 view.unsaved_loop = Some(UnsavedLoop {
                     turn: TurnRef {
@@ -914,8 +915,7 @@ fn confirmed_empty_header_requires_known_idle_and_clean_lifecycle() {
         assert_startup_header(&driver.app, false);
         let view = driver.app.sessions.known.get_mut("ses_1").unwrap();
         view.event_gap = false;
-        view.reconcile_inflight = false;
-        view.needs_post_wait_history = false;
+        view.history_read.reset();
         view.unsaved_loop = None;
         view.result_unconfirmed = false;
     }
@@ -4952,7 +4952,7 @@ fn history_failure_clear_and_reopen_keep_destructive_actions_guarded() {
     let view = &driver.app.sessions.known["ses_1"];
     assert!(view.event_gap);
     assert!(!view.transcript.complete);
-    assert!(!view.loading);
+    assert!(!view.history_read.is_loading());
 
     // `/clear` starts a new history read but must not erase the safety fence.
     submit_command(&mut driver, "/clear");
@@ -4967,7 +4967,7 @@ fn history_failure_clear_and_reopen_keep_destructive_actions_guarded() {
     let view = &driver.app.sessions.known["ses_1"];
     assert!(view.event_gap);
     assert!(!view.transcript.complete);
-    assert!(view.loading);
+    assert!(view.history_read.is_loading());
 
     driver.step(AppEvent::CloseSession {
         session_id: "ses_1".into(),
@@ -4988,7 +4988,7 @@ fn history_failure_clear_and_reopen_keep_destructive_actions_guarded() {
     let view = &driver.app.sessions.known["ses_1"];
     assert!(!view.event_gap);
     assert!(view.transcript.complete);
-    assert!(!view.loading);
+    assert!(!view.history_read.is_loading());
 
     driver.step(AppEvent::CloseSession {
         session_id: "ses_1".into(),
@@ -5100,16 +5100,20 @@ fn inflight_history_gap_reconciles_new_revision_before_lifecycle_actions() {
         })
     );
     assert!(driver.app.sessions.known["ses_1"].event_gap);
-    assert!(driver.app.sessions.known["ses_1"].loading);
-    assert!(driver.app.sessions.known["ses_1"].reconcile_inflight);
+    assert!(driver.app.sessions.known["ses_1"].history_read.is_loading());
+    assert!(
+        driver.app.sessions.known["ses_1"]
+            .history_read
+            .is_reconciling()
+    );
 
     // Only the complete response for the new revision releases the fence.
     driver.respond(retry, history(Vec::new(), None, 0));
     let view = &driver.app.sessions.known["ses_1"];
     assert!(!view.event_gap);
     assert!(view.transcript.complete);
-    assert!(!view.loading);
-    assert!(!view.reconcile_inflight);
+    assert!(!view.history_read.is_loading());
+    assert!(!view.history_read.is_reconciling());
 
     driver.step(AppEvent::CloseSession {
         session_id: "ses_1".into(),
