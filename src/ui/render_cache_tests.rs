@@ -336,9 +336,10 @@ fn unrelated_rpc_reprepare_keeps_scrollbar_drag_until_release() {
     )));
     assert!(app.scrollbar_preview_offset("ses_test").is_some());
 
-    app.update(AppEvent::Rpc(RpcEvent::AgentLogLine(
-        "unrelated stderr".to_owned(),
-    )));
+    app.update(AppEvent::Rpc(RpcEvent::AgentStderr {
+        bytes: "unrelated stderr".len(),
+        dropped: 0,
+    }));
     assert!(app.prepared_conversation(WIDTH).is_none());
     let reparsed = prepare_conversation(&app, WIDTH);
     app.update(AppEvent::ConversationPrepared(reparsed));

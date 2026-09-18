@@ -25,15 +25,33 @@ pub enum AppCommand {
 }
 
 #[derive(Clone, Eq, PartialEq)]
-pub struct ClipboardText(String);
+pub struct ClipboardText {
+    text: String,
+    /// The capture identity: a completion for another session/revision is
+    /// stale feedback and never decorates a newer selection (spec §5.5).
+    session_id: String,
+    revision: u64,
+}
 
 impl ClipboardText {
-    pub fn new(text: String) -> Self {
-        Self(text)
+    pub fn new(text: String, session_id: String, revision: u64) -> Self {
+        Self {
+            text,
+            session_id,
+            revision,
+        }
     }
 
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.text
+    }
+
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 }
 
@@ -41,8 +59,9 @@ impl fmt::Debug for ClipboardText {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ClipboardText")
-            .field("chars", &self.0.chars().count())
-            .field("bytes", &self.0.len())
+            .field("chars", &self.text.chars().count())
+            .field("bytes", &self.text.len())
+            .field("revision", &self.revision)
             .finish()
     }
 }

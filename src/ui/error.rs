@@ -21,7 +21,8 @@ pub fn render_notice(frame: &mut Frame, area: Rect, theme: &Theme, notice: &Noti
         NoticeLevel::Info => theme.dim,
     };
     let prefix = if notice.sticky { "⚠ " } else { "" };
-    let text = format!("{prefix}{}", notice.text);
+    let raw = format!("{prefix}{}", notice.text);
+    let text = crate::safe_text::safe_display(&raw).into_owned();
     let line = Line::styled(
         layout::truncate(&text, area.width as usize),
         Style::new().fg(fg),
@@ -50,7 +51,10 @@ pub fn render_fatal(
             Style::new().fg(theme.error).add_modifier(Modifier::BOLD),
         ),
         Line::styled("First failure:", Style::new().fg(theme.muted)),
-        Line::styled(reason.to_owned(), text_style),
+        Line::styled(
+            crate::safe_text::safe_display(reason).into_owned(),
+            text_style,
+        ),
         Line::styled(
             format!("Exit status: {}", exit_status.unwrap_or("unavailable")),
             text_style,
@@ -60,7 +64,10 @@ pub fn render_fatal(
         lines.extend([
             Line::default(),
             Line::styled("Known turn result:", Style::new().fg(theme.muted)),
-            Line::styled(known_result.to_owned(), Style::new().fg(theme.success)),
+            Line::styled(
+                crate::safe_text::safe_display(known_result).into_owned(),
+                Style::new().fg(theme.success),
+            ),
         ]);
     }
     if result.unconfirmed {
@@ -82,7 +89,10 @@ pub fn render_fatal(
     }
     lines.extend([
         Line::default(),
-        Line::styled("Recent agent output:", Style::new().fg(theme.muted)),
+        Line::styled(
+            "Recent agent stderr (content-free):",
+            Style::new().fg(theme.muted),
+        ),
     ]);
     let width = area.width as usize;
     let start = logs.len().saturating_sub(20);

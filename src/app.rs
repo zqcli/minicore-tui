@@ -12,7 +12,7 @@ use std::time::{Duration, Instant, SystemTime};
 use crossterm::event::Event as CrosstermEvent;
 
 use crate::command::{AppCommand, CommandIssue, LocalCommand, is_slash_command, parse_command};
-use crate::event::{AppEvent, RpcEvent};
+use crate::event::{AppEvent, JobOutcome, RpcEvent};
 use crate::keymap::{self, Action, EditorCursor};
 use crate::protocol::{
     AgentEventWire, EventMetaWire, IncomingFrame, METHOD_LIST_MODELS, METHOD_LIST_PROFILES,
@@ -22,7 +22,7 @@ use crate::protocol::{
     ToolDisplayWire, ToolOutcomeWire, ToolProgressWire, TurnAvailability, TurnPersistenceWire,
     TurnRef, UserMessageKindWire, validate_backend,
 };
-use crate::rpc::RpcError;
+use crate::rpc::{RpcError, SendClass};
 use crate::state::catalog::CatalogState;
 use crate::state::composer::{Composer, MAX_COMPOSER_BYTES};
 use crate::state::selection::{
@@ -60,6 +60,13 @@ pub const MAX_STEER_QUEUE_BYTES: usize = 256 * 1024;
 
 const MAX_NOTICES: usize = 32;
 const MAX_RETAINED_TURN_RESULTS: usize = 32;
+/// The TUI targets at most this many outstanding deferred requests
+/// (`turn.send`/`turn.wait`/`turn.result`/`session.compact`), leaving half of
+/// the Agent's 32-slot deferred pool for other clients (spec §5.3/§21).
+const MAX_DEFERRED_REQUESTS: usize = 16;
+/// Bound for coalesced admission-failure retries. One intent per precise
+/// target keeps the map naturally small; the cap only prevents pathology.
+const MAX_RPC_RETRIES: usize = 64;
 
 /// How long a transient notice stays before `Tick` removes it (spec 33.2).
 const NOTICE_TTL: Duration = Duration::from_secs(5);
@@ -315,6 +322,41 @@ pub struct ReadRequest {
     pub gap_revision: u64,
 }
 
+/// One request whose synchronous admission found the outbound FIFO full. It
+/// was never written, so the exact request may be retried later (spec §5.2).
+#[derive(Debug)]
+struct RetryEntry {
+    kind: RequestKind,
+    request: OutgoingRequest,
+}
+
+/// The precise target of a retry intent. Repeated user intent for the same
+/// target coalesces into one entry instead of queueing a second cancel/wait.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum RetryKey {
+    Submission(LocalSubmissionId),
+    Wait(TurnRef),
+    TurnResult(TurnRef),
+    Steer {
+        session_id: SessionId,
+        steer_id: u64,
+    },
+    CancelTurn(TurnRef),
+    Compact {
+        session_id: SessionId,
+        operation_id: String,
+    },
+    CancelCompact {
+        session_id: SessionId,
+        operation_id: String,
+    },
+    History(SessionId),
+    SessionRead {
+        session_id: SessionId,
+        label: &'static str,
+    },
+}
+
 /// CLI preferences injected at construction (spec 6.1). They only seed the
 /// catalog's next-session seats, so an existing session is never touched;
 /// a `None` seat lets the catalog default apply.
@@ -413,6 +455,12 @@ pub struct App {
     /// uses `Instant::now`; tests may inject a virtual clock at construction.
     monotonic_now: Arc<dyn Fn() -> Instant + Send + Sync>,
     pub pending_requests: HashMap<RequestId, RequestKind>,
+    /// Coalesced retries for requests refused by the bounded outbound FIFO.
+    /// Bounded by [`MAX_RPC_RETRIES`]; drains on the next progress event.
+    pending_retries: std::collections::BTreeMap<RetryKey, RetryEntry>,
+    /// Monotonic identity for the current selection, so a clipboard job that
+    /// finishes after the selection changed does not show stale feedback.
+    selection_revision: u64,
     /// The two read-only in-flight slots (spec §5.3). Execution waits are
     /// counted separately and never take a slot.
     pub queries: crate::app::queries::QuerySlots,
@@ -577,6 +625,8 @@ impl App {
             open_new_session_on_ready: false,
             now: SystemTime::now,
             pending_requests: HashMap::new(),
+            pending_retries: std::collections::BTreeMap::new(),
+            selection_revision: 0,
             queries: crate::app::queries::QuerySlots::new(),
             turn_results: HashMap::new(),
             retained_results: HashMap::new(),
@@ -728,10 +778,9 @@ impl App {
         let unconfirmed = self.sessions.known.values().any(|view| {
             view.result_unconfirmed
                 || view.live.as_ref().is_some_and(|live| {
-                    !live
-                        .last_result
+                    live.last_result
                         .as_ref()
-                        .is_some_and(|result| live.reference.as_ref() == Some(&result.turn))
+                        .is_none_or(|result| live.reference.as_ref() != Some(&result.turn))
                 })
         });
         let mut message = "shutdown timed out; Agent force-terminated".to_owned();
@@ -873,6 +922,16 @@ impl App {
         if !reuse_layout {
             self.prepared_conversation = None;
         }
+        // Admission-failure retries are only re-emitted after a progress
+        // signal, never in direct response to another `RpcQueueFull`. That
+        // keeps `run_commands` from ping-ponging inside one reducer pass.
+        let progress_signal = matches!(
+            &event,
+            AppEvent::Tick
+                | AppEvent::Rpc(_)
+                | AppEvent::RpcSendFailed { .. }
+                | AppEvent::RpcChannelEnded
+        );
         // Hit tests in one mouse event share the same immutable preparation.
         if matches!(&event, AppEvent::Terminal(CrosstermEvent::Mouse(mouse))
             if !matches!(mouse.kind, crossterm::event::MouseEventKind::ScrollUp | crossterm::event::MouseEventKind::ScrollDown))
@@ -917,6 +976,7 @@ impl App {
             AppEvent::Rpc(event) => self.on_rpc_event(event),
             AppEvent::RpcChannelEnded => self.on_rpc_channel_ended(),
             AppEvent::RpcSendFailed { id, error } => self.on_send_failed(id, error),
+            AppEvent::RpcQueueFull { request, class } => self.on_queue_full(request, class),
             AppEvent::ShutdownRequested => self.request_shutdown(),
             AppEvent::Tick => {
                 let now = self.instant_now();
@@ -1049,21 +1109,7 @@ impl App {
                 self.terminal_size = (width, height);
                 Vec::new()
             }
-            AppEvent::ClipboardResult { success, error } => {
-                if success {
-                    self.selection_copied_until = Some(
-                        self.instant_now()
-                            .checked_add(Duration::from_millis(1_800))
-                            .expect("copy feedback deadline is representable"),
-                    );
-                } else {
-                    self.notice(
-                        NoticeLevel::Warning,
-                        error.unwrap_or_else(|| "copy failed".to_owned()),
-                    );
-                }
-                Vec::new()
-            }
+            AppEvent::JobFinished(outcome) => self.on_job_finished(outcome),
             AppEvent::ConversationPrepared(prepared) => {
                 self.install_conversation(prepared);
                 Vec::new()
@@ -1095,6 +1141,9 @@ impl App {
         // has been fully handled, so it observes the newest cursor and never
         // overtakes that reducer pass.
         self.drain_query_followups(&mut commands);
+        if progress_signal {
+            commands.extend(self.drain_rpc_retries());
+        }
         self.sync_spinner_deadline();
         if let Some((was_dirty, before)) = scroll_visual_before {
             self.dirty = was_dirty || before != self.scroll_visual_state() || !commands.is_empty();
@@ -1136,6 +1185,21 @@ impl App {
                     })
                 })
         })
+    }
+
+    /// Starts one owned clipboard capture for already-sanitized
+    /// presentation text. The command carries the precise session/revision
+    /// identity so a stale completion cannot decorate a newer selection
+    /// (spec §5.5). The job runs off the UI loop; `App::update` applies the
+    /// result.
+    pub(crate) fn capture_copy(&mut self, text: String) -> AppCommand {
+        self.selection_revision = self.selection_revision.wrapping_add(1);
+        let session_id = self.sessions.active.clone().unwrap_or_default();
+        AppCommand::CopySelection(crate::command::ClipboardText::new(
+            text,
+            session_id,
+            self.selection_revision,
+        ))
     }
 
     pub fn selection_copied(&self) -> bool {
@@ -4180,6 +4244,24 @@ impl App {
         turn: TurnRef,
         cursor: crate::protocol::ReadCursor,
     ) -> Option<AppCommand> {
+        let kind = RequestKind::TurnResult(turn.clone());
+        if let Some(retry) = Self::retry_key(&kind) {
+            if self.retry_pending(&retry) {
+                return None;
+            }
+        }
+        if !self.deferred_admission_ok() {
+            self.defer_request(kind, |id| {
+                OutgoingRequest::turn_result(
+                    id,
+                    &turn,
+                    Some(cursor),
+                    READ_PAGE_LIMIT,
+                    READ_PAGE_MAX_BYTES,
+                )
+            });
+            return None;
+        }
         let key = crate::app::queries::QueryKey::TurnResult {
             session_id: turn.session_id.clone(),
             loop_id: turn.loop_id.clone(),
@@ -4195,8 +4277,7 @@ impl App {
             READ_PAGE_LIMIT,
             READ_PAGE_MAX_BYTES,
         );
-        self.pending_requests
-            .insert(id, RequestKind::TurnResult(turn));
+        self.pending_requests.insert(id, kind);
         Some(AppCommand::Rpc(request))
     }
 
@@ -4213,6 +4294,167 @@ impl App {
         if refresh {
             self.pending_query_followups.push_back(key);
         }
+    }
+
+    /// The precise retry target of a request kind, if it may be retried after
+    /// a full-FIFO refusal. Kinds without a target have no safe automatic
+    /// retry and are reported instead.
+    fn retry_key(kind: &RequestKind) -> Option<RetryKey> {
+        Some(match kind {
+            RequestKind::SendTurn {
+                local_submission, ..
+            } => RetryKey::Submission(*local_submission),
+            RequestKind::WaitTurn(turn) | RequestKind::ReloadWaitTurn(turn) => {
+                RetryKey::Wait(turn.clone())
+            }
+            RequestKind::TurnResult(turn) => RetryKey::TurnResult(turn.clone()),
+            RequestKind::SteerTurn {
+                session_id,
+                steer_id,
+                ..
+            } => RetryKey::Steer {
+                session_id: session_id.clone(),
+                steer_id: *steer_id,
+            },
+            RequestKind::CancelTurn(turn) => RetryKey::CancelTurn(turn.clone()),
+            RequestKind::Compact {
+                session_id,
+                operation_id,
+            } => RetryKey::Compact {
+                session_id: session_id.clone(),
+                operation_id: operation_id.clone(),
+            },
+            RequestKind::CompactCancel {
+                session_id,
+                operation_id,
+            } => RetryKey::CancelCompact {
+                session_id: session_id.clone(),
+                operation_id: operation_id.clone(),
+            },
+            RequestKind::History { session_id, .. } => RetryKey::History(session_id.clone()),
+            RequestKind::SessionState { session_id, .. } => RetryKey::SessionRead {
+                session_id: session_id.clone(),
+                label: "state",
+            },
+            RequestKind::SessionPresentation { session_id } => RetryKey::SessionRead {
+                session_id: session_id.clone(),
+                label: "presentation",
+            },
+            RequestKind::SessionContext { session_id, .. } => RetryKey::SessionRead {
+                session_id: session_id.clone(),
+                label: "context",
+            },
+            _ => return None,
+        })
+    }
+
+    /// Whether an identical retry intent is already retained for this target.
+    fn retry_pending(&self, key: &RetryKey) -> bool {
+        self.pending_retries.contains_key(key)
+    }
+
+    /// Stores a coalesced retry for a request that was refused admission. The
+    /// bounded map keeps at most one request per precise target.
+    fn defer_request(
+        &mut self,
+        kind: RequestKind,
+        build: impl FnOnce(RequestId) -> OutgoingRequest,
+    ) -> bool {
+        let Some(key) = Self::retry_key(&kind) else {
+            return false;
+        };
+        if self.pending_retries.len() >= MAX_RPC_RETRIES && !self.pending_retries.contains_key(&key)
+        {
+            return false;
+        }
+        let id = self.next_request_id();
+        let request = build(id);
+        self.pending_retries
+            .insert(key, RetryEntry { kind, request });
+        true
+    }
+
+    /// Re-emits retained retry intents. Every emitted command carries a fresh
+    /// pending registration; a retry that is refused again is simply stored
+    /// again by [`App::on_queue_full`].
+    fn drain_rpc_retries(&mut self) -> Vec<AppCommand> {
+        if self.pending_retries.is_empty() {
+            return Vec::new();
+        }
+        let entries = std::mem::take(&mut self.pending_retries);
+        let mut commands = Vec::with_capacity(entries.len());
+        for (_, entry) in entries {
+            self.pending_requests.insert(entry.request.id, entry.kind);
+            commands.push(AppCommand::Rpc(entry.request));
+        }
+        commands
+    }
+
+    /// Handles a request whose synchronous admission found the FIFO full. The
+    /// id is revoked (it was never written), the input is kept, and one retry
+    /// intent is retained for the exact target (spec §5.2).
+    fn on_queue_full(&mut self, request: OutgoingRequest, _class: SendClass) -> Vec<AppCommand> {
+        let Some(kind) = self.pending_requests.remove(&request.id) else {
+            return Vec::new();
+        };
+        self.free_query_slot(request.id);
+        if let Some(key) = Self::retry_key(&kind) {
+            if self.pending_retries.len() < MAX_RPC_RETRIES
+                || self.pending_retries.contains_key(&key)
+            {
+                self.pending_retries
+                    .insert(key, RetryEntry { kind, request });
+                self.notice(
+                    NoticeLevel::Info,
+                    "send queue is busy; the request stays pending locally",
+                );
+                return Vec::new();
+            }
+        }
+        self.notice(
+            NoticeLevel::Warning,
+            "send queue is full and this request cannot be retried automatically",
+        );
+        Vec::new()
+    }
+
+    /// Outstanding deferred requests (`turn.send`, `turn.wait`,
+    /// `turn.result`, `session.compact`) counted against the local 16-slot
+    /// target (spec §5.3/§21). Read-only queries have their own two slots.
+    fn deferred_pending(&self) -> usize {
+        self.pending_requests
+            .values()
+            .filter(|kind| {
+                matches!(
+                    kind,
+                    RequestKind::SendTurn { .. }
+                        | RequestKind::WaitTurn(_)
+                        | RequestKind::ReloadWaitTurn(_)
+                        | RequestKind::TurnResult(_)
+                        | RequestKind::Compact { .. }
+                )
+            })
+            .count()
+            + self
+                .pending_retries
+                .values()
+                .filter(|entry| {
+                    matches!(
+                        entry.kind,
+                        RequestKind::SendTurn { .. }
+                            | RequestKind::WaitTurn(_)
+                            | RequestKind::ReloadWaitTurn(_)
+                            | RequestKind::TurnResult(_)
+                            | RequestKind::Compact { .. }
+                    )
+                })
+                .count()
+    }
+
+    /// Whether a new deferred request fits the local target. A refused request
+    /// is retained as a retry intent by its caller, never silently dropped.
+    fn deferred_admission_ok(&self) -> bool {
+        self.deferred_pending() < MAX_DEFERRED_REQUESTS
     }
 
     fn drain_query_followups(&mut self, commands: &mut Vec<AppCommand>) {
@@ -5875,11 +6117,51 @@ impl App {
         }
     }
 
-    fn push_log(&mut self, line: String) {
-        self.agent_logs.push_back(line);
+    /// Records one content-free stderr notice. Only the byte length and any
+    /// collapsed drop count are kept; the text itself never enters app state
+    /// or logs (spec §19).
+    fn push_stderr(&mut self, bytes: usize, dropped: usize) {
+        if dropped > 0 {
+            self.agent_logs
+                .push_back(format!("agent stderr: {dropped} line(s) dropped"));
+        }
+        self.agent_logs
+            .push_back(format!("agent stderr: {bytes} bytes"));
         while self.agent_logs.len() > MAX_AGENT_LOG_LINES {
             self.agent_logs.pop_front();
         }
+    }
+
+    /// Applies a finished owned local job. The result carries its capture
+    /// identity so a stale completion cannot decorate a newer selection.
+    fn on_job_finished(&mut self, outcome: JobOutcome) -> Vec<AppCommand> {
+        match outcome {
+            JobOutcome::Clipboard {
+                session_id,
+                revision,
+                result,
+            } => match result {
+                Ok(()) => {
+                    // A copy belongs to the selection generation it was
+                    // taken from. The session check only guards a switch
+                    // between two sessions; with no active session the
+                    // capture's empty id still matches.
+                    let same_session = match self.sessions.active.as_deref() {
+                        Some(active) => active == session_id,
+                        None => session_id.is_empty(),
+                    };
+                    if same_session && revision == self.selection_revision {
+                        self.selection_copied_until = Some(
+                            self.instant_now()
+                                .checked_add(Duration::from_millis(1_800))
+                                .expect("copy feedback deadline is representable"),
+                        );
+                    }
+                }
+                Err(error) => self.notice(NoticeLevel::Warning, error),
+            },
+        }
+        Vec::new()
     }
 
     // ---- bootstrap -----------------------------------------------------
@@ -7343,6 +7625,9 @@ impl App {
     ) -> Option<AppCommand> {
         if self.pending_requests.values().any(|kind| {
             matches!(kind, RequestKind::CompactCancel { session_id: pending, operation_id: id } if pending == session_id && id == operation_id)
+        }) || self.retry_pending(&RetryKey::CancelCompact {
+            session_id: session_id.to_owned(),
+            operation_id: operation_id.to_owned(),
         }) {
             return None;
         }
@@ -8213,6 +8498,7 @@ impl App {
             .pending_requests
             .values()
             .any(|kind| matches!(kind, RequestKind::CancelTurn(pending) if pending == &turn))
+            || self.retry_pending(&RetryKey::CancelTurn(turn.clone()))
         {
             return Vec::new();
         }
@@ -8274,6 +8560,20 @@ impl App {
             WaitOrigin::Normal => RequestKind::WaitTurn(turn.clone()),
             WaitOrigin::Reload => RequestKind::ReloadWaitTurn(turn.clone()),
         };
+        if let Some(key) = Self::retry_key(&kind) {
+            if self.retry_pending(&key) {
+                return None;
+            }
+        }
+        if !self.deferred_admission_ok() {
+            if self.defer_request(kind, |id| OutgoingRequest::wait_turn(id, &turn)) {
+                self.notice(
+                    NoticeLevel::Info,
+                    "deferred request limit reached; turn.wait will be registered when a slot frees",
+                );
+            }
+            return None;
+        }
         Some(self.request(kind, |id| OutgoingRequest::wait_turn(id, &turn)))
     }
 
@@ -9773,8 +10073,8 @@ impl App {
     fn on_rpc_event(&mut self, event: RpcEvent) -> Vec<AppCommand> {
         match event {
             RpcEvent::Frame(frame) => self.on_frame(frame),
-            RpcEvent::AgentLogLine(line) => {
-                self.push_log(line);
+            RpcEvent::AgentStderr { bytes, dropped } => {
+                self.push_stderr(bytes, dropped);
                 Vec::new()
             }
             RpcEvent::ConnectionClosed => {
@@ -11508,6 +11808,16 @@ mod tests {
 
     fn test_app() -> App {
         App::new(PathBuf::from("/project"))
+    }
+
+    /// A clipboard job result carrying the app's current capture identity, so
+    /// the reducer treats it as the live selection.
+    fn clipboard_job(app: &App, result: Result<(), String>) -> AppEvent {
+        AppEvent::JobFinished(JobOutcome::Clipboard {
+            session_id: app.sessions.active.clone().unwrap_or_default(),
+            revision: app.selection_revision,
+            result,
+        })
     }
 
     fn wire_event(raw: Value) -> AgentEventWire {
@@ -14343,22 +14653,17 @@ mod tests {
         ));
         app.sessions.known.insert("ses_spinner".to_owned(), view);
         app.sessions.active = Some("ses_spinner".to_owned());
-        app.update(AppEvent::ClipboardResult {
-            success: false,
-            error: Some("arm spinner".to_owned()),
-        });
+        app.update(clipboard_job(&app, Err("arm spinner".to_owned())));
 
         assert_eq!(app.next_tick(), Some(Duration::from_millis(100)));
         for millis in [0, 10, 20, 40, 60, 80, 99] {
             elapsed.store(millis, Ordering::Relaxed);
             app.update(AppEvent::Tick);
-            app.update(AppEvent::Rpc(RpcEvent::AgentLogLine(
-                "rpc traffic".to_owned(),
-            )));
-            app.update(AppEvent::ClipboardResult {
-                success: false,
-                error: Some("notice traffic".to_owned()),
-            });
+            app.update(AppEvent::Rpc(RpcEvent::AgentStderr {
+                bytes: 12,
+                dropped: 0,
+            }));
+            app.update(clipboard_job(&app, Err("notice traffic".to_owned())));
             assert_eq!(
                 app.frame_count, 0,
                 "repeated Tick/RPC/notice traffic must not accelerate the spinner"
@@ -14684,10 +14989,10 @@ mod tests {
             base + Duration::from_millis(clock.load(Ordering::Relaxed))
         });
 
-        app.update(AppEvent::ClipboardResult {
-            success: false,
-            error: Some("copy failed: unavailable".to_owned()),
-        });
+        app.update(clipboard_job(
+            &app,
+            Err("copy failed: unavailable".to_owned()),
+        ));
         assert!(!app.selection_copied());
         assert!(
             app.notices()
@@ -14695,10 +15000,7 @@ mod tests {
                 .any(|notice| notice.text.contains("copy failed"))
         );
 
-        app.update(AppEvent::ClipboardResult {
-            success: true,
-            error: None,
-        });
+        app.update(clipboard_job(&app, Ok(())));
         assert!(app.selection_copied());
         elapsed.store(1_799, Ordering::Relaxed);
         app.update(AppEvent::Tick);

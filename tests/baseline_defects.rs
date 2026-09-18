@@ -122,38 +122,46 @@ fn ping_result_carries_protocol_version_and_capabilities() {
     );
 }
 
-/// Defect: the UI admission path awaits a fixed 64-slot channel
-/// (`RpcProcess::send`), so a full queue blocks `App::update`'s caller. Stage
-/// B adds a synchronous `try_send` with a 28+4 split.
+/// C1 migration (formerly the RED pin
+/// `baseline_outbound_queue_is_64_and_send_awaits`): the UI admission path is
+/// synchronous, bounded at 32 slots (28 ordinary, 4 reserved control), and a
+/// full class refuses with a typed error instead of blocking `App::update`'s
+/// caller. Behaviour is exercised against a real spawned child in
+/// `tests/backpressure_baseline.rs`.
 #[test]
-fn baseline_outbound_queue_is_64_and_send_awaits() {
+fn ui_admission_is_synchronous_with_28_normal_and_4_control_slots() {
     let source = include_str!("../src/rpc.rs");
+    assert!(source.contains("pub const OUTBOUND_QUEUE_CAPACITY: usize = 32;"));
+    assert!(source.contains("pub const OUTBOUND_NORMAL_CAPACITY: usize = 28;"));
+    assert!(source.contains("pub fn try_send("));
+    assert!(source.contains("SendError::QueueFull("));
     assert!(
-        source.contains("const REQUESTS_CHANNEL_CAPACITY: usize = 64;"),
-        "BASELINE: current outbound queue is 64 with no control reserve"
+        !source.contains("REQUESTS_CHANNEL_CAPACITY"),
+        "the single 64-slot awaiting channel is gone"
     );
-    assert!(
-        source.contains("pub async fn send("),
-        "BASELINE: the UI path still uses the awaiting `send`"
-    );
-    assert!(
-        !source.contains("pub fn try_send("),
-        "BASELINE: no synchronous admission exists yet"
-    );
+    // `send` survives only as the transport test / non-UI helper; the main
+    // loop never awaits the queue.
+    assert!(source.contains("pub async fn send("));
+    let main = include_str!("../src/main.rs");
+    let production = main
+        .split("#[cfg(test)]")
+        .next()
+        .expect("main.rs has a production half");
+    assert!(!production.contains("process.send("));
 }
 
-/// Defect: only a per-frame 32 MiB bound exists; there is no aggregate
-/// pending-wire budget. Stage B adds a 64 MiB token budget.
+/// C1 migration (formerly the RED pin `baseline_has_no_inbound_wire_byte_budget`):
+/// the 32 MiB per-frame bound is joined by a 64 MiB aggregate budget whose
+/// charge is released when the app takes ownership of a decoded frame, so a
+/// fast producer cannot buffer decoded frames without bound (spec §5.4).
 #[test]
-fn baseline_has_no_inbound_wire_byte_budget() {
+fn inbound_wire_budget_is_released_by_frame_ownership() {
     let source = include_str!("../src/rpc.rs");
+    assert!(source.contains("pub const MAX_RPC_FRAME_BYTES: usize = 32 * 1024 * 1024;"));
+    assert!(source.contains("pub const MAX_WIRE_BUDGET_BYTES: usize = 64 * 1024 * 1024;"));
     assert!(
-        source.contains("pub const MAX_RPC_FRAME_BYTES: usize = 32 * 1024 * 1024;"),
-        "BASELINE: per-frame bound exists"
-    );
-    assert!(
-        !source.contains("WIRE_BUDGET") && !source.contains("wire_bytes"),
-        "BASELINE: no aggregate wire-byte budget token exists yet"
+        source.contains("fn observe_consumed(") && source.contains("self.wire.release(bytes)"),
+        "consuming a frame releases its share of the read budget"
     );
 }
 
@@ -242,22 +250,33 @@ fn baseline_prepare_clones_full_history_and_rescans_tools() {
     );
 }
 
-/// Defect: `run_commands` awaits `process.send().await` and the clipboard
-/// synchronously in the main loop. Stage C moves both to owned jobs.
+/// C1 migration (formerly the RED pin `baseline_run_commands_awaits_send_and_clipboard`):
+/// `run_commands` admits synchronously with `try_send`, hands the clipboard to
+/// an owned job, and never awaits either the writer or the clipboard in the
+/// main loop. A full queue produces `AppEvent::RpcQueueFull` so the app can
+/// revoke the pending registration and keep the typed input.
 #[test]
-fn baseline_run_commands_awaits_send_and_clipboard() {
+fn run_commands_admits_synchronously_and_owns_the_clipboard() {
     let source = include_str!("../src/main.rs");
+    // Test helpers may still await `send` when driving a fake child; the
+    // production half must never await the outbound queue.
+    let production = source
+        .split("#[cfg(test)]")
+        .next()
+        .expect("main.rs has a production half");
+    assert!(production.contains("process.try_send("));
     assert!(
-        source.contains("let result = process.send(request.clone()).await;"),
-        "BASELINE: the main loop awaits the RPC send"
+        !production.contains("process.send("),
+        "the main loop must not await the RPC send"
     );
+    assert!(production.contains("jobs.copy_to_clipboard("));
+    assert!(source.contains("AppEvent::RpcQueueFull {"));
+    assert!(production.contains("LocalJobs"), "owned jobs exist");
+    assert!(include_str!("../src/lib.rs").contains("pub mod jobs;"));
+    let jobs = include_str!("../src/jobs.rs");
     assert!(
-        source.contains("let result = clipboard.set_text(text.as_str());"),
-        "BASELINE: the main loop runs the clipboard inline"
-    );
-    assert!(
-        !source.contains("mod jobs") && !source.contains("use crate::jobs"),
-        "BASELINE: no owned job module exists yet"
+        jobs.contains("spawn_blocking") && jobs.contains("shutdown"),
+        "clipboard work runs on an owned blocking task with a joinable shutdown"
     );
 }
 
@@ -300,12 +319,12 @@ fn reload_does_not_stage_a_full_history_replacement() {
     assert!(source.contains("fn apply_reload"));
 }
 
-/// Defect (REF-48): the markdown display boundary passes raw control
-/// sequences straight through. Measured: an ESC/OSC-52+BEL payload survives
-/// both `MarkdownRenderer::render` and `wrap_plain` into the final rows.
-/// Stage E adds the unified safe-display boundary.
+/// C1 migration (formerly the RED pin `baseline_control_sequences_reach_the_display_rows`):
+/// (REF-48) the display boundary escapes control sequences in both the
+/// markdown renderer and the plain wrapper, so an ESC/OSC-52+BEL payload can
+/// never reach a terminal cell as a live sequence.
 #[test]
-fn baseline_control_sequences_reach_the_display_rows() {
+fn control_sequences_are_escaped_at_the_display_boundary() {
     use minicore_tui::markdown::{MarkdownRenderer, wrap_plain};
     use minicore_tui::theme::Theme;
     let theme = Theme::dark();
@@ -322,39 +341,45 @@ fn baseline_control_sequences_reach_the_display_rows() {
     let rendered = joined(renderer.render(payload, 80, style));
     let plain = joined(wrap_plain(payload, 80, style));
     assert!(
-        rendered.contains('\u{1b}') && rendered.contains('\u{7}'),
-        "BASELINE: markdown rendering leaks ESC/BEL control sequences"
+        !rendered.contains('\u{1b}') && !rendered.contains('\u{7}'),
+        "markdown rendering must not leak ESC/BEL control sequences"
     );
     assert!(
-        plain.contains('\u{1b}') && plain.contains('\u{7}'),
-        "BASELINE: plain wrapping leaks ESC/BEL control sequences"
+        !plain.contains('\u{1b}') && !plain.contains('\u{7}'),
+        "plain wrapping must not leak ESC/BEL control sequences"
     );
+    assert!(rendered.contains('␛') && plain.contains('␛'));
+    assert!(rendered.contains("after") && plain.contains("after"));
 }
 
-/// Defect (REF-49): the Agent's stderr is stored into `agent_logs` and shown
-/// verbatim; there is no redaction boundary and no test asserting log content
-/// is content-free. Only `--debug` logs method/id/byte-count/duration. Stage C
-/// adds the redaction boundary and its tests.
+/// C1 migration (formerly the RED pin `baseline_agent_stderr_is_logged_without_a_redaction_boundary`):
+/// (REF-49) the Agent's stderr never becomes stored display text. The
+/// transport emits only a byte count and a dropped count; the app keeps the
+/// counters and the debug log stays method/id/byte-count/duration only.
 #[test]
-fn baseline_agent_stderr_is_logged_without_a_redaction_boundary() {
+fn agent_stderr_is_never_stored_as_content() {
     let rpc = include_str!("../src/rpc.rs");
     assert!(
-        rpc.contains("RpcEvent::AgentLogLine(agent_log_line(&line))"),
-        "BASELINE: raw stderr lines become AgentLogLine events"
+        !rpc.contains("AgentLogLine(agent_log_line"),
+        "raw stderr text must not become an event payload"
     );
-    let main = include_str!("../src/main.rs");
     assert!(
-        !main.contains("redact") && !main.contains("sanitize_log"),
-        "BASELINE: no log redaction function exists yet"
+        rpc.contains("RpcEvent::AgentStderr {"),
+        "stderr is reported as counts only"
     );
-    let tests = [
-        include_str!("../tests/agent_e2e.rs"),
-        include_str!("../tests/app_flow.rs"),
-        include_str!("../tests/protocol.rs"),
-    ]
-    .concat();
+    let event = include_str!("../src/event.rs");
+    assert!(event.contains("AgentStderr { bytes: usize, dropped: usize }"));
     assert!(
-        !tests.contains("agent_logs_contain_no"),
-        "BASELINE: no test asserts the debug log is content-free"
+        !event.contains("AgentLogLine"),
+        "no content-carrying stderr variant remains"
+    );
+    let app = include_str!("../src/app.rs");
+    assert!(
+        app.contains("fn push_stderr(&mut self, bytes: usize, dropped: usize)"),
+        "the app records counts, not text"
+    );
+    assert!(
+        app.contains("agent stderr: {bytes} bytes"),
+        "visible feedback names the count, not the content"
     );
 }

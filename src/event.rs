@@ -2,8 +2,8 @@
 //! state is mutated exclusively by the future `App::update` (development
 //! spec 9.1).
 //!
-//! Ordering contract: frames and log lines arrive in the order their bytes
-//! were read on their own pipe, but `Frame`, `AgentLogLine`,
+//! Ordering contract: frames and stderr notices arrive in the order their
+//! bytes were read on their own pipe, but `Frame`, `AgentStderr`,
 //! `ConnectionClosed`, `Exited`, and `ProtocolError` are produced by four
 //! independent tasks, so no total order is promised between them. The app
 //! must latch the first connection-terminating event during normal
@@ -14,8 +14,8 @@ use std::process::ExitStatus;
 
 use crossterm::event::Event as CrosstermEvent;
 
-use crate::protocol::{FrameError, IncomingFrame, Reasoning, RequestId};
-use crate::rpc::RpcError;
+use crate::protocol::{FrameError, IncomingFrame, OutgoingRequest, Reasoning, RequestId};
+use crate::rpc::{RpcError, SendClass};
 use crate::state::view::PreparedConversation;
 use crate::theme::ThemeKind;
 
@@ -27,9 +27,11 @@ use crate::theme::ThemeKind;
 pub enum RpcEvent {
     /// One complete response or notification frame.
     Frame(IncomingFrame),
-    /// One captured agent stderr line, UTF-8 and capped at 4096 bytes
-    /// (spec 10.8). Stderr is never printed to the terminal.
-    AgentLogLine(String),
+    /// One captured agent stderr notice: a UTF-8 line capped at 4096 bytes.
+    /// Only the byte length is carried; stderr content is never retained or
+    /// displayed (spec §19). `dropped` counts notices discarded because the
+    /// bounded event channel was full (spec §5.4).
+    AgentStderr { bytes: usize, dropped: usize },
     /// The agent's stdout pipe reached EOF.
     ConnectionClosed,
     /// Fatal protocol or pipe failure; the connection must be considered
@@ -106,6 +108,13 @@ pub enum AppEvent {
     RpcSendFailed {
         id: RequestId,
         error: RpcError,
+    },
+    /// Synchronous admission found the outbound FIFO full (spec §5.2). The
+    /// request was **not** written: the app revokes its pending registration
+    /// and keeps one bounded retry intent keyed by the precise target.
+    RpcQueueFull {
+        request: OutgoingRequest,
+        class: SendClass,
     },
     /// Advance the visual frame counter (spinner animation, spec 15.6).
     Tick,
@@ -202,14 +211,25 @@ pub enum AppEvent {
         width: u16,
         height: u16,
     },
-    /// Result of the single outbound clipboard adapter. Selection state is
-    /// retained on failure so the user can retry without dragging again.
-    ClipboardResult {
-        success: bool,
-        error: Option<String>,
-    },
+    /// An owned local job finished. Jobs never mutate the app; this event is
+    /// the only hand-off (spec §5.5).
+    JobFinished(JobOutcome),
     /// A complete render preparation result. `App::update` installs it only
     /// when the active session and content width still match. Rows, section
     /// ranges, copy ranges, and total height are one immutable snapshot.
     ConversationPrepared(PreparedConversation),
+}
+
+/// The result of one owned local job (clipboard now; export and the draft
+/// editor plug in here when they land).
+#[derive(Debug)]
+pub enum JobOutcome {
+    /// The native clipboard adapter finished. The session/revision identify
+    /// the capture that was copied so stale feedback cannot be shown for a
+    /// newer selection.
+    Clipboard {
+        session_id: String,
+        revision: u64,
+        result: Result<(), String>,
+    },
 }

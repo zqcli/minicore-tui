@@ -6026,9 +6026,10 @@ fn forced_shutdown_message_combines_unknown_known_failure_and_stderr() {
         json!({"turn": {"session_id": "ses_1", "loop_id": "loop_unknown"}}),
     );
     let _wait = unknown.request("turn.wait");
-    unknown.step(AppEvent::Rpc(RpcEvent::AgentLogLine(
-        "agent hung during shutdown".into(),
-    )));
+    unknown.step(AppEvent::Rpc(RpcEvent::AgentStderr {
+        bytes: "agent hung during shutdown".len(),
+        dropped: 0,
+    }));
     let shutdown = unknown.app.update(AppEvent::ShutdownRequested);
     assert!(shutdown.iter().any(
         |command| matches!(command, AppCommand::Rpc(request) if request.method == "agent.shutdown")
@@ -6042,7 +6043,7 @@ fn forced_shutdown_message_combines_unknown_known_failure_and_stderr() {
     let message = unknown.app.shutdown_force_message();
     assert!(message.contains("force-terminated"));
     assert!(message.contains("result/save status unconfirmed"));
-    assert!(message.contains("agent hung during shutdown"));
+    assert!(message.contains("agent stderr: 26 bytes"));
 
     let mut known = Driver::new();
     bootstrap(&mut known);
@@ -6058,13 +6059,14 @@ fn forced_shutdown_message_combines_unknown_known_failure_and_stderr() {
     );
     let wait = known.request("turn.wait");
     known.respond(wait, wait_result("ses_1", "loop_failed", "failed"));
-    known.step(AppEvent::Rpc(RpcEvent::AgentLogLine(
-        "known failure stderr".into(),
-    )));
+    known.step(AppEvent::Rpc(RpcEvent::AgentStderr {
+        bytes: "known failure stderr".len(),
+        dropped: 0,
+    }));
     known.app.update(AppEvent::ShutdownRequested);
     let message = known.app.shutdown_force_message();
     assert!(message.contains("known persistence failure retained"));
-    assert!(message.contains("known failure stderr"));
+    assert!(message.contains("agent stderr: 20 bytes"));
     assert!(!message.contains("result/save status unconfirmed"));
 }
 

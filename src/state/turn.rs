@@ -7,7 +7,7 @@ use crate::state::tool::LiveTool;
 
 /// App-local id correlating a submitted turn with its send response; the
 /// wire only carries `TurnRef`s.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct LocalSubmissionId(pub u64);
 
 #[derive(Debug, Clone, PartialEq, Eq)]

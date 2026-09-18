@@ -6,7 +6,6 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use super::{App, AppCommand, EditorCursor, LastClick, MousePress, MouseTarget, ScrollbarDrag};
-use crate::command::ClipboardText;
 use crate::state::composer::MAX_COMPOSER_BYTES;
 use crate::state::selection::{Dock, NewSessionField};
 use crate::state::session::SessionView;
@@ -1069,7 +1068,7 @@ impl App {
         }
     }
 
-    fn copy_selection_command(&self) -> Vec<AppCommand> {
+    fn copy_selection_command(&mut self) -> Vec<AppCommand> {
         let Some(selection) = self.selection.as_ref() else {
             return Vec::new();
         };
@@ -1079,7 +1078,7 @@ impl App {
         if text.is_empty() {
             return Vec::new();
         }
-        vec![AppCommand::CopySelection(ClipboardText::new(text))]
+        vec![self.capture_copy(text)]
     }
 
     pub(crate) fn terminal_content_width(&self) -> u16 {
@@ -1485,7 +1484,7 @@ impl App {
         Some(start..end)
     }
 
-    fn copy_editor_selection_command(&self) -> Vec<AppCommand> {
+    fn copy_editor_selection_command(&mut self) -> Vec<AppCommand> {
         let Some(range) = self.composer_selection_range() else {
             return Vec::new();
         };
@@ -1499,7 +1498,7 @@ impl App {
         if text.is_empty() {
             return Vec::new();
         }
-        vec![AppCommand::CopySelection(ClipboardText::new(text))]
+        vec![self.capture_copy(text)]
     }
 
     fn toggle_section_at(&mut self, column: u16, row: u16) {

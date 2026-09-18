@@ -99,7 +99,7 @@ pub const MAX_HISTORY_LIMIT: usize = 100;
 #[serde(transparent)]
 pub struct RequestId(pub u64);
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct TurnRef {
     pub session_id: String,
     pub loop_id: String,

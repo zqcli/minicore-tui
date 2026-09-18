@@ -703,7 +703,8 @@ fn inner_width(area: Rect) -> usize {
 /// One model row: id, compact context, tools support, supported reasoning,
 /// and the ✓ current marker for the active session's model (spec 26.3).
 fn model_line(theme: &Theme, model: &ModelInfo, current: bool, width: usize) -> Line<'static> {
-    let mut spans = vec![Span::styled(model.id.clone(), Style::new().fg(theme.text))];
+    let id = crate::safe_text::safe_display(&model.id).into_owned();
+    let mut spans = vec![Span::styled(id, Style::new().fg(theme.text))];
     spans.push(Span::styled(
         format!("  {}", compact_context(model.context_window)),
         Style::new().fg(theme.muted),
@@ -768,10 +769,11 @@ fn reasoning_line(theme: &Theme, level: Reasoning, width: usize) -> Line<'static
 }
 
 fn profile_line(theme: &Theme, profile: &ProfileInfo, width: usize) -> Line<'static> {
-    let tools = profile.tools.join(", ");
+    let id = crate::safe_text::safe_display(&profile.id).into_owned();
+    let tools = crate::safe_text::safe_display(&profile.tools.join(", ")).into_owned();
     fit_spans(
         vec![
-            Span::styled(profile.id.clone(), Style::new().fg(theme.text)),
+            Span::styled(id, Style::new().fg(theme.text)),
             Span::styled(format!("  tools: {tools}"), Style::new().fg(theme.muted)),
         ],
         width.saturating_sub(2),
@@ -788,27 +790,21 @@ fn session_lines(
     wide: bool,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let title = title_or_short_id(info);
+    let title = crate::safe_text::safe_display(&title_or_short_id(info)).into_owned();
     let age = relative_age(&info.updated_at, (app.now)());
     let marker = session_marker(app, info);
+    let model = crate::safe_text::safe_display(&info.model).into_owned();
+    let workspace = crate::safe_text::safe_display(&info.workspace).into_owned();
     let right = if wide {
-        format!(
-            "{} · {}   {age}",
-            info.model,
-            reasoning_label(info.reasoning)
-        )
+        format!("{} · {}   {age}", model, reasoning_label(info.reasoning))
     } else {
         age
     };
     let line1 = sides(&title, &right, width, theme);
     let line2_text = if wide {
-        format!("  {marker} {}", info.workspace)
+        format!("  {marker} {workspace}")
     } else {
-        format!(
-            "  {marker} {}/{}",
-            info.model,
-            reasoning_label(info.reasoning)
-        )
+        format!("  {marker} {model}/{}", reasoning_label(info.reasoning))
     };
     let line2 = Line::from(Span::styled(line2_text, Style::new().fg(theme.muted)));
     if wide {

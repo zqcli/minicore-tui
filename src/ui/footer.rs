@@ -176,6 +176,10 @@ fn footer_parts(app: &App, theme: &Theme) -> FooterParts {
 }
 
 fn push_part(parts: &mut Vec<FooterPart>, text: String, color: Color) {
+    // Footer text mixes workspace paths, branch names, model ids, and usage
+    // metadata. All of it crosses the same safe-display boundary as the rest
+    // of the UI (spec §19).
+    let text = crate::safe_text::safe_display(&text).into_owned();
     if !text.is_empty() {
         parts.push(FooterPart {
             text,

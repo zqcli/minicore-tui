@@ -22,11 +22,14 @@ use ratatui::layout::Rect;
 
 use minicore_tui::app::{App, CliPrefs};
 use minicore_tui::args::{self, Args};
-use minicore_tui::clipboard::{self, ClipboardPort};
 use minicore_tui::command::AppCommand;
 use minicore_tui::event::{AppEvent, RpcEvent};
-use minicore_tui::protocol::OutgoingRequest;
-use minicore_tui::rpc::{RpcError, RpcProcess};
+use minicore_tui::jobs::LocalJobs;
+use minicore_tui::protocol::{
+    METHOD_SESSION_CLOSE, METHOD_SESSION_COMPACT_CANCEL, METHOD_SHUTDOWN, METHOD_TURN_CANCEL,
+    OutgoingRequest,
+};
+use minicore_tui::rpc::{RpcError, RpcProcess, SendClass, SendError};
 use minicore_tui::terminal::{PanicHookGuard, TerminalGuard};
 use minicore_tui::ui;
 
@@ -82,7 +85,11 @@ async fn main() -> ExitCode {
         }
     };
 
-    let run_result = run_fullscreen(&mut guard, &mut process, &opts).await;
+    let mut jobs = LocalJobs::new();
+    let run_result = run_fullscreen(&mut guard, &mut process, &mut jobs, &opts).await;
+    // Join every owned local job before restoring the terminal; each worker is
+    // deadline-bounded, so a hung helper cannot extend this forever.
+    jobs.shutdown().await;
     // Reap the child on every path (idempotent after a clean shutdown).
     process.terminate().await;
     let restore_result = guard.restore();
@@ -104,6 +111,7 @@ async fn main() -> ExitCode {
 enum Selected {
     Rpc(Option<RpcEvent>),
     RpcCooldown,
+    Job(Option<AppEvent>),
     Terminal(Event),
     TerminalEof,
     Signal,
@@ -155,6 +163,7 @@ fn dispatch_due_tick(app: &mut App, deadline: &mut TickDeadline, now: Instant) -
 async fn run_fullscreen(
     guard: &mut TerminalGuard,
     process: &mut RpcProcess,
+    jobs: &mut LocalJobs,
     opts: &Args,
 ) -> io::Result<()> {
     let workspace = if opts.workspace_explicit {
@@ -170,7 +179,6 @@ async fn run_fullscreen(
     };
     let mut app = App::with_cli_prefs(workspace, prefs);
     app.update(AppEvent::SetTheme(opts.theme));
-    let mut clipboard = clipboard::terminal_clipboard();
 
     let terminal = guard.terminal_mut();
     // The application does not create a blocking input-reader thread.
@@ -184,7 +192,7 @@ async fn run_fullscreen(
 
     // Bootstrap fires the four discovery requests concurrently (spec 6).
     let commands = app.update(AppEvent::Bootstrap);
-    if run_commands(process, &mut app, commands, opts.debug, &mut clipboard).await? {
+    if run_commands(process, &mut app, jobs, commands, opts.debug).await? {
         return Ok(());
     }
 
@@ -218,6 +226,7 @@ async fn run_fullscreen(
             () = sleep_or_pending(shutdown_deadline) => Selected::ShutdownTimeout,
             maybe = process.recv(), if rpc_open && rpc_cooldown_until.is_none() => Selected::Rpc(maybe),
             () = sleep_or_pending(rpc_cooldown), if rpc_cooldown_until.is_some() => Selected::RpcCooldown,
+            maybe = jobs.events().recv() => Selected::Job(maybe),
             maybe = events.next() => match maybe {
                 Some(Ok(event)) => Selected::Terminal(event),
                 Some(Err(error)) => {
@@ -243,14 +252,12 @@ async fn run_fullscreen(
                 }
             }
             Selected::Rpc(Some(event)) => {
-                let batch =
-                    run_rpc_batch(process, &mut app, event, opts.debug, &mut clipboard).await?;
+                let batch = run_rpc_batch(process, &mut app, jobs, event, opts.debug).await?;
                 if batch.exit {
                     exit = true;
                 } else if batch.channel_ended {
                     let commands = rpc_channel_ended(&mut rpc_open, &mut app);
-                    if run_commands(process, &mut app, commands, opts.debug, &mut clipboard).await?
-                    {
+                    if run_commands(process, &mut app, jobs, commands, opts.debug).await? {
                         exit = true;
                     }
                 } else {
@@ -259,7 +266,7 @@ async fn run_fullscreen(
             }
             Selected::Rpc(None) => {
                 let commands = rpc_channel_ended(&mut rpc_open, &mut app);
-                if run_commands(process, &mut app, commands, opts.debug, &mut clipboard).await? {
+                if run_commands(process, &mut app, jobs, commands, opts.debug).await? {
                     exit = true;
                 }
             }
@@ -267,9 +274,21 @@ async fn run_fullscreen(
                 rpc_cooldown_until = None;
                 tokio::task::yield_now().await;
             }
+            Selected::Job(Some(event)) => {
+                let commands = app.update(event);
+                jobs.reap_finished().await;
+                if run_commands(process, &mut app, jobs, commands, opts.debug).await? {
+                    exit = true;
+                }
+            }
+            Selected::Job(None) => {
+                return Err(io::Error::other(
+                    "local job event channel ended unexpectedly",
+                ));
+            }
             Selected::Terminal(event) => {
                 let commands = app.update(AppEvent::Terminal(event));
-                if run_commands(process, &mut app, commands, opts.debug, &mut clipboard).await? {
+                if run_commands(process, &mut app, jobs, commands, opts.debug).await? {
                     exit = true;
                 }
             }
@@ -279,7 +298,7 @@ async fn run_fullscreen(
             Selected::Signal => {
                 signal_fired = true;
                 let commands = app.update(AppEvent::ShutdownRequested);
-                if run_commands(process, &mut app, commands, opts.debug, &mut clipboard).await? {
+                if run_commands(process, &mut app, jobs, commands, opts.debug).await? {
                     exit = true;
                 }
             }
@@ -375,9 +394,9 @@ struct RpcBatchResult {
 async fn run_rpc_batch(
     process: &mut RpcProcess,
     app: &mut App,
+    jobs: &mut LocalJobs,
     first: RpcEvent,
     debug: bool,
-    clipboard: &mut dyn ClipboardPort,
 ) -> io::Result<RpcBatchResult> {
     let started = Instant::now();
     let mut processed = 0usize;
@@ -386,7 +405,7 @@ async fn run_rpc_batch(
     while let Some(event) = pending {
         processed += 1;
         let commands = app.update(AppEvent::Rpc(event));
-        if run_commands(process, app, commands, debug, clipboard).await? {
+        if run_commands(process, app, jobs, commands, debug).await? {
             return Ok(RpcBatchResult {
                 exit: true,
                 channel_ended: false,
@@ -483,49 +502,66 @@ async fn sleep_or_pending(duration: Option<Duration>) {
     }
 }
 
+/// Classifies an outbound request for admission (spec §5.2). Cancel, close,
+/// and shutdown keep four reserved FIFO slots so a saturated UI can still
+/// stop work; everything else shares the first 28.
+fn send_class(request: &OutgoingRequest) -> SendClass {
+    match request.method {
+        METHOD_TURN_CANCEL
+        | METHOD_SESSION_COMPACT_CANCEL
+        | METHOD_SESSION_CLOSE
+        | METHOD_SHUTDOWN => SendClass::Control,
+        _ => SendClass::Normal,
+    }
+}
+
 /// Executes side effects without ever mutating `App` directly; failures (and
 /// their follow-up commands) flow back as `AppEvent`s. Returns `true` when
 /// the loop must exit (`AppCommand::Exit`).
+///
+/// RPC admission is synchronous and never awaits queue capacity; the
+/// clipboard is started as an owned job. This function therefore never
+/// blocks the UI loop on a full queue or a slow helper (spec §5.1/§5.2/§5.5).
 async fn run_commands(
     process: &mut RpcProcess,
     app: &mut App,
+    jobs: &mut LocalJobs,
     commands: Vec<AppCommand>,
     debug: bool,
-    clipboard: &mut dyn ClipboardPort,
 ) -> io::Result<bool> {
     let mut queue: VecDeque<AppCommand> = commands.into();
     while let Some(command) = queue.pop_front() {
         match command {
             AppCommand::Rpc(request) => {
                 let start = Instant::now();
-                let result = process.send(request.clone()).await;
                 if debug {
                     debug_log_request(&request, start);
                 }
-                if let Err(error) = result {
-                    // A send failure is an event: on_send_failed recovers
-                    // state and may chain KillChild/Exit here.
-                    let more = app.update(AppEvent::RpcSendFailed {
-                        id: request.id,
-                        error,
-                    });
-                    queue.extend(more);
+                let class = send_class(&request);
+                match process.try_send(request.clone(), class) {
+                    Ok(()) => {}
+                    Err(SendError::QueueFull(class)) => {
+                        // Never written: revoke the pending registration and
+                        // keep one retry intent for the exact target.
+                        let more = app.update(AppEvent::RpcQueueFull { request, class });
+                        queue.extend(more);
+                    }
+                    Err(error) => {
+                        let more = app.update(AppEvent::RpcSendFailed {
+                            id: request.id,
+                            error: RpcError::from(error),
+                        });
+                        queue.extend(more);
+                    }
                 }
             }
             AppCommand::KillChild => process.kill_child(),
             AppCommand::CopySelection(text) => {
-                let result = clipboard.set_text(text.as_str());
-                let event = match result {
-                    Ok(()) => AppEvent::ClipboardResult {
-                        success: true,
-                        error: None,
-                    },
-                    Err(error) => AppEvent::ClipboardResult {
-                        success: false,
-                        error: Some(format!("copy failed: {error}")),
-                    },
-                };
-                app.update(event);
+                jobs.copy_to_clipboard(
+                    text.session_id(),
+                    text.revision(),
+                    text.as_str().to_owned(),
+                );
             }
             AppCommand::Exit => return Ok(true),
         }
@@ -655,7 +691,10 @@ mod tests {
             let now = base + Duration::from_millis(millis);
             let requested = app.next_tick().expect("live App must arm a tick");
             scheduler.arm(Some(requested), now);
-            app.update(AppEvent::Rpc(RpcEvent::AgentLogLine("non-tick".to_owned())));
+            app.update(AppEvent::Rpc(RpcEvent::AgentStderr {
+                bytes: 8,
+                dropped: 0,
+            }));
             if dispatch_due_tick(&mut app, &mut scheduler, now) {
                 tick_at = Some(millis);
                 break;
@@ -674,7 +713,10 @@ mod tests {
             .expect("tick session")
             .live = None;
         elapsed.store(40, Ordering::Relaxed);
-        app.update(AppEvent::Rpc(RpcEvent::AgentLogLine("idle".to_owned())));
+        app.update(AppEvent::Rpc(RpcEvent::AgentStderr {
+            bytes: 4,
+            dropped: 0,
+        }));
         assert_eq!(
             scheduler.arm(app.next_tick(), base + Duration::from_millis(40)),
             None,
@@ -770,7 +812,10 @@ mod tests {
         for millis in 0..5000 {
             elapsed.store(millis, Ordering::Relaxed);
             app.update(AppEvent::Tick);
-            app.update(AppEvent::Rpc(RpcEvent::AgentLogLine("busy".to_owned())));
+            app.update(AppEvent::Rpc(RpcEvent::AgentStderr {
+                bytes: 4,
+                dropped: 0,
+            }));
             app.update(AppEvent::ShutdownRequested);
         }
         assert!(
@@ -785,7 +830,7 @@ mod tests {
         ));
         assert_eq!(
             app.shutdown_force_message(),
-            "shutdown timed out; Agent force-terminated; last Agent stderr: busy"
+            "shutdown timed out; Agent force-terminated; last Agent stderr: agent stderr: 4 bytes"
         );
     }
 
@@ -843,9 +888,10 @@ mod tests {
         app.sessions
             .known
             .insert("known-failed".to_owned(), known_failed);
-        app.update(AppEvent::Rpc(RpcEvent::AgentLogLine(
-            "stderr before forced kill".to_owned(),
-        )));
+        app.update(AppEvent::Rpc(RpcEvent::AgentStderr {
+            bytes: "stderr before forced kill".len(),
+            dropped: 0,
+        }));
         app.update(AppEvent::ShutdownRequested);
         elapsed.store(5000, Ordering::Relaxed);
 
@@ -857,7 +903,10 @@ mod tests {
         assert!(message.contains("force-terminated"));
         assert!(message.contains("result/save status unconfirmed"));
         assert!(message.contains("known persistence failure retained"));
-        assert!(message.contains("stderr before forced kill"));
+        assert!(message.contains(&format!(
+            "agent stderr: {} bytes",
+            "stderr before forced kill".len()
+        )));
     }
 
     #[tokio::test]
@@ -973,7 +1022,7 @@ mod tests {
         // the reader/child-waiter ordering race directly.
         let error = force_kill_and_report(&mut process, &mut app).await;
         let report = error.to_string();
-        assert!(report.contains("fake agent stderr after forced termination"));
+        assert!(report.contains("agent stderr: 42 bytes"));
         assert!(report.contains("result/save status unconfirmed"));
         assert!(report.contains("known persistence failure retained"));
         assert_eq!(

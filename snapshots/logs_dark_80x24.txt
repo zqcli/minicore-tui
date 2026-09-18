@@ -9,11 +9,11 @@
 
  ┌─────────────────────────────────────────────────────────────────────────────┐
  │Agent logs                                                                   │
- │Captured stderr (newest first)                                               │
+ │Recent stderr activity (newest first)                                        │
  │                                                                             │
- │agent 12:34:20  tool read: 128 lines                                         │
- │agent 12:34:13  session ses_1 opened                                         │
- │agent 12:34:12  loaded profile coding                                        │
+ │agent stderr: 36 bytes                                                       │
+ │agent stderr: 34 bytes                                                       │
+ │agent stderr: 37 bytes                                                       │
  │                                                                             │
  │                                                                             │
  │                                                                             │

@@ -1605,9 +1605,10 @@ fn fatal_connection_renders_the_overlay() {
         session_id: "ses_1".into(),
         text: "unfinished".into(),
     });
-    app.update(AppEvent::Rpc(RpcEvent::AgentLogLine(
-        "latest agent stderr".to_owned(),
-    )));
+    app.update(AppEvent::Rpc(RpcEvent::AgentStderr {
+        bytes: "latest agent stderr".len(),
+        dropped: 0,
+    }));
     app.update(AppEvent::Rpc(RpcEvent::Exited(None)));
     let terminal = draw(&app, 80, 24);
     let content = text(&terminal);
@@ -1615,7 +1616,7 @@ fn fatal_connection_renders_the_overlay() {
     assert!(content.contains("Exit status: unavailable"));
     assert!(content.contains("result/save status unconfirmed"));
     assert!(content.contains("Tool side effects may already exist"));
-    assert!(content.contains("latest agent stderr"));
+    assert!(content.contains("agent stderr: 19 bytes"), "{content}");
     assert!(content.contains("Press q to quit"));
 }
 
@@ -3680,7 +3681,8 @@ fn logs_panel_shows_bounded_agent_stderr_without_raw_frames() {
     let terminal = draw(&app, 80, 24);
     let content = text(&terminal);
     assert!(content.contains("Agent logs"));
-    assert!(content.contains("loaded profile coding"));
+    assert!(content.contains("agent stderr: 37 bytes"));
+    assert!(content.contains("Recent stderr activity"));
     assert!(!content.contains("jsonrpc"), "no raw RPC frames in logs");
 }
 
@@ -3723,9 +3725,10 @@ fn help_and_logs_body_paging_does_not_scroll_the_transcript() {
 
     let mut logs = testapp::chat(ThemeKind::Dark);
     for index in 0..32 {
-        logs.update(AppEvent::Rpc(RpcEvent::AgentLogLine(format!(
-            "agent line {index:02}"
-        ))));
+        logs.update(AppEvent::Rpc(RpcEvent::AgentStderr {
+            bytes: format!("agent line {index:02}").len(),
+            dropped: 0,
+        }));
     }
     for character in "/logs".chars() {
         logs.update(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
@@ -3770,9 +3773,10 @@ fn short_panels_page_down_moves_help_logs_and_session_selector() {
 
     let mut logs = testapp::logs(ThemeKind::Dark);
     for index in 0..32 {
-        logs.update(AppEvent::Rpc(RpcEvent::AgentLogLine(format!(
-            "agent line {index:02}"
-        ))));
+        logs.update(AppEvent::Rpc(RpcEvent::AgentStderr {
+            bytes: format!("agent line {index:02}").len(),
+            dropped: 0,
+        }));
     }
     logs.update(AppEvent::TerminalSize {
         width: 60,

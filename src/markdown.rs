@@ -251,10 +251,11 @@ impl<'a> MarkdownRenderer<'a> {
 
     /// Parses `text` into blocks.
     fn parse(&self, text: &str) -> Vec<Block> {
+        let text = crate::safe_text::safe_display(text);
         #[cfg(test)]
         MARKDOWN_PARSE_COUNT.with(|count| count.set(count.get() + 1));
         let options = Options::empty();
-        let parser = Parser::new_ext(text, options);
+        let parser = Parser::new_ext(&text, options);
         let mut b = Builder {
             theme: self.theme,
             blocks: Vec::new(),
@@ -643,6 +644,7 @@ fn push_span_char(spans: &mut Vec<Span<'static>>, ch: char, style: Style) {
 /// newline only fills the tail line, so the paragraph structure of a live
 /// message matches the original text after every delta.
 pub fn wrap_plain(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
+    let text = crate::safe_text::safe_display(text);
     let width = width.max(1);
     let mut lines = Vec::new();
     for raw in text.split('\n') {

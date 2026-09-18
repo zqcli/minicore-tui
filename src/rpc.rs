@@ -3,12 +3,15 @@
 //! (development spec 10). Background tasks only emit `RpcEvent`s; they never
 //! touch app state.
 
+use std::collections::VecDeque;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{Child, Command};
+use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -27,8 +30,105 @@ pub const MAX_AGENT_LOG_LINE_BYTES: usize = 4096;
 /// `RpcError::RequestTooLarge`, so the agent never answers them with a
 /// null-id parse error and the connection never turns fatal for them.
 pub const MAX_REQUEST_LINE_BYTES: usize = 1024 * 1024;
+/// Total outbound FIFO capacity. The single writer drains it strictly in
+/// admission order; control requests cannot jump an already-queued request.
+/// The capacity is *reserved*, not reordered (spec §5.2).
+pub const OUTBOUND_QUEUE_CAPACITY: usize = 32;
+/// Slots an ordinary request may occupy. The remaining four are reserved for
+/// cancel/close/shutdown so a saturated UI can still stop work.
+pub const OUTBOUND_NORMAL_CAPACITY: usize = 28;
+/// Unconsumed inbound frame budget (spec §5.4): bytes of frames that were
+/// decoded but not yet consumed by the app. The reader waits here instead of
+/// buffering unbounded frames behind a 128-event channel. This is an encoded
+/// wire budget, not an RSS guarantee.
+pub const MAX_WIRE_BUDGET_BYTES: usize = 64 * 1024 * 1024;
 
-const REQUESTS_CHANNEL_CAPACITY: usize = 64;
+/// Which admission class a request uses (spec §5.2). Ordinary requests stop
+/// at [`OUTBOUND_NORMAL_CAPACITY`]; control requests may occupy the reserved
+/// tail of the FIFO. Admission never reorders an already-queued request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SendClass {
+    Normal,
+    Control,
+}
+
+/// A local admission failure. Every variant means the request was **not**
+/// written to the child, so the caller can safely keep its input and retry
+/// the exact same request later (spec §5.2). Once [`RpcProcess::try_send`]
+/// returns `Ok`, a later write failure is a connection event, never a
+/// resendable local error.
+#[derive(Debug, thiserror::Error)]
+pub enum SendError {
+    #[error("the RPC process is closed")]
+    Closed,
+    #[error("the outbound queue is full for this admission class")]
+    QueueFull(SendClass),
+    #[error("failed to serialize the request: {0}")]
+    Serialize(#[from] serde_json::Error),
+    #[error(
+        "request line of {actual_bytes} bytes (including the newline) exceeds the {max_bytes} byte limit"
+    )]
+    RequestTooLarge {
+        actual_bytes: usize,
+        max_bytes: usize,
+    },
+}
+
+/// The single FIFO writer's queue. Admission is synchronous and bounded; the
+/// writer awaits the shared notification instead of the UI awaiting capacity.
+#[derive(Debug, Default)]
+struct Outbound {
+    lines: VecDeque<Vec<u8>>,
+    closed: bool,
+    notify: Arc<Notify>,
+}
+
+/// Outstanding inbound frame bytes that were decoded but not yet consumed by
+/// the app (spec §5.4). `charge` waits until there is room; `release` runs
+/// when the app takes ownership of the frame.
+#[derive(Debug)]
+struct WireBudget {
+    limit: usize,
+    used: Mutex<usize>,
+    notify: Notify,
+}
+
+impl WireBudget {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            used: Mutex::new(0),
+            notify: Notify::new(),
+        }
+    }
+
+    async fn charge(&self, bytes: usize) {
+        loop {
+            let notified = self.notify.notified();
+            {
+                let mut used = self.used.lock().unwrap_or_else(|error| error.into_inner());
+                if *used + bytes <= self.limit {
+                    *used += bytes;
+                    return;
+                }
+            }
+            notified.await;
+        }
+    }
+
+    fn release(&self, bytes: usize) {
+        let mut used = self.used.lock().unwrap_or_else(|error| error.into_inner());
+        *used = used.saturating_sub(bytes);
+        drop(used);
+        self.notify.notify_one();
+    }
+
+    #[cfg(test)]
+    fn used(&self) -> usize {
+        *self.used.lock().unwrap_or_else(|error| error.into_inner())
+    }
+}
+
 const EVENTS_CHANNEL_CAPACITY: usize = 128;
 const READ_CHUNK_BYTES: usize = 8192;
 const KILL_CHANNEL_CAPACITY: usize = 1;
@@ -50,8 +150,12 @@ pub const TERMINATE_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// this type only forwards already-numbered requests.
 #[derive(Debug)]
 pub struct RpcProcess {
-    requests: mpsc::Sender<Vec<u8>>,
+    outbound: Arc<Mutex<Outbound>>,
     events: mpsc::Receiver<RpcEvent>,
+    /// Wire bytes of each decoded frame already in `events` but not yet
+    /// consumed, in arrival order. Released in `recv`/`try_recv`.
+    frame_bytes: Arc<Mutex<VecDeque<usize>>>,
+    wire: Arc<WireBudget>,
     kill: mpsc::Sender<()>,
     tasks: Vec<JoinHandle<()>>,
     /// Latched when an `Exited` event was consumed; the waiter task reaped
@@ -111,51 +215,100 @@ impl RpcProcess {
         let stdout = child.stdout.take().expect("agent stdout is piped");
         let stderr = child.stderr.take().expect("agent stderr is piped");
 
-        let (requests_tx, requests_rx) = mpsc::channel(REQUESTS_CHANNEL_CAPACITY);
+        let outbound = Arc::new(Mutex::new(Outbound::default()));
+        let frame_bytes: Arc<Mutex<VecDeque<usize>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let wire = Arc::new(WireBudget::new(MAX_WIRE_BUDGET_BYTES));
         let (events_tx, events_rx) = mpsc::channel(EVENTS_CHANNEL_CAPACITY);
         let (kill_tx, kill_rx) = mpsc::channel(KILL_CHANNEL_CAPACITY);
 
         let tasks = vec![
-            tokio::spawn(stdin_writer(stdin, requests_rx, events_tx.clone())),
-            tokio::spawn(stdout_reader(stdout, events_tx.clone())),
+            tokio::spawn(stdin_writer(
+                stdin,
+                Arc::clone(&outbound),
+                events_tx.clone(),
+            )),
+            tokio::spawn(stdout_reader(
+                stdout,
+                events_tx.clone(),
+                Arc::clone(&wire),
+                Arc::clone(&frame_bytes),
+            )),
             tokio::spawn(stderr_reader(stderr, events_tx.clone())),
             tokio::spawn(child_waiter(child, kill_rx, events_tx)),
         ];
 
         Ok(Self {
-            requests: requests_tx,
+            outbound,
             events: events_rx,
+            frame_bytes,
+            wire,
             kill: kill_tx,
             tasks,
             seen_exit: false,
         })
     }
 
-    /// Sends one already-numbered request as a single NDJSON line. The id
-    /// was allocated by the caller and must already be registered in its
-    /// pending map before this returns, so a response can never beat the
-    /// registration.
+    /// Synchronous, non-blocking admission for the UI path (spec §5.2). The
+    /// id was allocated by the caller and must already be registered in its
+    /// pending map before the command executes, so a response can never beat
+    /// the registration. Returning `Ok(())` means the request is in the
+    /// single FIFO writer's queue; a later write failure is a connection
+    /// event, not an error the caller may retry.
     ///
     /// The serialized line (including the trailing newline) must fit the
-    /// agent's 1 MiB request bound; oversized requests fail with the typed
-    /// `RpcError::RequestTooLarge` (actual and maximum byte counts only, no
-    /// content) and are never written to the child. Channel or serialization
-    /// failures are synchronous too; the caller reports them back to the
-    /// app.
-    pub async fn send(&self, request: OutgoingRequest) -> Result<(), RpcError> {
-        let bytes = serde_json::to_vec(&request)?;
-        let line_bytes = bytes.len() + 1;
-        if line_bytes > MAX_REQUEST_LINE_BYTES {
-            return Err(RpcError::RequestTooLarge {
-                actual_bytes: line_bytes,
-                max_bytes: MAX_REQUEST_LINE_BYTES,
-            });
+    /// agent's 1 MiB request bound; oversized requests fail locally and are
+    /// never written. `QueueFull` means the request was not accepted and was
+    /// not written; the caller keeps its input and may retry the exact
+    /// request when space is available.
+    pub fn try_send(&self, request: OutgoingRequest, class: SendClass) -> Result<(), SendError> {
+        let bytes = serialize_bounded(&request)?;
+        self.push_bytes(bytes, class)
+    }
+
+    fn push_bytes(&self, bytes: Vec<u8>, class: SendClass) -> Result<(), SendError> {
+        let mut outbound = self
+            .outbound
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if outbound.closed {
+            return Err(SendError::Closed);
         }
-        self.requests
-            .send(bytes)
-            .await
-            .map_err(|_| RpcError::Closed)?;
+        let capacity = match class {
+            SendClass::Normal => OUTBOUND_NORMAL_CAPACITY,
+            SendClass::Control => OUTBOUND_QUEUE_CAPACITY,
+        };
+        if outbound.lines.len() >= capacity {
+            return Err(SendError::QueueFull(class));
+        }
+        outbound.lines.push_back(bytes);
+        outbound.notify.notify_one();
         Ok(())
+    }
+
+    /// Waits for queue space and sends one request. Kept for transport tests
+    /// and non-UI callers; the UI path uses [`RpcProcess::try_send`].
+    pub async fn send(&self, request: OutgoingRequest) -> Result<(), RpcError> {
+        let bytes = serialize_bounded(&request).map_err(RpcError::from)?;
+        loop {
+            let notify = {
+                let outbound = self
+                    .outbound
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                if outbound.closed {
+                    return Err(RpcError::Closed);
+                }
+                if outbound.lines.len() < OUTBOUND_NORMAL_CAPACITY {
+                    break;
+                }
+                // Clone the handle and drop the guard before awaiting: a
+                // `MutexGuard` must never cross an await point.
+                Arc::clone(&outbound.notify)
+            };
+            notify.notified().await;
+        }
+        self.push_bytes(bytes, SendClass::Normal)
+            .map_err(RpcError::from)
     }
 
     /// The next event from the agent; `None` once every background task has
@@ -164,10 +317,29 @@ impl RpcProcess {
     /// `ProtocolError` (see `crate::event`).
     pub async fn recv(&mut self) -> Option<RpcEvent> {
         let event = self.events.recv().await;
-        if matches!(&event, Some(RpcEvent::Exited(_))) {
-            self.mark_exit_seen();
+        if let Some(event) = &event {
+            self.observe_consumed(event);
         }
         event
+    }
+
+    /// Releases one frame's wire-budget charge as soon as the app owns the
+    /// decoded frame, and latches a consumed exit (spec §5.4). Non-frame
+    /// events carry no charge.
+    fn observe_consumed(&mut self, event: &RpcEvent) {
+        if matches!(event, RpcEvent::Frame(_)) {
+            let bytes = self
+                .frame_bytes
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .pop_front();
+            if let Some(bytes) = bytes {
+                self.wire.release(bytes);
+            }
+        }
+        if matches!(event, RpcEvent::Exited(_)) {
+            self.mark_exit_seen();
+        }
     }
 
     /// Yields an event only if one is already buffered; `Ok(None)` means the
@@ -182,8 +354,8 @@ impl RpcProcess {
                 return Err(RpcError::Closed);
             }
         };
-        if matches!(&event, Some(RpcEvent::Exited(_))) {
-            self.mark_exit_seen();
+        if let Some(event) = &event {
+            self.observe_consumed(event);
         }
         Ok(event)
     }
@@ -196,9 +368,15 @@ impl RpcProcess {
             return;
         }
         self.seen_exit = true;
-        let (closed, receiver) = mpsc::channel::<Vec<u8>>(1);
-        drop(receiver);
-        self.requests = closed;
+        let outbound = self
+            .outbound
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        // The writer task owns the Mutex for its whole send; cloning a `bool`
+        // and notifying is done under the same lock, so no wakeup is lost.
+        let mut outbound = outbound;
+        outbound.closed = true;
+        outbound.notify.notify_one();
     }
 
     /// Requests the waiter task to kill the agent child; the
@@ -350,6 +528,39 @@ pub enum RpcError {
     },
 }
 
+impl From<SendError> for RpcError {
+    fn from(error: SendError) -> Self {
+        match error {
+            SendError::Closed => Self::Closed,
+            // `send` only reports this after a close raced the waiting loop;
+            // the process is unusable either way.
+            SendError::QueueFull(_) => Self::Closed,
+            SendError::Serialize(error) => Self::Serialize(error),
+            SendError::RequestTooLarge {
+                actual_bytes,
+                max_bytes,
+            } => Self::RequestTooLarge {
+                actual_bytes,
+                max_bytes,
+            },
+        }
+    }
+}
+
+/// Serializes one request and enforces the agent's 1 MiB line bound before
+/// any byte is queued. The reported error carries only byte counts.
+fn serialize_bounded(request: &OutgoingRequest) -> Result<Vec<u8>, SendError> {
+    let bytes = serde_json::to_vec(request)?;
+    let line_bytes = bytes.len() + 1;
+    if line_bytes > MAX_REQUEST_LINE_BYTES {
+        return Err(SendError::RequestTooLarge {
+            actual_bytes: line_bytes,
+            max_bytes: MAX_REQUEST_LINE_BYTES,
+        });
+    }
+    Ok(bytes)
+}
+
 /// Writes one NDJSON request line and flushes it (spec 10.5).
 async fn write_ndjson_line<W>(writer: &mut W, line: &[u8]) -> io::Result<()>
 where
@@ -361,15 +572,40 @@ where
 }
 
 /// The only task that writes to the agent's stdin. Lines arrive already
-/// serialized and bound-checked by `RpcProcess::send`.
+/// serialized and bound-checked by `RpcProcess::try_send`/`send`; the writer
+/// drains them strictly FIFO — control admission owns reserved capacity, it
+/// never reorders an already-queued request (spec §5.2).
 async fn stdin_writer<W>(
     mut stdin: W,
-    mut requests: mpsc::Receiver<Vec<u8>>,
+    outbound: Arc<Mutex<Outbound>>,
     events: mpsc::Sender<RpcEvent>,
 ) where
     W: AsyncWrite + Unpin,
 {
-    while let Some(line) = requests.recv().await {
+    loop {
+        let line = {
+            let mut queue = outbound.lock().unwrap_or_else(|error| error.into_inner());
+            queue.lines.pop_front()
+        };
+        let line = match line {
+            Some(line) => Some(line),
+            None => {
+                let (closed, notify) = {
+                    let queue = outbound.lock().unwrap_or_else(|error| error.into_inner());
+                    (queue.closed, Arc::clone(&queue.notify))
+                };
+                if closed {
+                    None
+                } else {
+                    // Nothing queued: wait for the next admission, then retry.
+                    notify.notified().await;
+                    continue;
+                }
+            }
+        };
+        let Some(line) = line else {
+            return;
+        };
         if let Err(error) = write_ndjson_line(&mut stdin, &line).await {
             emit(
                 &events,
@@ -387,8 +623,17 @@ async fn stdin_writer<W>(
 /// The only task that reads the agent's stdout. One line at a time, with a
 /// hard bound enforced before any byte is buffered; malformed or oversized
 /// frames are fatal and reading stops (spec 10.6, 10.7).
-async fn stdout_reader<R>(mut stdout: R, events: mpsc::Sender<RpcEvent>)
-where
+///
+/// Every decoded frame is charged against the shared wire budget before it is
+/// queued, so a fast producer cannot buffer unbounded decoded frames behind
+/// the bounded event channel (spec §5.4). The charge is released by the app
+/// when it consumes the frame.
+async fn stdout_reader<R>(
+    mut stdout: R,
+    events: mpsc::Sender<RpcEvent>,
+    wire: Arc<WireBudget>,
+    frame_bytes: Arc<Mutex<VecDeque<usize>>>,
+) where
     R: AsyncRead + Unpin,
 {
     let mut chunk = [0u8; READ_CHUNK_BYTES];
@@ -413,7 +658,14 @@ where
             if byte == b'\n' {
                 let line = std::mem::take(&mut line);
                 match parse_frame(&line) {
-                    Ok(frame) => emit(&events, RpcEvent::Frame(frame)).await,
+                    Ok(frame) => {
+                        wire.charge(line.len()).await;
+                        frame_bytes
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .push_back(line.len());
+                        emit(&events, RpcEvent::Frame(frame)).await;
+                    }
                     Err(error) => {
                         emit(&events, RpcEvent::ProtocolError(error)).await;
                         return;
@@ -456,6 +708,7 @@ where
 {
     let mut chunk = [0u8; READ_CHUNK_BYTES];
     let mut line = Vec::new();
+    let mut dropped = 0usize;
     loop {
         let read = match stderr.read(&mut chunk).await {
             Ok(0) => break,
@@ -464,7 +717,8 @@ where
         };
         for &byte in &chunk[..read] {
             if byte == b'\n' {
-                emit(&events, RpcEvent::AgentLogLine(agent_log_line(&line))).await;
+                let text = agent_log_line(&line);
+                emit_stderr(&events, text.len(), &mut dropped);
                 line.clear();
             } else if line.len() < MAX_AGENT_LOG_LINE_BYTES {
                 line.push(byte);
@@ -473,7 +727,24 @@ where
         }
     }
     if !line.is_empty() {
-        emit(&events, RpcEvent::AgentLogLine(agent_log_line(&line))).await;
+        let text = agent_log_line(&line);
+        emit_stderr(&events, text.len(), &mut dropped);
+    }
+}
+
+/// Stderr never blocks the reader and never squeezes out a response: a full
+/// event channel drops the notice and counts it (spec §5.4). Only the byte
+/// length travels app-side, so no stderr content is retained (spec §19).
+///
+/// The dropped count is folded into the next notice that does fit, so the
+/// total is bounded without ever dropping silently.
+fn emit_stderr(events: &mpsc::Sender<RpcEvent>, bytes: usize, dropped: &mut usize) {
+    match events.try_send(RpcEvent::AgentStderr {
+        bytes,
+        dropped: *dropped,
+    }) {
+        Ok(()) => *dropped = 0,
+        Err(_) => *dropped = dropped.saturating_add(1),
     }
 }
 
@@ -582,17 +853,35 @@ mod tests {
     /// half, so tests can observe exactly what would reach the child's stdin.
     fn test_process() -> (RpcProcess, DuplexStream) {
         let (client, server) = duplex(2 * 1024 * 1024);
-        let (requests_tx, requests_rx) = mpsc::channel(8);
         let (events_tx, events_rx) = mpsc::channel(8);
         let (kill_tx, _kill_rx) = mpsc::channel(1);
+        let outbound = Arc::new(Mutex::new(Outbound::default()));
         let process = RpcProcess {
-            requests: requests_tx,
+            outbound: Arc::clone(&outbound),
             events: events_rx,
+            frame_bytes: Arc::new(Mutex::new(VecDeque::new())),
+            wire: Arc::new(WireBudget::new(MAX_WIRE_BUDGET_BYTES)),
             kill: kill_tx,
-            tasks: vec![tokio::spawn(stdin_writer(client, requests_rx, events_tx))],
+            tasks: vec![tokio::spawn(stdin_writer(client, outbound, events_tx))],
             seen_exit: false,
         };
         (process, server)
+    }
+
+    fn test_frame_bytes() -> Arc<Mutex<VecDeque<usize>>> {
+        Arc::new(Mutex::new(VecDeque::new()))
+    }
+
+    fn test_wire() -> Arc<WireBudget> {
+        Arc::new(WireBudget::new(MAX_WIRE_BUDGET_BYTES))
+    }
+
+    /// Pushes one already-serialized line into the shared writer queue and
+    /// wakes the writer, exactly as synchronous admission does.
+    fn push_line(outbound: &Arc<Mutex<Outbound>>, bytes: Vec<u8>) {
+        let mut queue = outbound.lock().unwrap_or_else(|error| error.into_inner());
+        queue.lines.push_back(bytes);
+        queue.notify.notify_one();
     }
 
     /// Builds a `params` value whose full request line (including the
@@ -621,19 +910,23 @@ mod tests {
     #[tokio::test]
     async fn writer_emits_one_flushed_ndjson_line_per_request() {
         let (client, mut server) = duplex(1024);
-        let (requests_tx, requests_rx) = mpsc::channel(4);
         let (events_tx, _events_rx) = mpsc::channel(4);
-        tokio::spawn(stdin_writer(client, requests_rx, events_tx));
+        let outbound = Arc::new(Mutex::new(Outbound::default()));
+        tokio::spawn(stdin_writer(client, Arc::clone(&outbound), events_tx));
 
-        requests_tx
-            .send(serde_json::to_vec(&request(1, "agent.ping")).unwrap())
-            .await
-            .unwrap();
-        requests_tx
-            .send(serde_json::to_vec(&request(2, "model.list")).unwrap())
-            .await
-            .unwrap();
-        drop(requests_tx);
+        push_line(
+            &outbound,
+            serde_json::to_vec(&request(1, "agent.ping")).unwrap(),
+        );
+        push_line(
+            &outbound,
+            serde_json::to_vec(&request(2, "model.list")).unwrap(),
+        );
+        {
+            let mut queue = outbound.lock().unwrap_or_else(|error| error.into_inner());
+            queue.closed = true;
+            queue.notify.notify_one();
+        }
 
         let mut expected = serde_json::to_vec(&request(1, "agent.ping")).unwrap();
         expected.push(b'\n');
@@ -652,7 +945,12 @@ mod tests {
     async fn reader_emits_frames_in_arrival_order_with_preserved_ids() {
         let (mut client, server) = duplex(16 * 1024);
         let (events_tx, mut events_rx) = mpsc::channel(16);
-        tokio::spawn(stdout_reader(server, events_tx));
+        tokio::spawn(stdout_reader(
+            server,
+            events_tx,
+            test_wire(),
+            test_frame_bytes(),
+        ));
 
         let event = r#"{"jsonrpc":"2.0","method":"agent.event","params":{"type":"output_delta","data":{"turn":{"session_id":"ses_1","loop_id":"loop_1"},"request_index":0,"channel":"text","delta":"hi","meta":{"session_id":"ses_1","dropped_before":0}}}}"#;
         let response =
@@ -701,7 +999,12 @@ mod tests {
     async fn reader_accepts_exactly_max_size_frames() {
         let (mut client, server) = duplex(8192);
         let (events_tx, mut events_rx) = mpsc::channel(8);
-        tokio::spawn(stdout_reader(server, events_tx));
+        tokio::spawn(stdout_reader(
+            server,
+            events_tx,
+            test_wire(),
+            test_frame_bytes(),
+        ));
 
         // A JSON string payload of exactly MAX_RPC_FRAME_BYTES in total
         // (quotes, filler, newline) is within the bound and fails only
@@ -729,7 +1032,12 @@ mod tests {
     async fn reader_rejects_the_first_byte_beyond_the_max() {
         let (mut client, server) = duplex(8192);
         let (events_tx, mut events_rx) = mpsc::channel(8);
-        tokio::spawn(stdout_reader(server, events_tx));
+        tokio::spawn(stdout_reader(
+            server,
+            events_tx,
+            test_wire(),
+            test_frame_bytes(),
+        ));
 
         let mut oversized = vec![b'x'; MAX_RPC_FRAME_BYTES + 1];
         oversized.push(b'\n');
@@ -746,7 +1054,12 @@ mod tests {
     async fn reader_treats_malformed_frames_as_fatal_and_stops() {
         let (mut client, server) = duplex(4096);
         let (events_tx, mut events_rx) = mpsc::channel(8);
-        tokio::spawn(stdout_reader(server, events_tx));
+        tokio::spawn(stdout_reader(
+            server,
+            events_tx,
+            test_wire(),
+            test_frame_bytes(),
+        ));
 
         client.write_all(b"not json\n").await.unwrap();
         match next_event(&mut events_rx).await {
@@ -765,7 +1078,12 @@ mod tests {
     async fn reader_reports_clean_eof_and_partial_frames() {
         let (mut client, server) = duplex(4096);
         let (events_tx, mut events_rx) = mpsc::channel(8);
-        tokio::spawn(stdout_reader(server, events_tx));
+        tokio::spawn(stdout_reader(
+            server,
+            events_tx,
+            test_wire(),
+            test_frame_bytes(),
+        ));
 
         client
             .write_all(br#"{"jsonrpc":"2.0","id":1,"result":{}}{"#)
@@ -800,21 +1118,21 @@ mod tests {
         client.write_all(&split).await.unwrap();
 
         match next_event(&mut events_rx).await {
-            RpcEvent::AgentLogLine(line) => assert_eq!(line, "short line"),
-            _ => panic!("expected a log line"),
+            RpcEvent::AgentStderr { bytes, dropped } => {
+                assert_eq!((bytes, dropped), ("short line".len(), 0));
+            }
+            _ => panic!("expected a stderr notice"),
         }
         let long_line = match next_event(&mut events_rx).await {
-            RpcEvent::AgentLogLine(line) => line,
-            _ => panic!("expected a log line"),
+            RpcEvent::AgentStderr { bytes, .. } => bytes,
+            _ => panic!("expected a stderr notice"),
         };
-        assert_eq!(long_line.len(), MAX_AGENT_LOG_LINE_BYTES);
+        assert_eq!(long_line, MAX_AGENT_LOG_LINE_BYTES);
         let split_line = match next_event(&mut events_rx).await {
-            RpcEvent::AgentLogLine(line) => line,
-            _ => panic!("expected a log line"),
+            RpcEvent::AgentStderr { bytes, .. } => bytes,
+            _ => panic!("expected a stderr notice"),
         };
-        assert!(std::str::from_utf8(split_line.as_bytes()).is_ok());
-        assert_eq!(split_line.len(), MAX_AGENT_LOG_LINE_BYTES - 1);
-        assert!(!split_line.ends_with('\u{FFFD}'));
+        assert_eq!(split_line, MAX_AGENT_LOG_LINE_BYTES - 1);
     }
 
     #[test]
@@ -910,24 +1228,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn try_send_admits_28_normal_then_reserves_four_control_slots() {
+        let (process, _server) = test_process();
+        for id in 0..OUTBOUND_NORMAL_CAPACITY as u64 {
+            process
+                .try_send(request(id + 1, "turn.send"), SendClass::Normal)
+                .expect("a normal slot is free");
+        }
+        assert!(matches!(
+            process.try_send(request(100, "turn.send"), SendClass::Normal),
+            Err(SendError::QueueFull(SendClass::Normal))
+        ));
+        for id in 0..(OUTBOUND_QUEUE_CAPACITY - OUTBOUND_NORMAL_CAPACITY) as u64 {
+            process
+                .try_send(request(200 + id, "turn.cancel"), SendClass::Control)
+                .expect("a reserved control slot is free");
+        }
+        assert!(matches!(
+            process.try_send(request(300, "turn.cancel"), SendClass::Control),
+            Err(SendError::QueueFull(SendClass::Control))
+        ));
+    }
+
+    #[tokio::test]
+    async fn try_send_enforces_the_1_mib_line_bound_without_writing() {
+        let (process, mut server) = test_process();
+        let params = params_with_line_bytes(MAX_REQUEST_LINE_BYTES + 1);
+        match process.try_send(request_with_params(1, params), SendClass::Normal) {
+            Err(SendError::RequestTooLarge {
+                actual_bytes,
+                max_bytes,
+            }) => {
+                assert_eq!(actual_bytes, MAX_REQUEST_LINE_BYTES + 1);
+                assert_eq!(max_bytes, MAX_REQUEST_LINE_BYTES);
+            }
+            other => panic!("expected a local size rejection, got: {other:?}"),
+        }
+        let mut buf = [0u8; 64];
+        assert!(
+            timeout(Duration::from_millis(200), server.read(&mut buf))
+                .await
+                .is_err(),
+            "a refused request must never reach the child"
+        );
+    }
+
+    #[tokio::test]
+    async fn wire_budget_releases_charge_when_the_app_owns_the_frame() {
+        let budget = WireBudget::new(10);
+        budget.charge(8).await;
+        assert_eq!(budget.used(), 8);
+        // Over the limit: the second charge must wait, not overrun.
+        assert!(
+            timeout(Duration::from_millis(50), budget.charge(8))
+                .await
+                .is_err()
+        );
+        budget.release(8);
+        timeout(TEST_TIMEOUT, budget.charge(8))
+            .await
+            .expect("the released charge lets the next frame in");
+        assert_eq!(budget.used(), 8);
+    }
+
+    #[tokio::test]
     async fn recv_ends_when_all_sender_tasks_are_gone() {
         let (client, _server) = duplex(1024);
-        let (requests_tx, requests_rx) = mpsc::channel(4);
         let (events_tx, events_rx) = mpsc::channel(4);
         let (kill_tx, _kill_rx) = mpsc::channel(1);
-        // The writer is the only holder of the events sender. It watches the
-        // requests channel; a surrogate sender sits in the process so the
-        // writer's input can be closed without dropping the process.
-        let writer = tokio::spawn(stdin_writer(client, requests_rx, events_tx));
-        let (surrogate_tx, _surrogate_rx) = mpsc::channel(4);
+        // The writer is the only holder of the events sender. It exits when
+        // the shared queue is closed and empty, which the test does below.
+        let outbound = Arc::new(Mutex::new(Outbound::default()));
+        let writer = tokio::spawn(stdin_writer(client, Arc::clone(&outbound), events_tx));
         let mut process = RpcProcess {
-            requests: surrogate_tx,
+            outbound,
             events: events_rx,
+            frame_bytes: test_frame_bytes(),
+            wire: Arc::new(WireBudget::new(MAX_WIRE_BUDGET_BYTES)),
             kill: kill_tx,
             tasks: vec![writer],
             seen_exit: false,
         };
-        drop(requests_tx);
+        {
+            let mut queue = process
+                .outbound
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            queue.closed = true;
+            queue.notify.notify_one();
+        }
         assert!(
             timeout(TEST_TIMEOUT, process.recv())
                 .await
@@ -938,27 +1327,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn consumed_frames_release_their_wire_charge() {
+        let (mut client, server) = duplex(4096);
+        let (events_tx, events_rx) = mpsc::channel(4);
+        let wire = Arc::new(WireBudget::new(4096));
+        let frame_bytes = test_frame_bytes();
+        tokio::spawn(stdout_reader(
+            server,
+            events_tx,
+            Arc::clone(&wire),
+            Arc::clone(&frame_bytes),
+        ));
+        let (kill_tx, _kill_rx) = mpsc::channel(1);
+        let mut process = RpcProcess {
+            outbound: Arc::new(Mutex::new(Outbound::default())),
+            events: events_rx,
+            frame_bytes: Arc::clone(&frame_bytes),
+            wire: Arc::clone(&wire),
+            kill: kill_tx,
+            tasks: Vec::new(),
+            seen_exit: false,
+        };
+        let payload = serde_json::to_vec(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {}
+        }))
+        .unwrap();
+        client.write_all(&payload).await.unwrap();
+        client.write_all(b"\n").await.unwrap();
+        let event = timeout(TEST_TIMEOUT, process.recv())
+            .await
+            .unwrap()
+            .expect("a decoded frame");
+        assert!(matches!(event, RpcEvent::Frame(_)));
+        // Receiving the frame hands ownership to the app, which releases the
+        // producer's charge instead of holding the whole read budget.
+        assert_eq!(wire.used(), 0);
+        assert!(
+            frame_bytes
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_empty()
+        );
+        drop(client);
+    }
+
+    #[tokio::test]
     async fn try_recv_drains_all_buffered_events_before_reporting_closed() {
         let (events_tx, events_rx) = mpsc::channel(EVENTS_CHANNEL_CAPACITY);
         for index in 0..EVENTS_CHANNEL_CAPACITY {
             events_tx
-                .send(RpcEvent::AgentLogLine(format!("event-{index}")))
+                .send(RpcEvent::AgentStderr {
+                    bytes: index,
+                    dropped: 0,
+                })
                 .await
                 .unwrap();
         }
         drop(events_tx);
-        let (requests_tx, _requests_rx) = mpsc::channel(1);
         let (kill_tx, _kill_rx) = mpsc::channel(1);
         let mut process = RpcProcess {
-            requests: requests_tx,
+            outbound: Arc::new(Mutex::new(Outbound::default())),
             events: events_rx,
+            frame_bytes: test_frame_bytes(),
+            wire: Arc::new(WireBudget::new(MAX_WIRE_BUDGET_BYTES)),
             kill: kill_tx,
             tasks: Vec::new(),
             seen_exit: false,
         };
 
         let mut received = 0;
-        while let Ok(Some(RpcEvent::AgentLogLine(_))) = process.try_recv() {
+        while let Ok(Some(RpcEvent::AgentStderr { .. })) = process.try_recv() {
             received += 1;
         }
         assert_eq!(received, EVENTS_CHANNEL_CAPACITY);
@@ -971,13 +1411,13 @@ mod tests {
         // The agent side is gone before the write: the writer must report a
         // typed pipe failure instead of silently losing the request.
         drop(server);
-        let (requests_tx, requests_rx) = mpsc::channel(4);
         let (events_tx, mut events_rx) = mpsc::channel(4);
-        tokio::spawn(stdin_writer(client, requests_rx, events_tx));
-        requests_tx
-            .send(serde_json::to_vec(&request(1, "agent.ping")).unwrap())
-            .await
-            .unwrap();
+        let outbound = Arc::new(Mutex::new(Outbound::default()));
+        tokio::spawn(stdin_writer(client, Arc::clone(&outbound), events_tx));
+        push_line(
+            &outbound,
+            serde_json::to_vec(&request(1, "agent.ping")).unwrap(),
+        );
         match next_event(&mut events_rx).await {
             RpcEvent::ProtocolError(error) => assert_eq!(error.kind, FrameErrorKind::Io),
             other => panic!("expected an io protocol error, got: {other:?}"),
@@ -1589,8 +2029,8 @@ mod tests {
         let mut saw_ping = false;
         while !(saw_log && saw_ping) {
             match next_process_event(&mut process).await {
-                RpcEvent::AgentLogLine(line) => {
-                    assert_eq!(line, "fake agent stderr before forced termination");
+                RpcEvent::AgentStderr { bytes, .. } => {
+                    assert_eq!(bytes, "fake agent stderr before forced termination".len());
                     saw_log = true;
                 }
                 RpcEvent::Frame(IncomingFrame::Response(response)) => {

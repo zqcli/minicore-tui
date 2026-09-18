@@ -682,12 +682,8 @@ pub fn help(theme: ThemeKind) -> App {
 /// The Logs panel with bounded captured stderr lines.
 pub fn logs(theme: ThemeKind) -> App {
     let mut app = fresh(theme);
-    for line in [
-        "agent 12:34:12  loaded profile coding",
-        "agent 12:34:13  session ses_1 opened",
-        "agent 12:34:20  tool read: 128 lines",
-    ] {
-        app.update(AppEvent::Rpc(RpcEvent::AgentLogLine(line.to_owned())));
+    for bytes in [37usize, 34, 36] {
+        app.update(AppEvent::Rpc(RpcEvent::AgentStderr { bytes, dropped: 0 }));
     }
     for c in "/logs".chars() {
         app.update(char_event(c));

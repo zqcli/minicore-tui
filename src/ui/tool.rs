@@ -357,6 +357,7 @@ fn push_wrapped_row(
     indent: &str,
     out: &mut Vec<Line<'static>>,
 ) {
+    let line = crate::safe_text::safe_display(line);
     let content_width = width
         .saturating_sub(rail::SURFACE_CONTENT_START)
         .saturating_sub(UnicodeWidthStr::width(indent));

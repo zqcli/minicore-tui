@@ -356,8 +356,11 @@ pub fn fill_line(line: Line<'static>, width: usize, style: Style) -> Line<'stati
 }
 
 /// One background-styled row: `text` truncated to `width`, then padding.
+/// Control characters are escaped here as well, so every caller that builds
+/// a row from backend text inherits the same safe-display boundary.
 pub fn filled(text: &str, width: usize, style: Style) -> Line<'static> {
-    let text = truncate(text, width);
+    let text = crate::safe_text::safe_display(text);
+    let text = truncate(&text, width);
     let fill = width.saturating_sub(column_width(&text));
     Line::from(vec![
         Span::styled(text, style),

@@ -24,7 +24,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     );
     frame.render_widget(
         Paragraph::new(vec![Line::from(Span::styled(
-            "Captured stderr (newest first)",
+            "Recent stderr activity (newest first)",
             Style::new().fg(theme.dim),
         ))]),
         panel.header,

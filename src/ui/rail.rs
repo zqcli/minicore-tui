@@ -156,6 +156,7 @@ pub fn surface_style(style: Style, background: Color) -> Style {
 /// Rail's `collapsedSimpleLine`: control whitespace and runs of whitespace
 /// become one ordinary space before the visual clip.
 pub fn collapsed_simple_line(text: &str) -> String {
+    let text = crate::safe_text::safe_display(text);
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
