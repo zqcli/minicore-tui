@@ -1237,10 +1237,7 @@ fn durable_block_lines<V: DurableLayoutSource>(
                 crate::state::transcript::AssistantPart::ToolCall(call) => call.name.len(),
             })
             .sum(),
-        TranscriptBlock::Tool(tool) => tool
-            .result
-            .as_ref()
-            .map_or(tool.name.len(), String::len),
+        TranscriptBlock::Tool(tool) => tool.result.as_ref().map_or(tool.name.len(), String::len),
         TranscriptBlock::Summary(summary) => summary.content.len(),
         TranscriptBlock::HistoryPlaceholder(_) => 0,
     };

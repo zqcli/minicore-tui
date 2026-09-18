@@ -351,8 +351,7 @@ fn prepare_frame_with_jobs(app: &mut App, jobs: &mut LocalJobs, area: Rect) {
         }
         if app.active_view().is_some() {
             if let Some(durable) = app.cached_durable(width) {
-                let prepared =
-                    ui::transcript::prepare_conversation_from_cache(app, width, durable);
+                let prepared = ui::transcript::prepare_conversation_from_cache(app, width, durable);
                 app.update(AppEvent::ConversationPrepared(prepared));
             } else if let Some(request) = app.layout_request(width) {
                 let identity = request.identity.clone();

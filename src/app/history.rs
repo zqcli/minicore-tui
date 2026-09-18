@@ -861,9 +861,7 @@ impl App {
                     .map_or(0, UnsavedLoop::retained_bytes);
             if total > crate::limits::LIVE_TOTAL_BYTES {
                 if let Some(live) = view.live.as_mut() {
-                    let allowed = live
-                        .retained_bytes()
-                        .min(crate::limits::LIVE_TOTAL_BYTES);
+                    let allowed = live.retained_bytes().min(crate::limits::LIVE_TOTAL_BYTES);
                     live.trim_to_bytes(allowed);
                     live.event_gap = true;
                 }

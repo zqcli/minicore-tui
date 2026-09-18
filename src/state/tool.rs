@@ -34,11 +34,7 @@ pub struct ToolPresentationState {
 impl ToolPresentationState {
     pub fn retained_bytes(&self) -> usize {
         self.display.detail.len()
-            + self
-                .display
-                .expanded_input
-                .as_ref()
-                .map_or(0, String::len)
+            + self.display.expanded_input.as_ref().map_or(0, String::len)
             + self.result.as_ref().map_or(0, |result| result.len())
     }
 
