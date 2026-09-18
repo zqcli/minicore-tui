@@ -1,6 +1,8 @@
 //! Live tool call state (spec 12.7). One `LiveTool` per tool_call_id;
 //! duplicate started/progress/finished events are idempotent.
 
+use std::sync::Arc;
+
 use crate::protocol::ToolDisplayWire;
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
@@ -25,7 +27,7 @@ impl ToolKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolPresentationState {
     pub display: ToolDisplayWire,
-    pub result: Option<String>,
+    pub result: Option<Arc<str>>,
     pub result_truncated: bool,
 }
 

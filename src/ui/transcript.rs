@@ -1,6 +1,7 @@
 //! The transcript/history scroll view: durable blocks and the live loop tail (spec r2).
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -20,7 +21,7 @@ use crate::state::transcript::{ToolBlock, TranscriptBlock};
 use crate::state::view::{
     ConversationLayout, ConversationSelection, CopyIndex, CopyRange, DurableCacheKey, FoldOverride,
     LayoutKey, PreparedConversation, PreparedDurable, SectionId, SectionIndex, SectionKind,
-    SectionLayout, SectionRange,
+    SectionLayout, SectionRange, SourceMap, SourceRow,
 };
 use crate::theme::Theme;
 use crate::ui::{assistant, header, layout, reasoning, tool, user};
@@ -55,6 +56,7 @@ pub struct DurableLayoutRequest {
     pub identity: DurableLayoutIdentity,
     pub snapshot: DurableLayoutSnapshot,
     pub previous: Option<Arc<PreparedDurable>>,
+    pub viewport: Range<usize>,
     pub cancel: Arc<AtomicBool>,
 }
 
@@ -64,6 +66,7 @@ pub struct DurableLayoutResult {
     pub durable: Arc<PreparedDurable>,
     pub changed_sections: usize,
     pub tool_index_lookups: usize,
+    pub complete: bool,
 }
 
 impl DurableLayoutSnapshot {
@@ -192,7 +195,7 @@ impl DurableLayoutSource for DurableLayoutSnapshot {
 /// metadata are consumed by measurement, rendering, hit testing, selection,
 /// and copying; callers install the result through `App::update`.
 pub fn prepare_conversation(app: &App, width: u16) -> PreparedConversation {
-    prepare_conversation_with_durable(app, width, None)
+    prepare_conversation_inner(app, width, None, true)
 }
 
 /// The no-session startup screen has no durable transcript. Production uses
@@ -200,13 +203,22 @@ pub fn prepare_conversation(app: &App, width: u16) -> PreparedConversation {
 /// for the owned layout worker.
 pub fn prepare_startup_conversation(app: &App, width: u16) -> PreparedConversation {
     debug_assert!(app.active_view().is_none());
-    prepare_conversation_with_durable(app, width, None)
+    prepare_conversation(app, width)
 }
 
 pub fn prepare_conversation_with_durable(
     app: &App,
     width: u16,
+    ready_durable: Arc<PreparedDurable>,
+) -> PreparedConversation {
+    prepare_conversation_inner(app, width, Some(ready_durable), false)
+}
+
+fn prepare_conversation_inner(
+    app: &App,
+    width: u16,
     ready_durable: Option<Arc<PreparedDurable>>,
+    allow_durable_build: bool,
 ) -> PreparedConversation {
     let theme = app.theme.theme();
     let durable = app.active_view().map(|view| {
@@ -222,6 +234,10 @@ pub fn prepare_conversation_with_durable(
         {
             return Arc::clone(cached);
         }
+        assert!(
+            allow_durable_build,
+            "production layout must install a worker-produced durable layout"
+        );
         // A cache miss is the only point that rebuilds the durable layout;
         // a cache hit below must not count (spec §25.1).
         let previous = view.transcript.render_cache.as_deref();
@@ -232,6 +248,8 @@ pub fn prepare_conversation_with_durable(
             width,
             app.reasoning_visible,
             previous,
+            0..0,
+            None,
             None,
         )
         .expect("synchronous test layout cannot be cancelled");
@@ -312,22 +330,37 @@ pub fn prepare_conversation_with_durable(
         .iter()
         .map(|section| (section.rows.clone(), copy_start_for_kind(&section.id.kind)))
         .collect();
-    let live_copy: Vec<CopyRange> = copy_start_for_live
-        .iter()
-        .flat_map(|(rows, copy_start)| {
-            rows.clone().map(|row| {
-                let section = live_sections
-                    .iter()
-                    .find(|section| section.rows.contains(&row))
-                    .expect("live copy row belongs to a live section");
-                let text = section_copy_text(section, row, &live, *copy_start);
-                CopyRange {
-                    row,
-                    columns: *copy_start..width as usize,
-                    decorative: section_copy_is_decorative(section, row, &text),
-                    text: text.into(),
-                }
-            })
+    let mut live_source = String::new();
+    let mut live_copy_meta = Vec::new();
+    for (rows, copy_start) in &copy_start_for_live {
+        for row in rows.clone() {
+            let section = live_sections
+                .iter()
+                .find(|section| section.rows.contains(&row))
+                .expect("live copy row belongs to a live section");
+            let text = section_copy_text(section, row, &live, *copy_start);
+            let start = live_source.len();
+            live_source.push_str(&text);
+            let end = live_source.len();
+            live_copy_meta.push((
+                row,
+                *copy_start,
+                start..end,
+                section_copy_is_decorative(section, row, &text),
+            ));
+            live_source.push('\n');
+        }
+    }
+    let live_source: Arc<str> = live_source.into();
+    let live_copy: Vec<CopyRange> = live_copy_meta
+        .into_iter()
+        .map(|(row, copy_start, source_range, decorative)| CopyRange {
+            row,
+            columns: copy_start..width as usize,
+            source: Arc::clone(&live_source),
+            source_range,
+            hard_break_after: true,
+            decorative,
         })
         .collect();
     let live_sections: Vec<SectionRange> = live_sections
@@ -527,6 +560,50 @@ pub fn all_lines(_theme: &Theme, app: &App, width: usize) -> Vec<Line<'static>> 
 /// Per rendered line, the content-cell ranges inside a markdown link.
 type LinkRow = Vec<std::ops::Range<usize>>;
 
+fn layout_block_order<V: DurableLayoutSource>(
+    view: &V,
+    viewport: Range<usize>,
+    previous: Option<&PreparedDurable>,
+) -> Vec<usize> {
+    let count = view.blocks().len();
+    let mut target = viewport.start / 4;
+    if let Some(previous) = previous {
+        if let Some(index) = previous
+            .layout
+            .sections
+            .iter()
+            .find(|placement| {
+                placement.rows.start < viewport.end && placement.rows.end > viewport.start
+            })
+            .and_then(|placement| placement.layout.key.section.history_index)
+        {
+            target = view
+                .blocks()
+                .iter()
+                .position(|block| block.index() == Some(index))
+                .unwrap_or(target);
+        }
+    }
+    if target >= count || viewport.start == 0 {
+        return (0..count).collect();
+    }
+    let mut order = Vec::with_capacity(count);
+    order.push(target);
+    for distance in 1..count {
+        if let Some(index) = target.checked_sub(distance) {
+            order.push(index);
+        }
+        if let Some(index) = target.checked_add(distance).filter(|index| *index < count) {
+            order.push(index);
+        }
+        if order.len() == count {
+            break;
+        }
+    }
+    order
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
     theme: &Theme,
     theme_kind: crate::theme::ThemeKind,
@@ -534,7 +611,9 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
     width: u16,
     reasoning_visible: bool,
     previous: Option<&PreparedDurable>,
+    viewport: Range<usize>,
     cancel: Option<&AtomicBool>,
+    mut batch_sink: Option<&mut dyn FnMut(Vec<Arc<SectionLayout>>) -> bool>,
 ) -> Option<(Arc<ConversationLayout>, usize, usize)> {
     let mut tool_index: HashMap<(&str, u32, &str), &ToolBlock> = HashMap::new();
     let block_revisions: HashMap<usize, u64> = view
@@ -569,11 +648,14 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
         })
         .unwrap_or_default();
     let mut sections = Vec::new();
+    let mut pending_batch = Vec::new();
     let mut rendered_tools = HashSet::new();
     let mut changed = 0;
     let mut tool_index_lookups = 0;
 
-    for (ordinal, block) in view.blocks().iter().enumerate() {
+    let block_order = layout_block_order(view, viewport, previous);
+    for ordinal in block_order {
+        let block = &view.blocks()[ordinal];
         if cancel.is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Relaxed)) {
             return None;
         }
@@ -582,11 +664,14 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
             .and_then(|index| block_revisions.get(&index).copied())
             .unwrap_or_else(|| block_content_revision(block));
         if let TranscriptBlock::Assistant(assistant_block) = block.as_ref() {
-            for input in assistant::section_inputs(
+            for (section_offset, input) in assistant::section_inputs(
                 assistant_block,
                 reasoning_visible,
                 view.reasoning_folds(),
-            ) {
+            )
+            .into_iter()
+            .enumerate()
+            {
                 if let Some(call) = &input.tool_call {
                     let tool = tool_index
                         .get(&(
@@ -636,9 +721,21 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                         reasoning_visible: true,
                     };
                     if let Some(layout) = cached.get(&key) {
-                        sections.push(Arc::clone(layout));
+                        if !push_layout_section(
+                            Arc::clone(layout),
+                            &mut sections,
+                            &mut pending_batch,
+                            &mut batch_sink,
+                        ) {
+                            return None;
+                        }
                         continue;
                     }
+                    let source_hint = tool
+                        .result
+                        .as_deref()
+                        .unwrap_or(tool.name.as_str())
+                        .to_owned();
                     let lines = durable_block_lines(
                         theme,
                         view,
@@ -646,9 +743,23 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                         width as usize,
                         reasoning_visible,
                     );
-                    if let Some(layout) = make_section_layout(key, lines, Vec::new(), true, folded)
-                    {
-                        sections.push(layout);
+                    if let Some(layout) = make_section_layout(
+                        key,
+                        lines,
+                        Vec::new(),
+                        true,
+                        folded,
+                        ordinal.saturating_mul(1_000_000) + section_offset,
+                        Some(source_hint.as_str()),
+                    ) {
+                        if !push_layout_section(
+                            layout,
+                            &mut sections,
+                            &mut pending_batch,
+                            &mut batch_sink,
+                        ) {
+                            return None;
+                        }
                         changed += 1;
                     }
                     continue;
@@ -672,7 +783,14 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                     reasoning_visible: input.kind == SectionKind::Thinking && reasoning_visible,
                 };
                 if let Some(layout) = cached.get(&key) {
-                    sections.push(Arc::clone(layout));
+                    if !push_layout_section(
+                        Arc::clone(layout),
+                        &mut sections,
+                        &mut pending_batch,
+                        &mut batch_sink,
+                    ) {
+                        return None;
+                    }
                     continue;
                 }
                 let rendered =
@@ -683,6 +801,8 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                     rendered.link_cells,
                     rendered.collapsible,
                     rendered.folded,
+                    ordinal.saturating_mul(1_000_000) + section_offset,
+                    Some(input.source.as_ref()),
                 ) {
                     sections.push(layout);
                     changed += 1;
@@ -722,14 +842,39 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
             reasoning_visible: true,
         };
         if let Some(layout) = cached.get(&key) {
-            sections.push(Arc::clone(layout));
+            if !push_layout_section(
+                Arc::clone(layout),
+                &mut sections,
+                &mut pending_batch,
+                &mut batch_sink,
+            ) {
+                return None;
+            }
             continue;
         }
         let lines = durable_block_lines(theme, view, block, width as usize, reasoning_visible);
         let collapsible = matches!(block.as_ref(), TranscriptBlock::Tool(_));
-        if let Some(layout) = make_section_layout(key, lines, Vec::new(), collapsible, folded) {
-            sections.push(layout);
+        if let Some(layout) = make_section_layout(
+            key,
+            lines,
+            Vec::new(),
+            collapsible,
+            folded,
+            ordinal.saturating_mul(1_000_000),
+            block_source(block),
+        ) {
+            if !push_layout_section(layout, &mut sections, &mut Vec::new(), &mut batch_sink) {
+                return None;
+            }
             changed += 1;
+        }
+    }
+    if let Some(sink) = batch_sink.as_mut() {
+        if !pending_batch.is_empty() && !sink(std::mem::take(&mut pending_batch)) {
+            return None;
+        }
+        if !sink(Vec::new()) {
+            return None;
         }
     }
     Some((
@@ -739,12 +884,42 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
     ))
 }
 
+const LAYOUT_BATCH_SECTIONS: usize = 64;
+
+fn block_source(block: &TranscriptBlock) -> Option<&str> {
+    match block {
+        TranscriptBlock::User(block) => Some(block.text.as_str()),
+        TranscriptBlock::Tool(block) => block.result.as_deref().or(Some(block.name.as_str())),
+        TranscriptBlock::Summary(block) => Some(block.content.as_str()),
+        TranscriptBlock::Assistant(_) | TranscriptBlock::HistoryPlaceholder(_) => None,
+    }
+}
+
+fn push_layout_section(
+    section: Arc<SectionLayout>,
+    sections: &mut Vec<Arc<SectionLayout>>,
+    batch: &mut Vec<Arc<SectionLayout>>,
+    sink: &mut Option<&mut dyn FnMut(Vec<Arc<SectionLayout>>) -> bool>,
+) -> bool {
+    if let Some(sink) = sink.as_mut() {
+        batch.push(section);
+        if batch.len() >= LAYOUT_BATCH_SECTIONS {
+            return sink(std::mem::take(batch));
+        }
+    } else {
+        sections.push(section);
+    }
+    true
+}
+
 fn make_section_layout(
     key: LayoutKey,
     lines: Vec<Line<'static>>,
     mut link_cells: Vec<Vec<std::ops::Range<usize>>>,
     collapsible: bool,
     folded: bool,
+    order: usize,
+    source_hint: Option<&str>,
 ) -> Option<Arc<SectionLayout>> {
     if lines.is_empty() {
         return None;
@@ -757,27 +932,63 @@ fn make_section_layout(
         collapsible,
         folded,
     };
-    let copy_ranges = (0..lines.len())
+    let row_texts = (0..lines.len())
         .map(|row| {
             let text = section_copy_text(&range, row, &lines, range.content_columns.start);
+            (text.clone(), section_copy_is_decorative(&range, row, &text))
+        })
+        .collect::<Vec<_>>();
+    let source: Arc<str> = row_texts
+        .iter()
+        .map(|(text, _)| text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .into();
+    let mut offset = 0;
+    let hard_break_rows = source_hint.is_some_and(|source| source.contains('\n'));
+    let last_content_row = row_texts
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, (text, decorative))| !*decorative && !text.is_empty())
+        .map_or(0, |(row, _)| row);
+    let copy_ranges: Vec<CopyRange> = row_texts
+        .into_iter()
+        .enumerate()
+        .map(|(row, (text, decorative))| {
+            let start = offset;
+            offset += text.len();
+            let end = offset;
+            offset += 1;
             CopyRange {
                 row,
                 columns: range.content_columns.clone(),
-                decorative: section_copy_is_decorative(&range, row, &text),
-                text: Arc::from(text),
+                source: Arc::clone(&source),
+                source_range: start..end,
+                hard_break_after: hard_break_rows || row == last_content_row,
+                decorative,
             }
         })
-        .collect::<Vec<_>>();
-    let source = copy_ranges
-        .iter()
-        .filter(|copy| !copy.decorative)
-        .map(|copy| copy.text.as_ref())
-        .collect::<Vec<_>>()
-        .join("\n");
+        .collect();
+    let source_map = Arc::new(SourceMap {
+        source: Arc::clone(&source),
+        rows: Arc::new(
+            copy_ranges
+                .iter()
+                .map(|copy| SourceRow {
+                    source_range: copy.source_range.clone(),
+                    hard_break_after: copy.hard_break_after,
+                    decorative: copy.decorative,
+                })
+                .collect(),
+        ),
+    });
     Some(Arc::new(SectionLayout {
         key,
+        order,
         rows: Arc::new(lines),
-        source: Arc::from(source),
+        source,
+        source_map,
         copy_ranges: Arc::new(copy_ranges),
         link_cells: Arc::new(link_cells),
         content_columns: range.content_columns,
@@ -861,6 +1072,7 @@ pub fn selection_text(
     let (start, focus) = selection.ordered_points();
     let end_row = focus.row;
     let mut rows = Vec::new();
+    let mut hard_break = false;
     for row in start.row..=end_row {
         let Some(copy) = conversation.copy_ranges.iter().find(|copy| copy.row == row) else {
             continue;
@@ -881,7 +1093,11 @@ pub fn selection_text(
         } else {
             copy.columns.end.saturating_sub(copy.columns.start)
         };
+        if !rows.is_empty() && hard_break {
+            rows.push("\n".to_owned());
+        }
         rows.push(slice_cell_range(copy.text, start_column, end_column));
+        hard_break = copy.hard_break_after;
     }
     while rows.first().is_some_and(|row| row.is_empty()) {
         rows.remove(0);
@@ -889,14 +1105,7 @@ pub fn selection_text(
     while rows.last().is_some_and(|row| row.is_empty()) {
         rows.pop();
     }
-    let mut result = String::new();
-    for row in rows {
-        if !result.is_empty() {
-            result.push('\n');
-        }
-        result.push_str(&row);
-    }
-    result
+    rows.concat()
 }
 
 fn slice_cell_range(text: &str, start: usize, end: usize) -> String {
@@ -1547,61 +1756,45 @@ fn live_section(
         };
         let mut rendered_tool_ids = HashSet::new();
 
-        if req.parts.is_empty() {
-            // Old live state has only flattened channels. Keep the legacy
-            // fallback explicit: its original order is unknown, so it is not
-            // represented as if it were an ordered parts stream.
-            if !req.reasoning_text.is_empty() {
-                context.append_reasoning(out, &mut ranges, &req.reasoning_text, 0, false);
+        let mut reasoning_ordinal = 0;
+        let mut text_ordinal = 0;
+        let mut in_hidden_run = false;
+        for part in &req.parts {
+            match part {
+                crate::state::turn::LivePart::Reasoning(text) => {
+                    context.append_reasoning(
+                        out,
+                        &mut ranges,
+                        text,
+                        reasoning_ordinal,
+                        in_hidden_run,
+                    );
+                    reasoning_ordinal += 1;
+                    in_hidden_run = !reasoning_visible;
+                }
+                crate::state::turn::LivePart::Text(text) => {
+                    context.append_text(out, &mut ranges, text, text_ordinal);
+                    text_ordinal += 1;
+                    in_hidden_run = false;
+                }
+                crate::state::turn::LivePart::Tool { tool_call_id } => {
+                    if let Some(live_tool) = req
+                        .tools
+                        .iter()
+                        .find(|tool| tool.tool_call_id == *tool_call_id)
+                    {
+                        rendered_tool_ids.insert(live_tool.tool_call_id.clone());
+                        context.append_tool(out, &mut ranges, live_tool);
+                    }
+                    in_hidden_run = false;
+                }
             }
-            if !req.text.is_empty() {
-                context.append_text(out, &mut ranges, &req.text, 0);
-            }
-            for live_tool in &req.tools {
-                rendered_tool_ids.insert(live_tool.tool_call_id.clone());
+        }
+        // A dropped or out-of-order marker must not make a real Tool
+        // disappear from the live tail.
+        for live_tool in &req.tools {
+            if !rendered_tool_ids.contains(&live_tool.tool_call_id) {
                 context.append_tool(out, &mut ranges, live_tool);
-            }
-        } else {
-            let mut reasoning_ordinal = 0;
-            let mut text_ordinal = 0;
-            let mut in_hidden_run = false;
-            for part in &req.parts {
-                match part {
-                    crate::state::turn::LivePart::Reasoning(text) => {
-                        context.append_reasoning(
-                            out,
-                            &mut ranges,
-                            text,
-                            reasoning_ordinal,
-                            in_hidden_run,
-                        );
-                        reasoning_ordinal += 1;
-                        in_hidden_run = !reasoning_visible;
-                    }
-                    crate::state::turn::LivePart::Text(text) => {
-                        context.append_text(out, &mut ranges, text, text_ordinal);
-                        text_ordinal += 1;
-                        in_hidden_run = false;
-                    }
-                    crate::state::turn::LivePart::Tool { tool_call_id } => {
-                        if let Some(live_tool) = req
-                            .tools
-                            .iter()
-                            .find(|tool| tool.tool_call_id == *tool_call_id)
-                        {
-                            rendered_tool_ids.insert(live_tool.tool_call_id.clone());
-                            context.append_tool(out, &mut ranges, live_tool);
-                        }
-                        in_hidden_run = false;
-                    }
-                }
-            }
-            // A dropped or out-of-order marker must not make a real Tool
-            // disappear from the live tail.
-            for live_tool in &req.tools {
-                if !rendered_tool_ids.contains(&live_tool.tool_call_id) {
-                    context.append_tool(out, &mut ranges, live_tool);
-                }
             }
         }
     }

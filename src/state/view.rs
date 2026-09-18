@@ -88,13 +88,28 @@ pub struct LayoutKey {
 #[derive(Debug)]
 pub struct SectionLayout {
     pub key: LayoutKey,
+    pub order: usize,
     pub rows: Arc<Vec<Line<'static>>>,
     pub source: Arc<str>,
+    pub source_map: Arc<SourceMap>,
     pub copy_ranges: Arc<Vec<CopyRange>>,
     pub link_cells: Arc<Vec<LinkRow>>,
     pub content_columns: std::ops::Range<usize>,
     pub collapsible: bool,
     pub folded: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct SourceMap {
+    pub source: Arc<str>,
+    pub rows: Arc<Vec<SourceRow>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceRow {
+    pub source_range: std::ops::Range<usize>,
+    pub hard_break_after: bool,
+    pub decorative: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -117,7 +132,15 @@ pub struct ConversationLayout {
 }
 
 impl ConversationLayout {
-    pub fn from_sections(sections: Vec<Arc<SectionLayout>>) -> Self {
+    pub fn retained_bytes(&self) -> usize {
+        self.sections
+            .iter()
+            .map(|placement| placement.layout.retained_bytes())
+            .sum()
+    }
+
+    pub fn from_sections(mut sections: Vec<Arc<SectionLayout>>) -> Self {
+        sections.sort_by_key(|section| section.order);
         let mut placements = Vec::with_capacity(sections.len());
         let mut offsets = Vec::with_capacity(sections.len());
         let mut total_rows = 0;
@@ -217,6 +240,32 @@ impl ConversationLayout {
     }
 }
 
+impl SectionLayout {
+    pub fn retained_bytes(&self) -> usize {
+        let rows = self
+            .rows
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.len())
+                    .sum::<usize>()
+            })
+            .sum::<usize>();
+        let copy = self
+            .copy_ranges
+            .iter()
+            .map(|range| range.text().len())
+            .sum::<usize>();
+        let links = self
+            .link_cells
+            .iter()
+            .map(|row| row.len() * std::mem::size_of::<std::ops::Range<usize>>())
+            .sum::<usize>();
+        rows + copy + self.source.len() + links
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FoldOverride {
     Expanded,
@@ -250,12 +299,23 @@ impl SectionRange {
 pub struct CopyRange {
     pub row: usize,
     pub columns: std::ops::Range<usize>,
-    /// Shared row text: a frame copy bumps a refcount instead of the bytes.
-    pub text: Arc<str>,
+    /// One shared source string per section/live run; each visual row only
+    /// stores a byte range into it instead of owning another row body.
+    pub source: Arc<str>,
+    pub source_range: std::ops::Range<usize>,
+    /// A soft-wrapped row joins directly to the next source range. Hard
+    /// newlines, real empty lines, and section boundaries insert `\n`.
+    pub hard_break_after: bool,
     /// True for layout-only boundary rows and folded hints. These rows may
     /// be rendered for spacing or affordances, but they are not transcript
     /// content when a selection is copied.
     pub decorative: bool,
+}
+
+impl CopyRange {
+    pub fn text(&self) -> &str {
+        &self.source[self.source_range.clone()]
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -311,6 +371,12 @@ pub type LinkRow = Vec<std::ops::Range<usize>>;
 pub struct PreparedDurable {
     pub key: DurableCacheKey,
     pub layout: Arc<ConversationLayout>,
+}
+
+impl PreparedDurable {
+    pub fn retained_bytes(&self) -> usize {
+        self.layout.retained_bytes()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -401,6 +467,7 @@ pub struct CopyView<'a> {
     pub row: usize,
     pub columns: &'a std::ops::Range<usize>,
     pub text: &'a str,
+    pub hard_break_after: bool,
     pub decorative: bool,
 }
 
@@ -418,7 +485,8 @@ impl CopyIndex {
                         row: placement.rows.start + local_row - placement.local_start
                             + self.durable_base.saturating_sub(self.durable_skip),
                         columns: &copy.columns,
-                        text: copy.text.as_ref(),
+                        text: copy.text(),
+                        hard_break_after: copy.hard_break_after,
                         decorative: copy.decorative,
                     })
                 })
@@ -426,7 +494,8 @@ impl CopyIndex {
         durable.chain(self.live.iter().map(move |copy| CopyView {
             row: copy.row + self.live_base,
             columns: &copy.columns,
-            text: copy.text.as_ref(),
+            text: copy.text(),
+            hard_break_after: copy.hard_break_after,
             decorative: copy.decorative,
         }))
     }

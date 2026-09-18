@@ -114,8 +114,12 @@ async fn install_worker_layout(app: &mut App, jobs: &mut LocalJobs, width: u16) 
     app.mark_layout_pending(identity);
     loop {
         let event = jobs.events().recv().await.expect("layout worker event");
-        if matches!(event, AppEvent::DurableLayoutPrepared(_)) {
-            app.update(event);
+        let complete = matches!(
+            &event,
+            AppEvent::DurableLayoutPrepared(result) if result.complete
+        );
+        app.update(event);
+        if complete {
             break;
         }
     }
@@ -241,7 +245,7 @@ async fn measure_c2b_worker_over_50k_rows_and_1000_output_deltas() {
         let prepared = minicore_tui::ui::transcript::prepare_conversation_with_durable(
             &app,
             WIDTH,
-            app.cached_durable(WIDTH),
+            app.cached_durable(WIDTH).expect("durable cache"),
         );
         window_rows += prepared
             .window(prepared.total_rows().saturating_sub(HEIGHT), HEIGHT)

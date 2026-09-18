@@ -1348,7 +1348,7 @@ fn loaded_running_session_reopen_reuses_view_after_state_failure() {
 
     let live = driver.app.sessions.known["ses_1"].live.as_ref().unwrap();
     assert_eq!(live.reference.as_ref().unwrap().loop_id, "loop_live");
-    assert_eq!(live.requests[0].text, "still accepted");
+    assert_eq!(live.requests[0].visible_text(), "still accepted");
     assert!(driver.app.request_is_pending(wait.id));
 }
 
@@ -1607,7 +1607,7 @@ fn first_open_running_placeholder_accepts_following_events() {
             .as_ref()
             .unwrap()
             .requests[0]
-            .text,
+            .visible_text(),
         "first output"
     );
 }
@@ -1672,7 +1672,10 @@ fn session_opened_event_initializes_unknown_view_and_reads_running_state() {
             .loop_id,
         "loop_event"
     );
-    assert_eq!(view.live.as_ref().unwrap().requests[0].text, "event output");
+    assert_eq!(
+        view.live.as_ref().unwrap().requests[0].visible_text(),
+        "event output"
+    );
 }
 
 #[test]
@@ -1760,7 +1763,7 @@ fn loop_events_can_bind_before_turn_send_response() {
     let wait = driver.request("turn.wait");
     assert_eq!(wait.params["loop_id"], "loop_early");
     let live = driver.app.sessions.known["ses_1"].live.as_ref().unwrap();
-    assert_eq!(live.requests[0].text, "already streaming");
+    assert_eq!(live.requests[0].visible_text(), "already streaming");
     assert_eq!(live.reference.as_ref().unwrap().loop_id, "loop_early");
 }
 
@@ -1825,8 +1828,8 @@ fn request_index_keeps_multi_request_deltas_separate() {
     }
     let live = driver.app.sessions.known["ses_1"].live.as_ref().unwrap();
     assert_eq!(live.requests.len(), 2);
-    assert_eq!(live.requests[0].text, "first");
-    assert_eq!(live.requests[1].text, "second");
+    assert_eq!(live.requests[0].visible_text(), "first");
+    assert_eq!(live.requests[1].visible_text(), "second");
 }
 
 #[test]
@@ -3026,7 +3029,12 @@ fn a_catalog_reload_leaves_no_stale_wait_for_a_settled_turn() {
             .transcript
             .window
             .items()
-            .any(|(_, item)| item.item.loop_id() == Some("loop_t2"))
+            .any(|(_, item)| match item.as_ref() {
+                TranscriptBlock::User(user) => user.loop_id.as_deref() == Some("loop_t2"),
+                TranscriptBlock::Assistant(assistant) => assistant.loop_id == "loop_t2",
+                TranscriptBlock::Tool(tool) => tool.loop_id == "loop_t2",
+                _ => false,
+            })
     );
 
     assert_eq!(driver.app.sessions.active.as_deref(), Some("ses_1"));
@@ -7007,18 +7015,23 @@ fn failed_turn_result_projects_authoritative_body_when_live_deltas_are_missing()
         Some(minicore_tui::protocol::TurnPersistenceWire::Failed)
     );
     assert_eq!(
-        view.live.as_ref().unwrap().requests[0].text,
+        view.live.as_ref().unwrap().requests[0].visible_text(),
         "authoritative result body"
     );
     assert_eq!(
-        view.unsaved_loop.as_ref().unwrap().requests[0].text,
+        view.unsaved_loop.as_ref().unwrap().requests[0].visible_text(),
         "authoritative result body"
     );
     assert!(
         view.transcript
             .window
             .items()
-            .all(|(_, item)| item.item.loop_id() != Some("loop_saved_failed")),
+            .all(|(_, item)| match item.as_ref() {
+                TranscriptBlock::User(user) => user.loop_id.as_deref() != Some("loop_saved_failed"),
+                TranscriptBlock::Assistant(assistant) => assistant.loop_id != "loop_saved_failed",
+                TranscriptBlock::Tool(tool) => tool.loop_id != "loop_saved_failed",
+                _ => true,
+            }),
         "turn-local result items must not enter session history"
     );
 }

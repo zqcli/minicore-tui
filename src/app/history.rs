@@ -11,6 +11,9 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::protocol::TurnRef;
+use crate::state::transcript::{
+    AssistantBlock, AssistantPart, SummaryBlock, ToolBlock, TranscriptBlock, UserBlock,
+};
 
 use super::*;
 use crate::protocol::read::{
@@ -35,13 +38,20 @@ pub enum PinError {
 #[derive(Debug, Clone, Default)]
 pub struct HistoryWindow {
     pin: Option<SnapshotPin>,
-    items: BTreeMap<usize, Arc<RawHistoryItem>>,
+    items: BTreeMap<usize, HistorySlot>,
     large_items: BTreeMap<usize, usize>,
     pending_large_items: BTreeMap<usize, ()>,
     loaded_ranges: Vec<Range<usize>>,
     bytes: usize,
     pub trailing_incomplete: bool,
     pub records_truncated: bool,
+}
+
+#[derive(Debug, Clone)]
+struct HistorySlot {
+    owner: Arc<TranscriptBlock>,
+    fingerprint: u64,
+    bytes: usize,
 }
 
 impl HistoryWindow {
@@ -53,16 +63,16 @@ impl HistoryWindow {
         self.pin.as_ref().map_or(0, |pin| pin.total)
     }
 
-    pub fn item(&self, index: usize) -> Option<&Arc<RawHistoryItem>> {
-        self.items.get(&index)
+    pub fn item(&self, index: usize) -> Option<&Arc<TranscriptBlock>> {
+        self.items.get(&index).map(|slot| &slot.owner)
     }
 
     pub fn large_item(&self, index: usize) -> Option<usize> {
         self.large_items.get(&index).copied()
     }
 
-    pub fn items(&self) -> impl Iterator<Item = (&usize, &Arc<RawHistoryItem>)> {
-        self.items.iter()
+    pub fn items(&self) -> impl Iterator<Item = (&usize, &Arc<TranscriptBlock>)> {
+        self.items.iter().map(|(index, slot)| (index, &slot.owner))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -129,18 +139,51 @@ impl HistoryWindow {
         self.pin = Some(pin);
     }
 
-    /// Inserts one decoded item, returning its `Arc` for the display bridge.
-    pub fn insert(&mut self, index: usize, item: RawHistoryItem) -> Arc<RawHistoryItem> {
-        let item = Arc::new(item);
+    /// Installs the one semantic owner shared by history and the transcript
+    /// projection. Raw wire items never remain in this window.
+    pub fn insert_owner(
+        &mut self,
+        index: usize,
+        owner: Arc<TranscriptBlock>,
+        fingerprint: u64,
+        bytes: usize,
+    ) {
         if let Some(previous) = self.items.remove(&index) {
-            self.bytes = self.bytes.saturating_sub(item_bytes(&previous));
+            self.bytes = self.bytes.saturating_sub(previous.bytes);
         }
         self.large_items.remove(&index);
         self.pending_large_items.remove(&index);
-        self.bytes += item_bytes(&item);
-        self.items.insert(index, item.clone());
+        self.bytes += bytes;
+        self.items.insert(
+            index,
+            HistorySlot {
+                owner,
+                fingerprint,
+                bytes,
+            },
+        );
         self.merge_range(index);
-        item
+    }
+
+    pub(crate) fn fingerprint(&self, index: usize) -> Option<u64> {
+        self.items.get(&index).map(|slot| slot.fingerprint)
+    }
+
+    #[cfg(test)]
+    pub fn insert(&mut self, index: usize, item: RawHistoryItem) {
+        let bytes = item_bytes(&item);
+        let fingerprint = raw_item_fingerprint(&item);
+        self.insert_owner(
+            index,
+            Arc::new(TranscriptBlock::HistoryPlaceholder(
+                crate::state::transcript::HistoryPlaceholderBlock {
+                    index,
+                    total_bytes: bytes,
+                },
+            )),
+            fingerprint,
+            bytes,
+        );
     }
 
     pub fn insert_placeholder(&mut self, index: usize, total_bytes: usize) {
@@ -164,16 +207,21 @@ impl HistoryWindow {
     /// bytes released. `loaded_ranges` is split so the evicted index reads as
     /// a real gap again (spec §6.5): a later read re-fetches it instead of
     /// trusting a range that no longer has content.
-    pub fn evict_oldest(&mut self, protect_from: usize) -> Option<usize> {
+    fn evict_oldest_entry(&mut self, protect_from: usize) -> Option<(usize, usize)> {
         let (&index, _) = self.items.iter().next()?;
         if index >= protect_from {
             return None;
         }
         let item = self.items.remove(&index)?;
-        let bytes = item_bytes(&item);
+        let bytes = item.bytes;
         self.bytes = self.bytes.saturating_sub(bytes);
         self.forget_loaded(index);
-        Some(bytes)
+        Some((index, bytes))
+    }
+
+    pub fn evict_oldest(&mut self, protect_from: usize) -> Option<usize> {
+        self.evict_oldest_entry(protect_from)
+            .map(|(_, bytes)| bytes)
     }
 
     /// Evicts unprotected oldest items until the retained bytes fit `budget`
@@ -181,8 +229,8 @@ impl HistoryWindow {
     pub fn evict_to_budget(&mut self, budget: usize, protect_from: usize) -> usize {
         let mut released = 0;
         while self.bytes > budget {
-            match self.evict_oldest(protect_from) {
-                Some(bytes) => released += bytes,
+            match self.evict_oldest_entry(protect_from) {
+                Some((_, bytes)) => released += bytes,
                 None => break,
             }
         }
@@ -267,6 +315,14 @@ fn item_bytes(item: &RawHistoryItem) -> usize {
     }
 }
 
+fn raw_item_fingerprint(item: &RawHistoryItem) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    format!("{item:?}").hash(&mut hasher);
+    hasher.finish()
+}
+
 /// One in-flight `session.read` page. It owns the chunk assembler so a page
 /// that lands outside its requested window can discard a partial item instead
 /// of mistaking it for loaded content (spec §6.3).
@@ -282,6 +338,100 @@ pub struct ReadPage {
     pub replacement: bool,
     /// Whether this page is a stale-check or gap reconcile.
     pub reconcile: bool,
+}
+
+/// Converts one decoded result item into its semantic owner. This conversion
+/// is shared by the session history reducer and the turn-result recovery
+/// window; neither window retains the raw wire item after this boundary.
+pub(super) fn raw_item_owner(index: usize, item: &RawHistoryItem) -> Arc<TranscriptBlock> {
+    use crate::protocol::read::{RuntimeAssistantPart, RuntimeItem, RuntimeUserKind};
+
+    match &item.item {
+        RuntimeItem::User(user) => Arc::new(TranscriptBlock::User(UserBlock {
+            index: Some(index),
+            loop_id: Some(user.loop_id.clone()),
+            kind: match user.kind {
+                RuntimeUserKind::Prompt => crate::protocol::UserMessageKindWire::Prompt,
+                RuntimeUserKind::Steering => crate::protocol::UserMessageKindWire::Steering,
+            },
+            text: user.input.text.clone(),
+            pending: false,
+        })),
+        RuntimeItem::Assistant(assistant) => {
+            let mut parts = Vec::new();
+            let mut tool_calls = Vec::new();
+            for part in &assistant.content {
+                match part {
+                    RuntimeAssistantPart::Text(text) if !text.is_empty() => {
+                        parts.push(AssistantPart::Text(text.clone()));
+                    }
+                    RuntimeAssistantPart::Reasoning { text, summary, .. } => {
+                        let body = text.clone().or_else(|| summary.clone()).unwrap_or_default();
+                        if !body.is_empty() {
+                            parts.push(AssistantPart::Reasoning(body));
+                        }
+                    }
+                    RuntimeAssistantPart::Text(_) => {}
+                    RuntimeAssistantPart::ToolCall {
+                        tool_call_id,
+                        name,
+                        call_index,
+                        ..
+                    } => {
+                        let call = crate::protocol::ToolCallViewWire {
+                            tool_call_id: tool_call_id.clone(),
+                            name: name.clone(),
+                            call_index: *call_index,
+                            display: None,
+                        };
+                        parts.push(AssistantPart::ToolCall(call.clone()));
+                        tool_calls.push(call);
+                    }
+                }
+            }
+            let reasoning_level = assistant
+                .reasoning
+                .as_deref()
+                .and_then(|value| {
+                    serde_json::from_value::<crate::protocol::Reasoning>(serde_json::Value::String(
+                        value.to_owned(),
+                    ))
+                    .ok()
+                })
+                .unwrap_or_default();
+            Arc::new(TranscriptBlock::Assistant(AssistantBlock {
+                index,
+                loop_id: assistant.loop_id.clone(),
+                request_index: assistant.request_index,
+                model: assistant.model.clone(),
+                reasoning_level,
+                parts,
+                tool_calls,
+                usage: assistant.usage,
+                finish_reason: assistant.finish_reason.clone(),
+                terminal_error: None,
+            }))
+        }
+        RuntimeItem::ToolResult(result) => Arc::new(TranscriptBlock::Tool(ToolBlock {
+            index: Some(index),
+            loop_id: result.loop_id.clone(),
+            request_index: result.request_index,
+            tool_call_id: result.call_id.clone(),
+            name: result.tool_name.clone(),
+            result: Some(result.output.content.clone()),
+            outcome: serde_json::from_value::<crate::protocol::ToolOutcomeWire>(
+                serde_json::Value::String(result.outcome.clone()),
+            )
+            .ok(),
+            live_status: None,
+            progress: None,
+            expanded: false,
+        })),
+        RuntimeItem::Summary(summary) => Arc::new(TranscriptBlock::Summary(SummaryBlock {
+            index,
+            content: summary.content.clone(),
+        })),
+    }
 }
 
 impl ReadPage {
@@ -305,7 +455,7 @@ pub struct TurnResultWindow {
     pub cursor: ReadCursor,
     pub assembler: ChunkAssembler,
     pub total: Option<usize>,
-    pub items: BTreeMap<usize, Arc<RawHistoryItem>>,
+    pub items: BTreeMap<usize, Arc<TranscriptBlock>>,
     pub large_items: BTreeMap<usize, usize>,
     pub pending_large_items: BTreeMap<usize, ()>,
     pub explicit_large_item: bool,
@@ -362,14 +512,15 @@ impl TurnResultWindow {
                         });
                     }
                     expected = index.saturating_add(1);
+                    let owner = raw_item_owner(index, &item);
                     if let Some(existing) = self.items.get(&index) {
-                        if existing.as_ref() != &item {
+                        if existing.as_ref() != owner.as_ref() {
                             return Err(ReadError::ItemChanged { index });
                         }
                     } else {
                         self.large_items.remove(&index);
                         self.pending_large_items.remove(&index);
-                        self.items.insert(index, Arc::new(item));
+                        self.items.insert(index, owner);
                     }
                 }
                 Assembled::LargeItem { index, total_bytes } => {
@@ -448,7 +599,7 @@ impl TurnResultWindow {
 #[derive(Debug)]
 pub struct AppliedPage {
     /// Newly decoded items in page order.
-    pub inserted: Vec<(usize, Arc<RawHistoryItem>)>,
+    pub inserted: Vec<(usize, RawHistoryItem)>,
     /// Items over the automatic decode budget. Their bytes are not retained,
     /// but their indexes remain visible as bounded placeholders.
     pub placeholders: Vec<(usize, usize)>,
@@ -518,8 +669,8 @@ pub fn apply_page(
                 // item is immutable, so different bytes are a protocol conflict.
                 // This is checked before ordering so an overlapping changed item
                 // is reported as a conflict rather than a mere gap.
-                if let Some(existing) = window.item(index) {
-                    if existing.as_ref() != &item {
+                if let Some(existing) = window.fingerprint(index) {
+                    if existing != raw_item_fingerprint(&item) {
                         return Ok(ReadApply::Ok(AppliedPage {
                             inserted,
                             placeholders,
@@ -545,7 +696,6 @@ pub fn apply_page(
                 if index < page.window_start || window.item(index).is_some() {
                     continue;
                 }
-                let item = window.insert(index, item);
                 inserted.push((index, item));
             }
             Ok(Assembled::LargeItem { index, total_bytes }) => {
@@ -687,6 +837,70 @@ pub fn apply_page(
 pub use crate::protocol::read::{ReadChunk as ReadChunkWire, ReadCursor as ReadCursorWire};
 
 impl App {
+    pub(crate) fn enforce_live_budget(&mut self) {
+        for view in self.sessions.known.values_mut() {
+            if let Some(live) = view.live.as_mut() {
+                if live.retained_bytes() > crate::limits::LIVE_LOOP_BYTES {
+                    live.trim_to_bytes(crate::limits::LIVE_LOOP_BYTES);
+                    live.event_gap = true;
+                    view.event_gap = true;
+                }
+            }
+            if let Some(unsaved) = view.unsaved_loop.as_mut() {
+                if unsaved.retained_bytes() > crate::limits::LIVE_LOOP_BYTES {
+                    unsaved.trim_to_bytes(crate::limits::LIVE_LOOP_BYTES);
+                    view.event_gap = true;
+                }
+            }
+        }
+        for view in self.sessions.known.values_mut() {
+            let total = view.live.as_ref().map_or(0, LiveLoop::retained_bytes)
+                + view
+                    .unsaved_loop
+                    .as_ref()
+                    .map_or(0, UnsavedLoop::retained_bytes);
+            if total > crate::limits::LIVE_TOTAL_BYTES {
+                if let Some(live) = view.live.as_mut() {
+                    let allowed = live
+                        .retained_bytes()
+                        .min(crate::limits::LIVE_TOTAL_BYTES);
+                    live.trim_to_bytes(allowed);
+                    live.event_gap = true;
+                }
+                if let Some(unsaved) = view.unsaved_loop.as_mut() {
+                    let remaining = crate::limits::LIVE_TOTAL_BYTES
+                        .saturating_sub(view.live.as_ref().map_or(0, LiveLoop::retained_bytes));
+                    unsaved.trim_to_bytes(remaining);
+                }
+                view.event_gap = true;
+            }
+        }
+    }
+
+    fn history_protect_from(view: &SessionView, viewport: (usize, usize), tail: usize) -> usize {
+        let mut protect_from = view.transcript.window.protect_from(tail);
+        if tail == 0 {
+            return usize::MAX;
+        }
+        let viewport_start = view.scroll.offset.saturating_sub(tail);
+        let viewport_end = view
+            .scroll
+            .offset
+            .saturating_add(viewport.1)
+            .saturating_add(tail);
+        if let Some(durable) = view.transcript.render_cache.as_ref() {
+            for placement in durable.layout.sections.iter() {
+                if placement.rows.end <= viewport_start || placement.rows.start >= viewport_end {
+                    continue;
+                }
+                if let Some(index) = placement.layout.key.section.history_index {
+                    protect_from = protect_from.min(index.saturating_sub(tail));
+                }
+            }
+        }
+        protect_from
+    }
+
     pub(super) fn retain_result_summary(&mut self, result: crate::protocol::TurnResultViewWire) {
         let turn = result.turn.clone();
         if !self.retained_results.contains_key(&turn) {
@@ -868,18 +1082,25 @@ impl App {
                         && result.persistence == Some(TurnPersistenceWire::Persisted)
                 })
             }))
-            && view
-                .transcript
-                .window
-                .items()
-                .any(|(_, item)| item.item.loop_id() == Some(loop_id))
+            && view.transcript.window.items().any(|(_, item)| {
+                matches!(
+                    item.as_ref(),
+                    TranscriptBlock::User(user) if user.loop_id.as_deref() == Some(loop_id)
+                ) || matches!(
+                    item.as_ref(),
+                    TranscriptBlock::Assistant(assistant) if assistant.loop_id == loop_id
+                ) || matches!(
+                    item.as_ref(),
+                    TranscriptBlock::Tool(tool) if tool.loop_id == loop_id
+                )
+            })
             && !view.transcript.window.items().any(|(_, item)| {
                 matches!(
-                    &item.item,
-                    crate::protocol::read::RuntimeItem::User(user)
-                        if user.loop_id == loop_id
-                            && user.kind == crate::protocol::read::RuntimeUserKind::Steering
-                            && user.input.text == steer_text
+                    item.as_ref(),
+                    TranscriptBlock::User(user)
+                        if user.loop_id.as_deref() == Some(loop_id)
+                            && user.kind == crate::protocol::UserMessageKindWire::Steering
+                            && user.text == steer_text
                 )
             })
     }
@@ -1003,7 +1224,14 @@ impl App {
                         return Vec::new();
                     }
                     for (index, item) in &applied.inserted {
-                        install_history_item(view, *index, item);
+                        if let Some(owner) = install_history_item(view, *index, item) {
+                            view.transcript.window.insert_owner(
+                                *index,
+                                owner,
+                                raw_item_fingerprint(item),
+                                item_bytes(item),
+                            );
+                        }
                     }
                     for (index, total_bytes) in &applied.placeholders {
                         install_history_placeholder(view, *index, *total_bytes);
@@ -1102,7 +1330,14 @@ impl App {
 
         // Project newly decoded Runtime items into the display bridge.
         for (index, item) in &applied.inserted {
-            install_history_item(view, *index, item);
+            if let Some(owner) = install_history_item(view, *index, item) {
+                view.transcript.window.insert_owner(
+                    *index,
+                    owner,
+                    raw_item_fingerprint(item),
+                    item_bytes(item),
+                );
+            }
         }
         for (index, total_bytes) in &applied.placeholders {
             install_history_placeholder(view, *index, *total_bytes);
@@ -1187,7 +1422,12 @@ impl App {
             view.transcript
                 .window
                 .items()
-                .any(|(_, item)| item.item.loop_id() == Some(id.as_str()))
+                .any(|(_, item)| match item.as_ref() {
+                    TranscriptBlock::User(user) => user.loop_id.as_deref() == Some(id.as_str()),
+                    TranscriptBlock::Assistant(assistant) => assistant.loop_id == *id,
+                    TranscriptBlock::Tool(tool) => tool.loop_id == *id,
+                    _ => false,
+                })
         });
 
         let loop_contained_in_history = match &live_loop_id {
@@ -1768,6 +2008,58 @@ impl App {
             .sum()
     }
 
+    pub(crate) fn layout_cache_bytes(&self) -> usize {
+        self.sessions
+            .known
+            .values()
+            .filter_map(|view| view.transcript.render_cache.as_ref())
+            .map(|cache| cache.retained_bytes())
+            .sum()
+    }
+
+    pub(crate) fn enforce_layout_budget(&mut self) -> usize {
+        let mut total = self.layout_cache_bytes();
+        if total <= crate::limits::LAYOUT_CACHE_BYTES {
+            return 0;
+        }
+        let active = self.sessions.active.clone();
+        let mut released = 0;
+        while total > crate::limits::LAYOUT_CACHE_BYTES {
+            let victim = self
+                .sessions
+                .known
+                .iter()
+                .filter(|(_, view)| view.transcript.render_cache.is_some())
+                .max_by_key(|(id, view)| {
+                    let active_rank = usize::from(Some(id.as_str()) == active.as_deref());
+                    (
+                        usize::MAX - active_rank,
+                        view.transcript
+                            .render_cache
+                            .as_ref()
+                            .map_or(0, |cache| cache.retained_bytes()),
+                    )
+                })
+                .map(|(id, _)| id.clone());
+            let Some(id) = victim else {
+                break;
+            };
+            let bytes = self.sessions.known[&id]
+                .transcript
+                .render_cache
+                .as_ref()
+                .map_or(0, |cache| cache.retained_bytes());
+            if let Some(view) = self.sessions.known.get_mut(&id) {
+                view.transcript.render_cache = None;
+                view.transcript.invalidate();
+            }
+            self.prepared_conversation = None;
+            total = total.saturating_sub(bytes);
+            released += bytes;
+        }
+        released
+    }
+
     /// Enforces the global history body budget (spec §21). Background
     /// sessions are evicted before the active one, and the protected tail is
     /// the viewport plus its neighbourhood, never the whole session. Work is
@@ -1803,9 +2095,8 @@ impl App {
                     } else {
                         crate::limits::HISTORY_PROTECT_TAIL_ITEMS_BACKGROUND
                     };
-                    view.transcript
-                        .window
-                        .can_evict(view.transcript.window.protect_from(protect))
+                    let protect_from = Self::history_protect_from(view, self.viewport, protect);
+                    view.transcript.window.can_evict(protect_from)
                 })
                 .max_by_key(|(id, view)| {
                     let active_rank = usize::from(Some(id.as_str()) == active.as_deref());
@@ -1820,10 +2111,8 @@ impl App {
             } else {
                 crate::limits::HISTORY_PROTECT_TAIL_ITEMS_BACKGROUND
             };
-            let protect_from = self.sessions.known[&id]
-                .transcript
-                .window
-                .protect_from(protect);
+            let protect_from =
+                Self::history_protect_from(&self.sessions.known[&id], self.viewport, protect);
             let evicted = self
                 .sessions
                 .known
@@ -1831,9 +2120,16 @@ impl App {
                 .expect("victim session exists")
                 .transcript
                 .window
-                .evict_oldest(protect_from);
+                .evict_oldest_entry(protect_from);
             match evicted {
-                Some(bytes) => {
+                Some((index, bytes)) => {
+                    if let Some(view) = self.sessions.known.get_mut(&id) {
+                        view.transcript
+                            .blocks_mut()
+                            .retain(|block| block.index() != Some(index));
+                        view.transcript.invalidate();
+                    }
+                    self.prepared_conversation = None;
                     released += bytes;
                     total = total.saturating_sub(bytes);
                 }

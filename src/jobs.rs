@@ -90,9 +90,41 @@ impl LocalJobs {
                 let cancel = Arc::clone(&request.cancel);
                 let cancel_for_build = Arc::clone(&cancel);
                 let build_identity = identity.clone();
+                let batch_events = layout_events.clone();
+                let batch_identity = identity.clone();
+                let batch_key = crate::state::view::DurableCacheKey {
+                    revision: identity.transcript_revision,
+                    width: identity.width,
+                    theme: identity.theme,
+                    reasoning_visible: identity.reasoning_visible,
+                    tools_expanded,
+                };
+                let batch_cancel = Arc::clone(&cancel);
                 let Ok(Some((layout, changed_sections, tool_index_lookups))) =
                     tokio::task::spawn_blocking(move || {
                         let theme = theme_kind.theme();
+                        let mut sink = |sections: Vec<Arc<crate::state::view::SectionLayout>>| {
+                            if sections.is_empty() || batch_cancel.load(Ordering::Relaxed) {
+                                return !batch_cancel.load(Ordering::Relaxed);
+                            }
+                            let durable = Arc::new(crate::state::view::PreparedDurable {
+                                key: batch_key.clone(),
+                                layout: Arc::new(
+                                    crate::state::view::ConversationLayout::from_sections(sections),
+                                ),
+                            });
+                            batch_events
+                                .blocking_send(AppEvent::DurableLayoutPrepared(
+                                    crate::ui::transcript::DurableLayoutResult {
+                                        identity: batch_identity.clone(),
+                                        durable,
+                                        changed_sections: 0,
+                                        tool_index_lookups: 0,
+                                        complete: false,
+                                    },
+                                ))
+                                .is_ok()
+                        };
                         crate::ui::transcript::build_durable_layout(
                             &theme,
                             theme_kind,
@@ -100,7 +132,9 @@ impl LocalJobs {
                             build_identity.width,
                             build_identity.reasoning_visible,
                             previous.as_deref(),
+                            request.viewport.clone(),
                             Some(&cancel_for_build),
+                            Some(&mut sink),
                         )
                     })
                     .await
@@ -127,6 +161,7 @@ impl LocalJobs {
                             durable,
                             changed_sections,
                             tool_index_lookups,
+                            complete: true,
                         },
                     ))
                     .await

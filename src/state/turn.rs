@@ -102,11 +102,8 @@ pub struct LiveRequest {
     pub config_revision: u64,
     pub model: String,
     pub reasoning: Reasoning,
-    pub text: String,
-    pub reasoning_text: String,
-    /// Arrival order of visible model parts. The flattened fields above are
-    /// retained for compatibility and accounting, but rendering uses this
-    /// sequence whenever it is populated.
+    /// Arrival order of visible model parts. This is the sole retained live
+    /// output body; flattened text/reasoning mirrors are intentionally absent.
     pub parts: Vec<LivePart>,
     pub tools: Vec<LiveTool>,
 }
@@ -130,10 +127,79 @@ impl LiveRequest {
             config_revision,
             model,
             reasoning,
-            text: String::new(),
-            reasoning_text: String::new(),
             parts: Vec::new(),
             tools: Vec::new(),
+        }
+    }
+
+    pub fn visible_text(&self) -> String {
+        self.parts
+            .iter()
+            .filter_map(|part| match part {
+                LivePart::Text(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn reasoning_text(&self) -> String {
+        self.parts
+            .iter()
+            .filter_map(|part| match part {
+                LivePart::Reasoning(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn retained_bytes(&self) -> usize {
+        let mut bytes = self.model.len();
+        for part in &self.parts {
+            bytes += match part {
+                LivePart::Text(text) | LivePart::Reasoning(text) => text.len(),
+                LivePart::Tool { tool_call_id } => tool_call_id.len(),
+            };
+        }
+        for tool in &self.tools {
+            bytes += tool.tool_call_id.len() + tool.name.len();
+            bytes += tool.progress.as_ref().map_or(0, String::len);
+            bytes += tool.result.as_ref().map_or(0, String::len);
+            if let Some(display) = &tool.display {
+                bytes += display.detail.len();
+                bytes += display.expanded_input.as_ref().map_or(0, String::len);
+            }
+        }
+        bytes
+    }
+
+    fn trim_to_bytes(&mut self, budget: usize, used: &mut usize) {
+        trim_string(&mut self.model, budget, used);
+        for part in &mut self.parts {
+            match part {
+                LivePart::Text(text) | LivePart::Reasoning(text) => {
+                    trim_string(text, budget, used);
+                }
+                LivePart::Tool { tool_call_id } => {
+                    trim_string(tool_call_id, budget, used);
+                }
+            }
+        }
+        for tool in &mut self.tools {
+            trim_string(&mut tool.tool_call_id, budget, used);
+            trim_string(&mut tool.name, budget, used);
+            if let Some(progress) = &mut tool.progress {
+                trim_string(progress, budget, used);
+            }
+            if let Some(result) = &mut tool.result {
+                trim_string(result, budget, used);
+                tool.result_truncated = true;
+            }
+            if let Some(display) = &mut tool.display {
+                trim_string(&mut display.detail, budget, used);
+                if let Some(input) = &mut display.expanded_input {
+                    trim_string(input, budget, used);
+                }
+            }
         }
     }
 }
@@ -200,6 +266,36 @@ impl LiveLoop {
             &mut self.requests[position]
         }
     }
+
+    pub fn retained_bytes(&self) -> usize {
+        let mut bytes = self.user_text.len();
+        bytes += self
+            .requests
+            .iter()
+            .map(LiveRequest::retained_bytes)
+            .sum::<usize>();
+        bytes
+    }
+
+    pub fn trim_to_bytes(&mut self, budget: usize) {
+        let mut used = 0;
+        trim_string(&mut self.user_text, budget, &mut used);
+        for request in &mut self.requests {
+            request.trim_to_bytes(budget, &mut used);
+        }
+    }
+}
+
+fn trim_string(text: &mut String, budget: usize, used: &mut usize) {
+    let available = budget.saturating_sub(*used);
+    if text.len() > available {
+        let mut end = available;
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+    }
+    *used = (*used).saturating_add(text.len());
 }
 
 /// Preserved loop data when persistence fails or session is blocked.
@@ -210,4 +306,23 @@ pub struct UnsavedLoop {
     pub requests: Vec<LiveRequest>,
     pub result: Option<TurnResultViewWire>,
     pub event_gap: bool,
+}
+
+impl UnsavedLoop {
+    pub fn retained_bytes(&self) -> usize {
+        self.user_text.len()
+            + self
+                .requests
+                .iter()
+                .map(LiveRequest::retained_bytes)
+                .sum::<usize>()
+    }
+
+    pub fn trim_to_bytes(&mut self, budget: usize) {
+        let mut used = 0;
+        trim_string(&mut self.user_text, budget, &mut used);
+        for request in &mut self.requests {
+            request.trim_to_bytes(budget, &mut used);
+        }
+    }
 }

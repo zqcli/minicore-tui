@@ -43,7 +43,8 @@ use crate::state::turn::{
     PendingSteerState, SteerQueueState, Submission, UnsavedLoop,
 };
 use crate::state::view::{
-    ConversationSelection, FoldOverride, PreparedConversation, PreparedDurable, SelectionPoint,
+    ConversationLayout, ConversationSelection, FoldOverride, PreparedConversation, PreparedDurable,
+    SelectionPoint,
 };
 use crate::theme::ThemeKind;
 use crate::ui::transcript::{
@@ -417,6 +418,7 @@ pub struct App {
     /// the main loop requests it from the single owned worker instead.
     async_layout: bool,
     layout_pending: Option<DurableLayoutIdentity>,
+    layout_partial: Option<(DurableLayoutIdentity, Arc<ConversationLayout>)>,
     next_layout_generation: u64,
     /// Current transcript selection. It is presentation-only and is rebased
     /// by stable section identity when a prepared snapshot changes.
@@ -607,6 +609,7 @@ impl App {
             prepared_conversation: None,
             async_layout: false,
             layout_pending: None,
+            layout_partial: None,
             next_layout_generation: 0,
             selection: None,
             selection_copied_until: None,
@@ -1150,6 +1153,8 @@ impl App {
         }
         // Cache budgets are enforced once per event pass, off the draw path.
         self.enforce_history_budget();
+        self.enforce_layout_budget();
+        self.enforce_live_budget();
         commands
     }
 
@@ -1205,6 +1210,7 @@ impl App {
         self.async_layout = true;
         self.prepared_conversation = None;
         self.layout_pending = None;
+        self.layout_partial = None;
     }
 
     pub fn async_layout_enabled(&self) -> bool {
@@ -1261,23 +1267,25 @@ impl App {
             identity,
             snapshot,
             previous,
+            viewport: self.viewport.0..self.viewport.0.saturating_add(self.viewport.1),
             cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
     pub fn mark_layout_pending(&mut self, identity: DurableLayoutIdentity) {
         self.layout_pending = Some(identity);
+        self.layout_partial = None;
     }
 
     pub fn clear_layout_pending(&mut self) {
         self.layout_pending = None;
+        self.layout_partial = None;
     }
 
     fn install_durable_layout(&mut self, result: DurableLayoutResult) {
         if self.layout_pending.as_ref() != Some(&result.identity) {
             return;
         }
-        self.layout_pending = None;
         let Some(view) = self.active_view() else {
             return;
         };
@@ -1289,6 +1297,45 @@ impl App {
         {
             return;
         }
+        if !result.complete {
+            let mut sections = self
+                .layout_partial
+                .as_ref()
+                .filter(|(identity, _)| identity == &result.identity)
+                .map(|(_, layout)| {
+                    layout
+                        .sections
+                        .iter()
+                        .map(|placement| Arc::clone(&placement.layout))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            sections.extend(
+                result
+                    .durable
+                    .layout
+                    .sections
+                    .iter()
+                    .map(|placement| Arc::clone(&placement.layout)),
+            );
+            self.layout_partial = Some((
+                result.identity,
+                Arc::new(ConversationLayout::from_sections(sections)),
+            ));
+            return;
+        }
+        self.layout_pending = None;
+        let durable = self
+            .layout_partial
+            .take()
+            .filter(|(identity, _)| identity == &result.identity)
+            .map(|(_, layout)| {
+                Arc::new(PreparedDurable {
+                    key: result.durable.key.clone(),
+                    layout,
+                })
+            })
+            .unwrap_or(result.durable);
         crate::perf::add(
             crate::perf::Counter::LayoutCalls,
             result.changed_sections as u64,
@@ -1300,7 +1347,7 @@ impl App {
         let prepared = crate::ui::transcript::prepare_conversation_with_durable(
             self,
             result.identity.width,
-            Some(result.durable),
+            durable,
         );
         self.install_conversation(prepared);
     }
@@ -1321,9 +1368,7 @@ impl App {
                     if let Some(durable) = self.cached_durable(width) {
                         std::borrow::Cow::Owned(
                             crate::ui::transcript::prepare_conversation_with_durable(
-                                self,
-                                width,
-                                Some(durable),
+                                self, width, durable,
                             ),
                         )
                     } else {
@@ -4076,7 +4121,12 @@ impl App {
                 .transcript
                 .window
                 .items()
-                .any(|(_, item)| item.item.loop_id() == Some(loop_id))
+                .any(|(_, item)| match item.as_ref() {
+                    TranscriptBlock::User(user) => user.loop_id.as_deref() == Some(loop_id),
+                    TranscriptBlock::Assistant(assistant) => assistant.loop_id == loop_id,
+                    TranscriptBlock::Tool(tool) => tool.loop_id == loop_id,
+                    _ => false,
+                })
     }
 
     /// Allocates an id, registers the pending kind, and builds the request
@@ -4953,11 +5003,9 @@ impl App {
         let request = live.ensure_request_mut(request_index, 0, String::new(), Reasoning::Auto);
         match channel {
             OutputChannelWire::Text => {
-                request.text.push_str(delta);
                 append_live_part(request, LivePart::Text(delta.to_owned()));
             }
             OutputChannelWire::Reasoning => {
-                request.reasoning_text.push_str(delta);
                 append_live_part(request, LivePart::Reasoning(delta.to_owned()));
             }
         }
@@ -5015,7 +5063,10 @@ impl App {
             if let Some(presentation) = &presentation {
                 tool.display = Some(presentation.display.clone());
                 if tool.result.is_none() {
-                    tool.result = presentation.result.clone();
+                    tool.result = presentation
+                        .result
+                        .as_ref()
+                        .map(|result| result.to_string());
                     tool.result_truncated = presentation.result_truncated;
                 }
             }
@@ -5026,7 +5077,9 @@ impl App {
                 status: ToolStatus::Pending,
                 progress: None,
                 display: presentation.as_ref().map(|state| state.display.clone()),
-                result: presentation.as_ref().and_then(|state| state.result.clone()),
+                result: presentation
+                    .as_ref()
+                    .and_then(|state| state.result.as_ref().map(|result| result.to_string())),
                 result_truncated: presentation
                     .as_ref()
                     .is_some_and(|state| state.result_truncated),
@@ -5202,7 +5255,9 @@ impl App {
             // input+result hidden count. If it arrived before ToolFinished,
             // leave that count intact; the later result event only fills the
             // result side of the state.
-            presentation.result = content;
+            presentation.result = content
+                .as_ref()
+                .map(|result| Arc::<str>::from(result.as_str()));
             presentation.result_truncated = content_truncated;
             presentation.display.truncated |= content_truncated;
         } else {
@@ -5223,7 +5278,9 @@ impl App {
                         hidden_line_count,
                         truncated: content_truncated,
                     },
-                    result: content,
+                    result: content
+                        .as_ref()
+                        .map(|result| Arc::<str>::from(result.as_str())),
                     result_truncated: content_truncated,
                 }),
             );
@@ -5274,7 +5331,7 @@ impl App {
                 display: display.clone(),
                 result: existing_result
                     .as_ref()
-                    .and_then(|(result, _)| result.clone()),
+                    .and_then(|(result, _)| result.as_deref().map(Arc::<str>::from)),
                 result_truncated: existing_result
                     .as_ref()
                     .is_some_and(|(_, truncated)| *truncated),
@@ -5357,63 +5414,42 @@ fn live_loop_from_turn_result(
     local_submission: LocalSubmissionId,
     fallback_text: String,
 ) -> LiveLoop {
-    use crate::protocol::read::{RuntimeAssistantPart, RuntimeItem, RuntimeUserKind};
-
     let mut live = LiveLoop::new(local_submission, fallback_text);
     live.reference = Some(turn.clone());
     for item in window.items.values() {
-        match &item.item {
-            RuntimeItem::User(user) => {
-                if user.kind == RuntimeUserKind::Prompt {
-                    live.user_text = user.input.text.clone();
+        match item.as_ref() {
+            TranscriptBlock::User(user) => {
+                if user.kind == UserMessageKindWire::Prompt {
+                    live.user_text = user.text.clone();
                 }
             }
-            RuntimeItem::Assistant(assistant) => {
-                let reasoning = assistant
-                    .reasoning
-                    .as_deref()
-                    .and_then(|value| {
-                        serde_json::from_value::<Reasoning>(serde_json::Value::String(
-                            value.to_owned(),
-                        ))
-                        .ok()
-                    })
-                    .unwrap_or_default();
+            TranscriptBlock::Assistant(assistant) => {
                 let request = live.ensure_request_mut(
                     assistant.request_index,
                     0,
                     assistant.model.clone(),
-                    reasoning,
+                    assistant.reasoning_level,
                 );
-                for part in &assistant.content {
+                for part in &assistant.parts {
                     match part {
-                        RuntimeAssistantPart::Text(text) => {
-                            if !text.is_empty() {
-                                request.text.push_str(text);
-                                request.parts.push(LivePart::Text(text.clone()));
-                            }
+                        AssistantPart::Text(text) => {
+                            append_live_part(request, LivePart::Text(text.clone()));
                         }
-                        RuntimeAssistantPart::Reasoning { text, summary, .. } => {
-                            let body = text.clone().or_else(|| summary.clone()).unwrap_or_default();
-                            if !body.is_empty() {
-                                request.reasoning_text.push_str(&body);
-                                request.parts.push(LivePart::Reasoning(body));
-                            }
+                        AssistantPart::Reasoning(body) => {
+                            append_live_part(request, LivePart::Reasoning(body.clone()));
                         }
-                        RuntimeAssistantPart::ToolCall {
-                            tool_call_id, name, ..
-                        } => {
+                        AssistantPart::ToolCall(call) => {
                             request.parts.push(LivePart::Tool {
-                                tool_call_id: tool_call_id.clone(),
+                                tool_call_id: call.tool_call_id.clone(),
                             });
                             if !request
                                 .tools
                                 .iter()
-                                .any(|tool| tool.tool_call_id == *tool_call_id)
+                                .any(|tool| tool.tool_call_id == call.tool_call_id)
                             {
                                 request.tools.push(crate::state::tool::LiveTool {
-                                    tool_call_id: tool_call_id.clone(),
-                                    name: name.clone(),
+                                    tool_call_id: call.tool_call_id.clone(),
+                                    name: call.name.clone(),
                                     status: ToolStatus::Pending,
                                     progress: None,
                                     display: None,
@@ -5426,13 +5462,9 @@ fn live_loop_from_turn_result(
                     }
                 }
             }
-            RuntimeItem::ToolResult(tool_result) => {
-                let status = tool_outcome_status(
-                    serde_json::from_value::<ToolOutcomeWire>(serde_json::Value::String(
-                        tool_result.outcome.clone(),
-                    ))
-                    .unwrap_or(ToolOutcomeWire::Unknown),
-                );
+            TranscriptBlock::Tool(tool_result) => {
+                let status =
+                    tool_outcome_status(tool_result.outcome.unwrap_or(ToolOutcomeWire::Unknown));
                 if let Some(request) = live
                     .requests
                     .iter_mut()
@@ -5441,25 +5473,25 @@ fn live_loop_from_turn_result(
                     if let Some(tool) = request
                         .tools
                         .iter_mut()
-                        .find(|tool| tool.tool_call_id == tool_result.call_id)
+                        .find(|tool| tool.tool_call_id == tool_result.tool_call_id)
                     {
                         tool.status = status;
-                        tool.result = Some(tool_result.output.content.clone());
+                        tool.result = tool_result.result.clone();
                     } else {
                         request.tools.push(crate::state::tool::LiveTool {
-                            tool_call_id: tool_result.call_id.clone(),
-                            name: tool_result.tool_name.clone(),
+                            tool_call_id: tool_result.tool_call_id.clone(),
+                            name: tool_result.name.clone(),
                             status,
                             progress: None,
                             display: None,
-                            result: Some(tool_result.output.content.clone()),
+                            result: tool_result.result.clone(),
                             result_truncated: false,
                             expanded: false,
                         });
                     }
                 }
             }
-            RuntimeItem::Summary(_) => {}
+            TranscriptBlock::Summary(_) | TranscriptBlock::HistoryPlaceholder(_) => {}
         }
     }
     live
@@ -5485,7 +5517,7 @@ fn install_history_item(
     view: &mut SessionView,
     index: usize,
     item: &crate::protocol::read::RawHistoryItem,
-) {
+) -> Option<std::sync::Arc<TranscriptBlock>> {
     use crate::protocol::read::{RuntimeAssistantPart, RuntimeItem, RuntimeUserKind};
 
     match &item.item {
@@ -5505,35 +5537,52 @@ fn install_history_item(
                             && (card.loop_id.as_deref() == Some(&user.loop_id)
                                 || card.text == user.input.text) =>
                     {
-                        Some(card)
+                        card.index = Some(index);
+                        card.loop_id = Some(user.loop_id.clone());
+                        card.kind = kind;
+                        card.text = user.input.text.clone();
+                        card.pending = false;
+                        Some(std::sync::Arc::clone(block))
                     }
                     _ => None,
                 });
-            if let Some(card) = replaced {
-                card.index = Some(index);
-                card.loop_id = Some(user.loop_id.clone());
-                card.kind = kind;
-                card.text = user.input.text.clone();
-                card.pending = false;
-            } else if !has_item_index(&view.transcript.blocks, index) {
-                view.transcript.push_block(TranscriptBlock::User(UserBlock {
+            let owner = if let Some(owner) = replaced {
+                owner
+            } else if let Some(owner) = view
+                .transcript
+                .blocks
+                .iter()
+                .find(|block| block.index() == Some(index))
+                .cloned()
+            {
+                owner
+            } else {
+                let owner = std::sync::Arc::new(TranscriptBlock::User(UserBlock {
                     index: Some(index),
                     loop_id: Some(user.loop_id.clone()),
                     kind,
                     text: user.input.text.clone(),
                     pending: false,
                 }));
-            } else {
-                return;
-            }
+                view.transcript
+                    .blocks_mut()
+                    .push(std::sync::Arc::clone(&owner));
+                owner
+            };
             if let Some(timestamp) = &item.timestamp {
                 view.user_timestamps.insert(index, timestamp.clone());
             }
             view.transcript.invalidate();
+            Some(owner)
         }
         RuntimeItem::Assistant(assistant) => {
             if has_item_index(&view.transcript.blocks, index) {
-                return;
+                return view
+                    .transcript
+                    .blocks
+                    .iter()
+                    .find(|block| block.index() == Some(index))
+                    .cloned();
             }
             let mut parts = Vec::new();
             let mut tool_calls = Vec::new();
@@ -5574,42 +5623,23 @@ fn install_history_item(
                         .ok()
                 })
                 .unwrap_or_default();
+            let owner = std::sync::Arc::new(TranscriptBlock::Assistant(AssistantBlock {
+                index,
+                loop_id: assistant.loop_id.clone(),
+                request_index: assistant.request_index,
+                model: assistant.model.clone(),
+                reasoning_level,
+                parts,
+                tool_calls: tool_calls.clone(),
+                usage: assistant.usage,
+                finish_reason: assistant.finish_reason.clone(),
+                terminal_error: None,
+            }));
             view.transcript
-                .push_block(TranscriptBlock::Assistant(AssistantBlock {
-                    index,
-                    loop_id: assistant.loop_id.clone(),
-                    request_index: assistant.request_index,
-                    model: assistant.model.clone(),
-                    reasoning_level,
-                    parts,
-                    tool_calls: tool_calls.clone(),
-                    usage: assistant.usage,
-                    finish_reason: assistant.finish_reason.clone(),
-                    terminal_error: None,
-                }));
-            for call in &tool_calls {
-                view.transcript.push_block(TranscriptBlock::Tool(ToolBlock {
-                    index: None,
-                    loop_id: assistant.loop_id.clone(),
-                    request_index: assistant.request_index,
-                    tool_call_id: call.tool_call_id.clone(),
-                    name: call.name.clone(),
-                    result: None,
-                    outcome: None,
-                    live_status: None,
-                    progress: None,
-                    expanded: view
-                        .tool_folds
-                        .get(&ToolKey::new(
-                            &view.info.session_id,
-                            &assistant.loop_id,
-                            assistant.request_index,
-                            &call.tool_call_id,
-                        ))
-                        .is_some_and(FoldOverride::expanded),
-                }));
-            }
+                .blocks_mut()
+                .push(std::sync::Arc::clone(&owner));
             view.transcript.invalidate();
+            Some(owner)
         }
         RuntimeItem::ToolResult(result) => {
             // A tool result answers a call in the most recent matching assistant
@@ -5619,29 +5649,23 @@ fn install_history_item(
                 result.outcome.clone(),
             ))
             .unwrap_or(ToolOutcomeWire::Unknown);
-            let patched = view
-                .transcript
-                .blocks_mut()
-                .iter_mut()
-                .rev()
-                .find_map(|block| match std::sync::Arc::make_mut(block) {
-                    TranscriptBlock::Tool(tool)
-                        if tool.tool_call_id == result.call_id
-                            && tool.loop_id == result.loop_id
-                            && tool.request_index == result.request_index =>
-                    {
-                        Some(tool)
-                    }
-                    _ => None,
-                });
-            if let Some(tool) = patched {
-                if tool.index.is_none() {
-                    tool.index = Some(index);
-                }
-                tool.result = Some(result.output.content.clone());
-                tool.outcome = Some(outcome);
-            } else if !has_item_index(&view.transcript.blocks, index) {
-                view.transcript.push_block(TranscriptBlock::Tool(ToolBlock {
+            let patched =
+                view.transcript
+                    .blocks_mut()
+                    .iter_mut()
+                    .rev()
+                    .find_map(|block| match block.as_ref() {
+                        TranscriptBlock::Tool(tool)
+                            if tool.tool_call_id == result.call_id
+                                && tool.loop_id == result.loop_id
+                                && tool.request_index == result.request_index =>
+                        {
+                            Some(std::sync::Arc::clone(block))
+                        }
+                        _ => None,
+                    });
+            let owner = if patched.is_some() {
+                let owner = std::sync::Arc::new(TranscriptBlock::Tool(ToolBlock {
                     index: Some(index),
                     loop_id: result.loop_id.clone(),
                     request_index: result.request_index,
@@ -5661,21 +5685,74 @@ fn install_history_item(
                         ))
                         .is_some_and(FoldOverride::expanded),
                 }));
+                let blocks = view.transcript.blocks_mut();
+                if let Some(position) = blocks.iter().position(|block| {
+                    matches!(
+                        block.as_ref(),
+                        TranscriptBlock::Tool(tool)
+                            if tool.tool_call_id == result.call_id
+                                && tool.loop_id == result.loop_id
+                                && tool.request_index == result.request_index
+                    )
+                }) {
+                    blocks[position] = std::sync::Arc::clone(&owner);
+                }
+                owner
+            } else if let Some(owner) = view
+                .transcript
+                .blocks
+                .iter()
+                .find(|block| block.index() == Some(index))
+                .cloned()
+            {
+                owner
             } else {
-                return;
-            }
+                let owner = std::sync::Arc::new(TranscriptBlock::Tool(ToolBlock {
+                    index: Some(index),
+                    loop_id: result.loop_id.clone(),
+                    request_index: result.request_index,
+                    tool_call_id: result.call_id.clone(),
+                    name: result.tool_name.clone(),
+                    result: Some(result.output.content.clone()),
+                    outcome: Some(outcome),
+                    live_status: None,
+                    progress: None,
+                    expanded: view
+                        .tool_folds
+                        .get(&ToolKey::new(
+                            &view.info.session_id,
+                            &result.loop_id,
+                            result.request_index,
+                            &result.call_id,
+                        ))
+                        .is_some_and(FoldOverride::expanded),
+                }));
+                view.transcript
+                    .blocks_mut()
+                    .push(std::sync::Arc::clone(&owner));
+                owner
+            };
             view.transcript.invalidate();
+            Some(owner)
         }
         RuntimeItem::Summary(summary) => {
             if has_item_index(&view.transcript.blocks, index) {
-                return;
+                return view
+                    .transcript
+                    .blocks
+                    .iter()
+                    .find(|block| block.index() == Some(index))
+                    .cloned();
             }
+            let owner = std::sync::Arc::new(TranscriptBlock::Summary(SummaryBlock {
+                index,
+                content: summary.content.clone(),
+            }));
             view.transcript
-                .push_block(TranscriptBlock::Summary(SummaryBlock {
-                    index,
-                    content: summary.content.clone(),
-                }));
+                .blocks_mut()
+                .push(std::sync::Arc::clone(&owner));
             view.transcript.invalidate();
+            Some(owner)
         }
     }
 }
@@ -8131,9 +8208,12 @@ mod tests {
         let view = &app.sessions.known["ses_1"];
         let live = view.live.as_ref().unwrap();
         assert_eq!(live.requests.len(), 2);
-        assert_eq!(live.requests[0].text, "Thinking...");
+        assert_eq!(live.requests[0].visible_text(), "Thinking...");
         assert_eq!(live.requests[0].tools.len(), 1);
-        assert_eq!(live.requests[1].text, "Done with second iteration.");
+        assert_eq!(
+            live.requests[1].visible_text(),
+            "Done with second iteration."
+        );
     }
 
     #[test]

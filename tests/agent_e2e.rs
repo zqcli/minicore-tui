@@ -22,12 +22,12 @@ use minicore_tui::command::AppCommand;
 use minicore_tui::event::{AppEvent, RpcEvent};
 use minicore_tui::protocol::{
     AgentEventWire, CancelReasonWire, CompactStatusWire, IncomingFrame, LoopOutcomeWire,
-    OutgoingRequest, Reasoning, RequestId, RpcNotification, RuntimeAssistantPart, RuntimeItem,
-    RuntimeUserKind, ToolCallViewWire, TurnPersistenceWire, TurnRef, TurnResultViewWire,
+    OutgoingRequest, Reasoning, RequestId, RpcNotification, ToolCallViewWire, TurnPersistenceWire,
+    TurnRef, TurnResultViewWire,
 };
 use minicore_tui::rpc::RpcProcess;
 use minicore_tui::state::session::ConfigUpdateState;
-use minicore_tui::state::transcript::AssistantPart;
+use minicore_tui::state::transcript::{AssistantPart, TranscriptBlock};
 use minicore_tui::state::turn::{LivePart, PendingSteerState};
 use minicore_tui::state::{FoldOverride, ToolKey};
 use minicore_tui::theme::ThemeKind;
@@ -59,40 +59,15 @@ fn require_agent_bin() -> String {
         .expect("MINICORE_AGENT_BIN must be set to run agent_e2e tests; cannot silently pass")
 }
 
-/// Concatenates the visible text parts of a Runtime assistant item.
-fn assistant_text(item: &minicore_tui::protocol::RuntimeAssistantItem) -> String {
-    item.content
+fn durable_assistant_text(item: &minicore_tui::state::transcript::AssistantBlock) -> String {
+    item.parts
         .iter()
         .filter_map(|part| match part {
-            RuntimeAssistantPart::Text(text) => Some(text.as_str()),
+            AssistantPart::Text(text) => Some(text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()
         .join("")
-}
-
-/// Projects a Runtime assistant item's tool-call parts onto the display DTO
-/// the assertions were written against.
-fn assistant_tool_calls(
-    item: &minicore_tui::protocol::RuntimeAssistantItem,
-) -> Vec<ToolCallViewWire> {
-    item.content
-        .iter()
-        .filter_map(|part| match part {
-            RuntimeAssistantPart::ToolCall {
-                tool_call_id,
-                name,
-                call_index,
-                ..
-            } => Some(ToolCallViewWire {
-                tool_call_id: tool_call_id.clone(),
-                name: name.clone(),
-                call_index: *call_index,
-                display: None,
-            }),
-            _ => None,
-        })
-        .collect()
 }
 
 // ============================================================================
@@ -752,7 +727,7 @@ async fn wait_turn_landed(
                     .transcript
                     .window
                     .items()
-                    .any(|(_, entry)| matches!(&entry.item, RuntimeItem::User(_)))
+                    .any(|(_, entry)| matches!(entry.as_ref(), TranscriptBlock::User(_)))
         })
     })
     .await
@@ -1453,7 +1428,7 @@ fn e2e_scenario_c_tool_execution() {
             view.transcript
                 .window
                 .items()
-                .any(|(_, i)| matches!(&i.item, RuntimeItem::ToolResult(_)))
+                .any(|(_, i)| matches!(i.as_ref(), TranscriptBlock::Tool(_)))
         );
 
         let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
@@ -1580,9 +1555,11 @@ fn e2e_scenario_d_steer_turn() {
         );
 
         let view = &app.sessions.known[&session_id];
-        assert!(view.transcript.window.items().any(|(_, i)| match &i.item {
-            RuntimeItem::User(u) => u.kind == RuntimeUserKind::Steering,
-            _ => false,
+        assert!(view.transcript.window.items().any(|(_, i)| {
+            matches!(
+                i.as_ref(),
+                TranscriptBlock::User(u) if u.kind == minicore_tui::protocol::UserMessageKindWire::Steering
+            )
         }));
 
         let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
@@ -1924,7 +1901,11 @@ fn e2e_two_consecutive_steers_both_reach_the_provider() {
             .window
             .items()
             .filter(|(_, entry)| {
-                matches!(&entry.item, RuntimeItem::User(u) if u.kind == RuntimeUserKind::Steering)
+                matches!(
+                    entry.as_ref(),
+                    TranscriptBlock::User(u)
+                        if u.kind == minicore_tui::protocol::UserMessageKindWire::Steering
+                )
             })
             .count();
         assert_eq!(
@@ -2122,7 +2103,11 @@ fn e2e_fifo_steers_are_paced_until_receipt() {
             .window
             .items()
             .filter(|(_, entry)| {
-                matches!(&entry.item, RuntimeItem::User(u) if u.kind == RuntimeUserKind::Steering)
+                matches!(
+                    entry.as_ref(),
+                    TranscriptBlock::User(u)
+                        if u.kind == minicore_tui::protocol::UserMessageKindWire::Steering
+                )
             })
             .count();
         assert_eq!(
@@ -2240,7 +2225,11 @@ fn e2e_fifo_duplicate_texts_are_paced_and_both_persist() {
             .window
             .items()
             .filter(|(_, entry)| {
-                matches!(&entry.item, RuntimeItem::User(u) if u.kind == RuntimeUserKind::Steering)
+                matches!(
+                    entry.as_ref(),
+                    TranscriptBlock::User(u)
+                        if u.kind == minicore_tui::protocol::UserMessageKindWire::Steering
+                )
             })
             .count();
         assert_eq!(
@@ -2454,25 +2443,25 @@ fn e2e_scenario_e_same_loop_update() {
             4,
             "Transcript must contain 4 items"
         );
-        let item = |index: usize| &view.transcript.window.item(index).unwrap().item;
+        let item = |index: usize| view.transcript.window.item(index).unwrap();
 
-        assert!(matches!(item(0), RuntimeItem::User(_)));
+        assert!(matches!(item(0).as_ref(), TranscriptBlock::User(_)));
 
         // Request 0: must retain original model label 'deep'
-        match item(1) {
-            RuntimeItem::Assistant(a) => {
+        match item(1).as_ref() {
+            TranscriptBlock::Assistant(a) => {
                 assert_eq!(a.request_index, 0);
                 assert_eq!(a.model, "deep");
-                assert_eq!(assistant_tool_calls(a).len(), 1);
+                assert_eq!(a.tool_calls.len(), 1);
             }
             other => panic!("Expected Assistant for item 1, got {:?}", other),
         }
 
-        assert!(matches!(item(2), RuntimeItem::ToolResult(_)));
+        assert!(matches!(item(2).as_ref(), TranscriptBlock::Tool(_)));
 
         // Request 1: must show updated model label 'fast'
-        match item(3) {
-            RuntimeItem::Assistant(a) => {
+        match item(3).as_ref() {
+            TranscriptBlock::Assistant(a) => {
                 assert_eq!(a.request_index, 1);
                 assert_eq!(a.model, "fast");
             }
@@ -2825,9 +2814,9 @@ fn e2e_stress_six_loops_ten_requests_no_repeated_final_text() {
             .transcript
             .window
             .items()
-            .filter_map(|(_, entry)| match &entry.item {
-                RuntimeItem::Assistant(assistant) => {
-                    let text = assistant_text(assistant);
+            .filter_map(|(_, entry)| match entry.as_ref() {
+                TranscriptBlock::Assistant(assistant) => {
+                    let text = durable_assistant_text(assistant);
                     (!text.is_empty()).then_some(text)
                 }
                 _ => None,
@@ -2926,9 +2915,9 @@ fn e2e_stress_second_tool_expansion_survives_background_generation() {
             .transcript
             .window
             .items()
-            .filter_map(|(_, entry)| match &entry.item {
-                RuntimeItem::Assistant(assistant) if assistant.request_index == 0 => {
-                    Some(assistant_tool_calls(assistant))
+            .filter_map(|(_, entry)| match entry.as_ref() {
+                TranscriptBlock::Assistant(assistant) if assistant.request_index == 0 => {
+                    Some(assistant.tool_calls.clone())
                 }
                 _ => None,
             })
@@ -2939,8 +2928,8 @@ fn e2e_stress_second_tool_expansion_survives_background_generation() {
             .transcript
             .window
             .items()
-            .find_map(|(_, entry)| match &entry.item {
-                RuntimeItem::Assistant(assistant) => Some(assistant.loop_id.clone()),
+            .find_map(|(_, entry)| match entry.as_ref() {
+                TranscriptBlock::Assistant(assistant) => Some(assistant.loop_id.clone()),
                 _ => None,
             })
             .unwrap();
@@ -3270,7 +3259,7 @@ fn e2e_stress_session_switch_preserves_tool_fold() {
                 view.transcript
                     .window
                     .items()
-                    .any(|(_, entry)| matches!(&entry.item, RuntimeItem::Assistant(_)))
+                    .any(|(_, entry)| matches!(entry.as_ref(), TranscriptBlock::Assistant(_)))
             })
         })
         .await
@@ -3281,8 +3270,8 @@ fn e2e_stress_session_switch_preserves_tool_fold() {
             .transcript
             .window
             .items()
-            .find_map(|(_, entry)| match &entry.item {
-                RuntimeItem::Assistant(assistant) => Some(assistant.loop_id.clone()),
+            .find_map(|(_, entry)| match entry.as_ref() {
+                TranscriptBlock::Assistant(assistant) => Some(assistant.loop_id.clone()),
                 _ => None,
             })
             .unwrap();

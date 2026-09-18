@@ -477,7 +477,6 @@ fn live_tool_fold_survives_presentation_finish_wait_and_history_replacement() {
         .unwrap()
         .requests
     {
-        request.reasoning_text.clear();
         request
             .parts
             .retain(|part| !matches!(part, crate::state::turn::LivePart::Reasoning(_)));

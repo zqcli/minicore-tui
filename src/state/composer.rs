@@ -17,6 +17,8 @@ use unicode_segmentation::UnicodeSegmentation;
 pub const MAX_HISTORY: usize = 100;
 /// Maximum UTF-8 bytes accepted by the prompt/steering composer.
 pub const MAX_COMPOSER_BYTES: usize = 256 * 1024;
+/// Fixed undo capacity keeps old snapshots from bypassing the draft budget.
+pub const MAX_COMPOSER_HISTORIES: usize = 128;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PasteRange {
@@ -55,8 +57,10 @@ impl Default for Composer {
 
 impl Composer {
     pub fn new() -> Self {
+        let mut textarea = TextArea::default();
+        textarea.set_max_histories(MAX_COMPOSER_HISTORIES);
         Self {
-            textarea: TextArea::default(),
+            textarea,
             history: VecDeque::new(),
             history_index: None,
             draft: String::new(),
@@ -138,6 +142,20 @@ impl Composer {
         };
         let start = start.min(raw.chars().count());
         let end = end.min(raw.chars().count()).max(start);
+        let removed = raw
+            .chars()
+            .skip(start)
+            .take(end.saturating_sub(start))
+            .map(char::len_utf8)
+            .sum::<usize>();
+        if self
+            .byte_len
+            .saturating_sub(removed)
+            .saturating_add(replacement.len())
+            > MAX_COMPOSER_BYTES
+        {
+            return;
+        }
         self.begin_edit();
         let before = self.content();
         self.textarea
@@ -295,41 +313,65 @@ impl Composer {
     /// Backspace; joins lines at word edges exactly as tui-textarea does.
     pub fn backspace(&mut self) {
         self.begin_edit();
-        let before = self.content();
-        let cursor = global_cursor(&self.textarea, &before);
+        let cursor = self.cursor_char_offset();
         if let Some(paste) = self.pastes.iter().find(|paste| paste.end == cursor) {
+            let before = self.content();
             let start = paste.start;
             let count = paste.end.saturating_sub(paste.start);
             for _ in 0..count {
                 self.textarea.delete_char();
             }
             debug_assert_eq!(start, global_cursor(&self.textarea, &before));
+            let after = self.content();
+            self.byte_len = after.len();
+            self.reconcile_pastes(&before, &after);
         } else {
+            let deleted = self.previous_char_bytes();
             self.textarea.delete_char();
+            self.byte_len = self.byte_len.saturating_sub(deleted);
         }
-        let after = self.content();
-        self.byte_len = after.len();
-        self.reconcile_pastes(&before, &after);
         self.bump_revision();
     }
 
     /// Delete (forward).
     pub fn delete(&mut self) {
         self.begin_edit();
-        let before = self.content();
-        let cursor = global_cursor(&self.textarea, &before);
+        let cursor = self.cursor_char_offset();
         if let Some(paste) = self.pastes.iter().find(|paste| paste.start == cursor) {
+            let before = self.content();
             let count = paste.end.saturating_sub(paste.start);
             for _ in 0..count {
                 self.textarea.delete_next_char();
             }
+            let after = self.content();
+            self.byte_len = after.len();
+            self.reconcile_pastes(&before, &after);
         } else {
+            let deleted = self.next_char_bytes();
             self.textarea.delete_next_char();
+            self.byte_len = self.byte_len.saturating_sub(deleted);
         }
-        let after = self.content();
-        self.byte_len = after.len();
-        self.reconcile_pastes(&before, &after);
         self.bump_revision();
+    }
+
+    fn previous_char_bytes(&self) -> usize {
+        let (row, column) = self.textarea.cursor();
+        if column > 0 {
+            return self.textarea.lines()[row]
+                .chars()
+                .nth(column - 1)
+                .map_or(0, char::len_utf8);
+        }
+        usize::from(row > 0)
+    }
+
+    fn next_char_bytes(&self) -> usize {
+        let (row, column) = self.textarea.cursor();
+        let line = &self.textarea.lines()[row];
+        if let Some(character) = line.chars().nth(column) {
+            return character.len_utf8();
+        }
+        usize::from(row + 1 < self.textarea.lines().len())
     }
 
     pub fn move_left(&mut self) {
@@ -422,15 +464,23 @@ impl Composer {
     /// Replaces the whole buffer (send-failure recovery, /clear, history)
     /// with the cursor at the end.
     pub fn set_text(&mut self, text: &str) {
-        let normalized = text
+        let mut normalized = text
             .replace("\r\n", "\n")
             .replace('\r', "\n")
             .replace('\t', "    ");
+        if normalized.len() > MAX_COMPOSER_BYTES {
+            let mut end = MAX_COMPOSER_BYTES;
+            while end > 0 && !normalized.is_char_boundary(end) {
+                end -= 1;
+            }
+            normalized.truncate(end);
+        }
         let lines = normalized
             .split('\n')
             .map(str::to_owned)
             .collect::<Vec<_>>();
         self.textarea = TextArea::new(lines);
+        self.textarea.set_max_histories(MAX_COMPOSER_HISTORIES);
         self.textarea.move_cursor(CursorMove::Bottom);
         self.textarea.move_cursor(CursorMove::End);
         self.pastes.clear();
