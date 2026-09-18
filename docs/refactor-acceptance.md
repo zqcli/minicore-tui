@@ -188,12 +188,10 @@ These are open and must not be reported as done:
   earlier history can evict what the user is looking at. The corrected slice
   must derive the protected range from the installed viewport plus its
   overscan and nearby results.
-- The section-Arc layout engine (`src/state/layout.rs`) is landed with tests
-  for prefix binary search, bounded windows, fold-local keys and shared
-  `SectionRange` metadata, but it is **not yet wired into the production frame
-  path**, and the single owned layout worker (bounded queue, one in-flight,
-  generation-verified install, viewport-first batching) is not built. Frames
-  still read the `PreparedDurable` arrays.
+- The standalone `src/state/layout.rs` module from `22633e0` was removed
+  again by `HEAD`: an engine that nothing reads is a forbidden placeholder
+  abstraction. The section-Arc layout must land together with its production
+  reader and the owned layout worker, not before them.
 
 ## C2 progress (incomplete)
 
