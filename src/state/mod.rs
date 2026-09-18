@@ -4,7 +4,6 @@
 
 pub mod catalog;
 pub mod composer;
-pub mod layout;
 pub mod selection;
 pub mod session;
 pub mod tool;
