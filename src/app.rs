@@ -1345,7 +1345,7 @@ impl App {
             crate::perf::Counter::ToolIndexLookups,
             result.tool_index_lookups as u64,
         );
-        let prepared = crate::ui::transcript::prepare_conversation_with_durable(
+        let prepared = crate::ui::transcript::prepare_conversation_from_cache(
             self,
             result.identity.width,
             durable,
@@ -1368,7 +1368,7 @@ impl App {
                 if self.async_layout {
                     if let Some(durable) = self.cached_durable(width) {
                         std::borrow::Cow::Owned(
-                            crate::ui::transcript::prepare_conversation_with_durable(
+                            crate::ui::transcript::prepare_conversation_from_cache(
                                 self, width, durable,
                             ),
                         )

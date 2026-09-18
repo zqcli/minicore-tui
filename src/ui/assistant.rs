@@ -98,7 +98,15 @@ pub fn section_inputs(
                 reasoning_parts.push(text.as_str());
                 index += 1;
             }
-            let joined: Arc<str> = reasoning_parts.concat().into();
+            let source_bytes = reasoning_parts.iter().map(|text| text.len()).sum::<usize>();
+            let joined: Arc<str> = if source_bytes > crate::limits::LAYOUT_SECTION_BYTES {
+                format!(
+                    "[large reasoning section: {source_bytes} bytes; read explicitly to render]"
+                )
+                .into()
+            } else {
+                reasoning_parts.concat().into()
+            };
             let key = ReasoningKey::new(&block.loop_id, block.request_index, reasoning_ordinal);
             reasoning_ordinal += 1;
             let expanded = folds.get(&key).map(FoldOverride::expanded);
@@ -122,7 +130,15 @@ pub fn section_inputs(
         match part {
             AssistantPart::Text(text) => {
                 out.push(AssistantSectionInput {
-                    source: Arc::from(text.as_str()),
+                    source: if text.len() > crate::limits::LAYOUT_SECTION_BYTES {
+                        format!(
+                            "[large assistant section: {} bytes; read explicitly to render]",
+                            text.len()
+                        )
+                        .into()
+                    } else {
+                        Arc::from(text.as_str())
+                    },
                     kind: SectionKind::AssistantText,
                     ordinal: text_ordinal,
                     collapsible: false,

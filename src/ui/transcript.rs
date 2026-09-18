@@ -206,12 +206,22 @@ pub fn prepare_startup_conversation(app: &App, width: u16) -> PreparedConversati
     prepare_conversation(app, width)
 }
 
-pub fn prepare_conversation_with_durable(
+pub fn prepare_conversation_from_cache(
     app: &App,
     width: u16,
     ready_durable: Arc<PreparedDurable>,
 ) -> PreparedConversation {
     prepare_conversation_inner(app, width, Some(ready_durable), false)
+}
+
+/// Compatibility name for test harnesses and older integration fixtures. The
+/// production renderer uses [`prepare_conversation_from_cache`] explicitly.
+pub fn prepare_conversation_with_durable(
+    app: &App,
+    width: u16,
+    ready_durable: Arc<PreparedDurable>,
+) -> PreparedConversation {
+    prepare_conversation_from_cache(app, width, ready_durable)
 }
 
 fn prepare_conversation_inner(
@@ -1216,6 +1226,31 @@ fn durable_block_lines<V: DurableLayoutSource>(
     width: usize,
     reasoning_visible: bool,
 ) -> Vec<Line<'static>> {
+    let body_bytes = match block {
+        TranscriptBlock::User(user) => user.text.len(),
+        TranscriptBlock::Assistant(assistant) => assistant
+            .parts
+            .iter()
+            .map(|part| match part {
+                crate::state::transcript::AssistantPart::Text(text)
+                | crate::state::transcript::AssistantPart::Reasoning(text) => text.len(),
+                crate::state::transcript::AssistantPart::ToolCall(call) => call.name.len(),
+            })
+            .sum(),
+        TranscriptBlock::Tool(tool) => tool
+            .result
+            .as_ref()
+            .map_or(tool.name.len(), String::len),
+        TranscriptBlock::Summary(summary) => summary.content.len(),
+        TranscriptBlock::HistoryPlaceholder(_) => 0,
+    };
+    if body_bytes > crate::limits::LAYOUT_SECTION_BYTES {
+        return summary_lines(
+            theme,
+            width,
+            &format!("[large history section: {body_bytes} bytes; read explicitly to render]"),
+        );
+    }
     match block {
         TranscriptBlock::User(user_block) => user::lines_with_timestamp(
             theme,

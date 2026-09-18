@@ -10,6 +10,10 @@
 pub const HISTORY_BODY_BYTES: usize = 32 * 1024 * 1024;
 /// Prepared conversation sections retained in the layout cache.
 pub const LAYOUT_CACHE_BYTES: usize = 48 * 1024 * 1024;
+/// Maximum source handed to one Markdown/layout section. Larger durable
+/// bodies remain readable through the history owner but render as a bounded
+/// explicit placeholder instead of creating an oversized row vector.
+pub const LAYOUT_SECTION_BYTES: usize = 4 * 1024 * 1024;
 /// Retained live output for one loop.
 pub const LIVE_LOOP_BYTES: usize = 4 * 1024 * 1024;
 /// Retained live output for every loop of one session.
@@ -44,6 +48,7 @@ mod tests {
     fn budgets_match_the_spec_targets() {
         assert_eq!(HISTORY_BODY_BYTES, 32 * 1024 * 1024);
         assert_eq!(LAYOUT_CACHE_BYTES, 48 * 1024 * 1024);
+        assert_eq!(LAYOUT_SECTION_BYTES, 4 * 1024 * 1024);
         assert_eq!(LIVE_LOOP_BYTES, 4 * 1024 * 1024);
         assert_eq!(LIVE_TOTAL_BYTES, 16 * 1024 * 1024);
         assert_eq!(TOOL_STREAM_BYTES, 1024 * 1024);
