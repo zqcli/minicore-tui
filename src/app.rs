@@ -1224,15 +1224,20 @@ impl App {
             }) {
                 return None;
             }
-            if view.transcript.render_cache.as_ref().is_some_and(|durable| {
-                durable.key
-                    == crate::state::view::DurableCacheKey::new(
-                        view,
-                        width,
-                        self.theme,
-                        self.reasoning_visible,
-                    )
-            }) {
+            if view
+                .transcript
+                .render_cache
+                .as_ref()
+                .is_some_and(|durable| {
+                    durable.key
+                        == crate::state::view::DurableCacheKey::new(
+                            view,
+                            width,
+                            self.theme,
+                            self.reasoning_visible,
+                        )
+                })
+            {
                 return None;
             }
             (
@@ -1328,9 +1333,9 @@ impl App {
                         ))
                     }
                 } else {
-                    std::borrow::Cow::Owned(
-                        crate::ui::transcript::prepare_conversation(self, width),
-                    )
+                    std::borrow::Cow::Owned(crate::ui::transcript::prepare_conversation(
+                        self, width,
+                    ))
                 }
             })
     }

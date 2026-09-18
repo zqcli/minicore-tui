@@ -232,7 +232,10 @@ async fn measure_c2b_worker_over_50k_rows_and_1000_output_deltas() {
         after.historical_text_bytes_cloned - base.historical_text_bytes_cloned,
         0
     );
-    assert_eq!(window_rows as u64, after.viewport_rows_materialized - base.viewport_rows_materialized);
+    assert_eq!(
+        window_rows as u64,
+        after.viewport_rows_materialized - base.viewport_rows_materialized
+    );
     assert!(after.viewport_rows_materialized <= 1000 * HEIGHT as u64);
     jobs.shutdown().await;
 }

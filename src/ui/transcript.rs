@@ -1,8 +1,8 @@
 //! The transcript/history scroll view: durable blocks and the live loop tail (spec r2).
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -15,12 +15,12 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::App;
 use crate::markdown::wrap_plain;
 use crate::state::session::SessionView;
-use crate::state::transcript::{ToolBlock, TranscriptBlock};
 use crate::state::tool::{ToolKey, ToolPresentationState};
+use crate::state::transcript::{ToolBlock, TranscriptBlock};
 use crate::state::view::{
-    ConversationLayout, ConversationSelection, CopyIndex, CopyRange, DurableCacheKey,
-    FoldOverride, LayoutKey, PreparedConversation, PreparedDurable, SectionId, SectionIndex,
-    SectionKind, SectionLayout, SectionRange,
+    ConversationLayout, ConversationSelection, CopyIndex, CopyRange, DurableCacheKey, FoldOverride,
+    LayoutKey, PreparedConversation, PreparedDurable, SectionId, SectionIndex, SectionKind,
+    SectionLayout, SectionRange,
 };
 use crate::theme::Theme;
 use crate::ui::{assistant, header, layout, reasoning, tool, user};
@@ -251,7 +251,11 @@ pub fn prepare_conversation_with_durable(
     });
     let durable_last_row_blank = durable
         .as_ref()
-        .and_then(|durable| durable.layout.row(durable.layout.total_rows.saturating_sub(1)))
+        .and_then(|durable| {
+            durable
+                .layout
+                .row(durable.layout.total_rows.saturating_sub(1))
+        })
         .map_or_else(
             || header.last().is_some_and(layout::line_is_blank),
             |line| layout::line_is_blank(line),
@@ -360,19 +364,17 @@ fn section_revision<V: DurableLayoutSource>(view: &V, id: &SectionId, block_revi
     id.hash(&mut hasher);
     block_revision.hash(&mut hasher);
     if let Some(tool_call_id) = id.tool_call_id.as_deref() {
-        view.tool_presentations()
-            .get(&ToolKey::new(
-                view.session_id(),
-                id.loop_id.as_deref().unwrap_or_default(),
-                id.request_index.unwrap_or_default(),
-                tool_call_id,
-            ))
-            .map(|presentation| {
-                presentation.display.detail.hash(&mut hasher);
-                presentation.display.expanded_input.hash(&mut hasher);
-                presentation.display.hidden_line_count.hash(&mut hasher);
-                presentation.display.truncated.hash(&mut hasher);
-            });
+        if let Some(presentation) = view.tool_presentations().get(&ToolKey::new(
+            view.session_id(),
+            id.loop_id.as_deref().unwrap_or_default(),
+            id.request_index.unwrap_or_default(),
+            tool_call_id,
+        )) {
+            presentation.display.detail.hash(&mut hasher);
+            presentation.display.expanded_input.hash(&mut hasher);
+            presentation.display.hidden_line_count.hash(&mut hasher);
+            presentation.display.truncated.hash(&mut hasher);
+        }
     }
     if id.kind == SectionKind::User {
         id.history_index
@@ -554,12 +556,7 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                 .layout
                 .sections
                 .iter()
-                .map(|placement| {
-                    (
-                        placement.layout.key.clone(),
-                        Arc::clone(&placement.layout),
-                    )
-                })
+                .map(|placement| (placement.layout.key.clone(), Arc::clone(&placement.layout)))
                 .collect()
         })
         .unwrap_or_default();
@@ -641,13 +638,8 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                         width as usize,
                         reasoning_visible,
                     );
-                    if let Some(layout) = make_section_layout(
-                        key,
-                        lines,
-                        Vec::new(),
-                        true,
-                        folded,
-                    ) {
+                    if let Some(layout) = make_section_layout(key, lines, Vec::new(), true, folded)
+                    {
                         sections.push(layout);
                         changed += 1;
                     }
@@ -669,19 +661,14 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                     width,
                     theme: theme_kind,
                     folded: input.folded,
-                    reasoning_visible: input.kind == SectionKind::Thinking
-                        && reasoning_visible,
+                    reasoning_visible: input.kind == SectionKind::Thinking && reasoning_visible,
                 };
                 if let Some(layout) = cached.get(&key) {
                     sections.push(Arc::clone(layout));
                     continue;
                 }
-                let rendered = assistant::render_section(
-                    theme,
-                    &input,
-                    width as usize,
-                    reasoning_visible,
-                );
+                let rendered =
+                    assistant::render_section(theme, &input, width as usize, reasoning_visible);
                 if let Some(layout) = make_section_layout(
                     key,
                     rendered.lines,
@@ -886,7 +873,7 @@ pub fn selection_text(
         } else {
             copy.columns.end.saturating_sub(copy.columns.start)
         };
-        rows.push(slice_cell_range(&copy.text, start_column, end_column));
+        rows.push(slice_cell_range(copy.text, start_column, end_column));
     }
     while rows.first().is_some_and(|row| row.is_empty()) {
         rows.remove(0);

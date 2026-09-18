@@ -678,9 +678,13 @@ fn assert_user_gap(app: &App, expected: &str) {
     let gap_row = users[0].rows.end;
     assert!(prepared.row(gap_row).unwrap().spans.is_empty());
     let durable = prepared.durable.as_ref().expect("durable frame");
-    assert!(durable.layout.sections.iter().all(|section| {
-        section.layout.link_cells.len() == section.layout.rows.len()
-    }));
+    assert!(
+        durable
+            .layout
+            .sections
+            .iter()
+            .all(|section| { section.layout.link_cells.len() == section.layout.rows.len() })
+    );
     assert!(prepared.links_at(gap_row).is_empty());
     assert!(prepared.sections.iter().all(|s| !s.rows.contains(&gap_row)));
     assert!(

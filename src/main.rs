@@ -311,11 +311,7 @@ async fn run_fullscreen(
             }
             Selected::Render => {
                 let size = terminal.size()?;
-                prepare_frame_with_jobs(
-                    &mut app,
-                    jobs,
-                    Rect::new(0, 0, size.width, size.height),
-                );
+                prepare_frame_with_jobs(&mut app, jobs, Rect::new(0, 0, size.width, size.height));
                 terminal.draw(|frame| ui::render(frame, &app))?;
                 last_render = Instant::now();
                 app.update(AppEvent::Rendered);
@@ -334,11 +330,7 @@ async fn run_fullscreen(
         // Rendered event clears the dirty flag so idle frames never draw.
         if app.dirty && last_render.elapsed() >= RENDER_INTERVAL {
             let size = terminal.size()?;
-            prepare_frame_with_jobs(
-                &mut app,
-                jobs,
-                Rect::new(0, 0, size.width, size.height),
-            );
+            prepare_frame_with_jobs(&mut app, jobs, Rect::new(0, 0, size.width, size.height));
             terminal.draw(|frame| ui::render(frame, &app))?;
             last_render = Instant::now();
             app.update(AppEvent::Rendered);
@@ -356,11 +348,8 @@ fn prepare_frame_with_jobs(app: &mut App, jobs: &mut LocalJobs, area: Rect) {
     if app.prepared_conversation(width).is_none() {
         if app.async_layout_enabled() && app.active_view().is_some() {
             if let Some(durable) = app.cached_durable(width) {
-                let prepared = ui::transcript::prepare_conversation_with_durable(
-                    app,
-                    width,
-                    Some(durable),
-                );
+                let prepared =
+                    ui::transcript::prepare_conversation_with_durable(app, width, Some(durable));
                 app.update(AppEvent::ConversationPrepared(prepared));
             } else if let Some(request) = app.layout_request(width) {
                 let identity = request.identity.clone();

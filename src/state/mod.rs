@@ -33,7 +33,7 @@ pub use turn::{
 };
 pub use view::{
     ConversationLayout, ConversationSelection, CopyIndex, CopyRange, CopyView, DurableCacheKey,
-    FoldOverride,
-    LayoutKey, PreparedConversation, PreparedDurable, ReasoningKey, SectionId, SectionIndex,
-    SectionKind, SectionLayout, SectionRange, SectionView, SelectionGranularity, SelectionPoint,
+    FoldOverride, LayoutKey, PreparedConversation, PreparedDurable, ReasoningKey, SectionId,
+    SectionIndex, SectionKind, SectionLayout, SectionRange, SectionView, SelectionGranularity,
+    SelectionPoint,
 };

@@ -134,7 +134,10 @@ impl ConversationLayout {
             }
             let local_start = usize::from(
                 previous_ends_blank
-                    && layout.rows.first().is_some_and(|line| line.spans.is_empty()),
+                    && layout
+                        .rows
+                        .first()
+                        .is_some_and(|line| line.spans.is_empty()),
             );
             let start = total_rows;
             let end = start + layout.rows.len().saturating_sub(local_start);
@@ -146,10 +149,7 @@ impl ConversationLayout {
             offsets.push(end);
             total_rows = end;
             previous_kind = Some(layout.key.section.kind);
-            previous_ends_blank = layout
-                .rows
-                .last()
-                .is_some_and(|line| line.spans.is_empty());
+            previous_ends_blank = layout.rows.last().is_some_and(|line| line.spans.is_empty());
         }
         Self {
             sections: Arc::new(placements),
@@ -344,10 +344,9 @@ impl SectionIndex {
             .into_iter()
             .flat_map(|layout| layout.sections.iter())
             .filter_map(move |placement| {
-                let start = placement.rows.start.saturating_sub(self.durable_skip)
-                    + self.durable_base;
-                let end = placement.rows.end.saturating_sub(self.durable_skip)
-                    + self.durable_base;
+                let start =
+                    placement.rows.start.saturating_sub(self.durable_skip) + self.durable_base;
+                let end = placement.rows.end.saturating_sub(self.durable_skip) + self.durable_base;
                 (end > start).then_some(SectionView {
                     id: placement.layout.key.section.clone(),
                     rows: start..end,
@@ -466,10 +465,7 @@ pub struct PreparedConversation {
 }
 
 impl PreparedConversation {
-    pub fn placeholder(
-        active: Option<&crate::state::session::SessionView>,
-        width: u16,
-    ) -> Self {
+    pub fn placeholder(active: Option<&crate::state::session::SessionView>, width: u16) -> Self {
         Self {
             width,
             session_id: active.map(|view| view.info.session_id.clone()),
@@ -527,12 +523,9 @@ impl PreparedConversation {
         let row = row - header;
         let durable = self.durable_rows();
         if row < durable {
-            return self
-                .durable
-                .as_ref()
-                .map_or(EMPTY, |durable| {
-                    durable.layout.links_at(self.durable_skip + row)
-                });
+            return self.durable.as_ref().map_or(EMPTY, |durable| {
+                durable.layout.links_at(self.durable_skip + row)
+            });
         }
         self.live_links
             .get(row - durable)

@@ -1138,7 +1138,7 @@ impl App {
             };
         };
         let relative = point.column.saturating_sub(copy.columns.start);
-        let (start, end) = word_cell_bounds(&copy.text, relative);
+        let (start, end) = word_cell_bounds(copy.text, relative);
         let mut anchor = point.clone();
         let mut focus = point.clone();
         anchor.column = copy.columns.start + start;
@@ -1636,7 +1636,7 @@ pub(super) fn set_all_tools_expanded(view: &mut SessionView, expanded: bool) {
 }
 
 fn copy_row_text(conversation: &PreparedConversation, row: usize) -> Option<&str> {
-    conversation.copy_row(row).map(|copy| &*copy.text)
+    conversation.copy_row(row).map(|copy| copy.text)
 }
 
 fn first_copy_column(conversation: &PreparedConversation, row: usize) -> usize {
@@ -1647,7 +1647,7 @@ fn first_copy_column(conversation: &PreparedConversation, row: usize) -> usize {
 
 fn copy_row_width(conversation: &PreparedConversation, row: usize) -> usize {
     conversation.copy_row(row).map_or(1, |copy| {
-        copy.columns.start + UnicodeWidthStr::width(&*copy.text)
+        copy.columns.start + UnicodeWidthStr::width(copy.text)
     })
 }
 

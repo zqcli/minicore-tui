@@ -20,8 +20,8 @@
 //! the task closes this process's pipe end, so no writer thread can outlive
 //! its owner and `shutdown` never detaches one.
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -159,8 +159,9 @@ impl LocalJobs {
                 }
                 true
             }
-            Err(mpsc::error::TrySendError::Full(_))
-            | Err(mpsc::error::TrySendError::Closed(_)) => false,
+            Err(mpsc::error::TrySendError::Full(_)) | Err(mpsc::error::TrySendError::Closed(_)) => {
+                false
+            }
         }
     }
 
