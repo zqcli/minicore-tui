@@ -57,9 +57,9 @@ cargo test --release --locked --test performance -- --ignored --nocapture
 
 | Probe | Result |
 |---|---|
-| `measure_prepare_frame_path_over_50k_rows` (7300 msgs, 5 calls) | **51,101 rows, ≈121.2 ms/call** on the production frame path |
-| `measure_live_delta_rebuild_cost` (7300 msgs, 1000 real `output_delta`, 51,101 rows) | history rows 51,101 → 51,234 (+133 visible), live-push loop ≈11.1 ms total |
-| `measure_all_lines_clone_latency` (1000 msgs, diagnostic helper, 20 clones) | 7001 rows/call, ≈17.3 ms/call |
+| `measure_prepare_frame_path_over_50k_rows` (7300 msgs, 5 calls) | **51,101 rows, ≈119.6 ms/call** on the production frame path |
+| `measure_live_delta_rebuild_cost` (7300 msgs, 1000 real `output_delta`, 51,101 rows) | history rows 51,101 → 51,234 (+133 visible), live-push loop ≈11.3 ms total |
+| `measure_all_lines_clone_latency` (1000 msgs, diagnostic helper, 20 clones) | 7001 rows/call, ≈17.6 ms/call |
 
 The live-delta probe pushes 1000 real `output_delta` events into an active
 loop and shows the visible delta is small (+133 rows) while the underlying
