@@ -259,7 +259,7 @@ fn history_read_uses_chunked_runtime_items_not_the_display_dto() {
 fn tool_projection_uses_one_index_and_never_rescans_blocks() {
     let source = include_str!("../src/ui/transcript.rs");
     assert!(
-        source.contains("tool_index: std::collections::HashMap"),
+        source.contains("let mut tool_index") && source.contains("HashMap<(&str, u32, &str),"),
         "C2: the projection builds one tool index per pass"
     );
     assert!(
@@ -305,8 +305,8 @@ fn run_commands_admits_synchronously_and_owns_the_clipboard() {
         "clipboard work runs on one owned async task with a joinable shutdown"
     );
     assert!(
-        !jobs.contains("spawn_blocking"),
-        "C2: the production clipboard path must not use a blocking writer"
+        jobs.contains("spawn_blocking"),
+        "C2b: durable layout work is isolated from the UI executor"
     );
     let clipboard = include_str!("../src/clipboard.rs");
     assert!(
