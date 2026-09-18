@@ -742,7 +742,7 @@ impl App {
 
     pub(super) fn resume_deferred_reconcile(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
         if !self.can_send_requests()
-            || self.sessions.deleted.contains(session_id)
+            || self.session_pending_deletion(session_id)
             || self.sessions.closed.contains(session_id)
         {
             return Vec::new();
@@ -827,7 +827,7 @@ impl App {
         read: &ReadRequest,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
-        if self.sessions.deleted.contains(session_id)
+        if self.session_pending_deletion(session_id)
             || self.sessions.pending_deletes.contains(session_id)
         {
             return Vec::new();
@@ -863,7 +863,7 @@ impl App {
         if !self.can_send_requests() {
             return Vec::new();
         }
-        if self.sessions.deleted.contains(session_id)
+        if self.session_pending_deletion(session_id)
             || self.sessions.pending_deletes.contains(session_id)
         {
             return Vec::new();
@@ -1600,7 +1600,7 @@ impl App {
         if !self.can_send_requests() {
             return Vec::new();
         }
-        if self.sessions.deleted.contains(session_id)
+        if self.session_pending_deletion(session_id)
             || self.sessions.pending_deletes.contains(session_id)
             || self.sessions.closed.contains(session_id)
         {
@@ -1644,7 +1644,7 @@ impl App {
         if meta.dropped_before == 0 {
             return;
         }
-        if self.sessions.deleted.contains(&meta.session_id)
+        if self.session_pending_deletion(&meta.session_id)
             || self.sessions.pending_deletes.contains(&meta.session_id)
         {
             return;

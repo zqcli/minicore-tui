@@ -6,6 +6,13 @@
 //! or cannot accept its pipe is killed and reported; no partial state is left
 //! behind.
 //!
+//! Reclamation is bounded but not omniscient: the call kills the direct child
+//! and detaches its writer thread on the deadline, so a descendant that
+//! inherited the pipe's read end can, in principle, keep that thread alive
+//! until the pipe closes or the process exits. The fixed platform adapters
+//! (`pbcopy`, `xclip`, `clip.exe`) do not spawn descendants; the residual
+//! leak is documented here rather than assumed away.
+//!
 //! Encoding is per platform: macOS (`pbcopy`) and Linux (`xclip`) receive
 //! `text` as UTF-8; Windows `clip.exe` interprets console input in the OEM
 //! codepage, so it receives UTF-16LE with a byte-order mark (the encoding
@@ -102,9 +109,15 @@ fn clipboard_payload(text: &str) -> Vec<u8> {
 /// A synchronous `write_all` alone can hang forever: a child that never
 /// drains its pipe fills the OS pipe buffer (~64 KiB) while a multi-hundred-
 /// KiB selection is still queued. The write therefore runs on a controlled
-/// writer thread that is killed and joined when the deadline expires; killing
-/// the child breaks the pipe, which unblocks the writer with `EPIPE` and lets
-/// the join return. No process or thread is ever left detached.
+/// writer thread. On the deadline the direct child is killed; that normally
+/// closes the pipe and unblocks the writer with `EPIPE`. If the child spawned
+/// a descendant that inherited the read end, killing the direct child does
+/// not close the pipe and the writer can stay blocked: the thread is then
+/// detached instead of joined so this function and the UI stay bounded, and
+/// the detached thread exits when the pipe finally closes or the process
+/// exits. The fixed platform adapters (`pbcopy`/`xclip`/`clip.exe`) spawn no
+/// descendants in practice; the residual leak is a real, documented risk (see
+/// the module docs), not a claim that a hung helper can never block.
 fn run_clipboard_with_timeout(
     program: &str,
     args: &[&str],
@@ -134,9 +147,12 @@ fn run_clipboard_with_timeout(
     };
 
     // The payload is streamed by a short-lived writer thread. It gains no
-    // independent lifetime: it owns `stdin`, and the caller either joins it
-    // here or kills the child first (which breaks the pipe and unblocks the
-    // write with EPIPE) and joins it immediately after.
+    // independent lifetime while it can make progress: the caller either
+    // joins it here or, on the deadline, kills the direct child first (which
+    // normally breaks the pipe and unblocks the write with EPIPE). If a child
+    // descendant still holds the read end, the thread is detached rather than
+    // joined so the caller stays bounded; see the function docs for the
+    // residual risk.
     let writer = thread::spawn(move || {
         let outcome = stdin.write_all(&payload).map(drop);
         drop(stdin); // EOF to the child after a successful write
@@ -150,10 +166,11 @@ fn run_clipboard_with_timeout(
                 .unwrap_or_else(|_| Err(io::Error::other("clipboard writer thread panicked")));
         }
         if Instant::now() >= deadline {
-            // The child never drained the pipe: kill it, which closes the
-            // read end and unblocks the writer with EPIPE, then join it.
+            // The child never drained the pipe: kill the direct child and
+            // detach the writer (do not join) so a descendant that inherited
+            // the read end cannot block this bounded call.
             let _ = child.kill();
-            let _ = writer.join();
+            drop(writer);
             let _ = child.wait();
             return Err(io::Error::other(format!(
                 "native clipboard `{program}` did not drain its input within {timeout:?}"
@@ -336,8 +353,10 @@ mod tests {
 
     /// A child that never drains its input must not hang the caller: the
     /// payload (much larger than a 64 KiB pipe buffer) is written by the
-    /// controlled writer thread, the deadline kills the child and joins the
-    /// thread, and `set_text` returns bounded.
+    /// controlled writer thread, the deadline kills the direct child and
+    /// detaches the writer, and `set_text` returns bounded. (A descendant
+    /// holding the pipe could keep the detached thread alive; the fixed
+    /// adapters spawn none, and the risk is documented in the module docs.)
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn non_draining_child_is_bounded_and_killed() {

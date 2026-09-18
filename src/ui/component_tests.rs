@@ -3581,7 +3581,15 @@ fn session_delete_requires_close_then_second_confirmation_and_tombstones_id() {
     assert_eq!(delete.params["session_id"], "ses_main");
     testapp::respond(&mut app, &delete, json!({"ok": true}));
     assert!(!app.sessions.list.iter().any(|s| s.session_id == "ses_main"));
-    assert!(app.sessions.deleted.contains("ses_main"));
+    assert!(
+        !app.sessions.known.contains_key("ses_main")
+            && !app
+                .sessions
+                .list
+                .iter()
+                .any(|session| session.session_id == "ses_main"),
+        "a deleted session is absent from the catalog"
+    );
 }
 
 #[test]

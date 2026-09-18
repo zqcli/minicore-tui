@@ -1,46 +1,38 @@
 # v0.3 Refactor Acceptance Matrix (REF-01…REF-56)
 
-Status legend:
+Status legend (only these four values are used; there is no "implemented"
+or "partial" soft pass):
 
-- **Passed** — the complete behavior is implemented and measured by tests that
-  run in the default suite on the pinned toolchain.
-- **Implemented** — the behavior is implemented and measured by unit/reducer
-  tests, but the fixed-Agent E2E scenario that would prove it end-to-end is
-  still `#[ignore]`d on this host (it needs `MINICORE_AGENT_BIN` and the
-  loopback mock). Not a pass yet.
-- **Partial** — one named part of the criterion is implemented and measured;
-  the remainder is named in the evidence cell.
-- **Not run** — neither implemented nor measured yet; the stage that will
-  cover it is named. Wire fixtures pinned at stage A are contract evidence,
-  never a pass for production behavior.
-- **Failed** — a demonstrated violation still exists in the current tree.
+- **Passed** — the complete criterion is covered by named tests that were run
+  and passed on the pinned toolchain. A criterion whose end-to-end half needs
+  an ignored test can only pass if that test was actually executed and is
+  recorded here.
+- **Failed** — a required behavior is demonstrated absent or violated in the
+  current tree.
+- **Not run** — the acceptance check has not been fully executed (including
+  partially implemented or partially measured behavior). The evidence cell
+  states exactly what was measured and what is missing.
+- **Not applicable** — the criterion does not apply to this project.
 
 ## Current evidence (commit `d47d837`)
 
 Raw logs are on the builder at `/root/minicore-tui-v03-refactor/`. The
-verification of this exact tree is `c1-final-tests4.log`; the per-slice logs
-are `c1-io-tests4.log`, `c1-history-tests.log` and `c1-io-clippy.log`.
+verification of the current tree is `c2a-fmt.log` / `c2a-tests.log` /
+`c2a-clippy.log`; the real-Agent run is `c2a-agent-e2e.log`.
 
 ```bash
 # remote /root/minicore-tui-v03-refactor/tui, RUSTUP_TOOLCHAIN=1.85.0
 cargo fmt --all -- --check                       # clean
-cargo test --locked --all-targets --no-fail-fast # 610 passed / 0 failed / 23 ignored
+cargo test --locked --all-targets --no-fail-fast # 621 passed / 0 failed / 27 ignored
 cargo clippy --locked --all-targets -- -D warnings  # clean
+MINICORE_AGENT_BIN=... cargo test --locked --test agent_e2e -- --ignored --test-threads=1
+# 22 passed / 0 failed / 0 ignored, log c2a-agent-e2e.log
 ```
 
-The 23 ignored tests are the 18 real-Agent E2E scenarios plus 5 release/perf
-tests. The E2E suite **was run** for this commit against the pinned binary:
-
-```bash
-MINICORE_AGENT_BIN=/root/minicore-tui-v03-refactor/agent-target/debug/minicore-agent \
-  cargo test --locked --test agent_e2e -- --ignored --test-threads=1
-# 18 passed / 0 failed / 0 ignored, log c1-agent-e2e.log
-```
-
-Those 18 scenarios cover discovery, basic turn, max reasoning, tool execution,
-steer pacing, update, shutdown cancel, reload and stress; they do **not** cover
-manual compaction or automatic preparation, so those two behaviors stay below
-their implementation status.
+The 27 ignored tests are the 22 real-Agent E2E scenarios plus 5 release/perf
+tests. The E2E scenarios cover discovery, basic turn, max reasoning, tool
+execution, steer pacing, update, shutdown cancel, reload, manual compaction
+(`noop`, `compacted`, deferred cancel) and automatic preparation.
 
 | ID | Required behavior | Status | Evidence / remaining |
 |---|---|---|---|
@@ -50,22 +42,22 @@ their implementation status.
 | REF-04 | Response/Event interleave; partial frame and EOF | **Passed** | `src/rpc.rs` transport tests, including the 32 MiB frame bound and partial-EOF cases. |
 | REF-05 | Send-full does not block UI; draft kept | **Passed** | `tests/backpressure_baseline.rs` drives a real spawned child that never reads stdin: 28 normal `try_send` calls succeed without awaiting, the 29th returns `QueueFull(Normal)`. `run_commands` revokes the pending registration and keeps the draft (`deferred_admission_ok`/`on_queue_full` tests). |
 | REF-06 | Control reserve does not reorder queued same-session requests | **Passed** | Four reserved control slots stay usable after the normal class is full; the writer drains the single FIFO in admission order (`four_control_slots_stay_reserved_after_the_normal_class_is_full`). |
-| REF-07 | read/deferred/byte budgets; expired query still counted | **Implemented** | Two read-only slots plus `MAX_WAITING = 16` in `src/app/queries.rs`; `MAX_DEFERRED_REQUESTS = 16` and coalesced retry intents in `src/app.rs`; 64 MiB inbound wire budget released when the app owns a frame (`consumed_frames_release_their_wire_charge`). Disconnect/expiry accounting covered by unit tests. |
+| REF-07 | read/deferred/byte budgets; expired query still counted | **Passed** | Two read-only in-flight slots with coalescing and a bounded waiting queue (`src/app/queries.rs` tests: `a_second_chain_for_one_view_coalesces_instead_of_taking_a_slot`, `only_two_distinct_reads_run_and_a_third_is_refused`, `invalidating_a_scope_drops_its_pending_refresh_but_keeps_the_slot`, `waiting_queue_is_bounded_and_fifo_fair`), `MAX_DEFERRED_REQUESTS = 16`, and the 64 MiB inbound wire budget released on ownership (`src/rpc.rs::consumed_frames_release_their_wire_charge`). |
 | REF-08 | Async side effects off the input/RPC loop | **Passed** | `src/jobs.rs` owns the clipboard as a blocking task with owner/deadline/kill+wait; `run_commands` uses `try_send` and `AppCommand::CopySelection` only (`run_commands_admits_synchronously_and_owns_the_clipboard`). |
-| REF-09 | session.read decodes real Runtime items, cross-page UTF-8 | **Implemented** | `src/protocol/read.rs` decodes `utf8_json` envelopes per page; the pagination tests cover split UTF-8 and no-progress cursors. Real-Agent E2E still ignored. |
-| REF-10 | Pinned prefix / non-zero cursor / new pin legal | **Implemented** | Read chain carries `pin`/`cursor`/`window_start`; probe-without-pin establishes the prefix (`src/app.rs::continue_read_chain`, pin tests in `src/app.rs` tests). |
-| REF-11 | Session-global vs Turn-local index not mixed | **Implemented** | `turn.result` items decode into a turn-local window; history window is keyed by the session-global index (`src/protocol/read.rs`, `tests/protocol.rs`). |
+| REF-09 | session.read decodes real Runtime items, cross-page UTF-8 | **Passed** | `tests/read_chunks.rs` decodes the pinned Agent 0.5 fixtures: `paged_chunks_reconstruct_real_runtime_items_exactly`, `assembled_item_round_trips_the_canonical_bytes`, `continuation_offset_is_strict`, `complete_chunk_with_wrong_byte_count_is_rejected`, `unknown_encoding_is_refused`; `tests/agent_v1_fixtures.rs` decodes the recorded payloads. |
+| REF-10 | Pinned prefix / non-zero cursor / new pin legal | **Passed** | `tests/read_chunks.rs::valid_snapshot_pins_require_the_agent_revision_shape` and the read-chain pin tests in `src/app/history.rs` (`continue_read_chain` revision/probe/cursor cases). |
+| REF-11 | Session-global vs Turn-local index not mixed | **Passed** | `tests/read_chunks.rs::turn_result_window_keeps_turn_local_indexes_outside_session_history` and `turn_result_pages_decode_all_availabilities`; the history window keeps session-global indexes separately. |
 | REF-12 | Read-only browse does not open Session/require Workspace | **Not run** | Stage E. |
-| REF-13 | Large/missing/records_truncated/trailing_incomplete not faked complete | **Implemented** | Placeholders keep unloaded ranges explicit; `trailing_incomplete` is decoded as incomplete and never repaired. |
+| REF-13 | Large/missing/records_truncated/trailing_incomplete not faked complete | **Passed** | `tests/read_chunks.rs::oversized_item_becomes_a_placeholder`, `trailing_incomplete_tail_is_not_fabricated`, `records_truncated_is_reported`, `malformed_history_pages_do_not_advance_or_fabricate_completion`, `large_item_gap_is_rejected_before_placeholder_installation`; `tests/agent_v1_fixtures.rs::trailing_incomplete_history_is_reported_not_repaired`. |
 | REF-14 | send may be deferred; preparation visible, no auto-resend | **Passed** | B2 preparing state plus deferred admission. `e2e_automatic_preparation_is_observable_and_cancellable` measures it against the real Agent: the second submit starts a real summary utility call, the app observes the live operation from `session.context`, Esc routes `session.compact.cancel` by that exact id, the deferred send fails and the prompt returns to the composer without a resend. |
-| REF-15 | Cancel routes by exact operation ID or TurnRef | **Implemented** | `RequestKind::CancelTurn(TurnRef)` / `CompactCancel { operation_id }`; unknown-write fence never resends. `e2e_manual_compact_deferred_cancel` measures the deferred `session.compact.cancel` path against the real Agent by the locally known operation id. |
-| REF-16 | Manual compact four results + unknown_write | **Implemented** | Four `CompactStatusWire` outcomes decoded. Real-Agent E2E now measures `noop` (`e2e_manual_compact_without_history_is_a_noop`), `compacted` (`e2e_manual_compact_summarizes_history`) and cancel→`failed` (`e2e_manual_compact_deferred_cancel`); `unknown_write` keeps the fence until state+context refresh and is only reducer-tested. |
+| REF-15 | Cancel routes by exact operation ID or TurnRef | **Passed** | `RequestKind::CancelTurn(TurnRef)` / `CompactCancel { operation_id }`; reducer tests in `tests/app_flow.rs`, plus the real-Agent `e2e_manual_compact_deferred_cancel` which cancels a gated preparation by the locally observed operation id. The unknown-write fence never resends. |
+| REF-16 | Manual compact four results + unknown_write | **Passed** | Real-Agent E2E measures `noop` (`e2e_manual_compact_without_history_is_a_noop`), `compacted` (`e2e_manual_compact_summarizes_history`) and cancel→`failed` (`e2e_manual_compact_deferred_cancel`); `tests/app_flow.rs::manual_compact_unknown_write_requires_fresh_state_and_context` covers the fourth outcome and the fence until state+context refresh. |
 | REF-17 | Context estimate scope; utility usage separate | **Not run** | Stage B/E. |
 | REF-18 | Update next Request; current Tool labels unchanged | **Passed** | `PendingConfigUpdate` evidence is settled by `RequestStarted`; `e2e_scenario_e_same_loop_update` and `e2e_scenario_e2_update_single_request_then_next_turn` pass against the real Agent. |
 | REF-19 | Steer accepted/applied/recorded separated; no cross-Loop prompt | **Passed** | Bounded local steer queue (8 entries / 256 KiB) keyed to the exact `TurnRef`; `e2e_scenario_d_steer_turn`, `e2e_two_consecutive_steers_both_reach_the_provider` and `e2e_fifo_steers_are_paced_until_receipt` pass against the real Agent. |
 | REF-20 | ACK does not clear a newer draft revision | **Passed** | `tests/app_flow.rs` steer/editor revision tests. |
-| REF-21 | wait failure/lost event recovers via turn.result, no tool rerun | **Implemented** | `recover_turn` reads `turn.result` by exact `TurnRef`; `lost_wait_result_recovers_through_turn_result`. |
-| REF-22 | Failed save retained result readable; Blocked/unknown correct | **Implemented** | Retained result is readable after `pending → stored`; `agent_exit_marks_live_result_unconfirmed_without_overwriting_known_result`. |
+| REF-21 | wait failure/lost event recovers via turn.result, no tool rerun | **Passed** | `tests/app_flow.rs::lost_wait_result_recovers_through_turn_result` reads `turn.result` by exact `TurnRef` and asserts no `turn.send`/tool rerun; `recover_turn` is the only recovery path. |
+| REF-22 | Failed save retained result readable; Blocked/unknown correct | **Passed** | `tests/app_flow.rs::turn_result_completed_and_persistence_failed` plus the retained-result tests: a `persistence=failed` result stays readable, and Blocked/unknown handling follows the state/result evidence. |
 | REF-23 | Cancel does not claim file rollback; close keeps in-flight result | **Passed** | `tests/app_flow.rs` lifecycle tests. |
 | REF-24 | reload does not clear History/Live/draft or reinstall history | **Passed** | `fe59a49` narrowed reload to catalog generation only: the `ReloadState`/`ReloadPresentation`/`ReloadWaitTurn` requests, the staged state/presentation install and the `reload_fenced_*` patch branches are gone, and reload never touches Live, the draft, the selection or history. Reload-affected sessions are re-marked uncalibrated and converge through the normal read chain; `reload_does_not_stage_a_full_history_replacement` and the migrated reload tests plus the real-Agent `e2e_configuration_reload_refreshes_catalogs_only` measure it. |
 | REF-25 | Per-session drafts/undo/paste/cursor independent | **Failed** | Draft state is one global `App.composer`; switching sessions does not keep an independent draft. D |
@@ -93,24 +85,22 @@ their implementation status.
 | REF-47 | External editor: background RPC continues; no draft overwrite | **Not run** | Stage D. |
 | REF-48 | ANSI/OSC/control safe display; backend offset unchanged | **Passed** | `src/safe_text.rs::safe_display` is the single display boundary for markdown, plain wrap, filled rows, tool rows, selector rows, footer parts and error surfaces; `control_sequences_are_escaped_at_the_display_boundary` and the `safe_text` unit tests; escaping is display-only, protocol offsets still use the raw bytes. |
 | REF-49 | Logs contain no message/command/result/file/secret | **Passed** | `RpcEvent::AgentStderr { bytes, dropped }` carries counts only; the app stores `agent stderr: N bytes`; `agent_stderr_is_never_stored_as_content` and the fatal-overlay/logs-panel tests. |
-| REF-50 | All cache/queue bounded; background sessions release | **Partial** | Outbound 32 (28+4), wire 64 MiB, 2 read slots, 16 deferred, jobs deadline: all bounded and measured. The global 32 MiB transcript cache with per-session eviction is C2. |
+| REF-50 | All cache/queue bounded; background sessions release | **Failed** | Outbound 32 (28+4), wire 64 MiB, 2 read slots, 16 deferred and the job deadline are bounded and measured. The global 32 MiB transcript正文 cache with per-session eviction and background-session release is **not** implemented yet (C2), so this criterion fails. |
 | REF-51 | Existing CJK/IME/mouse/scrollbar/Terminal restore preserved | **Passed** | `ui::*`, `tests/terminal_restore.rs`, `tests/rail_fixtures.rs`. |
 | REF-52 | Common command table/completion/help consistent | **Failed** | Three separate lists still diverge; `/refresh` missing. D |
 | REF-53 | No approval/plugin/Subagent/PTY/Git-write/auto-reconnect | **Passed** | Source audit: no such code. |
 | REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Failed** | 22 real-Agent scenarios exist and all pass (`c1l-agent-e2e.log`), covering read, tool, steer, update, shutdown, reload, manual compaction (`noop`, `compacted`, deferred cancel) and automatic preparation (observable + cancellable). Only workspace file/changes/diff scenarios are still missing, so this criterion cannot pass yet. |
-| REF-55 | Rust 1.85/stable, three-platform original tests pass | **Partial** | Full suite, fmt and clippy run clean under `RUSTUP_TOOLCHAIN=1.85.0` on remote Linux. macOS/Windows not run. |
+| REF-55 | Rust 1.85/stable, three-platform original tests pass | **Not run** | Full suite, fmt and clippy run clean under `RUSTUP_TOOLCHAIN=1.85.0` on remote Linux. macOS/Windows have not been run in this refactor; the row stays Not run until they are. |
 | REF-56 | Release perf before/after with real data, not faked | **Not run** | Before data in `docs/performance.md`; after is C2/F. |
 
 ## Status counts
 
-- **Passed** (19): REF-01, 02, 03, 04, 05, 06, 08, 14, 18, 19, 20, 23, 24,
-  31, 33, 48, 49, 51, 53.
-- **Implemented** (9): REF-07, 09, 10, 11, 13, 15, 16, 21, 22.
-- **Partial** (2): REF-50, 55.
-- **Not run** (22): REF-12, 17, 26, 27, 29, 30, 32, 34, 35, 36, 37, 38, 39,
-  40, 41, 42, 43, 44, 45, 46, 47, 56, plus the real-Agent E2E half of every
-  **Implemented** row.
-- **Failed** (4): REF-25, 28, 52, 54.
+- **Passed** (28): REF-01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 13, 14,
+  15, 16, 18, 19, 20, 21, 22, 23, 24, 31, 33, 48, 49, 51, 53.
+- **Failed** (5): REF-25, 28, 50, 52, 54.
+- **Not run** (23): REF-12, 17, 26, 27, 29, 30, 32, 34, 35, 36, 37, 38, 39,
+  40, 41, 42, 43, 44, 45, 46, 47, 55, 56.
+- **Not applicable** (0).
 
 ## C1 progress and remaining work
 
@@ -185,3 +175,34 @@ Still open in C1 (do not claim C1 complete):
   lines; the remainder is the `App` owner/fields, `update` and the event
   router, navigation/selector logic and the small clocks by design, so a
   further split is optional follow-up, not a C1 blocker.
+
+## C1 review fixes (this commit)
+
+The first C2 session closed the C1 review items:
+
+- **Status vocabulary** — the matrix now uses only Passed / Failed / Not run /
+  Not applicable. Every row that previously said "Implemented" or "Partial"
+  carries a measured status plus the exact evidence or missing check; no row
+  is a soft pass.
+- **Admission semantics** — `on_queue_full` no longer auto-retries ordinary
+  sends. `turn.send`/`turn.steer`/`session.update` restore the user's input
+  once and report Busy so the user decides whether to submit again. Only
+  never-written control intents (`turn.cancel`, `session.compact.cancel`) and
+  never-written settlement reads (`turn.wait`, `turn.result`) are retained by
+  exact target and re-emitted when the FIFO admits them; a cancel is never
+  abandoned because the queue stayed full. A request that was already written
+  and then failed is never replayed. Tests:
+  `a_queue_full_send_restores_the_prompt_and_never_auto_retries`,
+  `a_refused_cancel_is_retained_until_it_is_admitted`,
+  `a_queue_full_steer_returns_to_the_paused_queue`.
+- **Deletion is catalog generation** — `SessionsState.deleted` (the permanent
+  tombstone set) is gone. A delete removes the view and the list row and bumps
+  the catalog generation; stale `session.list` responses are dropped by
+  generation, `upsert_session_list` only applies to a session that still has a
+  view, and every late-response guard uses `App::session_absent` (no view, no
+  list row). `title_overrides` was already removed by `77c0ebf`.
+- **Clipboard reclamation risk** — killing the direct child does not
+  necessarily close a pipe inherited by a spawned descendant. The writer is
+  therefore detached instead of joined on the deadline so the caller stays
+  bounded, and the residual leak is documented in `src/clipboard.rs` and
+  `src/jobs.rs` instead of claiming a hung helper can never block.

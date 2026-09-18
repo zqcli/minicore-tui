@@ -163,9 +163,6 @@ pub struct SessionsState {
     /// Delete requests that have not received a response. Refresh results do
     /// not re-add these IDs while their outcome is pending.
     pub pending_deletes: HashSet<SessionId>,
-    /// IDs removed by a successful delete. A later stale session.list cannot
-    /// resurrect them in this TUI process.
-    pub deleted: HashSet<SessionId>,
     /// A successful close acknowledged by this TUI process. A stale session
     /// list cannot mark the session loaded again until a later open ACK.
     pub closed: HashSet<SessionId>,

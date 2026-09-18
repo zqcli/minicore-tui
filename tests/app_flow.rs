@@ -25,6 +25,17 @@ use minicore_tui::state::turn::{PendingSteerState, SteerQueueItem, SteerQueueSta
 use minicore_tui::state::{AssistantPart, TranscriptBlock};
 use minicore_tui::ui::{layout, panel};
 
+/// A deleted session is absent from both the known views and the catalog
+/// list; the catalog generation, not a tombstone set, keeps it deleted.
+fn session_absent(app: &minicore_tui::app::App, session_id: &str) -> bool {
+    !app.sessions.known.contains_key(session_id)
+        && !app
+            .sessions
+            .list
+            .iter()
+            .any(|session| session.session_id == session_id)
+}
+
 struct Driver {
     app: App,
     queue: VecDeque<OutgoingRequest>,
@@ -4773,7 +4784,7 @@ fn close_verification_blocked_state_remains_unsafe_for_delete() {
             .iter()
             .all(|request| request.method != "session.delete")
     );
-    assert!(!driver.app.sessions.deleted.contains("ses_1"));
+    assert!(!session_absent(&driver.app, "ses_1"));
 }
 
 #[test]
@@ -5083,7 +5094,7 @@ fn inflight_history_gap_reconciles_new_revision_before_lifecycle_actions() {
     });
     let delete = driver.request("session.delete");
     driver.respond(delete, json!({"ok": true}));
-    assert!(driver.app.sessions.deleted.contains("ses_1"));
+    assert!(session_absent(&driver.app, "ses_1"));
 }
 
 #[test]
@@ -5179,7 +5190,7 @@ fn deleted_session_id_rejects_late_lifecycle_responses_and_events() {
         driver.app.pending_requests.insert(request_id, kind);
     }
     driver.respond(delete, json!({"ok": true}));
-    assert!(driver.app.sessions.deleted.contains("ses_1"));
+    assert!(session_absent(&driver.app, "ses_1"));
     assert!(!driver.app.sessions.known.contains_key("ses_1"));
     assert_eq!(driver.app.sessions.active, None);
     for request_id in [80_010, 80_011, 80_012, 80_013] {
@@ -5258,7 +5269,7 @@ fn deleted_session_id_rejects_late_lifecycle_responses_and_events() {
         }
     })));
 
-    assert!(driver.app.sessions.deleted.contains("ses_1"));
+    assert!(session_absent(&driver.app, "ses_1"));
     assert!(!driver.app.sessions.known.contains_key("ses_1"));
     assert_eq!(driver.app.sessions.active, None);
     assert!(

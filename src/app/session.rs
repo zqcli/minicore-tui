@@ -12,11 +12,18 @@ impl App {
         // A local lifecycle mutation makes every in-flight catalog response
         // stale, so a late list can never resurrect this old title or a
         // deleted row (spec §3.5).
+        //
+        // A delete removes the view and the list row; the generation is bumped
+        // so any in-flight list response issued before it is discarded. This
+        // upsert is called for lifecycle ACKs only, and every such ACK has a
+        // known view by the time it lands: a deleted session has none, so a
+        // late ACK cannot resurrect it.
+        if !self.sessions.known.contains_key(&session.session_id) {
+            return;
+        }
         self.bump_session_list_generation();
         let mut session = session;
-        if self.sessions.deleted.contains(&session.session_id)
-            || self.sessions.pending_deletes.contains(&session.session_id)
-        {
+        if self.sessions.pending_deletes.contains(&session.session_id) {
             return;
         }
         if self.sessions.closed.contains(&session.session_id) {
@@ -96,9 +103,9 @@ impl App {
         if !self.can_send_requests() {
             return Vec::new();
         }
-        if self.sessions.deleted.contains(session_id)
-            || self.sessions.pending_deletes.contains(session_id)
-        {
+        // The known/list check below is the real gate; a deleted session has
+        // neither, so it is refused there without a tombstone set.
+        if self.sessions.pending_deletes.contains(session_id) {
             return Vec::new();
         }
         if !self.sessions.known.contains_key(session_id) {
@@ -260,9 +267,9 @@ impl App {
         &mut self,
         session_id: &SessionId,
     ) -> Option<AppCommand> {
-        if self.sessions.deleted.contains(session_id)
-            || self.sessions.pending_deletes.contains(session_id)
-        {
+        // A presentation refresh is only meaningful for a known session; the
+        // view lookup below refuses an absent/deleted one.
+        if self.sessions.pending_deletes.contains(session_id) {
             return None;
         }
         if self.reload.is_some() {
@@ -297,9 +304,7 @@ impl App {
     }
 
     pub(super) fn activate_existing_session(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
-        if self.sessions.deleted.contains(session_id)
-            || self.sessions.pending_deletes.contains(session_id)
-        {
+        if self.session_absent(session_id) || self.sessions.pending_deletes.contains(session_id) {
             return Vec::new();
         }
         if self.sessions.active.as_ref() != Some(session_id) {
@@ -730,6 +735,27 @@ impl App {
         command
     }
 
+    /// Whether a session was deleted locally and no authoritative catalog list
+    /// has confirmed the deletion yet. The entry lives only from the delete
+    /// ACK to the next applied current-generation `session.list`; the stale
+    /// list protection itself is the catalog generation, not this map
+    /// (spec §3.5).
+    pub(crate) fn session_pending_deletion(&self, session_id: &str) -> bool {
+        self.catalogs.pending_deletions.contains_key(session_id)
+    }
+
+    /// Whether the session is no longer part of this process's catalog: it has
+    /// neither a view nor a list row. This is the durable "gone" fact; there
+    /// is no permanent tombstone set to keep in sync (spec §3.5).
+    pub(crate) fn session_absent(&self, session_id: &str) -> bool {
+        !self.sessions.known.contains_key(session_id)
+            && !self
+                .sessions
+                .list
+                .iter()
+                .any(|session| session.session_id == session_id)
+    }
+
     /// Whether a session-list response may be applied: it must have been
     /// issued at the current catalog generation. A stale response is dropped
     /// and its caller re-issues a fresh list request.
@@ -796,9 +822,10 @@ impl App {
         if self.has_pending_lifecycle_request() {
             return Vec::new();
         }
-        if self.sessions.deleted.contains(session_id)
-            || self.sessions.pending_deletes.contains(session_id)
-        {
+        // Opening is decided by the Agent: a deleted session has no catalog
+        // row to select, and the backend rejects a stale open with
+        // session_not_found rather than this TUI keeping a tombstone set.
+        if self.sessions.pending_deletes.contains(session_id) {
             return Vec::new();
         }
         if self.pending_open_or_history(session_id)
@@ -1033,7 +1060,7 @@ impl App {
         session_id: &SessionId,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
-        if self.sessions.deleted.contains(session_id) {
+        if self.session_pending_deletion(session_id) {
             return Vec::new();
         }
         match response.parse_close() {
@@ -1098,7 +1125,7 @@ impl App {
         session_id: &SessionId,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
-        if self.sessions.deleted.contains(session_id) {
+        if self.session_pending_deletion(session_id) {
             return Vec::new();
         }
         match response.parse_session_state() {
@@ -1186,7 +1213,7 @@ impl App {
         if self.has_pending_lifecycle_request() {
             return Vec::new();
         }
-        if self.sessions.deleted.contains(session_id)
+        if self.session_absent(session_id)
             || self.sessions.pending_deletes.contains(session_id)
             || self.pending_requests.values().any(|request| {
                 matches!(request, RequestKind::DeleteSession { session_id: pending } if pending == session_id)
@@ -1255,7 +1282,7 @@ impl App {
         session_id: &SessionId,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
-        if self.sessions.deleted.contains(session_id) {
+        if self.session_pending_deletion(session_id) {
             return Vec::new();
         }
         match response.parse_delete() {
@@ -1266,11 +1293,18 @@ impl App {
                 self.mouse_down = None;
                 self.panel_click = None;
                 self.sessions.pending_deletes.remove(session_id);
-                self.sessions.deleted.insert(session_id.clone());
                 self.sessions.closed.remove(session_id);
                 self.sessions.known.remove(session_id);
                 self.sessions.list.retain(|s| &s.session_id != session_id);
+                // The catalog generation is the durable deletion record: any
+                // list response issued before this point is stale. The
+                // bounded deletion window below additionally gates late
+                // lifecycle events until the next current list confirms the
+                // deletion; it is cleared then, not kept forever.
                 self.bump_session_list_generation();
+                self.catalogs
+                    .pending_deletions
+                    .insert(session_id.clone(), self.catalogs.session_list_generation);
                 if self.sessions.active.as_deref() == Some(session_id.as_str()) {
                     ui_actions::cancel_scrollbar_drag(self);
                     ui_actions::clear_selection(self);
@@ -1316,9 +1350,9 @@ impl App {
         if !self.can_send_requests() {
             return Vec::new();
         }
-        if self.sessions.deleted.contains(&session_id)
-            || self.sessions.pending_deletes.contains(&session_id)
-        {
+        // This response creates the view (session.create/open), so an absent
+        // session is the normal case; a deleted session's request was purged.
+        if self.sessions.pending_deletes.contains(&session_id) {
             return Vec::new();
         }
         let session = match response.parse_session() {
@@ -1441,6 +1475,9 @@ impl App {
             visible.push(session);
         }
         self.sessions.list = visible;
+        // A current-generation list is the authoritative confirmation: the
+        // bounded deletion window opened by the delete ACK is over.
+        self.catalogs.pending_deletions.clear();
         self.reconcile_session_selection(true);
         if let Some(state) = self.session_selector_state_mut() {
             state.error = None;
@@ -1453,9 +1490,9 @@ impl App {
         session_id: SessionId,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
-        if self.sessions.deleted.contains(&session_id)
-            || self.sessions.pending_deletes.contains(&session_id)
-        {
+        // The rename ACK either updates a known view or inserts one from the
+        // authoritative metadata; a deleted session's request was purged.
+        if self.sessions.pending_deletes.contains(&session_id) {
             return Vec::new();
         }
         let parsed = response.parse_session_rename();
@@ -1525,9 +1562,9 @@ impl App {
         previous_retired_loop: Option<TurnRef>,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
-        if self.sessions.deleted.contains(&session_id)
-            || self.sessions.pending_deletes.contains(&session_id)
-        {
+        // The open ACK is the normal way a view appears; a delete purged this
+        // request id, so it cannot resurrect a deleted session.
+        if self.sessions.pending_deletes.contains(&session_id) {
             return Vec::new();
         }
         let parsed = response.parse_session();
@@ -1642,7 +1679,7 @@ impl App {
         query: u64,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
-        if self.sessions.deleted.contains(session_id)
+        if self.session_pending_deletion(session_id)
             || self.sessions.pending_deletes.contains(session_id)
         {
             return Vec::new();
@@ -1699,7 +1736,7 @@ impl App {
         session_id: &SessionId,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
-        if self.sessions.deleted.contains(session_id)
+        if self.session_pending_deletion(session_id)
             || self.sessions.pending_deletes.contains(session_id)
         {
             return Vec::new();
@@ -1881,7 +1918,7 @@ impl App {
         source: SessionStateSource,
     ) -> Vec<AppCommand> {
         let from_event = source == SessionStateSource::Notification;
-        if self.sessions.deleted.contains(&state.session_id)
+        if self.session_pending_deletion(&state.session_id)
             || self.sessions.pending_deletes.contains(&state.session_id)
         {
             return Vec::new();

@@ -534,8 +534,21 @@ impl App {
     }
 
     /// Handles a request whose synchronous admission found the FIFO full. The
-    /// id is revoked (it was never written), the input is kept, and one retry
-    /// intent is retained for the exact target (spec §5.2).
+    /// id is revoked (it was never written) and nothing is replayed from the
+    /// wire.
+    ///
+    /// - A control intent that was never written (`turn.cancel`,
+    ///   `session.compact.cancel`) is retained by exact target and re-emitted
+    ///   when the FIFO admits it; a cancel is never abandoned because the
+    ///   queue stayed full (spec §5.2).
+    /// - A settlement read that was never written (`turn.wait`,
+    ///   `turn.result`) is retained the same way; if the retention bound is
+    ///   reached it falls back to the result-confirmation recovery path.
+    /// - An ordinary user intent (`turn.send`, `turn.steer`,
+    ///   `session.update`) is never auto-retried: the input is restored and
+    ///   the UI reports Busy so the user decides whether to submit again.
+    /// - Read queries merge into the normal refresh path and are re-read
+    ///   through their generation, never through this queue.
     pub(super) fn on_queue_full(
         &mut self,
         request: OutgoingRequest,
@@ -545,30 +558,67 @@ impl App {
             return Vec::new();
         };
         self.free_query_slot(request.id);
-        let key = Self::retry_key(&kind);
-        let mut retry = false;
-        if let Some(key) = &key {
-            let attempts = self.retry_attempts.entry(key.clone()).or_insert(0);
-            *attempts = attempts.saturating_add(1);
-            retry = *attempts <= MAX_SEND_ATTEMPTS
-                && (self.pending_retries.len() < MAX_RPC_RETRIES
-                    || self.pending_retries.contains_key(key));
-            if !retry {
-                self.retry_attempts.remove(key);
+        let entry = RetryEntry { kind, request };
+        if Self::is_retained_intent(&entry.kind) {
+            let key = Self::retry_key(&entry.kind).expect("retained intents have a precise target");
+            let is_cancel = matches!(
+                entry.kind,
+                RequestKind::CancelTurn(_) | RequestKind::CompactCancel { .. }
+            );
+            if self.pending_retries.len() >= MAX_RPC_RETRIES
+                && !self.pending_retries.contains_key(&key)
+            {
+                // Make room without ever abandoning a cancel: drop the oldest
+                // settlement intent (recoverable through turn.result/state).
+                let victim = self
+                    .pending_retries
+                    .iter()
+                    .find(|(_, retained)| !Self::is_cancel_intent(&retained.kind))
+                    .map(|(key, _)| key.clone());
+                match victim {
+                    Some(victim) => {
+                        if let Some(older) = self.pending_retries.remove(&victim) {
+                            self.abandon_retry(older);
+                        }
+                    }
+                    None if !is_cancel => {
+                        // Only cancels are retained and this is a settlement
+                        // read: recover through the result read-back instead.
+                        self.abandon_retry(entry);
+                        return Vec::new();
+                    }
+                    None => {}
+                }
             }
-        }
-        if retry {
-            let key = key.expect("retry implies a precise target");
-            self.pending_retries
-                .insert(key, RetryEntry { kind, request });
+            self.pending_retries.insert(key, entry);
             self.notice(
                 NoticeLevel::Info,
-                "send queue is busy; the request stays pending locally",
+                "the send queue is busy; the cancel stays pending until it is admitted",
             );
             return Vec::new();
         }
-        self.abandon_retry(RetryEntry { kind, request });
+        self.abandon_retry(entry);
         Vec::new()
+    }
+
+    /// A control intent whose loss would strand real work, or a settlement read
+    /// whose loss would stall a live turn. Only these may keep waiting for
+    /// transport space after a refusal; ordinary sends are the user's call.
+    fn is_retained_intent(kind: &RequestKind) -> bool {
+        matches!(
+            kind,
+            RequestKind::CancelTurn(_)
+                | RequestKind::CompactCancel { .. }
+                | RequestKind::WaitTurn(_)
+                | RequestKind::TurnResult(_)
+        )
+    }
+
+    fn is_cancel_intent(kind: &RequestKind) -> bool {
+        matches!(
+            kind,
+            RequestKind::CancelTurn(_) | RequestKind::CompactCancel { .. }
+        )
     }
 
     /// One request that was refused admission for the last time: restore the
@@ -582,7 +632,7 @@ impl App {
                 self.restore_unsent_turn(&session_id, local_submission);
                 self.notice(
                     NoticeLevel::Warning,
-                    "turn.send was never admitted; the text is back in the editor",
+                    "the send queue is busy; the prompt stays in the editor and was not sent",
                 );
             }
             RequestKind::SteerTurn {
@@ -615,7 +665,7 @@ impl App {
                 }
                 self.notice(
                     NoticeLevel::Warning,
-                    "steer was never admitted; it stays in the paused queue",
+                    "the send queue is busy; the steer stays in the paused queue and was not sent",
                 );
             }
             RequestKind::UpdateSession { session_id, .. } => {
@@ -624,7 +674,19 @@ impl App {
                 }
                 self.notice(
                     NoticeLevel::Warning,
-                    "model/reasoning update was never admitted; nothing changed",
+                    "the send queue is busy; the model/reasoning update was not sent",
+                );
+            }
+            RequestKind::WaitTurn(turn) | RequestKind::TurnResult(turn) => {
+                // A settlement read that was never written. Mark the result as
+                // needing an authoritative read and let the recovery path
+                // (`turn.result`) settle it; never fabricate a registered wait.
+                if let Some(view) = self.sessions.known.get_mut(&turn.session_id) {
+                    view.result_confirmation = ResultConfirmation::NeedsRead;
+                }
+                self.notice(
+                    NoticeLevel::Warning,
+                    "the send queue is busy; the turn result will be read back instead",
                 );
             }
             RequestKind::History { session_id, .. }
@@ -2028,10 +2090,10 @@ impl App {
         };
         self.free_query_slot(id);
         if let Some(key) = Self::retry_key(&kind) {
-            self.retry_attempts.remove(&key);
+            self.pending_retries.remove(&key);
         }
         if Self::request_session_id(&kind)
-            .is_some_and(|session_id| self.sessions.deleted.contains(session_id))
+            .is_some_and(|session_id| self.session_pending_deletion(session_id))
         {
             return Vec::new();
         }

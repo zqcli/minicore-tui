@@ -15,9 +15,10 @@
 //!
 //! No blocking call happens in `App::update`, in draw, or in the RPC command
 //! dispatch: `run_commands` starts a job and returns. The clipboard adapter
-//! itself bounds the whole write+wait with one shared deadline and kills and
-//! joins its child (`src/clipboard.rs`), so `shutdown` never waits forever on
-//! a hung helper.
+//! bounds the whole write+wait with one shared deadline and kills the direct
+//! child (`src/clipboard.rs`); the writer thread is detached on the deadline,
+//! so `shutdown` stays bounded even in the documented descendant-holds-the-
+//! pipe case (see the clipboard module docs for that residual risk).
 
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -298,7 +299,14 @@ mod tests {
             event,
             AppEvent::JobFinished(JobOutcome::Clipboard { revision: 1, .. })
         ));
-        jobs.reap_finished().await;
+        // The completion event is sent just before the worker returns, so
+        // reap until the finished handle is actually observable.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while jobs.has_in_flight() && Instant::now() < deadline {
+            jobs.reap_finished().await;
+            tokio::task::yield_now().await;
+        }
+        assert!(!jobs.has_in_flight(), "the finished job is reaped");
 
         assert_eq!(
             jobs.copy_with("ses_1", 3, "third".to_owned(), MockClipboard::default()),

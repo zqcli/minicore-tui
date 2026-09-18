@@ -33,6 +33,17 @@ use minicore_tui::state::{FoldOverride, ToolKey};
 use minicore_tui::theme::ThemeKind;
 use serde_json::json;
 
+/// A deleted session is absent from both the known views and the catalog
+/// list; the catalog generation, not a tombstone set, keeps it deleted.
+fn session_absent(app: &App, session_id: &str) -> bool {
+    !app.sessions.known.contains_key(session_id)
+        && !app
+            .sessions
+            .list
+            .iter()
+            .any(|session| session.session_id == session_id)
+}
+
 // Bounded harness deadlines. Under a default-parallel run (ten real Agent
 // processes spawned at once) spawn contention can stretch any single wait
 // well past a per-request window, so the official run is serial and these
@@ -1142,7 +1153,7 @@ fn e2e_session_panel_rename_and_delete_against_current_agent() {
         assert!(!app.pending_requests.values().any(|kind| {
             matches!(kind, RequestKind::DeleteSession { session_id: pending } if pending == &session_id)
         }));
-        assert!(!app.sessions.deleted.contains(&session_id));
+        assert!(!session_absent(&app, &session_id));
 
         // Re-enter the confirmation and explicitly choose Delete.
         dispatch(&mut process, &mut app, key(KeyCode::Delete))
@@ -1155,7 +1166,7 @@ fn e2e_session_panel_rename_and_delete_against_current_agent() {
             .await
             .unwrap();
         pump_until(&mut process, &mut app, |a| {
-            a.sessions.deleted.contains(&session_id) && !a.sessions.known.contains_key(&session_id)
+            session_absent(a, &session_id)
         })
         .await
         .unwrap();

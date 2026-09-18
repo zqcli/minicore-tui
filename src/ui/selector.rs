@@ -485,7 +485,7 @@ fn session_items<'a>(app: &'a App, state: &SessionSelectorState) -> Vec<&'a Sess
         .into_iter()
         .filter(|info| {
             !app.sessions.pending_deletes.contains(&info.session_id)
-                && !app.sessions.deleted.contains(&info.session_id)
+                && !app.session_absent(&info.session_id)
         })
         .collect()
 }

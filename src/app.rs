@@ -68,13 +68,9 @@ const MAX_RETAINED_TURN_RESULTS: usize = 32;
 /// (`turn.send`/`turn.wait`/`turn.result`/`session.compact`), leaving half of
 /// the Agent's 32-slot deferred pool for other clients (spec §5.3/§21).
 const MAX_DEFERRED_REQUESTS: usize = 16;
-/// Bound for coalesced admission-failure retries. One intent per precise
+/// Bound for coalesced admission-failure intents. One intent per precise
 /// target keeps the map naturally small; the cap only prevents pathology.
 const MAX_RPC_RETRIES: usize = 64;
-/// How often one refused request may be re-emitted before the app gives up
-/// and restores the user's input. Bounded so a permanently full FIFO cannot
-/// ping-pong forever on progress signals (spec §5.2).
-const MAX_SEND_ATTEMPTS: u8 = 2;
 
 /// How long a transient notice stays before `Tick` removes it (spec 33.2).
 const NOTICE_TTL: Duration = Duration::from_secs(5);
@@ -451,9 +447,6 @@ pub struct App {
     /// Catalog generation captured when each `session.list` request was
     /// issued; a response older than the current generation is discarded.
     session_list_requests: std::collections::BTreeMap<RequestId, u64>,
-    /// Refusal count per exact retry target, so retries are bounded and the
-    /// counter can be cleared when the request finally settles.
-    retry_attempts: std::collections::BTreeMap<RetryKey, u8>,
     /// Monotonic identity for the current selection, so a clipboard job that
     /// finishes after the selection changed does not show stale feedback.
     selection_revision: u64,
@@ -575,6 +568,7 @@ impl App {
                 next_reasoning: None,
                 default_workspace,
                 session_list_generation: 0,
+                pending_deletions: std::collections::BTreeMap::new(),
             },
             sessions: SessionsState::default(),
             notices: VecDeque::new(),
@@ -616,7 +610,6 @@ impl App {
             pending_requests: HashMap::new(),
             pending_retries: std::collections::BTreeMap::new(),
             session_list_requests: std::collections::BTreeMap::new(),
-            retry_attempts: std::collections::BTreeMap::new(),
             selection_revision: 0,
             queries: crate::app::queries::QuerySlots::new(),
             turn_results: HashMap::new(),
@@ -1322,7 +1315,7 @@ impl App {
 
     fn session_is_visible(&self, session_id: &str) -> bool {
         !self.sessions.pending_deletes.contains(session_id)
-            && !self.sessions.deleted.contains(session_id)
+            && !self.session_absent(session_id)
             && self
                 .sessions
                 .list
@@ -2313,9 +2306,7 @@ impl App {
         if self.has_pending_lifecycle_request() {
             return Vec::new();
         }
-        if self.sessions.deleted.contains(session_id)
-            || self.sessions.pending_deletes.contains(session_id)
-        {
+        if self.session_absent(session_id) || self.sessions.pending_deletes.contains(session_id) {
             return Vec::new();
         }
         let Some((draft, submitting)) =
@@ -3559,22 +3550,16 @@ impl App {
 
     /// Re-emits retained retry intents. Every emitted command carries a fresh
     /// pending registration; a retry that is refused again is simply stored
-    /// again by [`App::on_queue_full`].
+    /// again by [`App::on_queue_full`]. Only never-written control and
+    /// settlement intents are retained here, so re-emission is always
+    /// re-sending something the Agent never saw, never replaying a failure.
     fn drain_rpc_retries(&mut self) -> Vec<AppCommand> {
         if self.pending_retries.is_empty() {
             return Vec::new();
         }
         let entries = std::mem::take(&mut self.pending_retries);
         let mut commands = Vec::with_capacity(entries.len());
-        for (key, entry) in entries {
-            let attempts = self.retry_attempts.get(&key).copied().unwrap_or(0);
-            if attempts > MAX_SEND_ATTEMPTS {
-                // The FIFO stayed full for every attempt: stop retrying, tell
-                // the user, and put the input back where it belongs.
-                self.retry_attempts.remove(&key);
-                self.abandon_retry(entry);
-                continue;
-            }
+        for (_key, entry) in entries {
             self.pending_requests.insert(entry.request.id, entry.kind);
             commands.push(AppCommand::Rpc(entry.request));
         }
@@ -3899,7 +3884,7 @@ impl App {
         // does not list it (e.g. an unloaded session).
         if let Some(active) = self.sessions.active.clone() {
             if !sessions.iter().any(|session| session.session_id == active)
-                && !self.sessions.deleted.contains(&active)
+                && !self.session_absent(&active)
                 && !self.sessions.pending_deletes.contains(&active)
             {
                 if let Some(view) = self.sessions.known.get(&active) {
@@ -3908,6 +3893,7 @@ impl App {
             }
         }
         self.sessions.list = sessions;
+        self.catalogs.pending_deletions.clear();
         self.reconcile_session_selection(true);
 
         let commands = self.resume_uncalibrated_sessions();
@@ -4219,11 +4205,16 @@ impl App {
             }
         };
         if let Some(key) = Self::retry_key(&kind) {
-            self.retry_attempts.remove(&key);
+            self.pending_retries.remove(&key);
         }
         self.free_query_slot(response.id);
+        // A delete purges every pending request for the session, so a late
+        // response is normally dropped as an unknown request id. The bounded
+        // deletion window additionally rejects a response whose id was
+        // re-registered after the delete; the stale list protection itself is
+        // the catalog generation, not a permanent tombstone set.
         if Self::request_session_id(&kind)
-            .is_some_and(|session_id| self.sessions.deleted.contains(session_id))
+            .is_some_and(|session_id| self.session_pending_deletion(session_id))
         {
             return Vec::new();
         }
@@ -4304,6 +4295,9 @@ impl App {
                 match response.parse_sessions() {
                     Ok(result) => {
                         let sessions = result.sessions;
+                        // A current-generation list is the authoritative
+                        // confirmation: the bounded deletion window is over.
+                        self.catalogs.pending_deletions.clear();
                         self.sessions.list = sessions.clone();
                         for session in sessions {
                             let session_id = session.session_id.clone();
@@ -4444,13 +4438,13 @@ impl App {
             AgentEventWire::Unknown => None,
         };
         if event_session_id.is_some_and(|session_id| {
-            self.sessions.deleted.contains(session_id)
+            self.session_pending_deletion(session_id)
                 || self.sessions.pending_deletes.contains(session_id)
         }) {
             return Vec::new();
         }
         if let AgentEventWire::SessionOpened { data } = &event {
-            if self.sessions.deleted.contains(&data.session.session_id)
+            if self.session_pending_deletion(&data.session.session_id)
                 || self
                     .sessions
                     .pending_deletes
@@ -7206,7 +7200,7 @@ mod tests {
         };
         take_requests(respond(&mut app, &delete, json!({"ok": true})));
         assert!(!app.sessions.known.contains_key("ses_1"));
-        assert!(app.sessions.deleted.contains("ses_1"));
+        assert!(app.session_absent("ses_1"));
 
         let after_stale = take_requests(respond(
             &mut app,
@@ -7725,39 +7719,31 @@ mod tests {
     }
 
     #[test]
-    fn a_queue_full_send_retries_twice_then_restores_the_prompt() {
+    fn a_queue_full_send_restores_the_prompt_and_never_auto_retries() {
         let mut app = test_app();
         ready(&mut app);
         open_session(&mut app, "ses_1");
-        let mut request = take_requests(app.update(AppEvent::SubmitTurn {
+        let request = take_requests(app.update(AppEvent::SubmitTurn {
             session_id: "ses_1".to_owned(),
             text: "never admitted".to_owned(),
         }))
         .remove(0);
         assert_eq!(request.method, "turn.send");
-        // Initial refusal plus two bounded re-emissions, then the app stops.
-        for attempt in 0..3 {
-            let more = app.update(AppEvent::RpcQueueFull {
-                request: request.clone(),
-                class: SendClass::Normal,
-            });
-            assert!(
-                take_requests(more).is_empty(),
-                "a refusal never re-sends in the same reducer pass (attempt {attempt})"
-            );
-            if attempt < 2 {
-                let retried = take_requests(app.update(AppEvent::Tick));
-                assert_eq!(
-                    retried.len(),
-                    1,
-                    "exactly one bounded retry per progress signal"
-                );
-                request = retried[0].clone();
-                assert_eq!(request.method, "turn.send");
-            }
-        }
+        let more = app.update(AppEvent::RpcQueueFull {
+            request: request.clone(),
+            class: SendClass::Normal,
+        });
+        assert!(
+            take_requests(more).is_empty(),
+            "a refusal never re-sends in the same reducer pass"
+        );
+        // Ordinary sends keep the user's input and report Busy; they are never
+        // re-emitted automatically on the next progress signal.
+        assert!(
+            take_requests(app.update(AppEvent::Tick)).is_empty(),
+            "turn.send is not re-emitted automatically"
+        );
         assert!(app.pending_retries.is_empty());
-        assert!(app.retry_attempts.is_empty());
         let view = &app.sessions.known["ses_1"];
         assert!(
             view.live.is_none(),
@@ -7771,8 +7757,59 @@ mod tests {
         assert!(
             app.notices()
                 .iter()
-                .any(|notice| notice.text.contains("never admitted")),
-            "the user is told the send was never admitted"
+                .any(|notice| notice.text.contains("busy")),
+            "the user is told the send path is busy"
+        );
+    }
+
+    #[test]
+    fn a_refused_cancel_is_retained_until_it_is_admitted() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+        let turn = make_turn("ses_1", "loop_1");
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        view.state = Some(
+            serde_json::from_value(running_state_json("ses_1", "loop_1")).expect("running state"),
+        );
+        view.live = Some(LiveLoop {
+            reference: Some(turn.clone()),
+            local_submission: LocalSubmissionId(1),
+            user_text: "prompt".into(),
+            requests: vec![],
+            pending_steers: vec![],
+            waiting: false,
+            cancel_requested: false,
+            event_gap: false,
+            last_result: None,
+        });
+        let mut request = take_requests(app.update(AppEvent::CancelTurn {
+            session_id: "ses_1".to_owned(),
+        }))
+        .remove(0);
+        assert_eq!(request.method, "turn.cancel");
+        // The FIFO stays full for many progress signals; the cancel must never
+        // be abandoned, and no more than one intent per target is retained.
+        for _ in 0..8 {
+            app.update(AppEvent::RpcQueueFull {
+                request: request.clone(),
+                class: SendClass::Control,
+            });
+            assert_eq!(
+                app.pending_retries.len(),
+                1,
+                "the cancel is retained while the FIFO is full"
+            );
+            let retried = take_requests(app.update(AppEvent::Tick));
+            assert_eq!(retried.len(), 1, "the retained cancel is re-emitted");
+            assert_eq!(retried[0].method, "turn.cancel");
+            request = retried[0].clone();
+        }
+        assert!(
+            app.sessions.known["ses_1"]
+                .live
+                .as_ref()
+                .is_some_and(|live| live.cancel_requested)
         );
     }
 
@@ -7828,17 +7865,16 @@ mod tests {
             last_result: None,
         });
         app.steer_turn(&"ses_1".to_owned(), "steer text".to_owned());
-        let mut request = take_requests(app.update(AppEvent::Tick)).remove(0);
+        let request = take_requests(app.update(AppEvent::Tick)).remove(0);
         assert_eq!(request.method, "turn.steer");
-        for attempt in 0..3 {
-            app.update(AppEvent::RpcQueueFull {
-                request: request.clone(),
-                class: SendClass::Normal,
-            });
-            if attempt < 2 {
-                request = take_requests(app.update(AppEvent::Tick)).remove(0);
-            }
-        }
+        app.update(AppEvent::RpcQueueFull {
+            request: request.clone(),
+            class: SendClass::Normal,
+        });
+        assert!(
+            take_requests(app.update(AppEvent::Tick)).is_empty(),
+            "a refused steer is never auto-retried"
+        );
         let view = &app.sessions.known["ses_1"];
         assert!(
             view.steer_queue_paused,
@@ -7851,11 +7887,11 @@ mod tests {
             view.steer_queue[0].state,
             crate::state::turn::SteerQueueState::Unsent
         );
-        assert!(
-            app.notices()
-                .iter()
-                .any(|notice| notice.text.contains("steer was never admitted"))
-        );
+        assert!(app.notices().iter().any(|notice| {
+            notice
+                .text
+                .contains("the steer stays in the paused queue and was not sent")
+        }));
     }
 
     #[test]

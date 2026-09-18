@@ -1,5 +1,6 @@
 //! Discovery catalogs and the defaults for a future new session (spec 12.3).
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::protocol::{ModelInfo, ProfileInfo, Reasoning};
@@ -21,6 +22,13 @@ pub struct CatalogState {
     /// discarded instead of resurrecting an old title or a deleted row
     /// (spec §3.5).
     pub session_list_generation: u64,
+    /// Sessions deleted since the last authoritative `session.list` response.
+    /// The generation in the value is the catalog generation at deletion; the
+    /// whole map is cleared when a current-generation list is applied, so this
+    /// is a bounded window tied to the catalog generation, not a permanent
+    /// tombstone set. It gates only late lifecycle *events* (responses are
+    /// already retired from `pending_requests` by the delete).
+    pub pending_deletions: BTreeMap<String, u64>,
 }
 
 impl CatalogState {
