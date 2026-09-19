@@ -30,14 +30,14 @@ impl Drop for InstallDuringUnwind {
     }
 }
 
-/// Runs the real enter/restore round trip. Skipped (passes) when stdin is
-/// not a terminal — which is the normal `cargo test` case — and effectuated
-/// when invoked from a real terminal with `cargo test --ignored`.
+/// Runs the real enter/restore round trip. The remote PTY harness sets
+/// `MINICORE_TUI_REQUIRE_PTY=1`, turning an accidental pipe invocation into a
+/// failure instead of a passing skip. An ordinary non-TTY ignored invocation
+/// remains a documented no-op for developers.
 #[test]
 #[ignore = "requires a real terminal: run with `cargo test --ignored` from a TTY"]
 fn real_pty_enter_and_restore_round_trip() {
-    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        eprintln!("terminal_restore: stdin/stdout are not a TTY; skipping the PTY round trip");
+    if !require_pty() {
         return;
     }
     let mut guard = TerminalGuard::enter().expect("enter the alternate screen");
@@ -55,8 +55,7 @@ fn real_pty_enter_and_restore_round_trip() {
 #[test]
 #[ignore = "requires a real terminal: run with cargo test --ignored from a TTY"]
 fn real_pty_editor_suspend_and_resume_round_trip() {
-    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        eprintln!("terminal_restore: stdin/stdout are not a TTY; skipping suspend round trip");
+    if !require_pty() {
         return;
     }
     let mut guard = TerminalGuard::enter().expect("enter the alternate screen");
@@ -65,6 +64,83 @@ fn real_pty_editor_suspend_and_resume_round_trip() {
     guard.resume().expect("resume the terminal after editor");
     assert!(!guard.is_suspended());
     guard.restore().expect("restore the terminal");
+}
+
+/// Checks the OS raw-mode bit around both editor transitions. This is a real
+/// PTY observation; TestBackend and ANSI byte tests cannot establish it.
+#[test]
+#[ignore = "requires a real terminal: run with cargo test --ignored from a TTY"]
+fn real_pty_raw_mode_is_restored_across_suspend_and_exit() {
+    if !require_pty() {
+        return;
+    }
+    assert!(!crossterm::terminal::is_raw_mode_enabled().expect("read initial raw mode"));
+    let mut guard = TerminalGuard::enter().expect("enter the alternate screen");
+    assert!(crossterm::terminal::is_raw_mode_enabled().expect("raw mode after enter"));
+    guard.suspend().expect("suspend the terminal");
+    assert!(!crossterm::terminal::is_raw_mode_enabled().expect("raw mode after suspend"));
+    guard.resume().expect("resume the terminal");
+    assert!(crossterm::terminal::is_raw_mode_enabled().expect("raw mode after resume"));
+    guard.restore().expect("restore the terminal");
+    assert!(!crossterm::terminal::is_raw_mode_enabled().expect("raw mode after restore"));
+}
+
+/// A Python PTY driver injects a normal key, changes the slave window size,
+/// then injects Ctrl-C. Crossterm must deliver all three observations while
+/// raw mode is active; the test disables raw mode before making assertions so
+/// a failed assertion cannot leave the driver terminal in raw mode.
+#[test]
+#[ignore = "requires a PTY driver: run the exact test with Python PTY tooling"]
+fn real_pty_delivers_input_resize_and_shutdown_signal() {
+    if !require_pty() {
+        return;
+    }
+    crossterm::terminal::enable_raw_mode().expect("enable raw mode for input test");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut saw_input = false;
+    let mut saw_resize = false;
+    let mut saw_shutdown = false;
+    while Instant::now() < deadline && !(saw_input && saw_resize && saw_shutdown) {
+        if !crossterm::event::poll(Duration::from_millis(100)).expect("poll PTY input") {
+            continue;
+        }
+        match crossterm::event::read().expect("read PTY input") {
+            crossterm::event::Event::Key(key)
+                if key.code == crossterm::event::KeyCode::Char('x')
+                    && key.modifiers.is_empty() =>
+            {
+                saw_input = true;
+            }
+            crossterm::event::Event::Key(key)
+                if key.code == crossterm::event::KeyCode::Char('c')
+                    && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                saw_shutdown = true;
+            }
+            crossterm::event::Event::Resize(width, height) if width > 0 && height > 0 => {
+                saw_resize = true;
+            }
+            _ => {}
+        }
+    }
+    crossterm::terminal::disable_raw_mode().expect("disable raw mode after input test");
+    assert!(saw_input, "PTY key input was not delivered");
+    assert!(saw_resize, "PTY resize was not delivered");
+    assert!(saw_shutdown, "PTY Ctrl-C shutdown input was not delivered");
+}
+
+/// Runs the panic child with inherited PTY file descriptors. The external
+/// harness checks the captured bytes for the unflushed marker and runs a
+/// post-child `stty` probe, so this is distinct from the pipe-based panic
+/// regression above.
+#[test]
+#[ignore = "requires a real PTY: run the exact test with script/Python PTY tooling"]
+fn real_pty_panic_child_restores_terminal_before_exit() {
+    if !require_pty() {
+        return;
+    }
+    let status = run_inherited_child("child_test", "panic");
+    assert_normal_panic(status);
 }
 
 /// The production order contract as a reference test: the documented restore
@@ -121,6 +197,10 @@ fn child_test() {
     let mut terminal = if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
         Some(TerminalGuard::enter().expect("enter child terminal"))
     } else {
+        assert!(
+            env::var_os("MINICORE_TUI_REQUIRE_PTY").is_none(),
+            "panic PTY child was not attached to a terminal"
+        );
         None
     };
     if let Some(guard) = terminal.as_mut() {
@@ -169,6 +249,17 @@ fn panic_hook_drop_child() {
     let current = panic::take_hook();
     drop(current);
     panic::set_hook(harness_hook);
+}
+
+fn require_pty() -> bool {
+    let is_pty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    if !is_pty && env::var_os("MINICORE_TUI_REQUIRE_PTY").is_some() {
+        panic!("terminal_restore requires stdin and stdout to be attached to a PTY");
+    }
+    if !is_pty {
+        eprintln!("terminal_restore: stdin/stdout are not a TTY; skipping the PTY check");
+    }
+    is_pty
 }
 
 // Native test capture must never contain this deliberately unflushed marker.
@@ -230,6 +321,31 @@ fn run_child(test_name: &str, mode: &str, capture_output: bool) -> ChildResult {
     let mut output = join_reader(stdout);
     output.extend(join_reader(stderr));
     ChildResult { status, output }
+}
+
+fn run_inherited_child(test_name: &str, mode: &str) -> ExitStatus {
+    let executable = env::current_exe().expect("terminal test executable");
+    let mut child = Command::new(executable)
+        .args(["--exact", test_name, "--nocapture"])
+        .env(CHILD_MODE, mode)
+        .env("MINICORE_TUI_REQUIRE_PTY", "1")
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn inherited-PTY panic child");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match child.try_wait().expect("poll inherited-PTY panic child") {
+            Some(status) => return status,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("inherited-PTY panic child exceeded 10-second timeout");
+            }
+            None => thread::sleep(Duration::from_millis(10)),
+        }
+    }
 }
 
 fn join_reader(reader: Option<thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {

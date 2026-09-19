@@ -23,10 +23,13 @@
 //!   helper. Do not cite it as the production frame cost.
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use minicore_tui::clipboard::ClipboardPort;
 use minicore_tui::app::{App, ConnectionState};
-use minicore_tui::event::{AppEvent, RpcEvent};
-use minicore_tui::jobs::LocalJobs;
+use minicore_tui::event::{AppEvent, JobOutcome, RpcEvent};
+use minicore_tui::jobs::{CopyAdmission, LocalJobs};
 use minicore_tui::protocol::{IncomingFrame, RpcNotification, TurnRef};
 use minicore_tui::state::session::SessionView;
 use minicore_tui::state::transcript::{AssistantBlock, AssistantPart, TranscriptBlock};
@@ -34,6 +37,189 @@ use minicore_tui::ui::transcript::{all_lines, prepare_conversation, total_lines}
 use serde_json::json;
 
 const WIDTH: u16 = 79;
+
+/// Deterministic migration gate for the editor budget. This uses the real
+/// App terminal-input path and the real Composer counters, but deliberately
+/// makes no wall-clock claim.
+#[test]
+fn refactor_migration_256k_draft_edit_is_join_free_and_bounded() {
+    minicore_tui::perf::reset();
+    let mut app = App::new(PathBuf::from("/project"));
+    let payload = "x".repeat(minicore_tui::state::composer::MAX_COMPOSER_BYTES - 4096);
+    app.update(AppEvent::Terminal(crossterm::event::Event::Paste(payload)));
+    let before = minicore_tui::perf::snapshot();
+    for _ in 0..2048 {
+        app.update(AppEvent::Terminal(crossterm::event::Event::Key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('a'),
+                crossterm::event::KeyModifiers::empty(),
+            ),
+        )));
+    }
+    let after = minicore_tui::perf::snapshot();
+    assert_eq!(
+        after.composer_full_joins - before.composer_full_joins,
+        0,
+        "ordinary input after a large paste must not join the whole draft"
+    );
+    assert_eq!(
+        app.composer.byte_len(),
+        minicore_tui::state::composer::MAX_COMPOSER_BYTES - 2048,
+        "cached draft length must track input deltas"
+    );
+    assert!(
+        app.composer.retained_bytes() <= minicore_tui::limits::COMPOSER_ALL_DRAFTS_BYTES,
+        "retained draft capacity estimate must stay inside the all-drafts budget"
+    );
+}
+
+/// Release-only timing probe for the same production App input path as the
+/// deterministic gate above. Its P95 is evidence for local edit processing on
+/// the fixed builder, not terminal input-to-frame latency.
+#[test]
+#[ignore = "Spec 25 Release timing probe; run with --release --ignored --nocapture"]
+fn measure_release_256k_draft_edit_p95() {
+    minicore_tui::perf::reset();
+    let mut app = App::new(PathBuf::from("/project"));
+    let payload = "x".repeat(minicore_tui::state::composer::MAX_COMPOSER_BYTES - 8192);
+    app.update(AppEvent::Terminal(crossterm::event::Event::Paste(payload)));
+    let joins_before_edits = minicore_tui::perf::snapshot().composer_full_joins;
+    let mut samples = Vec::with_capacity(4096);
+    for _ in 0..4096 {
+        let started = Instant::now();
+        app.update(AppEvent::Terminal(crossterm::event::Event::Key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('a'),
+                crossterm::event::KeyModifiers::empty(),
+            ),
+        )));
+        samples.push(started.elapsed());
+    }
+    samples.sort_unstable();
+    let p95 = samples[(samples.len() * 95 / 100).saturating_sub(1)];
+    let p99 = samples[(samples.len() * 99 / 100).saturating_sub(1)];
+    let counters = minicore_tui::perf::snapshot();
+    println!(
+        "composer_256k_release: edits={} p95_us={} p99_us={} draft_bytes={} retained_capacity_estimate={} composer_full_joins_delta={}",
+        samples.len(),
+        p95.as_micros(),
+        p99.as_micros(),
+        app.composer.byte_len(),
+        app.composer.retained_bytes(),
+        counters.composer_full_joins - joins_before_edits,
+    );
+    assert!(p95 < Duration::from_millis(30), "draft edit P95 exceeded 30 ms");
+    assert_eq!(
+        counters.composer_full_joins - joins_before_edits,
+        0,
+        "ordinary edits after the paste must not join the full draft"
+    );
+}
+
+/// Same direct Composer workload as the independent 9d11ee6 baseline probe.
+/// The App reducer probe above remains the production-path measurement; this
+/// one exists only to make the before/after editor-container comparison
+/// apples-to-apples.
+#[test]
+#[ignore = "Spec 25 baseline-comparison probe; run with --release --ignored --nocapture"]
+fn measure_release_256k_composer_direct_p95() {
+    minicore_tui::perf::reset();
+    let mut composer = minicore_tui::state::composer::Composer::new();
+    let payload = "x".repeat(minicore_tui::state::composer::MAX_COMPOSER_BYTES - 8192);
+    assert!(composer.insert_paste(&payload));
+    let joins_before_edits = minicore_tui::perf::snapshot().composer_full_joins;
+    let mut samples = Vec::with_capacity(4096);
+    for _ in 0..4096 {
+        let started = Instant::now();
+        assert!(composer.type_char('a'));
+        samples.push(started.elapsed());
+    }
+    samples.sort_unstable();
+    let p95 = samples[(samples.len() * 95 / 100).saturating_sub(1)];
+    let p99 = samples[(samples.len() * 99 / 100).saturating_sub(1)];
+    let counters = minicore_tui::perf::snapshot();
+    println!(
+        "composer_direct_256k_release: edits={} p95_us={} p99_us={} draft_bytes={} retained_capacity_estimate={} composer_full_joins_delta={}",
+        samples.len(),
+        p95.as_micros(),
+        p99.as_micros(),
+        composer.byte_len(),
+        composer.retained_bytes(),
+        counters.composer_full_joins - joins_before_edits,
+    );
+    assert!(
+        p95 < Duration::from_millis(30),
+        "direct draft edit P95 exceeded 30 ms"
+    );
+    assert_eq!(
+        counters.composer_full_joins - joins_before_edits,
+        0,
+        "direct ordinary edits after the paste must not join the full draft"
+    );
+}
+
+#[derive(Clone)]
+struct BlockingClipboard {
+    release: Arc<tokio::sync::Notify>,
+}
+
+impl ClipboardPort for BlockingClipboard {
+    async fn set_text(&mut self, _text: &str) -> std::io::Result<()> {
+        self.release.notified().await;
+        Ok(())
+    }
+}
+
+/// The owned clipboard task remains pending while App input, scroll, resize,
+/// and an RPC-side stderr observation are reduced. This is a deterministic
+/// non-blocking ownership check; the real hung-helper timeout remains in the
+/// clipboard unit suite and the PTY harness.
+#[tokio::test]
+async fn clipboard_job_does_not_block_input_scroll_resize_or_rpc() {
+    let release = Arc::new(tokio::sync::Notify::new());
+    let mut jobs = LocalJobs::new();
+    assert!(matches!(
+        jobs.copy_with(
+            "ses_perf",
+            1,
+            "selected text".to_owned(),
+            BlockingClipboard {
+                release: Arc::clone(&release),
+            },
+        ),
+        CopyAdmission::Started(_)
+    ));
+
+    let mut app = app_with_history(200, 240);
+    let started = Instant::now();
+    app.update(AppEvent::Terminal(crossterm::event::Event::Key(
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::PageDown,
+            crossterm::event::KeyModifiers::empty(),
+        ),
+    )));
+    app.update(AppEvent::TerminalSize {
+        width: 120,
+        height: 40,
+    });
+    app.update(AppEvent::Rpc(RpcEvent::AgentStderr {
+        bytes: 12,
+        dropped: 0,
+    }));
+    assert!(
+        started.elapsed() < Duration::from_millis(100),
+        "input, scroll, resize, and RPC reduction must not wait on clipboard I/O"
+    );
+
+    release.notify_one();
+    let event = jobs.events().recv().await.expect("clipboard completion");
+    let outcome = match event {
+        AppEvent::JobFinished(outcome @ JobOutcome::Clipboard { .. }) => outcome,
+        other => panic!("unexpected local completion: {other:?}"),
+    };
+    jobs.reap_completion(&outcome).await;
+    jobs.shutdown().await;
+}
 
 /// Builds an active, loaded session whose durable transcript has `messages`
 /// assistant blocks, each a Markdown paragraph of roughly `bytes_per_message`.

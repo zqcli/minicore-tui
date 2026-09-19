@@ -34,6 +34,9 @@ pub struct PerfCounters {
     /// Tool lookups that fell back to scanning every block. Must stay zero in
     /// the projection path.
     pub tool_linear_scans: AtomicU64,
+    /// Number of actual ratatui `Terminal::draw` calls in the production loop.
+    /// This is opt-in scheduling evidence, not terminal latency.
+    pub draw_calls: AtomicU64,
     /// Bytes currently retained by the shared history window (budget input).
     pub history_body_bytes: AtomicU64,
 }
@@ -48,6 +51,7 @@ impl PerfCounters {
             composer_full_joins: AtomicU64::new(0),
             tool_index_lookups: AtomicU64::new(0),
             tool_linear_scans: AtomicU64::new(0),
+            draw_calls: AtomicU64::new(0),
             history_body_bytes: AtomicU64::new(0),
         }
     }
@@ -67,11 +71,12 @@ impl PerfCounters {
             composer_full_joins: self.composer_full_joins.load(Ordering::Relaxed),
             tool_index_lookups: self.tool_index_lookups.load(Ordering::Relaxed),
             tool_linear_scans: self.tool_linear_scans.load(Ordering::Relaxed),
+            draw_calls: self.draw_calls.load(Ordering::Relaxed),
             history_body_bytes: self.history_body_bytes.load(Ordering::Relaxed),
         }
     }
 
-    fn counters(&self) -> [&AtomicU64; 8] {
+    fn counters(&self) -> [&AtomicU64; 9] {
         [
             &self.layout_calls,
             &self.historical_text_bytes_cloned,
@@ -80,6 +85,7 @@ impl PerfCounters {
             &self.composer_full_joins,
             &self.tool_index_lookups,
             &self.tool_linear_scans,
+            &self.draw_calls,
             &self.history_body_bytes,
         ]
     }
@@ -95,6 +101,7 @@ pub struct PerfSnapshot {
     pub composer_full_joins: u64,
     pub tool_index_lookups: u64,
     pub tool_linear_scans: u64,
+    pub draw_calls: u64,
     pub history_body_bytes: u64,
 }
 
@@ -109,6 +116,7 @@ pub enum Counter {
     ComposerFullJoins,
     ToolIndexLookups,
     ToolLinearScans,
+    DrawCalls,
     HistoryBodyBytes,
 }
 
@@ -145,6 +153,7 @@ pub fn add(counter: Counter, delta: u64) {
             Counter::ComposerFullJoins => &perf.composer_full_joins,
             Counter::ToolIndexLookups => &perf.tool_index_lookups,
             Counter::ToolLinearScans => &perf.tool_linear_scans,
+            Counter::DrawCalls => &perf.draw_calls,
             Counter::HistoryBodyBytes => &perf.history_body_bytes,
         };
         target.fetch_add(delta, Ordering::Relaxed);
@@ -167,6 +176,7 @@ pub fn set(counter: Counter, value: u64) {
             Counter::ComposerFullJoins => &perf.composer_full_joins,
             Counter::ToolIndexLookups => &perf.tool_index_lookups,
             Counter::ToolLinearScans => &perf.tool_linear_scans,
+            Counter::DrawCalls => &perf.draw_calls,
             Counter::HistoryBodyBytes => &perf.history_body_bytes,
         };
         target.store(value, Ordering::Relaxed);

@@ -127,6 +127,19 @@ async fn main() -> ExitCode {
     // Reap the child on every path (idempotent after a clean shutdown).
     process.terminate().await;
     let restore_result = guard.restore();
+    if std::env::var_os("MINICORE_TUI_PERF_STATS").is_some() {
+        let counters = minicore_tui::perf::snapshot();
+        eprintln!(
+            "minicore-tui perf: draws={} layout_calls={} history_bytes_cloned={} viewport_rows={} viewport_bytes={} composer_full_joins={} retained_history_bytes={}",
+            counters.draw_calls,
+            counters.layout_calls,
+            counters.historical_text_bytes_cloned,
+            counters.viewport_rows_materialized,
+            counters.viewport_text_bytes_cloned,
+            counters.composer_full_joins,
+            counters.history_body_bytes,
+        );
+    }
     match (run_result, restore_result) {
         (Ok(()), Ok(())) => ExitCode::SUCCESS,
         (Err(error), _) => {
@@ -383,6 +396,7 @@ async fn run_fullscreen(
                 let size = guard.terminal_mut().size()?;
                 prepare_frame_with_jobs(&mut app, jobs, Rect::new(0, 0, size.width, size.height));
                 guard.terminal_mut().draw(|frame| ui::render(frame, &app))?;
+                minicore_tui::perf::count(minicore_tui::perf::Counter::DrawCalls);
                 last_render = Instant::now();
                 app.update(AppEvent::Rendered);
             }
@@ -402,6 +416,7 @@ async fn run_fullscreen(
             let size = guard.terminal_mut().size()?;
             prepare_frame_with_jobs(&mut app, jobs, Rect::new(0, 0, size.width, size.height));
             guard.terminal_mut().draw(|frame| ui::render(frame, &app))?;
+            minicore_tui::perf::count(minicore_tui::perf::Counter::DrawCalls);
             last_render = Instant::now();
             app.update(AppEvent::Rendered);
         }
