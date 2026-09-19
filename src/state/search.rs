@@ -374,11 +374,11 @@ impl<'a> ScanPlan<'a> {
         tool_call_id: Option<String>,
         text: &str,
     ) {
-        for offset in literal_match_offsets(text, self.needle) {
-            if self.collector.matches.len() >= MAX_SEARCH_MATCHES {
-                self.collector.truncated = true;
-                return;
-            }
+        let room = MAX_SEARCH_MATCHES.saturating_sub(self.collector.matches.len());
+        let mut offsets = literal_match_offsets_limited(text, self.needle, room.saturating_add(1));
+        let truncated = offsets.len() > room;
+        offsets.truncate(room);
+        for offset in offsets {
             self.collector.matches.push(SearchMatch {
                 index,
                 source,
@@ -390,6 +390,9 @@ impl<'a> ScanPlan<'a> {
                 source_offset: offset,
                 byte_range: offset..offset.saturating_add(self.needle.len()),
             });
+        }
+        if truncated {
+            self.collector.truncated = true;
         }
     }
 
@@ -597,7 +600,14 @@ impl<'a> ScanPlan<'a> {
 /// byte-window comparison without allocating; other needles compare lowercase
 /// characters at char boundaries. Never indexes a non-boundary byte.
 pub fn literal_match_offsets(hay: &str, needle: &str) -> Vec<usize> {
+    literal_match_offsets_limited(hay, needle, usize::MAX)
+}
+
+fn literal_match_offsets_limited(hay: &str, needle: &str, limit: usize) -> Vec<usize> {
     if needle.is_empty() || hay.is_empty() {
+        return Vec::new();
+    }
+    if limit == 0 {
         return Vec::new();
     }
     if needle.is_ascii() {
@@ -609,6 +619,7 @@ pub fn literal_match_offsets(hay: &str, needle: &str) -> Vec<usize> {
             .filter(|(offset, window)| {
                 window.eq_ignore_ascii_case(needle) && hay.is_char_boundary(*offset)
             })
+            .take(limit)
             .map(|(offset, _)| offset)
             .collect();
     }
@@ -616,6 +627,9 @@ pub fn literal_match_offsets(hay: &str, needle: &str) -> Vec<usize> {
     for (offset, _) in hay.char_indices() {
         if case_insensitive_starts_with(&hay[offset..], needle) {
             out.push(offset);
+            if out.len() == limit {
+                break;
+            }
         }
     }
     out
@@ -728,5 +742,22 @@ mod tests {
                 .label(SearchScope::Loaded)
                 .contains("loaded content")
         );
+    }
+
+    #[test]
+    fn repeated_matches_stop_at_the_search_budget_without_collecting_all_offsets() {
+        let text = "a".repeat(MAX_SEARCH_MATCHES + 10_000);
+        let mut plan = ScanPlan::new("a", false);
+        plan.push(
+            None,
+            SearchSource::AssistantText,
+            None,
+            None,
+            0,
+            None,
+            &text,
+        );
+        assert_eq!(plan.collector.matches.len(), MAX_SEARCH_MATCHES);
+        assert!(plan.collector.truncated);
     }
 }
