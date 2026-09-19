@@ -3,6 +3,7 @@
 //! which is the single entry point for state changes.
 
 pub mod catalog;
+pub mod changes;
 pub mod composer;
 pub mod export;
 pub mod panels;
