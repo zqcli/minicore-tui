@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 
 pub mod read;
 pub mod tool;
+pub mod workspace;
 
 pub use read::{
     Assembled, ChunkAssembler, EncodedHistoryItem, MAX_AUTO_ITEM_BYTES, RawHistoryItem, ReadChunk,

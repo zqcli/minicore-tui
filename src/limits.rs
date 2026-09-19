@@ -6,6 +6,11 @@
 //! mentioned in a comment is not a budget; the values below are the ones the
 //! accounting code uses.
 
+/// The fixed Agent's whole-file read bound; no unbounded preview accumulation.
+pub const FILE_PREVIEW_BYTES: usize = 512 * 1024;
+pub const WORKSPACE_CANDIDATE_BYTES: usize = 1024 * 1024;
+pub const WORKSPACE_CANDIDATES: usize = 500;
+
 /// Decoded history bodies retained across all sessions.
 pub const HISTORY_BODY_BYTES: usize = 32 * 1024 * 1024;
 /// Prepared conversation sections retained in the layout cache.

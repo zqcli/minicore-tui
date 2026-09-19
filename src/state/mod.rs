@@ -14,6 +14,7 @@ pub mod tool;
 pub mod transcript;
 pub mod turn;
 pub mod view;
+pub mod workspace;
 
 pub use catalog::CatalogState;
 pub use composer::{Composer, PasteRange};

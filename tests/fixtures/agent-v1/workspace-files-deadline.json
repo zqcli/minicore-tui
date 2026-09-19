@@ -19,10 +19,7 @@
     "size": 614400
    }
   ],
-  "next_cursor": {
-   "entry": 2,
-   "scope": "770c29138b20eb3a"
-  },
+  "next_cursor": null,
   "observed_at_unix_ms": 1789720709493,
   "scan_complete": false,
   "skipped_count": 0,
