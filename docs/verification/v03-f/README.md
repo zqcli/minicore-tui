@@ -103,17 +103,17 @@ The owned timeout/kill/wait test verifies the helper is gone and not a zombie.
 Rust 1.85 Release results on the fixed remote builder:
 
 ```text
-production App draft edit: 4096 edits, Rust 1.85 P95=659 us, P99=738 us,
+production App draft edit: 4096 edits, Rust 1.85 P95=700 us, P99=755 us,
   draft_bytes=258048, retained_capacity_estimate=5402688,
   composer_full_joins_delta=0
-same direct Composer workload: Rust 1.85 P95=209 us, P99=248 us,
+same direct Composer workload: Rust 1.85 P95=192 us, P99=220 us,
   draft_bytes=258048, retained_capacity_estimate=5402688,
   composer_full_joins_delta=0
-C2c 120x40: Rust 1.85 p95_us=3404, p99_us=3594, durable_rows=43870,
+C2c 120x40: Rust 1.85 p95_us=3571, p99_us=4367, durable_rows=43870,
   layout_calls=0, history_bytes_cloned=0, viewport_bytes=4396336
 full current performance ignored set: 9 passed, 0 failed
-stable repeat: App p95_us=728 p99_us=773; direct Composer p95_us=186 p99_us=220;
-  C2c p95_us=2955 p99_us=3824; full set 9 passed, 0 failed
+stable repeat: App p95_us=662 p99_us=676; direct Composer p95_us=238 p99_us=243;
+  C2c p95_us=3565 p99_us=4295; full set 9 passed, 0 failed
 ```
 
 The 256 KiB target is a local edit-processing target. These numbers are not

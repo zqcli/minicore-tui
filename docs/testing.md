@@ -31,8 +31,8 @@ Rust 1.85.0 and stable each reported **830 passed, 0 failed, 53 ignored**;
 Rust toolchains, and the Linux OS-PTY report passed the lifecycle, negative
 same-slave raw-mode, panic, input/resize, shutdown, idle, and production
 clipboard cases. The independent 0.2.8 direct Composer baseline measured P95 1492 µs
-and P99 1907 µs, versus current Rust 1.85 values of 209 µs and 248 µs (stable:
-186 µs and 220 µs). See
+and P99 1907 µs, versus current Rust 1.85 values of 192 µs and 220 µs (stable:
+238 µs and 243 µs). See
 [`verification/v03-f/README.md`](verification/v03-f/README.md) for scope and
 limitations.
 

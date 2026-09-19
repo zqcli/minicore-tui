@@ -17,19 +17,19 @@ provenance. The current source manifest is 375 entries with SHA-256
 1.85.0 and stable Release performance each passed **9/9**:
 
 ```text
-Rust 1.85 production App 256 KiB draft: edits=4096 p95_us=659 p99_us=738,
+Rust 1.85 production App 256 KiB draft: edits=4096 p95_us=700 p99_us=755,
   draft_bytes=258048 retained_capacity_estimate=5402688 composer_full_joins_delta=0
-Rust 1.85 same direct Composer workload: p95_us=209 p99_us=248,
+Rust 1.85 same direct Composer workload: p95_us=192 p99_us=220,
   draft_bytes=258048 retained_capacity_estimate=5402688 composer_full_joins_delta=0
 C2 stable layout: layout_calls_delta=0 history_bytes_cloned=0 viewport_rows=40000
-Rust 1.85 C2c 120x40: p95_us=3404 p99_us=3594 durable_rows=43870,
+Rust 1.85 C2c 120x40: p95_us=3571 p99_us=4367 durable_rows=43870,
   layout_calls=0 history_bytes_cloned=0 viewport_bytes=4396336
 C2b worker: durable_rows=51101 deltas=1000,
   layout_calls=0 history_bytes_cloned=0 viewport_bytes=2986911
-Rust stable production App 256 KiB draft: p95_us=728 p99_us=773;
-Rust stable direct Composer: p95_us=186 p99_us=220;
-Rust stable C2c 120x40: p95_us=2955 p99_us=3824.
-real NativeClipboard helper: 2003 ms (Rust 1.85), 2002 ms (stable), direct PID
+Rust stable production App 256 KiB draft: p95_us=662 p99_us=676;
+Rust stable direct Composer: p95_us=238 p99_us=243;
+Rust stable C2c 120x40: p95_us=3565 p99_us=4295.
+real NativeClipboard helper: 2004 ms (Rust 1.85), 2004 ms (stable), direct PID
 observed and reaped; run_commands/input/scroll/cancel kept progressing.
 ```
 
@@ -43,7 +43,7 @@ exact allocator/RSS accounting remains unclaimed.
 
 The independent remote 0.2.8 archive at `9d11ee6` recorded P95 1492 µs and
 P99 1907 µs for the same direct Composer workload, versus current Rust 1.85
-values of 209 µs and 248 µs (stable: 186 µs and 220 µs). This is a
+values of 192 µs and 220 µs (stable: 238 µs and 243 µs). This is a
 fixed-workload comparison, not a general
 application speedup or terminal input-to-frame claim; archive details and the
 hash are in [`verification/v03-f/README.md`](verification/v03-f/README.md).
