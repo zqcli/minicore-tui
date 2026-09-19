@@ -1,0 +1,11 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-tui-v03-refactor/tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 21.78s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-d056aeab2bc8c3fc)
+
+running 1 test
+test app::context_tests::explicit_refresh_targets_the_current_main_view_without_repinning_history ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 544 filtered out; finished in 0.00s
+
+    Checking minicore-tui v0.2.8 (/root/minicore-tui-v03-refactor/tui)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 9.06s

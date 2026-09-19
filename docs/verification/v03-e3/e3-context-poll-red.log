@@ -1,0 +1,27 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-tui-v03-refactor/tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 29.42s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-d056aeab2bc8c3fc)
+
+running 6 tests
+test app::context_tests::context_metadata_unknowns_do_not_become_zero_or_summary_prompt_text ... ok
+test app::context_tests::context_active_polls_obey_foreground_and_background_minimums ... FAILED
+test app::context_tests::context_cancel_is_exact_and_closing_does_not_cancel ... ok
+test app::context_tests::context_idle_and_closed_panel_stop_polling_and_late_only_releases_slot ... ok
+test app::context_tests::context_method_not_found_disables_only_unsupported_actions_without_fallback ... ok
+test app::context_tests::context_compact_outcomes_preserve_history_and_confirm_unknown_write ... ok
+
+failures:
+
+---- app::context_tests::context_active_polls_obey_foreground_and_background_minimums stdout ----
+
+thread 'app::context_tests::context_active_polls_obey_foreground_and_background_minimums' panicked at src/app/context_tests.rs:57:5:
+assertion failed: a.update(AppEvent::Tick).is_empty()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    app::context_tests::context_active_polls_obey_foreground_and_background_minimums
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 534 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

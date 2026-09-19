@@ -78,6 +78,43 @@ Letters, Enter and bracketed paste do not edit or submit the draft while the
 detail main area owns focus. `/cancel` from Editor still explicitly stops the
 current operation through the existing precise TurnRef/compaction path.
 
+## Changes / Diff And Context (v0.3 E3)
+
+`/diff` (or `/diff workspace`) opens workspace Changes. `/diff session` and
+`/diff turn <loop_id>` request native write/edit/apply_patch records for the
+explicit scope. Workspace attribution is unknown; Bash/user/external edits
+are not attributed to the Agent's native records. Workspace reads require a
+loaded Session; closed sessions require explicit Continue for workspace scope,
+never implicit open. Native session/Turn records remain read-only cold reads.
+
+| Main focus/key | Behavior |
+|---|---|
+| Changes list: Up/Down, Page keys, End, wheel/scrollbar | Move/select/scroll received records; no implicit fetch. |
+| Changes list: Enter | Open the selected record's single-file unified diff. |
+| Tab / Shift+Tab | List: workspace/session scope. Diff: cycle head_to_worktree, head_to_index, index_to_worktree; native tool_before_after is fixed. |
+| Ctrl+N | Read the exact next cursor when available; stale/limit/error never silently rescans. |
+| F5 or `/refresh` from Editor | Refresh the current list/comparison plus an explicit status observation, without reloading conversation history. |
+| Diff: Page/arrows/wheel/scrollbar, End | Scroll locally / follow the loaded tail. |
+| Diff: Ctrl+Shift+C | Copy the immutable layout snapshot's safe line-source text, not hunk/sign/line-number decoration or an applicable patch. Partial/stale/incomplete-line/display-limit data is labelled. |
+| Esc | Diff → list → conversation, preserving both positions, draft and conversation anchor. Never cancel a tool. |
+
+`/context` opens coverage, estimates, automatic preparation, manual operation
+and utility usage as separate sections. Unknown values are not zero and no
+summary body is attached or rendered. Tab selects Refresh / compact / exact
+operation cancel; Enter invokes the selected enabled action. F5 or `/refresh`
+reads context only. Manual compact uses the existing loaded/idle/settled/
+unblocked admission; cancellation never substitutes a guessed TurnRef.
+Page/arrows/End and wheel/scrollbar stay local. Closing the page stops its
+observation, not a B-owned operation or mandatory confirmation. Idle does not
+poll; active foreground/background operation reads are bounded by 500 ms/2 s.
+
+Both pages retain the existing Editor and one-line Footer. F6 switches focus;
+Editor keys keep their normal meanings. Dock/selection Esc precedes closing
+the main view, and only subsequent explicit cancel acts on execution.
+Footer git identity is an explicit last observation: unknown is `git?`, a
+confirmed non-repository has no branch suffix, and `seen:` / `stale:` plus
+detached state are distinct. It is not a live repository watcher.
+
 ## Workspace Files And Literal Search (v0.3 E2)
 
 Type `@` at a word boundary (start or after whitespace), or use `/files [path
@@ -202,7 +239,7 @@ Unknown commands and invalid arguments produce a local notice and no RPC.
 | `/copy [last\|message\|code\|selection]` | Copy loaded conversation content; default is the last completed reply. |
 | `/export [raw] [path]` | Open the explicit bounded export form. |
 | `/rename [title]` | Rename, or open its title dialog. |
-| `/compact` / `/context` | Start manual compaction / read the current context snapshot (not the deferred E3 Context detail page). |
+| `/compact` / `/context` | Start manual compaction / open the concrete Context main view over the existing operation owner. |
 | `/settings` / `/editor` | Local preferences / external editing of the current draft only. |
 | `/quit` | Request normal Agent shutdown. |
 

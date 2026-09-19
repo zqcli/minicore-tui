@@ -1,0 +1,22 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-tui-v03-refactor/tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 6.58s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-d056aeab2bc8c3fc)
+
+running 1 test
+test app::context_tests::context_confirmation_resumes_when_retired_read_releases_its_actual_slot ... FAILED
+
+failures:
+
+---- app::context_tests::context_confirmation_resumes_when_retired_read_releases_its_actual_slot stdout ----
+
+thread 'app::context_tests::context_confirmation_resumes_when_retired_read_releases_its_actual_slot' panicked at src/app/context_tests.rs:277:5:
+an occupied read must not cause a zero-deadline spin
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    app::context_tests::context_confirmation_resumes_when_retired_read_releases_its_actual_slot
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 543 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

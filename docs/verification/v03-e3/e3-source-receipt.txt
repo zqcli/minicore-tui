@@ -1,0 +1,30 @@
+E3 final build/test source receipt
+
+Local branch: refactor/v0.3-full-project
+Accepted E2 start: 95d3a27
+Final tested implementation: 733df37276a6475fb0af2f4f7ee362bea7fd0ba5
+Remote tested root: /root/minicore-tui-v03-refactor/tui
+Tracked build/test/snapshot inputs: 368
+Manifest: e3-source.sha256
+Manifest SHA-256: fa7ea80e11cf9aa642a5a7ea7352bb9d3620bf6b7863e6e29ec1294319be0f2d
+Remote successful checks: 368 (e3-source-check.log)
+Local successful checks: 368 (e3-local-source-check.log)
+
+Pinned Agent: 061743369459299e66be97bf97d2b27352a39914
+Pinned Runtime: 6cd2bdbc634437dea925495c61c7eb0be10ba171
+Fixed Agent executable SHA-256:
+661b32976ad6ae2fbe2b33411c7d0d082f9782da70745e4e4a6602c87fb7b273
+Backend source/Cargo manifests check successfully on local and remote trees.
+Backend working trees retain only the previously untracked specification files.
+No backend source, Store, executable, user model/context preference or dependency update.
+
+Final verification on Rust 1.85.0 and stable 1.97.1, independently:
+- fmt passed
+- 812 default tests passed; 0 failed; 43 ignored
+- Clippy and rustdoc warnings denied, passed
+- 34/34 real fixed-Agent E2Es passed
+Rust 1.85.0 Release performance: 6/6 passed.
+C2c synthetic P95/P99: 7999/8335 microseconds; no real terminal latency claim.
+
+The subsequent evidence/documentation-only commit does not change these inputs.
+No local Cargo build/test/format and no push. E3 parent review pending; F not started.

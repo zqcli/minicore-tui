@@ -1,0 +1,14 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-tui-v03-refactor/tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 27.41s
+     Running tests/changes.rs (target/debug/deps/changes-387bc90a998171c9)
+
+running 6 tests
+test diff_layout_copy_has_only_safe_source_not_labels_or_wraps ... ok
+test fragments_preserve_utf8_crlf_and_require_exact_identity_and_completion ... ok
+test opaque_references_and_cursors_are_not_decoded_or_rebuilt ... ok
+test no_repository_is_different_from_failed_observation_and_old_branch_is_stale ... ok
+test pinned_changes_and_status_schemas_additive_and_malformed ... ok
+test incomplete_line_is_not_silently_skipped_and_budget_is_real ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

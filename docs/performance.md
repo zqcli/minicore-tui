@@ -164,6 +164,39 @@ grapheme, and a real 140 KB UTF-8 line over multiple same-line pages. Real-Agent
 E2Es also use the owned file-layout worker. These are structural checks, not a
 new file-preview throughput or peak-RSS measurement.
 
+## E3 read-only review regression (final implementation `733df37`)
+
+On each remote Linux toolchain, Rust 1.85.0 and stable 1.97.1, the final default
+suite passed **812 tests, 0 failed, 43 ignored**, and all **34/34** serial fixed-
+Agent E2Es passed. The six ignored Release workloads also passed; see
+[the final E3 log](verification/v03-e3/e3-performance.log).
+
+```text
+c2b_worker: durable_rows=51101 deltas=1000 layout_calls=0
+            history_bytes_cloned=0 viewport_rows=40000 viewport_bytes=2986911
+c2c_120x40: p95_us=7999 p99_us=8335 durable_rows=43870
+            history_bytes_cloned=0 layout_calls=0 viewport_rows=40000
+            viewport_bytes=4396336 retained_layout_bytes_estimate=8035080
+```
+
+The unchanged structural probes still show zero stable-history layout calls
+and body copies. These single-run synthetic timings vary with scheduling;
+they are not an optimization claim over E2 or real terminal input latency.
+Changes uses the same two read slots and serialized layout worker, with a
+1 MiB diff body, 16,384 logical lines, 131,072 display rows, 500 records / 1 MiB
+record accounting and the existing 48 MiB layout cache budget. Footer status
+metadata has a separate global 1 MiB bound and is observed only explicitly.
+An extreme-width layout test checks the display-row/capacity bound; a real
+140 KB single-line diff checks raw fragment assembly through the worker.
+
+Context reuses B's query/operation owner. Idle/panel-only closed reads stop;
+actual operation/confirmation deadlines remain bounded at 500 ms foreground /
+2 s background. A retired-read regression checks there is no zero-duration
+timer spin while a slot is occupied and confirmation resumes on completion.
+The Agent harness now honors the application's actual timer deadlines rather
+than starving a quiet transport; no Provider deadline or assertion was relaxed.
+There is no fresh E3 peak-RSS, allocation benchmark or interactive latency claim.
+
 ## Not run / Remaining
 
 - decode-throughput and RSS measurements for the current serialized decode
@@ -173,8 +206,8 @@ new file-preview throughput or peak-RSS measurement.
 - exact allocation-capacity and RSS accounting, which is intentionally not
   attempted here;
 - terminal input-to-frame latency under real interactive streaming;
-- E3 Changes/Context main-area workflows, changes/diff E2Es, and interactive
-  iTerm2 editor validation; E2 workspace/files/search/preview now has the
-  automated evidence above. D2 search/copy/export and D3 editor/settings
+- interactive iTerm2/IME/clipboard/real-TTY validation and a real external
+  Provider; E2 workspace and E3 Changes/Context now have the automated evidence
+  above. D2 search/copy/export and D3 editor/settings
   measurements remain in `docs/refactor-acceptance.md`. macOS and Windows
   validation remains **Not run**; Linux validation passed on both toolchains.

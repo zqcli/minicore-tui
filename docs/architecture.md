@@ -326,7 +326,7 @@ are layout metadata, never part of backend offsets or copied decoration. The
 retained text/index capacity is included in the 48 MiB layout budget.
 
 An exhaustive `close_main_detail` in `app/panels.rs` dispatches Conversation,
-ToolDetail and FilePreview explicitly. A file may retain one results-Dock
+ToolDetail, FilePreview, Changes and Context explicitly. A file may retain one results-Dock
 return target, not a page stack. Focus and stale layout identities are separate
 from execution ownership. Closing a view neither cancels a loop nor opens a
 Session. Query input places its hardware caret using safe-text terminal cells.
@@ -338,6 +338,49 @@ never become locally opened filesystem roots. No regex/shell search, local
 ignore implementation, watcher, index, backend crate dependency or Store
 migration was added. New DTO/view Debug implementations report metadata only.
 
+## v0.3 E3 Changes, Status and Context
+
+`protocol/changes.rs` mirrors the pinned list/diff/status DTOs. The concrete
+`MainView::Changes` owns a bounded list and one selected diff, not an aggregate
+document or navigation graph. Workspace attribution stays unknown; session and
+exact Turn scopes describe native write/edit/apply_patch records. Original
+opaque refs/cursors and full ToolRefs are retained; equal paths never merge
+independent records. Workspace comparisons are explicit; native comparisons
+stay `tool_before_after`. Esc restores diff/list/conversation positions.
+
+Diff fragments validate hunk/line identity, raw byte offsets, completion and
+versions before publication. Stale retains the old body and requires explicit
+refresh. Central bounds are 500 records / 1 MiB record accounting, a 1 MiB diff
+body, 16,384 logical lines and 131,072 layout rows. Immutable coalesced source
+feeds the same serialized layout worker, and text/index capacity participates
+in the 48 MiB layout budget. Copy is safe line-source text from the immutable
+snapshot, without display decorations or soft-wrap newlines, not patch export.
+Incomplete/stale/display-limited copies are disclosed.
+
+`workspace.status` runs only on execution-session open and Changes open/refresh.
+The full DTO is decoded; cached Footer metadata has a global 1 MiB bound and
+does not duplicate its path-entry list. Footer identity comes from that explicit
+last observation, not presentation's older branch field. NoGit, unknown,
+incomplete, detached, seen and stale remain distinct. There is no TUI Git
+subprocess, repository write, watcher or renderer I/O.
+
+`MainView::Context` renders the existing Session context and B operation owners:
+coverage, estimated budgets, automatic preparation, manual results and separate
+utility usage. No summary body is displayed or attached. Manual admission,
+process-unique operation IDs, exact cancellation and unknown-write confirmation
+reuse B. Compacted/noop and main-view `/refresh` do not re-pin history.
+Panel-only reads stop on close/idle; actual B execution/settlement reads outlive
+the panel. An unmaintained active panel snapshot is discarded without cancelling
+the authoritative operation. Foreground/background deadlines are at least
+500 ms/2 s. Retired reads retain slots, do not spin a zero-duration timer, and
+resume due confirmation when they actually finish. Unsupported context/compact/
+cancel methods disable their corresponding entry; no alternate mutation is used.
+
+Both surfaces reuse the two shared read slots, deferred budget, finite focus
+and existing worker. There are no optional Tool→Changes or Diff→FilePreview
+links without a specific supported return contract. E3 verification and known
+unrun checks are in [verification/v03-e3/README.md](verification/v03-e3/README.md).
+
 ## Explicit Non-Goals
 
 This frontend intentionally does not implement:
@@ -347,8 +390,7 @@ This frontend intentionally does not implement:
 - approval UI, implicit cross-loop follow-up queues, or full PTY emulation;
 - MCP, plugins, skills, subagents, remote Agents, session forks/branches, or
   automatic reconnect/restart;
-- OSC52 copy or automatic content attachments; Changes/Context main-area pages
-  remain deferred to E3.
+- OSC52 copy, automatic content attachments, Git mutations, or patch export.
 
 Those omissions are backend and product-boundary decisions, not hidden
 fallbacks. The complete wire boundary is pinned in

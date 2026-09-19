@@ -53,12 +53,25 @@ The final E2 implementation is `d553e96` (start `285dbd1`; foundation `38d5367`,
 UI/E2E slice `e83a14b`, then Dock focus/caret correction). On **each** remote
 Linux toolchain, all required fmt/test/Clippy/rustdoc checks passed with warnings
 denied: **788 passed, 0 failed, 41 default ignored**, and **32/32 fixed-Agent
-E2Es**, including all previous 30. All six Release workloads passed. Current
-synthetic C2c P95/P99 is **7500/7951 μs**, with zero stable-history layout calls
+E2Es**, including all previous 30. All six Release workloads passed. E2's
+synthetic C2c P95/P99 was **7500/7951 μs**, with zero stable-history layout calls
 and zero history-body cloning. The **349-file** source-equality manifest,
 commands, final logs, scope and limitations are in
-[`verification/v03-e2/README.md`](verification/v03-e2/README.md). E2 is ready for
-parent review; E3 and full-project v0.3 completion are not claimed.
+[`verification/v03-e2/README.md`](verification/v03-e2/README.md). Parent E2 approval
+authorized the E3 work below.
+
+The final E3 implementation is `733df37` (start `95d3a27`; foundation `5a7c62b`,
+Changes/status `a2071ed`, Context/E2Es `5b597e1`, retired-read/timer correction
+`001a603`, then current-main-view refresh routing). Both remote toolchains
+passed fmt, tests, Clippy and rustdoc with warnings denied: **812 passed,
+0 failed, 43 default ignored**, plus **34/34 fixed-Agent E2Es**, including all
+previous 32. All six Release workloads passed. Final synthetic C2c P95/P99 is
+**7999/8335 μs**, with zero stable-history layout calls/body copies. The
+**368-file** local/remote source manifest, commands, logs, retained red tests,
+boundaries and remaining manual checks are in
+[`verification/v03-e3/README.md`](verification/v03-e3/README.md).
+**E3 parent review is pending. F overall validation has not started; this is
+not full-project v0.3 release completion.**
 
 | ID | Required behavior | Status | Evidence / remaining work |
 |---|---|---|---|
@@ -78,7 +91,7 @@ parent review; E3 and full-project v0.3 completion are not claimed.
 | REF-14 | Deferred send has visible preparation and no automatic resend | **Passed** | B2 reducer and Agent preparation E2E. |
 | REF-15 | Cancellation routes by exact operation ID or TurnRef | **Passed** | Operation ownership and cancellation tests. |
 | REF-16 | Manual compact outcomes and unknown-write fence | **Passed** | Four-result fixtures, reducer tests, and Agent E2E. |
-| REF-17 | Context estimate scope and separate utility usage | **Not run** | Stage B/E surface is not complete. |
+| REF-17 | Context estimate scope and separate utility usage | **Passed** | Concrete Context sections distinguish coverage, estimates, automatic/manual operations and utility usage; unknown is not zero. Nine-snapshot/metadata tests, all four compact outcomes, exact cancellation, unknown-write confirmation, deadlines/retirement and real-Agent Context reads pass. No summary body is displayed or attached. |
 | REF-18 | Config update applies to the next request without relabeling current Tool | **Passed** | Request-boundary and Agent E2E tests. |
 | REF-19 | Steer accepted/applied/recorded are distinct and loop-scoped | **Passed** | Bounded steer queue and serial Agent E2E. |
 | REF-20 | ACK cannot clear a newer editor revision | **Passed** | Editor-revision reducer tests. |
@@ -102,9 +115,9 @@ parent review; E3 and full-project v0.3 completion are not claimed.
 | REF-38 | `@file` remains a path reference and preview does not attach content | **Passed** | E2 quoted/control-safe path tokens, native insertion/undo and large-paste cursor tests; real-Agent files/preview workflows assert zero Provider calls and zero History items. |
 | REF-39 | workspace.files/search partial pages and cursor rules | **Passed** | Pinned DTO/deadline fixtures, 150 ms debounce, one in-flight/generation/opaque cursor tests, explicit partial/skipped/stop labels and 500-item/1 MiB limit; real-Agent three-page files and grep, scope/case and selected-line positioning. |
 | REF-40 | workspace.read fixed-revision paging and changed-data fencing | **Passed** | Exact next_range/if_revision, same-line UTF-8, CRLF/no-eol, changed stop, binary/too-large/unavailable, real-slot stale-response and shared-layout tests; real-Agent 140 KB line, mutation between pages, explicit refresh and source-safe copy. |
-| REF-41 | Changes workspace/tool origin and three comparisons | **Not run** | D/E. |
-| REF-42 | Opaque change references and stale/fragment behavior | **Not run** | D/E. |
-| REF-43 | Footer branches from explicit status and renderer performs no I/O | **Not run** | Stage E. |
+| REF-41 | Changes workspace/tool origin and three comparisons | **Passed** | Concrete list/single-file diff; workspace origin remains unknown, session/exact Turn scopes use native evidence. Real Git staged/unstaged/untracked/rename/delete/conflict/binary scenario exercises all three comparisons. Two native writes keep independent refs and ToolRefs; Bash/external edits are excluded from native records. |
+| REF-42 | Opaque change references and stale/fragment behavior | **Passed** | Original refs/cursors are forwarded; generation/epoch/slot/layout fencing, fragment offsets/completion, CRLF/no-eol, gap/duplicate/overflow/cap tests and immutable source-copy checks. Real-Agent list/diff mutation returns stale without concatenation; a 140 KB line spans multiple pages through the shared worker. |
+| REF-43 | Footer branches from explicit status and renderer performs no I/O | **Passed** | Full workspace.status DTO, explicit open/Changes/refresh observations, bounded metadata and presentation-branch precedence tests. Real NoGit/unborn/detached observations; failed/partial status never claims NoGit. Pure renderers, no production Git subprocess. |
 | REF-44 | Search coverage distinguishes unloaded/large from global no-match | **Passed** | `/search` scans a loaded snapshot or an explicit pinned full-session `session.read` chain on the owned workers; coverage labels stay incomplete for large/stopped/failed/truncated scans. The real-Agent E2E scans 22 saved items across more than one page, finds a multi-byte UTF-8 literal, and reports complete coverage. |
 | REF-45 | Prompt jump and temporary folds preserve selection | **Passed** | `/prev`, `/next`, `/latest` and match jumps skip steering, read an unloaded window at the exact index under the captured pin, and install temporary fold overrides that are restored when search closes (reducer tests). |
 | REF-46 | Copy/export has no Rail/fake newline and export uses a fixed bounded pin | **Passed** | `/copy` reuses the rendered copy rows and hit operations with no remote read; `render_with_breaks` reports real logical line ends so a soft wrap never gains a newline and paragraph/code breaks survive. `/export` writes through one owned job from a pinned `session.read` chain with a bounded channel, unique temp file, explicit overwrite confirmation, atomic rename, cancel cleanup, explicit oversized placeholders, and an explicit raw-JSON path that verifies offsets/EOF before writing. The real-Agent E2E covers a multi-page UTF-8 history plus an in-progress live turn without mixing it into the saved pin. |
@@ -115,15 +128,15 @@ parent review; E3 and full-project v0.3 completion are not claimed.
 | REF-51 | Existing CJK/IME/mouse/scrollbar/terminal restore behavior | **Passed** | UI, Rail, terminal, and snapshot tests. |
 | REF-52 | Common command table/completion/help stay consistent | **Passed** | `command::COMMANDS` is the single static table driving parsing, completion and the help panel; tests assert every table entry parses and is offered, unlisted names are unknown, and the help panel renders every entry. |
 | REF-53 | No approval/plugin/Subagent/PTY/Git-write/auto-reconnect feature | **Passed** | Source audit. |
-| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Not run** | 32/32 fixed-Agent E2Es pass on both toolchains, including E1 process streams/cancellation, E2 files/search/preview and all previous scenarios. Changes/diff remains E3 scope and is not covered. |
-| REF-55 | Rust 1.85/stable and original tests on three platforms | **Not run** | Current E2 tree passes Rust 1.85.0 and stable 1.97.1 on remote Linux; macOS/Windows execution and terminal manual acceptance remain Not run. |
+| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Passed** | 34/34 on both toolchains: all prior 32 scenarios plus real synthetic-Git paging/status/diff/stale and native provenance/Turn/Context workflows. Fixed backend sources and executable match recorded hashes. |
+| REF-55 | Rust 1.85/stable and original tests on three platforms | **Not run** | Current E3 tree passes Rust 1.85.0 and stable 1.97.1 on remote Linux; macOS/Windows execution and terminal manual acceptance remain Not run. |
 | REF-56 | Release before/after performance evidence uses real data | **Passed** | Current-tree Rust 1.85 focused C2b/C2c release probes passed; the full six-test ignored release suite also passed in this validation cycle. Workload units are recorded in `docs/performance.md`. |
 
 ## Counts
 
-- **Passed**: 50
+- **Passed**: 55
 - **Failed**: 0
-- **Not run**: 6
+- **Not run**: 1
 - **Not applicable**: 0
 
 ## C Status
@@ -136,10 +149,10 @@ parent review; E3 and full-project v0.3 completion are not claimed.
   oversized items and a fresh decode-throughput/RSS measurement are outside
   this boundary. D2's explicit `/export raw` path is separately covered by
   reducer fixtures; exact allocator/RSS accounting is not claimed.
-- **D/E**: D1/D2/D3, E1 tool details and E2 file references/candidates/preview/
-  literal search are implemented and validated (see `D Status` and E1/E2
-  evidence). E2 parent review is pending. E3 Changes/Context main-area work has
-  not started; it is not implemented by this handoff.
+- **D/E**: D1/D2/D3, E1 tool details, E2 file references/candidates/preview/
+  literal search and E3 Changes/status/Context are implemented with automated
+  evidence. E3 parent review is pending. F overall validation and manual/
+  macOS/Windows acceptance remain unclaimed.
 
 ## D Status
 
@@ -200,12 +213,13 @@ for the criteria below, on the tree validated by the logs above:
   config-path, Agent-config, protocol, provider, and storage categories.
 - **D1/D2/D3 parent review**: the parent/independent review of these commits
   has not been recorded here; "Passed" reflects the current tree's own measured
-  evidence. E remains deferred until that review.
+  evidence. Later E authorizations and E3's pending parent review are recorded
+  in Current Evidence above; this historical D entry is not release acceptance.
 
 ## Current C2c Follow-ups
 
-1. Keep the passed Rust 1.85 fmt/tests/clippy, release probes, and 22-test
-   Agent E2E evidence tied to the current workload units.
+1. Keep the passed dual-toolchain fmt/tests/clippy/rustdoc, six Release probes
+   and 34-scenario Agent E2E evidence tied to the recorded workload units.
 2. Keep oversized automatic history decoding explicit and bounded; no complete
    body may be fabricated from an 8 MiB placeholder path.
 3. Leave the general oversized history-read workflow and

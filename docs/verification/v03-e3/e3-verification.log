@@ -1,0 +1,23 @@
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  183G   40G  83% /
+rustc 1.85.0 (4d91de4e4 2025-02-17)
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  183G   40G  83% /
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  183G   40G  83% /
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  183G   40G  83% /
+VERIFIED 1.85.0
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  183G   40G  83% /
+rustc 1.97.1 (8bab26f4f 2026-07-14)
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  183G   40G  83% /
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  183G   40G  83% /
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  183G   40G  83% /
+VERIFIED stable
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  183G   40G  83% /
+VERIFIED performance and dependency inspection

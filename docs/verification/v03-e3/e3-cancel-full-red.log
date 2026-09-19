@@ -1,0 +1,54 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.11s
+     Running tests/agent_e2e.rs (target/debug/deps/agent_e2e-42d4553a1edbcc51)
+
+running 34 tests
+test changes_e2e::e2e_changes_native_records_remain_independent_and_turn_scoped ... ok
+test changes_e2e::e2e_changes_workspace_scopes_status_comparisons_fragments_and_stale ... ok
+test e2e_automatic_preparation_is_observable_and_cancellable ... ok
+test e2e_browse_closed_session_survives_deleted_workspace_and_dead_model ... ok
+test e2e_configuration_reload_refreshes_catalogs_only ... ok
+test e2e_external_editor_coexists_with_a_real_background_turn ... ok
+test e2e_fifo_duplicate_texts_are_paced_and_both_persist ... ok
+test e2e_fifo_steers_are_paced_until_receipt ... ok
+test e2e_full_search_and_export_real_agent_chain ... ok
+test e2e_live_request_usage_shows_during_loop_and_persisted_total_replaces_it ... ok
+test e2e_manual_compact_deferred_cancel ... FAILED
+test e2e_manual_compact_summarizes_history ... ok
+test e2e_manual_compact_without_history_is_a_noop ... ok
+test e2e_max_reasoning_ships_literal_max_and_provider_body_carries_it ... ok
+test e2e_new_form_rename_close_delete_commands ... ok
+test e2e_reasoning_summary_item_boundaries_survive_to_the_tui ... ok
+test e2e_scenario_a_discovery ... ok
+test e2e_scenario_b_basic_turn ... ok
+test e2e_scenario_c_tool_execution ... ok
+test e2e_scenario_d_steer_turn ... ok
+test e2e_scenario_e2_update_single_request_then_next_turn ... ok
+test e2e_scenario_e_same_loop_update ... ok
+test e2e_scenario_f_shutdown_cancels_active_wait ... ok
+test e2e_session_panel_rename_and_delete_against_current_agent ... ok
+test e2e_session_switch_keeps_drafts_and_running_background_loop ... ok
+test e2e_startup_selection_opens_without_auto_prompt ... ok
+test e2e_stress_second_tool_expansion_survives_background_generation ... ok
+test e2e_stress_session_switch_preserves_tool_fold ... ok
+test e2e_stress_six_loops_ten_requests_no_repeated_final_text ... ok
+test e2e_tool_detail_close_does_not_cancel_then_exact_turn_cancel_drains ... ok
+test e2e_tool_detail_drains_real_nonpty_stdout_and_stderr_after_terminal ... ok
+test e2e_two_consecutive_steers_both_reach_the_provider ... ok
+test workspace_e2e::e2e_workspace_files_and_literal_search_page_without_attaching_content ... ok
+test workspace_e2e::e2e_workspace_preview_raw_paging_changed_binary_and_too_large ... ok
+
+failures:
+
+---- e2e_manual_compact_deferred_cancel stdout ----
+
+thread 'e2e_manual_compact_deferred_cancel' panicked at tests/agent_e2e.rs:4263:10:
+called `Result::unwrap()` on an `Err` value: "e2e pump timed out: Ready (active Some(\"ses_7f20fdc8bdf239fb633eea51ba21937b\"), pending [], list [(\"ses_7f20fdc8bdf239fb633eea51ba21937b\", true)], dock Composer)"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    e2e_manual_compact_deferred_cancel
+
+test result: FAILED. 33 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 108.39s
+
+error: test failed, to rerun pass `--test agent_e2e`
