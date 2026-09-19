@@ -101,9 +101,9 @@ workloads also passed.
 
 ## Counts
 
-- **Passed**: 36
+- **Passed**: 34
 - **Failed**: 1
-- **Not run**: 19
+- **Not run**: 21
 - **Not applicable**: 0
 
 ## C Status
