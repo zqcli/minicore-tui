@@ -223,6 +223,13 @@ impl FilePreviewState {
         if page.encoding != FileEncoding::Utf8 || page.revision.is_none() {
             return Err("malformed UTF-8 file page");
         }
+        if page
+            .revision
+            .as_ref()
+            .is_some_and(|revision| revision.len() > 4096)
+        {
+            return Err("file revision metadata is too large");
+        }
         if self
             .revision
             .as_ref()

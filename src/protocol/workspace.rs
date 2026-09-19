@@ -2,6 +2,8 @@
 //! Cursors remain opaque JSON, including additive fields; known fields are validated.
 use super::*;
 
+const MAX_WORKSPACE_METADATA_BYTES: usize = 4096;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct FileRange {
     pub start_line: u32,
@@ -185,12 +187,15 @@ fn cursor_valid(cursor: &Option<Value>, search: bool) -> bool {
     if search {
         serde_json::from_value::<SearchCursor>(value.clone()).is_ok_and(|c| {
             let _ = (c.entry, c.line);
-            c.path_index < 32 && c.line_byte_offset <= 512 * 1024 && !c.scope.is_empty()
+            c.path_index < 32
+                && c.line_byte_offset <= 512 * 1024
+                && !c.scope.is_empty()
+                && c.scope.len() <= MAX_WORKSPACE_METADATA_BYTES
         })
     } else {
         serde_json::from_value::<ListCursor>(value.clone()).is_ok_and(|c| {
             let _ = c.entry;
-            !c.scope.is_empty()
+            !c.scope.is_empty() && c.scope.len() <= MAX_WORKSPACE_METADATA_BYTES
         })
     }
 }
