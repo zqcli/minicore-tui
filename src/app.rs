@@ -4283,6 +4283,8 @@ impl App {
             ),
             LocalCommand::Refresh if self.file_preview().is_some() => self.file_more(true),
             LocalCommand::Refresh if self.tool_detail().is_some() => self.refresh_tool_detail(),
+            LocalCommand::Refresh if self.changes().is_some() => self.changes_more(true),
+            LocalCommand::Refresh if self.context_panel().is_some() => self.refresh_context_panel(),
             LocalCommand::Refresh => self.refresh_view_data(),
             LocalCommand::Rename { title } => self.rename_from_command(title),
             LocalCommand::Help => self.open_dock(Dock::Help),

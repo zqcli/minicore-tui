@@ -303,3 +303,30 @@ fn context_confirmation_resumes_when_retired_read_releases_its_actual_slot() {
     assert!(a.context_polls.is_empty());
     assert!(!a.active_view().unwrap().is_preparing());
 }
+
+#[test]
+fn explicit_refresh_targets_the_current_main_view_without_repinning_history() {
+    let mut a = app();
+    let r = take_requests(a.open_context()).remove(0);
+    respond(&mut a, &r, fixture("session-context-idle"));
+    let requests = take_requests(a.run_command("/refresh"));
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "session.context");
+    respond(&mut a, &requests[0], fixture("session-context-idle"));
+    let requests = take_requests(a.open_changes(crate::protocol::changes::ChangeScope::Workspace));
+    for r in requests {
+        let value = fixture(if r.method == "workspace.status" {
+            "workspace-status"
+        } else {
+            "changes-list-workspace"
+        });
+        respond(&mut a, &r, value);
+    }
+    let requests = take_requests(a.run_command("/refresh"));
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests
+            .iter()
+            .all(|r| matches!(r.method, "changes.list" | "workspace.status"))
+    );
+}
