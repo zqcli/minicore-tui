@@ -84,6 +84,7 @@ pub const MAX_STEER_QUEUE_LEN: usize = 8;
 pub const MAX_STEER_QUEUE_BYTES: usize = 256 * 1024;
 
 const MAX_NOTICES: usize = 32;
+const MAX_NOTICE_BYTES: usize = 4096;
 const MAX_RETAINED_TURN_RESULTS: usize = 32;
 /// The TUI targets at most this many outstanding deferred requests
 /// (`turn.send`/`turn.wait`/`turn.result`/`session.compact`), leaving half of
@@ -5277,6 +5278,15 @@ impl App {
     }
 
     fn push_notice(&mut self, notice: Notice) {
+        let mut notice = notice;
+        if notice.text.len() > MAX_NOTICE_BYTES {
+            let mut end = MAX_NOTICE_BYTES.saturating_sub(1);
+            while end > 0 && !notice.text.is_char_boundary(end) {
+                end -= 1;
+            }
+            notice.text.truncate(end);
+            notice.text.push('…');
+        }
         self.notices.push_back(notice);
         while self.notices.len() > MAX_NOTICES {
             self.notices.pop_front();
