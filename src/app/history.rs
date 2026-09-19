@@ -7,7 +7,7 @@
 //! transient `RawHistoryItem` values to `app.rs`, which immediately projects
 //! them into the shared `TranscriptBlock` owner.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -3454,6 +3454,74 @@ impl App {
             {
                 Arc::make_mut(&mut view.user_timestamps)
                     .retain(|index, _| window.item(*index).is_some());
+            }
+
+            let mut tool_keys = HashSet::new();
+            let mut reasoning_keys = HashSet::new();
+            for block in view.transcript.blocks.iter() {
+                match block.as_ref() {
+                    TranscriptBlock::Assistant(assistant) => {
+                        let mut ordinal = 0;
+                        for part in &assistant.parts {
+                            if matches!(part, AssistantPart::Reasoning(_)) {
+                                reasoning_keys.insert(crate::state::view::ReasoningKey::new(
+                                    &assistant.loop_id,
+                                    assistant.request_index,
+                                    ordinal,
+                                ));
+                                ordinal += 1;
+                            }
+                        }
+                    }
+                    TranscriptBlock::Tool(tool) => {
+                        tool_keys.insert(ToolKey::new(
+                            &view.info.session_id,
+                            &tool.loop_id,
+                            tool.request_index,
+                            &tool.tool_call_id,
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(live) = view.live.as_ref() {
+                if let Some(reference) = live.reference.as_ref() {
+                    for request in &live.requests {
+                        let mut ordinal = 0;
+                        for part in &request.parts {
+                            match part {
+                                crate::state::turn::LivePart::Reasoning(_) => {
+                                    reasoning_keys.insert(crate::state::view::ReasoningKey::new(
+                                        &reference.loop_id,
+                                        request.request_index,
+                                        ordinal,
+                                    ));
+                                    ordinal += 1;
+                                }
+                                crate::state::turn::LivePart::Tool { tool_call_id } => {
+                                    tool_keys.insert(ToolKey::new(
+                                        &reference.session_id,
+                                        &reference.loop_id,
+                                        request.request_index,
+                                        tool_call_id,
+                                    ));
+                                }
+                                crate::state::turn::LivePart::Text(_) => {}
+                            }
+                        }
+                    }
+                }
+            }
+            if view.tool_folds.keys().any(|key| !tool_keys.contains(key)) {
+                Arc::make_mut(&mut view.tool_folds).retain(|key, _| tool_keys.contains(key));
+            }
+            if view
+                .reasoning_folds
+                .keys()
+                .any(|key| !reasoning_keys.contains(key))
+            {
+                Arc::make_mut(&mut view.reasoning_folds)
+                    .retain(|key, _| reasoning_keys.contains(key));
             }
         }
     }
