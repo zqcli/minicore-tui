@@ -398,7 +398,7 @@ pub struct App {
     pub reasoning_visible: bool,
     pub frame_count: u64,
     pub composer: Composer,
-    /// Local slash candidates derived from `command::SLASH_COMMAND_NAMES`.
+    /// Local slash candidates derived from `command::COMMANDS`.
     pub slash_completion: Option<SlashCompletionState>,
     /// Preferred visual column while moving vertically through wrapped editor
     /// rows, matching the native editor's temporary vertical-column state.
@@ -2820,6 +2820,24 @@ impl App {
         Vec::new()
     }
 
+    /// `/rename <title>`: carries the title through the same submission path
+    /// as the dialog, so an ACK-lost rename rereads metadata instead of
+    /// blind-rewriting (spec §10.4).
+    fn rename_session_title(&mut self, session_id: &SessionId, title: String) -> Vec<AppCommand> {
+        self.open_selector(SelectorKind::Session);
+        if let Some(state) = self.session_selector_state_mut() {
+            state.selected_session_id = Some(session_id.clone());
+            state.scope = crate::state::selection::SessionScope::CurrentWorkspace;
+            state.error = None;
+            state.mode = SessionPanelMode::Rename {
+                cursor: title.chars().count(),
+                draft: title,
+                submitting: false,
+            };
+        }
+        self.submit_session_rename(session_id)
+    }
+
     fn submit_session_rename(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
         if self.reload.is_some() {
             self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
@@ -3709,7 +3727,8 @@ impl App {
 
     fn apply_command(&mut self, command: LocalCommand) -> Vec<AppCommand> {
         match command {
-            LocalCommand::New => self.open_new_session(),
+            LocalCommand::New => self.create_session_quick(),
+            LocalCommand::NewForm => self.open_new_session(),
             LocalCommand::Resume => {
                 let browsing = self.sessions.active.clone().filter(|active| {
                     self.sessions
@@ -3739,14 +3758,25 @@ impl App {
                 }
             }
             LocalCommand::Delete { confirm } => {
-                if let Some(session_id) = self.sessions.active.clone() {
-                    self.delete_session(&session_id, confirm)
-                } else {
-                    self.notice(NoticeLevel::Warning, "no active session to delete");
-                    Vec::new()
+                // A closed session has no active view: fall back to the
+                // session panel selection, which is the only way to delete a
+                // closed session by command (spec §10.4).
+                match self
+                    .sessions
+                    .active
+                    .clone()
+                    .or_else(|| self.selected_session_id())
+                {
+                    Some(session_id) => self.delete_session(&session_id, confirm),
+                    None => {
+                        self.notice(NoticeLevel::Warning, "no active session to delete");
+                        Vec::new()
+                    }
                 }
             }
             LocalCommand::Clear => self.clear_transcript(),
+            LocalCommand::Refresh => self.refresh_view_data(),
+            LocalCommand::Rename { title } => self.rename_from_command(title),
             LocalCommand::Help => self.open_dock(Dock::Help),
             LocalCommand::Logs => self.open_dock(Dock::Logs),
             LocalCommand::Cancel => self.cancel_active_turn(),

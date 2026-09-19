@@ -71,8 +71,11 @@ impl fmt::Debug for ClipboardText {
 /// resulting requests (e.g. a transcript reload) hit the wire.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalCommand {
-    /// Open the new-session form from the catalog defaults.
+    /// Create a session directly in the current workspace with the most
+    /// recent explicit configuration (spec §10.4); no catalog-form detour.
     New,
+    /// Open the pre-filled new-session form (`/new form`, Ctrl+N).
+    NewForm,
     /// Open the session selector.
     Resume,
     /// Open the session selector.
@@ -95,6 +98,10 @@ pub enum LocalCommand {
     Context,
     /// Start one manual compaction operation.
     Compact,
+    /// Re-read only this session's view data (history/presentation).
+    Refresh,
+    /// Rename a session; `None` opens the rename dialog (spec §10.4).
+    Rename { title: Option<String> },
     /// Reload Agent configuration and refresh safe read-only TUI state.
     Reload,
     /// Normal shutdown intent (`agent.shutdown` arrives in Phase 6).
@@ -105,33 +112,157 @@ pub enum LocalCommand {
     Delete { confirm: bool },
 }
 
-/// Commands exposed by the local parser and therefore eligible for editor
-/// completion. Keeping this list beside the parser prevents the popup from
-/// advertising a command that the reducer cannot execute.
-pub const SLASH_COMMAND_NAMES: &[&str] = &[
-    "new",
-    "resume",
-    "sessions",
-    "model",
-    "reasoning",
-    "theme",
-    "clear",
-    "help",
-    "logs",
-    "cancel",
-    "context",
-    "compact",
-    "reload",
-    "quit",
-    "close",
-    "delete",
+/// One implemented slash command. The table is the single source for the
+/// parser, the help panel and the completion popup, so an entry can never
+/// advertise a command the reducer does not execute (spec §10.5, §23).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandSpec {
+    pub name: &'static str,
+    /// Usage line shown by help and completion.
+    pub usage: &'static str,
+    /// One-line description shown by the help panel.
+    pub summary: &'static str,
+    pub args: CommandArgs,
+}
+
+/// Argument shapes the parser knows how to validate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandArgs {
+    /// No arguments accepted.
+    None,
+    /// `/theme <dark|light>`.
+    Theme,
+    /// `/close [confirm]`, `/delete [confirm]`.
+    OptionalConfirm,
+    /// `/rename [title]`: the title is the rest of the line.
+    OptionalTitle,
+    /// `/new [form]`.
+    NewForm,
+}
+
+/// Every command the reducer can execute. Methods added in a later stage must
+/// be listed here only together with their reducer arm.
+pub const COMMANDS: &[CommandSpec] = &[
+    CommandSpec {
+        name: "new",
+        usage: "/new [form]",
+        summary: "create a session here with the recent explicit model/profile/reasoning",
+        args: CommandArgs::NewForm,
+    },
+    CommandSpec {
+        name: "resume",
+        usage: "/resume",
+        summary: "continue the read-only session, or open the session selector",
+        args: CommandArgs::None,
+    },
+    CommandSpec {
+        name: "sessions",
+        usage: "/sessions",
+        summary: "open the session selector",
+        args: CommandArgs::None,
+    },
+    CommandSpec {
+        name: "model",
+        usage: "/model",
+        summary: "choose the model for a new session",
+        args: CommandArgs::None,
+    },
+    CommandSpec {
+        name: "reasoning",
+        usage: "/reasoning",
+        summary: "choose the reasoning level for a new session",
+        args: CommandArgs::None,
+    },
+    CommandSpec {
+        name: "theme",
+        usage: "/theme <dark|light>",
+        summary: "switch the color palette",
+        args: CommandArgs::Theme,
+    },
+    CommandSpec {
+        name: "clear",
+        usage: "/clear",
+        summary: "re-read the local transcript view (never writes to the Store)",
+        args: CommandArgs::None,
+    },
+    CommandSpec {
+        name: "refresh",
+        usage: "/refresh",
+        summary: "re-read this session's history and presentation data",
+        args: CommandArgs::None,
+    },
+    CommandSpec {
+        name: "rename",
+        usage: "/rename [title]",
+        summary: "rename a session; without a title the rename dialog opens",
+        args: CommandArgs::OptionalTitle,
+    },
+    CommandSpec {
+        name: "help",
+        usage: "/help",
+        summary: "open the help panel",
+        args: CommandArgs::None,
+    },
+    CommandSpec {
+        name: "logs",
+        usage: "/logs",
+        summary: "open the agent log panel",
+        args: CommandArgs::None,
+    },
+    CommandSpec {
+        name: "cancel",
+        usage: "/cancel",
+        summary: "cancel the active loop",
+        args: CommandArgs::None,
+    },
+    CommandSpec {
+        name: "context",
+        usage: "/context",
+        summary: "read the current context/preparation snapshot",
+        args: CommandArgs::None,
+    },
+    CommandSpec {
+        name: "compact",
+        usage: "/compact",
+        summary: "start one manual compaction",
+        args: CommandArgs::None,
+    },
+    CommandSpec {
+        name: "reload",
+        usage: "/reload",
+        summary: "reload Agent configuration and the catalogs",
+        args: CommandArgs::None,
+    },
+    CommandSpec {
+        name: "quit",
+        usage: "/quit",
+        summary: "shut the agent down and leave",
+        args: CommandArgs::None,
+    },
+    CommandSpec {
+        name: "close",
+        usage: "/close [confirm]",
+        summary: "close the active session (results are still received)",
+        args: CommandArgs::OptionalConfirm,
+    },
+    CommandSpec {
+        name: "delete",
+        usage: "/delete [confirm]",
+        summary: "delete a closed session after confirmation",
+        args: CommandArgs::OptionalConfirm,
+    },
 ];
+
+/// The spec for an implemented command name, if any.
+pub fn command_spec(name: &str) -> Option<&'static CommandSpec> {
+    COMMANDS.iter().find(|spec| spec.name == name)
+}
 
 pub fn slash_command_candidates(query: &str) -> Vec<String> {
     let query = query.to_ascii_lowercase();
-    let mut matches = SLASH_COMMAND_NAMES
+    let mut matches = COMMANDS
         .iter()
-        .filter_map(|name| fuzzy_score(&query, name).map(|score| (score, *name)))
+        .filter_map(|spec| fuzzy_score(&query, spec.name).map(|score| (score, spec.name)))
         .collect::<Vec<_>>();
     matches.sort_by(|left, right| left.0.total_cmp(&right.0));
     matches
@@ -210,8 +341,9 @@ impl fmt::Display for CommandIssue {
 }
 
 /// Parses `input` only when its first non-whitespace character is `/`
-/// (spec 23.1). Unknown commands and unexpected arguments are local issues;
-/// the caller shows a notice and never sends an RPC command.
+/// (spec 23.1). The static table owns which names exist; this function only
+/// validates their arguments. Unknown commands and unexpected arguments are
+/// local issues; the caller shows a notice and never sends an RPC command.
 pub fn parse_command(input: &str) -> Result<LocalCommand, CommandIssue> {
     let input = input.trim_start();
     let Some(rest) = input.strip_prefix('/') else {
@@ -223,53 +355,55 @@ pub fn parse_command(input: &str) -> Result<LocalCommand, CommandIssue> {
     };
     let name = name.to_ascii_lowercase();
 
+    if name.is_empty() {
+        return Err(CommandIssue::Unknown("/".to_owned()));
+    }
+    let spec = command_spec(&name).ok_or_else(|| CommandIssue::Unknown(name.clone()))?;
     let no_args = |cmd: LocalCommand| -> Result<LocalCommand, CommandIssue> {
         if args.is_empty() {
             Ok(cmd)
         } else {
-            Err(CommandIssue::InvalidArgs(format!(
-                "usage: /{name} (no arguments)"
-            )))
+            Err(CommandIssue::InvalidArgs(format!("usage: {}", spec.usage)))
+        }
+    };
+    let confirm = |build: fn(bool) -> LocalCommand| -> Result<LocalCommand, CommandIssue> {
+        match args {
+            "" => Ok(build(false)),
+            "confirm" | "--force" | "force" => Ok(build(true)),
+            _ => Err(CommandIssue::InvalidArgs(format!("usage: {}", spec.usage))),
         }
     };
 
-    match name.as_str() {
-        "" => Err(CommandIssue::Unknown("/".to_owned())),
-        "new" => no_args(LocalCommand::New),
-        "resume" => no_args(LocalCommand::Resume),
-        "sessions" => no_args(LocalCommand::Sessions),
-        "model" => no_args(LocalCommand::Model),
-        "reasoning" => no_args(LocalCommand::Reasoning),
-        "theme" => match args {
+    match (spec.name, spec.args) {
+        ("resume", _) => no_args(LocalCommand::Resume),
+        ("sessions", _) => no_args(LocalCommand::Sessions),
+        ("model", _) => no_args(LocalCommand::Model),
+        ("reasoning", _) => no_args(LocalCommand::Reasoning),
+        ("clear", _) => no_args(LocalCommand::Clear),
+        ("refresh", _) => no_args(LocalCommand::Refresh),
+        ("help", _) => no_args(LocalCommand::Help),
+        ("logs", _) => no_args(LocalCommand::Logs),
+        ("cancel", _) => no_args(LocalCommand::Cancel),
+        ("context", _) => no_args(LocalCommand::Context),
+        ("compact", _) => no_args(LocalCommand::Compact),
+        ("reload", _) => no_args(LocalCommand::Reload),
+        ("quit", _) => no_args(LocalCommand::Quit),
+        ("theme", _) => match args {
             "dark" => Ok(LocalCommand::Theme(ThemeKind::Dark)),
             "light" => Ok(LocalCommand::Theme(ThemeKind::Light)),
-            _ => Err(CommandIssue::InvalidArgs(
-                "usage: /theme <dark|light>".to_owned(),
-            )),
+            _ => Err(CommandIssue::InvalidArgs(format!("usage: {}", spec.usage))),
         },
-        "clear" => no_args(LocalCommand::Clear),
-        "help" => no_args(LocalCommand::Help),
-        "logs" => no_args(LocalCommand::Logs),
-        "cancel" => no_args(LocalCommand::Cancel),
-        "context" => no_args(LocalCommand::Context),
-        "compact" => no_args(LocalCommand::Compact),
-        "reload" => no_args(LocalCommand::Reload),
-        "quit" => no_args(LocalCommand::Quit),
-        "close" => match args {
-            "" => Ok(LocalCommand::Close { confirm: false }),
-            "confirm" | "--force" | "force" => Ok(LocalCommand::Close { confirm: true }),
-            _ => Err(CommandIssue::InvalidArgs(
-                "usage: /close [confirm]".to_owned(),
-            )),
+        ("new", _) => match args {
+            "" => Ok(LocalCommand::New),
+            "form" | "--form" => Ok(LocalCommand::NewForm),
+            _ => Err(CommandIssue::InvalidArgs(format!("usage: {}", spec.usage))),
         },
-        "delete" => match args {
-            "" => Ok(LocalCommand::Delete { confirm: false }),
-            "confirm" | "--force" | "force" => Ok(LocalCommand::Delete { confirm: true }),
-            _ => Err(CommandIssue::InvalidArgs(
-                "usage: /delete [confirm]".to_owned(),
-            )),
-        },
-        other => Err(CommandIssue::Unknown(other.to_owned())),
+        ("rename", _) => Ok(LocalCommand::Rename {
+            title: (!args.is_empty()).then(|| args.to_owned()),
+        }),
+        ("close", _) => confirm(|confirm| LocalCommand::Close { confirm }),
+        ("delete", _) => confirm(|confirm| LocalCommand::Delete { confirm }),
+        (other, _) => Err(CommandIssue::Unknown(other.to_owned())),
     }
 }
 
@@ -282,6 +416,43 @@ pub fn is_slash_command(input: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// D1d (spec §10.5): the help/completion table is the parse authority.
+    /// Every listed command parses, every unlisted name is unknown, and the
+    /// completion popup offers exactly the table's names.
+    #[test]
+    fn the_static_table_drives_parsing_and_completion() {
+        for spec in COMMANDS {
+            let parsed = parse_command(&format!("/{}", spec.name));
+            if spec.args == CommandArgs::Theme {
+                // A required argument: the table still owns the name, and the
+                // bare form reports its usage instead of "unknown command".
+                assert!(
+                    matches!(parsed, Err(CommandIssue::InvalidArgs(_))),
+                    "/{} must reach its usage: {parsed:?}",
+                    spec.name
+                );
+                assert!(parse_command("/theme dark").is_ok());
+            } else {
+                assert!(
+                    parsed.is_ok(),
+                    "/{} must parse from its own table entry: {parsed:?}",
+                    spec.name
+                );
+            }
+        }
+        let candidates = slash_command_candidates("");
+        let mut expected = COMMANDS
+            .iter()
+            .map(|spec| format!("/{}", spec.name))
+            .collect::<Vec<_>>();
+        expected.sort();
+        let mut candidates = candidates;
+        candidates.sort();
+        assert_eq!(candidates, expected);
+        assert!(parse_command("/not-a-command").is_err());
+        assert!(command_spec("not-a-command").is_none());
+    }
 
     #[test]
     fn parses_every_implemented_command() {
@@ -305,10 +476,18 @@ mod tests {
         assert_eq!(parse_command("/context"), Ok(LocalCommand::Context));
         assert_eq!(parse_command("/compact"), Ok(LocalCommand::Compact));
         assert_eq!(parse_command("/reload"), Ok(LocalCommand::Reload));
+        assert_eq!(parse_command("/refresh"), Ok(LocalCommand::Refresh));
         assert_eq!(
-            parse_command("/refresh"),
-            Err(CommandIssue::Unknown("refresh".to_owned()))
+            parse_command("/rename"),
+            Ok(LocalCommand::Rename { title: None })
         );
+        assert_eq!(
+            parse_command("/rename fresh title"),
+            Ok(LocalCommand::Rename {
+                title: Some("fresh title".to_owned())
+            })
+        );
+        assert_eq!(parse_command("/new form"), Ok(LocalCommand::NewForm));
         assert_eq!(parse_command("/quit"), Ok(LocalCommand::Quit));
         assert_eq!(
             parse_command("/close"),
@@ -351,12 +530,12 @@ mod tests {
     }
 
     #[test]
-    fn public_command_names_exclude_refresh_and_include_reload() {
-        assert!(SLASH_COMMAND_NAMES.contains(&"reload"));
-        assert!(SLASH_COMMAND_NAMES.contains(&"context"));
-        assert!(SLASH_COMMAND_NAMES.contains(&"compact"));
-        assert!(!SLASH_COMMAND_NAMES.contains(&"refresh"));
-        assert_eq!(slash_command_candidates("ref"), Vec::<String>::new());
+    fn implemented_command_names_are_offered_and_reload_is_kept() {
+        assert!(command_spec("reload").is_some());
+        assert!(command_spec("context").is_some());
+        assert!(command_spec("compact").is_some());
+        // `/refresh` is implemented in D1, so completion offers it.
+        assert_eq!(slash_command_candidates("ref"), vec!["/refresh"]);
         assert_eq!(slash_command_candidates("rel"), vec!["/reload"]);
     }
 

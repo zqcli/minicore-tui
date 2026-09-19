@@ -75,14 +75,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     }
     lines.push(Line::default());
     lines.push(section(theme, "Slash commands", width));
-    for command in [
-        "/new  /resume  /sessions  /model  /reasoning  /cancel  /reload",
-        "/close [confirm]  /delete [confirm]  /theme dark|light  /clear  /help  /logs  /quit",
-    ] {
-        lines.push(Line::from(Span::styled(
-            command,
-            Style::new().fg(theme.md_code),
-        )));
+    for spec in crate::command::COMMANDS {
+        let usage = layout::truncate(spec.usage, width);
+        lines.push(Line::from(vec![
+            Span::styled(format!("{usage:<26}"), Style::new().fg(theme.md_code)),
+            Span::styled(spec.summary, Style::new().fg(theme.muted)),
+        ]));
     }
     lines.push(Line::default());
     lines.push(section(theme, "Scope", width));

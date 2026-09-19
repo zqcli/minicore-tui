@@ -896,6 +896,123 @@ impl App {
         ]
     }
 
+    /// `/new` (spec §10.4): create directly in the current workspace with the
+    /// most recent explicit configuration, keeping only seats the catalogs
+    /// still know. The custom form stays on `/new form` and Ctrl+N.
+    pub(super) fn create_session_quick(&mut self) -> Vec<AppCommand> {
+        if !self.guard_ready() {
+            return Vec::new();
+        }
+        if self.reload.is_some() {
+            self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
+            return Vec::new();
+        }
+        if self.has_pending_lifecycle_request() || self.session_panel_busy() {
+            self.notice(NoticeLevel::Info, "wait for the pending session action");
+            return Vec::new();
+        }
+        let workspace = self
+            .catalogs
+            .default_workspace
+            .to_string_lossy()
+            .into_owned();
+        let profile = self.catalogs.next_profile.clone().filter(|id| {
+            self.catalogs
+                .profiles
+                .iter()
+                .any(|profile| &profile.id == id)
+        });
+        let model = self
+            .catalogs
+            .next_model
+            .clone()
+            .filter(|id| self.catalogs.models.iter().any(|model| &model.id == id))
+            .or_else(|| self.catalogs.models.first().map(|model| model.id.clone()));
+        let reasoning = self.catalogs.next_reasoning.filter(|level| {
+            self.catalogs
+                .models
+                .iter()
+                .find(|info| Some(&info.id) == model.as_ref())
+                .is_none_or(|info| {
+                    info.supported_reasoning.is_empty() || info.supported_reasoning.contains(level)
+                })
+        });
+        self.create_session(
+            &workspace,
+            profile.as_deref(),
+            model.as_deref(),
+            reasoning,
+            None,
+        )
+    }
+
+    /// `/refresh` (spec §10.4): re-read only this session's view data. It
+    /// issues the presentation and history reads and never a configuration
+    /// request, so it stays distinct from `/reload`.
+    pub(super) fn refresh_view_data(&mut self) -> Vec<AppCommand> {
+        if !self.guard_ready() {
+            return Vec::new();
+        }
+        if self.reload.is_some() {
+            self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
+            return Vec::new();
+        }
+        let Some(session_id) = self.sessions.active.clone() else {
+            self.notice(NoticeLevel::Info, "No session is open to refresh.");
+            return Vec::new();
+        };
+        let mut commands = Vec::new();
+        commands.extend(self.request_session_presentation(&session_id));
+        if let Some(view) = self.sessions.known.get_mut(&session_id) {
+            view.history_read.begin(HistoryTrigger::Refresh);
+        }
+        commands.extend(self.request_history(&session_id));
+        self.notice(
+            NoticeLevel::Info,
+            format!("Refreshing {session_id}'s view data"),
+        );
+        commands
+    }
+
+    /// `/rename [title]` (spec §10.4): with a title it goes through the same
+    /// mutation-safe submission as the dialog; without one it opens the
+    /// dialog for the active (or selected) session.
+    pub(super) fn rename_from_command(&mut self, title: Option<String>) -> Vec<AppCommand> {
+        if !self.guard_ready() {
+            return Vec::new();
+        }
+        if self.reload.is_some() {
+            self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
+            return Vec::new();
+        }
+        let target = self.sessions.active.clone();
+        let Some(session_id) = target else {
+            self.notice(
+                NoticeLevel::Info,
+                "No session is open to rename — open the session panel first.",
+            );
+            return Vec::new();
+        };
+        if self.has_pending_lifecycle_request() || self.session_panel_busy() {
+            self.notice(NoticeLevel::Info, "wait for the pending session action");
+            return Vec::new();
+        }
+        if !self.sessions.known.contains_key(&session_id) {
+            return Vec::new();
+        }
+        match title {
+            Some(title) => self.rename_session_title(&session_id, title),
+            None => {
+                self.open_selector(SelectorKind::Session);
+                if let Some(state) = self.session_selector_state_mut() {
+                    state.selected_session_id = Some(session_id);
+                    state.scope = crate::state::selection::SessionScope::CurrentWorkspace;
+                }
+                self.begin_session_rename()
+            }
+        }
+    }
+
     pub(super) fn create_session(
         &mut self,
         workspace: &str,

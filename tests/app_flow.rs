@@ -18,7 +18,7 @@ use minicore_tui::protocol::{
     CompactStatusWire, IncomingFrame, OutgoingRequest, RpcNotification, RpcResponse,
     SessionStateWire, SessionStatusWire, TurnRef,
 };
-use minicore_tui::state::selection::Dock;
+use minicore_tui::state::selection::{Dock, SessionPanelMode};
 use minicore_tui::state::session::HistoryTrigger;
 use minicore_tui::state::tool::ToolStatus;
 use minicore_tui::state::turn::{PendingSteerState, SteerQueueItem, SteerQueueState, UnsavedLoop};
@@ -59,6 +59,30 @@ impl Driver {
             queue: VecDeque::new(),
             copies: Vec::new(),
             exited: false,
+        }
+    }
+
+    fn commands(&mut self, commands: Vec<AppCommand>) {
+        for command in commands {
+            match command {
+                AppCommand::Rpc(request) if request.method == "session.presentation" => {
+                    let session_id = request.params["session_id"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned();
+                    self.respond(
+                        request,
+                        json!({
+                            "session_id": session_id,
+                            "context": {"kind": "unknown"}
+                        }),
+                    );
+                }
+                AppCommand::Rpc(request) => self.queue.push_back(request),
+                AppCommand::KillChild => {}
+                AppCommand::CopySelection(text) => self.copies.push(text.as_str().to_owned()),
+                AppCommand::Exit => self.exited = true,
+            }
         }
     }
 
@@ -709,7 +733,16 @@ fn new_session_and_empty_created_session_keep_startup_header() {
     assert!(!old_screen.contains("MINICORE  v0.2.8"));
     assert_eq!(driver.app.sessions.active.as_deref(), Some("ses_1"));
 
+    // `/new` now creates quickly with the current workspace and the recent
+    // explicit configuration; the custom form moved to `/new form`.
     submit_command(&mut driver, "/new");
+    assert!(driver.app.new_session().is_none());
+    let quick = driver.request("session.create");
+    assert_eq!(quick.params["workspace"], "/workspace");
+    assert_eq!(quick.params["model"], "deep");
+    driver.respond_error(quick, 1234, "quick create unavailable");
+
+    submit_command(&mut driver, "/new form");
     let form_screen = rendered_text(&driver.app, 120, 40);
     for expected in [
         "MINICORE  v0.2.8",
@@ -7143,9 +7176,12 @@ fn draft_budget_trims_undo_before_touching_text() {
     assert_eq!(driver.app.composer.undo_capacity(), 1);
 }
 
+/// Runs a slash command from the composer directly (works whatever the dock
+/// is, which the Enter key does not).
 fn slash(driver: &mut Driver, command: &str) {
     driver.app.composer.set_text(command);
-    driver.step(enter());
+    let commands = driver.app.submit_composer();
+    driver.commands(commands);
 }
 
 fn drive_ctrl(driver: &mut Driver, c: char) {
@@ -7560,4 +7596,198 @@ fn session_selector_defaults_to_current_workspace_recent_activity() {
         other => panic!("expected the session selector, got {other:?}"),
     };
     assert_eq!(selected.as_deref(), Some("ses_here"));
+}
+
+/// D1c (spec §10.4): `/new` creates directly in the current workspace with
+/// the recent explicit configuration; the custom form stays on `/new form`.
+#[test]
+fn new_command_creates_quickly_and_new_form_opens_the_custom_form() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    slash(&mut driver, "/new");
+    assert!(
+        driver.app.new_session().is_none(),
+        "the quick path never opens the catalog form"
+    );
+    let create = driver.request("session.create");
+    assert_eq!(create.params["workspace"], "/workspace");
+    assert_eq!(create.params["profile"], "coding");
+    assert_eq!(create.params["model"], "deep");
+    assert_eq!(create.params["reasoning"], "high");
+
+    slash(&mut driver, "/new form");
+    assert!(
+        driver.app.new_session().is_some(),
+        "/new form still reaches the custom form"
+    );
+}
+
+/// D1c (spec §10.4): `/rename <title>` takes the safe mutation path; a failed
+/// ACK neither rewrites local metadata nor duplicates the request.
+#[test]
+fn rename_command_failure_keeps_metadata_and_does_not_duplicate() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+
+    let before = driver.app.sessions.known["ses_1"].info.title.clone();
+    slash(&mut driver, "/rename fresh title");
+    let rename = driver.request("session.rename");
+    assert_eq!(rename.params["title"], "fresh title");
+    assert_eq!(rename.params["session_id"], "ses_1");
+    driver.respond_error(rename, 1234, "rename unavailable");
+    assert_eq!(
+        driver.app.sessions.known["ses_1"].info.title, before,
+        "a failed ACK never writes local metadata"
+    );
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "session.rename"),
+        "no duplicate rename is issued"
+    );
+}
+
+/// D1c (spec §10.4): a bare `/rename` opens the dialog for the active
+/// session (the typed path is covered separately).
+#[test]
+fn rename_command_opens_the_dialog_without_a_title() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+
+    slash(&mut driver, "/rename");
+    if let Some(position) = driver
+        .queue
+        .iter()
+        .position(|request| request.method == "session.list")
+    {
+        let list = driver.queue.remove(position).unwrap();
+        driver.respond(list, json!({"sessions": [session("ses_1")]}));
+    }
+    match &driver.app.dock {
+        Dock::SessionSelector(state) => assert!(
+            matches!(state.mode, SessionPanelMode::Rename { .. }),
+            "the dock rename form is reachable"
+        ),
+        dock => panic!("expected the rename dialog, got {dock:?}"),
+    }
+}
+
+/// D1c (spec §10.4): the typed `/rename` applies the ACK's authoritative
+/// metadata (never a local blind rewrite).
+#[test]
+fn rename_command_applies_the_ack_metadata() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+    let mut titled = session("ses_1");
+    titled["title"] = json!("fresh title");
+    slash(&mut driver, "/rename fresh title");
+    let rename = driver.request("session.rename");
+    driver.respond(rename, json!({"session": titled}));
+    assert_eq!(
+        driver.app.sessions.known["ses_1"].info.title.as_deref(),
+        Some("fresh title")
+    );
+}
+
+/// D1c (spec §10.4): `/refresh` re-reads only this session's view data;
+/// `/reload` stays the configuration path.
+#[test]
+fn refresh_reads_only_view_data_and_reload_stays_configuration() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+    let _ = driver.queue.drain(..).count();
+    slash(&mut driver, "/refresh");
+    let methods = driver
+        .queue
+        .iter()
+        .map(|request| request.method)
+        .collect::<Vec<_>>();
+    // The presentation read coalesces with one already in flight; the
+    // history reread is the view-data guarantee measured here.
+    assert!(methods.contains(&"session.read"), "{methods:?}");
+    for unrelated in ["agent.reload", "model.list", "profile.list", "session.list"] {
+        assert!(
+            !methods.contains(&unrelated),
+            "/refresh must not issue {unrelated}: {methods:?}"
+        );
+    }
+
+    let _ = driver.queue.drain(..).count();
+    slash(&mut driver, "/reload");
+    let methods = driver
+        .queue
+        .iter()
+        .map(|request| request.method)
+        .collect::<Vec<_>>();
+    assert_eq!(methods, vec!["agent.reload"]);
+}
+
+/// D1c (spec §10.4, §23.3): `/clear` only re-reads the local view, `/close`
+/// keeps receiving results, and `/delete` is closed-only with confirmation.
+#[test]
+fn clear_close_and_delete_keep_their_local_and_closed_only_contracts() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+    let _ = driver.queue.drain(..).count();
+    slash(&mut driver, "/clear");
+    let written = driver
+        .queue
+        .iter()
+        .map(|request| request.method)
+        .collect::<Vec<_>>();
+    assert!(
+        written.iter().all(|method| *method == "session.read"),
+        "/clear never writes to the Store: {written:?}"
+    );
+    let read = driver.request("session.read");
+    driver.respond(read, history(Vec::new(), None, 0));
+
+    // Close the running session through the command; the closed view stays.
+    let wait = start_turn_and_close(&mut driver, "ses_1", "loop_1");
+
+    // The retained wait still delivers the retired loop's result after close.
+    driver.respond(wait, wait_result("ses_1", "loop_1", "persisted"));
+    assert_eq!(
+        driver.app.sessions.known["ses_1"]
+            .last_result
+            .as_ref()
+            .map(|result| result.turn.loop_id.as_str()),
+        Some("loop_1"),
+        "results still land after close"
+    );
+
+    // A turn-free session closes cleanly, so the closed-only delete path is
+    // reachable: the panel selection is the target and delete asks first.
+    open_idle(&mut driver, "ses_2");
+    slash(&mut driver, "/close confirm");
+    let close2 = driver.request("session.close");
+    driver.respond(close2, json!({"ok": true}));
+    driver.step(AppEvent::OpenSessionSelector);
+    driver.respond_method("session.list", json!({"sessions": [session("ses_2")]}));
+    let selected = match &driver.app.dock {
+        Dock::SessionSelector(state) => state.selected_session_id.clone(),
+        dock => panic!("expected the session selector, got {dock:?}"),
+    };
+    assert_eq!(
+        selected,
+        Some("ses_2".to_owned()),
+        "the closed session is selectable"
+    );
+    slash(&mut driver, "/delete");
+    assert!(
+        !driver
+            .queue
+            .iter()
+            .any(|request| request.method == "session.delete"),
+        "delete waits for the explicit confirm"
+    );
+    slash(&mut driver, "/delete confirm");
+    let delete = driver.request("session.delete");
+    assert_eq!(delete.params["session_id"], "ses_2");
 }

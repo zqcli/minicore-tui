@@ -3719,15 +3719,43 @@ fn selectors_render_on_both_themes_without_panicking() {
 
 #[test]
 fn help_panel_lists_keys_and_safety_notes() {
-    let mut app = testapp::help(ThemeKind::Dark);
+    let app = testapp::help(ThemeKind::Dark);
     let terminal = draw(&app, 80, 24);
     let content = text(&terminal);
     assert!(content.contains("Help"));
     assert!(content.contains("Ctrl+R"));
     assert!(any_cell_matching(&terminal, |cell| cell.symbol() == "┌"
         && cell.fg == Theme::dark().border_accent));
-    // Scroll to the bottom: the scope notes are on the final page.
-    for _ in 0..40 {
+
+    // A wide terminal shows the single command table without wrapping; the
+    // first and last page together cover the whole panel.
+    let mut wide = testapp::help(ThemeKind::Dark);
+    let mut wide_content = text(&draw(&wide, 140, 50));
+    for _ in 0..200 {
+        wide.update(AppEvent::Terminal(crossterm::event::Event::Key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Down,
+                crossterm::event::KeyModifiers::empty(),
+            ),
+        )));
+    }
+    wide_content.push_str(&text(&draw(&wide, 140, 50)));
+    assert!(wide_content.contains("Slash commands"));
+    assert!(wide_content.contains("/cancel"));
+    assert!(wide_content.contains("/reload"));
+    assert!(wide_content.contains("/refresh"));
+    assert!(wide_content.contains("Tools run automatically."));
+    assert!(wide_content.contains("Bash is not sandboxed."));
+    assert!(wide_content.contains("No approval UI"));
+}
+
+/// D1d (spec §10.5): the help panel renders the same static command table the
+/// parser uses, so help can never advertise an unimplemented command.
+#[test]
+fn help_panel_lists_every_table_command() {
+    let mut app = testapp::help(ThemeKind::Dark);
+    let mut content = text(&draw(&app, 120, 60));
+    for _ in 0..200 {
         app.update(AppEvent::Terminal(crossterm::event::Event::Key(
             crossterm::event::KeyEvent::new(
                 crossterm::event::KeyCode::Down,
@@ -3735,14 +3763,16 @@ fn help_panel_lists_keys_and_safety_notes() {
             ),
         )));
     }
-    let terminal = draw(&app, 80, 24);
-    let content = text(&terminal);
-    assert!(content.contains("Slash commands"));
-    assert!(content.contains("/cancel"));
-    assert!(content.contains("/reload"));
-    assert!(content.contains("Tools run automatically."));
-    assert!(content.contains("Bash is not sandboxed."));
-    assert!(content.contains("No approval UI"));
+    content.push_str(&text(&draw(&app, 120, 60)));
+    for spec in crate::command::COMMANDS {
+        assert!(
+            content.contains(spec.name),
+            "help is missing the {} entry",
+            spec.name
+        );
+    }
+    assert!(content.contains("/refresh"));
+    assert!(content.contains("/rename"));
 }
 
 #[test]
