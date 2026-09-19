@@ -61,17 +61,23 @@ impl App {
             // Continuing a read-only browse must not consume the draft: the
             // text the user typed stays in the composer for the next Enter
             // (spec §10.1). Every other slash command owns the line it ran.
-            let keeps_draft = matches!(
-                crate::command::parse_command(&text),
-                Ok(crate::command::LocalCommand::Resume)
-            ) && self.sessions.active.as_ref().is_some_and(|active| {
-                self.sessions
-                    .known
-                    .get(active)
-                    .is_some_and(|view| view.browsing)
-            });
+            let parsed = crate::command::parse_command(&text);
+            let keeps_browse_draft =
+                matches!(parsed.as_ref(), Ok(crate::command::LocalCommand::Resume))
+                    && self.sessions.active.as_ref().is_some_and(|active| {
+                        self.sessions
+                            .known
+                            .get(active)
+                            .is_some_and(|view| view.browsing)
+                    });
+            // `/editor` captures the exact Composer revision before the
+            // external process starts. Keep the command buffer stable until
+            // that job returns; clearing it here would make every successful
+            // editor result look stale even though no user draft changed.
+            let keeps_editor_draft =
+                matches!(parsed.as_ref(), Ok(crate::command::LocalCommand::Editor));
             let commands = self.run_command(&text);
-            if !keeps_draft {
+            if !keeps_browse_draft && !keeps_editor_draft {
                 self.composer.clear();
             }
             return commands;
@@ -856,6 +862,14 @@ impl App {
             },
             JobOutcome::Export { capture, outcome } => {
                 return self.on_export_job_finished(capture, outcome);
+            }
+            JobOutcome::Config {
+                path,
+                config,
+                result,
+            } => return self.on_config_finished(path, config, result),
+            JobOutcome::Editor { capture, outcome } => {
+                return self.on_editor_finished(capture, outcome);
             }
         }
         Vec::new()

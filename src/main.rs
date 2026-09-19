@@ -46,7 +46,7 @@ const RPC_BATCH_COOLDOWN: Duration = Duration::from_millis(1);
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let opts = match args::parse(std::env::args().skip(1)) {
+    let mut opts = match args::parse(std::env::args().skip(1)) {
         Ok(opts) => opts,
         Err(error) => {
             eprintln!("minicore-tui: {error}");
@@ -61,6 +61,32 @@ async fn main() -> ExitCode {
     if opts.version {
         println!("minicore-tui {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
+    }
+
+    let config_path = opts
+        .config_path
+        .clone()
+        .unwrap_or_else(minicore_tui::config::default_path);
+    let mut tui_config = match minicore_tui::config::load(&config_path, opts.config_path.is_some())
+    {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("minicore-tui: configuration error: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    if tui_config.editor.is_none() {
+        match minicore_tui::config::editor_from_environment() {
+            Ok(editor) => tui_config.editor = editor,
+            Err(error) => {
+                eprintln!("minicore-tui: configuration error: {error}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    if let Err(error) = opts.apply_tui_config(&tui_config) {
+        eprintln!("minicore-tui: configuration error: {error}");
+        return ExitCode::from(2);
     }
 
     // Spawn the agent before the alternate screen: config validation and
@@ -86,7 +112,15 @@ async fn main() -> ExitCode {
     };
 
     let mut jobs = LocalJobs::new();
-    let run_result = run_fullscreen(&mut guard, &mut process, &mut jobs, &opts).await;
+    let run_result = run_fullscreen(
+        &mut guard,
+        &mut process,
+        &mut jobs,
+        &opts,
+        config_path,
+        tui_config,
+    )
+    .await;
     // Join every owned local job before restoring the terminal; each worker is
     // deadline-bounded, so a hung helper cannot extend this forever.
     jobs.shutdown().await;
@@ -165,6 +199,8 @@ async fn run_fullscreen(
     process: &mut RpcProcess,
     jobs: &mut LocalJobs,
     opts: &Args,
+    config_path: PathBuf,
+    tui_config: minicore_tui::config::TuiConfig,
 ) -> io::Result<()> {
     let workspace = if opts.workspace_explicit {
         opts.workspace.clone()
@@ -185,7 +221,8 @@ async fn run_fullscreen(
         open_new_session_on_ready: opts.workspace_explicit && startup_session.is_none(),
         startup_session,
     };
-    let mut app = App::with_cli_prefs(workspace, prefs);
+    let mut app = App::with_tui_config(workspace, config_path, tui_config);
+    app.set_cli_prefs(prefs);
     app.update(AppEvent::SetTheme(opts.theme));
     app.enable_async_layout();
     app.enable_async_decode();
@@ -193,7 +230,6 @@ async fn run_fullscreen(
     // enqueues a line (spec 13/§5.5). Dropping it at the end joins the writer.
     let debug_log = DebugLog::new(opts.debug);
 
-    let terminal = guard.terminal_mut();
     // The application does not create a blocking input-reader thread.
     // Crossterm's EventStream owns its reader and uses its Drop behavior to
     // wake/stop it; the exact internal implementation remains Crossterm's
@@ -205,7 +241,7 @@ async fn run_fullscreen(
 
     // Bootstrap fires the four discovery requests concurrently (spec 6).
     let commands = app.update(AppEvent::Bootstrap);
-    if run_commands(process, &mut app, jobs, commands, &debug_log).await? {
+    if run_commands(guard, process, &mut app, jobs, commands, &debug_log).await? {
         return Ok(());
     }
 
@@ -218,20 +254,26 @@ async fn run_fullscreen(
     loop {
         // Measured geometry flows back through `AppEvent::Viewport`; the
         // renderer never writes scroll state (spec 3, 7).
-        let size = terminal.size()?;
-        if (size.width as usize, size.height as usize) != last_size {
-            app.update(AppEvent::TerminalSize {
-                width: size.width,
-                height: size.height,
-            });
-            last_size = (size.width as usize, size.height as usize);
+        if !app.editor_active() {
+            let size = guard.terminal_mut().size()?;
+            if (size.width as usize, size.height as usize) != last_size {
+                app.update(AppEvent::TerminalSize {
+                    width: size.width,
+                    height: size.height,
+                });
+                last_size = (size.width as usize, size.height as usize);
+            }
         }
         if shutdown_timeout_command(&app).is_some() {
             return Err(force_kill_and_report(process, &mut app).await);
         }
         let shutdown_deadline = app.shutdown_remaining();
         let tick_sleep = tick_deadline.arm(app.next_tick(), Instant::now());
-        let render_deadline = render_deadline(app.dirty, last_render.elapsed());
+        let render_deadline = if app.editor_active() {
+            None
+        } else {
+            render_deadline(app.dirty, last_render.elapsed())
+        };
         let rpc_cooldown =
             rpc_cooldown_until.map(|deadline| deadline.saturating_duration_since(Instant::now()));
 
@@ -240,7 +282,7 @@ async fn run_fullscreen(
             maybe = process.recv(), if rpc_open && rpc_cooldown_until.is_none() => Selected::Rpc(maybe),
             () = sleep_or_pending(rpc_cooldown), if rpc_cooldown_until.is_some() => Selected::RpcCooldown,
             maybe = jobs.events().recv() => Selected::Job(maybe),
-            maybe = events.next() => match maybe {
+            maybe = events.next(), if !app.editor_active() => match maybe {
                 Some(Ok(event)) => Selected::Terminal(event),
                 Some(Err(error)) => {
                     return Err(io::Error::new(
@@ -265,12 +307,13 @@ async fn run_fullscreen(
                 }
             }
             Selected::Rpc(Some(event)) => {
-                let batch = run_rpc_batch(process, &mut app, jobs, event, &debug_log).await?;
+                let batch =
+                    run_rpc_batch(guard, process, &mut app, jobs, event, &debug_log).await?;
                 if batch.exit {
                     exit = true;
                 } else if batch.channel_ended {
                     let commands = rpc_channel_ended(&mut rpc_open, &mut app);
-                    if run_commands(process, &mut app, jobs, commands, &debug_log).await? {
+                    if run_commands(guard, process, &mut app, jobs, commands, &debug_log).await? {
                         exit = true;
                     }
                 } else {
@@ -279,7 +322,7 @@ async fn run_fullscreen(
             }
             Selected::Rpc(None) => {
                 let commands = rpc_channel_ended(&mut rpc_open, &mut app);
-                if run_commands(process, &mut app, jobs, commands, &debug_log).await? {
+                if run_commands(guard, process, &mut app, jobs, commands, &debug_log).await? {
                     exit = true;
                 }
             }
@@ -288,9 +331,17 @@ async fn run_fullscreen(
                 tokio::task::yield_now().await;
             }
             Selected::Job(Some(event)) => {
-                let commands = app.update(event);
+                let commands = if matches!(&event, AppEvent::JobFinished(JobOutcome::Editor { .. }))
+                {
+                    guard
+                        .resume()
+                        .map_err(|error| io::Error::other(error.to_string()))?;
+                    app.update(event)
+                } else {
+                    app.update(event)
+                };
                 jobs.reap_finished().await;
-                if run_commands(process, &mut app, jobs, commands, &debug_log).await? {
+                if run_commands(guard, process, &mut app, jobs, commands, &debug_log).await? {
                     exit = true;
                 }
             }
@@ -300,8 +351,12 @@ async fn run_fullscreen(
                 ));
             }
             Selected::Terminal(event) => {
-                let commands = app.update(AppEvent::Terminal(event));
-                if run_commands(process, &mut app, jobs, commands, &debug_log).await? {
+                let commands = if app.editor_active() {
+                    Vec::new()
+                } else {
+                    app.update(AppEvent::Terminal(event))
+                };
+                if run_commands(guard, process, &mut app, jobs, commands, &debug_log).await? {
                     exit = true;
                 }
             }
@@ -311,7 +366,7 @@ async fn run_fullscreen(
             Selected::Signal => {
                 signal_fired = true;
                 let commands = app.update(AppEvent::ShutdownRequested);
-                if run_commands(process, &mut app, jobs, commands, &debug_log).await? {
+                if run_commands(guard, process, &mut app, jobs, commands, &debug_log).await? {
                     exit = true;
                 }
             }
@@ -319,9 +374,12 @@ async fn run_fullscreen(
                 dispatch_due_tick(&mut app, &mut tick_deadline, Instant::now());
             }
             Selected::Render => {
-                let size = terminal.size()?;
+                if app.editor_active() {
+                    continue;
+                }
+                let size = guard.terminal_mut().size()?;
                 prepare_frame_with_jobs(&mut app, jobs, Rect::new(0, 0, size.width, size.height));
-                terminal.draw(|frame| ui::render(frame, &app))?;
+                guard.terminal_mut().draw(|frame| ui::render(frame, &app))?;
                 last_render = Instant::now();
                 app.update(AppEvent::Rendered);
             }
@@ -337,10 +395,10 @@ async fn run_fullscreen(
 
         // Render when state changed and the 30 FPS budget allows it; the
         // Rendered event clears the dirty flag so idle frames never draw.
-        if app.dirty && last_render.elapsed() >= RENDER_INTERVAL {
-            let size = terminal.size()?;
+        if !app.editor_active() && app.dirty && last_render.elapsed() >= RENDER_INTERVAL {
+            let size = guard.terminal_mut().size()?;
             prepare_frame_with_jobs(&mut app, jobs, Rect::new(0, 0, size.width, size.height));
-            terminal.draw(|frame| ui::render(frame, &app))?;
+            guard.terminal_mut().draw(|frame| ui::render(frame, &app))?;
             last_render = Instant::now();
             app.update(AppEvent::Rendered);
         }
@@ -423,6 +481,7 @@ struct RpcBatchResult {
 /// `RpcProcess`'s bounded channel for the next select turn, so no frame is
 /// dropped merely to preserve fairness.
 async fn run_rpc_batch(
+    guard: &mut TerminalGuard,
     process: &mut RpcProcess,
     app: &mut App,
     jobs: &mut LocalJobs,
@@ -436,7 +495,7 @@ async fn run_rpc_batch(
     while let Some(event) = pending {
         processed += 1;
         let commands = app.update(AppEvent::Rpc(event));
-        if run_commands(process, app, jobs, commands, debug_log).await? {
+        if run_commands(guard, process, app, jobs, commands, debug_log).await? {
             return Ok(RpcBatchResult {
                 exit: true,
                 channel_ended: false,
@@ -563,6 +622,7 @@ fn schedule_pending_decode(app: &mut App, jobs: &mut LocalJobs) {
 }
 
 async fn run_commands(
+    guard: &mut TerminalGuard,
     process: &mut RpcProcess,
     app: &mut App,
     jobs: &mut LocalJobs,
@@ -632,6 +692,30 @@ async fn run_commands(
                         }));
                         queue.extend(more);
                     }
+                }
+            }
+            AppCommand::PersistConfig(request) => {
+                if let Err(_busy) = jobs.start_config_write(*request) {
+                    let more = app.update(AppEvent::JobFinished(JobOutcome::Config {
+                        path: app.config_path.clone(),
+                        config: app.tui_config.clone(),
+                        result: Err("another settings write is still in progress".to_owned()),
+                    }));
+                    queue.extend(more);
+                }
+            }
+            AppCommand::StartEditor(request) => {
+                let request = *request;
+                if let Err(error) = guard.suspend() {
+                    return Err(io::Error::other(format!(
+                        "failed to suspend terminal for external editor: {error}"
+                    )));
+                }
+                if let Err(_busy) = jobs.start_editor(request) {
+                    guard
+                        .resume()
+                        .map_err(|error| io::Error::other(error.to_string()))?;
+                    return Err(io::Error::other("another external editor is still running"));
                 }
             }
             AppCommand::KillChild => process.kill_child(),

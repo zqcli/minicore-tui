@@ -26,6 +26,10 @@ pub enum AppCommand {
     /// Start the one owned export writer with an already-validated target and
     /// the bounded channel it drains (spec §17.4).
     StartExport(Box<StartExportRequest>),
+    /// Persist the local TUI config through one owned blocking job.
+    PersistConfig(Box<PersistConfigRequest>),
+    /// Start one owned external-editor job for the captured draft.
+    StartEditor(Box<StartEditorRequest>),
     /// The agent process is fully gone (or never existed); leave the TUI.
     Exit,
 }
@@ -55,6 +59,19 @@ impl std::fmt::Debug for StartExportRequest {
             .field("raw_oversized", &self.spec.raw_oversized)
             .finish()
     }
+}
+
+#[derive(Debug)]
+pub struct PersistConfigRequest {
+    pub path: std::path::PathBuf,
+    pub config: crate::config::TuiConfig,
+}
+
+#[derive(Debug)]
+pub struct StartEditorRequest {
+    pub capture: crate::jobs::EditorCapture,
+    pub editor: crate::config::EditorConfig,
+    pub draft: String,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -134,6 +151,10 @@ pub enum LocalCommand {
     Model,
     /// Open the reasoning selector (target: a new session).
     Reasoning,
+    /// Open the local TUI settings form.
+    Settings,
+    /// Open the external editor for the current draft.
+    Editor,
     /// Switch the color palette.
     Theme(ThemeKind),
     /// Clear the local transcript view and reload the active session.
@@ -289,6 +310,18 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "reasoning",
         usage: "/reasoning",
         summary: "choose the reasoning level for a new session",
+        args: CommandArgs::None,
+    },
+    CommandSpec {
+        name: "settings",
+        usage: "/settings",
+        summary: "edit local TUI preferences and launch paths",
+        args: CommandArgs::None,
+    },
+    CommandSpec {
+        name: "editor",
+        usage: "/editor",
+        summary: "edit the current draft in the configured external editor",
         args: CommandArgs::None,
     },
     CommandSpec {
@@ -541,6 +574,8 @@ pub fn parse_command(input: &str) -> Result<LocalCommand, CommandIssue> {
         ("sessions", _) => no_args(LocalCommand::Sessions),
         ("model", _) => no_args(LocalCommand::Model),
         ("reasoning", _) => no_args(LocalCommand::Reasoning),
+        ("settings", _) => no_args(LocalCommand::Settings),
+        ("editor", _) => no_args(LocalCommand::Editor),
         ("clear", _) => no_args(LocalCommand::Clear),
         ("refresh", _) => no_args(LocalCommand::Refresh),
         ("help", _) => no_args(LocalCommand::Help),
@@ -623,6 +658,8 @@ mod tests {
         assert_eq!(parse_command("/sessions"), Ok(LocalCommand::Sessions));
         assert_eq!(parse_command("/model"), Ok(LocalCommand::Model));
         assert_eq!(parse_command("/reasoning"), Ok(LocalCommand::Reasoning));
+        assert_eq!(parse_command("/settings"), Ok(LocalCommand::Settings));
+        assert_eq!(parse_command("/editor"), Ok(LocalCommand::Editor));
         assert_eq!(
             parse_command("/theme dark"),
             Ok(LocalCommand::Theme(ThemeKind::Dark))

@@ -133,6 +133,8 @@ pub fn screen_layout(app: &App, area: Rect) -> ScreenLayout {
         Dock::Search(_) => search_panel_height(content.height),
         // The export form is a compact fixed-height form.
         Dock::Export(_) => panel_height(short).saturating_add(4),
+        // Settings needs one row per fixed field plus the footer.
+        Dock::Settings(_) => panel_height(short).saturating_add(7),
         Dock::SessionSelector(state) => panel_height(short).saturating_add(u16::from(!matches!(
             &state.mode,
             crate::state::selection::SessionPanelMode::Browse

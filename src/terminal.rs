@@ -85,6 +85,7 @@ impl<W: io::Write> Drop for TerminalWriter<W> {
 pub struct TerminalGuard {
     terminal: Terminal<CrosstermBackend<TerminalWriter<Stdout>>>,
     restored: RestoreLatch,
+    suspended: bool,
 }
 
 impl TerminalGuard {
@@ -111,6 +112,7 @@ impl TerminalGuard {
         Ok(Self {
             terminal,
             restored: RestoreLatch::default(),
+            suspended: false,
         })
     }
 
@@ -124,7 +126,62 @@ impl TerminalGuard {
     pub fn restore(&mut self) -> Result<(), TerminalError> {
         // Ratatui's Terminal::drop may flush Show after our restore sequence.
         self.terminal.backend_mut().writer_mut().discard_pending();
-        self.restored.attempt(|| attempt_restore(&mut io::stdout()))
+        let result = self.restored.attempt(|| attempt_restore(&mut io::stdout()));
+        if result.is_ok() {
+            self.suspended = false;
+        }
+        result
+    }
+
+    /// Temporarily leaves the alternate screen for a direct external editor.
+    /// RPC readers and the App loop remain alive; the main loop simply ignores
+    /// terminal input and drawing until [`Self::resume`] completes.
+    pub fn suspend(&mut self) -> Result<(), TerminalError> {
+        if self.suspended {
+            return Ok(());
+        }
+        self.terminal.backend_mut().writer_mut().discard_pending();
+        let result = {
+            let writer = self.terminal.backend_mut().writer_mut();
+            attempt_restore(writer)
+        };
+        if result.is_ok() {
+            self.suspended = true;
+            self.restored.done = true;
+        }
+        result
+    }
+
+    /// Re-enters the alternate screen after the owned editor exits. The clear
+    /// forces a fresh frame; callers also invalidate app geometry through the
+    /// editor completion reducer path.
+    pub fn resume(&mut self) -> Result<(), TerminalError> {
+        if !self.suspended {
+            return Ok(());
+        }
+        enable_raw_mode().map_err(|err| TerminalError::new("resume raw mode", err))?;
+        let mut screen = ScreenState::default();
+        let result = {
+            let writer = self.terminal.backend_mut().writer_mut();
+            screen.apply(writer)
+        }
+        .and_then(|()| {
+            self.terminal
+                .clear()
+                .map_err(|err| TerminalError::new("clear resumed terminal", err))
+        });
+        if let Err(error) = result {
+            screen.rollback(self.terminal.backend_mut().writer_mut());
+            let _ = disable_raw_mode();
+            return Err(error);
+        }
+        self.suspended = false;
+        self.restored.done = false;
+        Ok(())
+    }
+
+    pub fn is_suspended(&self) -> bool {
+        self.suspended
     }
 
     fn create_terminal() -> Result<Terminal<CrosstermBackend<TerminalWriter<Stdout>>>, TerminalError>

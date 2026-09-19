@@ -471,9 +471,7 @@ impl App {
         let prompts = self.loaded_prompts(&session_id);
         let current = self.current_prompt_position(&session_id);
         let target = match (direction, current) {
-            (d, Some(current)) if d < 0 => {
-                prompts.iter().filter(|entry| entry.0 < current).next_back()
-            }
+            (d, Some(current)) if d < 0 => prompts.iter().rfind(|entry| entry.0 < current),
             (d, Some(current)) if d > 0 => prompts.iter().find(|entry| entry.0 > current),
             // No known viewport position: `/prev` starts at the newest loaded
             // prompt, `/next` at the oldest one.
@@ -803,9 +801,7 @@ impl App {
                 let prompts = self.loaded_prompts(session_id);
                 let found = match direction {
                     d if d < 0 => before
-                        .and_then(|before| {
-                            prompts.iter().filter(|entry| entry.0 < before).next_back()
-                        })
+                        .and_then(|before| prompts.iter().rfind(|entry| entry.0 < before))
                         .or_else(|| before.is_none().then(|| prompts.last()).flatten()),
                     _ => before.and_then(|before| prompts.iter().find(|entry| entry.0 > before)),
                 };

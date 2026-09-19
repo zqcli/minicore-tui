@@ -17,7 +17,7 @@ use crate::jobs::{DecodeIdentity, DecodeRequest, LocalScanIdentity, LocalScanReq
 use crate::keymap::{self, Action, EditorCursor};
 use crate::protocol::{
     AgentEventWire, EventMetaWire, IncomingFrame, METHOD_LIST_MODELS, METHOD_LIST_PROFILES,
-    METHOD_LIST_SESSIONS, ModelInfo, OutgoingRequest, OutputChannelWire, ProfileInfo,
+    METHOD_LIST_SESSIONS, METHOD_PING, ModelInfo, OutgoingRequest, OutputChannelWire, ProfileInfo,
     READ_PAGE_LIMIT, READ_PAGE_MAX_BYTES, Reasoning, RequestId, RpcNotification, RpcResponse,
     RpcResponseError, SessionInfo, SessionStateWire, SessionStatusWire, ToolDisplayWire,
     ToolOutcomeWire, ToolProgressWire, TurnAvailability, TurnPersistenceWire, TurnRef,
@@ -412,6 +412,11 @@ pub struct App {
     /// counter for the spinner, and the Phase 5 composer.
     pub theme: ThemeKind,
     pub reasoning_visible: bool,
+    /// Local TUI preferences and the file they came from. These never contain
+    /// provider credentials or Agent catalog data.
+    pub tui_config: crate::config::TuiConfig,
+    pub config_path: PathBuf,
+    pub agent_restart_required: bool,
     pub frame_count: u64,
     pub composer: Composer,
     /// Local slash candidates derived from `command::COMMANDS`.
@@ -535,6 +540,11 @@ pub struct App {
     /// paused while it is set (backpressure, never an unbounded buffer).
     export_outbox: VecDeque<crate::jobs::ExportInbound>,
     export_hold: bool,
+    /// Previous preferences retained until an atomic settings write reports.
+    settings_previous: Option<crate::config::TuiConfig>,
+    settings_previous_restart_required: Option<bool>,
+    editor_capture: Option<crate::jobs::EditorCapture>,
+    next_editor_operation: u64,
     /// Paged authoritative result bodies keyed by their exact TurnRef. Their
     /// item indexes are turn-local and never enter the session history window.
     turn_results: HashMap<TurnRef, crate::app::history::TurnResultWindow>,
@@ -624,6 +634,33 @@ impl ReloadProgress {
     }
 }
 
+fn startup_error_message(method: &str, error: &RpcResponseError) -> String {
+    match error {
+        RpcResponseError::Parse(error) => {
+            format!("protocol error during startup request {method}: {error}")
+        }
+        RpcResponseError::Malformed => {
+            format!("protocol error during startup request {method}: malformed response")
+        }
+        RpcResponseError::Agent(error) => {
+            let category = match error.code {
+                crate::protocol::STORE_ERROR => "storage error",
+                crate::protocol::PROVIDER_ERROR => "provider error",
+                -32_014 => "Agent configuration rejected",
+                _ => match error.data.as_ref().map(|data| data.kind.as_str()) {
+                    Some("storage" | "store") => "storage error",
+                    Some("provider") => "provider error",
+                    Some("config" | "configuration" | "agent_config") => {
+                        "Agent configuration rejected"
+                    }
+                    _ => "Agent startup error",
+                },
+            };
+            format!("{category} during startup request {method}: {error}")
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionActionSafety {
     Safe,
@@ -660,6 +697,9 @@ impl App {
             child_exit_status: None,
             theme: ThemeKind::Dark,
             reasoning_visible: true,
+            tui_config: crate::config::TuiConfig::default(),
+            config_path: crate::config::default_path(),
+            agent_restart_required: false,
             frame_count: 0,
             composer: Composer::default(),
             slash_completion: None,
@@ -718,6 +758,10 @@ impl App {
             export_cancel: None,
             export_outbox: VecDeque::new(),
             export_hold: false,
+            settings_previous: None,
+            settings_previous_restart_required: None,
+            editor_capture: None,
+            next_editor_operation: 0,
             turn_results: HashMap::new(),
             retained_results: HashMap::new(),
             retained_result_order: VecDeque::new(),
@@ -743,12 +787,16 @@ impl App {
     /// next-session seats (spec 6.1).
     pub fn with_cli_prefs(default_workspace: PathBuf, prefs: CliPrefs) -> Self {
         let mut app = Self::new(default_workspace);
-        app.catalogs.next_profile = prefs.profile;
-        app.catalogs.next_model = prefs.model;
-        app.catalogs.next_reasoning = prefs.reasoning;
-        app.open_new_session_on_ready = prefs.open_new_session_on_ready;
-        app.startup_session = prefs.startup_session;
+        app.set_cli_prefs(prefs);
         app
+    }
+
+    pub fn set_cli_prefs(&mut self, prefs: CliPrefs) {
+        self.catalogs.next_profile = prefs.profile;
+        self.catalogs.next_model = prefs.model;
+        self.catalogs.next_reasoning = prefs.reasoning;
+        self.open_new_session_on_ready = prefs.open_new_session_on_ready;
+        self.startup_session = prefs.startup_session;
     }
 
     /// Constructs an app with a caller-supplied monotonic clock. This is
@@ -1385,6 +1433,37 @@ impl App {
             .as_ref()
             .filter(|durable| durable.key == key)
             .cloned()
+    }
+
+    /// Constructs the app with already-resolved local preferences. Startup
+    /// applies these before Bootstrap so the first frame uses the same theme
+    /// and visibility choices as later settings changes.
+    pub fn with_tui_config(
+        default_workspace: PathBuf,
+        config_path: PathBuf,
+        config: crate::config::TuiConfig,
+    ) -> Self {
+        let mut app = Self::new(default_workspace);
+        app.config_path = config_path;
+        app.apply_tui_config(config);
+        app
+    }
+
+    pub fn apply_tui_config(&mut self, config: crate::config::TuiConfig) {
+        self.theme = config.theme;
+        self.reasoning_visible = config.thinking_visible;
+        for view in self.sessions.known.values_mut() {
+            view.tools_expanded = config.tools_expanded;
+        }
+        self.tui_config = config;
+        self.prepared_conversation = None;
+        self.dirty = true;
+    }
+
+    fn new_session_view(&self, info: SessionInfo) -> SessionView {
+        let mut view = SessionView::new(info);
+        view.tools_expanded = self.tui_config.tools_expanded;
+        view
     }
 
     pub fn enable_async_layout(&mut self) {
@@ -2376,7 +2455,7 @@ impl App {
             Dock::ReasoningSelector(_) => Target::ReasoningSelector,
             Dock::ProfileSelector(_) => Target::ProfileSelector,
             Dock::Help | Dock::Logs | Dock::Search(_) => Target::Composer,
-            Dock::Export(_) => Target::Composer,
+            Dock::Export(_) | Dock::Settings(_) => Target::Composer,
         };
         match target {
             Target::Composer => Vec::new(),
@@ -2409,6 +2488,7 @@ impl App {
             Panel,
             Search,
             Export,
+            Settings,
         }
         let target = match &self.dock {
             Dock::Composer => Target::Composer,
@@ -2420,12 +2500,16 @@ impl App {
             Dock::Help | Dock::Logs => Target::Panel,
             Dock::Search(_) => Target::Search,
             Dock::Export(_) => Target::Export,
+            Dock::Settings(_) => Target::Settings,
         };
         match target {
             Target::Composer => {}
             Target::Search => self.close_search(),
             Target::Export => {
                 self.export_escape();
+            }
+            Target::Settings => {
+                self.settings_escape();
             }
             Target::SessionSelector => self.dock = Dock::Composer,
             Target::NewSession => {
@@ -3545,6 +3629,33 @@ impl App {
                 Vec::new()
             }
             ExportEscape => self.export_escape(),
+            SettingsTypeChar(c) => {
+                if let Some(state) = self.settings_state_mut() {
+                    state.type_char(c);
+                }
+                Vec::new()
+            }
+            SettingsBackspace => {
+                if let Some(state) = self.settings_state_mut() {
+                    state.backspace();
+                }
+                Vec::new()
+            }
+            SettingsClear => {
+                if let Some(state) = self.settings_state_mut() {
+                    state.clear();
+                }
+                Vec::new()
+            }
+            SettingsFieldStep(delta) => {
+                if let Some(state) = self.settings_state_mut() {
+                    state.step(delta);
+                }
+                Vec::new()
+            }
+            SettingsToggle => self.settings_toggle_or_submit(),
+            SettingsSubmit => self.settings_submit(),
+            SettingsEscape => self.settings_escape(),
             SessionBrowse => self.browse_selected_session(),
             SessionContinue => self.continue_selected_session(),
             SessionScopeToggle => self.toggle_session_scope(),
@@ -3892,6 +4003,8 @@ impl App {
             LocalCommand::Sessions => self.open_selector(SelectorKind::Session),
             LocalCommand::Model => self.open_selector(SelectorKind::Model),
             LocalCommand::Reasoning => self.open_selector(SelectorKind::Reasoning),
+            LocalCommand::Settings => self.open_settings(),
+            LocalCommand::Editor => self.open_external_editor(),
             LocalCommand::Theme(kind) => {
                 self.theme = kind;
                 self.notice(NoticeLevel::Info, format!("theme: {kind:?}"));
@@ -3941,6 +4054,235 @@ impl App {
             LocalCommand::Reload => self.reload(),
             LocalCommand::Quit => self.request_shutdown(),
         }
+    }
+
+    fn settings_state(&self) -> Option<&crate::state::settings::SettingsState> {
+        match &self.dock {
+            Dock::Settings(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    fn settings_state_mut(&mut self) -> Option<&mut crate::state::settings::SettingsState> {
+        match &mut self.dock {
+            Dock::Settings(state) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn open_settings(&mut self) -> Vec<AppCommand> {
+        if !self.guard_ready() {
+            return Vec::new();
+        }
+        if self.settings_previous.is_some() {
+            self.notice(NoticeLevel::Info, "settings are already being saved");
+            return Vec::new();
+        }
+        self.dock = Dock::Settings(crate::state::settings::SettingsState::from_config(
+            &self.tui_config,
+        ));
+        self.panel_scroll = 0;
+        Vec::new()
+    }
+
+    fn settings_toggle_or_submit(&mut self) -> Vec<AppCommand> {
+        let apply = self
+            .settings_state()
+            .is_some_and(|state| state.field == crate::state::settings::SettingsField::Apply);
+        if apply {
+            self.settings_submit()
+        } else {
+            if let Some(state) = self.settings_state_mut() {
+                state.toggle();
+            }
+            Vec::new()
+        }
+    }
+
+    fn settings_submit(&mut self) -> Vec<AppCommand> {
+        let Some(state) = self.settings_state() else {
+            return Vec::new();
+        };
+        if state.submitting {
+            return Vec::new();
+        }
+        let config = match state.build_config() {
+            Ok(config) => config,
+            Err(error) => {
+                if let Some(state) = self.settings_state_mut() {
+                    state.error = Some(error);
+                }
+                return Vec::new();
+            }
+        };
+        let previous = self.tui_config.clone();
+        let agent_changed = previous.agent_executable != config.agent_executable
+            || previous.agent_config != config.agent_config;
+        self.settings_previous_restart_required = Some(self.agent_restart_required);
+        self.settings_previous = Some(previous);
+        self.apply_tui_config(config.clone());
+        self.agent_restart_required |= agent_changed;
+        if let Some(state) = self.settings_state_mut() {
+            state.submitting = true;
+            state.error = None;
+        }
+        vec![AppCommand::PersistConfig(Box::new(
+            crate::command::PersistConfigRequest {
+                path: self.config_path.clone(),
+                config,
+            },
+        ))]
+    }
+
+    fn settings_escape(&mut self) -> Vec<AppCommand> {
+        if self.settings_state().is_some_and(|state| state.submitting) {
+            return Vec::new();
+        }
+        self.settings_previous = None;
+        self.settings_previous_restart_required = None;
+        self.dock = Dock::Composer;
+        Vec::new()
+    }
+
+    pub fn settings_form(&self) -> Option<&crate::state::settings::SettingsState> {
+        self.settings_state()
+    }
+
+    pub fn editor_active(&self) -> bool {
+        self.editor_capture.is_some()
+    }
+
+    fn open_external_editor(&mut self) -> Vec<AppCommand> {
+        if self.editor_active() {
+            self.notice(NoticeLevel::Info, "an external editor is already open");
+            return Vec::new();
+        }
+        let Some(editor) = self.tui_config.editor.clone() else {
+            self.notice(
+                NoticeLevel::Warning,
+                "no external editor is configured; use /settings or MINICORE_TUI_EDITOR",
+            );
+            return Vec::new();
+        };
+        if self.composer.byte_len() > crate::limits::EDITOR_READ_BYTES {
+            self.notice(
+                NoticeLevel::Warning,
+                "the current draft is too large for external editor admission",
+            );
+            return Vec::new();
+        }
+        let session_id = self.sessions.active.clone().unwrap_or_default();
+        let session_epoch = self
+            .sessions
+            .known
+            .get(&session_id)
+            .map(|view| view.session_epoch)
+            .unwrap_or(0);
+        self.next_editor_operation = self.next_editor_operation.wrapping_add(1);
+        let capture = crate::jobs::EditorCapture {
+            operation_id: self.next_editor_operation,
+            session_id,
+            session_epoch,
+            editor_revision: self.composer.editor_revision(),
+        };
+        let draft = self.composer.content();
+        self.editor_capture = Some(capture.clone());
+        vec![AppCommand::StartEditor(Box::new(
+            crate::command::StartEditorRequest {
+                capture,
+                editor,
+                draft,
+            },
+        ))]
+    }
+
+    fn on_editor_finished(
+        &mut self,
+        capture: crate::jobs::EditorCapture,
+        outcome: crate::jobs::EditorOutcome,
+    ) -> Vec<AppCommand> {
+        if self.editor_capture.as_ref() != Some(&capture) {
+            return Vec::new();
+        }
+        self.editor_capture = None;
+        match outcome {
+            crate::jobs::EditorOutcome::Updated(text) => {
+                let current_session = self.sessions.active.clone().unwrap_or_default();
+                let current_epoch = self
+                    .sessions
+                    .known
+                    .get(&current_session)
+                    .map(|view| view.session_epoch)
+                    .unwrap_or(0);
+                if current_session != capture.session_id
+                    || current_epoch != capture.session_epoch
+                    || self.composer.editor_revision() != capture.editor_revision
+                {
+                    self.notice(
+                        NoticeLevel::Warning,
+                        "external editor returned an older draft; newer Composer text was kept",
+                    );
+                } else if text.len() > crate::limits::EDITOR_READ_BYTES {
+                    self.notice(
+                        NoticeLevel::Warning,
+                        "external editor output exceeded the draft readback limit",
+                    );
+                } else {
+                    self.composer.set_text(&text);
+                    ui_actions::refresh_slash_completion(self);
+                    self.notice(NoticeLevel::Info, "draft updated from external editor");
+                }
+            }
+            crate::jobs::EditorOutcome::Cancelled => {
+                self.notice(NoticeLevel::Info, "external editor cancelled; draft kept");
+            }
+            crate::jobs::EditorOutcome::Failed(error) => {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("external editor failed: {error}"),
+                );
+            }
+        }
+        Vec::new()
+    }
+
+    fn on_config_finished(
+        &mut self,
+        path: std::path::PathBuf,
+        config: crate::config::TuiConfig,
+        result: Result<(), String>,
+    ) -> Vec<AppCommand> {
+        if path != self.config_path || self.settings_previous.is_none() {
+            return Vec::new();
+        }
+        match result {
+            Ok(()) => {
+                self.settings_previous = None;
+                self.settings_previous_restart_required = None;
+                if self.agent_restart_required {
+                    self.notice(
+                        NoticeLevel::Info,
+                        "settings saved; Agent path changes apply on the next startup",
+                    );
+                } else {
+                    self.notice(NoticeLevel::Info, "settings saved");
+                }
+                self.dock = Dock::Composer;
+            }
+            Err(error) => {
+                let previous = self.settings_previous.take().unwrap_or_default();
+                self.agent_restart_required = self
+                    .settings_previous_restart_required
+                    .take()
+                    .unwrap_or(false);
+                self.apply_tui_config(previous.clone());
+                let mut state = crate::state::settings::SettingsState::from_config(&previous);
+                state.error = Some(format!("settings were not saved: {error}"));
+                self.dock = Dock::Settings(state);
+            }
+        }
+        let _ = config;
+        Vec::new()
     }
 
     /// `/clear` wipes only the local view of the active session and reloads
@@ -4600,7 +4942,7 @@ impl App {
             } else {
                 self.sessions.known.insert(
                     session.session_id.clone(),
-                    SessionView::new(session.clone()),
+                    self.new_session_view(session.clone()),
                 );
             }
         }
@@ -4789,7 +5131,7 @@ impl App {
     }
 
     fn bootstrap_failure(&mut self, method: &str, error: RpcResponseError) -> Vec<AppCommand> {
-        self.connection_terminated(&format!("bootstrap request {method} failed: {error}"))
+        self.connection_terminated(&startup_error_message(method, &error))
     }
 
     fn on_create_response(&mut self, draft_id: u64, response: &RpcResponse) -> Vec<AppCommand> {
@@ -4822,7 +5164,7 @@ impl App {
         if !self.sessions.known.contains_key(&session_id) {
             self.sessions
                 .known
-                .insert(session_id.clone(), SessionView::new(session.clone()));
+                .insert(session_id.clone(), self.new_session_view(session.clone()));
         }
         self.on_session_response(session_id, response)
     }
@@ -4837,6 +5179,10 @@ impl App {
             RpcEvent::ConnectionClosed => {
                 if self.connection == ConnectionState::ShuttingDown {
                     Vec::new()
+                } else if self.connection == ConnectionState::Starting {
+                    self.connection_terminated(
+                        "Agent configuration rejected or Agent exited before the protocol handshake",
+                    )
                 } else {
                     self.connection_terminated("agent stdout closed unexpectedly")
                 }
@@ -4848,6 +5194,8 @@ impl App {
                         format!("RPC protocol error during shutdown: {error}"),
                     );
                     vec![AppCommand::KillChild]
+                } else if self.connection == ConnectionState::Starting {
+                    self.connection_terminated(&format!("protocol error during startup: {error}"))
                 } else {
                     self.connection_terminated(&format!("RPC protocol error: {error}"))
                 }
@@ -4869,6 +5217,10 @@ impl App {
                     Vec::new()
                 } else if matches!(self.connection, ConnectionState::Failed(_)) {
                     Vec::new()
+                } else if self.connection == ConnectionState::Starting {
+                    self.connection_terminated(&format!(
+                        "Agent configuration rejected or Agent exited before the protocol handshake ({text})"
+                    ))
                 } else {
                     self.connection_terminated(&format!("agent exited: {text}"))
                 }
@@ -4881,7 +5233,13 @@ impl App {
             self.shutdown_child_exited = true;
             return vec![AppCommand::Exit];
         }
-        self.connection_terminated("agent RPC channel closed unexpectedly")
+        if self.connection == ConnectionState::Starting {
+            self.connection_terminated(
+                "Agent configuration rejected or Agent exited before the protocol handshake",
+            )
+        } else {
+            self.connection_terminated("agent RPC channel closed unexpectedly")
+        }
     }
 
     fn connection_terminated(&mut self, reason: &str) -> Vec<AppCommand> {
@@ -5002,14 +5360,14 @@ impl App {
                 match response.parse_ping() {
                     Ok(pong) => {
                         if let Err(error) = validate_backend(&pong) {
-                            let msg = error.to_string();
+                            let msg = format!("protocol incompatible during startup: {error}");
                             self.notice(NoticeLevel::Error, &msg);
                             self.connection = ConnectionState::Failed(msg);
                             return Vec::new();
                         }
                     }
                     Err(err) => {
-                        let msg = format!("agent.ping failed: {err}");
+                        let msg = startup_error_message(METHOD_PING, &err);
                         self.notice(NoticeLevel::Error, &msg);
                         self.connection = ConnectionState::Failed(msg);
                         return Vec::new();
@@ -5066,10 +5424,8 @@ impl App {
                         self.sessions.list = sessions.clone();
                         for session in sessions {
                             let session_id = session.session_id.clone();
-                            self.sessions
-                                .known
-                                .entry(session_id)
-                                .or_insert_with(|| SessionView::new(session));
+                            let view = self.new_session_view(session);
+                            self.sessions.known.entry(session_id).or_insert(view);
                         }
                         self.bootstrap_progress(BootstrapPart::Sessions)
                     }
@@ -5307,9 +5663,10 @@ impl App {
                         (view.state.is_none() && !open_pending, false)
                     }
                     None => {
-                        self.sessions
-                            .known
-                            .insert(session_id.clone(), SessionView::new(data.session.clone()));
+                        self.sessions.known.insert(
+                            session_id.clone(),
+                            self.new_session_view(data.session.clone()),
+                        );
                         (!open_pending, true)
                     }
                 };
@@ -6452,6 +6809,43 @@ mod tests {
 
     fn test_app() -> App {
         App::new(PathBuf::from("/project"))
+    }
+
+    #[test]
+    fn startup_errors_keep_protocol_provider_storage_and_config_categories() {
+        let cases = [
+            (
+                RpcResponseError::Parse(serde_json::from_str::<Value>("{").unwrap_err()),
+                "protocol error",
+            ),
+            (
+                RpcResponseError::Agent(crate::protocol::RpcError {
+                    code: crate::protocol::PROVIDER_ERROR,
+                    message: "provider unavailable".to_owned(),
+                    data: None,
+                }),
+                "provider error",
+            ),
+            (
+                RpcResponseError::Agent(crate::protocol::RpcError {
+                    code: crate::protocol::STORE_ERROR,
+                    message: "store unavailable".to_owned(),
+                    data: None,
+                }),
+                "storage error",
+            ),
+            (
+                RpcResponseError::Agent(crate::protocol::RpcError {
+                    code: -32_014,
+                    message: "invalid config".to_owned(),
+                    data: None,
+                }),
+                "Agent configuration rejected",
+            ),
+        ];
+        for (error, category) in cases {
+            assert!(startup_error_message("agent.ping", &error).contains(category));
+        }
     }
 
     /// A clipboard job result carrying the app's current capture identity, so

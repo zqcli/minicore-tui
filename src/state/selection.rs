@@ -28,6 +28,8 @@ pub enum Dock {
     /// The local export form (spec §17.4): a target path, the explicit
     /// content choices and the export's progress/limitations.
     Export(crate::state::export::ExportFormState),
+    /// Local TUI preferences; applying this form persists only the TUI config.
+    Settings(crate::state::settings::SettingsState),
 }
 
 /// The highlighted field in the new-session form (spec 25.3).

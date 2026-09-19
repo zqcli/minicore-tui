@@ -228,8 +228,8 @@ pub enum AppEvent {
     LocalScanFinished(Box<crate::jobs::LocalScanOutcome>),
 }
 
-/// The result of one owned local job (clipboard now; export and the draft
-/// editor plug in here when they land).
+/// The result of one owned local job. Each side effect carries enough identity
+/// for the reducer to reject stale completions.
 #[derive(Debug)]
 pub enum JobOutcome {
     /// The native clipboard adapter finished. The session/revision identify
@@ -246,5 +246,17 @@ pub enum JobOutcome {
     Export {
         capture: crate::jobs::ExportCapture,
         outcome: crate::jobs::ExportOutcome,
+    },
+    /// The local TUI config write finished; the config itself is never sent
+    /// to Agent or included in provider traffic.
+    Config {
+        path: std::path::PathBuf,
+        config: crate::config::TuiConfig,
+        result: Result<(), String>,
+    },
+    /// The direct external editor returned under its exact draft identity.
+    Editor {
+        capture: crate::jobs::EditorCapture,
+        outcome: crate::jobs::EditorOutcome,
     },
 }

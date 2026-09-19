@@ -241,11 +241,52 @@ pub struct ExportCapture {
     pub session_epoch: u64,
 }
 
+/// Exact draft identity carried through an external editor process. A return
+/// from an older session/revision/epoch is feedback only and cannot replace a
+/// newer Composer buffer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EditorCapture {
+    pub operation_id: u64,
+    pub session_id: String,
+    pub session_epoch: u64,
+    pub editor_revision: u64,
+}
+
+/// The editor job never returns provider output or raw process streams.
+#[derive(Eq, PartialEq)]
+pub enum EditorOutcome {
+    Updated(String),
+    Cancelled,
+    Failed(String),
+}
+
+impl std::fmt::Debug for EditorOutcome {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Updated(text) => formatter
+                .debug_struct("Updated")
+                .field("bytes", &text.len())
+                .finish(),
+            Self::Cancelled => formatter.write_str("Cancelled"),
+            Self::Failed(error) => formatter
+                .debug_struct("Failed")
+                .field("error_bytes", &error.len())
+                .finish(),
+        }
+    }
+}
+
 /// The one owned writer slot is still occupied by an earlier export whose
 /// typed completion has not been drained. The caller keeps the newer request
 /// unstarted instead of overwriting the owner handle (spec §17.4).
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct ExportBusyError;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct ConfigBusyError;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct EditorBusyError;
 
 /// The final state of one owned export job.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -313,6 +354,9 @@ pub struct LocalJobs {
     /// Set by `shutdown` (and by a stray writer loss) to wake a writer blocked
     /// on its channel even while the App still holds its sender.
     export_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    config_task: Option<JoinHandle<()>>,
+    editor_task: Option<JoinHandle<()>>,
+    editor_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Default for LocalJobs {
@@ -549,6 +593,9 @@ impl LocalJobs {
             scan_task: Some(scan_task),
             export_task: None,
             export_cancel: None,
+            config_task: None,
+            editor_task: None,
+            editor_cancel: None,
         }
     }
 
@@ -740,10 +787,71 @@ impl LocalJobs {
         self.export_task.is_some()
     }
 
+    pub fn has_editor_in_flight(&self) -> bool {
+        self.editor_task.is_some()
+    }
+
+    pub fn start_config_write(
+        &mut self,
+        request: crate::command::PersistConfigRequest,
+    ) -> Result<JobId, ConfigBusyError> {
+        if self.config_task.is_some() {
+            return Err(ConfigBusyError);
+        }
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        let events = self.events_tx.clone();
+        let path = request.path;
+        let config = request.config;
+        let event_path = path.clone();
+        let event_config = config.clone();
+        self.config_task = Some(tokio::task::spawn_blocking(move || {
+            let result = crate::config::persist(&path, &config).map_err(|error| error.to_string());
+            let _ = events.blocking_send(AppEvent::JobFinished(JobOutcome::Config {
+                path: event_path,
+                config: event_config,
+                result,
+            }));
+        }));
+        Ok(id)
+    }
+
+    pub fn start_editor(
+        &mut self,
+        request: crate::command::StartEditorRequest,
+    ) -> Result<JobId, EditorBusyError> {
+        if self.editor_task.is_some() {
+            return Err(EditorBusyError);
+        }
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        let events = self.events_tx.clone();
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel_for_job = Arc::clone(&cancel);
+        let capture = request.capture;
+        let editor = request.editor;
+        let draft = request.draft;
+        self.editor_cancel = Some(cancel);
+        self.editor_task = Some(tokio::task::spawn_blocking(move || {
+            let outcome = run_editor_job(&editor, &draft, &cancel_for_job);
+            let _ = events.blocking_send(AppEvent::JobFinished(JobOutcome::Editor {
+                capture,
+                outcome,
+            }));
+        }));
+        Ok(id)
+    }
+
     /// Signals the owned export writer to abort now. It does not wait for the
     /// writer to finish; `shutdown` joins the handle right after.
     fn request_export_abort(&mut self) {
         if let Some(cancel) = self.export_cancel.as_ref() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn request_editor_abort(&mut self) {
+        if let Some(cancel) = self.editor_cancel.as_ref() {
             cancel.store(true, Ordering::Relaxed);
         }
     }
@@ -774,6 +882,25 @@ impl LocalJobs {
             if let Some(handle) = self.export_task.take() {
                 let _ = handle.await;
             }
+        }
+        if self
+            .config_task
+            .as_ref()
+            .is_some_and(|handle| handle.is_finished())
+        {
+            if let Some(handle) = self.config_task.take() {
+                let _ = handle.await;
+            }
+        }
+        if self
+            .editor_task
+            .as_ref()
+            .is_some_and(|handle| handle.is_finished())
+        {
+            if let Some(handle) = self.editor_task.take() {
+                let _ = handle.await;
+            }
+            self.editor_cancel = None;
         }
     }
 
@@ -834,6 +961,22 @@ impl LocalJobs {
             }
             let _ = task.await;
         }
+        self.request_editor_abort();
+        self.editor_cancel = None;
+        if let Some(task) = self.editor_task.take() {
+            while !task.is_finished() {
+                while self.events_rx.try_recv().is_ok() {}
+                tokio::task::yield_now().await;
+            }
+            let _ = task.await;
+        }
+        if let Some(task) = self.config_task.take() {
+            while !task.is_finished() {
+                while self.events_rx.try_recv().is_ok() {}
+                tokio::task::yield_now().await;
+            }
+            let _ = task.await;
+        }
         let Some(handle) = self.clipboard.take() else {
             return;
         };
@@ -843,6 +986,105 @@ impl LocalJobs {
             tokio::task::yield_now().await;
         }
         let _ = handle.await;
+    }
+}
+
+/// Runs one direct external editor. There is deliberately no wall-clock edit
+/// deadline: an interactive editor may remain open for an arbitrary period.
+/// Ownership is explicit instead: shutdown/cancel sets `cancel`, kills the
+/// child, waits for it, and then drops the 0600 temporary file.
+pub fn run_editor_job(
+    editor: &crate::config::EditorConfig,
+    draft: &str,
+    cancel: &Arc<std::sync::atomic::AtomicBool>,
+) -> EditorOutcome {
+    use std::io::{Read, Write};
+    use std::process::Command;
+    use std::time::Duration;
+
+    let mut temp = match tempfile::Builder::new()
+        .prefix(".minicore-tui-draft-")
+        .tempfile()
+    {
+        Ok(temp) => temp,
+        Err(_) => {
+            return EditorOutcome::Failed("cannot create the editor temporary file".to_owned());
+        }
+    };
+    if draft.len() > crate::limits::EDITOR_READ_BYTES
+        || draft.len() > crate::limits::EDITOR_TOTAL_BYTES
+    {
+        return EditorOutcome::Failed(
+            "draft is too large for external editor admission".to_owned(),
+        );
+    }
+    if temp
+        .write_all(draft.as_bytes())
+        .and_then(|()| temp.as_file_mut().sync_all())
+        .is_err()
+    {
+        return EditorOutcome::Failed("cannot write the editor temporary file".to_owned());
+    }
+    let path = temp.path().to_owned();
+    let mut command = Command::new(&editor.executable);
+    // Inherit the terminal directly. `TerminalGuard::suspend` has already
+    // left the alternate screen and raw mode, so an interactive editor can
+    // use the user's real stdin/stdout without a pty or shell wrapper.
+    command.args(&editor.args).arg(&path);
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(_) => {
+            return EditorOutcome::Failed("configured editor could not be started".to_owned());
+        }
+    };
+    let status = loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return EditorOutcome::Cancelled;
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return EditorOutcome::Failed("could not observe the configured editor".to_owned());
+            }
+        }
+    };
+    if !status.success() {
+        return EditorOutcome::Failed("configured editor exited unsuccessfully".to_owned());
+    }
+    // Reopen by path: editors commonly save by atomic rename, so the
+    // original NamedTempFile handle may refer to the pre-edit inode.
+    let edited = match std::fs::File::open(&path) {
+        Ok(file) => file,
+        Err(_) => return EditorOutcome::Failed("cannot read the editor draft".to_owned()),
+    };
+    let metadata = match edited.metadata() {
+        Ok(metadata) => metadata,
+        Err(_) => return EditorOutcome::Failed("cannot inspect the editor draft".to_owned()),
+    };
+    if metadata.len() > crate::limits::EDITOR_READ_BYTES as u64
+        || metadata.len() > crate::limits::EDITOR_TOTAL_BYTES as u64
+    {
+        return EditorOutcome::Failed("editor output exceeds the draft readback limit".to_owned());
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    if edited
+        .take((crate::limits::EDITOR_READ_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return EditorOutcome::Failed("cannot read the editor draft".to_owned());
+    }
+    if bytes.len() > crate::limits::EDITOR_READ_BYTES {
+        return EditorOutcome::Failed("editor output exceeds the draft readback limit".to_owned());
+    }
+    match String::from_utf8(bytes) {
+        Ok(text) => EditorOutcome::Updated(text),
+        Err(_) => EditorOutcome::Failed("editor output is not valid UTF-8".to_owned()),
     }
 }
 
@@ -1232,6 +1474,73 @@ mod tests {
             "a finished job frees the single slot"
         );
         jobs.shutdown().await;
+    }
+
+    #[cfg(unix)]
+    mod editor_tests {
+        use super::*;
+        use std::sync::atomic::AtomicBool;
+        use std::time::Duration;
+
+        fn editor(script: &str) -> crate::config::EditorConfig {
+            crate::config::EditorConfig {
+                executable: "/bin/sh".to_owned(),
+                args: vec!["-c".to_owned(), script.to_owned(), "editor".to_owned()],
+            }
+        }
+
+        #[test]
+        fn scripted_editor_reopens_the_temp_path_and_returns_utf8() {
+            let outcome = run_editor_job(
+                &editor(
+                    "if stat -c %a \"$1\" >/dev/null 2>&1; then mode=$(stat -c %a \"$1\"); else mode=$(stat -f %Lp \"$1\"); fi; tmp=\"$1.new\"; printf \"$mode|你好\\neditor\" > \"$tmp\"; mv \"$tmp\" \"$1\"",
+                ),
+                "old draft",
+                &Arc::new(AtomicBool::new(false)),
+            );
+            assert_eq!(
+                outcome,
+                EditorOutcome::Updated("600|你好\neditor".to_owned())
+            );
+        }
+
+        #[test]
+        fn invalid_utf8_large_output_and_nonzero_exit_keep_the_old_draft() {
+            let invalid = run_editor_job(
+                &editor("printf '\\377' > \"$1\""),
+                "old draft",
+                &Arc::new(AtomicBool::new(false)),
+            );
+            assert!(matches!(invalid, EditorOutcome::Failed(message) if message.contains("UTF-8")));
+
+            let large = run_editor_job(
+                &editor("head -c 262145 /dev/zero > \"$1\""),
+                "old draft",
+                &Arc::new(AtomicBool::new(false)),
+            );
+            assert!(matches!(large, EditorOutcome::Failed(message) if message.contains("limit")));
+
+            let failed = run_editor_job(
+                &editor("exit 7"),
+                "old draft",
+                &Arc::new(AtomicBool::new(false)),
+            );
+            assert!(
+                matches!(failed, EditorOutcome::Failed(message) if message.contains("unsuccessfully"))
+            );
+        }
+
+        #[test]
+        fn cancelling_a_hung_editor_kills_and_waits_for_the_child() {
+            let cancel = Arc::new(AtomicBool::new(false));
+            let cancel_for_job = Arc::clone(&cancel);
+            let handle = std::thread::spawn(move || {
+                run_editor_job(&editor("sleep 30"), "old draft", &cancel_for_job)
+            });
+            std::thread::sleep(Duration::from_millis(80));
+            cancel.store(true, Ordering::Relaxed);
+            assert_eq!(handle.join().unwrap(), EditorOutcome::Cancelled);
+        }
     }
 
     /// A refused copy does not keep its text alive and cannot later overwrite

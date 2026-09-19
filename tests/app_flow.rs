@@ -47,6 +47,10 @@ struct Driver {
         minicore_tui::jobs::ExportCapture,
         std::sync::mpsc::Receiver<minicore_tui::jobs::ExportOutcome>,
     )>,
+    editors: Vec<(
+        minicore_tui::jobs::EditorCapture,
+        std::sync::mpsc::Receiver<minicore_tui::jobs::EditorOutcome>,
+    )>,
     exited: bool,
 }
 
@@ -57,6 +61,7 @@ impl Driver {
             queue: VecDeque::new(),
             copies: Vec::new(),
             exports: Vec::new(),
+            editors: Vec::new(),
             exited: false,
         }
     }
@@ -67,8 +72,23 @@ impl Driver {
             queue: VecDeque::new(),
             copies: Vec::new(),
             exports: Vec::new(),
+            editors: Vec::new(),
             exited: false,
         }
+    }
+
+    fn start_editor(&mut self, request: minicore_tui::command::StartEditorRequest) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let capture = request.capture.clone();
+        std::thread::spawn(move || {
+            let outcome = minicore_tui::jobs::run_editor_job(
+                &request.editor,
+                &request.draft,
+                &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            );
+            let _ = tx.send(outcome);
+        });
+        self.editors.push((capture, rx));
     }
 
     fn start_export(&mut self, request: minicore_tui::command::StartExportRequest) {
@@ -85,6 +105,24 @@ impl Driver {
             let _ = tx.send(outcome);
         });
         self.exports.push((capture, rx));
+    }
+
+    fn drain_editors(&mut self) -> bool {
+        let mut finished = Vec::new();
+        for (index, (_, rx)) in self.editors.iter().enumerate() {
+            if let Ok(outcome) = rx.try_recv() {
+                finished.push((index, outcome));
+            }
+        }
+        let progressed = !finished.is_empty();
+        for (index, outcome) in finished.into_iter().rev() {
+            let (capture, _) = self.editors.remove(index);
+            let more = self.app.update(AppEvent::JobFinished(
+                minicore_tui::event::JobOutcome::Editor { capture, outcome },
+            ));
+            self.commands(more);
+        }
+        progressed
     }
 
     /// Feeds every finished export job back to the reducer. The harness is
@@ -139,6 +177,20 @@ impl Driver {
                 AppCommand::KillChild => {}
                 AppCommand::CopySelection(text) => self.copies.push(text.as_str().to_owned()),
                 AppCommand::StartExport(request) => self.start_export(*request),
+                AppCommand::StartEditor(request) => self.start_editor(*request),
+                AppCommand::PersistConfig(request) => {
+                    let request = *request;
+                    let result = minicore_tui::config::persist(&request.path, &request.config)
+                        .map_err(|error| error.to_string());
+                    let more = self.app.update(AppEvent::JobFinished(
+                        minicore_tui::event::JobOutcome::Config {
+                            path: request.path,
+                            config: request.config,
+                            result,
+                        },
+                    ));
+                    self.commands(more);
+                }
                 AppCommand::Exit => self.exited = true,
             }
         }
@@ -171,6 +223,20 @@ impl Driver {
                 AppCommand::KillChild => {}
                 AppCommand::CopySelection(text) => self.copies.push(text.as_str().to_owned()),
                 AppCommand::StartExport(request) => self.start_export(*request),
+                AppCommand::StartEditor(request) => self.start_editor(*request),
+                AppCommand::PersistConfig(request) => {
+                    let request = *request;
+                    let result = minicore_tui::config::persist(&request.path, &request.config)
+                        .map_err(|error| error.to_string());
+                    let more = self.app.update(AppEvent::JobFinished(
+                        minicore_tui::event::JobOutcome::Config {
+                            path: request.path,
+                            config: request.config,
+                            result,
+                        },
+                    ));
+                    self.commands(more);
+                }
                 AppCommand::Exit => self.exited = true,
             }
         }
@@ -9201,6 +9267,67 @@ fn cancelling_export_keeps_input_responsive_while_writer_finishes() {
         driver.app.composer().content(),
         "draft while export cancels"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn external_editor_updates_only_the_current_draft_and_rejects_stale_return() {
+    let dir = ExportDir::new("editor-reducer");
+    let config_path = dir.target("config.toml");
+    let editor = minicore_tui::config::EditorConfig {
+        executable: "/bin/sh".to_owned(),
+        args: vec![
+            "-c".to_owned(),
+            "sleep 0.05; printf 'edited 你好' > \"$1\"".to_owned(),
+            "editor".to_owned(),
+        ],
+    };
+    let config = minicore_tui::config::TuiConfig {
+        editor: Some(editor),
+        ..minicore_tui::config::TuiConfig::default()
+    };
+    let mut driver = Driver::with_app(App::with_tui_config(
+        PathBuf::from("/workspace"),
+        config_path,
+        config,
+    ));
+    bootstrap(&mut driver);
+    driver.app.composer_mut().set_text("old draft");
+    slash(&mut driver, "/editor");
+    assert!(driver.app.editor_active());
+    driver.app.composer_mut().set_text("newer draft wins");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !driver.drain_editors() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "editor did not return"
+        );
+        std::thread::yield_now();
+    }
+    assert_eq!(driver.app.composer().content(), "newer draft wins");
+    assert!(!driver.app.editor_active());
+}
+
+#[test]
+fn settings_apply_persists_atomically_without_reloading_agent() {
+    let dir = ExportDir::new("settings");
+    let config_path = dir.target("config.toml");
+    let mut driver = Driver::with_app(App::with_tui_config(
+        PathBuf::from("/workspace"),
+        config_path.clone(),
+        minicore_tui::config::TuiConfig::default(),
+    ));
+    bootstrap(&mut driver);
+    slash(&mut driver, "/settings");
+    press(&mut driver, KeyCode::Enter);
+    driver.step(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+        KeyCode::Char('s'),
+        KeyModifiers::CONTROL,
+    ))));
+    assert!(matches!(driver.app.dock, Dock::Composer));
+    let saved = minicore_tui::config::load(&config_path, true).expect("saved settings");
+    assert_eq!(saved.theme, minicore_tui::theme::ThemeKind::Light);
+    assert!(!driver.app.agent_restart_required);
 }
 
 /// The explicit raw-export entry streams an oversized item's sanitized JSON

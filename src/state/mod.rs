@@ -8,6 +8,7 @@ pub mod export;
 pub mod search;
 pub mod selection;
 pub mod session;
+pub mod settings;
 pub mod tool;
 pub mod transcript;
 pub mod turn;
@@ -24,6 +25,7 @@ pub use session::{
     ConfigUpdateState, ManualCompactState, PendingConfigUpdate, ScrollState, SessionId,
     SessionView, SessionsState,
 };
+pub use settings::{SettingsField, SettingsState};
 pub use tool::{LiveTool, ToolConflict, ToolFacts, ToolKey, ToolPresentationState, ToolStatus};
 pub use transcript::{
     AssistantBlock, AssistantPart, HistoryPlaceholderBlock, SummaryBlock, ToolBlock, ToolExpansion,

@@ -120,7 +120,7 @@ impl App {
             };
             self.sessions
                 .known
-                .insert(session_id.clone(), SessionView::new(info));
+                .insert(session_id.clone(), self.new_session_view(info));
         }
         if self
             .sessions
@@ -399,10 +399,9 @@ impl App {
                 );
                 return Vec::new();
             };
-            self.sessions.known.insert(
-                session_id.clone(),
-                crate::state::session::SessionView::new(info),
-            );
+            self.sessions
+                .known
+                .insert(session_id.clone(), self.new_session_view(info));
         }
         if let Some(view) = self.sessions.known.get_mut(session_id) {
             view.browsing = true;
@@ -1641,7 +1640,7 @@ impl App {
             None => {
                 self.sessions
                     .known
-                    .insert(session_id.clone(), SessionView::new(session));
+                    .insert(session_id.clone(), self.new_session_view(session));
             }
         }
         let listed_info = self
@@ -1729,7 +1728,7 @@ impl App {
             } else {
                 self.sessions
                     .known
-                    .insert(session_id.clone(), SessionView::new(session.clone()));
+                    .insert(session_id.clone(), self.new_session_view(session.clone()));
             }
             visible.push(session);
         }
@@ -1792,7 +1791,7 @@ impl App {
         } else {
             self.sessions
                 .known
-                .insert(session_id.clone(), SessionView::new(session.clone()));
+                .insert(session_id.clone(), self.new_session_view(session.clone()));
         }
         if self.reload.is_some() {
             self.mark_session_uncalibrated(&session_id);

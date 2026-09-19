@@ -49,6 +49,24 @@ fn real_pty_enter_and_restore_round_trip() {
         .expect("second restore is a no-op and still succeeds");
 }
 
+/// Exercises the exact suspend/resume lifecycle used by `/editor`. It is kept
+/// as a real-terminal check because raw mode and alternate-screen state cannot
+/// be meaningfully simulated by the normal test backend.
+#[test]
+#[ignore = "requires a real terminal: run with cargo test --ignored from a TTY"]
+fn real_pty_editor_suspend_and_resume_round_trip() {
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        eprintln!("terminal_restore: stdin/stdout are not a TTY; skipping suspend round trip");
+        return;
+    }
+    let mut guard = TerminalGuard::enter().expect("enter the alternate screen");
+    guard.suspend().expect("suspend the terminal for editor");
+    assert!(guard.is_suspended());
+    guard.resume().expect("resume the terminal after editor");
+    assert!(!guard.is_suspended());
+    guard.restore().expect("restore the terminal");
+}
+
 /// The production order contract as a reference test: the documented restore
 /// sequence is fixed in-crate, and this test pins the ownership contract the
 /// async main loop relies on — the guard must be sendable across the loop.

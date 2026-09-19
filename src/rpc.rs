@@ -513,7 +513,7 @@ impl Drop for RpcProcess {
 pub enum RpcError {
     #[error("agent config file does not exist: {0}")]
     ConfigMissing(PathBuf),
-    #[error("failed to spawn the agent process: {0}")]
+    #[error("failed to spawn agent executable: {0}")]
     Spawn(io::Error),
     #[error("the RPC process is closed")]
     Closed,

@@ -15,8 +15,9 @@ minicore-tui — a Pi-style coding agent TUI for minicore-agent
 Usage: minicore-tui [OPTIONS]
 
 Options:
+  --config <PATH>            TUI config file [default: platform config path]
   --agent-bin <PATH>         minicore-agent binary [default: minicore-agent]
-  --agent-config <PATH>      agent config file (required; must exist)
+  --agent-config <PATH>      agent config file (required unless config supplies it)
   --workspace <PATH>         workspace for a new session [default: cwd]
   --continue                 open the most recent session in this workspace
   --session <ID>             open this exact session id (no prompts)
@@ -34,9 +35,13 @@ Options:
 /// `PathBuf`s (spec 14).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Args {
+    pub config_path: Option<PathBuf>,
     pub agent_bin: PathBuf,
     pub agent_config: PathBuf,
     pub workspace: PathBuf,
+    pub agent_bin_explicit: bool,
+    pub agent_config_explicit: bool,
+    pub theme_explicit: bool,
     /// Whether `--workspace` was passed explicitly; a Ready app opens a
     /// pre-filled new-session form only then (spec 6.1).
     pub workspace_explicit: bool,
@@ -63,6 +68,33 @@ pub enum ArgsError {
     ConflictingFlags(&'static str, &'static str),
 }
 
+impl Args {
+    /// Applies the loaded TUI config only where the CLI did not provide an
+    /// explicit value. The backend Agent config remains required after this
+    /// merge, so startup cannot silently invent a path.
+    pub fn apply_tui_config(&mut self, config: &crate::config::TuiConfig) -> Result<(), ArgsError> {
+        if !self.agent_bin_explicit {
+            if let Some(path) = &config.agent_executable {
+                self.agent_bin = path.clone();
+            }
+        }
+        if !self.agent_config_explicit {
+            if let Some(path) = &config.agent_config {
+                self.agent_config = path.clone();
+            }
+        }
+        if !self.theme_explicit {
+            self.theme = config.theme;
+        }
+        if self.agent_config.as_os_str().is_empty() {
+            return Err(ArgsError::MissingRequired(
+                "--agent-config or [agent].config",
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl fmt::Display for ArgsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -87,9 +119,13 @@ where
     I: IntoIterator<Item = String>,
 {
     let mut parsed = Args {
+        config_path: None,
         agent_bin: PathBuf::from("minicore-agent"),
         agent_config: PathBuf::new(),
         workspace: PathBuf::new(),
+        agent_bin_explicit: false,
+        agent_config_explicit: false,
+        theme_explicit: false,
         workspace_explicit: false,
         profile: None,
         model: None,
@@ -126,8 +162,15 @@ where
             }
         };
         match name.as_str() {
-            "--agent-bin" => parsed.agent_bin = PathBuf::from(value()?),
-            "--agent-config" => parsed.agent_config = PathBuf::from(value()?),
+            "--config" => parsed.config_path = Some(PathBuf::from(value()?)),
+            "--agent-bin" => {
+                parsed.agent_bin = PathBuf::from(value()?);
+                parsed.agent_bin_explicit = true;
+            }
+            "--agent-config" => {
+                parsed.agent_config = PathBuf::from(value()?);
+                parsed.agent_config_explicit = true;
+            }
             "--workspace" => {
                 parsed.workspace = PathBuf::from(value()?);
                 parsed.workspace_explicit = true;
@@ -135,7 +178,10 @@ where
             "--profile" => parsed.profile = Some(value()?),
             "--model" => parsed.model = Some(value()?),
             "--reasoning" => parsed.reasoning = Some(parse_reasoning(&value()?)?),
-            "--theme" => parsed.theme = parse_theme(&value()?)?,
+            "--theme" => {
+                parsed.theme = parse_theme(&value()?)?;
+                parsed.theme_explicit = true;
+            }
             "--continue" => parsed.continue_recent = true,
             "--session" => parsed.session = Some(value()?),
             "--debug" => parsed.debug = true,
@@ -151,8 +197,12 @@ where
     if parsed.continue_recent && parsed.session.is_some() {
         return Err(ArgsError::ConflictingFlags("--continue", "--session"));
     }
-    if !parsed.help && !parsed.version && parsed.agent_config.as_os_str().is_empty() {
-        return Err(ArgsError::MissingRequired("--agent-config"));
+    if !parsed.help
+        && !parsed.version
+        && parsed.config_path.is_none()
+        && parsed.agent_config.as_os_str().is_empty()
+    {
+        return Err(ArgsError::MissingRequired("--agent-config or --config"));
     }
     Ok(parsed)
 }
@@ -200,16 +250,17 @@ mod tests {
     }
 
     #[test]
-    fn agent_config_is_required() {
+    fn agent_config_is_required_without_a_tui_config() {
         assert_eq!(
             parse_flags(&[]),
-            Err(ArgsError::MissingRequired("--agent-config"))
+            Err(ArgsError::MissingRequired("--agent-config or --config"))
         );
-        // Run-mode flags still require the config.
+        // Run-mode flags still require a backend config source.
         assert_eq!(
             parse_flags(&["--theme", "light"]),
-            Err(ArgsError::MissingRequired("--agent-config"))
+            Err(ArgsError::MissingRequired("--agent-config or --config"))
         );
+        assert!(parse_flags(&["--config", "tui.toml"]).is_ok());
     }
 
     #[test]
@@ -381,5 +432,28 @@ mod tests {
             parse_flags(&["--reasoning", "turbo", "--agent-config", "a.toml"]),
             Err(ArgsError::InvalidReasoning(_))
         ));
+    }
+
+    #[test]
+    fn cli_values_override_tui_config_defaults() {
+        let mut parsed = parse_flags(&[
+            "--agent-bin",
+            "/cli/agent",
+            "--agent-config",
+            "/cli/agent.toml",
+            "--theme",
+            "light",
+        ])
+        .unwrap();
+        let config = crate::config::TuiConfig {
+            theme: ThemeKind::Dark,
+            agent_executable: Some(PathBuf::from("/config/agent")),
+            agent_config: Some(PathBuf::from("/config/agent.toml")),
+            ..crate::config::TuiConfig::default()
+        };
+        parsed.apply_tui_config(&config).unwrap();
+        assert_eq!(parsed.agent_bin, PathBuf::from("/cli/agent"));
+        assert_eq!(parsed.agent_config, PathBuf::from("/cli/agent.toml"));
+        assert_eq!(parsed.theme, ThemeKind::Light);
     }
 }

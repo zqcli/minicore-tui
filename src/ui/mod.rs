@@ -27,6 +27,7 @@ pub mod reasoning;
 pub mod scrollbar;
 pub mod search;
 pub mod selector;
+pub mod settings;
 pub mod status;
 pub mod steer_queue;
 pub mod tool;
@@ -112,6 +113,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         Dock::Logs => logs::render(frame, screen.panel, app, &theme),
         Dock::Search(_) => search::render(frame, screen.panel, app, &theme),
         Dock::Export(form) => export::render(frame, screen.panel, &theme, form),
+        Dock::Settings(settings) => settings::render(frame, screen.panel, &theme, settings),
     }
     footer::render(frame, screen.footer, app, &theme);
 }

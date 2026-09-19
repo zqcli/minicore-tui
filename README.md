@@ -158,7 +158,7 @@ The Agent executes native stateless `subagent` single/parallel/chain calls;
 the TUI displays their ordinary Tool results. Persistent subagent orchestration,
 manager/tree UI, approval UI, compaction controls, live Bash/PTY output, MCP,
 plugins, skills, remote agents and image input remain outside this delivery.
-External editor and OSC52 copy remain optional follow-up work.
+The TUI now supports a bounded direct external-editor draft workflow; OSC52 copy remains optional follow-up work.
 
 ## Platform And Troubleshooting
 

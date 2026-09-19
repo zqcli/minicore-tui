@@ -628,7 +628,14 @@ impl Drop for E2eEnvironment {
 // ============================================================================
 
 async fn pump_step(process: &mut RpcProcess, app: &mut App) -> Result<(), String> {
-    let event = tokio::time::timeout(Duration::from_secs(10), process.recv()).await;
+    let commands = drain_editor_jobs(app).await?;
+    dispatch_commands(process, app, commands).await?;
+    let wait = if editor_job_in_flight() {
+        Duration::from_millis(20)
+    } else {
+        Duration::from_secs(10)
+    };
+    let event = tokio::time::timeout(wait, process.recv()).await;
     let event = match event {
         // A silent window is scheduling contention, not a product stall: the
         // caller's overall deadline (bounded) decides whether the pump timed
@@ -642,7 +649,10 @@ async fn pump_step(process: &mut RpcProcess, app: &mut App) -> Result<(), String
             // Only the scan/export chains need an idle pass to retry a read
             // slot or a parked record; other flows must see exactly the events
             // the Agent sent, or a preparation retry would run too early.
-            if app.export_running() || matches!(app.dock, Dock::Search(_)) {
+            let editor_commands = drain_editor_jobs(app).await?;
+            dispatch_commands(process, app, editor_commands).await?;
+            if app.export_running() || matches!(app.dock, Dock::Search(_)) || editor_job_in_flight()
+            {
                 let commands = app.update(AppEvent::Tick);
                 dispatch_commands(process, app, commands).await?;
             }
@@ -691,6 +701,18 @@ async fn wait_for_request0_and_wait_turn(
                         }
                         AppCommand::LocalScan(request) => handle_local_scan(app, &request),
                         AppCommand::StartExport(request) => handle_start_export(*request),
+                        AppCommand::StartEditor(request) => handle_start_editor(*request),
+                        AppCommand::PersistConfig(request) => {
+                            let request = *request;
+                            let result =
+                                minicore_tui::config::persist(&request.path, &request.config)
+                                    .map_err(|error| error.to_string());
+                            let _ = app.update(AppEvent::JobFinished(JobOutcome::Config {
+                                path: request.path,
+                                config: request.config,
+                                result,
+                            }));
+                        }
                         AppCommand::KillChild => process.kill_child(),
                         AppCommand::CopySelection(_) => {}
                         AppCommand::Exit => return Ok(()),
@@ -833,6 +855,13 @@ static EXPORT_HANDLES: std::sync::Mutex<
     )>,
 > = std::sync::Mutex::new(Vec::new());
 
+static EDITOR_HANDLES: std::sync::Mutex<
+    Vec<(
+        minicore_tui::jobs::EditorCapture,
+        tokio::task::JoinHandle<minicore_tui::jobs::EditorOutcome>,
+    )>,
+> = std::sync::Mutex::new(Vec::new());
+
 fn handle_start_export(request: minicore_tui::command::StartExportRequest) {
     let capture = request.capture.clone();
     let cancel = request.cancel.clone();
@@ -843,6 +872,26 @@ fn handle_start_export(request: minicore_tui::command::StartExportRequest) {
         .lock()
         .expect("export handle lock")
         .push((capture, handle));
+}
+
+fn handle_start_editor(request: minicore_tui::command::StartEditorRequest) {
+    let capture = request.capture.clone();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_for_job = Arc::clone(&cancel);
+    let handle = tokio::task::spawn_blocking(move || {
+        minicore_tui::jobs::run_editor_job(&request.editor, &request.draft, &cancel_for_job)
+    });
+    EDITOR_HANDLES
+        .lock()
+        .expect("editor handle lock")
+        .push((capture, handle));
+}
+
+fn editor_job_in_flight() -> bool {
+    !EDITOR_HANDLES
+        .lock()
+        .expect("editor handle lock")
+        .is_empty()
 }
 
 /// Feeds every finished export job's outcome back to the reducer.
@@ -864,6 +913,31 @@ async fn drain_export_jobs(app: &mut App) -> Result<Vec<AppCommand>, String> {
     for (capture, handle) in finished {
         let outcome = handle.await.map_err(|error| error.to_string())?;
         commands.extend(app.update(AppEvent::JobFinished(JobOutcome::Export {
+            capture,
+            outcome,
+        })));
+    }
+    Ok(commands)
+}
+
+async fn drain_editor_jobs(app: &mut App) -> Result<Vec<AppCommand>, String> {
+    let finished: Vec<_> = {
+        let mut guard = EDITOR_HANDLES.lock().expect("editor handle lock");
+        let mut finished = Vec::new();
+        let mut index = 0;
+        while index < guard.len() {
+            if guard[index].1.is_finished() {
+                finished.push(guard.remove(index));
+            } else {
+                index += 1;
+            }
+        }
+        finished
+    };
+    let mut commands = Vec::new();
+    for (capture, handle) in finished {
+        let outcome = handle.await.map_err(|error| error.to_string())?;
+        commands.extend(app.update(AppEvent::JobFinished(JobOutcome::Editor {
             capture,
             outcome,
         })));
@@ -3627,6 +3701,17 @@ async fn dispatch_commands(
             }
             AppCommand::LocalScan(request) => handle_local_scan(app, &request),
             AppCommand::StartExport(request) => handle_start_export(*request),
+            AppCommand::StartEditor(request) => handle_start_editor(*request),
+            AppCommand::PersistConfig(request) => {
+                let request = *request;
+                let result = minicore_tui::config::persist(&request.path, &request.config)
+                    .map_err(|error| error.to_string());
+                let _ = app.update(AppEvent::JobFinished(JobOutcome::Config {
+                    path: request.path,
+                    config: request.config,
+                    result,
+                }));
+            }
             AppCommand::KillChild => process.kill_child(),
             AppCommand::CopySelection(_) => {}
             AppCommand::Exit => return Ok(()),
@@ -4870,5 +4955,98 @@ fn e2e_full_search_and_export_real_agent_chain() {
         assert!(rep.shutdown_ok && rep.seen_eof && rep.seen_exit);
         process.terminate().await;
         let _ = std::fs::remove_dir_all(&dir);
+    });
+}
+
+/// D3 (spec §12.4/REF-47): the direct editor owns only its temporary draft
+/// file while the real Agent RPC reader and background turn continue to make
+/// progress. The return is routed through the same session/revision fence as
+/// production and leaves no workspace file behind.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_external_editor_coexists_with_a_real_background_turn() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    env._server
+        .enqueue_chunked_sse(sse_text_response("background answer"));
+    let editor_scratch = env.temp_dir.join("editor-scratch");
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+        let session =
+            create_compact_session(&mut process, &mut app, &env.workspace_path, "Editor A").await;
+        let editor = minicore_tui::config::EditorConfig {
+            executable: "/bin/sh".to_owned(),
+            args: vec![
+                "-c".to_owned(),
+                format!(
+                    "sleep 0.30; printf 'editor draft' > \"$1\"; test ! -e '{}'",
+                    editor_scratch.display()
+                ),
+                "editor".to_owned(),
+            ],
+        };
+        let config = minicore_tui::config::TuiConfig {
+            editor: Some(editor),
+            ..minicore_tui::config::TuiConfig::default()
+        };
+        app.apply_tui_config(config);
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session.clone(),
+                text: "background question".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        wait_for_request0_and_wait_turn(&env, &mut process, &mut app, &session)
+            .await
+            .unwrap();
+
+        app.composer_mut().set_text("draft before editor");
+        run_slash_command(&mut process, &mut app, "/editor")
+            .await
+            .unwrap();
+        assert!(app.editor_active());
+        pump_until(&mut process, &mut app, |a| {
+            !a.editor_active()
+                && a.sessions
+                    .known
+                    .get(&session)
+                    .is_some_and(|view| view.live.is_none() && view.transcript.total >= 2)
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            app.composer().content(),
+            "editor draft",
+            "editor notices: {:?}",
+            app.notices
+                .iter()
+                .map(|notice| &notice.text)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !editor_scratch.exists(),
+            "editor used a workspace path instead of the private temp file"
+        );
+        let view = app.sessions.known.get(&session).expect("session view");
+        assert!(view.transcript.total >= 2, "background turn did not land");
+
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok && rep.seen_eof && rep.seen_exit);
+        process.terminate().await;
     });
 }

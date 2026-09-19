@@ -112,6 +112,14 @@ pub enum Action {
     ExportToggleRaw,
     /// Export form Esc: close the form (cancelling a running export).
     ExportEscape,
+    /// Settings form actions.
+    SettingsTypeChar(char),
+    SettingsBackspace,
+    SettingsClear,
+    SettingsFieldStep(i32),
+    SettingsToggle,
+    SettingsSubmit,
+    SettingsEscape,
     SessionDeleteToggle,
     SessionRenameChar(char),
     SessionRenameBackspace,
@@ -187,6 +195,9 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
     // target, and the toggles use Ctrl chords so a path can never trigger one.
     if let Dock::Export(form) = &app.dock {
         return export_keys(key, press, typing, form.running());
+    }
+    if let Dock::Settings(state) = &app.dock {
+        return settings_keys(key, press, typing, state.submitting);
     }
 
     if press {
@@ -329,9 +340,9 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
         | Dock::ReasoningSelector(_)
         | Dock::ProfileSelector(_) => selector_keys(key, press, typing),
         Dock::Help | Dock::Logs => panel_keys(key, press, typing),
-        // The search and export panels are handled before this match (they own
-        // the keyboard while open).
-        Dock::Search(_) | Dock::Export(_) => Action::None,
+        // The search, export, and settings panels are handled before this
+        // match (they own the keyboard while open).
+        Dock::Search(_) | Dock::Export(_) | Dock::Settings(_) => Action::None,
     }
 }
 
@@ -502,6 +513,32 @@ fn export_keys(key: KeyEvent, press: bool, typing: bool, running: bool) -> Actio
         KeyCode::Char('y') if ctrl(&key) && !running => Action::ExportToggleOverwrite,
         KeyCode::Char('r') if ctrl(&key) && !running => Action::ExportToggleRaw,
         KeyCode::Char(c) if !ctrl(&key) && !alt(&key) && !running => Action::ExportTypeChar(c),
+        _ => Action::None,
+    }
+}
+
+fn settings_keys(key: KeyEvent, press: bool, typing: bool, submitting: bool) -> Action {
+    if submitting {
+        return if press && key.code == KeyCode::Esc {
+            Action::SettingsEscape
+        } else {
+            Action::None
+        };
+    }
+    if !(press || typing) {
+        return Action::None;
+    }
+    match key.code {
+        KeyCode::Esc => Action::SettingsEscape,
+        KeyCode::Enter if press => Action::SettingsToggle,
+        KeyCode::Tab if press => Action::SettingsFieldStep(1),
+        KeyCode::BackTab if press => Action::SettingsFieldStep(-1),
+        KeyCode::Up if press => Action::SettingsFieldStep(-1),
+        KeyCode::Down if press => Action::SettingsFieldStep(1),
+        KeyCode::Backspace => Action::SettingsBackspace,
+        KeyCode::Char('u') if ctrl(&key) => Action::SettingsClear,
+        KeyCode::Char('s') if ctrl(&key) && press => Action::SettingsSubmit,
+        KeyCode::Char(c) if !ctrl(&key) && !alt(&key) => Action::SettingsTypeChar(c),
         _ => Action::None,
     }
 }

@@ -26,6 +26,10 @@ pub const TOOL_TOTAL_BYTES: usize = 16 * 1024 * 1024;
 pub const COMPOSER_DRAFT_BYTES: usize = 256 * 1024;
 /// Every Composer draft held by the app.
 pub const COMPOSER_ALL_DRAFTS_BYTES: usize = 8 * 1024 * 1024;
+/// Maximum UTF-8 bytes accepted when an external editor returns a draft.
+pub const EDITOR_READ_BYTES: usize = 256 * 1024;
+/// Hard cumulative admission ceiling for editor readback work.
+pub const EDITOR_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 /// Items protected near the active viewport before history eviction may
 /// remove the oldest confirmed items. This protects the viewport and its
 /// recent neighbourhood, not the whole active session.
@@ -55,6 +59,8 @@ mod tests {
         assert_eq!(TOOL_TOTAL_BYTES, 16 * 1024 * 1024);
         assert_eq!(COMPOSER_DRAFT_BYTES, 256 * 1024);
         assert_eq!(COMPOSER_ALL_DRAFTS_BYTES, 8 * 1024 * 1024);
+        assert_eq!(EDITOR_READ_BYTES, 256 * 1024);
+        assert_eq!(EDITOR_TOTAL_BYTES, 8 * 1024 * 1024);
         assert_eq!(HISTORY_PROTECT_TAIL_ITEMS_BACKGROUND, 0);
     }
 }

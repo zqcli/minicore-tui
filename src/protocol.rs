@@ -88,6 +88,7 @@ pub const PROFILE_NOT_FOUND: i64 = -32_008;
 pub const MODEL_NOT_FOUND: i64 = -32_009;
 pub const WORKSPACE_ERROR: i64 = -32_010;
 pub const STORE_ERROR: i64 = -32_011;
+pub const PROVIDER_ERROR: i64 = -32_012;
 pub const RUNTIME_ERROR: i64 = -32_013;
 pub const INVALID_SESSION_SETTINGS: i64 = -32_014;
 pub const HISTORY_TOO_LARGE: i64 = -32_015;
