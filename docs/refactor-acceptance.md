@@ -35,10 +35,10 @@ workload; reruns can vary with host scheduling, and they are not terminal
 input-to-frame latency.
 
 Current-tree validation also passed Rust 1.85.0 `fmt --check`,
-`test --locked --all-targets --no-fail-fast` (676 passed, 0 failed, 34 ignored)
-and Clippy with `-D warnings`. The real Agent 0.5 serial run passed 26/26
-tests (22 pre-existing + 4 D1 scenarios). The six ignored release performance
-workloads also passed.
+`test --locked --all-targets --no-fail-fast` (706 passed, 0 failed, 35 ignored)
+and Clippy with `-D warnings` (`d2g-*.log`). The real Agent 0.5 serial run
+passed 27/27 tests (`d2g-e2e.log`: 22 pre-existing + 4 D1 + 1 D2 scenario).
+The six ignored release performance workloads also passed.
 
 | ID | Required behavior | Status | Evidence / remaining work |
 |---|---|---|---|
@@ -85,9 +85,9 @@ workloads also passed.
 | REF-41 | Changes workspace/tool origin and three comparisons | **Not run** | D/E. |
 | REF-42 | Opaque change references and stale/fragment behavior | **Not run** | D/E. |
 | REF-43 | Footer branches from explicit status and renderer performs no I/O | **Not run** | Stage E. |
-| REF-44 | Search coverage distinguishes unloaded/large from global no-match | **Not run** | Stage D. |
-| REF-45 | Prompt jump and temporary folds preserve selection | **Not run** | Stage D. |
-| REF-46 | Copy/export has no Rail/fake newline and export uses a fixed bounded pin | **Not run** | Stage D. |
+| REF-44 | Search coverage distinguishes unloaded/large from global no-match | **Passed** | `/search` scans a loaded snapshot or an explicit pinned full-session `session.read` chain on the owned workers; coverage labels stay incomplete for large/stopped/failed/truncated scans. The real-Agent E2E finds a literal in the durable UTF-8 body with complete coverage. |
+| REF-45 | Prompt jump and temporary folds preserve selection | **Passed** | `/prev`, `/next`, `/latest` and match jumps skip steering, read an unloaded window at the exact index under the captured pin, and install temporary fold overrides that are restored when search closes (reducer tests). |
+| REF-46 | Copy/export has no Rail/fake newline and export uses a fixed bounded pin | **Passed** | `/copy` reuses the rendered copy rows and hit operations with no remote read; `render_with_breaks` reports real logical line ends so a soft wrap never gains a newline and paragraph/code breaks survive. `/export` writes through one owned job from a pinned `session.read` chain with a bounded channel, unique temp file, explicit overwrite confirm, atomic rename, cancel cleanup, explicit oversized placeholders, and no opaque provider data. |
 | REF-47 | External editor does not block RPC or overwrite a newer draft | **Not run** | Stage D. |
 | REF-48 | ANSI/OSC/control-safe display with raw protocol offsets preserved | **Passed** | Safe-display and control-sequence tests. |
 | REF-49 | Logs contain no message/command/result/file/secret content | **Passed** | Content-free stderr/debug logging tests. |
@@ -115,8 +115,9 @@ workloads also passed.
   through 8 MiB, but the explicit raw-read/export workflow for oversized items
   and a fresh decode-throughput/RSS measurement are intentionally outside this
   boundary. Exact allocator/RSS accounting is not claimed.
-- **D/E**: Search/export/workspace workflows are intentionally not started and
-  must not be reported as C defects.
+- **D/E**: The search/export half of D is now implemented (see `D Status`);
+  the workspace/E panels were intentionally not started and must not be
+  reported as C defects.
 
 ## D Status
 
@@ -139,8 +140,31 @@ for the criteria below, on the tree validated by the logs above:
   closed-only `/delete confirm`.
 - **D1d command table**: **Passed.** One static table drives parse, help and
   completion; no unimplemented command is advertised.
-- **D2 search/export, E panels, stable/macOS/Windows**: **Not run**, not
-  started.
+- **D2 search/navigation**: **Passed.** `/search [full] [literal]` keeps the
+  transcript visible, scans loaded content on the owned worker, and runs the
+  explicit full-session scan as a pinned `session.read` chain whose items are
+  decoded/scanned by the single decode worker. Coverage never claims a global
+  no-match for large/stopped/failed/truncated scans; `n`/`p`/Enter jumps read
+  an unloaded target window and temporary folds are restored on exit; Esc
+  leaves the search first and never cancels a turn.
+- **D2 copy**: **Passed.** `/copy [last|message|code|selection]` reuses the
+  existing hit/copy operations, never issues a remote read, keeps the
+  selection on a clipboard failure, and preserves real newlines without
+  inventing one at a soft wrap (renderer-reported row breaks).
+- **D2 export**: **Passed** for the criteria measured here, with the
+  limitations below. The reducer tests run the real writer (temp file beside
+  the target, refusal until the explicit `Ctrl+Y` confirm, atomic rename,
+  cancel removing the uncommitted temp, explicit placeholder plus `partial`
+  note for an oversized item), and the real-Agent E2E exports a session whose
+  file carries the source, the UTF-8 body and the explicitly appended live
+  turn's `unconfirmed` note with no temp file left.
+- **D2 export limitations**: **Not run/limited.** (a) A multi-page export
+  against a *real Agent* was not measured: the E2E session fits one read page,
+  while two-page chaining is covered by reducer fixtures. (b) The chunked
+  raw-JSON path for items above the 8 MiB auto-decode ceiling is **not
+  implemented**: such items are written as explicit placeholders and the file
+  carries a `partial` note instead of a complete body. (c) Stable-toolchain,
+  macOS and Windows runs remain **Not run**.
 - **D1 review**: the parent/independent review of these commits has not been
   recorded here; "Passed" reflects the current tree's own measured evidence.
 
