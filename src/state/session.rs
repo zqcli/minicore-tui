@@ -276,6 +276,10 @@ pub struct SessionView {
     /// Stable per-section fold choices. These are local UI state only.
     pub tool_folds: HashMap<ToolKey, FoldOverride>,
     pub reasoning_folds: HashMap<ReasoningKey, FoldOverride>,
+    /// This session's own draft: text, cursor, undo/redo, paste markers and
+    /// editor revision. Switching sessions swaps the whole composer, never a
+    /// text-only copy (spec §10.3, §12).
+    pub composer: crate::state::composer::Composer,
 }
 
 impl SessionView {
@@ -322,6 +326,7 @@ impl SessionView {
             tool_presentations: Arc::new(HashMap::new()),
             tool_folds: HashMap::new(),
             reasoning_folds: HashMap::new(),
+            composer: crate::state::composer::Composer::default(),
         }
     }
 

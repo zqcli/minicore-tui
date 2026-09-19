@@ -1167,10 +1167,59 @@ impl App {
         }
         // Cache budgets are enforced once per event pass, off the draw path.
         self.enforce_history_budget();
+        self.enforce_draft_budget();
         self.enforce_layout_budget();
         self.enforce_live_budget();
         self.enforce_tool_budget();
         commands
+    }
+
+    /// The composer that owns the next keystroke. While a session is active
+    /// this is that session's draft; with no session it is the scratch draft.
+    /// Switching sessions swaps the whole composer with the view (spec §10.3).
+    pub fn composer(&self) -> &Composer {
+        &self.composer
+    }
+
+    /// Mutable form of [`Self::composer`].
+    pub fn composer_mut(&mut self) -> &mut Composer {
+        &mut self.composer
+    }
+
+    /// Switches the displayed session, moving the entire composer (text,
+    /// cursor, undo/redo, paste markers, revision) between the scratch owner
+    /// and the session view, so every session keeps an independent draft and
+    /// the view keeps its anchor/folds. Background sessions are neither
+    /// closed nor cancelled.
+    pub(crate) fn set_active_session(&mut self, next: Option<SessionId>) {
+        if self.sessions.active == next {
+            return;
+        }
+        if let Some(current) = self.sessions.active.take() {
+            match self.sessions.known.get_mut(&current) {
+                Some(view) => std::mem::swap(&mut view.composer, &mut self.composer),
+                // The view no longer exists (delete is an explicit discard).
+                None => self.composer.clear(),
+            }
+        }
+        self.sessions.active = next.clone();
+        if let Some(id) = next {
+            if let Some(view) = self.sessions.known.get_mut(&id) {
+                std::mem::swap(&mut view.composer, &mut self.composer);
+            }
+        }
+    }
+
+    /// Retained draft bytes across every session composer plus the scratch
+    /// draft. Undo/redo and paste markers count (spec §12.1, §21).
+    pub fn draft_bytes(&self) -> usize {
+        self.composer.retained_bytes()
+            + self
+                .sessions
+                .known
+                .values()
+                .map(|view| view.composer.retained_bytes())
+                .sum::<usize>()
     }
 
     /// The active session's view, for read-only render access.

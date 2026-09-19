@@ -311,7 +311,7 @@ impl App {
             ui_actions::cancel_scrollbar_drag(self);
             ui_actions::clear_selection(self);
         }
-        self.sessions.active = Some(session_id.clone());
+        self.set_active_session(Some(session_id.clone()));
         let state_pending = self
             .sessions
             .known
@@ -1051,7 +1051,7 @@ impl App {
         if self.sessions.active.as_deref() == Some(session_id.as_str()) {
             ui_actions::cancel_scrollbar_drag(self);
             ui_actions::clear_selection(self);
-            self.sessions.active = None;
+            self.set_active_session(None);
         }
     }
 
@@ -1308,7 +1308,8 @@ impl App {
                 if self.sessions.active.as_deref() == Some(session_id.as_str()) {
                     ui_actions::cancel_scrollbar_drag(self);
                     ui_actions::clear_selection(self);
-                    self.sessions.active = None;
+                    // Delete is an explicit discard: the swap target is gone.
+                    self.set_active_session(None);
                 }
                 if let Dock::SessionSelector(state) = &mut self.dock {
                     if state.selected_session_id.as_deref() == Some(session_id.as_str()) {
@@ -1397,7 +1398,7 @@ impl App {
             ui_actions::cancel_scrollbar_drag(self);
         }
         ui_actions::clear_selection(self);
-        self.sessions.active = Some(session_id.clone());
+        self.set_active_session(Some(session_id.clone()));
 
         if self.reload.is_some() {
             // The lifecycle ACK crossed the reload boundary. The response

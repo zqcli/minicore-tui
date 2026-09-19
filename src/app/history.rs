@@ -2898,6 +2898,47 @@ impl App {
 }
 
 impl App {
+    /// Enforces the all-drafts budget (spec §21). Undo records are trimmed
+    /// oldest-first; un-sent text is never deleted silently, and a draft that
+    /// alone exceeds the budget reports it instead of dropping content.
+    pub(crate) fn enforce_draft_budget(&mut self) -> usize {
+        self.enforce_draft_budget_with(crate::limits::COMPOSER_ALL_DRAFTS_BYTES)
+    }
+
+    /// Budget-parameterized form used by tests; production always passes
+    /// [`crate::limits::COMPOSER_ALL_DRAFTS_BYTES`].
+    pub fn enforce_draft_budget_with(&mut self, budget: usize) -> usize {
+        let mut retained = self.draft_bytes();
+        if retained <= budget {
+            return 0;
+        }
+        let before = retained;
+        let mut capacity = 32usize;
+        loop {
+            for view in self.sessions.known.values_mut() {
+                view.composer.set_undo_capacity(capacity);
+            }
+            self.composer.set_undo_capacity(capacity);
+            retained = self.draft_bytes();
+            if retained <= budget || capacity <= 1 {
+                break;
+            }
+            capacity = (capacity / 2).max(1);
+        }
+        if retained > budget {
+            self.notice(
+                NoticeLevel::Warning,
+                format!(
+                    "draft budget: {} KiB retained across sessions; trim or discard a draft (un-sent text is kept)",
+                    retained / 1024
+                ),
+            );
+        }
+        before.saturating_sub(retained)
+    }
+}
+
+impl App {
     /// Retained decoded history bytes across every session.
     pub(crate) fn history_body_bytes(&self) -> usize {
         self.sessions

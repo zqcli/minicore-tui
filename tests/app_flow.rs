@@ -7035,3 +7035,101 @@ fn failed_turn_result_projects_authoritative_body_when_live_deltas_are_missing()
         "turn-local result items must not enter session history"
     );
 }
+
+/// D1 (spec §10.3): each session keeps its own whole composer. Switching
+/// saves/restores text, cursor, undo and paste markers, and background
+/// running loops are neither closed nor cancelled.
+#[test]
+fn switching_sessions_keeps_independent_composers_and_background_loops() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+
+    // A loop is left running on ses_1 before switching away.
+    driver.step(AppEvent::SubmitTurn {
+        session_id: "ses_1".into(),
+        text: "background work".into(),
+    });
+    let send = driver.request("turn.send");
+    driver.respond(
+        send,
+        json!({"turn": {"session_id": "ses_1", "loop_id": "loop_bg"}}),
+    );
+    let _wait = driver.request("turn.wait");
+
+    // A real draft: two paste projections and a non-default cursor.
+    let pasted = (0..12)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    driver.app.composer.insert_paste(&pasted);
+    driver.app.composer.type_text(" tail");
+    driver.app.composer.move_to(0, 3);
+    let first_revision = driver.app.composer.editor_revision();
+    let first_bytes = driver.app.composer.byte_len();
+    let first_pastes = driver.app.composer.display_paste_markers().len();
+    assert!(first_pastes >= 1, "the paste projection is retained");
+
+    // Draft independently in a second session.
+    open_idle(&mut driver, "ses_2");
+    assert!(
+        driver.app.composer.content().is_empty(),
+        "a new session starts with an empty draft"
+    );
+    driver.step(AppEvent::Terminal(CrosstermEvent::Paste("second".into())));
+    driver.app.composer.move_to(0, 1);
+
+    // Switching back restores the first session's whole composer.
+    driver.step(AppEvent::OpenSession {
+        session_id: "ses_1".into(),
+    });
+    assert_eq!(driver.app.composer.content(), format!("{pasted} tail"));
+    assert_eq!(driver.app.composer.byte_len(), first_bytes);
+    assert_eq!(driver.app.composer.cursor(), (0, 3));
+    assert_eq!(
+        driver.app.composer.display_paste_markers().len(),
+        first_pastes,
+        "paste markers follow the session"
+    );
+    assert!(driver.app.composer.editor_revision() >= first_revision);
+    // Undo history follows the session too: typing then undoing restores the
+    // exact pre-edit text.
+    driver.app.composer.type_char('z');
+    driver.app.composer.undo();
+    assert_eq!(driver.app.composer.content(), format!("{pasted} tail"));
+
+    // The background loop survived both switches untouched.
+    assert_eq!(
+        driver.app.sessions.known["ses_1"]
+            .live
+            .as_ref()
+            .and_then(|live| live.reference.as_ref())
+            .map(|turn| turn.loop_id.as_str()),
+        Some("loop_bg")
+    );
+
+    // The second session's draft is still its own.
+    driver.step(AppEvent::OpenSession {
+        session_id: "ses_2".into(),
+    });
+    assert_eq!(driver.app.composer.content(), "second");
+}
+
+/// D1 (spec §12.1, §21): the all-drafts budget counts undo/paste retention,
+/// trims the oldest undo records first, and never deletes un-sent text.
+#[test]
+fn draft_budget_trims_undo_before_touching_text() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+    let text = "x".repeat(200 * 1024);
+    driver.app.composer.set_text(&text);
+    let capacity = driver.app.composer.undo_capacity();
+    assert!(capacity > 1);
+    let retained = driver.app.draft_bytes();
+    assert!(retained > 0);
+    // Force a tiny budget through the app-level pass.
+    driver.app.enforce_draft_budget_with(1);
+    assert_eq!(driver.app.composer.content().len(), text.len());
+    assert_eq!(driver.app.composer.undo_capacity(), 1);
+}

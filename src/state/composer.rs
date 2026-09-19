@@ -19,6 +19,10 @@ pub const MAX_HISTORY: usize = 100;
 pub const MAX_COMPOSER_BYTES: usize = crate::limits::COMPOSER_DRAFT_BYTES;
 /// Fixed undo capacity keeps old snapshots from bypassing the draft budget.
 pub const MAX_COMPOSER_HISTORIES: usize = 128;
+/// The pinned editor does not expose its undo snapshots, so the draft budget
+/// charges at most this many buffer-sized undo records until the capacity is
+/// trimmed (spec §12.1: a measured fixed count is acceptable).
+pub const UNDO_SNAPSHOT_ESTIMATE: usize = 8;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PasteRange {
@@ -30,6 +34,8 @@ pub struct PasteRange {
 }
 
 /// Whether navigating history touches the editor's live draft.
+///
+/// Debug is manual: it reports sizes and the cursor only, never draft text.
 pub struct Composer {
     textarea: TextArea<'static>,
     history: VecDeque<String>,
@@ -47,6 +53,20 @@ pub struct Composer {
     pastes: Vec<PasteRange>,
     paste_undo: Vec<Vec<PasteRange>>,
     paste_redo: Vec<Vec<PasteRange>>,
+    /// Current editor undo capacity; trimming it frees the oldest records.
+    undo_capacity: usize,
+}
+
+impl std::fmt::Debug for Composer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Composer")
+            .field("bytes", &self.byte_len)
+            .field("lines", &self.textarea.lines().len())
+            .field("revision", &self.editor_revision)
+            .field("pastes", &self.pastes.len())
+            .finish()
+    }
 }
 
 impl Default for Composer {
@@ -69,6 +89,7 @@ impl Composer {
             pastes: Vec::new(),
             paste_undo: Vec::new(),
             paste_redo: Vec::new(),
+            undo_capacity: MAX_COMPOSER_HISTORIES,
         }
     }
 
@@ -184,6 +205,36 @@ impl Composer {
     /// Cached UTF-8 byte length without materializing the buffer.
     pub fn byte_len(&self) -> usize {
         self.byte_len
+    }
+
+    /// Bytes this draft retains, including the bounded undo estimate, paste
+    /// projections and recalled messages. The budget must cover these, not
+    /// only the visible text (spec §12.1, §21).
+    pub fn retained_bytes(&self) -> usize {
+        let snapshots = self.undo_capacity.min(UNDO_SNAPSHOT_ESTIMATE);
+        let undo = self
+            .byte_len
+            .saturating_mul(snapshots)
+            .min(MAX_COMPOSER_BYTES.saturating_mul(UNDO_SNAPSHOT_ESTIMATE));
+        let pastes = self
+            .pastes
+            .iter()
+            .map(|range| range.char_count.saturating_mul(4).saturating_add(64))
+            .sum::<usize>();
+        let recalled = self.history.iter().map(String::len).sum::<usize>() + self.draft.len();
+        self.byte_len + undo + pastes + recalled
+    }
+
+    /// Shrinks the retained undo capacity; the editor drops its oldest
+    /// records. Un-sent text is never touched.
+    pub fn set_undo_capacity(&mut self, capacity: usize) {
+        self.undo_capacity = capacity.clamp(1, MAX_COMPOSER_HISTORIES);
+        self.textarea.set_max_histories(self.undo_capacity);
+    }
+
+    /// The current undo capacity (for budget reports and tests).
+    pub fn undo_capacity(&self) -> usize {
+        self.undo_capacity
     }
 
     /// The TextArea for the renderer (read-only widget access).
