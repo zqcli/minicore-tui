@@ -24,21 +24,22 @@ The current-tree C2 release evidence is:
 
 ```text
 C2b: durable_rows=51101 deltas=1000 layout_calls=0 history_bytes_cloned=0
-C2c: p95_us=7893 p99_us=8323 durable_rows=43870 layout_calls=0
+C2c: p95_us=7610 p99_us=7932 durable_rows=43870 layout_calls=0
       history_bytes_cloned=0 viewport_rows=40000 viewport_bytes=4396336
       retained_layout_bytes_estimate=8035080 c2c_max_tree_vm_hwm_kib=47172
-Agent 0.5 serial E2E: 27/27
+Agent 0.5 serial E2E: 28/28
 ```
 
 The C2c P95/P99 values are synthetic frame-processing samples for the fixed
 workload; reruns can vary with host scheduling, and they are not terminal
 input-to-frame latency.
 
-Current-tree validation also passed Rust 1.85.0 `fmt --check`,
-`test --locked --all-targets --no-fail-fast` (720 passed, 0 failed, 35 ignored)
-and Clippy with `-D warnings` (`d2g-*.log`). The real Agent 0.5 serial run
-passed 27/27 tests (`d2g-e2e.log`: 22 pre-existing + 4 D1 + 1 D2 scenario).
-The six ignored release performance workloads also passed.
+Current-tree validation passed Rust 1.85.0 `fmt --check`,
+`test --locked --all-targets --no-fail-fast` (734 passed, 0 failed, 37 ignored)
+and Clippy with `-D warnings`. Rust stable 1.97.1 also passed fmt, all-targets
+tests, and Clippy with `-D warnings`. The real Agent 0.5 serial run passed
+28/28 tests, including the D3 editor/background-turn scenario. The six
+ignored release performance workloads also passed.
 
 | ID | Required behavior | Status | Evidence / remaining work |
 |---|---|---|---|
@@ -88,22 +89,22 @@ The six ignored release performance workloads also passed.
 | REF-44 | Search coverage distinguishes unloaded/large from global no-match | **Passed** | `/search` scans a loaded snapshot or an explicit pinned full-session `session.read` chain on the owned workers; coverage labels stay incomplete for large/stopped/failed/truncated scans. The real-Agent E2E scans 22 saved items across more than one page, finds a multi-byte UTF-8 literal, and reports complete coverage. |
 | REF-45 | Prompt jump and temporary folds preserve selection | **Passed** | `/prev`, `/next`, `/latest` and match jumps skip steering, read an unloaded window at the exact index under the captured pin, and install temporary fold overrides that are restored when search closes (reducer tests). |
 | REF-46 | Copy/export has no Rail/fake newline and export uses a fixed bounded pin | **Passed** | `/copy` reuses the rendered copy rows and hit operations with no remote read; `render_with_breaks` reports real logical line ends so a soft wrap never gains a newline and paragraph/code breaks survive. `/export` writes through one owned job from a pinned `session.read` chain with a bounded channel, unique temp file, explicit overwrite confirmation, atomic rename, cancel cleanup, explicit oversized placeholders, and an explicit raw-JSON path that verifies offsets/EOF before writing. The real-Agent E2E covers a multi-page UTF-8 history plus an in-progress live turn without mixing it into the saved pin. |
-| REF-47 | External editor does not block RPC or overwrite a newer draft | **Not run** | Stage D. |
+| REF-47 | External editor does not block RPC or overwrite a newer draft | **Passed** | Scripted direct-editor jobs cover atomic rename/readback, 0600 temp-file permissions, invalid UTF-8, 256 KiB rejection, nonzero exit, cancellation kill/wait/cleanup, and stale session/revision fencing; `tests/app_flow.rs` covers stale reducer return and the real Agent E2E keeps a background turn progressing while the editor runs. Real iTerm2 manual interaction remains explicitly **Not run**. |
 | REF-48 | ANSI/OSC/control-safe display with raw protocol offsets preserved | **Passed** | Safe-display and control-sequence tests. |
 | REF-49 | Logs contain no message/command/result/file/secret content | **Passed** | Content-free stderr/debug logging tests. |
 | REF-50 | All cache/queue owners are bounded and background sessions release bodies | **Passed** | Budget tests cover viewport/neighbor/recent-result protection, farthest-first active-head eviction under the 32 MiB cap, 48 MiB layout eviction, background-first ordering, and weak-pointer release of history/layout owners; RSS remains an observation, not a mathematical proof. |
 | REF-51 | Existing CJK/IME/mouse/scrollbar/terminal restore behavior | **Passed** | UI, Rail, terminal, and snapshot tests. |
 | REF-52 | Common command table/completion/help stay consistent | **Passed** | `command::COMMANDS` is the single static table driving parsing, completion and the help panel; tests assert every table entry parses and is offered, unlisted names are unknown, and the help panel renders every entry. |
 | REF-53 | No approval/plugin/Subagent/PTY/Git-write/auto-reconnect feature | **Passed** | Source audit. |
-| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Not run** | 27/27 current Agent E2E covers read/tool/compact, lifecycle, and the D2 multi-page search/export path; workspace file/changes/diff workflows are D/E scope and not covered. |
+| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Not run** | 28/28 current Agent E2E covers read/tool/compact, lifecycle, D2 search/export, and D3 editor coexistence; workspace file/changes/diff workflows are D/E scope and not covered. |
 | REF-55 | Rust 1.85/stable and original tests on three platforms | **Not run** | Rust 1.85 remote Linux is authoritative; current-tree stable/macOS/Windows coverage is not complete. |
 | REF-56 | Release before/after performance evidence uses real data | **Passed** | Current-tree Rust 1.85 focused C2b/C2c release probes passed; the full six-test ignored release suite also passed in this validation cycle. Workload units are recorded in `docs/performance.md`. |
 
 ## Counts
 
-- **Passed**: 38
+- **Passed**: 39
 - **Failed**: 0
-- **Not run**: 18
+- **Not run**: 17
 - **Not applicable**: 0
 
 ## C Status
@@ -116,9 +117,9 @@ The six ignored release performance workloads also passed.
   oversized items and a fresh decode-throughput/RSS measurement are outside
   this boundary. D2's explicit `/export raw` path is separately covered by
   reducer fixtures; exact allocator/RSS accounting is not claimed.
-- **D/E**: The search/export half of D is now implemented (see `D Status`);
-  the workspace/E panels were intentionally not started and must not be
-  reported as C defects.
+- **D/E**: D1, D2, and the D3 settings/editor/lifecycle slice are implemented
+  and validated (see `D Status`); workspace/file/changes/diff panels and E were
+  intentionally not started and must not be reported as C defects.
 
 ## D Status
 
@@ -165,10 +166,21 @@ for the criteria below, on the tree validated by the logs above:
 - **D2 export limitations**: **Not run**. The fixed Agent's runtime model-text
   ceiling is 256 KiB, so a real-Agent >8 MiB oversized item cannot be produced;
   the >8 MiB raw-export path is validated with bounded reducer fixtures rather
-  than claimed as a real-Agent measurement. Stable-toolchain, macOS and
-  Windows runs remain **Not run**.
-- **D1 review**: the parent/independent review of these commits has not been
-  recorded here; "Passed" reflects the current tree's own measured evidence.
+  than claimed as a real-Agent measurement. Stable Linux passed for this
+  current tree; macOS and Windows runs remain **Not run**.
+- **D3 settings/editor/lifecycle**: **Passed** for the implemented slice.
+  `config.rs` has strict TOML schema/duplicate-key handling, atomic persistence,
+  CLI precedence, single-value editor environment parsing, and no provider
+  secret/catalog fields. `/settings` is a real Dock with theme, thinking/tool
+  defaults, editor executable/args, and Agent paths; path changes only warn
+  that the next startup uses them. `/editor` uses one direct executable plus
+  args and an OS-temp draft, suspends input/draw through `TerminalGuard`, keeps
+  RPC/App/jobs alive, resumes and fences session/epoch/revision on return, and
+  kills/waits/cleans up on shutdown. Startup failures retain executable,
+  config-path, Agent-config, protocol, provider, and storage categories.
+- **D1/D2/D3 parent review**: the parent/independent review of these commits
+  has not been recorded here; "Passed" reflects the current tree's own measured
+  evidence. E remains deferred until that review.
 
 ## Current C2c Follow-ups
 

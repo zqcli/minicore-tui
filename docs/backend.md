@@ -50,8 +50,8 @@ repository's fixtures/E2E remain the release gate.
 passes bootstrap, and the reducer tests
 `bootstrap_accepts_the_pinned_agent_0_5_protocol_v1` and
 `bootstrap_rejects_a_backend_missing_required_capabilities` measure both
-directions. The current C2 tree has also been validated against the pinned
-Agent with all 22 serial E2E scenarios passing; protocol v1 equality remains a
+directions. The current D3 tree has also been validated against the pinned
+Agent with all 28 serial E2E scenarios passing; protocol v1 equality remains a
 necessary condition, not the only release gate.
 
 ## Method surface (33 methods)
@@ -238,14 +238,13 @@ python3 scripts/generate_agent_v1_fixtures.py \
 cargo test --release --locked --test performance -- --ignored --nocapture
 ```
 
-Last verified current-tree result under Rust 1.85: `fmt --check` clean,
-`test --locked --all-targets --no-fail-fast` passed 720 tests with zero
-failures (482 library tests; 35 ignored across the targets), and
-`clippy --locked --all-targets -- -D warnings` clean. The pinned Agent 0.5.0
-serial E2E run passed 27/27 scenarios, including the real multi-page D2
+Last verified current-tree result under Rust 1.85: `fmt --check` clean;
+full test and Clippy counts are recorded in `docs/refactor-acceptance.md`.
+The pinned Agent 0.5.0 serial E2E run passed 28/28 scenarios, including the
+D3 editor/background-turn coexistence case and the real multi-page D2
 search/export chain. The release performance suite passed 6/6 ignored
 workloads, including the 1000-delta C2b probe and the 120×40 C2c probe. The
-latest C2c sample recorded `p95_us=7893` and `p99_us=8323` for synthetic frame
+latest C2c sample recorded `p95_us=7610` and `p99_us=7932` for synthetic frame
 processing; reruns can vary with host scheduling, and these are not terminal
 input-to-frame latency measurements.
 
@@ -254,12 +253,12 @@ When reusing the existing `tui-target` directory after an rsync, run
 preserves source mtimes, and a newer stale rlib otherwise shadows the synced
 source, producing confusing "variant not found" errors.
 
-The 27 Agent E2E scenarios and six release/performance workloads are ignored
+The 28 Agent E2E scenarios and six release/performance workloads are ignored
 by default and are evidence only when explicitly run with their required
 binary/options. `docs/refactor-acceptance.md` tracks which REF rows remain
 open.
 
-C2 status: the B1/B2 lifecycle and `session.read` migration, serialized
+C2/D status: the B1/B2 lifecycle and `session.read` migration, serialized
 bounded decode worker, shared immutable layout worker, `ScrollAnchor`,
 viewport/neighbor/recent-result history protection, ToolFacts monotonic
 terminal handling, shared body/display owners, bounded SourceMap copy facts,
@@ -267,5 +266,6 @@ and the 32 MiB/48 MiB owner budgets are landed and verified. The current
 boundary intentionally does not add automatic typed decoding above 8 MiB or
 claim mathematically exact allocator/RSS accounting; oversized items remain
 explicit placeholders on the automatic history path. D2 search/copy/export is
-implemented and validated separately; workspace and external-editor workflows
-remain unstarted.
+implemented and validated separately. D3 adds local TOML settings, direct
+external-editor jobs with terminal suspend/resume, and startup error
+classification; workspace/file/changes/diff workflows remain deferred.

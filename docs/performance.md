@@ -49,8 +49,8 @@ synchronous durable-layout fallback.
 Current-tree C2c release probe after the decode-worker and ToolFacts changes:
 
 ```text
-p95_us=7893
-p99_us=8323
+p95_us=7610
+p99_us=7932
 durable_rows=43870
 layout_calls=0
 history_bytes_cloned=0
@@ -116,6 +116,7 @@ allocator-capacity measurements.
 - exact allocation-capacity and RSS accounting, which is intentionally not
   attempted here;
 - terminal input-to-frame latency under real interactive streaming;
-- D/E workspace and external-editor workflows; D2 search/copy/export
-  measurements are recorded in `docs/refactor-acceptance.md`, while stable,
-  macOS, and Windows validation remains **Not run**.
+- D/E workspace/file/changes/diff workflows and interactive iTerm2 editor
+  validation; D2 search/copy/export and D3 editor/settings measurements are
+  recorded in `docs/refactor-acceptance.md`, while macOS and Windows validation
+  remains **Not run**. Stable Linux validation passed for this tree.
