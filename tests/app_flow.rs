@@ -11,7 +11,7 @@ use ratatui::text::Line;
 use serde_json::{Value, json};
 use unicode_width::UnicodeWidthStr;
 
-use minicore_tui::app::{App, ConnectionState, RequestKind};
+use minicore_tui::app::{App, CliPrefs, ConnectionState, RequestKind, StartupSession};
 use minicore_tui::command::AppCommand;
 use minicore_tui::event::{AppEvent, RpcEvent};
 use minicore_tui::protocol::{
@@ -44,6 +44,15 @@ struct Driver {
 }
 
 impl Driver {
+    fn with_app(app: App) -> Self {
+        Self {
+            app,
+            queue: VecDeque::new(),
+            copies: Vec::new(),
+            exited: false,
+        }
+    }
+
     fn new() -> Self {
         Self {
             app: App::new(PathBuf::from("/workspace")),
@@ -7132,4 +7141,267 @@ fn draft_budget_trims_undo_before_touching_text() {
     driver.app.enforce_draft_budget_with(1);
     assert_eq!(driver.app.composer.content().len(), text.len());
     assert_eq!(driver.app.composer.undo_capacity(), 1);
+}
+
+fn enter() -> AppEvent {
+    AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::empty(),
+    )))
+}
+
+/// Opens the session panel with one closed catalog row selected.
+fn panel_with_closed_session(driver: &mut Driver, id: &str) {
+    // A closed row whose workspace and model do not exist locally: browse
+    // must not need either (spec §10.1).
+    let mut row = session(id);
+    row["workspace"] = json!("/nonexistent/project");
+    row["model"] = json!("model-that-does-not-exist");
+    driver.step(AppEvent::OpenSessionSelector);
+    driver.respond_method("session.list", json!({"sessions": [row]}));
+}
+
+/// D1 (spec §10.1): Ctrl+B reads a closed session through `session.read`
+/// alone. No `session.open` leaves, so the row's workspace and model need not
+/// exist locally.
+#[test]
+fn browsing_a_closed_session_reads_history_without_opening_it() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    panel_with_closed_session(&mut driver, "ses_closed");
+    driver.step(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+        KeyCode::Char('b'),
+        KeyModifiers::CONTROL,
+    ))));
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "session.open"),
+        "browse must not open the session; queued: {:?}",
+        driver
+            .queue
+            .iter()
+            .map(|request| request.method)
+            .collect::<Vec<_>>()
+    );
+    let read = driver.request("session.read");
+    driver.respond(
+        read,
+        history(vec![user(0, "loop_old", "browsed prompt")], None, 1),
+    );
+    let view = &driver.app.sessions.known["ses_closed"];
+    assert!(view.browsing, "the view stays read-only");
+    assert_eq!(view.transcript.blocks.len(), 1);
+    assert_eq!(driver.app.sessions.active.as_deref(), Some("ses_closed"));
+}
+
+/// D1 (spec §10.1): the first Enter after a read-only browse parks the text
+/// and asks for an explicit continue; a failed open keeps the browsed
+/// history and returns the text to the composer.
+#[test]
+fn browsing_requires_an_explicit_continue_and_keeps_text_when_open_fails() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    panel_with_closed_session(&mut driver, "ses_closed");
+    driver.step(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+        KeyCode::Char('b'),
+        KeyModifiers::CONTROL,
+    ))));
+    let read = driver.request("session.read");
+    driver.respond(
+        read,
+        history(vec![user(0, "loop_old", "browsed prompt")], None, 1),
+    );
+
+    driver.app.composer.set_text("continue please");
+    driver.step(enter());
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "turn.send" && request.method != "session.open"),
+        "the first Enter only parks the text"
+    );
+    assert!(driver.app.composer.content().is_empty());
+    assert_eq!(
+        driver.app.sessions.known["ses_closed"]
+            .pending_continue
+            .as_deref(),
+        Some("continue please")
+    );
+
+    driver.step(enter());
+    assert!(
+        driver
+            .queue
+            .iter()
+            .any(|request| request.method == "session.open"),
+        "the second Enter opens the session"
+    );
+    let open = driver.request("session.open");
+    driver.respond_error(open, 1234, "session_not_found");
+    let view = &driver.app.sessions.known["ses_closed"];
+    assert!(view.browsing, "a failed open returns to read-only browse");
+    assert_eq!(view.transcript.blocks.len(), 1, "browsed history is kept");
+    assert_eq!(driver.app.composer.content(), "continue please");
+}
+
+/// D1 (spec §10.1): after the open ACK, the parked text is sent as the
+/// session's next turn.
+#[test]
+fn continuing_a_browsed_session_sends_the_parked_text_after_open() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    panel_with_closed_session(&mut driver, "ses_closed");
+    driver.step(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+        KeyCode::Char('b'),
+        KeyModifiers::CONTROL,
+    ))));
+    let read = driver.request("session.read");
+    driver.respond(
+        read,
+        history(vec![user(0, "loop_old", "browsed prompt")], None, 1),
+    );
+    driver.app.composer.set_text("continue please");
+    driver.step(enter());
+    driver.step(enter());
+    let open = driver.request("session.open");
+    driver.respond(open, json!({"session": session("ses_closed")}));
+    let send = driver.request("turn.send");
+    assert_eq!(send.params["text"], "continue please");
+    assert_eq!(send.params["session_id"], "ses_closed");
+    assert!(!driver.app.sessions.known["ses_closed"].browsing);
+}
+
+/// D1 (spec §6.1): `--session <id>` opens the exact id after bootstrap and
+/// never opens the selector.
+#[test]
+fn startup_session_flag_opens_the_exact_id_without_a_selector() {
+    let prefs = CliPrefs {
+        startup_session: Some(StartupSession::Exact("ses_pinned".into())),
+        ..CliPrefs::default()
+    };
+    let mut driver = Driver::with_app(App::with_cli_prefs(PathBuf::from("/workspace"), prefs));
+    bootstrap(&mut driver);
+    assert!(
+        !matches!(driver.app.dock, Dock::SessionSelector(_)),
+        "an exact id never shows the selector"
+    );
+    let open = driver.request("session.open");
+    assert_eq!(open.params["session_id"], "ses_pinned");
+    driver.respond(open, json!({"session": session("ses_pinned")}));
+    driver.respond_method("session.state", state("ses_pinned", "idle", Value::Null));
+    let read = driver.request("session.read");
+    driver.respond(read, history(Vec::new(), None, 0));
+    assert_eq!(driver.app.sessions.active.as_deref(), Some("ses_pinned"));
+}
+
+/// D1 (spec §6.1): `--continue` picks the most recent session whose workspace
+/// is exactly the current one, ignoring a newer session in another project.
+#[test]
+fn startup_continue_matches_only_the_current_workspace() {
+    let prefs = CliPrefs {
+        startup_session: Some(StartupSession::ContinueCurrentWorkspace),
+        ..CliPrefs::default()
+    };
+    let mut driver = Driver::with_app(App::with_cli_prefs(PathBuf::from("/workspace"), prefs));
+    driver.step(AppEvent::Bootstrap);
+    driver.respond_method(
+        "agent.ping",
+        json!({
+            "version": "0.5.0",
+            "protocol_version": 1,
+            "capabilities": minicore_tui::protocol::REQUIRED_CAPABILITIES,
+        }),
+    );
+    driver.respond_method(
+        "model.list",
+        json!({"models": [
+            {"id":"deep","model_ref":"provider/deep","context_window":128000,"supports_tools":true,"supported_reasoning":["auto","high"]}
+        ]}),
+    );
+    driver.respond_method(
+        "profile.list",
+        json!({"profiles": [{"id":"coding","model":"deep","reasoning":"high","tools":["read"]}]}),
+    );
+    let mut other = session("ses_other");
+    other["workspace"] = json!("/other-project");
+    other["updated_at"] = json!("2026-03-01T00:00:00Z");
+    other["loaded"] = json!(false);
+    let mut here = session("ses_here");
+    here["updated_at"] = json!("2026-02-01T00:00:00Z");
+    here["loaded"] = json!(false);
+    driver.respond_method("session.list", json!({"sessions": [other, here]}));
+    let open = driver.request("session.open");
+    assert_eq!(
+        open.params["session_id"], "ses_here",
+        "the current workspace wins over a newer other-project session"
+    );
+}
+
+/// D1 (spec §6.1): when `--continue` finds nothing in the current workspace
+/// the selector opens instead of guessing across projects.
+#[test]
+fn startup_continue_falls_back_to_the_selector_without_cross_project_guessing() {
+    let prefs = CliPrefs {
+        startup_session: Some(StartupSession::ContinueCurrentWorkspace),
+        ..CliPrefs::default()
+    };
+    let mut driver = Driver::with_app(App::with_cli_prefs(PathBuf::from("/workspace"), prefs));
+    driver.step(AppEvent::Bootstrap);
+    driver.respond_method(
+        "agent.ping",
+        json!({
+            "version": "0.5.0",
+            "protocol_version": 1,
+            "capabilities": minicore_tui::protocol::REQUIRED_CAPABILITIES,
+        }),
+    );
+    driver.respond_method(
+        "model.list",
+        json!({"models": [
+            {"id":"deep","model_ref":"provider/deep","context_window":128000,"supports_tools":true,"supported_reasoning":["auto","high"]}
+        ]}),
+    );
+    driver.respond_method(
+        "profile.list",
+        json!({"profiles": [{"id":"coding","model":"deep","reasoning":"high","tools":["read"]}]}),
+    );
+    let mut other = session("ses_other");
+    other["workspace"] = json!("/other-project");
+    other["updated_at"] = json!("2026-03-01T00:00:00Z");
+    other["loaded"] = json!(false);
+    driver.respond_method("session.list", json!({"sessions": [other]}));
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "session.open"),
+        "no cross-project guess is opened"
+    );
+    assert!(
+        matches!(driver.app.dock, Dock::SessionSelector(_)),
+        "the selector takes over"
+    );
+}
+
+/// D1 (spec §10.2): the session selector defaults to the current workspace's
+/// recent activity while other workspaces stay listed below it.
+#[test]
+fn session_selector_defaults_to_current_workspace_recent_activity() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    driver.step(AppEvent::OpenSessionSelector);
+    let mut other = session("ses_other");
+    other["workspace"] = json!("/other-project");
+    other["updated_at"] = json!("2026-03-01T00:00:00Z");
+    let mut here = session("ses_here");
+    here["updated_at"] = json!("2026-02-01T00:00:00Z");
+    driver.respond_method("session.list", json!({"sessions": [other, here]}));
+    let selected = match &driver.app.dock {
+        Dock::SessionSelector(state) => state.selected_session_id.clone(),
+        other => panic!("expected the session selector, got {other:?}"),
+    };
+    assert_eq!(selected.as_deref(), Some("ses_here"));
 }

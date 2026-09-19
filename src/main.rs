@@ -20,7 +20,7 @@ use crossterm::event::{Event, EventStream};
 use futures_util::StreamExt;
 use ratatui::layout::Rect;
 
-use minicore_tui::app::{App, CliPrefs};
+use minicore_tui::app::{App, CliPrefs, StartupSession};
 use minicore_tui::args::{self, Args};
 use minicore_tui::command::AppCommand;
 use minicore_tui::event::{AppEvent, JobOutcome, RpcEvent};
@@ -171,11 +171,19 @@ async fn run_fullscreen(
     } else {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
     };
+    let startup_session = if let Some(session_id) = opts.session.clone() {
+        Some(StartupSession::Exact(session_id))
+    } else if opts.continue_recent {
+        Some(StartupSession::ContinueCurrentWorkspace)
+    } else {
+        None
+    };
     let prefs = CliPrefs {
         profile: opts.profile.clone(),
         model: opts.model.clone(),
         reasoning: opts.reasoning,
-        open_new_session_on_ready: opts.workspace_explicit,
+        open_new_session_on_ready: opts.workspace_explicit && startup_session.is_none(),
+        startup_session,
     };
     let mut app = App::with_cli_prefs(workspace, prefs);
     app.update(AppEvent::SetTheme(opts.theme));

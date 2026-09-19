@@ -348,6 +348,15 @@ enum RetryKey {
     },
 }
 
+/// Startup session selection from the CLI (spec §6.1): `--session <id>` is
+/// exact and never prompts, `--continue` matches only the current explicit
+/// workspace and falls back to the selector when nothing matches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartupSession {
+    Exact(String),
+    ContinueCurrentWorkspace,
+}
+
 /// CLI preferences injected at construction (spec 6.1). They only seed the
 /// catalog's next-session seats, so an existing session is never touched;
 /// a `None` seat lets the catalog default apply.
@@ -359,6 +368,8 @@ pub struct CliPrefs {
     /// When set and no session is active, a Ready app opens a pre-filled
     /// new-session form (explicit `--workspace`; never auto-creates).
     pub open_new_session_on_ready: bool,
+    /// Consumed once, when the first current catalog arrives (spec §6.1).
+    pub startup_session: Option<StartupSession>,
 }
 
 /// All app and UI state. Only `App::update` mutates it; render code reads
@@ -368,6 +379,8 @@ pub struct App {
     pub catalogs: CatalogState,
     pub sessions: SessionsState,
     pub notices: VecDeque<Notice>,
+    /// CLI startup session intent, consumed once (spec §6.1).
+    pub startup_session: Option<StartupSession>,
     /// Set by every `update` except `Rendered`, which clears it, so the main
     /// loop can throttle draws (max 30 FPS) without missing a change.
     pub dirty: bool,
@@ -631,6 +644,7 @@ impl App {
             shutdown_deadline: None,
             shutdown_child_exited: false,
             open_new_session_on_ready: false,
+            startup_session: None,
             now: SystemTime::now,
             pending_requests: HashMap::new(),
             pending_retries: std::collections::BTreeMap::new(),
@@ -666,6 +680,7 @@ impl App {
         app.catalogs.next_model = prefs.model;
         app.catalogs.next_reasoning = prefs.reasoning;
         app.open_new_session_on_ready = prefs.open_new_session_on_ready;
+        app.startup_session = prefs.startup_session;
         app
     }
 
@@ -1715,10 +1730,31 @@ impl App {
     }
 
     fn filtered_session_items(&self, query: &str) -> Vec<&SessionInfo> {
-        filtered_sessions(&self.sessions.list, query)
+        let items: Vec<&SessionInfo> = filtered_sessions(&self.sessions.list, query)
             .into_iter()
             .filter(|session| self.session_is_visible(&session.session_id))
-            .collect()
+            .collect();
+        if !query.trim().is_empty() {
+            return items;
+        }
+        // The selector defaults to the current workspace's recent activity;
+        // other workspaces stay reachable below it (spec §10.2).
+        let workspace = self
+            .catalogs
+            .default_workspace
+            .to_string_lossy()
+            .into_owned();
+        let mut current: Vec<&SessionInfo> = Vec::new();
+        let mut others: Vec<&SessionInfo> = Vec::new();
+        for session in items {
+            if session.workspace == workspace {
+                current.push(session);
+            } else {
+                others.push(session);
+            }
+        }
+        current.extend(others);
+        current
     }
 
     fn session_selector_cursor(&self, state: &SessionSelectorState) -> usize {
@@ -2316,6 +2352,31 @@ impl App {
             draft.field = FIELDS[(current + delta as i64).rem_euclid(FIELDS.len() as i64) as usize];
         }
         Vec::new()
+    }
+
+    /// Ctrl+B in the session panel: read-only browse of the selected closed
+    /// session without opening it (spec §10.1).
+    fn browse_selected_session(&mut self) -> Vec<AppCommand> {
+        if !self.guard_ready() || self.session_panel_busy() {
+            return Vec::new();
+        }
+        let selected = {
+            let Some(state) = self.session_selector_state() else {
+                return Vec::new();
+            };
+            if !matches!(&state.mode, SessionPanelMode::Browse) {
+                return Vec::new();
+            }
+            state.selected_session_id.clone()
+        };
+        let Some(selected) = selected else {
+            return Vec::new();
+        };
+        if !self.session_is_visible(&selected) || !self.session_is_filtered_visible(&selected) {
+            self.reconcile_session_selection(true);
+            return Vec::new();
+        }
+        self.browse_session(&selected)
     }
 
     fn confirm_session_selector(&mut self) -> Vec<AppCommand> {
@@ -3235,6 +3296,7 @@ impl App {
             RefreshSessions => self.refresh_sessions(),
             SessionRename => self.begin_session_rename(),
             SessionClose => self.begin_session_close(),
+            SessionBrowse => self.browse_selected_session(),
             SessionDelete => self.begin_session_delete(),
             SessionDeleteToggle => self.toggle_session_delete_choice(),
             ToggleTools => {
@@ -4354,7 +4416,7 @@ impl App {
         vec![ping, models, profiles, sessions]
     }
 
-    fn bootstrap_progress(&mut self, part: BootstrapPart) {
+    fn bootstrap_progress(&mut self, part: BootstrapPart) -> Vec<AppCommand> {
         match part {
             BootstrapPart::Ping => self.bootstrap.ping = true,
             BootstrapPart::Models => self.bootstrap.models = true,
@@ -4366,9 +4428,48 @@ impl App {
             self.connection = ConnectionState::Ready;
             self.blocked_notice = false;
             self.catalogs.seed_seats(&self.sessions.known);
+            // CLI startup intent wins over the pre-filled new-session form:
+            // opening or continuing an existing session is explicit.
+            match self.startup_session.take() {
+                Some(StartupSession::Exact(session_id)) => {
+                    self.open_new_session_on_ready = false;
+                    return self.open_session(&session_id);
+                }
+                Some(StartupSession::ContinueCurrentWorkspace) => {
+                    self.open_new_session_on_ready = false;
+                    return self.continue_startup_session();
+                }
+                None => {}
+            }
             if self.open_new_session_on_ready && self.sessions.active.is_none() {
                 self.open_new_session_on_ready = false;
                 self.open_new_session();
+            }
+        }
+        Vec::new()
+    }
+
+    /// `--continue`: the most recently updated session whose workspace is
+    /// exactly the current one. A miss opens the selector instead of
+    /// guessing across projects (spec §6.1).
+    fn continue_startup_session(&mut self) -> Vec<AppCommand> {
+        let workspace = self
+            .catalogs
+            .default_workspace
+            .to_string_lossy()
+            .into_owned();
+        let candidate = crate::state::selection::filtered_sessions(&self.sessions.list, "")
+            .into_iter()
+            .find(|session| session.workspace == workspace)
+            .map(|session| session.session_id.clone());
+        match candidate {
+            Some(session_id) => self.open_session(&session_id),
+            None => {
+                self.notice(
+                    NoticeLevel::Info,
+                    format!("no session in {workspace} to continue; choose one"),
+                );
+                self.open_selector(SelectorKind::Session)
             }
         }
     }
@@ -4633,22 +4734,19 @@ impl App {
                         return Vec::new();
                     }
                 }
-                self.bootstrap_progress(BootstrapPart::Ping);
-                Vec::new()
+                self.bootstrap_progress(BootstrapPart::Ping)
             }
             RequestKind::ListModels => match response.parse_models() {
                 Ok(result) => {
                     self.catalogs.models = result.models;
-                    self.bootstrap_progress(BootstrapPart::Models);
-                    Vec::new()
+                    self.bootstrap_progress(BootstrapPart::Models)
                 }
                 Err(error) => self.bootstrap_failure(METHOD_LIST_MODELS, error),
             },
             RequestKind::ListProfiles => match response.parse_profiles() {
                 Ok(result) => {
                     self.catalogs.profiles = result.profiles;
-                    self.bootstrap_progress(BootstrapPart::Profiles);
-                    Vec::new()
+                    self.bootstrap_progress(BootstrapPart::Profiles)
                 }
                 Err(error) => self.bootstrap_failure(METHOD_LIST_PROFILES, error),
             },
@@ -4692,8 +4790,7 @@ impl App {
                                 .entry(session_id)
                                 .or_insert_with(|| SessionView::new(session));
                         }
-                        self.bootstrap_progress(BootstrapPart::Sessions);
-                        Vec::new()
+                        self.bootstrap_progress(BootstrapPart::Sessions)
                     }
                     Err(error) => self.bootstrap_failure(METHOD_LIST_SESSIONS, error),
                 }

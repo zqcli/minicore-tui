@@ -212,6 +212,15 @@ pub struct SessionView {
     /// history rows and the loop total supersede these live rows; they are
     /// only shown when no persisted source owns the request.
     pub live_request_usage: HashMap<(String, u32), crate::protocol::UsageWire>,
+    /// Read-only browse (spec §10.1): the view was materialized by
+    /// `session.read` alone, without `session.open`, so it may describe a
+    /// closed session whose workspace/model need not exist locally. Sending
+    /// from a browsing view requires an explicit continue.
+    pub browsing: bool,
+    /// Text parked by a browse-mode submission: it waits for the explicit
+    /// continue confirmation, then rides along the open request so an open
+    /// failure restores it to the composer instead of dropping it.
+    pub pending_continue: Option<String>,
     /// One bounded fence for events from the loop retired by close/reopen.
     /// This is not a result registry.
     pub retired_loop: Option<TurnRef>,
@@ -290,6 +299,8 @@ impl SessionView {
             context: None,
             context_query_generation: 0,
             manual_compact: None,
+            browsing: false,
+            pending_continue: None,
             presentation: None,
             presentation_pending: false,
             presentation_refresh_pending: false,

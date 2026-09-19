@@ -71,6 +71,9 @@ pub enum Action {
     SessionRename,
     SessionClose,
     SessionDelete,
+    /// Open the selected closed session read-only through `session.read`
+    /// only (spec §10.1).
+    SessionBrowse,
     SessionDeleteToggle,
     SessionRenameChar(char),
     SessionRenameBackspace,
@@ -155,6 +158,7 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
                 KeyCode::Delete => return Action::SessionDelete,
                 KeyCode::Char('d') if ctrl(&key) => return Action::SessionDelete,
                 KeyCode::Char('w') if ctrl(&key) => return Action::SessionClose,
+                KeyCode::Char('b') if ctrl(&key) => return Action::SessionBrowse,
                 _ => {}
             }
         }

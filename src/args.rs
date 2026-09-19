@@ -18,6 +18,8 @@ Options:
   --agent-bin <PATH>         minicore-agent binary [default: minicore-agent]
   --agent-config <PATH>      agent config file (required; must exist)
   --workspace <PATH>         workspace for a new session [default: cwd]
+  --continue                 open the most recent session in this workspace
+  --session <ID>             open this exact session id (no prompts)
   --profile <ID>             default profile for a new session
   --model <ID>               default model for a new session
   --reasoning <LEVEL>        default reasoning (auto|disabled|low|medium|high|xhigh|max|ultra)
@@ -42,6 +44,10 @@ pub struct Args {
     pub model: Option<String>,
     pub reasoning: Option<Reasoning>,
     pub theme: ThemeKind,
+    /// `--continue`: resume the most recent session of the current workspace.
+    pub continue_recent: bool,
+    /// `--session <ID>`: open this exact id, no selector.
+    pub session: Option<String>,
     pub debug: bool,
     pub help: bool,
     pub version: bool,
@@ -54,6 +60,7 @@ pub enum ArgsError {
     MissingRequired(&'static str),
     InvalidTheme(String),
     InvalidReasoning(String),
+    ConflictingFlags(&'static str, &'static str),
 }
 
 impl fmt::Display for ArgsError {
@@ -69,6 +76,7 @@ impl fmt::Display for ArgsError {
                 f,
                 "invalid reasoning `{value}` (expected `auto`, `disabled`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`)"
             ),
+            Self::ConflictingFlags(a, b) => write!(f, "`{a}` and `{b}` cannot be combined"),
         }
     }
 }
@@ -87,6 +95,8 @@ where
         model: None,
         reasoning: None,
         theme: ThemeKind::Dark,
+        continue_recent: false,
+        session: None,
         debug: false,
         help: false,
         version: false,
@@ -126,6 +136,8 @@ where
             "--model" => parsed.model = Some(value()?),
             "--reasoning" => parsed.reasoning = Some(parse_reasoning(&value()?)?),
             "--theme" => parsed.theme = parse_theme(&value()?)?,
+            "--continue" => parsed.continue_recent = true,
+            "--session" => parsed.session = Some(value()?),
             "--debug" => parsed.debug = true,
             "--help" | "-h" => parsed.help = true,
             "--version" | "-V" => parsed.version = true,
@@ -136,6 +148,9 @@ where
     // every other invocation is run mode and needs `--agent-config`. Every
     // argument is parsed first, so an unknown flag still errors even when
     // `--help` is present.
+    if parsed.continue_recent && parsed.session.is_some() {
+        return Err(ArgsError::ConflictingFlags("--continue", "--session"));
+    }
     if !parsed.help && !parsed.version && parsed.agent_config.as_os_str().is_empty() {
         return Err(ArgsError::MissingRequired("--agent-config"));
     }
@@ -294,6 +309,24 @@ mod tests {
             parse_flags(&["-V", "--agent-config", "a.toml"])
                 .unwrap()
                 .version
+        );
+    }
+
+    #[test]
+    fn parses_continue_and_session_startup_selection() {
+        let parsed = parse_flags(&["--agent-config", "a.toml", "--continue"]).unwrap();
+        assert!(parsed.continue_recent);
+        assert_eq!(parsed.session, None);
+        let parsed = parse_flags(&["--agent-config=a.toml", "--session=ses_9"]).unwrap();
+        assert_eq!(parsed.session.as_deref(), Some("ses_9"));
+        assert!(!parsed.continue_recent);
+        assert_eq!(
+            parse_flags(&["--agent-config", "a.toml", "--continue", "--session", "s"]),
+            Err(ArgsError::ConflictingFlags("--continue", "--session"))
+        );
+        assert_eq!(
+            parse_flags(&["--agent-config", "a.toml", "--session"]),
+            Err(ArgsError::MissingValue("--session".to_owned()))
         );
     }
 

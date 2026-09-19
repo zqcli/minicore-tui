@@ -356,6 +356,123 @@ impl App {
         commands
     }
 
+    /// Read-only browse (spec §10.1): materializes a view from the catalog
+    /// row and issues `session.read` only. No `session.open`, no state,
+    /// presentation, model or workspace requirement; loaded history is kept
+    /// when a later continue fails.
+    pub(super) fn browse_session(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
+        if !self.guard_ready() || self.reload.is_some() || self.session_panel_busy() {
+            return Vec::new();
+        }
+        if self.sessions.pending_deletes.contains(session_id)
+            || self
+                .sessions
+                .known
+                .get(session_id)
+                .is_some_and(|view| view.closing)
+        {
+            return Vec::new();
+        }
+        if self
+            .sessions
+            .known
+            .get(session_id)
+            .is_some_and(|view| view.browsing)
+        {
+            ui_actions::cancel_scrollbar_drag(self);
+            ui_actions::clear_selection(self);
+            self.set_active_session(Some(session_id.clone()));
+            self.dock = Dock::Composer;
+            return Vec::new();
+        }
+        if !self.sessions.known.contains_key(session_id) {
+            let Some(info) = self
+                .sessions
+                .list
+                .iter()
+                .find(|session| session.session_id == session_id.as_str())
+                .cloned()
+            else {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("session {session_id} is not in the catalog"),
+                );
+                return Vec::new();
+            };
+            self.sessions.known.insert(
+                session_id.clone(),
+                crate::state::session::SessionView::new(info),
+            );
+        }
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            view.browsing = true;
+            view.pending_continue = None;
+            view.history_read.begin(HistoryTrigger::Refresh);
+        }
+        ui_actions::cancel_scrollbar_drag(self);
+        ui_actions::clear_selection(self);
+        self.set_active_session(Some(session_id.clone()));
+        self.dock = Dock::Composer;
+        self.notice(
+            NoticeLevel::Info,
+            format!(
+                "Browsing {session_id} read-only (no session opened). Press Enter to continue it."
+            ),
+        );
+        self.request_history(session_id).into_iter().collect()
+    }
+
+    /// Second Enter in a browsing view: open the session and send the parked
+    /// text once the Agent confirms. The text stays parked until then so an
+    /// open failure can restore it.
+    pub(super) fn continue_browsed_session(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
+        let text = self
+            .sessions
+            .known
+            .get(session_id)
+            .and_then(|view| view.pending_continue.clone());
+        let Some(text) = text else {
+            return Vec::new();
+        };
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            view.browsing = false;
+        }
+        self.notice(
+            NoticeLevel::Info,
+            format!("Continuing {session_id}: opening the session to send the parked text"),
+        );
+        let commands = self.request_open_session(session_id);
+        if commands.is_empty() {
+            // The open request was refused (reload, lifecycle fence, ...):
+            // restore the read-only state and the parked text.
+            if let Some(view) = self.sessions.known.get_mut(session_id) {
+                view.browsing = true;
+            }
+            self.notice(
+                NoticeLevel::Info,
+                "session was not opened; the text is still parked — press Enter again to retry",
+            );
+            return Vec::new();
+        }
+        let _ = text;
+        commands
+    }
+
+    /// Open failure: keep the browsed history and hand the parked text back
+    /// to the composer (spec §10.1).
+    fn restore_browsed_continue(&mut self, session_id: &SessionId) {
+        let Some(view) = self.sessions.known.get_mut(session_id) else {
+            return;
+        };
+        let Some(text) = view.pending_continue.take() else {
+            return;
+        };
+        view.browsing = true;
+        if self.composer.content().is_empty() {
+            self.composer.set_text(&text);
+        }
+    }
+
     pub(super) fn can_activate_existing_session(&self, session_id: &SessionId) -> bool {
         self.sessions.known.get(session_id).is_some_and(|view| {
             view.info.loaded && !view.closing && Self::has_initialized_session_view(view)
@@ -843,6 +960,13 @@ impl App {
         if self.can_activate_existing_session(session_id) {
             return self.activate_existing_session(session_id);
         }
+        self.request_open_session(session_id)
+    }
+
+    /// Issues the `session.open` RPC and establishes the lifecycle fence.
+    /// Shared by the plain open path and the browse-mode continue path, which
+    /// must ask the Agent to open a session the browser only read.
+    fn request_open_session(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
         // Establish the lifecycle fence before the new request leaves the
         // reducer. Old notifications can arrive before session.open responds.
         let retired_loop_on_failure = self
@@ -1581,6 +1705,7 @@ impl App {
                 }
                 _ => format!("session.open failed: {error}"),
             };
+            self.restore_browsed_continue(&session_id);
             if let Dock::SessionSelector(state) = &mut self.dock {
                 state.error = Some(message);
             } else {
@@ -1597,6 +1722,7 @@ impl App {
                     view.retired_loop = Some(retired_loop);
                 }
             }
+            self.restore_browsed_continue(&session_id);
             let message =
                 format!("session.open response does not match requested session {session_id}");
             if let Dock::SessionSelector(state) = &mut self.dock {
@@ -1639,6 +1765,7 @@ impl App {
                 view.history_read.defer(HistoryTrigger::Gap);
             }
             view.closing = false;
+            view.browsing = false;
             view.live = None;
             view.unsaved_loop = None;
             view.last_result = retained_after_reopen;
@@ -1674,6 +1801,17 @@ impl App {
         if matches!(&self.dock, Dock::SessionSelector(state) if state.selected_session_id.as_deref() == Some(opened_id.as_str()) && matches!(&state.mode, SessionPanelMode::Browse))
         {
             self.dock = Dock::Composer;
+        }
+        // A browse-mode continue sends its parked text only after the Agent
+        // confirmed the open (spec §10.1); an open failure restored it to the
+        // composer in the failure branches above.
+        let parked = self
+            .sessions
+            .known
+            .get_mut(&opened_id)
+            .and_then(|view| view.pending_continue.take());
+        if let Some(text) = parked {
+            commands.extend(self.submit_turn(opened_id, text));
         }
         if self.reload.is_some() {
             commands.extend(self.maybe_finish_reload());

@@ -42,6 +42,18 @@ impl App {
     /// silently swallowed; a missing agent or session gets a notice.
     pub fn submit_composer(&mut self) -> Vec<AppCommand> {
         self.editor_selection = None;
+        // Second Enter in a browsing view confirms the continue even though
+        // the composer is empty (the text is parked on the view).
+        if let Some(active) = self.sessions.active.clone() {
+            if self
+                .sessions
+                .known
+                .get(&active)
+                .is_some_and(|view| view.browsing && view.pending_continue.is_some())
+            {
+                return self.continue_browsed_session(&active);
+            }
+        }
         let text = self.composer.content().trim().to_owned();
         if text.is_empty() {
             return Vec::new();
@@ -69,6 +81,27 @@ impl App {
             );
             return Vec::new();
         };
+        // Read-only browse (spec §10.1): the first submission parks the text
+        // and asks for an explicit continue; only the second Enter opens the
+        // session and sends it. A draft is never dropped by this gate.
+        if self
+            .sessions
+            .known
+            .get(&active)
+            .is_some_and(|view| view.browsing)
+        {
+            if let Some(view) = self.sessions.known.get_mut(&active) {
+                view.pending_continue = Some(text);
+            }
+            self.composer.clear();
+            self.notice(
+                NoticeLevel::Info,
+                format!(
+                    "{active} is open for reading only. Press Enter again to continue it — the text is parked, not sent."
+                ),
+            );
+            return Vec::new();
+        }
         let is_running = self
             .sessions
             .known
