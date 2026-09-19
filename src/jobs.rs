@@ -992,6 +992,22 @@ impl LocalJobs {
         }
     }
 
+    /// Joins the worker that produced one completion event. The worker sends
+    /// its typed outcome immediately before returning, so waiting here is
+    /// bounded by the already-finished job's final task handoff and cannot
+    /// wait on an unrelated local job.
+    pub async fn reap_completion(&mut self, outcome: &JobOutcome) {
+        match outcome {
+            JobOutcome::Clipboard { .. } => join_job(&mut self.clipboard).await,
+            JobOutcome::Export { .. } => join_job(&mut self.export_task).await,
+            JobOutcome::Config { .. } => join_job(&mut self.config_task).await,
+            JobOutcome::Editor { .. } => {
+                join_job(&mut self.editor_task).await;
+                self.editor_cancel = None;
+            }
+        }
+    }
+
     /// Whether the clipboard job is still in flight.
     pub fn has_in_flight(&self) -> bool {
         self.clipboard
@@ -1073,6 +1089,12 @@ impl LocalJobs {
             while self.events_rx.try_recv().is_ok() {}
             tokio::task::yield_now().await;
         }
+        let _ = handle.await;
+    }
+}
+
+async fn join_job(handle: &mut Option<JoinHandle<()>>) {
+    if let Some(handle) = handle.take() {
         let _ = handle.await;
     }
 }

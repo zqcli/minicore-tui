@@ -331,8 +331,11 @@ async fn run_fullscreen(
                 tokio::task::yield_now().await;
             }
             Selected::Job(Some(event)) => {
-                let commands = if matches!(&event, AppEvent::JobFinished(JobOutcome::Editor { .. }))
-                {
+                let is_editor = matches!(&event, AppEvent::JobFinished(JobOutcome::Editor { .. }));
+                if let AppEvent::JobFinished(outcome) = &event {
+                    jobs.reap_completion(outcome).await;
+                }
+                let commands = if is_editor {
                     guard
                         .resume()
                         .map_err(|error| io::Error::other(error.to_string()))?;
