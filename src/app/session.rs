@@ -1972,7 +1972,7 @@ impl App {
             view.presentation = None;
             view.presentation_pending = false;
             view.presentation_refresh_pending = false;
-            view.user_timestamps.clear();
+            Arc::make_mut(&mut view.user_timestamps).clear();
             view.live_user_timestamp = None;
             view.live_user_time_accepted = false;
             view.tool_presentations = std::sync::Arc::new(std::collections::HashMap::new());

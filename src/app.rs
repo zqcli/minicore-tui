@@ -6838,7 +6838,7 @@ fn install_history_item(
                 owner
             };
             if let Some(timestamp) = &item.timestamp {
-                view.user_timestamps.insert(index, timestamp.clone());
+                Arc::make_mut(&mut view.user_timestamps).insert(index, timestamp.clone());
             }
             view.transcript.invalidate();
             Some(owner)

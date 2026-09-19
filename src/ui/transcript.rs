@@ -35,7 +35,7 @@ pub struct DurableLayoutSnapshot {
     pub tool_folds: HashMap<ToolKey, FoldOverride>,
     pub tool_presentations: Arc<HashMap<ToolKey, Arc<ToolPresentationState>>>,
     pub tools_expanded: bool,
-    pub user_timestamps: HashMap<usize, String>,
+    pub user_timestamps: Arc<HashMap<usize, String>>,
     pub live_user_timestamp: Option<String>,
     pub live_user_time_accepted: bool,
     pub live_user_loop_id: Option<String>,
@@ -79,7 +79,7 @@ impl DurableLayoutSnapshot {
             tool_folds: view.tool_folds.clone(),
             tool_presentations: Arc::clone(&view.tool_presentations),
             tools_expanded: view.tools_expanded,
-            user_timestamps: view.user_timestamps.clone(),
+            user_timestamps: Arc::clone(&view.user_timestamps),
             live_user_timestamp: view.live_user_timestamp.clone(),
             live_user_time_accepted: view.live_user_time_accepted,
             live_user_loop_id: view
@@ -130,7 +130,7 @@ impl DurableLayoutSource for SessionView {
     }
 
     fn user_timestamps(&self) -> &HashMap<usize, String> {
-        &self.user_timestamps
+        self.user_timestamps.as_ref()
     }
 
     fn live_user_timestamp(&self) -> Option<&str> {

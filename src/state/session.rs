@@ -192,7 +192,7 @@ pub struct SessionView {
     pub presentation_refresh_pending: bool,
     /// User acceptance times keyed by durable history item index. Missing
     /// entries remain unknown rather than being replaced by local `now()`.
-    pub user_timestamps: HashMap<usize, String>,
+    pub user_timestamps: Arc<HashMap<usize, String>>,
     /// Acceptance time for the currently pending live prompt, if returned.
     pub live_user_timestamp: Option<String>,
     /// Distinguishes an accepted prompt with an unavailable clock from the
@@ -301,7 +301,7 @@ impl SessionView {
             presentation: None,
             presentation_pending: false,
             presentation_refresh_pending: false,
-            user_timestamps: HashMap::new(),
+            user_timestamps: Arc::new(HashMap::new()),
             live_user_timestamp: None,
             live_user_time_accepted: false,
             state: None,
