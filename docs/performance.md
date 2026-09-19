@@ -4,6 +4,32 @@ This document separates historical Stage A baselines from the current C2b/C2c
 structural evidence. Timing values are workload measurements, not hard CI
 limits and not terminal input-to-frame latency claims.
 
+The current refactor package is **0.3.0**. The E1–E3 measurements below are
+recorded remote-Linux evidence; they do not imply that the new hosted matrix or
+native macOS/Windows execution has already run.
+
+## Current Local Final-Source Run
+
+The current code/test/snapshot baseline is `0aa64c5e4d9211351123db059547beddb15c2cce`.
+The local rustc 1.98.0 release performance suite passed all **6/6** ignored
+workloads. Recorded outputs were:
+
+```text
+live delta: 1000 deltas, 51101 -> 51234 history rows, 133 delta rows,
+            push_ms=47.58
+all_lines: 20 clones, 140020 total rows, per_call_ms=20.63
+prepare 50k rows: per_call_ms=111.85
+C2 stable layout: 1000 frames, 250 deltas, elapsed_ms=1651.99,
+                  layout_calls=0, history_bytes_cloned=0
+C2c 120x40: p95_us=2503 p99_us=2880 durable_rows=43870,
+            viewport_bytes=4396336 retained_layout_bytes_estimate=8035080
+C2b worker: durable_rows=51101 deltas=1000,
+            layout_calls=0 history_bytes_cloned=0 viewport_bytes=2986911
+```
+
+These local measurements are workload evidence only. They do not measure
+terminal input-to-frame latency, exact RSS, or allocator behavior.
+
 ## Environment
 
 | Item | Value |
@@ -44,9 +70,9 @@ only the measured visible window. A layout build is now owned by the single
 serialized `LocalJobs` layout worker; production active sessions do not use a
 synchronous durable-layout fallback.
 
-## C2c Release Evidence
+## Historical C2c Release Evidence
 
-Current-tree C2c release probe after the decode-worker and ToolFacts changes:
+The E3-era C2c release probe after the decode-worker and ToolFacts changes:
 
 ```text
 p95_us=7610
@@ -62,9 +88,8 @@ c2c_max_tree_vm_hwm_kib=47172
 
 The samples are synthetic frame-processing measurements for the fixed 120×40
 workload; reruns can vary with host scheduling. They are **not** terminal input
-latency or terminal input-to-frame P95/P99 measurements. The focused current-tree C2b/C2c probes
-passed; the full six-test ignored release suite also passed in this validation
-cycle. The source/perf workload is 1000 deltas,
+latency or terminal input-to-frame P95/P99 measurements. The historical focused C2b/C2c probes passed; the current local final-source
+six-test ignored release suite is recorded above. The source/perf workload is 1000 deltas,
 7300 history blocks, 43,870 durable rows, a 119-column content width, and a
 40-row viewport; these units must remain in future logs.
 
@@ -199,6 +224,11 @@ There is no fresh E3 peak-RSS, allocation benchmark or interactive latency claim
 
 ## Not run / Remaining
 
+The phase-F query-slot fix is a lifecycle correctness change, not a throughput
+change. Its focused regression covers scope invalidation of waiting, ready,
+refresh, and detached follow-up state while preserving real in-flight
+ownership. No performance number is inferred from that test.
+
 - decode-throughput and RSS measurements for the current serialized decode
   worker;
 - typed explicit decoding/read workflow for items over 8 MiB; oversized items
@@ -207,7 +237,8 @@ There is no fresh E3 peak-RSS, allocation benchmark or interactive latency claim
   attempted here;
 - terminal input-to-frame latency under real interactive streaming;
 - interactive iTerm2/IME/clipboard/real-TTY validation and a real external
-  Provider; E2 workspace and E3 Changes/Context now have the automated evidence
-  above. D2 search/copy/export and D3 editor/settings
-  measurements remain in `docs/refactor-acceptance.md`. macOS and Windows
-  validation remains **Not run**; Linux validation passed on both toolchains.
+  Provider; E2 workspace and E3 Changes/Context have the automated evidence
+  above. D2 search/copy/export and D3 editor/settings measurements remain in
+  `docs/refactor-acceptance.md`. Hosted CI and native macOS/Windows execution
+  remain **Not run** until those jobs execute; Linux validation passed on both
+  toolchains.

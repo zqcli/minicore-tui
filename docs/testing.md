@@ -9,11 +9,10 @@ enter an alternate screen during normal CI tests.
 ## Current 0.3.0 Verification Boundary
 
 The current package is TUI **0.3.0**, paired with Agent **0.5.0** and Runtime
-**0.4.1**. The fixed source revisions are recorded in
-[`docs/backend.md`](backend.md), and the phase-F query-lifecycle regression is
-in commit `d5d1609`. The E3 Linux records below are historical evidence for the
-implementation before this final F review delta; the new hosted workflow has
-not run in this workspace and is not claimed as passed.
+**0.4.1**. The current code/test/snapshot baseline is
+`0aa64c5e4d9211351123db059547beddb15c2cce`; fixed backend revisions are
+recorded in [`docs/backend.md`](backend.md). Phase-F review and the final
+Tool Detail/history/export fixes pass the focused current local suite.
 
 The default local commands remain offline after dependencies have been fetched:
 
@@ -23,6 +22,13 @@ cargo test --locked --offline --all-targets
 cargo clippy --locked --offline --all-targets -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --offline --no-deps
 ```
+
+The current local rustc 1.98.0 result is **828 passed, 0 failed, 43 ignored** across the
+all-targets suite; `tests/app_flow.rs` is **137/137**, and the ignored release
+performance suite is **6/6**. These checks were run against the current local
+source baseline. The authorized remote Rust 1.85/stable checks, fixed
+Agent/Runtime build, final-source serial Agent E2E, hosted CI, and native/manual
+terminal checks remain separate acceptance evidence and are not claimed here.
 
 ## Historical Patch Verification
 
@@ -51,7 +57,7 @@ Its source/artifact hashes remain historical. Earlier panel stages are retained 
 [Stage 4](verification/stage4-session-panel/README.md). Existing MSRV strict-Clippy
 diagnostics are not claimed as fixed or suppressed.
 
-For the preceding **TUI 0.2.7 / Agent 0.3.2**, see
+For the historical preceding **TUI 0.2.7 / Agent 0.3.2**, see
 [verification/0.2.7/README.md](verification/0.2.7/README.md). All compilation was
 performed remotely on Linux: stable and Rust 1.85 each passed 423 default tests
 with 17 ignored; 16 real-Agent loopback E2E tests passed separately. Native macOS
@@ -79,12 +85,12 @@ cargo tree --locked --offline -p crossterm
 cargo metadata --locked --offline --no-deps --format-version 1
 ```
 
-Final6 delivery verification used Rust `1.85.0` and stable on an isolated
-remote Linux builder; see [verification.md](verification.md) for the recorded
-commands and results. GitHub Actions Linux, macOS, and Windows jobs were not
-run in final6.
-Suggested command time limits are 120 seconds for fmt, metadata, and
-dependency-tree checks, and 900 seconds for test, clippy, and doc checks.
+The historical E3 delivery verification used Rust `1.85.0` and stable on an
+isolated remote Linux builder; see [verification/v03-e3/README.md](verification/v03-e3/README.md)
+for those recorded commands and results. GitHub Actions Linux, macOS, and
+Windows jobs were not run for that record. Suggested command time limits are
+120 seconds for fmt, metadata, and dependency-tree checks, and 900 seconds for
+test, clippy, and doc checks.
 Credentials and private workspace paths are never recorded in test artifacts.
 
 ## Reproducible macOS Artifact
@@ -109,11 +115,12 @@ against portable fixtures, so it also runs on Linux without macOS tools.
 ## Counting Targets And Tests
 
 `cargo metadata --no-deps --format-version 1` is the source of truth for Cargo
-targets. The `agent_process` target has `harness = false`, so it is an
-executable fake-Agent harness and intentionally has no libtest `test result`
-line. For the other targets, count the `passed`, `failed`, and `ignored`
-fields from each `test result: ok` line in the unabridged `cargo test` output.
-Do not count compile messages or the harness-free executable as tests.
+targets. The `agent_process` target has `harness = false`, so it is an executable
+fake-Agent harness and intentionally has no libtest `test result` line. For the
+other targets, count the `passed`, `failed`, and `ignored` fields from each
+`test result: ok` line in the unabridged `cargo test` output. The current local
+all-target run totals **828 passed, 0 failed, 43 ignored**. Do not count compile
+messages or the harness-free executable as tests.
 
 ## Snapshots
 
@@ -187,17 +194,17 @@ cargo test --locked --offline --test agent_e2e -- --ignored --test-threads=1 --n
 ```
 
 The test harness creates an isolated configuration, data directory, workspace,
-and loopback mock model endpoint. The ignored suite covers discovery, turns, steering, updates, configuration
-reload, shutdown, and the Session-panel rename/close/delete flow.
-No provider key or real user data is used.
+and loopback mock model endpoint. The current ignored target contains 34
+scenarios covering discovery, turns, steering, updates, configuration reload,
+shutdown, Tool/file/workspace/Changes/Context workflows, and editor/background
+lifecycle behavior. No provider key or real user data is used.
 
 A delivery run should wrap this command in a 300-second timeout and a cleanup
 trap. The trap must kill/reap only processes created by the run and remove its
-temporary root. The official serial command is `--ignored --test-threads=1`. The historical
-remote final run covered 17 scenarios. The configuration-reload acceptance
-runs execute all 18 scenarios against a fresh Agent binary; both stable and
-MSRV E2E runs passed. This is loopback evidence against the real Agent binary,
-not external-provider coverage.
+temporary root. The official serial command is `--ignored --test-threads=1`.
+The historical E3 remote run passed 34/34 on both Linux toolchains; the final
+source-baseline run is pending. This is loopback evidence against the real
+Agent binary, not external-provider coverage.
 
 
 ## Stage 7 PTY Evidence

@@ -9,13 +9,15 @@ pinned Agent contract and updating the local DTOs and fixtures together.
 
 | Item | Value |
 |---|---|
-| Agent repository | `https://github.com/zqcli/minicore-agent` (`dev`) |
-| Agent commit | `b2e23938d073ab21c2775faa623561ba929a5ed1` |
-| Runtime commit | `87f3cf92b9b5980b0f468174a319cf53427d858e` |
-| RPC version | `0.3.x` |
+| TUI code/test/snapshot baseline | `0aa64c5e4d9211351123db059547beddb15c2cce` |
+| Agent repository | `https://github.com/zqcli/minicore-agent` |
+| Agent commit | `061743369459299e66be97bf97d2b27352a39914` (`0.5.0`) |
+| Runtime commit | `6cd2bdbc634437dea925495c61c7eb0be10ba171` (`0.4.1`) |
+| RPC protocol | `Protocol v1` |
 
 These values are the compatibility baseline, not a claim that an arbitrary
-Agent build is compatible.
+Agent build is compatible. The documentation-only follow-up is separate from
+the code/test/snapshot baseline above.
 
 ## Transport
 
@@ -45,46 +47,63 @@ the reader does not scan ahead for a later line. Agent log lines are capped at
 
 ## Methods
 
+The complete Protocol v1 method surface is the one recorded in
+[`docs/backend.md`](backend.md):
+
+```text
+agent.ping, agent.reload, agent.shutdown,
+profile.list, model.list,
+session.list, session.create, session.open, session.close, session.delete,
+session.state, session.context, session.compact, session.compact.cancel,
+session.update, session.rename, session.history, session.read,
+session.presentation,
+workspace.read, workspace.files, workspace.search, workspace.status,
+changes.list, changes.diff,
+tool.read, tool.output,
+turn.send, turn.steer, turn.cancel, turn.wait, turn.result,
+interaction.answer
+```
+
+The application-history path is `session.read`. `session.history` and
+`session.presentation` remain compatibility/diagnostic reads and are not used
+to reconstruct the application transcript.
+
 | Method | Parameters | Result used by the TUI |
 |---|---|---|
-| `agent.ping` | empty | `{"version":"0.3.x"}` |
-| `agent.reload` | empty | exactly `{"ok":true}` |
-| `model.list` | empty | model catalog |
-| `profile.list` | empty | profile catalog |
-| `session.list` | empty | session catalog |
-| `session.create` | workspace required; profile/model/reasoning/title optional | created `SessionInfo` |
-| `session.open` | `session_id` | opened `SessionInfo` |
-| `session.close` | `session_id` | explicit cleanup result; separate wait still determines saving |
-| `session.delete` | `session_id` | explicit confirmed deletion result |
-| `session.state` | `session_id` | current five-state session view and active loop object |
-| `session.update` | `session_id`, optional `model`/`reasoning` (at least one) | updated `SessionInfo` and optional `active_revision` |
-| `session.rename` | `session_id`, required `title` string (empty clears the title) | complete renamed `SessionInfo`; no execution revision |
-| `session.history` | `session_id`, `offset`, `limit` | durable indexed history page (`HistoryPageWire`) |
-| `turn.send` | `session_id`, `text` | `TurnRef` (`{session_id, loop_id}`) |
-| `turn.wait` | exact `TurnRef` | direct `TurnResultViewWire` (`{turn, outcome, usage, requests, tool_rounds, final_config_revision, persistence}`) |
-| `turn.steer` | `session_id`, `loop_id`, `text` | `{"ok":true}` |
-| `turn.cancel` | exact `TurnRef` | cancellation result |
-| `agent.shutdown` | empty | `{"ok":true}` |
+| `agent.ping` | empty | Protocol version plus ordered capability list |
+| `agent.reload` | empty | exactly `{"ok":true}` on success |
+| `session.read` | session identity, pinned cursor and byte budget | ordered sanitized Runtime-item chunks with continuation cursor |
+| `turn.send` | `session_id`, `text` | exact `TurnRef` (`{session_id, loop_id}`) |
+| `turn.wait` | exact `TurnRef` | direct turn result and persistence facts |
+| `turn.result` | exact `TurnRef` | pending/live/stored result view |
+| `turn.steer` / `turn.cancel` | exact session/turn identity | acknowledgement or cancellation result |
+| `tool.read` / `tool.output` | full Tool identity and stream cursor | authoritative facts and bounded stream pages |
+| `workspace.*` / `changes.*` | session, scope and opaque cursors | bounded read-only workspace/change observations |
+| `session.context` / `session.compact*` | session and operation identity | context/compaction facts and typed outcomes |
 
-`agent.reload` is sent with `{}` parameters and accepts only the exact
-successful result shape `{"ok":true}`; malformed, missing, false, or extra
-fields fail closed. A valid `{"ok":false}` reports that configuration was not
-applied. A valid `{"ok":true}` followed by a catalog/state/history refresh
-failure reports that configuration reloaded but the view refresh is
-incomplete or failed. Transport loss after the ACK reports configuration as
-reloaded but leaves view refresh outcome unknown; transport loss before the
-ACK, or a malformed/unknown ACK, reports an unknown reload outcome and does
-not automatically retry. Agent event
+`agent.ping` must report `protocol_version == 1` and the required capabilities;
+there is no Agent 0.3 package-minor fallback. `agent.reload` is sent with `{}`
+parameters and accepts only the exact successful result shape `{"ok":true}`;
+malformed, missing, false, or extra fields fail closed. A valid `{"ok":true}`
+followed by a catalog/state/read refresh failure reports that configuration
+reloaded but the view refresh is incomplete or failed. Transport loss after the
+ACK reports configuration as reloaded but leaves the view refresh outcome
+unknown; transport loss before the ACK, or a malformed/unknown ACK, reports an
+unknown reload outcome and does not automatically retry. Agent event
 notifications cover session state/open/close, turn start/finish, request
 start, text/reasoning deltas, and tool lifecycle.
 
-## RPC-18 Audit
+A valid `{"ok":false}` reports that configuration was not applied. Agent event
+notifications cover session state/open/close, turn start/finish, request start,
+text/reasoning deltas, and tool lifecycle.
 
-The complete v0.3 method surface is covered explicitly below. “PASS” describes the recorded
-contract/evidence baseline: the method is represented by the production
-request/response path and was covered by a remote final6/Stage 3 flow or
-protocol test. It is not current post-edit validation and does not claim a
-separate real-provider test for every method.
+## Core RPC Audit
+
+The table retains the original focused request/response assertions. The full
+Protocol v1 method list is above and the release acceptance matrix records the
+broader fixture, reducer, and E2E coverage. “PASS” describes contract or fixture
+coverage in the current codebase; it does not claim a real-provider test or a
+final-source pinned-Agent run for every method.
 
 | # | Method | Request/response evidence | Status |
 |---:|---|---|---|
@@ -100,7 +119,7 @@ separate real-provider test for every method.
 | 10 | `session.state` | `tests/protocol.rs:session_state_uses_an_active_loop_object` | PASS |
 | 11 | `session.update` | `tests/app_flow.rs:session_update_is_sent_for_an_active_session` | PASS |
 | 12 | `session.rename` | `src/ui/component_tests.rs:session_panel_rename_uses_id_and_waits_for_complete_ack`; real Agent path: `tests/agent_e2e.rs:e2e_session_panel_rename_and_delete_against_current_agent` | PASS |
-| 13 | `session.history` | `tests/app_flow.rs:history_pages_by_contiguous_item_index_not_render_block_count` | PASS |
+| 13 | `session.read` | `tests/read_chunks.rs` and `tests/app_flow.rs:history_pages_by_contiguous_item_index_not_render_block_count` | PASS |
 | 14 | `turn.send` | `tests/app_flow.rs:send_response_registers_direct_wait_and_durable_history_replaces_live` | PASS |
 | 15 | `turn.cancel` | `tests/app_flow.rs:slash_cancel_sends_exact_turn_cancel_and_wait_reconciles` | PASS |
 | 16 | `turn.wait` | `tests/protocol.rs:turn_wait_is_a_direct_turn_result_view` | PASS |
@@ -121,7 +140,7 @@ notifications may be interleaved. In particular:
 
 After a successful `turn.send`, the TUI registers `turn.wait` immediately in
 the same update. A wait result with `persistence=persisted` starts a `session.state`
-refresh and incremental `session.history` chain while the session remains loaded.
+refresh and incremental pinned `session.read` chain while the session remains loaded.
 Failed or unknown completion retains its live/result/gap facts without pretending
 that existing History recovers that loop. Raw history item indexes, not rendered block counts, drive pagination;
 tool results patch the matching tool call. Live event order is not used
@@ -142,7 +161,7 @@ event resumes the existing settled/handoff rules. Reads issued before reload
 are fenced as `StaleRead`; any retired read or
 lifecycle ACK that leaves authority uncertain clears the old session state and
 keeps the session's `event_gap`/incomplete-history fence. Recovery issues
-independent fresh `session.state` and `session.history` reads. Ordinary pending
+independent fresh `session.state` and `session.read` reads. Ordinary pending
 reads, history loading, and a temporarily absent SessionState retain their
 pre-reload admission behavior.
 Reload-retired reads and lifecycle ACKs set a session-scoped
@@ -164,8 +183,8 @@ Every event carries session metadata and `dropped_before`. A positive
 value marks an event gap. The TUI displays the gap and clears it only after actual History alignment for
 an appropriately confirmed result; failure/unknown retains the marker. It does
 not add event ACK, replay, or reconnect
-protocols. `turn.wait`, `session.state`, and `session.history` are the
-authority. A retained blocked completion may be read once more through the internal
+protocols. `turn.wait`, `session.state`, and the paged `session.read` path are the
+authority; `session.history` is compatibility-only. A retained blocked completion may be read once more through the internal
 exact-turn `turn.wait` path; there is no polling or automatic retry.
 
 ## Wire Projection

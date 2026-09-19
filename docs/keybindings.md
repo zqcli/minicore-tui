@@ -1,4 +1,4 @@
-# Keys And Slash Commands
+# Keys And Slash Commands (v0.3.0)
 
 The keymap is fixed in `src/keymap.rs`. It is pure and compiled into the
 binary; there is no user keybinding DSL. All key actions become
@@ -15,6 +15,7 @@ Editor restores the existing editing and command behavior.
 | `Ctrl+D` | Request shutdown only when the composer is empty and the active session is idle. |
 | `F1` | Open Help; press `F1` or `Esc` to close it. |
 | `Ctrl+R` | Open the session selector. |
+| `Ctrl+G` | Continue a browsed closed session explicitly, without sending a prompt. |
 | `Ctrl+N` | Open the new-session form. |
 | `Ctrl+L` | Open the model selector; updates the active session at a request boundary, or edits a new-session draft. |
 | `Shift+Tab` | Open the reasoning selector from the composer; move to the previous form field in a new-session form; close the reasoning selector. |
@@ -53,6 +54,16 @@ submits a new turn. While the loop is in a
 running model/tool state, `Enter` submits a mid-turn steering message via
 `turn.steer`; WaitingForInput and Finishing disable submission. `Esc` remains
 the cancellation action only after higher-priority views/selections are closed.
+
+`/settings` edits only local TUI preferences: theme, reasoning/tool defaults,
+external-editor executable/arguments, and the next-start Agent paths. `Ctrl+S`
+applies a valid settings form atomically; an Agent path change is reported as a
+next-startup requirement and never reloads or kills the current child.
+`/editor` opens the current draft in the configured executable with its exact
+argument vector and an OS temporary file. The terminal is suspended only for
+input/drawing; RPC readers, App updates, background turns, waits, and saves
+continue. Invalid UTF-8, oversized output, nonzero exit, cancellation, and a
+stale draft preserve the existing Composer text.
 
 ## Tool Detail (v0.3 E1)
 

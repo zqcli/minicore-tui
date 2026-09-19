@@ -91,8 +91,9 @@ the composer issues `turn.steer`.
 
 Agent events are a live, best-effort view. `dropped_before` marks an event gap,
 but the TUI does not add ACK, replay, or deduplication infrastructure. The
-wait response, `session.state`, and durable `session.history` are
-authoritative. After a wait, the app fetches the durable tail, merges items by
+wait response, `session.state`, and the paged durable `session.read` path are
+authoritative; `session.history` is compatibility-only and is never used as
+the application history path. After a wait, the app fetches the durable tail, merges items by
 monotonic item index, patches tool results by call ID, clears the gap when the issued gap
 revision is still current, and removes the provisional live turn (or transitions to
 an unsaved loop banner if persistence failed). Background sessions retain their own
@@ -117,7 +118,7 @@ Reads retired at reload start become stale responses. If a retired state,
 presentation, or history read could have been the authority for a session,
 the session drops the old state snapshot and retains event-gap and
 incomplete-history fences. A reload failure starts independent fresh
-`session.state` and `session.history` reads; History may clear the gap, but
+`session.state` and `session.read` reads; History may clear the gap, but
 submit/close/delete remain blocked until a valid state response also restores
 state authority. Ordinary submit admission retains its existing state/history-read behavior: an
 in-flight ordinary read, loading history, or temporarily absent SessionState
@@ -380,6 +381,34 @@ Both surfaces reuse the two shared read slots, deferred budget, finite focus
 and existing worker. There are no optional Tool→Changes or Diff→FilePreview
 links without a specific supported return contract. E3 verification and known
 unrun checks are in [verification/v03-e3/README.md](verification/v03-e3/README.md).
+
+## Phase-F Query Lifecycle Boundary
+
+`QuerySlots` owns in-flight request ownership separately from query intent.
+Close, reopen, delete, and detail/Dock close invalidate `waiting`, `ready`,
+coalesced refresh flags, and the App's detached follow-up queue by
+`QueryScope`. A real in-flight request remains registered as `StaleRead` until
+its response arrives, because only that response can release the slot it
+actually owns. This prevents an old same-session page from being reissued into
+a closed view or a newer session epoch without pretending that a remote request
+finished early.
+
+History follow-ups carry a session identity and are admitted only through the
+current view; search/export retain their generation or export identity. Tool
+refreshes coalesce by `ToolKey`, so reopening a detail while an old response is
+in flight schedules one follow-up after the old slot is released. Deferred
+`turn.result` retries reclaim their read slot before emission, and never-written
+wait/result intents are retired at a session lifecycle boundary. Query scope
+invalidation is centralized so panel-local cleanup and session lifecycle
+cleanup cannot diverge.
+
+Completion-owned local jobs are a separate ownership boundary: a config,
+editor, export, decode, or layout slot remains admitted until its typed
+completion event is dequeued, then the exact worker owner is joined. Shutdown
+cancels or terminates children, drains typed outcomes, joins each matching
+owner, and only then releases the slot. Async decode/layout identities also
+carry session/epoch or view-generation fences, so stale results can release
+ownership without installing data into a newer view.
 
 ## Explicit Non-Goals
 

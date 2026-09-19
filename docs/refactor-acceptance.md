@@ -1,4 +1,4 @@
-# v0.3 Refactor Acceptance Matrix (REF-01…REF-56)
+# v0.3.0 Refactor Acceptance Matrix (REF-01…REF-56 + F review)
 
 Status values are deliberately strict:
 
@@ -9,16 +9,42 @@ Status values are deliberately strict:
   validation has not been run on the current tree.
 - **Not applicable** — the criterion does not apply to this project.
 
-## Current Evidence
+## Current Local Verification
+
+The current code/test/snapshot baseline is `0aa64c5e4d9211351123db059547beddb15c2cce`.
+On the local rustc 1.98.0 environment (the package MSRV is 1.85.0) it passed:
+
+- `cargo fmt --all -- --check`;
+- `cargo test --locked --offline --all-targets`: **828 passed, 0 failed,
+  43 ignored**;
+- `cargo clippy --locked --offline --all-targets -- -D warnings`;
+- `RUSTDOCFLAGS='-D warnings' cargo doc --locked --offline --no-deps`;
+- `git diff --check`;
+- `cargo test --locked --offline --test app_flow`: **137/137**; and
+- the ignored release performance suite: **6/6**.
+
+This is current local evidence, not remote dual-toolchain or hosted-CI
+execution. The fixed-Agent/Runtime build and serial Agent E2E run on this final
+source baseline remain pending.
+
+## Historical E3 Remote Evidence And Phase-F Delta
+
+The E3 counts below are the last complete remote-Linux validation before the
+phase-F review delta; they are retained as historical evidence and are not
+relabeled as a full 0.3.0 release run. The current package is TUI 0.3.0 against
+Agent 0.5.0 / Runtime 0.4.1. Phase-F work began at `d5d1609` and continued
+through the current source baseline with query-lifecycle, ownership, bounds,
+privacy, shutdown, Tool Detail, history-reopen, and export-harness fixes.
+Hosted CI is configured but has not run in this workspace.
 
 The authoritative builder is `root@192.168.20.199`, workspace
-`/root/minicore-tui-v03-refactor/tui`, with Rust 1.85.0. The current C2c
-mainline includes the bounded serialized canonical-item decode worker, shared
-history owners, monotonic ToolFacts presentation ownership, content-based
-ScrollAnchor restoration, viewport/neighbor/recent-result eviction protection,
-layout batching, budgets, and SourceMap copy metadata. The current-tree
-evidence below was refreshed with the authoritative Rust 1.85 commands;
-earlier C2b/C2c release logs remain historical context only.
+`/root/minicore-tui-v03-refactor/tui`, with Rust 1.85.0. The E3 C2c mainline
+included the bounded serialized canonical-item decode worker, shared history
+owners, monotonic ToolFacts presentation ownership, content-based ScrollAnchor
+restoration, viewport/neighbor/recent-result eviction protection, layout
+batching, budgets, and SourceMap copy metadata. The current local baseline
+retains those boundaries and adds the phase-F fixes above; earlier C2b/C2c
+release logs remain historical context only.
 
 The preceding D3 C2 release baseline was:
 
@@ -34,44 +60,43 @@ The C2c P95/P99 values are synthetic frame-processing samples for the fixed
 workload; reruns can vary with host scheduling, and they are not terminal
 input-to-frame latency.
 
-The latest E1 implementation is `7ca349b` (start `740a528`; DTO/stream slice
-`bd92e84`, detail slice `6653205`, capacity/harness hardening `e3f4af0`, then
-visible-snapshot copy and tab-cache coherence). On **each** of Rust 1.85.0 and stable 1.97.1, `fmt --check`,
-`test --locked --all-targets --no-fail-fast` (**762 passed, 0 failed, 39 ignored**),
-Clippy and rustdoc with warnings denied passed. The real fixed-Agent serial run
-passed **30/30 on each toolchain**, including all original 28 and the two new
-Bash/detail/cancel workflows. All six ignored Release performance workloads
-passed. The E1 C2c synthetic P95/P99 was **7941/8306 μs**; the block above
-records the preceding D3 baseline, not a current terminal measurement.
+The historical E1 implementation is `7ca349b` (start `740a528`; DTO/stream
+slice `bd92e84`, detail slice `6653205`, capacity/harness hardening `e3f4af0`,
+then visible-snapshot copy and tab-cache coherence). On **each** of Rust
+1.85.0 and stable 1.97.1, `fmt --check`, `test --locked --all-targets
+--no-fail-fast` (**762 passed, 0 failed, 39 ignored**), Clippy and rustdoc with
+warnings denied passed. The real fixed-Agent serial run passed **30/30 on each
+toolchain**. All six ignored Release performance workloads passed. The E1 C2c
+synthetic P95/P99 was **7941/8306 μs**; these are historical stage values, not
+current terminal measurements.
 
 Full commands, logs, scope, known unrun checks and the **338-file local/remote
 tracked build-source equality manifest** are in
 [`verification/v03-e1/README.md`](verification/v03-e1/README.md). Parent reported
 E1 baseline review passed before authorizing E2.
 
-The final E2 implementation is `d553e96` (start `285dbd1`; foundation `38d5367`,
-UI/E2E slice `e83a14b`, then Dock focus/caret correction). On **each** remote
-Linux toolchain, all required fmt/test/Clippy/rustdoc checks passed with warnings
-denied: **788 passed, 0 failed, 41 default ignored**, and **32/32 fixed-Agent
-E2Es**, including all previous 30. All six Release workloads passed. E2's
-synthetic C2c P95/P99 was **7500/7951 μs**, with zero stable-history layout calls
-and zero history-body cloning. The **349-file** source-equality manifest,
-commands, final logs, scope and limitations are in
-[`verification/v03-e2/README.md`](verification/v03-e2/README.md). Parent E2 approval
-authorized the E3 work below.
+The historical E2 implementation is `d553e96` (start `285dbd1`; foundation
+`38d5367`, UI/E2E slice `e83a14b`, then Dock focus/caret correction). On each
+remote Linux toolchain, all required fmt/test/Clippy/rustdoc checks passed with
+warnings denied: **788 passed, 0 failed, 41 default ignored**, and **32/32
+fixed-Agent E2Es**, including all previous 30. All six Release workloads
+passed. E2's synthetic C2c P95/P99 was **7500/7951 μs**, with zero
+stable-history layout calls and zero history-body cloning. The **349-file**
+source-equality manifest, commands, final logs, scope and limitations are in
+[`verification/v03-e2/README.md`](verification/v03-e2/README.md). Parent E2
+approval authorized the E3 work below.
 
-The final E3 implementation is `733df37` (start `95d3a27`; foundation `5a7c62b`,
-Changes/status `a2071ed`, Context/E2Es `5b597e1`, retired-read/timer correction
-`001a603`, then current-main-view refresh routing). Both remote toolchains
-passed fmt, tests, Clippy and rustdoc with warnings denied: **812 passed,
-0 failed, 43 default ignored**, plus **34/34 fixed-Agent E2Es**, including all
-previous 32. All six Release workloads passed. Final synthetic C2c P95/P99 is
-**7999/8335 μs**, with zero stable-history layout calls/body copies. The
-**368-file** local/remote source manifest, commands, logs, retained red tests,
-boundaries and remaining manual checks are in
-[`verification/v03-e3/README.md`](verification/v03-e3/README.md).
-**E3 parent review is pending. F overall validation has not started; this is
-not full-project v0.3 release completion.**
+The historical E3 implementation is `733df37` (start `95d3a27`; foundation
+`5a7c62b`, Changes/status `a2071ed`, Context/E2Es `5b597e1`, retired-read/timer
+correction `001a603`, then current-main-view refresh routing). Both remote
+toolchains passed fmt, tests, Clippy and rustdoc with warnings denied:
+**812 passed, 0 failed, 43 default ignored**, plus **34/34 fixed-Agent E2Es**,
+including all previous 32. All six Release workloads passed. Final synthetic C2c
+P95/P99 was **7999/8335 μs**, with zero stable-history layout calls/body copies.
+The **368-file** local/remote source manifest, commands, logs, retained red
+tests, boundaries and remaining manual checks are in
+[`verification/v03-e3/README.md`](verification/v03-e3/README.md). **E3 parent
+review remains pending.**
 
 | ID | Required behavior | Status | Evidence / remaining work |
 |---|---|---|---|
@@ -81,7 +106,7 @@ not full-project v0.3 release completion.**
 | REF-04 | Response/event interleave, partial frame, and EOF behavior | **Passed** | RPC transport tests. |
 | REF-05 | Full outbound admission does not block the UI; draft is retained | **Passed** | Backpressure and reducer tests. |
 | REF-06 | Reserved control slots preserve FIFO safety | **Passed** | Backpressure baseline tests. |
-| REF-07 | Read/deferred/byte budgets and expired-query accounting | **Passed** | Query slots, deferred cap, and wire-budget tests. |
+| REF-07 | Read/deferred/byte budgets and expired-query accounting | **Passed** | Query slots, deferred cap, and wire-budget tests; phase-F scope invalidation retains real in-flight ownership while retiring queued/detached intent, coalesces Tool refreshes, and reclaims a `turn.result` retry slot before emission. |
 | REF-08 | Local side effects stay off the input/RPC loop | **Passed** | Owned clipboard and job tests. |
 | REF-09 | `session.read` reconstructs Runtime items across UTF-8 pages | **Passed** | `tests/read_chunks.rs` plus Agent fixtures; assembler now emits encoded items and production JSON decode is owned by `LocalJobs`. |
 | REF-10 | Pinned prefix, cursor offsets, and new-pin rules | **Passed** | Read-chain pin/cursor tests. |
@@ -128,15 +153,15 @@ not full-project v0.3 release completion.**
 | REF-51 | Existing CJK/IME/mouse/scrollbar/terminal restore behavior | **Passed** | UI, Rail, terminal, and snapshot tests. |
 | REF-52 | Common command table/completion/help stay consistent | **Passed** | `command::COMMANDS` is the single static table driving parsing, completion and the help panel; tests assert every table entry parses and is offered, unlisted names are unknown, and the help panel renders every entry. |
 | REF-53 | No approval/plugin/Subagent/PTY/Git-write/auto-reconnect feature | **Passed** | Source audit. |
-| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Passed** | 34/34 on both toolchains: all prior 32 scenarios plus real synthetic-Git paging/status/diff/stale and native provenance/Turn/Context workflows. Fixed backend sources and executable match recorded hashes. |
+| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Not run** | Historical E3 evidence is 34/34 on both remote toolchains, including synthetic-Git paging/status/diff/stale and native provenance/Turn/Context workflows. The pinned Agent/Runtime run has not yet been repeated on the current `0aa64c5` source baseline. |
 | REF-55 | Rust 1.85/stable and original tests on three platforms | **Not run** | Current E3 tree passes Rust 1.85.0 and stable 1.97.1 on remote Linux; macOS/Windows execution and terminal manual acceptance remain Not run. |
-| REF-56 | Release before/after performance evidence uses real data | **Passed** | Current-tree Rust 1.85 focused C2b/C2c release probes passed; the full six-test ignored release suite also passed in this validation cycle. Workload units are recorded in `docs/performance.md`. |
+| REF-56 | Release before/after performance evidence uses real data | **Passed** | The current local rustc 1.98.0 focused C2b/C2c probes passed; the full six-test ignored release suite also passed on the current source baseline. Workload units are recorded in `docs/performance.md`. |
 
 ## Counts
 
-- **Passed**: 55
+- **Passed**: 54
 - **Failed**: 0
-- **Not run**: 1
+- **Not run**: 2
 - **Not applicable**: 0
 
 ## C Status
@@ -151,8 +176,16 @@ not full-project v0.3 release completion.**
   reducer fixtures; exact allocator/RSS accounting is not claimed.
 - **D/E**: D1/D2/D3, E1 tool details, E2 file references/candidates/preview/
   literal search and E3 Changes/status/Context are implemented with automated
-  evidence. E3 parent review is pending. F overall validation and manual/
-  macOS/Windows acceptance remain unclaimed.
+  evidence. E3 parent review is pending.
+- **F review**: **Focused local review passed.** Query scope invalidation now
+  clears `waiting`, `ready`, coalesced refreshes, and detached follow-ups for
+  close, reopen, delete, and panel teardown while retaining real in-flight
+  request IDs until their responses release slots. It also retires
+  never-written session retries and reissues coalesced Tool refreshes after
+  stale responses. The final Tool Detail capability-retention, reopen-reasoning,
+  export no-clobber, memory-bound, privacy, shutdown, and completion-owner
+  regressions pass in the current local suite. Full remote validation, pinned
+  Agent E2E, hosted CI, and native platform acceptance remain **Not run**.
 
 ## D Status
 
@@ -200,7 +233,8 @@ for the criteria below, on the tree validated by the logs above:
   ceiling is 256 KiB, so a real-Agent >8 MiB oversized item cannot be produced;
   the >8 MiB raw-export path is validated with bounded reducer fixtures rather
   than claimed as a real-Agent measurement. Stable Linux passed for this
-  current tree; macOS and Windows runs remain **Not run**.
+  historical E3 tree; macOS and Windows runs remain **Not run**, and the
+  final pinned-Agent run for the current source baseline is still pending.
 - **D3 settings/editor/lifecycle**: **Passed** for the implemented slice.
   `config.rs` has strict TOML schema/duplicate-key handling, atomic persistence,
   CLI precedence, single-value editor environment parsing, and no provider
@@ -214,7 +248,17 @@ for the criteria below, on the tree validated by the logs above:
 - **D1/D2/D3 parent review**: the parent/independent review of these commits
   has not been recorded here; "Passed" reflects the current tree's own measured
   evidence. Later E authorizations and E3's pending parent review are recorded
-  in Current Evidence above; this historical D entry is not release acceptance.
+  in Current Local Verification above; this historical D entry is not release acceptance.
+
+## Phase-F Follow-ups
+
+1. Run the authorized remote Rust 1.85/stable fmt, tests, Clippy, rustdoc,
+   fixed Agent/Runtime builds, and serial loopback E2Es on the `0aa64c5`
+   source baseline.
+2. Execute the new hosted matrix before changing platform statuses from
+   **Not run**; the workflow configuration alone is not execution evidence.
+3. Keep manual iTerm2/editor/IME, exact RSS, real-provider, and oversized
+   real-Agent checks conservative.
 
 ## Current C2c Follow-ups
 

@@ -1,16 +1,24 @@
-# v0.3 Refactor Migration Inventory (Stage A)
+# v0.3 Refactor Migration Inventory (Historical Stage A)
 
-This is the frozen stage-A inventory of user-visible commands, E2E scenarios,
-and core behaviors that every later stage must migrate rather than drop
-(Spec §22.2, §28.2). Each row names the current evidence; stage B–E must keep an
-equivalent assertion.
+This file preserves the frozen stage-A inventory of user-visible commands, E2E
+scenarios, and core behaviors that every later stage had to migrate rather than
+drop (Spec §22.2, §28.2). It is a historical baseline, not the current release
+matrix. The current 0.3.0 migration guide is
+[`migration-v0.2-to-v0.3.md`](migration-v0.2-to-v0.3.md), and the current
+acceptance statuses are in [`refactor-acceptance.md`](refactor-acceptance.md).
 
-## Slash commands (current surface)
+The delivered v0.3 surface now includes E1 tool details, E2 workspace/file
+references and preview, E3 Changes/Diff/Context, D3 settings and external
+editing, and phase-F query-scope invalidation. Stage B–F retained the source
+and behavior boundaries below; the original Stage-A counts are not relabeled.
 
-Parser: [`src/command.rs`](../src/command.rs). The list below is the complete
-current command set. Stage D adds `/rename /search /copy /export /files /grep
-/diff /tool /context /compact /editor /settings /refresh` and must keep the
-existing twelve working.
+## Stage-A Slash Commands (Historical)
+
+Parser: [`src/command.rs`](../src/command.rs). The list below is the frozen
+Stage-A command set. The delivered v0.3 surface additionally includes
+`/rename /search /copy /export /files /grep /diff /tool /context /compact
+/editor /settings /refresh`; the live command table and key behavior are in
+[`docs/keybindings.md`](keybindings.md).
 
 | Command | Args | Effect | Current test |
 |---|---|---|---|
@@ -30,15 +38,16 @@ existing twelve working.
 | `/delete` | `[confirm]` | delete a closed session | same |
 
 Keys: [`src/keymap.rs`](../src/keymap.rs) (F1 help, F2 rename, F5 refresh
-sessions, F6 reserved for stage E focus toggle, Ctrl+N/R/L/O/T, Esc/PageUp/
-PageDown/Home/End, Ctrl+C/Ctrl+D).
+sessions, F6 Main/Editor focus toggle, Ctrl+N/R/L/O/T, Esc/PageUp/PageDown/
+Home/End, Ctrl+C/Ctrl+D).
 
-## Real-Agent E2E scenarios (18, ignored by default)
+## Stage-A Real-Agent E2E Scenarios (18, Historical)
 
 File: [`tests/agent_e2e.rs`](../tests/agent_e2e.rs). Run with
 `MINICORE_AGENT_BIN=… cargo test --locked --test agent_e2e -- --ignored
 --test-threads=1`. Each starts a loopback Responses mock with a synthetic
-workspace/data dir.
+workspace/data dir. The current target has 34 scenarios; the 18 rows below are
+preserved as the Stage-A migration inventory and are not the final count.
 
 | # | Scenario | Must keep |
 |---|---|---|

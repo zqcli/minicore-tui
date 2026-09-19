@@ -1,7 +1,12 @@
-# Final Report: Agent v0.3 / Runtime v0.4 Migration
+# Historical Final Report: Agent v0.3 / Runtime v0.4 Migration
 
-The current release versions are **TUI 0.2.8 / Agent 0.3.3**. The
-original [0.2.8 release](release-0.2.8.md) was a paired version update without additional
+This report preserves the earlier 0.2.x delivery record. The current release
+line is **TUI 0.3.0 / Agent 0.5.0 / Runtime 0.4.1**; see
+[`docs/refactor-acceptance.md`](refactor-acceptance.md),
+[`docs/backend.md`](backend.md), and [`docs/performance.md`](performance.md)
+for the current refactor evidence. The
+historical report begins with the older release versions **TUI 0.2.8 / Agent 0.3.3**.
+The original [0.2.8 release](release-0.2.8.md) was a paired version update without additional
 TUI behavior changes. See
 [release-0.2.7.md](release-0.2.7.md) for buffered terminal output, level-1 Debug
 package optimization, preserved executables/cache cleanup, and remote-only builds.
@@ -12,7 +17,15 @@ The [0.2.6 changes](release-0.2.6.md) retain dependency-level optimization, and 
 painting and coalesced preparation.
 The [0.2.4 changes](release-0.2.4.md) retain true reasoning-part boundaries,
 paired Steer receipts and the gray FIFO queue above Working. Runtime remains untouched.
-Source updates are committed on `dev`; no release tag has been created.
+The current 0.3.0 code/test/snapshot baseline is
+`0aa64c5e4d9211351123db059547beddb15c2cce`, paired with Agent
+`061743369459299e66be97bf97d2b27352a39914` and Runtime
+`6cd2bdbc634437dea925495c61c7eb0be10ba171`. Local rustc 1.98.0 validation
+passed 828 tests with no failures and 43 ignored, the focused `app_flow` target passed
+137/137, and the release performance suite passed 6/6. The authorized remote
+Rust 1.85/stable checks, final-source pinned-Agent E2E, hosted CI, native/manual
+terminal checks, exact RSS, provider, and real oversized-Agent checks remain
+separate and are not claimed by this historical report.
 
 The [0.2.3 Footer fixes](release-0.2.3.md) remain, but its pending-Steer User-card
 UI is superseded by the 0.2.4 queue. The [0.2.2 fixes](release-0.2.2.md) cover
@@ -22,7 +35,7 @@ The [0.2.1 package](release-0.2.1.md), Rail gates below, and **0.2.0** migration
 evidence are historical; their counts and cross-platform checks are not
 relabeled as new runs. Agent/Runtime protocol compatibility is unchanged.
 
-## Current Follow-Ups
+## Historical 0.2.x Follow-Ups
 
 The same-version [Tool/reload/subagent follow-up](verification/followups/README.md)
 adds safe failure bodies, 100 ms Working animation, consecutive User spacing,
@@ -41,7 +54,7 @@ Corrected TUI binaries/symbols are installed with old inodes preserved; Agent
 bytes are unchanged. No user process restart, new push, hosted CI, release tag or
 pixel parity is implied.
 
-## Previous Session Acceptance
+## Historical Session Acceptance
 
 Session management now shares dock-panel geometry with all selectors, New
 Session, Help and Logs. Session-specific actions provide open, new, refresh,
@@ -69,7 +82,7 @@ and Debug symbols were installed at that boundary with old executable inodes
 preserved; the current follow-up installation supersedes those paths. User
 processes were not restarted; no hosted CI, push or pixel-parity claim is implied.
 
-## Rail Follow-Up Status
+## Historical Rail Follow-Up Status
 
 The source tree also contains the Rail Stage 0–7 follow-up described
 in [rail-ui-parity-stage0.md](rail-ui-parity-stage0.md) and summarized in
@@ -150,7 +163,7 @@ subscription, unavailable old timestamps, and missing branch values remain
 explicit unknowns where the Agent has no reliable source. No commits were
 created by this work.
 
-## Delivery Identity
+## Historical Delivery Identity
 
 | Repository | Original start HEAD | End HEAD | Change owner |
 |---|---|---|---|
@@ -167,7 +180,7 @@ inventory and preserved-paths summary.
 - Agent presentation/RPC source is modified as described above; Runtime source
   was not modified. No commit was created.
 
-## Implemented Semantics
+## Historical Implemented Semantics
 
 - `src/protocol.rs` models the v0.3 JSON-RPC DTOs: `TurnRef`, indexed
   history, five session states, direct `turn.wait` results, outcomes,
@@ -220,7 +233,7 @@ inventory and preserved-paths summary.
   dispatching new RPC commands; reports combine captured stderr with
   known/unknown result facts.
 
-## MIG Coverage
+## Historical MIG Coverage
 
 The complete one-row-per-criterion matrix is in `docs/acceptance.md`; the
 16-method RPC audit is in `docs/rpc-contract.md`.
@@ -233,14 +246,16 @@ cover RPC, terminal, and dependency boundaries; MIG-122 through MIG-140 cover
 flows, snapshots, E2E, and platform CI; MIG-141 through MIG-160 cover the r2
 backend revisions and their edge cases.
 
-The matrix reports **157 PASS / 3 NOT RUN**. The parent independently verified
-pins, backend build provenance, dependency absence, and evidence recording
-(MIG-001/002/006/007/141/160) by source/metadata audit, which is appropriate for
-those requirements and is not a runtime SHA-attestation claim.
+The historical matrix reports **157 PASS / 3 NOT RUN**. The parent independently
+verified pins, backend build provenance, dependency absence, and evidence
+recording (MIG-001/002/006/007/141/160) by source/metadata audit, which is
+appropriate for those requirements and is not a runtime SHA-attestation claim.
 MIG-138/139/140 are NOT RUN: GitHub Actions Linux/macOS/Windows jobs were not
-triggered. Remote Linux tests and cross-target checks are not substituted for CI.
+triggered. Remote Linux tests and cross-target checks are not substituted for
+CI. The current Protocol v1 acceptance matrix is
+[`docs/refactor-acceptance.md`](refactor-acceptance.md).
 
-## Final6 & Post-review Verification
+## Historical Final6 Verification
 
 All final6 commands ran remotely in
 `/root/minicore-tui-r2-01a06ec1/tui` on `192.168.20.199`. Raw final2, final3,

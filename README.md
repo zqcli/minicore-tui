@@ -132,24 +132,27 @@ The complete current keymap and slash-command semantics are in
 - `Esc` closes a dock or cancels the exact running turn;
 - `Ctrl+C` clears non-empty input, then double-presses to quit; `/cancel` cancels the exact active loop, `/reload` reloads Agent configuration and safe read-only state, and `/quit` performs normal shutdown.
 
-Implemented local commands are `/new`, `/resume`, `/sessions`, `/model`,
-`/reasoning`, `/cancel`, `/reload`, `/theme dark`, `/theme light`, `/clear`,
-`/help`, `/logs`, `/quit`, `/close`, and `/delete`. Unknown commands never
-reach the Agent. `/reload` sends empty `agent.reload` params, refreshes safe
+Implemented local commands include `/new`, `/resume`, `/sessions`, `/model`,
+`/reasoning`, `/theme`, `/clear`, `/help`, `/logs`, `/cancel`, `/reload`,
+`/quit`, `/close`, `/delete`, `/rename`, `/tool`, `/files`, `/grep`, `/diff`,
+`/context`, `/compact`, `/refresh`, `/search`, `/prev`, `/next`, `/latest`,
+`/copy`, `/export`, `/settings`, and `/editor`. Unknown commands never reach
+the Agent. `/reload` sends empty `agent.reload` params, refreshes safe
 catalog/session reads and rereads a retained turn result once without duplicating
 an existing wait or replaying execution.
 
 ## Backend Contract And Scope
 
-The wire contract is pinned in [docs/rpc-contract.md](docs/rpc-contract.md), with
-[current source/artifact provenance](docs/verification/reload-refresh/README.md).
-The [r2 backend record](docs/backend.md) is historical. `persisted` acknowledges
-appending the process's durable items, not transaction/fsync/crash durability.
-A failed append blocks the Session while retaining its in-process completion.
+The wire contract is pinned in [docs/rpc-contract.md](docs/rpc-contract.md),
+with the current source and backend revisions in [docs/backend.md](docs/backend.md).
+Historical r2 and E3 verification records remain linked from the acceptance
+matrix. `persisted` acknowledges appending the process's durable items, not
+transaction/fsync/crash durability. A failed append blocks the Session while
+retaining its in-process completion.
 
 - Agent 0.5.0 commit `061743369459299e66be97bf97d2b27352a39914`;
 - Runtime 0.4.1 commit `6cd2bdbc634437dea925495c61c7eb0be10ba171`;
-- TUI release-branch source baseline `c118077`;
+- TUI code/test/snapshot baseline `0aa64c5e4d9211351123db059547beddb15c2cce`;
 - RPC Protocol v1 with the required capability set;
 - NDJSON over stdio, with one TUI writer, one stdout reader, one stderr reader,
   bounded frames (up to 32 MiB), request IDs, response/event interleaving, and no event replay.

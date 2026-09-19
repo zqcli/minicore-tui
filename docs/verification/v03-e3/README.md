@@ -1,8 +1,10 @@
-# v0.3 E3 — Changes/Diff, explicit workspace status and Context
+# Historical v0.3 E3 — Changes/Diff, explicit workspace status and Context
 
-E3 implementation and its automated checks are complete. **Parent E3 review is
-pending; F overall validation/release acceptance has not started.** This is not
-full-project v0.3 completion or manual/macOS/Windows acceptance.
+This directory is a frozen E3 evidence record for the pre-final-F source tree.
+E3 implementation and its automated checks were complete at that boundary.
+**Parent E3 review remains pending; the record is not final-source release
+acceptance.** Current local evidence and remaining statuses are tracked in
+[`../../refactor-acceptance.md`](../../refactor-acceptance.md).
 
 ## Source and authorization boundary
 

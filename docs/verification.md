@@ -1,6 +1,12 @@
-# Delivery Verification
+# Historical Delivery Verification
 
-## Current Delivery: 0.2.8 — Fullscreen Scrollbar
+The current release line is TUI 0.3.0 / Agent 0.5.0 / Runtime 0.4.1. Use
+[`refactor-acceptance.md`](refactor-acceptance.md),
+[`backend.md`](backend.md), and [`testing.md`](testing.md) for current evidence.
+This index preserves the earlier 0.2.x delivery records and must not be read as
+current 0.3.0 acceptance.
+
+## Historical Delivery: 0.2.8 — Fullscreen Scrollbar
 
 Installed TUI implementation is `5feab8d`, with unchanged Agent `f1697f7` and
 Runtime 0.4.1. The scrollbar follows Pi 0.85.1's default fullscreen auto behavior.

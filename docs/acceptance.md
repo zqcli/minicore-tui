@@ -1,6 +1,21 @@
-# r2 Acceptance Status & MIG-001..160 Verification Matrix
+# Historical r2 Acceptance Status & MIG-001..160 Verification Matrix
 
-This matrix maps every MIG-001..160 criterion to source and executable evidence.
+This matrix maps every MIG-001..160 criterion to the historical v0.2/r2
+source and executable evidence. It is retained for migration provenance; it is
+not the current 0.3.0 acceptance record. Use
+[`docs/refactor-acceptance.md`](refactor-acceptance.md) for the current
+Protocol v1 / Agent 0.5.0 release line.
+
+## Current 0.3.0 Note
+
+The current code/test/snapshot baseline is
+`0aa64c5e4d9211351123db059547beddb15c2cce`. Local rustc 1.98.0 validation
+passed **828 tests, 0 failed, 43 ignored**, including **137/137** in `tests/app_flow.rs`
+and **6/6** ignored release performance workloads. The fixed Agent/Runtime
+remote run, final-source serial E2E, hosted CI, and native/manual acceptance
+are not represented by this historical MIG matrix; their statuses remain in
+[`refactor-acceptance.md`](refactor-acceptance.md).
+
 `PASS` requires the cited executable test or exact dependency/source check to have passed in the
 remote final6 runs. Pins, dependency absence, and evidence-recording requirements use source audits,
 not invented runtime tests. `NOT RUN` means the criterion was not executed; a remote Linux run never substitutes
@@ -25,7 +40,7 @@ All commands ran in `/root/minicore-tui-r2-01a06ec1/tui` on `192.168.20.199`; fi
 
 - **PASS**: 157 criteria supported by final6 execution, exact dependency checks, or source/provenance audits appropriate to the criterion.
 - Source-audit criteria MIG-001, MIG-002, MIG-006, MIG-007, MIG-141, and MIG-160 were independently checked by the parent; these do not claim runtime SHA attestation or platform CI execution.
-- **NOT RUN**: 3 criteria (`MIG-138, MIG-139, MIG-140`); platform CI status is not substituted by remote Linux execution.
+- **NOT RUN**: 3 historical criteria (`MIG-138, MIG-139, MIG-140`); platform CI status is not substituted by remote Linux execution. The 0.3.0 hosted matrix is configured separately and awaits an actual run.
 
 ## MIG-001..160 Acceptance Matrix
 

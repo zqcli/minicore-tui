@@ -13,16 +13,17 @@ through `--agent-bin`; its config and data directory belong to the Agent.
 
 | Component | Repository | Revision | Package |
 |---|---|---|---|
-| TUI | `zqcli/minicore-tui` | `c118077` (release-branch source baseline) | `0.3.0` |
+| TUI | `zqcli/minicore-tui` | `0aa64c5e4d9211351123db059547beddb15c2cce` (current code/test/snapshot baseline) | `0.3.0` |
 | Agent | `zqcli/minicore-agent` | `061743369459299e66be97bf97d2b27352a39914` | `0.5.0` |
 | Runtime | `zqcli/minicore-runtime` | `6cd2bdbc634437dea925495c61c7eb0be10ba171` | `0.4.1` |
 
 The Agent and Runtime revisions are fixed inputs for the 0.3.0 release line;
-the TUI source baseline above includes the phase-F query-lifecycle fix and
-package/CI changes. The TUI does not link either backend crate, does not modify
-the Agent or Runtime source, and does not read the Agent Store. Hosted CI checks
-that the separate source checkouts resolve to these exact revisions before
-building them.
+the TUI baseline above includes the phase-F lifecycle, ownership, bounds,
+privacy, shutdown, Tool Detail, history-reopen, and export-harness fixes. The
+TUI does not link either backend crate, does not modify the Agent or Runtime
+source, and does not read the Agent Store. Hosted CI is configured to check that
+the separate source checkouts resolve to these exact revisions before building
+them, but has not run for this release.
 
 ## Handshake
 
@@ -50,14 +51,13 @@ repository's fixtures/E2E remain the release gate.
 **Current status:** stage B1 (commit `afd2894`) removed the
 `is_supported_agent_version` package-minor gate and replaced it with
 `validate_backend(protocol_version, capabilities)`. The pinned Agent 0.5.0
-passes bootstrap, and the reducer tests
-`bootstrap_accepts_the_pinned_agent_0_5_protocol_v1` and
-`bootstrap_rejects_a_backend_missing_required_capabilities` measure both
-directions. The E3 record contains 34 serial loopback E2E scenarios; the
-phase-F query-lifecycle fix adds regression coverage for detached follow-ups,
-and the new hosted workflow reruns the fixed-Agent suite without provider
-credentials. Protocol v1 equality remains necessary, not sufficient, for
-release acceptance.
+contract is covered by fixtures and reducer tests, including acceptance and
+rejection of the required Protocol v1 capability set. The current local
+`0aa64c5` tree passes its full offline all-target suite on rustc 1.98.0 and
+strict quality gates; the prior E3 remote record contains 34 serial loopback E2E
+scenarios, but that Agent run has not yet been repeated on the final source
+baseline. Protocol v1 equality remains necessary, not sufficient, for release
+acceptance.
 
 ## Method surface (33 methods)
 
@@ -226,7 +226,7 @@ agent  binary  /root/minicore-tui-v03-refactor/agent-target/debug/minicore-agent
 agent  head    061743369459299e66be97bf97d2b27352a39914
 runtime head   6cd2bdbc634437dea925495c61c7eb0be10ba171
 tui    base    9d11ee69c4efa02ef1e5bff143662b48dc3194de (stage-A baseline)
-tui    head    current local C2 tree (not pushed)
+tui    head    0aa64c5e4d9211351123db059547beddb15c2cce (current code/test/snapshot baseline)
 CARGO_TARGET_DIR=/root/minicore-tui-v03-refactor/tui-target
 ```
 
@@ -243,15 +243,20 @@ python3 scripts/generate_agent_v1_fixtures.py \
 cargo test --release --locked --test performance -- --ignored --nocapture
 ```
 
-Last verified current-tree result under Rust 1.85: `fmt --check` clean;
-full test and Clippy counts are recorded in `docs/refactor-acceptance.md`.
-The recorded E3 pinned-Agent serial E2E run passed 34/34 scenarios on the
-remote Linux builder, including the editor/background-turn coexistence case and
-the multi-page search/export plus workspace/Changes/Context workflows. The new
-hosted CI job builds the fixed Agent and Runtime separately and reruns the E2E
-suite with the loopback mock. Until that hosted job runs, its result is not
-claimed as release evidence. The release performance suite passed 6/6 ignored
-workloads in the E3 record; its synthetic frame timings are not terminal
+The current local `0aa64c5` source baseline passed `cargo fmt --check`,
+`cargo test --locked --offline --all-targets` on rustc 1.98.0 (828 passed, 0
+failed, 43 ignored), strict Clippy, warning-denied rustdoc, `git diff --check`,
+the 137-test
+`app_flow` target, and all 6 ignored release performance workloads. These local
+checks do not replace the authorized remote Rust 1.85/stable run or the pinned
+Agent E2E run still scheduled for the final source baseline.
+
+The prior E3 pinned-Agent serial E2E run passed 34/34 scenarios on the remote
+Linux builder, including editor/background-turn coexistence, multi-page
+search/export, and workspace/Changes/Context workflows. That is retained as
+historical E3 evidence until the final source baseline is rerun. The hosted CI
+job builds the fixed Agent and Runtime separately and reruns the E2E suite with
+the loopback mock, but has not run. Synthetic frame timings are not terminal
 input-to-frame latency measurements.
 
 When reusing the existing `tui-target` directory after an rsync, run
@@ -259,10 +264,11 @@ When reusing the existing `tui-target` directory after an rsync, run
 preserves source mtimes, and a newer stale rlib otherwise shadows the synced
 source, producing confusing "variant not found" errors.
 
-The 28 Agent E2E scenarios and six release/performance workloads are ignored
+The 34 Agent E2E scenarios and six release/performance workloads are ignored
 by default and are evidence only when explicitly run with their required
-binary/options. `docs/refactor-acceptance.md` tracks which REF rows remain
-open.
+binary/options. The current local run executed the six performance workloads;
+the final-source pinned-Agent run remains pending. `docs/refactor-acceptance.md`
+tracks which REF rows remain open.
 
 C2/F status: the B1/B2 lifecycle and `session.read` migration, serialized
 bounded decode worker, shared immutable layout worker, `ScrollAnchor`,
