@@ -88,6 +88,14 @@ not allocator accounting.
 This is Linux kernel-PTY evidence. It is not real iTerm2/manual IME use, native
 macOS/Windows execution, or hosted CI; those remain `Not run`.
 
+### Harness Notes
+
+A direct SSH-pipe invocation of the production `run_commands` probe correctly
+failed its explicit PTY precondition; the same test then passed through this
+external kernel-PTY driver. A later shell quoting error affected only log
+summarization after Cargo had completed; the result lines were read directly
+from the remote logs. Neither harness event is counted as product evidence.
+
 ## Spec 25 Evidence
 
 The deterministic migration gate uses the production App input path after a
