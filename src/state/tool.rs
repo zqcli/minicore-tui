@@ -4,6 +4,212 @@
 use std::sync::Arc;
 
 use crate::protocol::ToolDisplayWire;
+use crate::protocol::{
+    ToolDataAvailabilityWire as Availability, ToolDataStreamWire as Stream, ToolRefWire,
+};
+
+impl From<&ToolRefWire> for ToolKey {
+    fn from(key: &ToolRefWire) -> Self {
+        Self::new(
+            &key.session_id,
+            &key.loop_id,
+            key.request_index,
+            &key.tool_call_id,
+        )
+    }
+}
+impl From<&ToolKey> for ToolRefWire {
+    fn from(key: &ToolKey) -> Self {
+        Self {
+            session_id: key.session_id.clone(),
+            loop_id: key.loop_id.clone(),
+            request_index: key.request_index,
+            tool_call_id: key.tool_call_id.clone(),
+        }
+    }
+}
+
+/// Raw bytes have one owner; layout snapshots only clone the small chunk Arcs.
+/// Closing the single detail releases all four windows (at most 4 MiB, below
+/// the global 16 MiB limit). Offsets always refer to the original raw bytes.
+#[derive(Clone, PartialEq, Eq)]
+pub struct StreamView {
+    pub stream: Stream,
+    pub next_offset: u64,
+    pub base_offset: u64,
+    pub observed_end: u64,
+    pub eof: bool,
+    pub availability: Availability,
+    pub truncated: bool,
+    pub gap: bool,
+    pub chunks: std::collections::VecDeque<Arc<[u8]>>,
+    pub retained_bytes: usize,
+    pub revision: u64,
+}
+
+impl std::fmt::Debug for StreamView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamView")
+            .field("stream", &self.stream)
+            .field("next_offset", &self.next_offset)
+            .field("retained_bytes", &self.retained_bytes)
+            .finish()
+    }
+}
+
+impl StreamView {
+    pub fn new(stream: Stream) -> Self {
+        Self {
+            stream,
+            next_offset: 0,
+            base_offset: 0,
+            observed_end: 0,
+            eof: false,
+            availability: Availability::Pending,
+            truncated: false,
+            gap: false,
+            chunks: Default::default(),
+            retained_bytes: 0,
+            revision: 0,
+        }
+    }
+
+    pub fn accept_page(
+        &mut self,
+        page: &crate::protocol::tool::ToolOutputPage,
+    ) -> Result<(), &'static str> {
+        if page.stream != self.stream {
+            return Err("wrong tool stream");
+        }
+        let bytes = decode_stream(self.stream, &page.encoding, &page.data)?;
+        self.append(
+            page.base_offset,
+            page.next_offset,
+            page.observed_end,
+            &bytes,
+        )?;
+        self.eof = page.eof;
+        self.availability = page.availability;
+        self.truncated |= page.truncated;
+        self.revision = self.revision.wrapping_add(1);
+        Ok(())
+    }
+
+    pub fn accept_event(
+        &mut self,
+        chunk: &crate::protocol::ToolProcessChunkWire,
+    ) -> Result<(), &'static str> {
+        if chunk.stream != self.stream {
+            return Err("wrong tool stream");
+        }
+        let bytes = decode_stream(self.stream, &chunk.encoding, &chunk.data)?;
+        self.append(
+            chunk.base_offset,
+            chunk.next_offset,
+            chunk.observed_end,
+            &bytes,
+        )?;
+        self.truncated |= chunk.dropped || chunk.expired;
+        self.availability = if chunk.expired {
+            Availability::Expired
+        } else {
+            Availability::Available
+        };
+        self.revision = self.revision.wrapping_add(1);
+        Ok(())
+    }
+
+    fn append(&mut self, base: u64, next: u64, end: u64, bytes: &[u8]) -> Result<(), &'static str> {
+        if base > next || next > end || next - base != bytes.len() as u64 {
+            return Err("invalid raw tool stream range");
+        }
+        if next < self.next_offset {
+            return Ok(());
+        }
+        if base > self.next_offset {
+            // A gap discards any dangling Unicode prefix too. Never join two
+            // disjoint byte ranges as though the missing output were present.
+            self.chunks.clear();
+            self.retained_bytes = 0;
+            self.base_offset = base;
+            self.gap = true;
+        }
+        let skip = self
+            .next_offset
+            .saturating_sub(base)
+            .min(bytes.len() as u64) as usize;
+        if !bytes[skip..].is_empty() {
+            if self.chunks.is_empty() {
+                self.base_offset = base + skip as u64;
+            }
+            let bytes = &bytes[skip..];
+            for chunk in bytes.chunks(crate::limits::TOOL_PAGE_BYTES) {
+                self.chunks.push_back(Arc::from(chunk));
+                self.retained_bytes += chunk.len();
+            }
+        }
+        self.next_offset = next;
+        self.observed_end = self.observed_end.max(end);
+        while self.retained_bytes > crate::limits::TOOL_STREAM_BYTES {
+            let old = self.chunks.pop_front().expect("charged chunk");
+            self.retained_bytes -= old.len();
+            self.base_offset += old.len() as u64;
+            self.truncated = true;
+            self.gap = true;
+        }
+        Ok(())
+    }
+
+    /// Runs on the serialized layout worker. Partial trailing codepoints are
+    /// withheld before EOF (at most three bytes); invalid bytes use U+FFFD.
+    /// No sanitized/display length ever feeds the RPC cursor.
+    pub fn display_text(&self) -> String {
+        let bytes: Vec<u8> = self
+            .chunks
+            .iter()
+            .flat_map(|chunk| chunk.iter().copied())
+            .collect();
+        let mut rest = bytes.as_slice();
+        let mut text = String::new();
+        while !rest.is_empty() {
+            match std::str::from_utf8(rest) {
+                Ok(valid) => {
+                    text.push_str(valid);
+                    break;
+                }
+                Err(error) => {
+                    let valid = error.valid_up_to();
+                    text.push_str(std::str::from_utf8(&rest[..valid]).expect("valid prefix"));
+                    rest = &rest[valid..];
+                    match error.error_len() {
+                        Some(len) => {
+                            text.push('\u{fffd}');
+                            rest = &rest[len..];
+                        }
+                        None => {
+                            if self.eof {
+                                text.push('\u{fffd}');
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        crate::safe_text::safe_display(&text).into_owned()
+    }
+}
+
+fn decode_stream(stream: Stream, encoding: &str, data: &str) -> Result<Vec<u8>, &'static str> {
+    use base64::Engine;
+    match (stream, encoding) {
+        (Stream::Input, "utf8_json") | (Stream::Output, "utf8") => Ok(data.as_bytes().to_vec()),
+        (Stream::Stdout | Stream::Stderr, "base64") => base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|_| "invalid tool base64"),
+        _ => Err("invalid tool stream encoding"),
+    }
+}
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct ToolKey {

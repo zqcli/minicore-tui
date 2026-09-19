@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub mod read;
+pub mod tool;
 
 pub use read::{
     Assembled, ChunkAssembler, EncodedHistoryItem, MAX_AUTO_ITEM_BYTES, RawHistoryItem, ReadChunk,
@@ -667,7 +668,7 @@ pub struct ToolInvocationDataWire {
     pub meta: EventMetaWire,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 pub struct ToolInvocationWire {
     pub tool_ref: ToolRefWire,
     pub name: String,
@@ -684,7 +685,7 @@ pub struct ToolExecutionDataWire {
     pub meta: EventMetaWire,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ToolExecutionWire {
     pub tool_ref: ToolRefWire,
     pub name: String,
@@ -726,7 +727,7 @@ pub struct ToolProcessWire {
     pub command: Option<CommandResultWire>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Clone, PartialEq, Deserialize)]
 pub struct ToolProcessChunkWire {
     pub stream: ToolDataStreamWire,
     pub encoding: String,
@@ -748,7 +749,7 @@ pub struct ToolRefWire {
     pub tool_call_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolSubjectWire {
     File { path: String },
@@ -756,7 +757,7 @@ pub enum ToolSubjectWire {
     Other,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 pub struct ToolInputSummaryWire {
     pub total_bytes: usize,
     pub preview: String,
@@ -800,7 +801,7 @@ pub enum ToolDataAvailabilityWire {
     Expired,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolDataStreamWire {
     Input,
