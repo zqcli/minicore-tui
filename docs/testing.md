@@ -25,10 +25,12 @@ RUSTDOCFLAGS="-D warnings" cargo doc --locked --offline --no-deps
 
 The current local rustc 1.98.0 result is **828 passed, 0 failed, 43 ignored** across the
 all-targets suite; `tests/app_flow.rs` is **137/137**, and the ignored release
-performance suite is **6/6**. These checks were run against the current local
-source baseline. The authorized remote Rust 1.85/stable checks, fixed
-Agent/Runtime build, final-source serial Agent E2E, hosted CI, and native/manual
-terminal checks remain separate acceptance evidence and are not claimed here.
+performance suite is **6/6**. The authorized final-source remote Rust 1.85.0
+and stable runs also report **828 passed, 0 failed, 43 ignored** with fmt,
+Clippy and rustdoc passing. Fixed Agent/Runtime builds passed on both toolchains,
+and the serial fixed-Agent E2E passed **34/34** on each. Hosted CI and
+native/manual terminal checks remain separate acceptance evidence and are not
+claimed here.
 
 ## Historical Patch Verification
 
@@ -202,12 +204,15 @@ lifecycle behavior. No provider key or real user data is used.
 A delivery run should wrap this command in a 300-second timeout and a cleanup
 trap. The trap must kill/reap only processes created by the run and remove its
 temporary root. The official serial command is `--ignored --test-threads=1`.
-The historical E3 remote run passed 34/34 on both Linux toolchains; the final
-source-baseline run is pending. This is loopback evidence against the real
-Agent binary, not external-provider coverage.
+The final-source remote run passed 34/34 on both Linux toolchains against the
+recorded fixed Agent binary. This is loopback evidence against the real Agent
+binary, not external-provider coverage.
 
 
-## Stage 7 PTY Evidence
+## Historical Stage 7 PTY Evidence
+
+The capture below is retained from the earlier 0.2.x/Rail verification and is
+not current 0.3.0 manual or hosted acceptance.
 
 `scripts/stage7_xtermjs.py` drives the real TUI and Agent through a PTY with an
 isolated loopback Responses server and temporary Git workspace. Actual PTY
@@ -235,7 +240,7 @@ prototype `stage7_pty.py` remains available but is not the final capture path.
 This evidence uses a mock provider with real Agent/tools, not an external LLM,
 and does not substitute for hosted CI or exhaustive source-cell equivalence.
 
-## Windows Cross-Check
+## Historical Windows Cross-Check
 
 The Linux builder performs these portable cross-target compile checks when
 needed:

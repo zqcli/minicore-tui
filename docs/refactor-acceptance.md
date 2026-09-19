@@ -23,15 +23,29 @@ On the local rustc 1.98.0 environment (the package MSRV is 1.85.0) it passed:
 - `cargo test --locked --offline --test app_flow`: **137/137**; and
 - the ignored release performance suite: **6/6**.
 
-This is current local evidence, not remote dual-toolchain or hosted-CI
-execution. The fixed-Agent/Runtime build and serial Agent E2E run on this final
-source baseline remain pending.
+The authorized remote final-source run also passed on both Rust 1.85.0 and
+stable 1.97.1: each all-target suite reported **828 passed, 0 failed, 43
+ignored**, with fmt, strict Clippy, and warning-denied rustdoc passing. The
+fixed Agent/Runtime manifests built offline on both toolchains; the recorded
+fixed Agent 0.5.0 binary hash is
+`661b32976ad6ae2fbe2b33411c7d0d082f9782da70745e4e4a6602c87fb7b273`. Serial
+loopback E2E passed **34/34** on each toolchain. The Rust 1.85 release
+performance suite passed **6/6**. Hosted CI, macOS/Windows execution, and
+native/manual terminal acceptance remain separate evidence.
+
+The same 368-path build/test/snapshot input list used by the historical E3
+receipt has current-content digest
+`1180a6f1ca4be7c61b1e7f3cab287b1f79aed63f8f9933629897fdf33bea6813` on both
+local and remote; the 60 committed snapshot files have sorted-content digest
+`b8913f5f47d8a6a57bbfae09a54e98a283aa88e468c9df7bfa9e6f7691e325e2`.
+Raw final-F logs remain on the authorized builder under
+`/root/minicore-tui-v03-refactor/logs/final-f/`; they are not copied into the
+repository.
 
 ## Historical E3 Remote Evidence And Phase-F Delta
 
-The E3 counts below are the last complete remote-Linux validation before the
-phase-F review delta; they are retained as historical evidence and are not
-relabeled as a full 0.3.0 release run. The current package is TUI 0.3.0 against
+The E3 counts below are retained for stage provenance; the final-source remote
+evidence is recorded above and is the current release validation. The current package is TUI 0.3.0 against
 Agent 0.5.0 / Runtime 0.4.1. Phase-F work began at `d5d1609` and continued
 through the current source baseline with query-lifecycle, ownership, bounds,
 privacy, shutdown, Tool Detail, history-reopen, and export-harness fixes.
@@ -153,15 +167,15 @@ review remains pending.**
 | REF-51 | Existing CJK/IME/mouse/scrollbar/terminal restore behavior | **Passed** | UI, Rail, terminal, and snapshot tests. |
 | REF-52 | Common command table/completion/help stay consistent | **Passed** | `command::COMMANDS` is the single static table driving parsing, completion and the help panel; tests assert every table entry parses and is offered, unlisted names are unknown, and the help panel renders every entry. |
 | REF-53 | No approval/plugin/Subagent/PTY/Git-write/auto-reconnect feature | **Passed** | Source audit. |
-| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Not run** | Historical E3 evidence is 34/34 on both remote toolchains, including synthetic-Git paging/status/diff/stale and native provenance/Turn/Context workflows. The pinned Agent/Runtime run has not yet been repeated on the current `0aa64c5` source baseline. |
-| REF-55 | Rust 1.85/stable and original tests on three platforms | **Not run** | Current E3 tree passes Rust 1.85.0 and stable 1.97.1 on remote Linux; macOS/Windows execution and terminal manual acceptance remain Not run. |
-| REF-56 | Release before/after performance evidence uses real data | **Passed** | The current local rustc 1.98.0 focused C2b/C2c probes passed; the full six-test ignored release suite also passed on the current source baseline. Workload units are recorded in `docs/performance.md`. |
+| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Passed** | Final-source serial loopback E2E passed 34/34 on both Rust 1.85.0 and stable 1.97.1 against fixed Agent 0.5.0 / Runtime 0.4.1, including synthetic-Git paging/status/diff/stale and native provenance/Turn/Context workflows. Fixed Agent binary SHA-256: `661b32976ad6ae2fbe2b33411c7d0d082f9782da70745e4e4a6602c87fb7b273`. |
+| REF-55 | Rust 1.85/stable and original tests on three platforms | **Not run** | Final-source Rust 1.85.0 and stable 1.97.1 remote Linux suites pass; hosted Linux/macOS/Windows jobs, native macOS/Windows execution, and terminal manual acceptance remain Not run. |
+| REF-56 | Release before/after performance evidence uses real data | **Passed** | The current local rustc 1.98.0 probes and the authorized remote Rust 1.85 C2b/C2c release suite passed; the remote suite completed all 6/6 workloads. Workload units are recorded in `docs/performance.md`. |
 
 ## Counts
 
-- **Passed**: 54
+- **Passed**: 55
 - **Failed**: 0
-- **Not run**: 2
+- **Not run**: 1
 - **Not applicable**: 0
 
 ## C Status
@@ -184,8 +198,9 @@ review remains pending.**
   never-written session retries and reissues coalesced Tool refreshes after
   stale responses. The final Tool Detail capability-retention, reopen-reasoning,
   export no-clobber, memory-bound, privacy, shutdown, and completion-owner
-  regressions pass in the current local suite. Full remote validation, pinned
-  Agent E2E, hosted CI, and native platform acceptance remain **Not run**.
+  regressions pass in the current local suite; final remote Rust/Agent
+  validation also passed. Hosted CI, native platform acceptance, parent review,
+  and the remaining manual/measurement checks remain **Not run**.
 
 ## D Status
 
@@ -233,8 +248,9 @@ for the criteria below, on the tree validated by the logs above:
   ceiling is 256 KiB, so a real-Agent >8 MiB oversized item cannot be produced;
   the >8 MiB raw-export path is validated with bounded reducer fixtures rather
   than claimed as a real-Agent measurement. Stable Linux passed for this
-  historical E3 tree; macOS and Windows runs remain **Not run**, and the
-  final pinned-Agent run for the current source baseline is still pending.
+  historical E3 tree; macOS and Windows runs remain **Not run**. The final
+  pinned-Agent run now passes; only the real >8 MiB Agent generation remains
+  unavailable because the fixed Agent model-text ceiling is 256 KiB.
 - **D3 settings/editor/lifecycle**: **Passed** for the implemented slice.
   `config.rs` has strict TOML schema/duplicate-key handling, atomic persistence,
   CLI precedence, single-value editor environment parsing, and no provider
@@ -252,11 +268,10 @@ for the criteria below, on the tree validated by the logs above:
 
 ## Phase-F Follow-ups
 
-1. Run the authorized remote Rust 1.85/stable fmt, tests, Clippy, rustdoc,
-   fixed Agent/Runtime builds, and serial loopback E2Es on the `0aa64c5`
-   source baseline.
-2. Execute the new hosted matrix before changing platform statuses from
-   **Not run**; the workflow configuration alone is not execution evidence.
+1. Execute the hosted matrix before changing platform statuses from **Not run**;
+   the workflow configuration and remote Linux run are not substitutes for
+   hosted platform jobs.
+2. Obtain parent/independent review of the final E3/F state.
 3. Keep manual iTerm2/editor/IME, exact RSS, real-provider, and oversized
    real-Agent checks conservative.
 

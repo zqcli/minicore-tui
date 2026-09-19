@@ -194,9 +194,11 @@ refactor matrix is [docs/refactor-acceptance.md](docs/refactor-acceptance.md);
 
 A real-Agent E2E is ignored by default and must use the pinned Agent binary plus
 a loopback mock endpoint; it does not require or permit access to a real
-provider. Do not put secrets or real user data in fixtures, logs, E2E config, or
-snapshots. Hosted CI builds the fixed Agent/Runtime sources separately and runs
-the serial E2E job without provider credentials.
+provider. The final-source remote Rust 1.85/stable runs passed 34/34 serial
+E2Es on each toolchain; hosted CI remains a separate unrun matrix. Do not put
+secrets or real user data in fixtures, logs, E2E config, or snapshots. Hosted CI
+builds the fixed Agent/Runtime sources separately and runs the serial E2E job
+without provider credentials.
 
 ## License
 

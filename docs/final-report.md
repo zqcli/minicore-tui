@@ -22,10 +22,13 @@ The current 0.3.0 code/test/snapshot baseline is
 `061743369459299e66be97bf97d2b27352a39914` and Runtime
 `6cd2bdbc634437dea925495c61c7eb0be10ba171`. Local rustc 1.98.0 validation
 passed 828 tests with no failures and 43 ignored, the focused `app_flow` target passed
-137/137, and the release performance suite passed 6/6. The authorized remote
-Rust 1.85/stable checks, final-source pinned-Agent E2E, hosted CI, native/manual
-terminal checks, exact RSS, provider, and real oversized-Agent checks remain
-separate and are not claimed by this historical report.
+137/137, and the release performance suite passed 6/6. The authorized final-source
+remote Rust 1.85/stable checks passed 828 tests with no failures and 43 ignored
+on each toolchain; fixed Agent/Runtime builds passed on both, 34/34 serial
+pinned-Agent E2Es passed on each, and the Rust 1.85 release performance suite
+passed 6/6. Hosted CI, native/manual terminal checks, exact RSS, provider, and
+real oversized-Agent checks remain separate and are not claimed by this
+historical report.
 
 The [0.2.3 Footer fixes](release-0.2.3.md) remain, but its pending-Steer User-card
 UI is superseded by the 0.2.4 queue. The [0.2.2 fixes](release-0.2.2.md) cover

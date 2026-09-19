@@ -67,10 +67,11 @@ remain offline and use fixtures/fake-Agent paths.
 Hosted CI is configured to test Rust 1.85.0 and stable on Ubuntu, macOS, and
 Windows. A separate Ubuntu job checks out and builds the fixed Agent/Runtime
 revisions, then runs the ignored serial `agent_e2e` suite against its loopback
-mock without provider credentials. Those hosted jobs and the final-source
-remote Agent E2E have not run yet. Native manual terminal interaction, exact RSS
-accounting, and oversized real-Agent item generation remain separate acceptance
-statuses until those environments are available.
+mock without provider credentials. The final-source remote Rust 1.85/stable
+checks, fixed backend builds, and 34/34 serial Agent E2Es have passed. Hosted
+jobs, native manual terminal interaction, exact RSS accounting, and oversized
+real-Agent item generation remain separate acceptance statuses until those
+environments are available.
 
 The current detailed matrix is in
 [`docs/refactor-acceptance.md`](refactor-acceptance.md); the fixed wire facts

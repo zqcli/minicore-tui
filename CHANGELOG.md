@@ -29,10 +29,11 @@ The 0.3.0 package targets the fixed `minicore-agent` 0.5.0 and
 Current acceptance remains conservative: the current code/test/snapshot baseline
 is `0aa64c5e4d9211351123db059547beddb15c2cce`; local rustc 1.98.0 validation
 passed 828 tests with no failures and 43 ignored, and the release performance
-suite passed 6/6. The final-source remote Rust 1.85/stable checks, pinned-Agent
-E2E, hosted CI, native/manual terminal interaction, exact RSS accounting,
-provider access, and oversized real-Agent items remain unrun where the
-environment cannot verify them. See
+suite passed 6/6. The final-source remote Rust 1.85/stable checks, fixed
+Agent/Runtime builds, and 34/34 pinned-Agent E2Es passed on both toolchains.
+Hosted CI, native/manual terminal interaction, exact RSS accounting, provider
+access, and oversized real-Agent items remain unrun where the environment
+cannot verify them. See
 [`docs/refactor-acceptance.md`](docs/refactor-acceptance.md).
 
 ## Historical releases

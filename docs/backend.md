@@ -54,10 +54,10 @@ repository's fixtures/E2E remain the release gate.
 contract is covered by fixtures and reducer tests, including acceptance and
 rejection of the required Protocol v1 capability set. The current local
 `0aa64c5` tree passes its full offline all-target suite on rustc 1.98.0 and
-strict quality gates; the prior E3 remote record contains 34 serial loopback E2E
-scenarios, but that Agent run has not yet been repeated on the final source
-baseline. Protocol v1 equality remains necessary, not sufficient, for release
-acceptance.
+strict quality gates. The authorized final-source remote Rust 1.85/stable runs
+also pass their full suites and 34/34 fixed-Agent E2Es; the recorded Agent
+binary hash is `661b32976ad6ae2fbe2b33411c7d0d082f9782da70745e4e4a6602c87fb7b273`.
+Protocol v1 equality remains necessary, not sufficient, for release acceptance.
 
 ## Method surface (33 methods)
 
@@ -248,16 +248,11 @@ The current local `0aa64c5` source baseline passed `cargo fmt --check`,
 failed, 43 ignored), strict Clippy, warning-denied rustdoc, `git diff --check`,
 the 137-test
 `app_flow` target, and all 6 ignored release performance workloads. These local
-checks do not replace the authorized remote Rust 1.85/stable run or the pinned
-Agent E2E run still scheduled for the final source baseline.
-
-The prior E3 pinned-Agent serial E2E run passed 34/34 scenarios on the remote
-Linux builder, including editor/background-turn coexistence, multi-page
-search/export, and workspace/Changes/Context workflows. That is retained as
-historical E3 evidence until the final source baseline is rerun. The hosted CI
-job builds the fixed Agent and Runtime separately and reruns the E2E suite with
-the loopback mock, but has not run. Synthetic frame timings are not terminal
-input-to-frame latency measurements.
+checks are complemented by the authorized remote Rust 1.85/stable runs, fixed
+backend builds, 34/34 E2Es on each toolchain, and the Rust 1.85 release
+performance run. The hosted CI job builds the fixed Agent and Runtime
+separately and reruns the E2E suite with the loopback mock, but has not run.
+Synthetic frame timings are not terminal input-to-frame latency measurements.
 
 When reusing the existing `tui-target` directory after an rsync, run
 `cargo clean -p minicore-tui` (or touch the sources) before the build: rsync
@@ -266,9 +261,9 @@ source, producing confusing "variant not found" errors.
 
 The 34 Agent E2E scenarios and six release/performance workloads are ignored
 by default and are evidence only when explicitly run with their required
-binary/options. The current local run executed the six performance workloads;
-the final-source pinned-Agent run remains pending. `docs/refactor-acceptance.md`
-tracks which REF rows remain open.
+binary/options. The authorized final-source run executed 34/34 E2Es on both
+Rust toolchains and all six performance workloads on Rust 1.85.0.
+`docs/refactor-acceptance.md` tracks which REF rows remain open.
 
 C2/F status: the B1/B2 lifecycle and `session.read` migration, serialized
 bounded decode worker, shared immutable layout worker, `ScrollAnchor`,

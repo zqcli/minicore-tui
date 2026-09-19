@@ -30,6 +30,30 @@ C2b worker: durable_rows=51101 deltas=1000,
 These local measurements are workload evidence only. They do not measure
 terminal input-to-frame latency, exact RSS, or allocator behavior.
 
+## Current Remote Final-Source Run
+
+The authorized Rust 1.85.0 Release run on the final source baseline passed all
+**6/6** ignored workloads:
+
+```text
+all_lines: 20 clones, rows_total=140020, per_call_ms=20.69
+live delta: 1000 deltas, 51101 -> 51234 history rows, 133 delta rows,
+            push_ms=81.36
+prepare 50k rows: per_call_ms=138.68
+C2 stable layout: 1000 frames, 250 deltas, live_rows=28,
+                  layout_calls_delta=0, history_bytes_cloned=0,
+                  viewport_rows=40000, viewport_bytes=2742348,
+                  elapsed_ms=5494.91
+C2c 120x40: p95_us=8180 p99_us=8549 durable_rows=43870,
+            viewport_bytes=4396336 retained_layout_bytes_estimate=8035080
+C2b worker: durable_rows=51101 deltas=1000,
+            layout_calls=0 history_bytes_cloned=0 viewport_bytes=2986911
+```
+
+Stable-history layout calls and history-body cloning remained zero in the
+structural probes. These are fixed-workload samples, not terminal input latency
+or exact RSS/allocator measurements.
+
 ## Environment
 
 | Item | Value |
@@ -88,8 +112,9 @@ c2c_max_tree_vm_hwm_kib=47172
 
 The samples are synthetic frame-processing measurements for the fixed 120×40
 workload; reruns can vary with host scheduling. They are **not** terminal input
-latency or terminal input-to-frame P95/P99 measurements. The historical focused C2b/C2c probes passed; the current local final-source
-six-test ignored release suite is recorded above. The source/perf workload is 1000 deltas,
+latency or terminal input-to-frame P95/P99 measurements. The historical focused
+C2b/C2c probes passed; the current local and authorized remote final-source
+release suites are recorded above. The source/perf workload is 1000 deltas,
 7300 history blocks, 43,870 durable rows, a 119-column content width, and a
 40-row viewport; these units must remain in future logs.
 
@@ -132,7 +157,7 @@ gaps. Layout eviction accounts both installed cache entries and in-flight
 partials. These are retained-payload estimates, not exact process RSS or
 allocator-capacity measurements.
 
-## E1 tool-detail regression (final implementation `7ca349b`)
+## Historical E1 tool-detail regression (final implementation `7ca349b`)
 
 Both Rust 1.85.0 and stable 1.97.1 passed the 762-test default suite and all
 30 real-Agent E2Es on the same remote Linux host. The six ignored Release
@@ -163,7 +188,7 @@ retains two pages and leaves shared in-flight snapshots unchanged. A fresh E1
 peak-RSS or manual-terminal measurement is **Not
 run**, not inferred from byte accounting.
 
-## E2 workspace regression (final implementation `d553e96`)
+## Historical E2 workspace regression (final implementation `d553e96`)
 
 On each of remote Linux Rust 1.85.0 and stable 1.97.1, the complete default
 suite passed **788 tests, 0 failed, 41 ignored**, and the separate fixed-Agent
@@ -189,7 +214,7 @@ grapheme, and a real 140 KB UTF-8 line over multiple same-line pages. Real-Agent
 E2Es also use the owned file-layout worker. These are structural checks, not a
 new file-preview throughput or peak-RSS measurement.
 
-## E3 read-only review regression (final implementation `733df37`)
+## Historical E3 read-only review regression (final implementation `733df37`)
 
 On each remote Linux toolchain, Rust 1.85.0 and stable 1.97.1, the final default
 suite passed **812 tests, 0 failed, 43 ignored**, and all **34/34** serial fixed-
