@@ -1561,6 +1561,39 @@ mod tests {
         jobs.shutdown().await;
     }
 
+    #[tokio::test]
+    async fn completion_owned_slots_wait_until_the_typed_event_is_consumed() {
+        let directory = tempfile::tempdir().expect("temporary config directory");
+        let path = directory.path().join("config.toml");
+        let mut jobs = LocalJobs::new();
+        jobs.start_config_write(crate::command::PersistConfigRequest {
+            path,
+            config: crate::config::TuiConfig::default(),
+        })
+        .expect("config job starts");
+
+        while !jobs
+            .config_task
+            .as_ref()
+            .is_some_and(|task| task.is_finished())
+        {
+            tokio::task::yield_now().await;
+        }
+        jobs.reap_finished().await;
+        assert!(
+            jobs.config_task.is_some(),
+            "a finished completion-owned task stays busy while its event is queued"
+        );
+
+        let event = jobs.events_rx.try_recv().expect("completion is queued");
+        let AppEvent::JobFinished(outcome) = event else {
+            panic!("unexpected local job event");
+        };
+        jobs.reap_completion(&outcome).await;
+        assert!(jobs.config_task.is_none());
+        jobs.shutdown().await;
+    }
+
     #[cfg(unix)]
     mod editor_tests {
         use super::*;
