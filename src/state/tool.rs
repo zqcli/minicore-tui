@@ -457,8 +457,12 @@ impl ToolFacts {
 
     pub fn retained_bytes(&self) -> usize {
         self.invocation_bytes()
-            + self.display.detail.len()
-            + self.display.expanded_input.as_ref().map_or(0, String::len)
+            + self.display.detail.capacity()
+            + self
+                .display
+                .expanded_input
+                .as_ref()
+                .map_or(0, String::capacity)
             + self.result.as_ref().map_or(0, |result| result.len())
     }
 
@@ -571,7 +575,10 @@ fn truncate_string(value: &mut String, budget: usize, used: &mut usize) {
         }
         value.truncate(end);
     }
-    *used = (*used).saturating_add(value.len());
+    if value.capacity() > available {
+        value.shrink_to_fit();
+    }
+    *used = (*used).saturating_add(value.capacity());
 }
 
 /// Tool call lifecycle as shown in the live, provisional view.
@@ -662,5 +669,22 @@ mod tests {
         );
 
         assert!(Arc::ptr_eq(facts.result.as_ref().unwrap(), &result));
+    }
+
+    #[test]
+    fn retained_bytes_counts_display_capacity_after_truncation() {
+        let mut detail = String::with_capacity(1024);
+        detail.push_str("tool");
+        let mut facts = facts();
+        facts.display = Arc::new(ToolDisplayWire {
+            detail,
+            expanded_input: None,
+            input_line_count: None,
+            hidden_line_count: None,
+            truncated: false,
+        });
+        facts.truncate_to_bytes(2);
+        assert_eq!(facts.display.detail, "to");
+        assert!(facts.retained_bytes() <= 2);
     }
 }

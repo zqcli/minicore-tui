@@ -153,21 +153,16 @@ impl LiveRequest {
     }
 
     fn retained_bytes(&self) -> usize {
-        let mut bytes = self.model.len();
+        let mut bytes = self.model.capacity();
         for part in &self.parts {
             bytes += match part {
-                LivePart::Text(text) | LivePart::Reasoning(text) => text.len(),
-                LivePart::Tool { tool_call_id } => tool_call_id.len(),
+                LivePart::Text(text) | LivePart::Reasoning(text) => text.capacity(),
+                LivePart::Tool { tool_call_id } => tool_call_id.capacity(),
             };
         }
         for tool in &self.tools {
-            bytes += tool.tool_call_id.len() + tool.name.len();
-            bytes += tool.progress.as_ref().map_or(0, String::len);
-            bytes += tool.result.as_ref().map_or(0, |result| result.len());
-            if let Some(display) = &tool.display {
-                bytes += display.detail.len();
-                bytes += display.expanded_input.as_ref().map_or(0, String::len);
-            }
+            bytes += tool.tool_call_id.capacity() + tool.name.capacity();
+            bytes += tool.progress.as_ref().map_or(0, String::capacity);
         }
         bytes
     }
@@ -190,25 +185,9 @@ impl LiveRequest {
             if let Some(progress) = &mut tool.progress {
                 trim_string(progress, budget, used);
             }
-            if let Some(result) = &mut tool.result {
-                let available = budget.saturating_sub(*used);
-                if result.len() > available {
-                    let mut end = available;
-                    while end > 0 && !result.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    *result = std::sync::Arc::<str>::from(&result[..end]);
-                    tool.result_truncated = true;
-                }
-                *used = (*used).saturating_add(result.len());
-            }
-            if let Some(display) = &mut tool.display {
-                let display = Arc::make_mut(display);
-                trim_string(&mut display.detail, budget, used);
-                if let Some(input) = &mut display.expanded_input {
-                    trim_string(input, budget, used);
-                }
-            }
+            // Tool result/display Arcs are charged and bounded by ToolFacts,
+            // their semantic owner. COW-trimming them here would duplicate
+            // the shared body when a live view and the facts map both retain it.
         }
     }
 }
@@ -277,12 +256,20 @@ impl LiveLoop {
     }
 
     pub fn retained_bytes(&self) -> usize {
-        let mut bytes = self.user_text.len();
+        let mut bytes = self.user_text.capacity();
         bytes += self
             .requests
             .iter()
             .map(LiveRequest::retained_bytes)
             .sum::<usize>();
+        bytes += self
+            .pending_steers
+            .iter()
+            .map(|steer| {
+                steer.text.capacity() + steer.accepted_at.as_ref().map_or(0, String::capacity)
+            })
+            .sum::<usize>();
+        bytes += self.last_result.as_ref().map_or(0, turn_result_bytes);
         bytes
     }
 
@@ -291,6 +278,12 @@ impl LiveLoop {
         trim_string(&mut self.user_text, budget, &mut used);
         for request in &mut self.requests {
             request.trim_to_bytes(budget, &mut used);
+        }
+        for steer in &mut self.pending_steers {
+            trim_string(&mut steer.text, budget, &mut used);
+            if let Some(accepted_at) = &mut steer.accepted_at {
+                trim_string(accepted_at, budget, &mut used);
+            }
         }
     }
 }
@@ -304,7 +297,10 @@ fn trim_string(text: &mut String, budget: usize, used: &mut usize) {
         }
         text.truncate(end);
     }
-    *used = (*used).saturating_add(text.len());
+    if text.capacity() > available {
+        text.shrink_to_fit();
+    }
+    *used = (*used).saturating_add(text.capacity());
 }
 
 /// Preserved loop data when persistence fails or session is blocked.
@@ -319,12 +315,13 @@ pub struct UnsavedLoop {
 
 impl UnsavedLoop {
     pub fn retained_bytes(&self) -> usize {
-        self.user_text.len()
+        self.user_text.capacity()
             + self
                 .requests
                 .iter()
                 .map(LiveRequest::retained_bytes)
                 .sum::<usize>()
+            + self.result.as_ref().map_or(0, turn_result_bytes)
     }
 
     pub fn trim_to_bytes(&mut self, budget: usize) {
@@ -333,5 +330,31 @@ impl UnsavedLoop {
         for request in &mut self.requests {
             request.trim_to_bytes(budget, &mut used);
         }
+    }
+}
+
+fn turn_result_bytes(result: &TurnResultViewWire) -> usize {
+    result.turn.session_id.capacity()
+        + result.turn.loop_id.capacity()
+        + result.accepted_at.as_ref().map_or(0, String::capacity)
+        + result.completed_at.as_ref().map_or(0, String::capacity)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_budget_uses_string_capacity_and_releases_trimmed_capacity() {
+        let mut live = LiveLoop::new(LocalSubmissionId(1), "prompt".to_owned());
+        let mut request = LiveRequest::new(0, 0, String::new(), Reasoning::Auto);
+        let mut text = String::with_capacity(1024);
+        text.push_str("reply");
+        request.parts.push(LivePart::Text(text));
+        live.requests.push(request);
+
+        assert!(live.retained_bytes() >= 1024);
+        live.trim_to_bytes(4);
+        assert!(live.retained_bytes() <= 4);
     }
 }

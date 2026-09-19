@@ -134,6 +134,11 @@ impl App {
             return;
         };
         panel.mode = SearchPanelMode::Input;
+        if panel.query.len().saturating_add(ch.len_utf8())
+            > crate::state::search::MAX_SEARCH_QUERY_BYTES
+        {
+            return;
+        }
         let cursor = panel.query_cursor.min(panel.query.len());
         let cursor = floor_char_boundary(&panel.query, cursor);
         panel.query.insert(cursor, ch);

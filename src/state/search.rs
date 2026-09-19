@@ -12,6 +12,9 @@ use crate::state::view::SectionKind;
 
 /// The most match summaries one scan keeps (spec §17.1).
 pub const MAX_SEARCH_MATCHES: usize = 500;
+/// Search input is local UI state, but it is still copied into every scan
+/// request and used by the matcher. Keep it within the normal draft bound.
+pub const MAX_SEARCH_QUERY_BYTES: usize = crate::limits::COMPOSER_DRAFT_BYTES;
 
 /// Which content a search covers (spec §17.1). `Loaded` is the default and
 /// never touches the remote session; `FullSession` is an explicit choice that
@@ -230,6 +233,7 @@ impl Default for SearchPanelState {
 
 impl SearchPanelState {
     pub fn new(session_id: String, session_epoch: u64, query: String, scope: SearchScope) -> Self {
+        let query = truncate_query(query);
         let cursor = query.chars().count();
         Self {
             session_id,
@@ -317,6 +321,17 @@ impl SearchPanelState {
     }
 }
 
+fn truncate_query(mut query: String) -> String {
+    if query.len() > MAX_SEARCH_QUERY_BYTES {
+        let mut end = MAX_SEARCH_QUERY_BYTES;
+        while end > 0 && !query.is_char_boundary(end) {
+            end -= 1;
+        }
+        query.truncate(end);
+    }
+    query
+}
+
 /// The loaded-content snapshot a scan walks: durable blocks are shared by
 /// `Arc`, live text is copied and bounded by the running turn.
 pub struct LoadedScanSnapshot {
@@ -379,6 +394,8 @@ impl<'a> ScanPlan<'a> {
         let truncated = offsets.len() > room;
         offsets.truncate(room);
         for offset in offsets {
+            let match_len = case_insensitive_match_len(&text[offset..], self.needle)
+                .unwrap_or(self.needle.len());
             self.collector.matches.push(SearchMatch {
                 index,
                 source,
@@ -386,9 +403,9 @@ impl<'a> ScanPlan<'a> {
                 request_index,
                 ordinal,
                 tool_call_id: tool_call_id.clone(),
-                preview: match_preview(text, offset, self.needle.len()),
+                preview: match_preview(text, offset, match_len),
                 source_offset: offset,
-                byte_range: offset..offset.saturating_add(self.needle.len()),
+                byte_range: offset..offset.saturating_add(match_len),
             });
         }
         if truncated {
@@ -625,7 +642,7 @@ fn literal_match_offsets_limited(hay: &str, needle: &str, limit: usize) -> Vec<u
     }
     let mut out = Vec::new();
     for (offset, _) in hay.char_indices() {
-        if case_insensitive_starts_with(&hay[offset..], needle) {
+        if case_insensitive_match_len(&hay[offset..], needle).is_some() {
             out.push(offset);
             if out.len() == limit {
                 break;
@@ -635,15 +652,23 @@ fn literal_match_offsets_limited(hay: &str, needle: &str, limit: usize) -> Vec<u
     out
 }
 
-fn case_insensitive_starts_with(hay: &str, needle: &str) -> bool {
-    let mut hay = hay.chars().flat_map(char::to_lowercase);
-    for wanted in needle.chars().flat_map(char::to_lowercase) {
-        match hay.next() {
-            Some(found) if found == wanted => {}
-            _ => return false,
+fn case_insensitive_match_len(hay: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let mut wanted = needle.chars().flat_map(char::to_lowercase).peekable();
+    for (offset, character) in hay.char_indices() {
+        for found in character.to_lowercase() {
+            match wanted.next() {
+                Some(expected) if expected == found => {}
+                _ => return None,
+            }
+            if wanted.peek().is_none() {
+                return Some(offset + character.len_utf8());
+            }
         }
     }
-    true
+    None
 }
 
 /// One bounded preview around `offset`, with the match itself included.
@@ -713,6 +738,27 @@ mod tests {
         assert_eq!(literal_match_offsets("日本語", "本"), vec![3]);
         assert_eq!(literal_match_offsets("日本語", "x"), Vec::<usize>::new());
         assert!(literal_match_offsets("abc", "").is_empty());
+    }
+
+    #[test]
+    fn unicode_folded_matches_keep_the_original_utf8_range() {
+        let text = "İx";
+        let mut plan = ScanPlan::new("i\u{307}", false);
+        plan.push(None, SearchSource::AssistantText, None, None, 0, None, text);
+        assert_eq!(plan.collector.matches[0].byte_range, 0..2);
+        assert!(text.is_char_boundary(plan.collector.matches[0].byte_range.end));
+    }
+
+    #[test]
+    fn search_query_is_bounded_on_panel_creation() {
+        let panel = SearchPanelState::new(
+            "ses".to_owned(),
+            0,
+            "界".repeat(MAX_SEARCH_QUERY_BYTES / 3 + 1),
+            SearchScope::Loaded,
+        );
+        assert!(panel.query.len() <= MAX_SEARCH_QUERY_BYTES);
+        assert!(panel.query.is_char_boundary(panel.query.len()));
     }
 
     #[test]
