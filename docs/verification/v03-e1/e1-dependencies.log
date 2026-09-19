@@ -1,0 +1,112 @@
+hashbrown v0.15.5
+└── lru v0.12.5
+    └── ratatui v0.29.0
+        ├── minicore-tui v0.2.8 (/root/minicore-tui-v03-refactor/tui)
+        └── tui-textarea v0.7.0
+            └── minicore-tui v0.2.8 (/root/minicore-tui-v03-refactor/tui)
+
+hashbrown v0.17.1
+└── indexmap v2.14.1
+    └── toml_edit v0.22.27
+        └── toml v0.8.23
+            └── minicore-tui v0.2.8 (/root/minicore-tui-v03-refactor/tui)
+
+syn v2.0.119
+├── darling_core v0.20.11
+│   ├── darling v0.20.11
+│   │   └── instability v0.3.10 (proc-macro)
+│   │       └── ratatui v0.29.0 (*)
+│   └── darling_macro v0.20.11 (proc-macro)
+│       └── darling v0.20.11 (*)
+├── darling_macro v0.20.11 (proc-macro) (*)
+├── instability v0.3.10 (proc-macro) (*)
+├── strum_macros v0.26.4 (proc-macro)
+│   └── strum v0.26.3
+│       └── ratatui v0.29.0 (*)
+├── synstructure v0.13.2
+│   ├── yoke-derive v0.8.2 (proc-macro)
+│   │   └── yoke v0.8.3
+│   │       ├── icu_collections v2.1.1
+│   │       │   ├── icu_locale v2.1.1
+│   │       │   │   └── icu_segmenter v2.1.2
+│   │       │   │       └── minicore-tui v0.2.8 (/root/minicore-tui-v03-refactor/tui)
+│   │       │   ├── icu_normalizer v2.1.1
+│   │       │   │   └── idna_adapter v1.2.1
+│   │       │   │       └── idna v1.1.0
+│   │       │   │           └── url v2.5.4
+│   │       │   │               [dev-dependencies]
+│   │       │   │               └── minicore-tui v0.2.8 (/root/minicore-tui-v03-refactor/tui)
+│   │       │   ├── icu_properties v2.1.2
+│   │       │   │   └── idna_adapter v1.2.1 (*)
+│   │       │   └── icu_segmenter v2.1.2 (*)
+│   │       ├── icu_provider v2.1.1
+│   │       │   ├── icu_locale v2.1.1 (*)
+│   │       │   ├── icu_normalizer v2.1.1 (*)
+│   │       │   ├── icu_properties v2.1.2 (*)
+│   │       │   └── icu_segmenter v2.1.2 (*)
+│   │       ├── zerotrie v0.2.5
+│   │       │   ├── icu_properties v2.1.2 (*)
+│   │       │   └── icu_provider v2.1.1 (*)
+│   │       └── zerovec v0.11.8
+│   │           ├── icu_collections v2.1.1 (*)
+│   │           ├── icu_locale v2.1.1 (*)
+│   │           ├── icu_locale_core v2.1.1
+│   │           │   ├── icu_locale v2.1.1 (*)
+│   │           │   ├── icu_properties v2.1.2 (*)
+│   │           │   └── icu_provider v2.1.1 (*)
+│   │           ├── icu_normalizer v2.1.1 (*)
+│   │           ├── icu_properties v2.1.2 (*)
+│   │           ├── icu_provider v2.1.1 (*)
+│   │           ├── icu_segmenter v2.1.2 (*)
+│   │           ├── potential_utf v0.1.6
+│   │           │   ├── icu_collections v2.1.1 (*)
+│   │           │   ├── icu_locale v2.1.1 (*)
+│   │           │   └── icu_segmenter v2.1.2 (*)
+│   │           └── tinystr v0.8.4
+│   │               ├── icu_locale v2.1.1 (*)
+│   │               └── icu_locale_core v2.1.1 (*)
+│   └── zerofrom-derive v0.1.7 (proc-macro)
+│       └── zerofrom v0.1.8
+│           ├── icu_collections v2.1.1 (*)
+│           ├── icu_provider v2.1.1 (*)
+│           ├── yoke v0.8.3 (*)
+│           ├── zerotrie v0.2.5 (*)
+│           └── zerovec v0.11.8 (*)
+├── yoke-derive v0.8.2 (proc-macro) (*)
+└── zerofrom-derive v0.1.7 (proc-macro) (*)
+
+syn v3.0.4
+├── displaydoc v0.2.7 (proc-macro)
+│   ├── icu_collections v2.1.1 (*)
+│   ├── icu_locale_core v2.1.1 (*)
+│   ├── icu_provider v2.1.1 (*)
+│   ├── tinystr v0.8.4 (*)
+│   └── zerotrie v0.2.5 (*)
+├── serde_derive v1.0.229 (proc-macro)
+│   └── serde v1.0.229
+│       ├── minicore-tui v0.2.8 (/root/minicore-tui-v03-refactor/tui)
+│       ├── serde_spanned v0.6.9
+│       │   ├── toml v0.8.23 (*)
+│       │   └── toml_edit v0.22.27 (*)
+│       ├── toml v0.8.23 (*)
+│       ├── toml_datetime v0.6.11
+│       │   ├── toml v0.8.23 (*)
+│       │   └── toml_edit v0.22.27 (*)
+│       └── toml_edit v0.22.27 (*)
+├── thiserror-impl v2.0.20 (proc-macro)
+│   └── thiserror v2.0.20
+│       └── minicore-tui v0.2.8 (/root/minicore-tui-v03-refactor/tui)
+├── tokio-macros v2.7.2 (proc-macro)
+│   └── tokio v1.53.1
+│       └── minicore-tui v0.2.8 (/root/minicore-tui-v03-refactor/tui)
+└── zerovec-derive v0.11.6 (proc-macro)
+    └── zerovec v0.11.8 (*)
+
+unicode-width v0.1.14
+└── unicode-truncate v1.1.0
+    └── ratatui v0.29.0 (*)
+
+unicode-width v0.2.0
+├── minicore-tui v0.2.8 (/root/minicore-tui-v03-refactor/tui)
+├── ratatui v0.29.0 (*)
+└── tui-textarea v0.7.0 (*)

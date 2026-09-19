@@ -107,6 +107,37 @@ gaps. Layout eviction accounts both installed cache entries and in-flight
 partials. These are retained-payload estimates, not exact process RSS or
 allocator-capacity measurements.
 
+## E1 tool-detail regression (final implementation `7ca349b`)
+
+Both Rust 1.85.0 and stable 1.97.1 passed the 762-test default suite and all
+30 real-Agent E2Es on the same remote Linux host. The six ignored Release
+workloads were rerun with Rust 1.85.0; see
+[the complete E1 log](verification/v03-e1/e1-performance.log).
+
+```text
+c2b_worker: durable_rows=51101 deltas=1000 layout_calls=0
+            history_bytes_cloned=0 viewport_rows=40000 viewport_bytes=2986911
+c2c_120x40: p95_us=7941 p99_us=8306 durable_rows=43870
+            history_bytes_cloned=0 layout_calls=0 viewport_rows=40000
+            viewport_bytes=4396336 retained_layout_bytes_estimate=8035080
+```
+
+The preceding D3 P95/P99 was 7610/7932 μs. These small timing differences are
+not claimed as a speedup, and neither run measures terminal input-to-frame
+latency. The diagnostic clone/cold-prepare helpers remain in the full log;
+they are not the production asynchronous hot path.
+
+E1 uses the existing serialized layout worker for tool text, with grapheme wrap
+indexes and viewport-only row materialization. The detail layout text/index
+capacity participates in the 48 MiB layout budget. One detail has four bounded
+1 MiB stream windows (not an unbounded cache per visited tool); a matching
+ToolFacts result body is shared by Arc. Stream-budget/head-eviction and Arc
+reuse tests pass. Tiny process events coalesce into capacity-accounted 16 KiB
+pages, with an independent 128-chunk bound; the 32,000-byte event regression
+retains two pages and leaves shared in-flight snapshots unchanged. A fresh E1
+peak-RSS or manual-terminal measurement is **Not
+run**, not inferred from byte accounting.
+
 ## Not run / Remaining
 
 - decode-throughput and RSS measurements for the current serialized decode

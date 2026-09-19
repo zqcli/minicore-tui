@@ -1,0 +1,19 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-tui-v03-refactor/tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 2.17s
+     Running tests/tool_streams.rs (target/debug/deps/tool_streams-ca59e0dcc860413b)
+
+running 1 test
+
+thread 'tiny_process_events_coalesce_without_mutating_inflight_layout_snapshots' panicked at tests/tool_streams.rs:104:5:
+tiny events must not create an unbounded metadata list
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test tiny_process_events_coalesce_without_mutating_inflight_layout_snapshots ... FAILED
+
+failures:
+
+failures:
+    tiny_process_events_coalesce_without_mutating_inflight_layout_snapshots
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `--test tool_streams`

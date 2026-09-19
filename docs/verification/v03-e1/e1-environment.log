@@ -1,0 +1,9 @@
+Linux 6.12.94+deb13-amd64 x86_64 GNU/Linux
+rustc 1.85.0 (4d91de4e4 2025-02-17)
+rustc 1.97.1 (8bab26f4f 2026-07-14)
+24
+               total        used        free      shared  buff/cache   available
+Mem:           31940        1677        4536         328       26548       30262
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  182G   41G  82% /
+661b32976ad6ae2fbe2b33411c7d0d082f9782da70745e4e4a6602c87fb7b273  /root/minicore-tui-v03-refactor/fixedagent-target/debug/minicore-agent

@@ -1,0 +1,24 @@
+Observed intermediate failure, before the E2E harness scheduling fix:
+
+Toolchain: Rust 1.85.0
+Command: MINICORE_AGENT_BIN=/root/minicore-tui-v03-refactor/fixedagent-target/debug/minicore-agent cargo +1.85.0 test --locked --test agent_e2e -- --ignored --test-threads=1
+Result: 29 passed; 1 failed; 0 ignored; 94.88 seconds
+Failed test: e2e_full_search_and_export_real_agent_chain
+Panic location in that intermediate tree: tests/agent_e2e.rs:5195:9
+Assertion: written.contains("Unconfirmed live turn")
+The exported header stated that live inclusion was requested, but no live section was appended.
+
+Original remote log: /root/minicore-tui-v03-refactor/e1-export-timing-failure.log
+The large synthetic exported body is omitted from this summary.
+
+Verified code facts:
+- The harness's pump_step waited up to 10 seconds for RPC unless an editor or tool detail was active.
+- The export loop only drained its local writer's completion queue after pump_step returned.
+- The loopback model was deliberately gated with request_timeout_seconds = 30.
+- Production main.rs selects local-job completion alongside RPC; it does not park it behind a ten-second RPC-only wait.
+
+Inference: delayed local completion processing let the gated live turn reach its model request deadline before the export captured it. The failed run did not separately log the Provider outcome, so that causal inference is not presented as a directly observed wire result.
+
+Correction: while export/editor work is active, the harness returns to the local result drains every 20 ms. No assertion, model deadline, backend source or product export behavior was changed.
+
+Verification: the targeted original test passed in 0.91 seconds (e1-export-timing-green.log). Both complete final toolchain sequences passed all 30 Agent E2Es (e1-1.85.0-e2e.log and e1-stable-e2e.log).

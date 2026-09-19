@@ -1,0 +1,20 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-tui-v03-refactor/tui)
+    Finished `release` profile [optimized] target(s) in 31.69s
+     Running tests/performance.rs (target/release/deps/performance-266f91e5083c07e4)
+
+running 6 tests
+measure_live_delta_rebuild_cost: deltas=1000 history_rows_before=51101 history_rows_after=51234 delta_rows=133 push_ms=5.28
+test measure_live_delta_rebuild_cost ... ok
+measure_all_lines_clone_latency: helper 20 clones rows_total=140020 per_call_ms=19.81
+test measure_all_lines_clone_latency ... ok
+measure_prepare_frame_path_over_50k_rows: total_rows=51101 per_call_ms=136.81
+test measure_prepare_frame_path_over_50k_rows ... ok
+measure_c2: frames=1000 deltas=250 live_rows=28 layout_calls_delta=0          history_bytes_cloned=0 viewport_rows=40000          viewport_bytes=2742348 window_rows=40000 rebuild_frames=[] elapsed_ms=5062.46
+test measure_c2_stable_layout_and_viewport_ownership ... ok
+c2c_120x40: p95_us=7941 p99_us=8306 durable_rows=43870 history_bytes_cloned=0 layout_calls=0 viewport_rows=40000 viewport_bytes=4396336 retained_layout_bytes_estimate=8035080
+test measure_c2c_release_workload_120x40 ... ok
+c2b_worker: durable_rows=51101 deltas=1000 layout_calls=0 history_bytes_cloned=0 viewport_rows=40000 viewport_bytes=2986911
+test measure_c2b_worker_over_50k_rows_and_1000_output_deltas ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 7.78s
+

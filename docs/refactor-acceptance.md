@@ -20,7 +20,7 @@ layout batching, budgets, and SourceMap copy metadata. The current-tree
 evidence below was refreshed with the authoritative Rust 1.85 commands;
 earlier C2b/C2c release logs remain historical context only.
 
-The current-tree C2 release evidence is:
+The preceding D3 C2 release baseline was:
 
 ```text
 C2b: durable_rows=51101 deltas=1000 layout_calls=0 history_bytes_cloned=0
@@ -34,12 +34,20 @@ The C2c P95/P99 values are synthetic frame-processing samples for the fixed
 workload; reruns can vary with host scheduling, and they are not terminal
 input-to-frame latency.
 
-Current-tree validation passed Rust 1.85.0 `fmt --check`,
-`test --locked --all-targets --no-fail-fast` (734 passed, 0 failed, 37 ignored)
-and Clippy with `-D warnings`. Rust stable 1.97.1 also passed fmt, all-targets
-tests, and Clippy with `-D warnings`. The real Agent 0.5 serial run passed
-28/28 tests, including the D3 editor/background-turn scenario. The six
-ignored release performance workloads also passed.
+The latest E1 implementation is `7ca349b` (start `740a528`; DTO/stream slice
+`bd92e84`, detail slice `6653205`, capacity/harness hardening `e3f4af0`, then
+visible-snapshot copy and tab-cache coherence). On **each** of Rust 1.85.0 and stable 1.97.1, `fmt --check`,
+`test --locked --all-targets --no-fail-fast` (**762 passed, 0 failed, 39 ignored**),
+Clippy and rustdoc with warnings denied passed. The real fixed-Agent serial run
+passed **30/30 on each toolchain**, including all original 28 and the two new
+Bash/detail/cancel workflows. All six ignored Release performance workloads
+passed. The current C2c synthetic P95/P99 is **7941/8306 μs**; the block above
+records the preceding D3 baseline, not a current terminal measurement.
+
+Full commands, logs, scope, known unrun checks and the **338-file local/remote
+tracked build-source equality manifest** are in
+[`verification/v03-e1/README.md`](verification/v03-e1/README.md). E1 is ready for
+parent review; this does not declare E2 or full-project v0.3 complete.
 
 | ID | Required behavior | Status | Evidence / remaining work |
 |---|---|---|---|
@@ -74,12 +82,12 @@ ignored release performance workloads also passed.
 | REF-29 | Viewport/click/copy share layout; soft-wrap adds no copied newline | **Passed** | Shared immutable layout, SourceMap hard/soft-break tests, CJK/emoji/code-indent/blank-line/link tests, grapheme tests, and an unloaded-placeholder non-copy test. |
 | REF-30 | Fold/resize/page-load preserve the scroll anchor | **Passed** | Five tests cover reasoning fold, width resize, earlier-history prepend, live→saved ToolID rebasing, and an unloaded-anchor nearest-retained fallback with a notice through `ScrollAnchor`. |
 | REF-31 | Rail geometry and one-line Footer baseline remain stable | **Passed** | Rail fixtures and render snapshots. |
-| REF-32 | Panel/focus cannot misfire send/cancel | **Not run** | Stage E. |
+| REF-32 | Panel/focus cannot misfire send/cancel | **Passed** | E1 concrete MainView/Focus, F6/Esc/draft/scroll tests and detail-close real-Agent E2E; existing dock/search/confirmation regressions remain green. Future E2 pages must use the same contract. |
 | REF-33 | Tool cards are not reordered or duplicated by completion | **Passed** | Tool completion and same-loop ordering tests. |
-| REF-34 | `tool.read` distinguishes awaiting-policy/running/terminal | **Not run** | Backend DTOs exist; the TUI does not consume the workflow. |
-| REF-35 | base64/raw offset/UTF-8 tail/gap/EOF behavior | **Not run** | D/E tool-read workflow. |
-| REF-36 | stdout/stderr have no fake total order; stop is not confirmation | **Not run** | Full workflow coverage is not complete. |
-| REF-37 | Only visible tools read on demand; hidden/partial/expired states remain visible | **Not run** | Stage E. |
+| REF-34 | `tool.read` distinguishes awaiting-policy/running/terminal | **Passed** | Pinned DTO fixtures plus E1 tool facts/recording/monotonic conflict tests; process command facts also survive arrival before read/execution. |
+| REF-35 | base64/raw offset/UTF-8 tail/gap/EOF behavior | **Passed** | Twelve tool_streams tests (including tiny-chunk capacity/snapshot preservation) plus the real-Agent multi-page Unicode stdout and independent stderr drain. Late page EOF cannot hide newer event bytes. |
+| REF-36 | stdout/stderr have no fake total order; stop is not confirmation | **Passed** | Separate stream tabs/cursors; nonzero exit 7 remains a command fact, and cancelling/termination_confirmed/output_complete are independent. Real exact-LoopRef Bash cancellation E2E passes. |
+| REF-37 | Only visible tools read on demand; hidden/partial/expired states remain visible | **Passed** | E1 current-tab polling, close/tab generation fencing, fragmented-transport stale response accounting, 250/500 ms tests, retained-window labels, real EOF drain and explicit retry after query errors. |
 | REF-38 | `@file` remains a path reference and preview does not attach content | **Not run** | Stage D/E. |
 | REF-39 | workspace.files/search partial pages and cursor rules | **Not run** | D/E. |
 | REF-40 | workspace.read fixed-revision paging and changed-data fencing | **Not run** | Stage E. |
@@ -96,15 +104,15 @@ ignored release performance workloads also passed.
 | REF-51 | Existing CJK/IME/mouse/scrollbar/terminal restore behavior | **Passed** | UI, Rail, terminal, and snapshot tests. |
 | REF-52 | Common command table/completion/help stay consistent | **Passed** | `command::COMMANDS` is the single static table driving parsing, completion and the help panel; tests assert every table entry parses and is offered, unlisted names are unknown, and the help panel renders every entry. |
 | REF-53 | No approval/plugin/Subagent/PTY/Git-write/auto-reconnect feature | **Passed** | Source audit. |
-| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Not run** | 28/28 current Agent E2E covers read/tool/compact, lifecycle, D2 search/export, and D3 editor coexistence; workspace file/changes/diff workflows are D/E scope and not covered. |
-| REF-55 | Rust 1.85/stable and original tests on three platforms | **Not run** | Rust 1.85 remote Linux is authoritative; current-tree stable/macOS/Windows coverage is not complete. |
+| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Not run** | 30/30 fixed-Agent E2Es pass on both toolchains, including E1 process streams/cancellation and all previous scenarios; workspace/file/changes/diff workflows are later E scope and remain uncovered. |
+| REF-55 | Rust 1.85/stable and original tests on three platforms | **Not run** | Current E1 tree passes Rust 1.85.0 and stable 1.97.1 on remote Linux; macOS/Windows execution and terminal manual acceptance remain Not run. |
 | REF-56 | Release before/after performance evidence uses real data | **Passed** | Current-tree Rust 1.85 focused C2b/C2c release probes passed; the full six-test ignored release suite also passed in this validation cycle. Workload units are recorded in `docs/performance.md`. |
 
 ## Counts
 
-- **Passed**: 39
+- **Passed**: 47
 - **Failed**: 0
-- **Not run**: 17
+- **Not run**: 9
 - **Not applicable**: 0
 
 ## C Status
@@ -117,9 +125,9 @@ ignored release performance workloads also passed.
   oversized items and a fresh decode-throughput/RSS measurement are outside
   this boundary. D2's explicit `/export raw` path is separately covered by
   reducer fixtures; exact allocator/RSS accounting is not claimed.
-- **D/E**: D1, D2, and the D3 settings/editor/lifecycle slice are implemented
-  and validated (see `D Status`); workspace/file/changes/diff panels and E were
-  intentionally not started and must not be reported as C defects.
+- **D/E**: D1/D2/D3 and E1 tool details are implemented and validated (see
+  `D Status` and the E1 evidence). Workspace/file/changes/context main-area
+  pages remain later E scope; they are not implemented by this handoff.
 
 ## D Status
 

@@ -280,7 +280,10 @@ The detail's four `StreamView` windows hold bounded chunks, at most 1 MiB per
 stream and at most 4 MiB for the single open detail (below the 16 MiB global
 stream allowance). Closing releases them. Existing result body Arcs are reused
 when authoritative output bytes match; the detail does not duplicate that
-already-owned body. Only server raw-byte next_offset continues paging. Event
+already-owned body. Tiny process chunks coalesce into capacity-accounted 16 KiB
+pages, and each stream also has an independent 128-chunk metadata bound. Shared
+in-flight layout snapshots remain immutable through copy-on-write. Only server
+raw-byte next_offset continues paging. Event
 gaps request the authoritative range; empty gap notices advance to the retained
 start without claiming EOF. Incomplete UTF-8 suffixes are withheld before EOF,
 invalid bytes are replaced for display, and controls never affect raw cursors.
