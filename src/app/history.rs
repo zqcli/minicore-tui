@@ -3509,6 +3509,14 @@ impl App {
                                 crate::state::turn::LivePart::Text(_) => {}
                             }
                         }
+                        for tool in &request.tools {
+                            tool_keys.insert(ToolKey::new(
+                                &reference.session_id,
+                                &reference.loop_id,
+                                request.request_index,
+                                &tool.tool_call_id,
+                            ));
+                        }
                     }
                 }
             }
