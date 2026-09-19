@@ -766,6 +766,7 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                         folded,
                         ordinal.saturating_mul(1_000_000) + section_offset,
                         Some(source_hint.as_str()),
+                        None,
                     ) {
                         if !push_layout_section(
                             layout,
@@ -818,6 +819,7 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                     rendered.folded,
                     ordinal.saturating_mul(1_000_000) + section_offset,
                     Some(input.source.as_ref()),
+                    rendered.hard_breaks.as_deref(),
                 ) {
                     sections.push(layout);
                     changed += 1;
@@ -877,6 +879,7 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
             folded,
             ordinal.saturating_mul(1_000_000),
             block_source(block),
+            None,
         ) {
             if !push_layout_section(layout, &mut sections, &mut Vec::new(), &mut batch_sink) {
                 return None;
@@ -927,6 +930,7 @@ fn push_layout_section(
     true
 }
 
+#[allow(clippy::too_many_arguments)]
 fn make_section_layout(
     key: LayoutKey,
     lines: Vec<Line<'static>>,
@@ -935,6 +939,7 @@ fn make_section_layout(
     folded: bool,
     order: usize,
     source_hint: Option<&str>,
+    rendered_breaks: Option<&[bool]>,
 ) -> Option<Arc<SectionLayout>> {
     if lines.is_empty() {
         return None;
@@ -974,15 +979,34 @@ fn make_section_layout(
         .rev()
         .find(|(_, (text, decorative))| !*decorative && !text.is_empty())
         .map_or(0, |(row, _)| row);
-    let hard_break_rows = hard_break_rows(
-        source_hint,
-        &row_texts,
-        range
-            .content_columns
-            .end
-            .saturating_sub(range.content_columns.start),
-        last_content_row,
-    );
+    // Markdown sections know exactly which rendered row ends a logical source
+    // line, so a soft wrap inside a paragraph or code line never becomes a
+    // fake newline. Rows rendered from plain text fall back to aligning the
+    // source lines with their wrapped rows.
+    let hard_break_rows = match rendered_breaks {
+        Some(breaks) => {
+            let mut rows: Vec<bool> = breaks.to_vec();
+            rows.resize(row_texts.len(), false);
+            for (row, (_text, decorative)) in row_texts.iter().enumerate() {
+                if *decorative {
+                    rows[row] = false;
+                }
+            }
+            if last_content_row < rows.len() {
+                rows[last_content_row] = true;
+            }
+            rows
+        }
+        None => hard_break_rows(
+            source_hint,
+            &row_texts,
+            range
+                .content_columns
+                .end
+                .saturating_sub(range.content_columns.start),
+            last_content_row,
+        ),
+    };
     let logical_ranges = source_ranges(source_hint, &row_texts, &hard_break_rows);
     let copy_source: Arc<str> = row_texts
         .iter()
@@ -2236,6 +2260,7 @@ mod source_map_tests {
             false,
             0,
             Some("alpha beta gamma"),
+            None,
         )
         .expect("wrapped section");
         assert_eq!(layout.source_map.source.as_ref(), "alpha beta gamma");
@@ -2276,6 +2301,7 @@ mod source_map_tests {
             false,
             0,
             Some(source),
+            None,
         )
         .expect("markdown section");
         assert_eq!(layout.source_map.source.as_ref(), source);
@@ -2298,6 +2324,31 @@ mod source_map_tests {
     }
 
     #[test]
+    fn markdown_soft_wraps_never_become_fake_newlines_in_the_copy_text() {
+        let theme = crate::theme::Theme::dark();
+        let renderer = crate::markdown::MarkdownRenderer::new(&theme);
+        let long_line = "x".repeat(120);
+        let source = format!("first line\n\n{long_line}\n\nlast line");
+        let (lines, _links, breaks) = renderer.render_with_breaks(&source, 20, Style::default());
+        let lines = lines
+            .into_iter()
+            .map(|line| crate::ui::rail::inset_row(21, 1, line))
+            .collect();
+        let layout = make_section_layout(
+            key(SectionKind::AssistantText),
+            lines,
+            Vec::new(),
+            false,
+            false,
+            0,
+            Some(source.as_str()),
+            Some(&breaks),
+        )
+        .expect("markdown section");
+        assert_eq!(copied_text(&layout), source);
+    }
+
+    #[test]
     fn grapheme_ranges_are_utf8_boundary_safe() {
         let source = "🙂 café";
         let lines = crate::markdown::wrap_plain(source, 5, Style::default());
@@ -2309,6 +2360,7 @@ mod source_map_tests {
             false,
             0,
             Some(source),
+            None,
         )
         .expect("grapheme section");
         assert!(
@@ -2337,6 +2389,7 @@ mod source_map_tests {
             false,
             0,
             Some(source),
+            None,
         )
         .expect("wide/code section");
         let copied = copied_text(&layout);
@@ -2364,6 +2417,7 @@ mod source_map_tests {
             false,
             0,
             Some(source),
+            None,
         )
         .expect("link section");
         let copied = copied_text(&layout);
@@ -2388,6 +2442,7 @@ mod source_map_tests {
             false,
             false,
             0,
+            None,
             None,
         )
         .expect("placeholder section");

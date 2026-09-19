@@ -52,6 +52,7 @@ use crate::ui::transcript::{
     DurableLayoutIdentity, DurableLayoutRequest, DurableLayoutResult, DurableLayoutSnapshot,
 };
 
+pub mod copy;
 pub mod history;
 pub mod queries;
 pub mod search;
@@ -3834,6 +3835,7 @@ impl App {
                 }
             }
             LocalCommand::Search { query, scope } => self.open_search(query, scope),
+            LocalCommand::Copy { target } => self.copy_command(target),
             LocalCommand::PromptJump(direction) => self.prompt_jump(direction),
             LocalCommand::Latest => self.jump_latest(),
             LocalCommand::Clear => self.clear_transcript(),

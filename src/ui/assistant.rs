@@ -64,6 +64,10 @@ pub struct AssistantSection {
     /// rendered by the transcript at this exact point rather than being
     /// moved after all assistant text.
     pub tool_call: Option<crate::protocol::ToolCallViewWire>,
+    /// For markdown-rendered text: per rendered row, whether the row ends a
+    /// logical source line rather than a soft wrap. `None` when the rows came
+    /// from a plain wrapper that already preserves source lines.
+    pub hard_breaks: Option<Vec<bool>>,
 }
 
 /// Cheap section metadata collected before Markdown/layout work. The source
@@ -193,13 +197,14 @@ pub fn render_section(
                 collapsible: input.collapsible,
                 folded: input.folded,
                 tool_call: None,
+                hard_breaks: None,
             }
         }
         SectionKind::AssistantText => {
             let renderer = MarkdownRenderer::new(theme);
             let base = Style::new().fg(theme.text);
             let inner = width.saturating_sub(1).max(1);
-            let (rendered, links) = renderer.render_with_links(&input.source, inner, base);
+            let (rendered, links, breaks) = renderer.render_with_breaks(&input.source, inner, base);
             let lines: Vec<_> = rendered
                 .into_iter()
                 .map(|line| crate::ui::rail::inset_row(width, 1, line))
@@ -214,10 +219,14 @@ pub fn render_section(
                 .collect();
             let vertical = layout::vertical_section(lines);
             let mut vertical_links = Vec::with_capacity(vertical.len());
+            let mut vertical_breaks = Vec::with_capacity(vertical.len());
             if !vertical.is_empty() {
                 vertical_links.push(Vec::new());
                 vertical_links.extend(link_cells);
                 vertical_links.push(Vec::new());
+                vertical_breaks.push(false);
+                vertical_breaks.extend(breaks);
+                vertical_breaks.push(false);
             }
             AssistantSection {
                 lines: vertical,
@@ -227,6 +236,7 @@ pub fn render_section(
                 collapsible: false,
                 folded: false,
                 tool_call: None,
+                hard_breaks: Some(vertical_breaks),
             }
         }
         SectionKind::Tool | SectionKind::User | SectionKind::Summary | SectionKind::Notice => {
@@ -238,6 +248,7 @@ pub fn render_section(
                 collapsible: input.collapsible,
                 folded: input.folded,
                 tool_call: input.tool_call.clone(),
+                hard_breaks: None,
             }
         }
     }
@@ -291,6 +302,7 @@ pub fn sections_with_folds(
                     collapsible: reasoning_visible && joined.trim().split('\n').count() > 3,
                     folded,
                     tool_call: None,
+                    hard_breaks: None,
                 });
                 in_hidden_run = !reasoning_visible;
             }
@@ -334,6 +346,7 @@ pub fn sections_with_folds(
                     collapsible: false,
                     folded: false,
                     tool_call: None,
+                    hard_breaks: None,
                 });
                 text_ordinal += 1;
                 in_hidden_run = false;
@@ -351,6 +364,7 @@ pub fn sections_with_folds(
                     collapsible: true,
                     folded: false,
                     tool_call: Some(call.clone()),
+                    hard_breaks: None,
                 });
                 in_hidden_run = false;
             }

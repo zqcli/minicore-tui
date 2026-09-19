@@ -88,6 +88,9 @@ pub enum LocalCommand {
     PromptJump(i32),
     /// Jump to the newest user prompt (`/latest`).
     Latest,
+    /// Copy already-rendered text through the single clipboard owner
+    /// (spec §17.3). `/copy` without an argument copies the last reply.
+    Copy { target: CopyTarget },
     /// Open the session selector.
     Resume,
     /// Open the session selector.
@@ -124,6 +127,31 @@ pub enum LocalCommand {
     Delete { confirm: bool },
 }
 
+/// What `/copy` takes (spec §17.3). Reusing the existing hit/copy operations
+/// means no copy path ever issues a remote read to "complete" a message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyTarget {
+    /// The last completed Assistant reply, excluding Thinking.
+    LastReply,
+    /// The message under the selection anchor or the top of the viewport.
+    Message,
+    /// The fenced code block of that message.
+    Code,
+    /// The existing mouse/keyboard selection.
+    Selection,
+}
+
+impl CopyTarget {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::LastReply => "last reply",
+            Self::Message => "message",
+            Self::Code => "code block",
+            Self::Selection => "selection",
+        }
+    }
+}
+
 /// One implemented slash command. The table is the single source for the
 /// parser, the help panel and the completion popup, so an entry can never
 /// advertise a command the reducer does not execute (spec §10.5, §23).
@@ -153,6 +181,8 @@ pub enum CommandArgs {
     /// `/search [full] [literal]`: the literal is the rest of the line; the
     /// leading `full` keyword starts the explicit full-session scan.
     Search,
+    /// `/copy [last|message|code|selection]`.
+    Copy,
 }
 
 /// Every command the reducer can execute. Methods added in a later stage must
@@ -169,6 +199,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         usage: "/search [full] [literal]",
         summary: "find literal text in loaded content, or scan the full session",
         args: CommandArgs::Search,
+    },
+    CommandSpec {
+        name: "copy",
+        usage: "/copy [last|message|code|selection]",
+        summary: "copy the last reply, the current message, its code, or the selection",
+        args: CommandArgs::Copy,
     },
     CommandSpec {
         name: "prev",
@@ -426,6 +462,21 @@ pub fn parse_command(input: &str) -> Result<LocalCommand, CommandIssue> {
                 scope,
             })
         }
+        ("copy", _) => match args {
+            "" | "last" | "reply" => Ok(LocalCommand::Copy {
+                target: CopyTarget::LastReply,
+            }),
+            "message" | "msg" => Ok(LocalCommand::Copy {
+                target: CopyTarget::Message,
+            }),
+            "code" => Ok(LocalCommand::Copy {
+                target: CopyTarget::Code,
+            }),
+            "selection" => Ok(LocalCommand::Copy {
+                target: CopyTarget::Selection,
+            }),
+            _ => Err(CommandIssue::InvalidArgs(format!("usage: {}", spec.usage))),
+        },
         ("prev", _) => no_args(LocalCommand::PromptJump(-1)),
         ("next", _) => no_args(LocalCommand::PromptJump(1)),
         ("latest", _) => no_args(LocalCommand::Latest),

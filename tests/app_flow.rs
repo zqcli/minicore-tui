@@ -8348,3 +8348,190 @@ fn prompt_jumps_skip_steering_and_read_an_unloaded_window() {
         "the jump lands on the prompt the windowed read loaded"
     );
 }
+
+// ---- D2: /copy (spec §17.3) ----
+
+fn set_terminal(driver: &mut Driver) {
+    driver.step(AppEvent::TerminalSize {
+        width: 80,
+        height: 24,
+    });
+}
+
+#[test]
+fn copy_last_reply_excludes_thinking_and_keeps_real_newlines() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    set_terminal(&mut driver);
+    let long_line = "x".repeat(200);
+    open_chat_with(
+        &mut driver,
+        vec![
+            user(0, "loop_1", "prompt one"),
+            assistant_with_reasoning(
+                1,
+                "loop_1",
+                0,
+                "deep",
+                &format!("first line\n\n{long_line}\n\nlast line"),
+                "secret reasoning that must not be copied",
+            ),
+            user(2, "loop_2", "prompt two"),
+            assistant(3, "loop_2", 0, "deep", "second reply body"),
+        ],
+    );
+    // The viewport sits at the tail, as it does after a completed reply.
+    driver.app.viewport = (40, 8);
+
+    slash(&mut driver, "/copy");
+    assert_eq!(driver.copies.len(), 1, "{:?}", driver.copies);
+    let copied = &driver.copies[0];
+    assert_eq!(copied, "second reply body");
+    assert!(!copied.contains("secret reasoning"));
+
+    // The last reply with its own body: hard newlines survive, soft-wrapped
+    // rows do not gain one.
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    set_terminal(&mut driver);
+    open_chat_with(
+        &mut driver,
+        vec![
+            user(0, "loop_1", "prompt one"),
+            assistant_with_reasoning(
+                1,
+                "loop_1",
+                0,
+                "deep",
+                &format!("first line\n\n{long_line}\n\nlast line"),
+                "secret reasoning",
+            ),
+        ],
+    );
+    driver.app.viewport = (40, 8);
+    slash(&mut driver, "/copy last");
+    assert_eq!(driver.copies.len(), 1, "{:?}", driver.copies);
+    let copied = &driver.copies[0];
+    assert!(copied.contains("first line"), "{copied:?}");
+    assert!(copied.ends_with("last line"), "{copied:?}");
+    assert!(!copied.contains("secret reasoning"));
+    assert_eq!(
+        copied,
+        &format!("first line\n\n{long_line}\n\nlast line"),
+        "paragraph breaks survive and the soft-wrapped row joins directly"
+    );
+}
+
+#[test]
+fn copy_message_and_code_reuse_the_hit_operations_without_remote_reads() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    set_terminal(&mut driver);
+    open_chat_with(
+        &mut driver,
+        vec![
+            user(0, "loop_1", "prompt one"),
+            assistant(
+                1,
+                "loop_1",
+                0,
+                "deep",
+                "intro text\n```rust\nlet value = 1;\nlet other = 2;\n```\noutro text",
+            ),
+        ],
+    );
+    driver.app.viewport = (40, 8);
+
+    slash(&mut driver, "/copy message");
+    assert_eq!(driver.copies.len(), 1, "{:?}", driver.copies);
+    let message = &driver.copies[0];
+    assert!(message.contains("intro text"), "{message:?}");
+    assert!(message.contains("let value = 1;"), "{message:?}");
+    assert!(message.contains("outro text"), "{message:?}");
+    assert!(
+        !message.contains("```"),
+        "rendered copy never includes fence rows: {message:?}"
+    );
+
+    slash(&mut driver, "/copy code");
+    assert_eq!(driver.copies.len(), 2, "{:?}", driver.copies);
+    assert_eq!(driver.copies[1], "let value = 1;\nlet other = 2;");
+
+    // A copy is local: nothing was sent for it, and no remote read happened.
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "session.read"),
+        "copy must never issue a read to complete a message"
+    );
+}
+
+#[test]
+fn copy_reports_unloaded_content_instead_of_copying_placeholder_text() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    set_terminal(&mut driver);
+    open_chat_with(&mut driver, vec![user(0, "loop_1", "loaded prompt")]);
+    set_terminal(&mut driver);
+    // A large item stays a visible placeholder; its body is not loaded. The
+    // window owns that fact, so the copy path can name it.
+    let view = driver
+        .app
+        .sessions
+        .known
+        .get_mut("ses_1")
+        .expect("session is open");
+    view.transcript.push_block(
+        minicore_tui::state::transcript::TranscriptBlock::HistoryPlaceholder(
+            minicore_tui::state::transcript::HistoryPlaceholderBlock {
+                index: 1,
+                total_bytes: 9_000_000,
+            },
+        ),
+    );
+    view.transcript
+        .window
+        .insert_large_placeholder(1, 9_000_000, true);
+    view.transcript.invalidate();
+    driver.app.viewport = (40, 8);
+    driver
+        .app
+        .sessions
+        .known
+        .get_mut("ses_1")
+        .unwrap()
+        .scroll
+        .follow_tail = true;
+
+    let before = driver.copies.len();
+    slash(&mut driver, "/copy message");
+    // Either the placeholder is picked (limitation) or the loaded prompt is
+    // picked (its text is copied); a placeholder body is never copied.
+    for copy in &driver.copies[before..] {
+        assert!(
+            !copy.contains("[large history item"),
+            "placeholder text must never be copied: {copy:?}"
+        );
+    }
+
+    // With nothing loaded at all the limitation is explicit.
+    let mut empty = Driver::new();
+    bootstrap(&mut empty);
+    slash(&mut empty, "/copy");
+    assert!(empty.copies.is_empty());
+    assert!(
+        empty
+            .app
+            .notices
+            .iter()
+            .any(|notice| notice.text.contains("no completed reply is loaded")),
+        "{:?}",
+        empty
+            .app
+            .notices
+            .iter()
+            .map(|notice| notice.text.clone())
+            .collect::<Vec<_>>()
+    );
+}

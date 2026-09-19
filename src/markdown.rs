@@ -353,38 +353,97 @@ impl<'a> MarkdownRenderer<'a> {
         width: usize,
         style: Style,
     ) -> (Vec<Line<'static>>, Vec<Vec<std::ops::Range<usize>>>) {
-        let blocks = self.parse(text);
-        let mut lines = Vec::new();
-        let mut link_cells = Vec::new();
-        let mut first = true;
-        for block in &blocks {
-            if !first {
-                lines.push(Line::default());
-                link_cells.push(Vec::new());
-            }
-            first = false;
-            self.block_lines_with_links(block, width, style, &mut lines, &mut link_cells);
-        }
+        let (lines, link_cells, _) = self.render_with_breaks(text, width, style);
         (lines, link_cells)
     }
 
+    /// Renders markdown and
+    /// returns, alongside each produced line, the link cells and whether the
+    /// line ends a *logical* source line (a paragraph/list item/code line
+    /// boundary) rather than a soft wrap. Copy and export use the third output
+    /// so a soft-wrapped row never gains a newline while real paragraph and
+    /// code-line breaks survive.
+    pub fn render_with_breaks(
+        &self,
+        text: &str,
+        width: usize,
+        style: Style,
+    ) -> (
+        Vec<Line<'static>>,
+        Vec<Vec<std::ops::Range<usize>>>,
+        Vec<bool>,
+    ) {
+        let blocks = self.parse(text);
+        let mut lines = Vec::new();
+        let mut link_cells = Vec::new();
+        let mut hard_breaks = Vec::new();
+        let mut first = true;
+        for block in &blocks {
+            if !first {
+                // The blank row between two blocks is itself a visible line, so
+                // the copy text keeps the paragraph gap (`a\n\nb`).
+                lines.push(Line::default());
+                link_cells.push(Vec::new());
+                hard_breaks.push(true);
+            }
+            first = false;
+            let start = lines.len();
+            self.block_lines_with_links(
+                block,
+                width,
+                style,
+                &mut lines,
+                &mut link_cells,
+                &mut hard_breaks,
+            );
+            hard_breaks.resize(lines.len(), false);
+            if lines.len() > start {
+                // A markdown block always ends the visual line it closes, so
+                // the next block starts on a new line.
+                hard_breaks[lines.len() - 1] = true;
+            }
+        }
+        (lines, link_cells, hard_breaks)
+    }
+
     fn block_lines(&self, block: &Block, width: usize, base: Style, out: &mut Vec<Line<'static>>) {
+        let mut breaks = Vec::new();
+        self.block_lines_breaks(block, width, base, out, &mut breaks);
+    }
+
+    fn block_lines_breaks(
+        &self,
+        block: &Block,
+        width: usize,
+        base: Style,
+        out: &mut Vec<Line<'static>>,
+        hard_breaks: &mut Vec<bool>,
+    ) {
         match block {
-            Block::Paragraph(segs) => out.extend(self.wrap_segments(segs, width, base)),
+            Block::Paragraph(segs) => {
+                let lines = wrap_segments_breaks(segs, width, base);
+                for (line, hard) in lines {
+                    out.push(line);
+                    hard_breaks.push(hard);
+                }
+            }
             Block::Heading { level, segs } => {
                 let mut style = base.fg(self.theme.md_heading);
                 if *level <= 2 {
                     style = style.add_modifier(Modifier::BOLD);
                 }
-                out.extend(self.wrap_segments(segs, width, style));
+                for (line, hard) in wrap_segments_breaks(segs, width, style) {
+                    out.push(line);
+                    hard_breaks.push(hard);
+                }
             }
             Block::Quote(segs) => {
                 let inner = width.saturating_sub(2).max(1);
                 let quote = base.fg(self.theme.md_quote);
-                let wrapped = self.wrap_segments(segs, inner, quote);
+                let wrapped = wrap_segments_breaks(segs, inner, quote);
                 let marker = Span::styled("▍ ", Style::new().fg(self.theme.md_quote));
                 let indent = Span::styled("  ", Style::new().fg(self.theme.md_quote));
-                for (index, line) in wrapped.into_iter().enumerate() {
+                for (index, (line, hard)) in wrapped.into_iter().enumerate() {
                     let mut spans = vec![if index == 0 {
                         marker.clone()
                     } else {
@@ -392,9 +451,10 @@ impl<'a> MarkdownRenderer<'a> {
                     }];
                     spans.extend(line.spans);
                     out.push(Line::from(spans));
+                    hard_breaks.push(hard);
                 }
             }
-            Block::Code { text } => self.code_lines(text, width, out),
+            Block::Code { text } => self.code_lines(text, width, out, hard_breaks),
             Block::List {
                 ordered,
                 start,
@@ -409,10 +469,10 @@ impl<'a> MarkdownRenderer<'a> {
                     };
                     let marker_w = UnicodeWidthStr::width(marker.as_str());
                     let inner = width.saturating_sub(marker_w).max(1);
-                    let wrapped = self.wrap_segments(item, inner, base);
+                    let wrapped = wrap_segments_breaks(item, inner, base);
                     let bullet = Span::styled(marker.clone(), bullet_color);
                     let indent = Span::styled(" ".repeat(marker_w), Style::new());
-                    for (line_index, line) in wrapped.into_iter().enumerate() {
+                    for (line_index, (line, hard)) in wrapped.into_iter().enumerate() {
                         let mut spans = vec![if line_index == 0 {
                             bullet.clone()
                         } else {
@@ -420,6 +480,7 @@ impl<'a> MarkdownRenderer<'a> {
                         }];
                         spans.extend(line.spans);
                         out.push(Line::from(spans));
+                        hard_breaks.push(hard);
                     }
                 }
             }
@@ -428,6 +489,7 @@ impl<'a> MarkdownRenderer<'a> {
                     "─".repeat(width),
                     Style::new().fg(self.theme.border),
                 )));
+                hard_breaks.push(false);
             }
         }
     }
@@ -439,11 +501,14 @@ impl<'a> MarkdownRenderer<'a> {
         base: Style,
         out: &mut Vec<Line<'static>>,
         link_cells: &mut Vec<Vec<std::ops::Range<usize>>>,
+        hard_breaks: &mut Vec<bool>,
     ) {
         match block {
-            Block::Paragraph(segs) => wrap_segments_links(segs, width, base, out, link_cells),
+            Block::Paragraph(segs) => {
+                wrap_segments_links(segs, width, base, out, link_cells, hard_breaks);
+            }
             _ => {
-                self.block_lines(block, width, base, out);
+                self.block_lines_breaks(block, width, base, out, hard_breaks);
                 while link_cells.len() < out.len() {
                     link_cells.push(Vec::new());
                 }
@@ -454,14 +519,28 @@ impl<'a> MarkdownRenderer<'a> {
     /// A single-color framed code block: border in `md_code_border`, content
     /// in `md_code_block`, indentation preserved, long lines soft-wrapped
     /// (spec 20.3). No syntax highlighting.
-    fn code_lines(&self, text: &str, width: usize, out: &mut Vec<Line<'static>>) {
+    fn code_lines(
+        &self,
+        text: &str,
+        width: usize,
+        out: &mut Vec<Line<'static>>,
+        hard_breaks: &mut Vec<bool>,
+    ) {
         let border = Style::new().fg(self.theme.md_code_border);
         let content = Style::new().fg(self.theme.md_code_block);
         let inner = width.saturating_sub(2).max(1);
         if width < 3 {
             for line in text.lines() {
-                for chunk in chunk_line(line, inner) {
+                let chunks = chunk_line(line, inner);
+                let chunks = if chunks.is_empty() {
+                    vec![String::new()]
+                } else {
+                    chunks
+                };
+                let last = chunks.len() - 1;
+                for (index, chunk) in chunks.into_iter().enumerate() {
                     out.push(Line::from(Span::styled(chunk, content)));
+                    hard_breaks.push(index == last);
                 }
             }
             return;
@@ -471,14 +550,23 @@ impl<'a> MarkdownRenderer<'a> {
             Span::styled("─".repeat(inner), border),
             Span::styled("╮", border),
         ]));
+        hard_breaks.push(false);
         for raw in text.lines() {
-            for chunk in chunk_line(raw, inner) {
+            let chunks = chunk_line(raw, inner);
+            let chunks = if chunks.is_empty() {
+                vec![String::new()]
+            } else {
+                chunks
+            };
+            let last = chunks.len() - 1;
+            for (index, chunk) in chunks.into_iter().enumerate() {
                 let pad = " ".repeat(inner.saturating_sub(UnicodeWidthStr::width(chunk.as_str())));
                 out.push(Line::from(vec![
                     Span::styled("│", border),
                     Span::styled(format!("{chunk}{pad}"), content),
                     Span::styled("│", border),
                 ]));
+                hard_breaks.push(index == last);
             }
         }
         out.push(Line::from(vec![
@@ -486,11 +574,7 @@ impl<'a> MarkdownRenderer<'a> {
             Span::styled("─".repeat(inner), border),
             Span::styled("╯", border),
         ]));
-    }
-
-    /// Greedy word-wrap styled segments to `width` display cells.
-    fn wrap_segments(&self, segs: &[Seg], width: usize, base: Style) -> Vec<Line<'static>> {
-        wrap_segments(segs, width, base)
+        hard_breaks.push(false);
     }
 }
 
@@ -519,9 +603,12 @@ fn chunk_line(line: &str, width: usize) -> Vec<String> {
     chunks
 }
 
-fn wrap_segments(segs: &[Seg], width: usize, base: Style) -> Vec<Line<'static>> {
+/// Wraps styled segments to `width` cells. Each emitted row reports whether it
+/// terminated a logical source line (a `\n` inside the run or the end of the
+/// run) rather than a soft wrap, so copy/export can rebuild the original text.
+fn wrap_segments_breaks(segs: &[Seg], width: usize, base: Style) -> Vec<(Line<'static>, bool)> {
     let width = width.max(1);
-    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut lines: Vec<(Line<'static>, bool)> = Vec::new();
     let mut current: Vec<Span<'static>> = Vec::new();
     let mut current_w = 0usize;
     for seg in segs {
@@ -529,14 +616,14 @@ fn wrap_segments(segs: &[Seg], width: usize, base: Style) -> Vec<Line<'static>> 
         for ch in seg.text.chars() {
             if ch == '\n' {
                 if !current.is_empty() {
-                    lines.push(Line::from(std::mem::take(&mut current)));
+                    lines.push((Line::from(std::mem::take(&mut current)), true));
                     current_w = 0;
                 }
                 continue;
             }
             let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
             if current_w + cw > width && !current.is_empty() {
-                lines.push(Line::from(std::mem::take(&mut current)));
+                lines.push((Line::from(std::mem::take(&mut current)), false));
                 current_w = 0;
             }
             push_span_char(&mut current, ch, style);
@@ -544,35 +631,42 @@ fn wrap_segments(segs: &[Seg], width: usize, base: Style) -> Vec<Line<'static>> 
         }
     }
     if !current.is_empty() {
-        lines.push(Line::from(current));
+        lines.push((Line::from(current), true));
     }
     if lines.is_empty() {
-        lines.push(Line::default());
+        lines.push((Line::default(), true));
     }
     lines
 }
 
-/// Like [`wrap_segments`] but records, per emitted line, the content-cell
-/// ranges covered by link segments. Both outputs come from one walk so they
-/// can never describe different layouts.
+/// Wraps styled segments like [`wrap_segments_breaks`] and records, per
+/// emitted line, the content-cell
+/// ranges covered by link segments and whether the line ended a logical
+/// source line. All outputs come from one walk so they can never describe
+/// different layouts.
 fn wrap_segments_links(
     segs: &[Seg],
     width: usize,
     base: Style,
     lines: &mut Vec<Line<'static>>,
     link_cells: &mut Vec<Vec<std::ops::Range<usize>>>,
+    hard_breaks: &mut Vec<bool>,
 ) {
     let width = width.max(1);
+    #[allow(clippy::too_many_arguments)]
     fn flush(
         lines: &mut Vec<Line<'static>>,
         link_cells: &mut Vec<Vec<std::ops::Range<usize>>>,
+        hard_breaks: &mut Vec<bool>,
         current: &mut Vec<Span<'static>>,
         current_links: &mut Vec<std::ops::Range<usize>>,
         current_w: &mut usize,
+        hard: bool,
     ) {
         if !current.is_empty() {
             lines.push(Line::from(std::mem::take(current)));
             link_cells.push(std::mem::take(current_links));
+            hard_breaks.push(hard);
             *current_w = 0;
         }
     }
@@ -586,9 +680,11 @@ fn wrap_segments_links(
                 flush(
                     lines,
                     link_cells,
+                    hard_breaks,
                     &mut current,
                     &mut current_links,
                     &mut current_w,
+                    true,
                 );
                 continue;
             }
@@ -597,9 +693,11 @@ fn wrap_segments_links(
                 flush(
                     lines,
                     link_cells,
+                    hard_breaks,
                     &mut current,
                     &mut current_links,
                     &mut current_w,
+                    false,
                 );
             }
             if seg.link && cw > 0 {
@@ -612,13 +710,16 @@ fn wrap_segments_links(
     flush(
         lines,
         link_cells,
+        hard_breaks,
         &mut current,
         &mut current_links,
         &mut current_w,
+        true,
     );
     if lines.is_empty() {
         lines.push(Line::default());
         link_cells.push(Vec::new());
+        hard_breaks.push(true);
     }
 }
 

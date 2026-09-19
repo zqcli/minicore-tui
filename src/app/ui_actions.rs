@@ -1071,7 +1071,7 @@ impl App {
         }
     }
 
-    fn copy_selection_command(&mut self) -> Vec<AppCommand> {
+    pub(super) fn copy_selection_command(&mut self) -> Vec<AppCommand> {
         let Some(selection) = self.selection.as_ref() else {
             return Vec::new();
         };
