@@ -26,10 +26,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use minicore_tui::clipboard::ClipboardPort;
 use minicore_tui::app::{App, ConnectionState};
+use minicore_tui::clipboard::ClipboardPort;
+#[cfg(all(unix, not(target_os = "macos")))]
+use minicore_tui::clipboard::NativeClipboard;
+#[cfg(all(unix, not(target_os = "macos")))]
+use minicore_tui::command::AppCommand;
 use minicore_tui::event::{AppEvent, JobOutcome, RpcEvent};
 use minicore_tui::jobs::{CopyAdmission, LocalJobs};
+#[cfg(all(unix, not(target_os = "macos")))]
+use minicore_tui::protocol::RpcResponse;
 use minicore_tui::protocol::{IncomingFrame, RpcNotification, TurnRef};
 use minicore_tui::state::session::SessionView;
 use minicore_tui::state::transcript::{AssistantBlock, AssistantPart, TranscriptBlock};
@@ -108,7 +114,10 @@ fn measure_release_256k_draft_edit_p95() {
         app.composer.retained_bytes(),
         counters.composer_full_joins - joins_before_edits,
     );
-    assert!(p95 < Duration::from_millis(30), "draft edit P95 exceeded 30 ms");
+    assert!(
+        p95 < Duration::from_millis(30),
+        "draft edit P95 exceeded 30 ms"
+    );
     assert_eq!(
         counters.composer_full_joins - joins_before_edits,
         0,
@@ -219,6 +228,195 @@ async fn clipboard_job_does_not_block_input_scroll_resize_or_rpc() {
     };
     jobs.reap_completion(&outcome).await;
     jobs.shutdown().await;
+}
+
+/// Runs the production `NativeClipboard`/`LocalJobs` path against a real Linux
+/// `xclip` child selected by an isolated PATH. The outer test process owns the
+/// fixture directory; the inner test process receives the PATH before Tokio
+/// starts, so no test mutates a live process environment. The helper never
+/// reads stdin and sleeps for two seconds, which makes the owned child wait
+/// observable rather than replacing it with a gated async double.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[tokio::test]
+#[ignore = "Spec 25 real OS clipboard helper and event-loop acceptance"]
+async fn real_native_clipboard_helper_keeps_event_loop_live_and_reaps() {
+    const CHILD_ENV: &str = "MINICORE_TUI_CLIPBOARD_CHILD";
+    const PID_ENV: &str = "MINICORE_TUI_CLIPBOARD_PID_FILE";
+    const TEST_NAME: &str = "real_native_clipboard_helper_keeps_event_loop_live_and_reaps";
+
+    if std::env::var_os(CHILD_ENV).is_some() {
+        let pid_path = PathBuf::from(
+            std::env::var_os(PID_ENV).expect("the clipboard helper PID path is injected"),
+        );
+        assert_eq!(NativeClipboard::new().program(), "xclip");
+        let mut jobs = LocalJobs::new();
+        let mut app = app_with_history(200, 240);
+        let send = app
+            .update(AppEvent::SubmitTurn {
+                session_id: "ses_perf".into(),
+                text: "running turn".into(),
+            })
+            .into_iter()
+            .find_map(|command| match command {
+                AppCommand::Rpc(request) => Some(request),
+                _ => None,
+            })
+            .expect("a running turn owns a send request");
+        let turn = TurnRef {
+            session_id: "ses_perf".into(),
+            loop_id: "loop_clipboard".into(),
+        };
+        app.update(AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Response(
+            RpcResponse {
+                id: send.id,
+                result: Some(json!({"turn": turn})),
+                error: None,
+            },
+        ))));
+        app.update(AppEvent::Terminal(crossterm::event::Event::Paste(
+            "draft survives a slow native clipboard".to_owned(),
+        )));
+        let draft = app.composer.content().to_owned();
+
+        let started = Instant::now();
+        assert!(matches!(
+            jobs.copy_to_clipboard(
+                "ses_perf",
+                1,
+                "x".repeat(minicore_tui::clipboard::MAX_CLIPBOARD_BYTES),
+            ),
+            CopyAdmission::Started(_)
+        ));
+        let pid_deadline = Instant::now() + Duration::from_secs(1);
+        while !pid_path.exists() {
+            assert!(
+                Instant::now() < pid_deadline,
+                "real xclip helper did not spawn"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let pid = std::fs::read_to_string(&pid_path)
+            .expect("read helper PID")
+            .trim()
+            .parse::<u32>()
+            .expect("helper PID is numeric");
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status"))
+            .expect("real helper has a proc status");
+        assert!(
+            status
+                .lines()
+                .any(|line| line == format!("PPid:\t{}", std::process::id())),
+            "PID file must identify the direct child, not an async gate"
+        );
+        assert!(!status.lines().any(|line| line.starts_with("State:\tZ")));
+
+        let mut saw_cancel = false;
+        for _ in 0..40 {
+            app.update(AppEvent::Terminal(crossterm::event::Event::Key(
+                crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::PageDown,
+                    crossterm::event::KeyModifiers::empty(),
+                ),
+            )));
+            app.update(AppEvent::TerminalSize {
+                width: 120,
+                height: 40,
+            });
+            app.update(AppEvent::Rpc(RpcEvent::AgentStderr {
+                bytes: 12,
+                dropped: 0,
+            }));
+            if !saw_cancel {
+                let commands = app.update(AppEvent::CancelTurn {
+                    session_id: "ses_perf".into(),
+                });
+                assert!(commands.iter().any(|command| {
+                    matches!(command, AppCommand::Rpc(request) if request.method == "turn.cancel")
+                }));
+                saw_cancel = true;
+            }
+            assert_eq!(app.composer.content(), draft);
+            tokio::task::yield_now().await;
+        }
+        assert!(saw_cancel, "the exact running turn cancel stayed routable");
+
+        let event = jobs.events().recv().await.expect("clipboard completion");
+        let outcome = match event {
+            AppEvent::JobFinished(outcome @ JobOutcome::Clipboard { .. }) => outcome,
+            other => panic!("unexpected local completion: {other:?}"),
+        };
+        assert!(started.elapsed() >= Duration::from_millis(1_900));
+        match &outcome {
+            JobOutcome::Clipboard { result, .. } => {
+                assert!(
+                    result.is_err(),
+                    "the non-reading helper must not claim success"
+                );
+            }
+            _ => unreachable!(),
+        }
+        jobs.reap_completion(&outcome).await;
+        assert!(!PathBuf::from(format!("/proc/{pid}")).exists());
+        assert_eq!(
+            app.composer.content(),
+            draft,
+            "clipboard failure keeps the draft"
+        );
+        println!(
+            "native_clipboard_real_helper: pid={} elapsed_ms={} cancel=true draft_bytes={}",
+            pid,
+            started.elapsed().as_millis(),
+            draft.len()
+        );
+        jobs.shutdown().await;
+        return;
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+    let directory = tempfile::tempdir().expect("temporary xclip PATH directory");
+    let helper = directory.path().join("xclip");
+    let pid_path = directory.path().join("xclip.pid");
+    std::fs::write(
+        &helper,
+        format!(
+            "#!/bin/sh\nprintf '%s' \"$$\" > '{}'\nexec /bin/sleep 2\n",
+            pid_path.display()
+        ),
+    )
+    .expect("write real xclip helper");
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700))
+        .expect("make real xclip helper executable");
+    let old_path = std::env::var_os("PATH").unwrap_or_default();
+    let path = format!(
+        "{}:{}",
+        directory.path().display(),
+        old_path.to_string_lossy()
+    );
+    let mut child = Command::new(std::env::current_exe().expect("performance test binary"))
+        .args(["--exact", TEST_NAME, "--ignored", "--nocapture"])
+        .env(CHILD_ENV, "1")
+        .env(PID_ENV, &pid_path)
+        .env("PATH", path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn isolated real clipboard test child");
+    let status = child.wait().expect("wait for real clipboard test child");
+    assert!(
+        status.success(),
+        "real clipboard event-loop child failed: {status}"
+    );
+    let pid = std::fs::read_to_string(&pid_path)
+        .expect("real clipboard child must leave its PID record")
+        .trim()
+        .parse::<u32>()
+        .expect("real clipboard PID is numeric");
+    assert!(
+        !PathBuf::from(format!("/proc/{pid}")).exists(),
+        "the direct helper must be reaped before the test child exits"
+    );
 }
 
 /// Builds an active, loaded session whose durable transcript has `messages`

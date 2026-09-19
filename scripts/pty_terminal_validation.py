@@ -14,16 +14,16 @@ import argparse
 import json
 import os
 import re
-import pty
 import resource
 import select
 import signal
 import struct
-import subprocess
 import tempfile
+import shutil
 import time
 import fcntl
 import termios
+import errno
 from pathlib import Path
 from typing import Iterable
 
@@ -35,30 +35,54 @@ def set_size(fd: int, columns: int, rows: int) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, packed)
 
 
-def cooked_mode_restored(master: int) -> bool:
-    """Read the slave termios after the child exits, without a shell."""
-    slave = os.open(os.ttyname(master), os.O_RDWR | os.O_NOCTTY)
-    try:
-        local_flags = termios.tcgetattr(slave)[3]
-        return bool(local_flags & termios.ICANON) and bool(local_flags & termios.ECHO)
-    finally:
-        os.close(slave)
+def cooked_mode_restored(slave: int) -> bool:
+    """Read the exact slave FD shared with the child, not `/dev/pts/ptmx`."""
+    local_flags = termios.tcgetattr(slave)[3]
+    return bool(local_flags & termios.ICANON) and bool(local_flags & termios.ECHO)
 
 
-def wait_status(pid: int, timeout: float) -> tuple[int, resource.struct_rusage]:
-    deadline = time.monotonic() + timeout
+def restore_cooked_mode(slave: int) -> None:
+    """Repair a deliberately failing negative fixture before the next case."""
+    attributes = termios.tcgetattr(slave)
+    attributes[3] |= termios.ICANON | termios.ECHO
+    termios.tcsetattr(slave, termios.TCSANOW, attributes)
+
+
+def drain_master(master: int, output: bytearray) -> None:
+    """Drain bytes already queued on the master without waiting for EIO."""
     while True:
-        waited, status, usage = os.wait4(pid, os.WNOHANG)
-        if waited == pid:
-            return os.waitstatus_to_exitcode(status), usage
-        if time.monotonic() >= deadline:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            os.waitpid(pid, 0)
-            raise RuntimeError(f"PTY child exceeded {timeout:.1f}s")
-        time.sleep(0.01)
+        try:
+            ready, _, _ = select.select([master], [], [], 0)
+        except OSError:
+            return
+        if not ready:
+            return
+        try:
+            chunk = os.read(master, 65536)
+        except OSError as error:
+            if error.errno in (errno.EIO, errno.EBADF):
+                return
+            raise
+        if not chunk:
+            return
+        output.extend(chunk)
+
+
+def kill_and_reap(pid: int) -> tuple[int, resource.struct_rusage]:
+    """Kill the PTY session and wait4 it exactly once."""
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    waited, status, usage = os.wait4(pid, 0)
+    if waited != pid:
+        raise RuntimeError(f"wait4 returned pid {waited}, expected {pid}")
+    return os.waitstatus_to_exitcode(status), usage
 
 
 def run_pty(
@@ -69,24 +93,34 @@ def run_pty(
     input_events: Iterable[tuple[float, bytes | tuple[int, int]]] = (),
     initial_size: tuple[int, int] = (80, 24),
 ) -> tuple[int, bytes, resource.struct_rusage, bool]:
-    pid, master = pty.fork()
+    master, slave = os.openpty()
+    pid = os.fork()
     if pid == 0:
-        os.environ.update(environment)
-        os.execv(argv[0], argv)
+        try:
+            os.close(master)
+            os.setsid()
+            fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+            for target in (0, 1, 2):
+                os.dup2(slave, target)
+            if slave > 2:
+                os.close(slave)
+            os.environ.update(environment)
+            os.execv(argv[0], argv)
+        except BaseException:
+            os._exit(127)
 
     set_size(master, *initial_size)
     events = iter(sorted(input_events, key=lambda item: item[0]))
     next_event = next(events, None)
     output = bytearray()
     deadline = time.monotonic() + timeout
+    reaped = False
     try:
         while True:
             now = time.monotonic()
             if now >= deadline:
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                kill_and_reap(pid)
+                reaped = True
                 raise RuntimeError(
                     f"PTY child exceeded {timeout:.1f}s: {' '.join(argv)}; "
                     f"output_tail={bytes(output[-4096:])!r}"
@@ -106,37 +140,40 @@ def run_pty(
                 try:
                     output.extend(os.read(master, 65536))
                 except OSError as error:
-                    if error.errno != 5:  # EIO: slave closed after exit.
+                    if error.errno != errno.EIO:
                         raise
-                    break
             waited, status, usage = os.wait4(pid, os.WNOHANG)
             if waited == pid:
-                # Drain bytes already queued by the slave before reporting.
-                while True:
-                    ready, _, _ = select.select([master], [], [], 0)
-                    if not ready:
-                        break
-                    try:
-                        output.extend(os.read(master, 65536))
-                    except OSError:
-                        break
+                reaped = True
+                # The parent deliberately keeps the original slave FD open,
+                # so the master cannot report a misleading EIO before the
+                # queued bytes have been drained. Inspect the same slave FD
+                # before closing it, then do one final nonblocking drain.
+                drain_master(master, output)
+                pty_restored = cooked_mode_restored(slave)
+                if not pty_restored:
+                    restore_cooked_mode(slave)
+                os.close(slave)
+                drain_master(master, output)
                 return (
                     os.waitstatus_to_exitcode(status),
                     bytes(output),
                     usage,
-                    cooked_mode_restored(master),
+                    pty_restored,
                 )
-
-        status, usage = wait_status(pid, max(0.1, deadline - time.monotonic()))
-        return status, bytes(output), usage, cooked_mode_restored(master)
     finally:
+        if not reaped:
+            try:
+                kill_and_reap(pid)
+            except ChildProcessError:
+                pass
         try:
-            os.close(master)
+            os.close(slave)
         except OSError:
             pass
         try:
-            os.waitpid(pid, os.WNOHANG)
-        except ChildProcessError:
+            os.close(master)
+        except OSError:
             pass
 
 
@@ -246,6 +283,56 @@ def run_idle_tui_probe(tui_binary: Path, fake_agent: Path, root: Path) -> dict:
     return tui_result("real_tui_idle_30s", code, output, usage, pty_restored)
 
 
+def run_main_clipboard_probe(main_test_binary: Path, root: Path) -> dict:
+    helper_dir = root / "clipboard-bin"
+    helper_dir.mkdir()
+    pid_path = root / "clipboard-helper.pid"
+    helper = helper_dir / "xclip"
+    helper.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s' \"$$\" > '{pid_path}'\n"
+        "exec /bin/sleep 2\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o700)
+    old_path = os.environ.get("PATH", "")
+    env = {
+        "TERM": "xterm-256color",
+        "RUST_BACKTRACE": "0",
+        "MINICORE_TUI_REQUIRE_PTY": "1",
+        "MINICORE_TUI_CLIPBOARD_PID_FILE": str(pid_path),
+        "PATH": f"{helper_dir}:{old_path}",
+    }
+    code, output, usage, pty_restored = run_pty(
+        [
+            str(main_test_binary),
+            "--exact",
+            "tests::real_run_commands_keeps_rpc_and_draft_live_during_native_clipboard",
+            "--ignored",
+            "--nocapture",
+        ],
+        env,
+        timeout=15.0,
+    )
+    result = {
+        "name": "real_run_commands_native_clipboard",
+        "exit": code,
+        "bytes": len(output),
+        "cpu_user_ms": round(usage.ru_utime * 1000, 3),
+        "cpu_sys_ms": round(usage.ru_stime * 1000, 3),
+        "max_rss_kib": usage.ru_maxrss,
+        "pty_cooked_after_exit": pty_restored,
+        "output": output,
+    }
+    assert_terminal_stream(result)
+    if not pid_path.exists():
+        raise RuntimeError("real clipboard helper did not leave its PID record")
+    pid = int(pid_path.read_text(encoding="utf-8").strip())
+    if Path(f"/proc/{pid}").exists():
+        raise RuntimeError("real clipboard helper survived without being reaped")
+    return {key: value for key, value in result.items() if key != "output"}
+
+
 def tui_result(
     name: str,
     code: int,
@@ -278,10 +365,11 @@ def main() -> int:
     parser.add_argument("--terminal-test-bin", type=Path, required=True)
     parser.add_argument("--tui-bin", type=Path)
     parser.add_argument("--fake-agent-bin", type=Path)
+    parser.add_argument("--main-test-bin", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
-    for path in (args.terminal_test_bin, args.tui_bin, args.fake_agent_bin):
+    for path in (args.terminal_test_bin, args.tui_bin, args.fake_agent_bin, args.main_test_bin):
         if path is not None and not path.is_file():
             parser.error(f"executable does not exist: {path}")
 
@@ -298,6 +386,24 @@ def main() -> int:
     raw = test_binary_case(args.terminal_test_bin, "real_pty_raw_mode_is_restored_across_suspend_and_exit")
     assert_terminal_stream(raw, min_alt_pairs=2)
     results.append({key: value for key, value in raw.items() if key != "output"})
+
+    negative = test_binary_case(
+        args.terminal_test_bin,
+        "real_pty_negative_leaves_raw_mode",
+        timeout=10.0,
+    )
+    if negative["exit"] != 0 or negative["pty_cooked_after_exit"]:
+        raise RuntimeError(
+            "the negative raw-mode fixture was not detected on the child's slave"
+        )
+    results.append(
+        {
+            key: value
+            for key, value in negative.items()
+            if key != "output"
+        }
+        | {"expected_raw_detection": True}
+    )
 
     input_probe = test_binary_case(
         args.terminal_test_bin,
@@ -322,14 +428,19 @@ def main() -> int:
             results.append({key: value for key, value in tui.items() if key != "output"})
             idle = run_idle_tui_probe(args.tui_bin, args.fake_agent_bin, root)
             results.append({key: value for key, value in idle.items() if key != "output"})
+        if args.main_test_bin is not None:
+            results.append(run_main_clipboard_probe(args.main_test_bin, root))
     finally:
         for child in root.iterdir():
-            child.unlink()
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
         root.rmdir()
 
     report = {
         "status": "PASS",
-        "pty": "Linux kernel PTY via Python pty.fork/TIOCSWINSZ",
+        "pty": "Linux kernel PTY via pty.openpty/fork/setsid/TIOCSCTTY/TIOCSWINSZ",
         "native_manual_iTerm2": "Not run",
         "hosted_ci": "Not run",
         "macos_windows_native": "Not run",

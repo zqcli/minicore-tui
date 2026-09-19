@@ -406,4 +406,101 @@ mod tests {
             "nonzero-exit cleanup must stay bounded"
         );
     }
+
+    /// Runs the fixed Linux `NativeClipboard` adapter through an actual
+    /// `xclip` child selected by an isolated PATH. The child is a direct
+    /// executable script that `exec`s `sleep 2`, never drains stdin, and is
+    /// therefore killed and waited by the owned deadline path. The parent
+    /// process uses a child test process for PATH injection so no global
+    /// environment mutation can race another test.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[tokio::test]
+    #[ignore = "remote real xclip timeout/kill/wait acceptance"]
+    async fn native_adapter_real_xclip_child_is_timeout_killed_and_reaped() {
+        const CHILD_ENV: &str = "MINICORE_TUI_CLIPBOARD_CHILD";
+        const TEST_NAME: &str =
+            "clipboard::tests::native_adapter_real_xclip_child_is_timeout_killed_and_reaped";
+
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let clipboard = NativeClipboard::new();
+            assert_eq!(clipboard.program(), "xclip");
+            let result = run_clipboard_with_timeout(
+                clipboard.program,
+                clipboard.args,
+                &"x".repeat(MAX_CLIPBOARD_BYTES),
+                Duration::from_millis(350),
+            )
+            .await;
+            assert!(
+                result.is_err(),
+                "a non-draining xclip child must hit the owned deadline"
+            );
+            return;
+        }
+
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::{Command, Stdio};
+
+        let directory = tempfile::tempdir().expect("temporary xclip PATH directory");
+        let pid_path = directory.path().join("xclip.pid");
+        let helper = directory.path().join("xclip");
+        std::fs::write(
+            &helper,
+            format!(
+                "#!/bin/sh\nprintf '%s' \"$$\" > '{}'\nexec /bin/sleep 2\n",
+                pid_path.display()
+            ),
+        )
+        .expect("write xclip helper");
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700))
+            .expect("make xclip helper executable");
+
+        let old_path = std::env::var_os("PATH").unwrap_or_default();
+        let path = format!(
+            "{}:{}",
+            directory.path().display(),
+            old_path.to_string_lossy()
+        );
+        let mut child = Command::new(std::env::current_exe().expect("clipboard test binary"))
+            .args(["--exact", TEST_NAME, "--ignored", "--nocapture"])
+            .env(CHILD_ENV, "1")
+            .env("PATH", path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn isolated NativeClipboard child test");
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let pid = loop {
+            if let Ok(text) = std::fs::read_to_string(&pid_path) {
+                break text.parse::<u32>().expect("xclip PID is numeric");
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the real xclip helper did not start"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let pid_arg = pid.to_string();
+        let alive = Command::new("kill")
+            .arg("-0")
+            .arg(&pid_arg)
+            .stderr(Stdio::null())
+            .status()
+            .expect("probe the real xclip child identity");
+        assert!(alive.success(), "the PID file must identify a live helper");
+
+        let status = child.wait().expect("wait for the child test");
+        assert!(status.success(), "child test failed: {status}");
+        let gone = Command::new("kill")
+            .arg("-0")
+            .arg(&pid_arg)
+            .stderr(Stdio::null())
+            .status()
+            .expect("probe the reaped xclip child identity");
+        assert!(
+            !gone.success(),
+            "the direct helper must be gone after kill+wait"
+        );
+    }
 }

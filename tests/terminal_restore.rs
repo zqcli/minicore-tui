@@ -85,6 +85,19 @@ fn real_pty_raw_mode_is_restored_across_suspend_and_exit() {
     assert!(!crossterm::terminal::is_raw_mode_enabled().expect("raw mode after restore"));
 }
 
+/// Negative harness fixture: deliberately leave the exact PTY slave in raw
+/// mode. The external driver must observe `ICANON/ECHO == false` on that same
+/// slave FD and reject this case; it must not reopen `/dev/pts/ptmx` and obtain
+/// a fresh cooked device that would make the defect look like a pass.
+#[test]
+#[ignore = "requires a real PTY: the external driver must detect the raw slave"]
+fn real_pty_negative_leaves_raw_mode() {
+    if !require_pty() {
+        return;
+    }
+    crossterm::terminal::enable_raw_mode().expect("enable raw mode for negative fixture");
+}
+
 /// A Python PTY driver injects a normal key, changes the slave window size,
 /// then injects Ctrl-C. Crossterm must deliver all three observations while
 /// raw mode is active; the test disables raw mode before making assertions so
@@ -106,14 +119,15 @@ fn real_pty_delivers_input_resize_and_shutdown_signal() {
         }
         match crossterm::event::read().expect("read PTY input") {
             crossterm::event::Event::Key(key)
-                if key.code == crossterm::event::KeyCode::Char('x')
-                    && key.modifiers.is_empty() =>
+                if key.code == crossterm::event::KeyCode::Char('x') && key.modifiers.is_empty() =>
             {
                 saw_input = true;
             }
             crossterm::event::Event::Key(key)
                 if key.code == crossterm::event::KeyCode::Char('c')
-                    && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+                    && key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
             {
                 saw_shutdown = true;
             }

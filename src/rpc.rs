@@ -2092,6 +2092,109 @@ mod tests {
         assert!(process.child_reaped(), "the forced child must be reaped");
     }
 
+    /// A real harness child stops consuming stdin while continuously writing
+    /// valid, roughly-1 MiB stdout frames. The production OS pipes must keep
+    /// the decoded frame budget below 64 MiB, normal admission must remain
+    /// synchronous at 28 slots with four reserved control slots, and the
+    /// child must resume FIFO stdin processing after the parent drains stdout.
+    #[tokio::test]
+    #[ignore = "remote OS-child backpressure and fairness acceptance"]
+    async fn real_child_stdout_flood_keeps_control_admission_and_cleanup_bounded() {
+        let mut process = spawn_fake("stdout_flood");
+        process
+            .send(OutgoingRequest::ping(RequestId(1)))
+            .await
+            .expect("flood ping sends");
+        match next_process_event(&mut process).await {
+            RpcEvent::Frame(IncomingFrame::Response(response)) => {
+                assert_eq!(response.id, RequestId(1));
+            }
+            other => panic!("expected flood ping response, got {other:?}"),
+        }
+
+        let started = Instant::now();
+        for id in 0..OUTBOUND_NORMAL_CAPACITY as u64 {
+            process
+                .try_send(request(100 + id, "agent.reload"), SendClass::Normal)
+                .expect("normal request admission stays synchronous");
+        }
+        for id in 0..(OUTBOUND_QUEUE_CAPACITY - OUTBOUND_NORMAL_CAPACITY) as u64 {
+            process
+                .try_send(request(200 + id, "turn.cancel"), SendClass::Control)
+                .expect("control request admission stays synchronous");
+        }
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "try_send must not wait for the paused child or stdout consumer"
+        );
+
+        let wire_threshold = MAX_WIRE_BUDGET_BYTES - 2 * 1024 * 1024;
+        timeout(Duration::from_secs(3), async {
+            while process.wire.used() < wire_threshold {
+                assert!(
+                    process.wire.used() <= MAX_WIRE_BUDGET_BYTES,
+                    "decoded stdout exceeded the 64 MiB wire budget"
+                );
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the real child must reach the bounded stdout budget");
+
+        let mut max_wire = process.wire.used();
+        let mut frame_count = 0usize;
+        let mut responses = Vec::new();
+        while responses.len() < OUTBOUND_QUEUE_CAPACITY {
+            let event = timeout(Duration::from_secs(5), process.recv())
+                .await
+                .expect("stdout flood must remain live")
+                .expect("flood process event channel must stay open");
+            match event {
+                RpcEvent::Frame(IncomingFrame::Response(response))
+                    if response.id.0 >= 100 && response.id.0 < 300 =>
+                {
+                    responses.push(response.id.0);
+                }
+                RpcEvent::Frame(_) => frame_count += 1,
+                _ => {}
+            }
+            max_wire = max_wire.max(process.wire.used());
+            assert!(
+                process.wire.used() <= MAX_WIRE_BUDGET_BYTES,
+                "wire budget must remain bounded while draining stdout"
+            );
+        }
+        let expected: Vec<u64> = (100..128).chain(200..204).collect();
+        assert_eq!(responses, expected, "normal and control requests stay FIFO");
+        assert!(frame_count >= 60, "the child must produce sustained stdout");
+        assert!(
+            max_wire >= wire_threshold,
+            "the budget gate was not exercised"
+        );
+
+        process
+            .send(OutgoingRequest::shutdown(RequestId(300)))
+            .await
+            .expect("shutdown joins the resumed FIFO after the flood");
+        timeout(Duration::from_secs(5), async {
+            loop {
+                match process.recv().await {
+                    Some(RpcEvent::Frame(IncomingFrame::Response(response)))
+                        if response.id == RequestId(300) => {}
+                    Some(RpcEvent::Exited(Some(status))) => {
+                        assert!(status.success(), "flood child shutdown must be clean");
+                        break;
+                    }
+                    Some(_) => {}
+                    None => panic!("flood child closed before its exit event"),
+                }
+            }
+        })
+        .await
+        .expect("flood child must be fully reaped after FIFO cleanup");
+        assert!(process.child_reaped());
+    }
+
     #[tokio::test]
     async fn fake_oversized_request_lines_are_rejected_without_writing() {
         let process = spawn_fake("serve");

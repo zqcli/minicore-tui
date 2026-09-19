@@ -1439,6 +1439,190 @@ mod tests {
         let _ = std::fs::remove_file(ready);
     }
 
+    /// Runs the exact production `run_commands` path with the native Linux
+    /// clipboard adapter while an OS child sleeps for two seconds. RPC control
+    /// admission, terminal-state reduction, scrolling and the Composer draft
+    /// must continue without waiting for that child; completion then proves
+    /// the direct helper was reaped.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[tokio::test]
+    #[ignore = "Spec 25 production run_commands with a real OS clipboard helper"]
+    async fn real_run_commands_keeps_rpc_and_draft_live_during_native_clipboard() {
+        use std::io::IsTerminal;
+
+        assert!(
+            std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
+            "production run_commands clipboard probe requires a PTY"
+        );
+        let pid_path = PathBuf::from(
+            std::env::var_os("MINICORE_TUI_CLIPBOARD_PID_FILE")
+                .expect("PTY harness must provide the clipboard helper PID path"),
+        );
+        let binary = std::env::var_os("CARGO_BIN_EXE_agent_process")
+            .map(PathBuf::from)
+            .filter(|path| is_agent_process_executable(path))
+            .or_else(|| {
+                let executable = std::env::current_exe().ok()?.canonicalize().ok()?;
+                std::fs::read_dir(executable.parent()?)
+                    .ok()?
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .filter(|path| {
+                        path.file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| {
+                                name == "agent_process" || name.starts_with("agent_process-")
+                            })
+                    })
+                    .filter(|path| is_agent_process_executable(path))
+                    .max_by_key(|path| {
+                        std::fs::metadata(path)
+                            .and_then(|metadata| metadata.modified())
+                            .ok()
+                    })
+            })
+            .expect("agent_process test target must be built");
+        let config = std::env::temp_dir().join(format!(
+            "mct-main-clipboard-{}-{}.toml",
+            std::process::id(),
+            Instant::now().elapsed().as_nanos()
+        ));
+        std::fs::write(&config, "serve\n").expect("write fake Agent config");
+        let mut process = RpcProcess::spawn(&binary, &config).expect("spawn fake Agent");
+        let mut guard = TerminalGuard::enter().expect("enter the PTY terminal");
+        let mut jobs = LocalJobs::new();
+        let mut app = App::new(PathBuf::from("/workspace"));
+        app.update(AppEvent::Terminal(Event::Paste(
+            "draft survives a slow native clipboard".to_owned(),
+        )));
+        let draft = app.composer.content().to_owned();
+        let debug = DebugLog::new(false);
+
+        let started = Instant::now();
+        assert!(
+            !run_commands(
+                &mut guard,
+                &mut process,
+                &mut app,
+                &mut jobs,
+                vec![AppCommand::CopySelection(
+                    minicore_tui::command::ClipboardText::new(
+                        "x".repeat(minicore_tui::clipboard::MAX_CLIPBOARD_BYTES),
+                        "ses_clipboard".to_owned(),
+                        1,
+                    ),
+                )],
+                &debug,
+            )
+            .await
+            .expect("run_commands admits the native clipboard job")
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "run_commands must return while the real helper is sleeping"
+        );
+
+        let pid_deadline = Instant::now() + Duration::from_secs(1);
+        while !pid_path.exists() {
+            assert!(Instant::now() < pid_deadline, "native helper did not spawn");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let pid = std::fs::read_to_string(&pid_path)
+            .expect("read native helper PID")
+            .trim()
+            .parse::<u32>()
+            .expect("native helper PID is numeric");
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status"))
+            .expect("native helper has a proc status");
+        assert!(
+            status
+                .lines()
+                .any(|line| line == format!("PPid:\t{}", std::process::id())),
+            "the PID must identify the direct native child"
+        );
+        assert!(!status.lines().any(|line| line.starts_with("State:\tZ")));
+
+        for _ in 0..40 {
+            app.update(AppEvent::Terminal(Event::Key(
+                crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::PageDown,
+                    crossterm::event::KeyModifiers::empty(),
+                ),
+            )));
+            app.update(AppEvent::TerminalSize {
+                width: 120,
+                height: 40,
+            });
+            app.update(AppEvent::Rpc(RpcEvent::AgentStderr {
+                bytes: 12,
+                dropped: 0,
+            }));
+            assert_eq!(app.composer.content(), draft);
+            tokio::task::yield_now().await;
+        }
+
+        let cancel = minicore_tui::protocol::OutgoingRequest::cancel_turn(
+            minicore_tui::protocol::RequestId(9_001),
+            &minicore_tui::protocol::TurnRef {
+                session_id: "ses_clipboard".to_owned(),
+                loop_id: "loop_clipboard".to_owned(),
+            },
+        );
+        let cancel_started = Instant::now();
+        run_commands(
+            &mut guard,
+            &mut process,
+            &mut app,
+            &mut jobs,
+            vec![AppCommand::Rpc(cancel)],
+            &debug,
+        )
+        .await
+        .expect("run_commands admits the control cancel");
+        assert!(
+            cancel_started.elapsed() < Duration::from_millis(100),
+            "control RPC admission must not wait for the clipboard child"
+        );
+        assert_eq!(
+            app.composer.content(),
+            draft,
+            "cancel must not lose the draft"
+        );
+
+        let event = tokio::time::timeout(Duration::from_secs(4), jobs.events().recv())
+            .await
+            .expect("the two-second native helper must finish")
+            .expect("clipboard completion channel remains open");
+        let outcome = match event {
+            AppEvent::JobFinished(outcome @ JobOutcome::Clipboard { .. }) => outcome,
+            other => panic!("unexpected clipboard event: {other:?}"),
+        };
+        assert!(started.elapsed() >= Duration::from_millis(1_900));
+        match &outcome {
+            JobOutcome::Clipboard { result, .. } => {
+                assert!(
+                    result.is_err(),
+                    "a non-reading native helper must not claim success"
+                )
+            }
+            _ => unreachable!(),
+        }
+        jobs.reap_completion(&outcome).await;
+        assert!(!PathBuf::from(format!("/proc/{pid}")).exists());
+        assert_eq!(app.composer.content(), draft);
+        println!(
+            "run_commands_native_clipboard: helper_pid={} elapsed_ms={} cancel_admitted=true draft_bytes={}",
+            pid,
+            started.elapsed().as_millis(),
+            draft.len()
+        );
+
+        jobs.shutdown().await;
+        process.terminate().await;
+        guard.restore().expect("restore PTY after clipboard probe");
+        let _ = std::fs::remove_file(config);
+    }
+
     fn is_agent_process_executable(path: &std::path::Path) -> bool {
         let Ok(metadata) = std::fs::metadata(path) else {
             return false;

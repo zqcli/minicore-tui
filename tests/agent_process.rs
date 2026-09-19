@@ -141,6 +141,34 @@ fn fake_emit_events(out: &mut impl Write, session_id: &str, loop_id: &str) {
     fake_write_line(out, &finished);
 }
 
+/// Produces valid, large stdout frames without reading stdin again until the
+/// flood completes. The parent transport test uses this to exercise the real
+/// OS pipes, the 64 MiB decoded-frame budget, and the bounded main-loop
+/// batches rather than substituting stderr or an in-memory stream.
+fn fake_emit_stdout_flood(out: &mut impl Write) {
+    let delta = "x".repeat(1024 * 1024);
+    for _ in 0..72 {
+        fake_write_line(
+            out,
+            &json!({
+                "jsonrpc": "2.0",
+                "method": "agent.event",
+                "params": {
+                    "type": "output_delta",
+                    "data": {
+                        "turn": {"session_id": "ses_flood", "loop_id": "loop_flood"},
+                        "request_index": 0,
+                        "channel": "text",
+                        "delta": delta.as_str(),
+                        "meta": fake_meta("ses_flood")
+                    }
+                }
+            }),
+        );
+    }
+    eprintln!("stdout flood complete");
+}
+
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let mut config: Option<String> = None;
@@ -212,6 +240,9 @@ fn serve(mode: &str) -> ExitCode {
                     }
                 } else {
                     fake_respond(&mut out, &id, result);
+                    if mode == "stdout_flood" {
+                        fake_emit_stdout_flood(&mut out);
+                    }
                 }
             }
             "model.list" => {
