@@ -19,13 +19,14 @@ use std::time::{Duration, Instant, SystemTime};
 use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
 use minicore_tui::app::{App, CliPrefs, ConnectionState, RequestKind, StartupSession};
 use minicore_tui::command::AppCommand;
-use minicore_tui::event::{AppEvent, RpcEvent};
+use minicore_tui::event::{AppEvent, JobOutcome, RpcEvent};
 use minicore_tui::protocol::{
     AgentEventWire, CancelReasonWire, CompactStatusWire, IncomingFrame, LoopOutcomeWire,
     OutgoingRequest, Reasoning, RequestId, RpcNotification, ToolCallViewWire, TurnPersistenceWire,
     TurnRef, TurnResultViewWire,
 };
 use minicore_tui::rpc::RpcProcess;
+use minicore_tui::state::export::ExportPhase;
 use minicore_tui::state::selection::{Dock, SessionPanelMode};
 use minicore_tui::state::session::ConfigUpdateState;
 use minicore_tui::state::transcript::{AssistantPart, TranscriptBlock};
@@ -634,22 +635,23 @@ async fn pump_step(process: &mut RpcProcess, app: &mut App) -> Result<(), String
         // out. Aborting on a single 10s window turned the parallel spawn of
         // ten real Agent processes into flaky "recv timed out" failures.
         Ok(event) => event.ok_or("agent process stream ended")?,
-        Err(_) => return Ok(()),
+        // A silent window is not a stalled app: the real main loop ticks while
+        // it waits for the next frame. The tick is what retries a queued read
+        // slot or a parked export record.
+        Err(_) => {
+            // Only the scan/export chains need an idle pass to retry a read
+            // slot or a parked record; other flows must see exactly the events
+            // the Agent sent, or a preparation retry would run too early.
+            if app.export_running() || matches!(app.dock, Dock::Search(_)) {
+                let commands = app.update(AppEvent::Tick);
+                dispatch_commands(process, app, commands).await?;
+            }
+            return Ok(());
+        }
     };
 
     let commands = app.update(AppEvent::Rpc(event));
-    for command in commands {
-        match command {
-            AppCommand::Rpc(req) => {
-                process.send(req).await.map_err(|e| e.to_string())?;
-            }
-            AppCommand::LocalScan(request) => handle_local_scan(app, &request),
-            AppCommand::KillChild => process.kill_child(),
-            AppCommand::CopySelection(_) => {}
-            AppCommand::Exit => return Ok(()),
-        }
-    }
-    Ok(())
+    dispatch_commands(process, app, commands).await
 }
 
 async fn wait_for_request0_and_wait_turn(
@@ -688,6 +690,7 @@ async fn wait_for_request0_and_wait_turn(
                             process.send(req).await.map_err(|e| e.to_string())?;
                         }
                         AppCommand::LocalScan(request) => handle_local_scan(app, &request),
+                        AppCommand::StartExport(request) => handle_start_export(*request),
                         AppCommand::KillChild => process.kill_child(),
                         AppCommand::CopySelection(_) => {}
                         AppCommand::Exit => return Ok(()),
@@ -820,20 +823,50 @@ fn handle_local_scan(app: &mut App, request: &minicore_tui::jobs::LocalScanReque
     let _ = app.update(AppEvent::LocalScanFinished(Box::new(outcome)));
 }
 
+/// The owned export writers this test process started. The real job runs on
+/// the blocking pool, exactly as `main.rs` starts it; the handles are awaited
+/// by the pump so the completion event reaches the App.
+static EXPORT_HANDLES: std::sync::Mutex<
+    Vec<tokio::task::JoinHandle<minicore_tui::jobs::ExportOutcome>>,
+> = std::sync::Mutex::new(Vec::new());
+
+fn handle_start_export(request: minicore_tui::command::StartExportRequest) {
+    let handle = tokio::task::spawn_blocking(move || {
+        minicore_tui::jobs::run_export_job(&request.target, request.overwrite, request.rx)
+    });
+    EXPORT_HANDLES
+        .lock()
+        .expect("export handle lock")
+        .push(handle);
+}
+
+/// Feeds every finished export job's outcome back to the reducer.
+async fn drain_export_jobs(app: &mut App) -> Result<Vec<AppCommand>, String> {
+    let finished: Vec<_> = {
+        let mut guard = EXPORT_HANDLES.lock().expect("export handle lock");
+        let mut finished = Vec::new();
+        let mut index = 0;
+        while index < guard.len() {
+            if guard[index].is_finished() {
+                finished.push(guard.remove(index));
+            } else {
+                index += 1;
+            }
+        }
+        finished
+    };
+    let mut commands = Vec::new();
+    for handle in finished {
+        let outcome = handle.await.map_err(|error| error.to_string())?;
+        commands.extend(app.update(AppEvent::JobFinished(JobOutcome::Export { outcome })));
+    }
+    Ok(commands)
+}
+
 async fn dispatch(process: &mut RpcProcess, app: &mut App, event: AppEvent) -> Result<(), String> {
     let commands = app.update(event);
-    for command in commands {
-        match command {
-            AppCommand::Rpc(req) => {
-                process.send(req).await.map_err(|e| e.to_string())?;
-            }
-            AppCommand::LocalScan(request) => handle_local_scan(app, &request),
-            AppCommand::KillChild => process.kill_child(),
-            AppCommand::CopySelection(_) => {}
-            AppCommand::Exit => return Ok(()),
-        }
-    }
-    Ok(())
+
+    dispatch_commands(process, app, commands).await
 }
 
 /// The reload path is deliberately exercised against the real Agent process:
@@ -3466,6 +3499,113 @@ async fn submit_slash_command(
     .await
 }
 
+/// Pumps until `predicate` holds while also running the decode worker's exact
+/// body, so read chains that need decoded items (full-session scans, exports)
+/// progress exactly as they do behind `main.rs`'s owned worker.
+async fn pump_until_with_decode(
+    process: &mut RpcProcess,
+    app: &mut App,
+    predicate: impl Fn(&App) -> bool,
+) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let commands = drain_pending_decode(app);
+        dispatch_commands(process, app, commands).await?;
+        if predicate(app) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("e2e decode pump timed out: {:?}", app.dock));
+        }
+        pump_step(process, app).await?;
+        let commands = drain_pending_decode(app);
+        dispatch_commands(process, app, commands).await?;
+        if predicate(app) {
+            return Ok(());
+        }
+    }
+}
+
+/// Runs the one decode worker's exact body inline and feeds every outcome
+/// back, so read chains, full-session scans and exports progress in E2E the
+/// way they do behind `main.rs`'s owned worker.
+fn drain_pending_decode(app: &mut App) -> Vec<AppCommand> {
+    let mut commands = Vec::new();
+    while let Some(request) = app.pending_decode_request() {
+        let identity = request.identity.clone();
+        let fingerprint = request.fingerprint;
+        let scan = request.scan.as_ref().map(|scan| (**scan).clone());
+        let export = request.export.as_ref().map(|spec| **spec);
+        app.mark_decode_scheduled();
+        let (result, scan_outcome, export_outcome) =
+            match minicore_tui::protocol::read::decode_item(&request.item.data) {
+                Ok(decoded) => {
+                    let scan_outcome = scan.map(|scan| {
+                        let mut plan = minicore_tui::state::search::ScanPlan::new(
+                            &scan.needle,
+                            scan.include_thinking,
+                        );
+                        plan.scan_item(request.item.index, &decoded);
+                        Box::new(minicore_tui::jobs::ScanItemOutcome {
+                            index: request.item.index,
+                            matches: plan.collector.matches,
+                        })
+                    });
+                    let export_outcome = export.map(|spec| {
+                        let rendered = minicore_tui::state::export::item_markdown(&decoded, spec);
+                        Box::new(minicore_tui::jobs::ExportItemOutcome {
+                            index: request.item.index,
+                            markdown: rendered.markdown,
+                            opaque_parts: rendered.opaque_parts,
+                        })
+                    });
+                    (Ok(decoded), scan_outcome, export_outcome)
+                }
+                Err(error) => (Err(error), None, None),
+            };
+        let outcome = minicore_tui::jobs::DecodeOutcome {
+            identity,
+            fingerprint,
+            result,
+            cancelled: false,
+            scan: scan_outcome,
+            export: export_outcome,
+        };
+        commands.extend(app.update(AppEvent::HistoryItemDecoded(Box::new(outcome))));
+    }
+    commands
+}
+
+/// Presses one unmodified key through the reducer path the TUI uses.
+async fn press_key(process: &mut RpcProcess, app: &mut App, code: KeyCode) -> Result<(), String> {
+    dispatch(
+        process,
+        app,
+        AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+            code,
+            KeyModifiers::empty(),
+        ))),
+    )
+    .await
+}
+
+/// Presses one Ctrl chord.
+async fn press_ctrl_key(
+    process: &mut RpcProcess,
+    app: &mut App,
+    character: char,
+) -> Result<(), String> {
+    dispatch(
+        process,
+        app,
+        AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+            KeyCode::Char(character),
+            KeyModifiers::CONTROL,
+        ))),
+    )
+    .await
+}
+
 /// Sends already-reduced commands exactly as the main loop would.
 async fn dispatch_commands(
     process: &mut RpcProcess,
@@ -3478,6 +3618,7 @@ async fn dispatch_commands(
                 process.send(req).await.map_err(|e| e.to_string())?;
             }
             AppCommand::LocalScan(request) => handle_local_scan(app, &request),
+            AppCommand::StartExport(request) => handle_start_export(*request),
             AppCommand::KillChild => process.kill_child(),
             AppCommand::CopySelection(_) => {}
             AppCommand::Exit => return Ok(()),
@@ -4522,5 +4663,158 @@ fn e2e_new_form_rename_close_delete_commands() {
         let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
         assert!(rep.shutdown_ok && rep.seen_eof && rep.seen_exit);
         process.terminate().await;
+    });
+}
+
+/// D2 (spec §17.1/§17.4): a real Agent read chain feeds both the pinned
+/// full-session search and the local export writer. The export is refused
+/// until the existing target is confirmed, commits atomically, keeps its
+/// unsaved live turn behind the explicit choice, and removes its temp file
+/// when cancelled.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_full_search_and_export_real_agent_chain() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    env._server.enqueue_sse(sse_text_response(
+        "café ☕ answer with a distinctive needle",
+    ));
+    let gate = Arc::new(AtomicBool::new(false));
+    env._server
+        .enqueue_gated(sse_text_response("live unsaved body"), gate.clone(), None);
+    let dir = std::env::temp_dir().join(format!(
+        "mctui-e2e-export-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    let target = dir.join("chat.md");
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+        let session =
+            create_compact_session(&mut process, &mut app, &env.workspace_path, "Export A").await;
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session.clone(),
+                text: "durable question".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        wait_turn_landed(&mut process, &mut app, &session)
+            .await
+            .unwrap();
+
+        // The explicit full-session scan runs on the real read chain and
+        // finds the literal in the durable body.
+        run_slash_command(&mut process, &mut app, "/search full needle")
+            .await
+            .unwrap();
+        pump_until_with_decode(&mut process, &mut app, |a| {
+            a.search_panel()
+                .is_some_and(|panel| !panel.matches.is_empty())
+        })
+        .await
+        .unwrap();
+        let panel = app.search_panel().expect("search panel");
+        assert_eq!(panel.matches.len(), 1, "{:?}", panel.matches);
+        assert!(panel.coverage.complete, "{:?}", panel.coverage);
+        press_key(&mut process, &mut app, KeyCode::Esc)
+            .await
+            .unwrap();
+
+        // A live turn that is not in saved history: appended only after the
+        // explicit Ctrl+N choice.
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session.clone(),
+                text: "unsaved question".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .known
+                .get(&session)
+                .is_some_and(|view| view.live.is_some())
+        })
+        .await
+        .unwrap();
+
+        // The explicit Ctrl+N choice appends the live turn; without it only
+        // saved history is written.
+        run_slash_command(
+            &mut process,
+            &mut app,
+            &format!("/export {}", target.display()),
+        )
+        .await
+        .unwrap();
+        press_ctrl_key(&mut process, &mut app, 'n').await.unwrap();
+        press_key(&mut process, &mut app, KeyCode::Enter)
+            .await
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let commands = drain_export_jobs(&mut app).await.unwrap();
+            dispatch_commands(&mut process, &mut app, commands)
+                .await
+                .unwrap();
+            if app
+                .export_form()
+                .is_some_and(|form| form.phase == ExportPhase::Done)
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "export did not finish: {:?}",
+                app.export_form().map(|form| form.notice.clone())
+            );
+            pump_step(&mut process, &mut app).await.unwrap();
+            let commands = drain_pending_decode(&mut app);
+            dispatch_commands(&mut process, &mut app, commands)
+                .await
+                .unwrap();
+        }
+        let written = std::fs::read_to_string(&target).expect("exported file");
+        assert!(written.contains("Conversation export"), "{written}");
+        assert!(written.contains("café ☕ answer"), "{written}");
+        assert!(written.contains("distinctive needle"), "{written}");
+        assert!(written.contains("saved history plus"), "{written}");
+        assert!(written.contains("Unconfirmed live turn"), "{written}");
+        assert!(written.contains("unsaved question"), "{written}");
+        assert!(written.contains("unconfirmed:"), "{written}");
+        let leftovers: Vec<String> = std::fs::read_dir(&dir)
+            .expect("readable scratch dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "chat.md")
+            .collect();
+        assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
+        gate.store(true, Ordering::Relaxed);
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok && rep.seen_eof && rep.seen_exit);
+        process.terminate().await;
+        let _ = std::fs::remove_dir_all(&dir);
     });
 }

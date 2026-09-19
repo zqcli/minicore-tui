@@ -40,6 +40,10 @@ struct Driver {
     app: App,
     queue: VecDeque<OutgoingRequest>,
     copies: Vec<String>,
+    /// One receiver per owned export writer the reducer started. The harness
+    /// runs the identical production job on a real thread, so the file it
+    /// writes is the file the product writes.
+    exports: Vec<std::sync::mpsc::Receiver<minicore_tui::jobs::ExportOutcome>>,
     exited: bool,
 }
 
@@ -49,6 +53,7 @@ impl Driver {
             app,
             queue: VecDeque::new(),
             copies: Vec::new(),
+            exports: Vec::new(),
             exited: false,
         }
     }
@@ -58,8 +63,41 @@ impl Driver {
             app: App::new(PathBuf::from("/workspace")),
             queue: VecDeque::new(),
             copies: Vec::new(),
+            exports: Vec::new(),
             exited: false,
         }
+    }
+
+    fn start_export(&mut self, request: minicore_tui::command::StartExportRequest) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let outcome =
+                minicore_tui::jobs::run_export_job(&request.target, request.overwrite, request.rx);
+            let _ = tx.send(outcome);
+        });
+        self.exports.push(rx);
+    }
+
+    /// Feeds every finished export job back to the reducer. The harness is
+    /// synchronous, so completion is polled instead of awaited.
+    fn drain_exports(&mut self) -> bool {
+        let mut finished = Vec::new();
+        for (index, rx) in self.exports.iter().enumerate() {
+            match rx.try_recv() {
+                Ok(outcome) => finished.push((index, outcome)),
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+            }
+        }
+        let progressed = !finished.is_empty();
+        for (index, outcome) in finished.into_iter().rev() {
+            self.exports.remove(index);
+            let more = self.app.update(AppEvent::JobFinished(
+                minicore_tui::event::JobOutcome::Export { outcome },
+            ));
+            self.commands(more);
+        }
+        progressed
     }
 
     fn commands(&mut self, commands: Vec<AppCommand>) {
@@ -91,6 +129,7 @@ impl Driver {
                 }
                 AppCommand::KillChild => {}
                 AppCommand::CopySelection(text) => self.copies.push(text.as_str().to_owned()),
+                AppCommand::StartExport(request) => self.start_export(*request),
                 AppCommand::Exit => self.exited = true,
             }
         }
@@ -122,6 +161,7 @@ impl Driver {
                 }
                 AppCommand::KillChild => {}
                 AppCommand::CopySelection(text) => self.copies.push(text.as_str().to_owned()),
+                AppCommand::StartExport(request) => self.start_export(*request),
                 AppCommand::Exit => self.exited = true,
             }
         }
@@ -8085,6 +8125,7 @@ fn full_session_search_scans_a_pinned_chain_and_never_claims_complete_on_large_i
             index: 0,
             matches: plan.collector.matches,
         })),
+        export: None,
     };
     let more = driver
         .app
@@ -8534,4 +8575,315 @@ fn copy_reports_unloaded_content_instead_of_copying_placeholder_text() {
             .map(|notice| notice.text.clone())
             .collect::<Vec<_>>()
     );
+}
+
+// ============================================================================
+// Local export (spec §17.4)
+// ============================================================================
+
+/// A private scratch directory for one export test. The harness runs the real
+/// writer, so these assertions cover the real temp-file/rename/cancel file
+/// semantics, not a stub.
+struct ExportDir(PathBuf);
+
+impl ExportDir {
+    fn new(name: &str) -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "mctui-export-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&path).expect("scratch dir");
+        Self(path)
+    }
+
+    fn target(&self, name: &str) -> PathBuf {
+        self.0.join(name)
+    }
+
+    /// Every file left in the scratch directory (a cancelled export must not
+    /// leave its temp file behind).
+    fn entries(&self) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(&self.0)
+            .expect("readable scratch dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+}
+
+impl Drop for ExportDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// One `session.read` page with a single durable item and an optional
+/// continuation cursor.
+fn export_page(index: usize, item: &Value, next: Option<usize>, total: usize) -> Value {
+    let mut page = history(vec![item.clone()], None, total);
+    page["records_truncated"] = json!(false);
+    if let Some(next) = next {
+        page["next_cursor"] = json!({"item": next, "offset": 0});
+    }
+    page["_index"] = json!(index);
+    page
+}
+
+/// Answers the pending export read with one page and runs the exact worker
+/// body for every queued item, mirroring `main.rs`'s decode hand-off.
+fn export_advance(driver: &mut Driver, page: Value) {
+    let request = driver.request("session.read");
+    driver.respond(request, page);
+    while let Some(decode) = driver.app.pending_decode_request() {
+        let spec = decode
+            .export
+            .as_ref()
+            .map(|spec| **spec)
+            .expect("an export decode carries its spec");
+        let item = minicore_tui::protocol::read::decode_item(&decode.item.data).expect("item");
+        let rendered = minicore_tui::state::export::item_markdown(&item, spec);
+        driver.app.mark_decode_scheduled();
+        let decoded = minicore_tui::jobs::DecodeOutcome {
+            identity: decode.identity.clone(),
+            fingerprint: decode.fingerprint,
+            result: Ok(item),
+            cancelled: false,
+            scan: None,
+            export: Some(Box::new(minicore_tui::jobs::ExportItemOutcome {
+                index: decode.item.index,
+                markdown: rendered.markdown,
+                opaque_parts: rendered.opaque_parts,
+            })),
+        };
+        let more = driver
+            .app
+            .update(AppEvent::HistoryItemDecoded(Box::new(decoded)));
+        driver.commands(more);
+    }
+}
+
+/// Drives an in-flight export until the owned job stops, answering read pages
+/// while it runs.
+fn finish_export(driver: &mut Driver, pages: &mut VecDeque<Value>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        driver.drain_exports();
+        // Settled means the chain stopped and the owned job reported back, so
+        // the file on disk is the committed result (or a definite failure).
+        let phase = driver.app.export_form().map(|form| form.phase);
+        let settled = !driver.app.export_running()
+            && driver.exports.is_empty()
+            && phase != Some(minicore_tui::state::export::ExportPhase::Running);
+        if settled {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the export did not finish: {:?}",
+            driver.app.export_form().map(|form| form.notice.clone())
+        );
+        if let Some(page) = pages.pop_front() {
+            export_advance(driver, page);
+        } else {
+            // A parked record is retried by the next reducer pass.
+            driver.step(AppEvent::Tick);
+            std::thread::yield_now();
+        }
+    }
+}
+
+#[test]
+fn export_form_toggles_validate_and_write_nothing() {
+    let dir = ExportDir::new("form");
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    set_terminal(&mut driver);
+    open_chat_with(&mut driver, vec![user(0, "loop_1", "prompt one")]);
+
+    slash(&mut driver, "/export");
+    let form = driver.app.export_form().expect("form open").clone();
+    assert_eq!(
+        form.phase,
+        minicore_tui::state::export::ExportPhase::Editing
+    );
+    // The defaults are the saved conversation only.
+    assert!(!form.spec.include_thinking);
+    assert!(!form.spec.include_tool);
+    assert!(!form.include_unsaved);
+    assert!(!form.overwrite);
+
+    // The toggles are Ctrl chords, so a typed path can never change them.
+    type_search_text(&mut driver, &dir.target("chat.md").display().to_string());
+    drive_ctrl(&mut driver, 't');
+    drive_ctrl(&mut driver, 'p');
+    drive_ctrl(&mut driver, 'n');
+    drive_ctrl(&mut driver, 'y');
+    let form = driver.app.export_form().expect("form open");
+    assert!(form.spec.include_thinking);
+    assert!(form.spec.include_tool);
+    assert!(form.include_unsaved);
+    assert!(form.overwrite);
+
+    // Esc closes without writing anything.
+    press(&mut driver, KeyCode::Esc);
+    assert!(driver.app.export_form().is_none());
+    assert!(dir.entries().is_empty(), "{:?}", dir.entries());
+}
+
+#[test]
+fn export_refuses_an_existing_target_until_overwrite_is_confirmed() {
+    let dir = ExportDir::new("overwrite");
+    let target = dir.target("chat.md");
+    std::fs::write(&target, "old contents").expect("pre-existing target");
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    set_terminal(&mut driver);
+    open_chat_with(
+        &mut driver,
+        vec![
+            user(0, "loop_1", "hello"),
+            assistant(1, "loop_1", 0, "deep", "a durable answer"),
+        ],
+    );
+
+    slash(&mut driver, &format!("/export {}", target.display()));
+    press(&mut driver, KeyCode::Enter);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        driver.drain_exports();
+        if !driver.app.export_running() {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "overwrite refusal");
+        std::thread::yield_now();
+    }
+    // Nothing was written and the temp file is gone.
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "old contents");
+    assert_eq!(dir.entries(), vec!["chat.md".to_owned()]);
+    let notice = driver
+        .app
+        .export_form()
+        .and_then(|form| form.notice.clone())
+        .unwrap_or_default();
+    assert!(notice.contains("already exists"), "{notice}");
+
+    // The refused attempt had already sent its first read: answering it
+    // releases the read slot without touching the file.
+    let stale = driver.request("session.read");
+    driver.respond(
+        stale,
+        json!({
+            "session": session("ses_1"),
+            "items": [],
+            "total": 0,
+            "records": [],
+            "records_truncated": false,
+            "history_revision": "0".repeat(64),
+            "captured_end": 0,
+            "trailing_incomplete": false,
+        }),
+    );
+
+    // The explicit confirmation enables the write.
+    drive_ctrl(&mut driver, 'y');
+    press(&mut driver, KeyCode::Enter);
+    let mut pages = VecDeque::from(vec![export_page(0, &user(0, "loop_1", "hello"), None, 1)]);
+    finish_export(&mut driver, &mut pages);
+    assert!(!driver.app.export_running());
+    let written = std::fs::read_to_string(&target).expect("exported file");
+    assert!(written.contains("Conversation export"), "{written}");
+    assert!(written.contains("source: saved history"), "{written}");
+    assert!(written.contains("hello"), "{written}");
+    assert!(!written.contains("old contents"));
+    assert_eq!(
+        dir.entries(),
+        vec!["chat.md".to_owned()],
+        "no temp file survives a finished export"
+    );
+}
+
+#[test]
+fn export_records_an_oversized_item_as_a_placeholder_and_reports_partial() {
+    let dir = ExportDir::new("oversized");
+    let target = dir.target("chat.md");
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    set_terminal(&mut driver);
+    open_chat_with(&mut driver, vec![user(0, "loop_1", "hello")]);
+
+    slash(&mut driver, &format!("/export {}", target.display()));
+    drive_ctrl(&mut driver, 'y');
+    press(&mut driver, KeyCode::Enter);
+    // One 9 MiB item: the export never assembles it.
+    let mut pages = VecDeque::from(vec![
+        export_page(0, &user(0, "loop_1", "hello"), Some(1), 2),
+        json!({
+            "session": session("ses_1"),
+            "items": [{
+                "index": 1, "offset": 0, "total_bytes": 9_000_000,
+                "encoding": "utf8_json", "data": "x", "complete": false,
+            }],
+            "total": 2,
+            "records": [],
+            "records_truncated": false,
+            "history_revision": "0".repeat(64),
+            "captured_end": 2,
+            "trailing_incomplete": false,
+        }),
+    ]);
+    finish_export(&mut driver, &mut pages);
+    let written = std::fs::read_to_string(&target).unwrap_or_else(|error| {
+        panic!(
+            "exported file: {error}; notice: {:?}",
+            driver
+                .app
+                .export_form()
+                .and_then(|form| form.notice.clone())
+        )
+    });
+    assert!(
+        written.contains("oversized history item: not exported"),
+        "{written}"
+    );
+    assert!(written.contains("## Export notes"), "{written}");
+    assert!(written.contains("partial:"), "{written}");
+    let form = driver.app.export_form().expect("form stays open");
+    assert!(form.limitations.is_partial());
+    assert_eq!(form.limitations.oversized_items, 1);
+}
+
+#[test]
+fn cancelling_an_export_removes_the_uncommitted_temp_file() {
+    let dir = ExportDir::new("cancel");
+    let target = dir.target("chat.md");
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    set_terminal(&mut driver);
+    open_chat_with(&mut driver, vec![user(0, "loop_1", "hello")]);
+
+    slash(&mut driver, &format!("/export {}", target.display()));
+    drive_ctrl(&mut driver, 'y');
+    press(&mut driver, KeyCode::Enter);
+    // The first page keeps the chain open, so the export is still running when
+    // the user cancels.
+    export_advance(
+        &mut driver,
+        export_page(0, &user(0, "loop_1", "hello"), Some(1), 2),
+    );
+    assert!(driver.app.export_running());
+    press(&mut driver, KeyCode::Esc);
+    assert!(driver.app.export_form().is_none());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !driver.drain_exports() {
+        assert!(std::time::Instant::now() < deadline, "cancel completion");
+        std::thread::yield_now();
+    }
+    assert!(!target.exists(), "a cancelled export commits nothing");
+    assert!(dir.entries().is_empty(), "{:?}", dir.entries());
 }
