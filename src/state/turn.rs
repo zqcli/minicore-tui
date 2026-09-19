@@ -285,6 +285,16 @@ impl LiveLoop {
                 trim_string(accepted_at, budget, &mut used);
             }
         }
+        if self
+            .last_result
+            .as_ref()
+            .is_some_and(|result| !reserve_result_bytes(result, budget, &mut used))
+        {
+            // A TurnRef is an identity, not display text: truncating it would
+            // manufacture a different result. The SessionView result remains
+            // authoritative, so discard only this provisional duplicate.
+            self.last_result = None;
+        }
     }
 }
 
@@ -330,6 +340,13 @@ impl UnsavedLoop {
         for request in &mut self.requests {
             request.trim_to_bytes(budget, &mut used);
         }
+        if self
+            .result
+            .as_ref()
+            .is_some_and(|result| !reserve_result_bytes(result, budget, &mut used))
+        {
+            self.result = None;
+        }
     }
 }
 
@@ -338,6 +355,15 @@ fn turn_result_bytes(result: &TurnResultViewWire) -> usize {
         + result.turn.loop_id.capacity()
         + result.accepted_at.as_ref().map_or(0, String::capacity)
         + result.completed_at.as_ref().map_or(0, String::capacity)
+}
+
+fn reserve_result_bytes(result: &TurnResultViewWire, budget: usize, used: &mut usize) -> bool {
+    let bytes = turn_result_bytes(result);
+    if bytes > budget.saturating_sub(*used) {
+        return false;
+    }
+    *used += bytes;
+    true
 }
 
 #[cfg(test)]
@@ -355,6 +381,30 @@ mod tests {
 
         assert!(live.retained_bytes() >= 1024);
         live.trim_to_bytes(4);
+        assert!(live.retained_bytes() <= 4);
+    }
+
+    #[test]
+    fn live_budget_drops_unfit_result_metadata_without_truncating_its_identity() {
+        let mut live = LiveLoop::new(LocalSubmissionId(1), String::new());
+        live.last_result = Some(TurnResultViewWire {
+            turn: TurnRef {
+                session_id: "session".repeat(256),
+                loop_id: "loop".repeat(256),
+            },
+            outcome: crate::protocol::LoopOutcomeWire::Completed,
+            usage: None,
+            requests: None,
+            tool_rounds: None,
+            final_config_revision: None,
+            persistence: None,
+            accepted_at: None,
+            completed_at: None,
+        });
+
+        live.trim_to_bytes(4);
+
+        assert!(live.last_result.is_none());
         assert!(live.retained_bytes() <= 4);
     }
 }
