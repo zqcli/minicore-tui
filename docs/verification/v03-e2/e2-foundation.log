@@ -1,0 +1,27 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-tui-v03-refactor/tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 25.88s
+     Running tests/workspace.rs (target/debug/deps/workspace-48095057a17c7f7d)
+
+running 6 tests
+test grep_ranges_are_utf8_bytes_not_character_or_cell_indexes ... ok
+test quoted_path_tokens_roundtrip_without_attaching_content ... ok
+test raw_chunks_crlf_same_line_unicode_and_copy_without_softwrap_or_numbers ... ok
+test deadline_is_partial_without_a_cursor ... FAILED
+test pinned_workspace_schemas_additive_fields_and_malformed_known_fields ... ok
+test huge_line_and_tiny_chunks_stay_bounded_and_controls_do_not_execute ... ok
+
+failures:
+
+---- deadline_is_partial_without_a_cursor stdout ----
+
+thread 'deadline_is_partial_without_a_cursor' panicked at tests/workspace.rs:50:5:
+assertion failed: page.next_cursor.is_none()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    deadline_is_partial_without_a_cursor
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+error: test failed, to rerun pass `--test workspace`

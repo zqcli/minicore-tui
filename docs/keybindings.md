@@ -4,7 +4,10 @@ The keymap is fixed in `src/keymap.rs`. It is pure and compiled into the
 binary; there is no user keybinding DSL. All key actions become
 `AppEvent`s and are applied by `App::update`.
 
-## Global Keys
+## Global / Editor Defaults
+
+Focus-local Dock and main-detail bindings below take precedence. Returning to
+Editor restores the existing editing and command behavior.
 
 | Key | Behavior |
 |---|---|
@@ -75,6 +78,59 @@ Letters, Enter and bracketed paste do not edit or submit the draft while the
 detail main area owns focus. `/cancel` from Editor still explicitly stops the
 current operation through the existing precise TurnRef/compaction path.
 
+## Workspace Files And Literal Search (v0.3 E2)
+
+Type `@` at a word boundary (start or after whitespace), or use `/files [path
+filter]`, to open a temporary file Dock. An email `name@host` and a pasted `@`
+remain ordinary text. These interfaces require an already loaded Session;
+closed-history browsing offers an explicit Continue, never an automatic open.
+
+| Dock key | Behavior |
+|---|---|
+| Characters / paste / Backspace / Ctrl+U | Edit or clear the current single-line query/scope; debounce is 150 ms. |
+| Tab / Shift+Tab | Switch query and directory/paths input. Files are recursive. |
+| Up/Down / PageUp/PageDown | Move through received candidates/matches. Files sort locally while preserving the highlighted path. |
+| Enter | Insert the selected file path, enter a selected directory, or preview the selected grep match. |
+| F4 / right-click a candidate | Preview a file without inserting anything into Editor. |
+| Ctrl+N | Request the next opaque cursor, if present and within local retention bounds. |
+| F5 | Explicit fresh scan; deadline never automatically rescans. |
+| Ctrl+I (grep only) | Toggle case sensitivity and discard the old cursor/results. |
+| Esc | Close this Dock before any main-detail or cancellation action. |
+
+`/grep [literal]` is literal text, not regex or a shell command. Its paths field
+accepts one relative path (spaces are literal) or a JSON string array, at most
+32 paths. Use an array for paths with leading/trailing spaces or a leading `[`,
+for example `["src", "dir with spaces"]`. The bounded field is 4096 bytes.
+Both Docks show the last page's partial/scan-complete/stop/skipped facts. They
+retain at most 500 entries/matches and 1 MiB of candidate payload, not a project
+index or a claim that all files were enumerated.
+
+A chosen path is inserted as readable JSON-quoted text, e.g.
+`@"dir with spaces/file.rs"`. Quotes, backslashes and unsafe controls have
+reversible escapes. **Only the path is sent if the user later submits it.**
+Preview content is never attached to a Prompt, summary, or History, and preview
+never calls a model: “引用路径，模型需要时再读”. The last insertion has a transient
+source-position mapping for Editor `F4`; any content edit (including undo/redo)
+degrades it to ordinary text. No attachment object or persistent attachment
+registry is created.
+
+### File Preview
+
+The main-area preview preserves Editor/draft and the conversation anchor.
+`F6` switches Main/Editor; the focus is shown. While Main owns focus, Page keys,
+arrows and wheel scroll only the file, the blue scrollbar can be dragged, and
+`End` follows the loaded tail. `Ctrl+N` / `[更多]` loads another exact range;
+`F5` / `[刷新]` / `/refresh` starts a new revision from line 1. `Ctrl+Shift+C`
+or `[复制]` copies the displayed immutable safe-source snapshot without line
+numbers or inserted soft-wrap newlines. CRLF and no-final-newline are retained;
+unsafe controls are made visible. Partial/old snapshots are disclosed.
+
+`Esc` / `← 返回` returns to the retained results Dock or conversation. Neither
+closing nor switching a detail cancels execution. Changed revisions stop
+paging and retain old content until an explicit refresh. Binary, too-large and
+unavailable files show their reason, not a blank successful preview. There is
+no local-root reconstruction, local file scanning, or content attachment.
+
 ## Session Panel
 
 When the session selector is open, the selected session is stored by its stable
@@ -138,13 +194,15 @@ Unknown commands and invalid arguments produce a local notice and no RPC.
 | `/cancel` | Cancel the active loop with `turn.cancel`; the existing `turn.wait` remains in flight. |
 | `/reload` | Send empty `agent.reload` params, then refresh catalogs without reloading history. |
 | `/tool <session> <loop> <request_index> <call>` | Open that exact read-only tool detail. |
+| `/files [path filter]` | Loaded-workspace file candidates, path insertion and explicit preview. |
+| `/grep [literal]` | Loaded-workspace literal search; scope/case are edited in its Dock. |
 | `/refresh` | Refresh the active detail, or explicitly refresh the conversation. |
 | `/search [full] [literal]` | Search loaded content, or explicitly scan a pinned full session. |
 | `/prev` / `/next` / `/latest` | Navigate user prompts. |
 | `/copy [last\|message\|code\|selection]` | Copy loaded conversation content; default is the last completed reply. |
 | `/export [raw] [path]` | Open the explicit bounded export form. |
 | `/rename [title]` | Rename, or open its title dialog. |
-| `/compact` / `/context` | Start manual compaction / read the current context snapshot (not an E2 detail page). |
+| `/compact` / `/context` | Start manual compaction / read the current context snapshot (not the deferred E3 Context detail page). |
 | `/settings` / `/editor` | Local preferences / external editing of the current draft only. |
 | `/quit` | Request normal Agent shutdown. |
 
@@ -152,7 +210,7 @@ Unknown commands and invalid arguments produce a local notice and no RPC.
 Blocked or Finishing; ordinary prompt/steer/update submissions remain refused.
 The internal one-shot `turn.wait` path remains available to the reducer for
 retained-result reconciliation.
-The following are deliberately not implemented: `!command`, `@file`,
+The following are deliberately not implemented: `!command`, automatic file-content attachments,
 `/fork`, `/branch`, `/steer`, `/queue`, `/login`,
 `/plugin`, and `/mcp`.
 

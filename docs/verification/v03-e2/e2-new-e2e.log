@@ -1,0 +1,10 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-tui-v03-refactor/tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 12.00s
+     Running tests/agent_e2e.rs (target/debug/deps/agent_e2e-42d4553a1edbcc51)
+
+running 2 tests
+test workspace_e2e::e2e_workspace_files_and_literal_search_page_without_attaching_content ... ok
+test workspace_e2e::e2e_workspace_preview_raw_paging_changed_binary_and_too_large ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.82s
+

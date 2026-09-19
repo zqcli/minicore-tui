@@ -1,0 +1,28 @@
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  181G   41G  82% /
+2.8G	/root/minicore-tui-v03-refactor/tui/target/debug/incremental
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  179G   44G  81% /
+rustc 1.85.0 (4d91de4e4 2025-02-17)
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  179G   44G  81% /
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  180G   43G  81% /
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  180G   43G  81% /
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  180G   43G  81% /
+VERIFIED 1.85.0
+rustc 1.97.1 (8bab26f4f 2026-07-14)
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  180G   43G  81% /
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  181G   41G  82% /
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  181G   41G  82% /
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  181G   41G  82% /
+VERIFIED stable
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1  234G  181G   41G  82% /
+VERIFIED performance and dependency inspection

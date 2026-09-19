@@ -138,6 +138,32 @@ retains two pages and leaves shared in-flight snapshots unchanged. A fresh E1
 peak-RSS or manual-terminal measurement is **Not
 run**, not inferred from byte accounting.
 
+## E2 workspace regression (final implementation `d553e96`)
+
+On each of remote Linux Rust 1.85.0 and stable 1.97.1, the complete default
+suite passed **788 tests, 0 failed, 41 ignored**, and the separate fixed-Agent
+serial run passed **32/32**, including all original 30. All six ignored Release
+workloads passed; see [the final E2 log](verification/v03-e2/e2-performance.log).
+
+```text
+c2b_worker: durable_rows=51101 deltas=1000 layout_calls=0
+            history_bytes_cloned=0 viewport_rows=40000 viewport_bytes=2986911
+c2c_120x40: p95_us=7500 p99_us=7951 durable_rows=43870
+            history_bytes_cloned=0 layout_calls=0 viewport_rows=40000
+            viewport_bytes=4396336 retained_layout_bytes_estimate=8035080
+```
+
+This does not claim an optimization over E1's 7941/8306 μs, or terminal latency.
+Workspace query state adds no ordinary-editor buffer joins or stable-history
+layout work. File preview's 512 KiB raw body uses small coalesced immutable
+chunks; source indexing/sanitizing/wrapping stays on the same serialized layout
+worker, with text/index capacity charged to the existing 48 MiB budget. Only
+viewport rows are materialized. Candidate/match retention is capped at 500
+records and 1 MiB. Tests exercise 32,000 tiny file chunks, a bounded pathological
+grapheme, and a real 140 KB UTF-8 line over multiple same-line pages. Real-Agent
+E2Es also use the owned file-layout worker. These are structural checks, not a
+new file-preview throughput or peak-RSS measurement.
+
 ## Not run / Remaining
 
 - decode-throughput and RSS measurements for the current serialized decode
@@ -147,7 +173,8 @@ run**, not inferred from byte accounting.
 - exact allocation-capacity and RSS accounting, which is intentionally not
   attempted here;
 - terminal input-to-frame latency under real interactive streaming;
-- D/E workspace/file/changes/diff workflows and interactive iTerm2 editor
-  validation; D2 search/copy/export and D3 editor/settings measurements are
-  recorded in `docs/refactor-acceptance.md`, while macOS and Windows validation
-  remains **Not run**. Stable Linux validation passed for this tree.
+- E3 Changes/Context main-area workflows, changes/diff E2Es, and interactive
+  iTerm2 editor validation; E2 workspace/files/search/preview now has the
+  automated evidence above. D2 search/copy/export and D3 editor/settings
+  measurements remain in `docs/refactor-acceptance.md`. macOS and Windows
+  validation remains **Not run**; Linux validation passed on both toolchains.

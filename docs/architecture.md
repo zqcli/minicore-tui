@@ -293,13 +293,50 @@ Only the current tab polls. Terminal output still drains to real EOF. A query
 error stops the chain with explicit retry, not recursive fallback. Hidden cards
 do not fetch full streams. There is no stdout/stderr merged timeline.
 
-The existing single serialized layout worker accepts either conversation or
-tool work; there is no second worker/RPC owner or generic panel framework.
+The existing single serialized layout worker accepts conversation, tool, or
+file work; there is no second worker/RPC owner or generic panel framework.
 Tool text is decoded/sanitized and indexed by grapheme-safe wrap ranges off the
 update/draw path; render materializes only visible rows. Its retained text/index
 capacity is charged to the existing 48 MiB layout cache budget. Details preserve
 the original Editor/Footer and saved conversation scroll state. Card title
 detail hits share draw geometry; the original card folding target stays intact.
+
+## v0.3 E2 Workspace Views
+
+`protocol/workspace.rs` mirrors the fixed Agent's read/files/search contracts.
+`app/workspace.rs` owns their reducer/query paths; `state/workspace.rs` owns the
+bounded observations and immutable file-layout requests/results. The concrete
+workspace Dock and `MainView::FilePreview` render through `ui/workspace.rs`.
+
+All workspace reads require a loaded Session and use the same two query slots
+as history and tool reads. There is at most one browser query and one file
+query in flight, including retired generations. Query/scope edits debounce
+150 ms, clear cursors, and fence old results; responses release their actual
+slot even after close. File/list/search queries never execute in a renderer.
+Cursors are opaque, only received candidates are sorted, and deadline or
+cursorless partial results require explicit user action rather than rescan.
+The browser retains at most 500 records and 1 MiB of candidate payload.
+
+File preview follows the exact next range under the initial revision, including
+same-line byte offsets. Only ok pages append to the bounded 512 KiB raw body;
+changed retains the old prefix and stops. CRLF and no-final-newline survive
+concatenation and safe-source copy. Coalesced Arc chunks feed the existing
+serialized layout worker; line numbers, grapheme wraps and raw source positions
+are layout metadata, never part of backend offsets or copied decoration. The
+retained text/index capacity is included in the 48 MiB layout budget.
+
+An exhaustive `close_main_detail` in `app/panels.rs` dispatches Conversation,
+ToolDetail and FilePreview explicitly. A file may retain one results-Dock
+return target, not a page stack. Focus and stale layout identities are separate
+from execution ownership. Closing a view neither cancels a loop nor opens a
+Session. Query input places its hardware caret using safe-text terminal cells.
+
+Path references are editable JSON-quoted text, not content attachments. The
+Composer's optional last-insertion mapping is invalidated by content edits;
+no file content enters Prompt, summary or History implicitly. Workspace paths
+never become locally opened filesystem roots. No regex/shell search, local
+ignore implementation, watcher, index, backend crate dependency or Store
+migration was added. New DTO/view Debug implementations report metadata only.
 
 ## Explicit Non-Goals
 
@@ -310,7 +347,8 @@ This frontend intentionally does not implement:
 - approval UI, implicit cross-loop follow-up queues, or full PTY emulation;
 - MCP, plugins, skills, subagents, remote Agents, session forks/branches, or
   automatic reconnect/restart;
-- OSC52 copy and workspace/changes/context main-area pages (later E slices).
+- OSC52 copy or automatic content attachments; Changes/Context main-area pages
+  remain deferred to E3.
 
 Those omissions are backend and product-boundary decisions, not hidden
 fallbacks. The complete wire boundary is pinned in

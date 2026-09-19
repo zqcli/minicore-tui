@@ -1,0 +1,918 @@
+   Compiling minicore-tui v0.2.8 (/root/minicore-tui-v03-refactor/tui)
+    Finished `test` profile [optimized + debuginfo] target(s) in 31.92s
+     Running unittests src/lib.rs (target/debug/deps/minicore_tui-d056aeab2bc8c3fc)
+
+running 511 tests
+test app::copy::tests::fenced_blocks_are_extracted_without_their_fences ... ok
+test app::copy::tests::a_source_offset_selects_the_block_that_contains_it ... ok
+test app::history::budget_tests::evicting_an_owner_releases_the_last_arc_body_reference ... ok
+test app::history::budget_tests::eviction_never_removes_the_protected_tail ... ok
+test app::history::budget_tests::eviction_releases_body_bytes_and_reopens_the_loaded_range ... ok
+test app::panels_tests::deleting_a_session_retains_query_accounting_until_the_real_response ... ok
+test app::panels_tests::f6_escape_preserve_draft_anchor_and_never_send_or_cancel_from_main ... ok
+test app::history::decode_tests::stale_decode_result_clears_worker_identity_without_installing_new_epoch ... ok
+test app::panels_tests::input_tab_survives_preview_eviction_when_authoritative_input_is_available ... ok
+test app::panels_tests::closing_a_and_opening_b_keeps_real_slots_and_ignores_late_a ... ok
+test app::panels_tests::process_command_is_retained_before_any_read_and_cancel_is_not_confirmation ... ok
+test app::history::decode_tests::async_history_waits_for_the_decode_worker_before_installing_owner ... ok
+test app::panels_tests::resource_exhausted_stops_pagination_until_explicit_retry ... ok
+test app::panels_tests::terminal_command_drains_until_real_empty_eof_then_stops ... ok
+test app::queries::tests::an_unknown_finish_never_corrupts_the_counters ... ok
+test app::panels_tests::switch_tab_holds_old_slot_and_old_response_cannot_change_current_tab ... ok
+test app::queries::tests::a_coalesced_read_does_not_emit_a_second_remote_request ... ok
+test app::panels_tests::tool_queries_share_the_deferred_budget_with_execution_waits ... ok
+test app::queries::tests::a_second_chain_for_one_view_coalesces_instead_of_taking_a_slot ... ok
+test app::panels_tests::terminal_conflict_uses_authoritative_read_and_recording_is_independent ... ok
+test app::queries::tests::only_two_distinct_reads_run_and_a_third_is_refused ... ok
+test app::panels_tests::copy_uses_the_visible_snapshot_while_new_process_bytes_await_layout ... ok
+test app::queries::tests::invalidating_a_scope_drops_its_pending_refresh_but_keeps_the_slot ... ok
+test app::panels_tests::detail_scroll_stops_follow_and_end_resumes_only_detail ... ok
+test app::panels_tests::polling_uses_500ms_fallback_and_250ms_event_hint ... ok
+test app::queries::tests::waiting_queue_is_bounded_and_fifo_fair ... ok
+test app::history::budget_tests::app_budget_evicts_background_first_and_protects_the_active_tail ... ok
+test app::steer_receipt_tests::receipt_without_matching_index_holds_until_a_correct_receipt ... ok
+test app::scrollbar_tests::early_scrollbar_tick_does_not_redraw ... ok
+test app::steer_queue_ui_tests::alt_up_withdraws_next_unsent_into_empty_editor_only ... ok
+test app::scrollbar_tests::pi_auto_hide_hover_and_idle_deadline ... ok
+test app::history::budget_tests::active_head_browse_releases_the_far_suffix_within_the_global_budget ... ok
+test app::steer_receipt_tests::dropped_receipt_recovered_via_presentation_steer_progress ... ok
+test app::panels_tests::title_detail_hit_does_not_replace_the_original_tool_fold ... ok
+test app::steer_queue_ui_tests::dock_queue_caps_display_and_footer_counts_unsent_and_inflight ... ok
+test app::tests::a_create_ack_after_a_reload_failure_starts_fresh_session_reads ... ok
+test app::scrollbar_tests::pi_wheel_steps_and_page_overlap_preserve_prepared_rows ... ok
+test app::tests::a_catalog_reload_does_not_retire_an_inflight_history_read ... ok
+test app::tests::a_create_ack_during_a_reload_stays_uncalibrated_until_recovery ... ok
+test app::steer_receipt_tests::stale_steer_progress_after_loop_switch_is_ignored ... ok
+test app::scrollbar_tests::boundary_wheel_is_noop_and_does_not_reveal_scrollbar ... ok
+test app::steer_receipt_tests::mid_loop_history_without_steer_keeps_queued_and_terminal_marks_not_recorded ... ok
+test app::tests::a_late_open_ack_after_a_reload_failure_starts_view_recovery ... ok
+test app::scrollbar_tests::pi_track_click_and_drag_are_live_release_does_not_recalculate ... ok
+test app::steer_receipt_tests::valid_ack_index_applies_with_original_request_and_then_sends_next ... ok
+test app::tests::a_history_gap_keeps_submit_blocked_until_the_history_read_settles ... ok
+test app::tests::a_late_session_list_cannot_resurrect_a_deleted_session ... ok
+test app::tests::a_queue_full_send_restores_the_prompt_and_never_auto_retries ... ok
+test app::tests::a_pending_send_survives_a_catalog_reload_and_binds_after_its_ack ... ok
+test app::tests::a_lifecycle_ack_during_a_reload_stays_uncalibrated_until_recovery ... ok
+test app::tests::a_queue_full_steer_returns_to_the_paused_queue ... ok
+test app::tests::a_late_session_list_cannot_resurrect_a_renamed_title ... ok
+test app::tests::a_refused_cancel_is_retained_until_it_is_admitted ... ok
+test app::tests::a_queued_steer_remains_paused_after_its_loop_settles ... ok
+test app::scrollbar_tests::any_mouse_release_ends_scrollbar_capture ... ok
+test app::scrollbar_tests::viewport_growth_keeps_capture_and_drag_uses_new_geometry ... ok
+test app::tests::a_rejected_send_keeps_an_existing_draft_and_appends_the_unsent_prompt ... ok
+test app::tests::acknowledged_reload_channel_end_does_not_claim_refresh_success ... ok
+test app::tests::a_running_loop_steers_after_a_fresh_state_even_with_a_history_gap ... ok
+test app::tests::bootstrap_accepts_a_v1_backend_with_the_full_capability_set ... ok
+test app::tests::bootstrap_registers_pending_requests_before_commands_leave_update ... ok
+test app::tests::bootstrap_reaches_ready_for_supported_version_0_3_0 ... ok
+test app::scrollbar_tests::marker_click_uses_prepared_geometry_before_viewport_receipt ... ok
+test app::tests::an_uncalibrated_session_ignores_idle_events_until_the_state_response ... ok
+test app::tests::an_open_ack_during_a_reload_stays_uncalibrated_until_recovery ... ok
+test app::tests::a_stale_reload_list_is_reissued_before_the_reload_completes ... ok
+test app::tests::bootstrap_rejects_a_backend_missing_required_capabilities ... ok
+test app::tests::clipboard_feedback_retries_after_failure_and_expires_after_1800ms ... ok
+test app::steer_queue_ui_tests::queue_layout_sits_above_status_with_one_blank_gap_and_hides_in_modal ... ok
+test app::tests::close_verify_failure_idle_event_does_not_authorize_repeat_close ... ok
+test app::tests::composer_clears_only_on_matching_submit_and_late_ack_never_clears_new_content ... ok
+test app::tests::composer_retains_text_on_steer_failure_and_shows_warning ... ok
+test app::tests::composer_routes_to_steer_turn_when_session_is_running ... ok
+test app::tests::enter_accepts_a_skill_completion_without_submitting ... ok
+test app::tests::bootstrap_rejects_a_non_v1_protocol_and_latches_failed ... ok
+test app::tests::dropped_close_verification_enters_guarded_unknown_and_recovers ... ok
+test app::tests::failed_state_read_drops_old_authority_and_blocks_submission ... ok
+test app::tests::composer_rejects_submit_when_session_is_blocked ... ok
+test app::tests::incomplete_reload_keeps_active_session_gap_after_channel_end ... ok
+test app::scrollbar_tests::wheel_uses_current_prepared_extent_before_viewport_receipt ... ok
+test app::tests::history_merges_user_assistant_tool_summary_without_synthetic_terminals ... ok
+test app::tests::idle_state_evidence_does_not_release_steer_authority_fence ... ok
+test app::tests::live_loop_records_multi_request_deltas_and_tools ... ok
+test app::tests::create_session_activates_and_pages_history ... ok
+test app::tests::paste_normalization_matches_the_native_editor_without_changing_submit_authority ... ok
+test app::panels_tests::detail_render_is_safe_narrow_and_keeps_the_existing_editor_footer_geometry ... ok
+test app::tests::editor_click_and_drag_use_visual_cells_and_copy_the_selected_text ... ok
+test app::tests::malformed_reload_ack_reports_unknown_without_retrying_reload ... ok
+test app::tests::reload_reentry_and_failed_ack_leave_the_existing_projection_untouched ... ok
+test app::tests::reload_after_ack_reports_catalog_failure_without_claiming_rollback ... ok
+test app::tests::reload_does_not_touch_a_live_projection ... ok
+test app::tests::reload_does_not_advance_steer_queue_or_consume_new_input ... ok
+test app::tests::busy_spinner_does_not_advance_selection_drag_before_its_50ms_deadline ... ok
+test app::tests::paragraph_selection_stops_at_rendered_blank_boundaries ... ok
+test app::tests::reload_leaves_a_pending_normal_state_read_to_finish_normally ... ok
+test app::tests::request_usage_event_populates_live_projection_by_request_index ... ok
+test app::tests::reopening_a_loaded_session_is_idempotent ... ok
+test app::tests::reload_stages_out_of_order_catalogs_before_installing_them ... ok
+test app::scrollbar_tests::resize_reuses_capture_with_current_geometry_and_fit_releases_it ... ok
+test app::tests::scroll_anchor_rebases_live_tool_to_saved_tool_by_tool_id ... ok
+test app::scrollbar_tests::selectors_do_not_activate_underlying_scrollbar ... ok
+test app::tests::marker_overlay_leaves_uncovered_links_and_blocks_its_own_cells ... ok
+test app::tests::scroll_anchor_survives_prepend_and_keeps_tool_identity ... ok
+test app::tests::slash_completion_matches_native_trigger_and_selection_rules ... ok
+test app::tests::state_send_failure_drops_old_authority_and_blocks_submission ... ok
+test app::tests::scroll_anchor_survives_width_resize ... ok
+test app::tests::tool_result_body_is_one_arc_across_live_history_and_presentation ... ok
+test app::tests::turn_wait_persistence_failure_latches_blocked_and_creates_unsaved_loop ... ok
+test app::tests::tool_result_without_presentation_gets_a_safe_fallback ... ok
+test app::tests::rail14_link_geometry_covers_code_and_bold_links_but_not_plain_text ... ok
+test app::tests::startup_errors_keep_protocol_provider_storage_and_config_categories ... ok
+test app::ui_actions::tests::word_bounds_match_source_segmenter_for_emoji_combining_and_paths ... ok
+test app::ui_actions::tests::word_bounds_group_cjk_runs_without_crossing_latin_boundaries ... ok
+test args::tests::agent_config_is_required_without_a_tui_config ... ok
+test args::tests::cli_values_override_tui_config_defaults ... ok
+test app::ui_actions::tests::word_bounds_keep_internal_word_punctuation_together ... ok
+test app::tests::scroll_anchor_survives_reasoning_fold ... ok
+test args::tests::defaults_use_path_agent_and_dark_theme ... ok
+test args::tests::help_with_a_config_still_prints_help ... ok
+test app::ui_actions::tests::word_bounds_use_the_dictionary_not_a_cell_pair_heuristic ... ok
+test args::tests::parses_all_flags_in_both_forms ... ok
+test args::tests::help_and_version_work_without_an_agent_config ... ok
+test args::tests::parses_continue_and_session_startup_selection ... ok
+test app::tests::rail14_link_and_overlay_clicks_never_fold_while_plain_click_toggles ... ok
+test app::tests::unloaded_scroll_anchor_falls_back_with_a_notice ... ok
+test args::tests::parses_help_and_version ... ok
+test app::tests::spinner_cadence_uses_monotonic_elapsed_not_tick_count ... ok
+test args::tests::rejects_missing_values ... ok
+test app::tests::wrapped_editor_vertical_motion_uses_visual_rows_and_preserves_history_edges ... ok
+test args::tests::rejects_unknown_flags ... ok
+test args::tests::unknown_flags_error_even_when_help_or_version_is_present ... ok
+test args::tests::workspace_defaults_to_cwd_without_flag ... ok
+test clipboard::tests::clipboard_payload_encoding_matches_the_target_platform ... ok
+test args::tests::reasoning_cli_accepts_all_agent_levels_and_rejects_unknown ... ok
+test args::tests::rejects_invalid_theme_and_reasoning ... ok
+test app::tests::marker_row_cannot_toggle_a_tool_section ... ok
+test clipboard::tests::native_adapter_uses_one_compile_time_program ... ok
+test clipboard::tests::mock_clipboard_records_text_and_can_fail ... ok
+test app::tests::selection_edge_reentry_waits_for_a_fresh_50ms_deadline ... ok
+test command::tests::implemented_command_names_are_offered_and_reload_is_kept ... ok
+test command::tests::parses_every_implemented_command ... ok
+test command::tests::leading_whitespace_and_case_are_flexible_but_trailing_args_are_not ... ok
+test command::tests::unknown_and_empty_commands_are_local_issues ... ok
+test command::tests::the_static_table_drives_parsing_and_completion ... ok
+test config::tests::default_path_prefers_xdg_then_home_without_searching_fallbacks ... ok
+test config::tests::editor_environment_rejects_shell_like_arguments ... ok
+test config::tests::duplicate_keys_are_invalid_and_never_reset_the_file ... ok
+test error::tests::reports_operation_and_source ... ok
+test jobs::tests::a_refused_copy_never_overwrites_the_admitted_one ... ok
+test jobs::tests::a_failing_clipboard_job_reports_a_safe_error ... ok
+test app::tests::scrollbar_wheel_input_preserves_capture_and_release_does_not_undo_it ... ok
+test config::tests::roundtrip_does_not_contain_provider_fields ... ok
+test jobs::tests::cancelled_decode_still_releases_its_identity ... ok
+test config::tests::invalid_config_does_not_overwrite_the_existing_file ... ok
+test jobs::tests::a_second_copy_is_refused_while_the_first_is_running ... ok
+test clipboard::tests::native_adapter_rejects_oversized_text_before_spawning ... ok
+test jobs::tests::one_copy_starts_and_reports_its_capture_identity ... ok
+test app::tests::scrollbar_thumb_uses_the_same_pending_offset_as_content ... ok
+test jobs::tests::shutdown_joins_a_hung_result_without_wedging ... ok
+test jobs::tests::serialized_decode_worker_returns_exact_identity_and_item ... ok
+test keymap::tests::composer_keys_submit_newline_history_undo_and_word_delete ... ok
+test keymap::tests::ctrl_c_and_ctrl_d_take_the_dedicated_actions ... ok
+test keymap::tests::esc_is_contextual ... ok
+test app::tests::scrollbar_release_cancels_if_live_output_grew_before_viewport_measurement ... ok
+test keymap::tests::global_shortcuts_map_regardless_of_the_dock ... ok
+test keymap::tests::q_is_a_character_in_the_composer_but_quits_from_help ... ok
+test keymap::tests::session_panel_shortcuts_do_not_consume_filter_letters ... ok
+test clipboard::tests::nonzero_exit_without_reading_is_reported_bounded ... ok
+test limits::tests::budgets_match_the_spec_targets ... ok
+test markdown::tests::adjacent_same_style_text_is_one_span_and_style_boundaries_remain ... ok
+test clipboard::tests::descendant_holding_the_pipe_does_not_hold_the_caller ... ok
+test keymap::tests::release_events_are_ignored_but_repeats_type ... ok
+test keymap::tests::selector_pages_are_selection_pages_not_transcript_scroll ... ok
+test markdown::tests::column_width_counts_cjk_as_two ... ok
+test markdown::tests::code_block_is_framed_and_preserves_indent ... ok
+test markdown::tests::link_surfaces_a_different_url_in_dim ... ok
+test markdown::tests::headings_lists_quotes_and_rules_render ... ok
+test markdown::tests::paragraphs_bold_italic_and_inline_code_are_styled ... ok
+test app::tests::scrollbar_drag_survives_content_viewport_change_without_release_remap ... ok
+test markdown::tests::render_with_links_reports_real_link_cells_not_colors ... ok
+test markdown::tests::soft_breaks_become_spaces_and_paragraphs_gap ... ok
+test markdown::tests::wrap_plain_keeps_empty_lines_and_single_newlines ... ok
+test markdown::tests::wrap_plain_cjk_emoji_blank_lines_lose_no_chars_or_width ... ok
+test app::tests::scrollbar_drag_is_live_and_cancellation_keeps_applied_position ... ok
+test protocol::tests::ping_request_has_the_documented_shape ... ok
+test protocol::tests::ping_requires_protocol_version_in_the_wire_result ... ok
+test protocol::tests::presentation_wire_debug_redacts_content_bodies ... ok
+test protocol::tests::reasoning_wire_roundtrips_all_agent_levels ... ok
+test markdown::tests::wrap_plain_never_exceeds_the_width_and_splits_at_overflow ... ok
+test protocol::tests::reload_request_and_result_are_strict ... ok
+test clipboard::tests::draining_child_consumes_the_full_payload ... ok
+test perf::tests::counters_count_real_events_and_reset ... ok
+test app::tests::selection_auto_scroll_stops_at_both_transcript_limits ... ok
+test app::tests::scrollbar_tail_scroll_during_capture_is_not_undone_by_release ... ok
+test protocol::tests::backend_validation_requires_protocol_v1_and_required_capabilities ... ok
+test protocol::tests::rename_request_has_the_documented_shape ... ok
+test protocol::tests::wait_result_is_not_wrapped_in_ok_result ... ok
+test rpc::tests::agent_process_name_selection_accepts_windows_executables_only ... ok
+test rpc::tests::consumed_frames_release_their_wire_charge ... ok
+test rpc::tests::helper_hangs ... ok
+test app::tests::idle_scrollbar_drag_does_not_arm_a_tick_but_still_renders_pending_content ... ok
+test app::tests::scrollbar_drag_cancels_when_switching_sessions ... ok
+test rpc::tests::helper_quiet_exit ... ok
+test rpc::tests::child_waiter_reports_natural_exit ... ok
+test app::history::budget_tests::layout_eviction_releases_the_last_prepared_layout_owner ... ok
+test rpc::tests::reader_treats_malformed_frames_as_fatal_and_stops ... ok
+test app::scrollbar_tests::app_scroll_and_visibility_trace_matches_pi ... ok
+test rpc::tests::send_accepts_request_lines_up_to_one_megabyte ... ok
+test jobs::tests::editor_tests::scripted_editor_reopens_the_temp_path_and_returns_utf8 ... ok
+test rpc::tests::recv_ends_when_all_sender_tasks_are_gone ... ok
+test rpc::tests::reader_reports_clean_eof_and_partial_frames ... ok
+test rpc::tests::fake_configs_have_independently_owned_directories ... ok
+test rpc::tests::reader_emits_frames_in_arrival_order_with_preserved_ids ... ok
+test rpc::tests::send_forwards_pre_numbered_requests_without_touching_ids ... ok
+test rpc::tests::stderr_line_replaces_interior_invalid_bytes_lossily ... ok
+test rpc::tests::stderr_reader_emits_bounded_utf8_safe_lines ... ok
+test rpc::tests::spawn_rejects_missing_config_before_spawning ... ok
+test rpc::tests::try_send_admits_28_normal_then_reserves_four_control_slots ... ok
+test rpc::tests::try_recv_drains_all_buffered_events_before_reporting_closed ... ok
+test rpc::tests::spawn_reports_an_unusable_agent_binary ... ok
+test rpc::tests::tool_detail_late_response_through_fragmented_transport_releases_only_its_slot ... ok
+test rpc::tests::writer_emits_one_flushed_ndjson_line_per_request ... ok
+test safe_text::tests::bidi_overrides_are_escaped_but_zwj_is_preserved ... ok
+test rpc::tests::agent_process_bare_run_is_quiet_and_successful ... ok
+test safe_text::tests::carriage_return_and_c1_controls_are_escaped_not_executed ... ok
+test safe_text::tests::escape_sequence_bytes_become_visible_pictures ... ok
+test safe_text::tests::escaping_changes_display_bytes_only ... ok
+test safe_text::tests::ordinary_text_is_borrowed_unchanged ... ok
+test rpc::tests::fake_responses_are_out_of_order_but_ids_never_reorder ... ok
+test rpc::tests::fake_crashing_agent_reports_termination_and_a_failed_exit ... ok
+test state::composer::tests::editing_inside_a_paste_expands_it_and_literal_marker_text_is_not_hidden ... ok
+test rpc::tests::writer_failure_emits_a_protocol_error ... ok
+test rpc::tests::fake_ping_then_clean_shutdown_reaps_the_child ... ok
+test state::composer::tests::history_recall_preserves_the_draft_and_enforces_the_cap ... ok
+test state::composer::tests::large_paste_is_projected_as_a_marker_but_submits_raw_text ... ok
+test state::composer::tests::multiline_editing_and_blank_lines_roundtrip ... ok
+test state::composer::tests::set_text_splits_logical_lines_and_normalizes_native_text ... ok
+test state::composer::tests::submitting_deduplicates_the_newest_entry ... ok
+test rpc::tests::fake_events_arrive_before_the_send_response ... ok
+test state::composer::tests::typing_inserts_into_the_buffer_with_char_cursor ... ok
+test rpc::tests::fake_hanging_agent_stderr_survives_until_kill_and_reap ... ok
+test state::export::tests::a_complete_export_claims_no_limitation ... ok
+test state::export::tests::a_dropped_writer_leaves_no_temp_file ... ok
+test state::export::tests::a_missing_parent_directory_is_reported_without_creating_it ... ok
+test state::export::tests::a_user_prompt_renders_its_text_under_a_user_heading ... ok
+test state::export::tests::an_unsaved_turn_marks_the_header_unconfirmed ... ok
+test state::export::tests::a_target_created_after_create_is_never_overwritten ... ok
+test state::export::tests::default_items_export_text_without_thinking_or_tools ... ok
+test state::export::tests::headers_name_the_source_and_every_limitation ... ok
+test state::export::tests::abort_removes_the_uncommitted_temp_and_keeps_the_target ... ok
+test state::export::tests::optional_parts_are_included_only_when_requested ... ok
+test state::export::tests::raw_item_stream_records_a_real_mismatch ... ok
+test state::export::tests::raw_item_stream_verifies_bytes_without_decoding ... ok
+test state::export::tests::summary_items_export_their_text ... ok
+test state::export::tests::target_validation_refuses_empty_and_directory_spellings ... ok
+test state::search::tests::ascii_and_unicode_literals_match_case_insensitively ... ok
+test state::search::tests::coverage_never_claims_a_complete_scan_for_limited_runs ... ok
+test state::search::tests::previews_stay_inside_char_boundaries ... ok
+test state::export::tests::two_writers_for_one_target_use_distinct_temp_files ... ok
+test state::export::tests::the_writer_refuses_an_existing_target_until_overwrite_is_confirmed ... ok
+test state::selection::tests::parse_rfc3339_handles_fractions_offsets_and_future ... ok
+test state::selection::tests::session_sort_ties_by_string_then_id_and_invalid_sorts_last ... ok
+test state::selection::tests::sessions_sort_by_absolute_instant_across_offsets ... ok
+test state::session::tests::live_per_request_usage_shows_during_the_loop_and_persisted_total_replaces_it ... ok
+test state::session::tests::usage_deduplicates_request_rows_and_persisted_loop_totals_replace_them ... ok
+test state::session::tests::usage_marks_partial_fields_and_keeps_failed_unsaved_usage_separate ... ok
+test state::settings::tests::settings_roundtrip_preserves_utf8_and_direct_argument_rows ... ok
+test state::settings::tests::settings_step_wraps_without_a_dynamic_keymap ... ok
+test state::tool::tests::finished_facts_reuse_an_existing_result_owner ... ok
+test state::tool::tests::terminal_facts_ignore_late_started_and_conflicting_finished_events ... ok
+test terminal::tests::ansi_sequences::entry_runs_screen_commands_in_spec_order ... ok
+test terminal::tests::ansi_sequences::partial_entry_failure_rolls_back_only_completed_steps ... ok
+test state::composer::tests::cursor_and_delete_treat_a_large_paste_as_one_editor_segment ... ok
+test terminal::tests::ansi_sequences::restore_reports_first_error_but_still_runs_later_steps ... ok
+test terminal::tests::ansi_sequences::restore_runs_commands_in_reverse_order ... ok
+test terminal::tests::latch_allows_retry_after_failure_and_noops_after_success ... ok
+test terminal::writer_tests::discard_prevents_ratatui_drop_from_flushing_a_stale_frame ... ok
+test terminal::writer_tests::drop_does_not_emit_pending_frame_after_emergency_restore ... ok
+test rpc::tests::fake_terminate_kills_and_reaps_a_hanging_agent ... ok
+test terminal::writer_tests::failed_write_on_flush_is_reported_without_drop_retry ... ok
+test rpc::tests::fake_serve_mode_speaks_the_full_contract ... ok
+test terminal::writer_tests::interrupted_and_short_writes_preserve_every_byte ... ok
+test terminal::writer_tests::small_writes_are_batched_until_explicit_flush ... ok
+test terminal::writer_tests::underlying_flush_error_is_not_swallowed ... ok
+test theme::tests::dark_palette_matches_spec ... ok
+test terminal::writer_tests::writer_panic_does_not_retry_io_during_unwind ... ok
+test state::composer::tests::word_delete_uses_display_segments_without_entering_paste_payload ... ok
+test theme::tests::default_kind_is_dark_and_for_kind_roundtrips ... ok
+test theme::tests::light_base_palette_matches_spec ... ok
+test theme::tests::reasoning_color_maps_to_the_level_palette ... ok
+test rpc::tests::fake_unknown_method_reports_a_top_level_jsonrpc_error ... ok
+test terminal::writer_tests::large_writes_are_not_truncated ... ok
+test terminal::writer_tests::full_buffers_flush_in_order ... ok
+test ui::component_tests::adjacent_assistant_sections_share_one_boundary_row ... ok
+test ui::component_tests::assistant_parts_keep_order_and_share_boundary_padding ... ok
+test terminal::writer_tests::crossterm_bytes_match_with_far_fewer_underlying_writes ... ok
+test ui::component_tests::cancelled_calls_use_the_dedicated_surface_in_live_and_durable_cards ... ok
+test ui::component_tests::cached_and_fallback_transcripts_have_identical_section_spacing ... ok
+test ui::component_tests::empty_reasoning_renders_nothing_and_does_not_hide_the_next_run ... ok
+test rpc::tests::fake_oversized_request_lines_are_rejected_without_writing ... ok
+test ui::component_tests::conversation_copy_skips_external_section_spacers_but_keeps_timestamp_content ... ok
+test ui::component_tests::durable_and_live_tool_sections_have_the_same_padding_shape ... ok
+test ui::component_tests::empty_user_sections_do_not_add_spacer_rows ... ok
+test ui::component_tests::explicit_markdown_blank_lines_survive_section_padding ... ok
+test ui::component_tests::failed_tool_cards_keep_status_summary_hint_and_error_body ... ok
+test ui::component_tests::event_gap_blocks_session_panel_close_and_delete_but_allows_rename ... ok
+test ui::component_tests::cursor_sits_at_the_composer_caret ... ok
+test ui::component_tests::conversation_selection_uses_grapheme_boundaries_for_cjk_and_emoji ... ok
+test ui::component_tests::conversation_drag_copies_across_blocks_without_the_rail_or_padding ... ok
+test ui::component_tests::fatal_connection_renders_the_overlay ... ok
+test ui::component_tests::double_click_selects_one_unicode_word ... ok
+test ui::component_tests::assistant_text_has_no_background ... ok
+test ui::component_tests::empty_selector_search_shows_no_matching_items ... ok
+test ui::component_tests::fatal_overlay_retains_a_known_result_summary ... ok
+test ui::component_tests::durable_tool_fold_override_is_honored_by_the_prepared_transcript ... ok
+test ui::component_tests::generic_selector_mouse_selects_and_confirms_the_hit_item ... ok
+test ui::component_tests::end_resumes_follow_with_marker_overlay ... ok
+test ui::component_tests::footer_is_one_row_on_short_terminals ... ok
+test ui::component_tests::message_and_tool_sections_have_symmetric_vertical_padding ... ok
+test ui::component_tests::help_and_logs_body_paging_does_not_scroll_the_transcript ... ok
+test ui::component_tests::footer_waiting_boundary_shows_next_config_with_current_request_preserved ... ok
+test ui::component_tests::logs_panel_shows_bounded_agent_stderr_without_raw_frames ... ok
+test ui::component_tests::light_theme_renders_identically_shaped_content ... ok
+test ui::component_tests::live_tool_mouse_click_collapses_the_running_card ... ok
+test ui::component_tests::footer_hides_secondary_info_below_80_columns ... ok
+test ui::component_tests::composer_uses_a_fixed_blue_rail_without_a_rectangular_border ... ok
+test ui::component_tests::live_request_without_model_is_explicitly_unknown ... ok
+test ui::component_tests::new_session_form_shows_all_fields_and_the_active_field_background ... ok
+test ui::component_tests::new_session_mouse_click_selects_field_and_places_unicode_cursor ... ok
+test ui::component_tests::multiline_composer_grows_the_panel_and_wraps_cjk ... ok
+test ui::component_tests::prepared_section_ids_survive_tool_result_updates ... ok
+test ui::component_tests::reasoning_selector_lists_only_supported_levels_with_the_current_session_header ... ok
+test ui::component_tests::prepared_tool_sections_keep_full_identity_and_mouse_toggle_uses_the_same_range ... ok
+test ui::component_tests::recent_notices_render_above_the_composer ... ok
+test ui::component_tests::selection_rebases_when_a_live_section_grows_after_the_selected_row ... ok
+test ui::component_tests::last_result_renders_outcome_and_persistence_in_status_and_transcript ... ok
+test ui::component_tests::running_live_turn_shows_gap_footer_and_status_spinner ... ok
+test ui::component_tests::selecting_max_updates_the_session_and_footer_shows_max ... ok
+test ui::component_tests::running_request_metadata_drives_footer_until_the_later_request_uses_max ... ok
+test ui::component_tests::reasoning_is_gray_and_italic_and_can_be_hidden ... ok
+test ui::component_tests::reasoning_selector_offers_max_only_when_the_model_advertises_it ... ok
+test ui::component_tests::session_delete_requires_close_then_second_confirmation_and_tombstones_id ... ok
+test ui::component_tests::selection_rebases_when_older_history_prepends_rows ... ok
+test ui::component_tests::selector_search_query_is_visible ... ok
+test ui::component_tests::new_output_marker_overlays_without_reducing_viewport ... ok
+test ui::component_tests::session_double_click_release_rechecks_the_current_target ... ok
+test ui::component_tests::session_panel_rename_uses_id_and_waits_for_complete_ack ... ok
+test ui::component_tests::session_panel_mouse_selection_and_double_click_use_shared_content_rect ... ok
+test ui::component_tests::selector_panel_replaces_the_composer_and_keeps_the_transcript_visible ... ok
+test ui::component_tests::session_footer_mouse_refresh_uses_the_action_hit_rect ... ok
+test ui::component_tests::shared_panel_layout_has_one_geometry_for_render_and_hit_testing ... ok
+test ui::component_tests::session_panel_cancel_reconciles_after_frozen_target_updates ... ok
+test ui::component_tests::session_selector_refresh_preserves_selected_id_after_reorder ... ok
+test ui::component_tests::scrollbar_drag_body_follows_before_release ... ok
+test ui::component_tests::stale_durable_tool_toggle_cannot_mutate_the_current_live_card ... ok
+test ui::component_tests::session_selector_sorts_newest_first_and_marks_running_loaded_idle ... ok
+test ui::component_tests::new_output_marker_renders_when_scrolled_away ... ok
+test ui::component_tests::stale_live_tool_loop_cannot_toggle_the_current_card ... ok
+test ui::component_tests::stable_history_layout_is_cached_and_tool_projection_uses_the_index ... ok
+test ui::component_tests::user_assistant_and_tool_boundaries_share_one_blank_row ... ok
+test ui::component_tests::session_rename_dialog_freezes_target_and_reconciles_before_footer_actions ... ok
+test ui::component_tests::short_terminal_renders_an_8_row_selector_panel ... ok
+test ui::component_tests::session_rename_ack_clears_hidden_target_when_query_has_no_matches ... ok
+test ui::component_tests::workspace_shortening_replaces_the_home_prefix ... ok
+test ui::composer::tests::cjk_cursor_hardware_position_uses_display_columns ... ok
+test ui::composer::tests::cursor_cell_is_the_visual_wrapped_position ... ok
+test ui::editor_layout::tests::centered_padding_is_not_a_cursor_target ... ok
+test ui::composer::tests::cursor_wrap_pos_matches_the_greedy_rule ... ok
+test ui::editor_layout::tests::cursor_at_wide_grapheme_middle_snaps_to_its_start ... ok
+test ui::editor_layout::tests::cursor_boundary_moves_to_the_next_soft_wrapped_row ... ok
+test ui::component_tests::short_panels_page_down_moves_help_logs_and_session_selector ... ok
+test ui::editor_layout::tests::only_valid_paste_ranges_are_kept_atomic ... ok
+test ui::editor_layout::tests::wraps_without_splitting_wide_graphemes ... ok
+test ui::footer::tests::duration_format_matches_rail_boundaries ... ok
+test ui::footer::tests::fit_aligned_matches_reference_narrow_footer_text ... ok
+test ui::footer::tests::model_shortening_preserves_unknown_model_identity_without_raw_prefixes ... ok
+test ui::footer::tests::numbers_cost_and_right_group_follow_rail_boundaries ... ok
+test ui::component_tests::user_card_uses_the_spec_background ... ok
+test ui::footer::tests::partial_usage_annotation_gets_a_separator_not_a_jammed_suffix ... ok
+test ui::rail::tests::editor_height_is_four_to_twelve_and_roughly_thirty_two_percent ... ok
+test ui::footer::tests::ready_footer_styled_cells_match_the_source_fixture ... ok
+test ui::layout::tests::seventy_nine_column_content_needs_two_visual_rows_at_inner_width_78 ... ok
+test ui::rail::tests::simple_line_collapses_control_whitespace_and_clip_is_cell_safe ... ok
+test ui::component_tests::word_selection_drag_extends_from_the_original_word_range ... ok
+test ui::rail::tests::surface_content_start_preserves_requested_inset ... ok
+test ui::rail::tests::surface_row_has_one_rail_cell_and_exact_width ... ok
+test ui::composer::tests::long_wrapped_line_cursor_is_visible_with_correct_hardware_position ... ok
+test ui::component_tests::help_panel_lists_every_table_command ... ok
+test ui::layout::tests::composer_height_caps_at_forty_percent_and_short_is_fixed ... ok
+test ui::layout::tests::dock_rows_derives_status_notice_panel_and_footer_consistently ... ok
+test ui::render_cache_tests::durable_history_mutation_invalidates_and_reparses ... ok
+test ui::render_cache_tests::no_op_mouse_moved_retains_prepared_conversation_and_does_not_dirty ... ok
+test ui::render_cache_tests::scrollbar_noop_event_benchmark ... ignored, manual matched scrollbar event benchmark
+test ui::render_cache_tests::live_tool_fold_survives_presentation_finish_wait_and_history_replacement ... ok
+test ui::component_tests::tool_cards_use_state_backgrounds_and_expanded_preview_bounds ... ok
+test ui::render_cache_tests::live_delta_reuses_durable_markdown_without_reparsing ... ok
+test ui::render_cache_tests::ordinary_editor_input_reuses_prepared_rows ... ok
+test ui::render_cache_tests::scroll_and_tick_and_viewport_retain_prepared_conversation ... ok
+test ui::scrollbar::reference_tests::active_thumb_matches_pi_palette_and_preserves_background_without_wide_artifacts ... ok
+test ui::render_cache_tests::theme_width_and_visibility_reject_stale_cache ... ok
+test ui::component_tests::session_selector_query_refresh_and_footer_actions_keep_filtered_target ... ok
+test ui::render_cache_tests::unrelated_rpc_reprepare_keeps_scrollbar_drag_until_release ... ok
+test jobs::tests::shutdown_waits_for_a_slow_but_bounded_job ... ok
+test ui::scrollbar::tests::drag_mapping_uses_thumb_grab_offset_and_reaches_both_edges ... ok
+test ui::scrollbar::tests::geometry_matches_the_pinned_reference_dimensions ... ok
+test ui::scrollbar::reference_tests::overlay_edges_clear_wide_glyphs_but_keep_combining_clusters ... ok
+test ui::section_gap_tests::consecutive_reasoning_parts_join_like_live_accumulation ... ok
+test ui::scrollbar::tests::pi_fullscreen_track_and_inactive_thumb ... ok
+test ui::scrollbar::tests::render_paints_pi_track_and_thumb_without_reflow ... ok
+test ui::section_gap_tests::thinking_single_newline_is_a_visual_break_not_flattened ... ok
+test ui::render_cache_tests::viewport_duplicate_is_idempotent_and_does_not_cancel_drag ... ok
+test ui::selector::tests::model_line_marks_the_current_session_model ... ok
+test ui::render_cache_tests::tool_presentation_refresh_invalidates_already_durable_tool_rows ... ok
+test ui::selector::tests::relative_age_formats_seconds_minutes_hours_days ... ok
+test ui::section_gap_tests::prepared_transcript_preserves_thinking_newlines_from_wire_entry ... ok
+test ui::section_gap_tests::user_card_then_thinking_has_exactly_one_transparent_spacer ... ok
+test ui::component_tests::help_panel_lists_keys_and_safety_notes ... ok
+test ui::settings_footer_steer_tests::folded_thinking_copy_excludes_the_hint_row_in_durable ... ok
+test ui::settings_footer_steer_tests::folded_thinking_copy_excludes_the_hint_row_in_live ... ok
+test ui::settings_footer_steer_tests::accepted_steer_awaiting_marker_is_excluded_from_the_copy ... ok
+test ui::scrollbar::reference_tests::geometry_and_pointer_mapping_match_released_pi_oracle ... ok
+test ui::settings_footer_steer_tests::provisional_steer_selection_never_rebases_onto_a_wrong_durable_user ... ok
+test ui::settings_footer_steer_tests::pending_steer_uses_gray_queue_not_a_user_card ... ok
+test ui::settings_footer_steer_tests::footer_reflects_acknowledged_reasoning_immediately_while_live ... ok
+test ui::scrollbar::reference_tests::auto_visibility_matches_released_pi_oracle ... ok
+test ui::settings_footer_steer_tests::persisted_steer_removes_provisional_and_stale_queued ... ok
+test ui::snapshots::cjk_80x24 ... ok
+test ui::snapshots::chat_dark_80x24 ... ok
+test ui::snapshots::chat_light_80x24 ... ok
+test ui::snapshots::empty_dark_80x24 ... ok
+test ui::snapshots::empty_light_80x24 ... ok
+test ui::settings_footer_steer_tests::footer_reflects_acknowledged_model_and_rejected_update_keeps_old ... ok
+test ui::settings_footer_steer_tests::accepted_pending_steer_renders_as_user_card_with_subtle_awaiting_marker ... ok
+test ui::snapshots::empty_model_search_dark_80x24 ... ok
+test ui::render_cache_tests::consecutive_user_cards_keep_one_transparent_gap_across_all_user_paths ... ok
+test ui::snapshots::close_user_dark_80x24 ... ok
+test ui::snapshots::help_dark_80x24 ... ok
+test ui::snapshots::model_selector_dark_80x24 ... ok
+test ui::snapshots::logs_dark_80x24 ... ok
+test ui::component_tests::tool_expanded_preview_remains_available_without_a_fixed_renderer_cap ... ok
+test ui::snapshots::help_light_120x40 ... ok
+test ui::snapshots::finishing_dark_80x24 ... ok
+test ui::component_tests::selectors_render_on_both_themes_without_panicking ... ok
+test ui::snapshots::close_user_light_120x40 ... ok
+test ui::snapshots::narrow_model_selector_dark_60x16 ... ok
+test ui::snapshots::model_selector_light_120x40 ... ok
+test ui::snapshots::multiline_composer_dark_80x24 ... ok
+test ui::snapshots::new_session_dark_80x24 ... ok
+test ui::snapshots::finishing_light_120x40 ... ok
+test ui::snapshots::profile_selector_dark_80x24 ... ok
+test ui::snapshots::pending_model_dark_60x16 ... ok
+test ui::snapshots::new_session_light_120x40 ... ok
+test ui::snapshots::pending_model_dark_80x24 ... ok
+test ui::section_gap_tests::busy_working_keeps_one_clear_blank_above_it_at_every_size ... ok
+test ui::snapshots::reasoning_hidden_80x24 ... ok
+test ui::snapshots::reasoning_selector_dark_80x24 ... ok
+test ui::snapshots::search_query_dark_80x24 ... ok
+test ui::snapshots::running_gap_80x24 ... ok
+test ui::snapshots::small_50x10 ... ok
+test ui::snapshots::session_selector_dark_80x24 ... ok
+test ui::snapshots::session_selector_light_120x40 ... ok
+test ui::snapshots::scroll_top_80x24 ... ok
+test ui::snapshots::pending_model_light_120x40 ... ok
+test ui::snapshots::shutdown_cancel_result_dark_80x24 ... ok
+test ui::snapshots::steering_dark_80x24 ... ok
+test ui::snapshots::steering_dark_60x16 ... ok
+test ui::snapshots::store_error_dark_60x16 ... ok
+test ui::snapshots::new_output_marker_dark_80x24 ... ok
+test ui::snapshots::unknown_cancel_result_dark_80x24 ... ok
+test ui::snapshots::steering_light_120x40 ... ok
+test ui::steer_queue::tests::truncation_exact_fit_is_never_silently_truncated ... ok
+test ui::steer_queue::tests::truncation_is_grapheme_safe_and_never_splits_a_cluster ... ok
+test ui::snapshots::store_error_dark_80x24 ... ok
+test ui::steer_queue::tests::preview_is_cell_aware_and_flattens_multiline ... ok
+test ui::snapshots::wide_120x40 ... ok
+test ui::snapshots::tools_80x24 ... ok
+test ui::snapshots::unsaved_gap_dark_60x16 ... ok
+test ui::tool::tests::default_expansion_only_forces_write_and_uses_generic_boundary ... ok
+test ui::snapshots::store_error_light_120x40 ... ok
+test ui::tool::tests::wrapped_hidden_count_reflects_visual_rows_and_survives_graphemes ... ok
+test ui::tests::dock_is_below_the_transcript_with_a_rail_composer ... ok
+test ui::transcript::source_map_tests::blank_logical_lines_and_links_keep_source_bounds ... ok
+test ui::transcript::source_map_tests::copy_source_preserves_soft_wraps_wide_text_code_indent_and_blank_lines ... ok
+test ui::tests::small_terminal_renders_the_centered_hint ... ok
+test ui::transcript::source_map_tests::grapheme_ranges_are_utf8_boundary_safe ... ok
+test ui::tool::tests::expanded_durable_rows_expose_the_full_payload_without_omission ... ok
+test ui::transcript::source_map_tests::link_wrapping_keeps_link_cells_and_does_not_invent_newlines ... ok
+test ui::steer_queue::tests::normal_queued_steer_shows_withdrawal_hint_without_pause_prefix ... ok
+test ui::transcript::source_map_tests::markdown_soft_wraps_never_become_fake_newlines_in_the_copy_text ... ok
+test ui::transcript::source_map_tests::soft_wraps_share_source_without_inventing_a_hard_break ... ok
+test ui::transcript::source_map_tests::unloaded_placeholder_is_visible_but_not_copyable ... ok
+test ui::user::tests::invalid_timestamp_is_not_replaced_with_current_time ... ok
+test ui::user::tests::timestamp_fixture_matches_the_pinned_utc_source_rows ... ok
+test ui::user::tests::timestamp_matches_rail_display_format ... ok
+test ui::snapshots::unsaved_gap_dark_80x24 ... ok
+test ui::steer_queue::tests::paused_queue_shows_withdrawal_hint_above_status ... ok
+test ui::tests::fullscreen_background_is_page_color_and_draw_never_panics ... ok
+test ui::snapshots::unsaved_gap_dark_160x50 ... ok
+test ui::render_cache_tests::cached_render_and_mouse_hit_testing_do_not_parse_history ... ok
+test ui::snapshots::steering_dark_160x50 ... ok
+test ui::snapshots::unsaved_gap_light_120x40 ... ok
+test jobs::tests::editor_tests::cancelling_a_hung_editor_kills_and_waits_for_the_child ... ok
+test jobs::tests::editor_tests::invalid_utf8_large_output_and_nonzero_exit_keep_the_old_draft ... ok
+test state::composer::tests::ordinary_typing_after_a_large_paste_does_not_join_the_buffer ... ok
+test rpc::tests::wire_budget_releases_charge_when_the_app_owns_the_frame ... ok
+test rpc::tests::reader_rejects_the_first_byte_beyond_the_max ... ok
+test rpc::tests::child_waiter_kills_and_reaps_a_hanging_child ... ok
+test rpc::tests::reader_accepts_exactly_max_size_frames ... ok
+test rpc::tests::send_rejects_oversized_lines_without_writing_them ... ok
+test rpc::tests::try_send_enforces_the_1_mib_line_bound_without_writing ... ok
+test clipboard::tests::non_draining_child_is_bounded_and_killed ... ok
+
+test result: ok. 510 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.51s
+
+     Running unittests src/main.rs (target/debug/deps/minicore_tui-d14d9bc901dc3dba)
+
+running 12 tests
+test tests::debug_log_lines_are_content_free_and_the_disabled_log_is_a_noop ... ok
+test tests::idle_has_no_render_deadline_and_busy_clamps_at_30_fps ... ok
+test tests::rpc_batch_is_bounded_and_yields_before_a_render_interval ... ok
+test tests::forced_shutdown_timeout_report_keeps_unknown_and_known_failure_facts ... ok
+test tests::active_tick_deadline_survives_continuous_non_tick_events ... ok
+test tests::rpc_channel_end_disables_polling_but_keeps_failed_overlay_interactive ... ok
+test tests::rpc_channel_end_exits_a_normal_shutdown ... ok
+test tests::prepare_frame_reuses_layout_and_reports_real_geometry ... ok
+test tests::small_terminal_skips_hidden_conversation_preparation ... ok
+test tests::shutdown_timeout_command_uses_the_app_latched_deadline ... ok
+test tests::forced_shutdown_drains_gated_stderr_before_reporting ... ok
+test tests::signal_listener_installs_once_and_recv_stays_pending ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/agent_e2e.rs (target/debug/deps/agent_e2e-42d4553a1edbcc51)
+
+running 30 tests
+test e2e_automatic_preparation_is_observable_and_cancellable ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_browse_closed_session_survives_deleted_workspace_and_dead_model ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_configuration_reload_refreshes_catalogs_only ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_external_editor_coexists_with_a_real_background_turn ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_fifo_duplicate_texts_are_paced_and_both_persist ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_fifo_steers_are_paced_until_receipt ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_full_search_and_export_real_agent_chain ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_live_request_usage_shows_during_loop_and_persisted_total_replaces_it ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_manual_compact_deferred_cancel ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_manual_compact_summarizes_history ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_manual_compact_without_history_is_a_noop ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_max_reasoning_ships_literal_max_and_provider_body_carries_it ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_new_form_rename_close_delete_commands ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_reasoning_summary_item_boundaries_survive_to_the_tui ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_scenario_a_discovery ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_scenario_b_basic_turn ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_scenario_c_tool_execution ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_scenario_d_steer_turn ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_scenario_e2_update_single_request_then_next_turn ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_scenario_e_same_loop_update ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_scenario_f_shutdown_cancels_active_wait ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_session_panel_rename_and_delete_against_current_agent ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_session_switch_keeps_drafts_and_running_background_loop ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_startup_selection_opens_without_auto_prompt ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_stress_second_tool_expansion_survives_background_generation ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_stress_session_switch_preserves_tool_fold ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_stress_six_loops_ten_requests_no_repeated_final_text ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+test e2e_tool_detail_close_does_not_cancel_then_exact_turn_cancel_drains ... ignored, requires MINICORE_AGENT_BIN; real Bash cancellation by exact LoopRef
+test e2e_tool_detail_drains_real_nonpty_stdout_and_stderr_after_terminal ... ignored, requires MINICORE_AGENT_BIN; real non-PTY Bash streams and tool detail
+test e2e_two_consecutive_steers_both_reach_the_provider ... ignored, requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server
+
+test result: ok. 0 passed; 0 failed; 30 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/agent_process.rs (target/debug/deps/agent_process-e482ea95bf9db44a)
+     Running tests/agent_v1_fixtures.rs (target/debug/deps/agent_v1_fixtures-4b115f4d7f5cbfb8)
+
+running 21 tests
+test changes_list_and_diff_keep_opaque_refs_and_structured_hunks ... ok
+test empty_stdout_reaches_clean_eof_not_a_fabricated_absence ... ok
+test context_and_compact_fixtures_decode_as_the_b2_dtos ... ok
+test manifest_pins_the_fixed_backend_and_protocol ... ok
+test ping_reports_protocol_version_and_capabilities ... ok
+test manual_compaction_reports_noop_and_compacted ... ok
+test session_context_separates_estimates_from_unknowns ... ok
+test session_read_chunks_are_runtime_item_envelopes ... ok
+test stale_changes_cursor_is_reported_not_continued ... ok
+test read_pages_reconstruct_exactly_with_continuation_cursors ... ok
+test tool_output_streams_use_raw_byte_offsets ... ok
+test tool_read_distinguishes_awaiting_policy_running_and_terminal ... ok
+test turn_wait_is_a_direct_result_view ... ok
+test tool_event_notifications_decode_from_the_real_agent_wire ... ok
+test workspace_files_and_search_report_partial_pages ... ok
+test trailing_incomplete_history_is_reported_not_repaired ... ok
+test turn_result_availability_covers_pending_and_stored ... ok
+test workspace_read_statuses_are_distinct ... ok
+test workspace_status_covers_repo_detached_and_unavailable ... ok
+test manifest_fixtures_match_the_files_on_disk ... ok
+test synthetic_states_use_documented_wire_shapes ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/app_flow.rs (target/debug/deps/app_flow-8743b973c1a7e01a)
+
+running 137 tests
+test bootstrap_registers_ids_before_requests_leave_update ... ok
+test a_reload_send_failure_does_not_retry_or_advance_the_fifo ... ok
+test agent_rejected_steer_restores_unsent_paused_at_fifo_front ... ok
+test ambiguous_steer_response_keeps_unconfirmed_and_never_resends ... ok
+test a_wait_sent_before_a_reload_failure_stays_on_its_original_session ... ok
+test a_stale_wait_send_failure_does_not_clear_a_sealed_loop_steer ... ok
+test a_sealed_loop_steer_queue_is_not_advanced_by_a_catalog_reload ... ok
+test blocked_session_forbids_send_steer_update_and_retains_completion ... ok
+test browsing_a_closed_session_reads_history_without_opening_it ... ok
+test a_target_created_during_an_export_is_not_overwritten ... ok
+test a_second_export_waits_for_the_owned_writer_slot ... ok
+test a_catalog_reload_leaves_no_stale_wait_for_a_settled_turn ... ok
+test agent_exit_marks_the_outcome_unknown_without_overwriting_a_known_failure ... ok
+test browsing_refuses_send_and_keeps_the_draft_until_an_explicit_continue ... ok
+test catalog_staging_does_not_touch_the_running_session_view ... ok
+test close_verification_blocked_state_remains_unsafe_for_delete ... ok
+test close_success_before_wait_response_processes_result_without_extra_state_or_history ... ok
+test close_verification_internal_or_malformed_retains_loaded_state ... ok
+test clear_close_and_delete_keep_their_local_and_closed_only_contracts ... ok
+test close_verification_running_state_is_written_without_cancelling_the_turn ... ok
+test close_verification_transport_failure_requires_a_fresh_state_read ... ok
+test continuing_a_browsed_session_keeps_history_and_draft_when_open_fails ... ok
+test cancelling_waits_for_the_typed_job_outcome ... ok
+test cancelling_an_export_removes_the_uncommitted_temp_file ... ok
+test ctrl_g_continues_a_browsed_session_without_sending ... ok
+test copy_reports_unloaded_content_instead_of_copying_placeholder_text ... ok
+test deleted_session_id_rejects_late_lifecycle_responses_and_events ... ok
+test duplicate_text_steer_while_first_sending_is_dropped ... ok
+test event_gap_blocks_close_and_delete_for_loaded_and_closed_sessions ... ok
+test cancelling_export_keeps_input_responsive_while_writer_finishes ... ok
+test export_form_toggles_validate_and_write_nothing ... ok
+test deterministic_same_loop_model_a_to_tool_to_model_b ... ok
+test first_open_running_placeholder_accepts_following_events ... ok
+test failed_close_reopen_keeps_retired_loop_fenced ... ok
+test copy_message_and_code_reuse_the_hit_operations_without_remote_reads ... ok
+test copy_last_reply_excludes_thinking_and_keeps_real_newlines ... ok
+test failed_turn_result_projects_authoritative_body_when_live_deltas_are_missing ... ok
+test forced_shutdown_message_combines_unknown_known_failure_and_stderr ... ok
+test export_records_an_oversized_item_as_a_placeholder_and_reports_partial ... ok
+test late_completed_loop_events_cannot_bind_a_new_prompt ... ok
+test late_session_events_cannot_overwrite_info_or_clear_a_new_loop ... ok
+test internal_refresh_turn_and_restricted_commands_remain_usable ... ok
+test late_steer_ack_after_complete_history_marks_missing_steer_not_recorded ... ok
+test late_turn_started_does_not_consume_sealed_loop_steer ... ok
+test history_validation_reports_stable_gap_and_stalled_cursor_errors ... ok
+test full_session_search_scans_a_pinned_chain_and_never_claims_complete_on_large_items ... ok
+test full_session_search_can_be_stopped_without_losing_found_matches ... ok
+test long_session_opens_at_the_tail_two_hundred_window ... ok
+test lost_wait_result_recovers_through_turn_result ... ok
+test loop_events_can_bind_before_turn_send_response ... ok
+test history_pages_by_contiguous_item_index_not_render_block_count ... ok
+test inflight_history_gap_reconciles_new_revision_before_lifecycle_actions ... ok
+test live_reasoning_renders_markdown_before_each_request_text ... ok
+test history_failure_clear_and_reopen_keep_destructive_actions_guarded ... ok
+test manual_compact_noop_finishes_without_retrying_or_blocking ... ok
+test manual_compact_unknown_write_requires_fresh_state_and_context ... ok
+test late_steer_ack_respects_recorded_and_uncertain_history ... ok
+test loaded_running_session_reopen_reuses_view_after_state_failure ... ok
+test manual_compact_failed_preserves_history_without_retrying ... ok
+test new_command_creates_quickly_and_new_form_opens_the_custom_form ... ok
+test draft_budget_trims_undo_before_touching_text ... ok
+test persistence_failure_blocks_without_losing_the_old_result_view ... ok
+test preparation_cancel_waits_for_the_observed_operation_id ... ok
+test ordered_live_parts_keep_late_reasoning_after_same_request_text ... ok
+test pending_turn_result_keeps_the_unconfirmed_fence ... ok
+test refresh_reads_only_view_data_and_reload_stays_configuration ... ok
+test export_refuses_an_existing_target_until_overwrite_is_confirmed ... ok
+test full_search_stops_on_a_total_change_instead_of_splicing_generations ... ok
+test regression_scenario_a_wait_internal_error_does_not_loop_history_or_clear_gap ... ok
+test confirmed_empty_header_requires_known_idle_and_clean_lifecycle ... ok
+test regression_scenario_b_wait_persisted_post_wait_history_and_no_infinite_retry ... ok
+test regression_scenario_c_failed_wait_does_not_reconcile_and_idempotent ... ok
+test regression_scenario_d_steer_retention_single_render_and_late_response_correlation ... ok
+test reload_staging_finishes_without_consuming_a_queued_steer ... ok
+test rename_command_applies_the_ack_metadata ... ok
+test regression_test_pending_config_update_loop_scoping_and_no_rollback ... ok
+test regression_scenario_e_stale_wait_and_history_paging_idempotence ... ok
+test regression_test_close_agent_error_single_state_check_and_store_error ... ok
+test rename_command_opens_the_dialog_without_a_title ... ok
+test persisted_reasoning_preserves_markdown_and_request_order_after_reopen ... ok
+test rename_command_never_leaks_an_unsent_pending_request ... ok
+test request_index_keeps_multi_request_deltas_separate ... ok
+test full_session_search_continues_across_more_than_one_page ... ok
+test reopen_invalidates_old_wait_failed_response ... ok
+test reopen_invalidates_old_wait_persisted_response ... ok
+test failed_tool_survives_live_finished_wait_and_history_with_folded_geometry ... ok
+test reasoning_rendering_keeps_hidden_cache_fallback_themes_and_cjk_width ... ok
+test regression_test_close_wait_correlation_and_guards ... ok
+test rename_command_failure_keeps_metadata_and_does_not_duplicate ... ok
+test resume_command_opens_a_browsed_session_without_sending ... ok
+test raw_export_records_a_chunk_mismatch_instead_of_claiming_complete ... ok
+test sealed_loop_queue_is_not_resubmitted_after_tick_or_new_prompt ... ok
+test sealed_loop_steer_can_only_be_withdrawn_deliberately ... ok
+test sealed_loop_steer_remains_unsent_without_a_send_failure_path ... ok
+test search_input_restarts_the_generation_and_a_late_scan_cannot_install ... ok
+test session_opened_event_initializes_unknown_view_and_reads_running_state ... ok
+test session_update_is_sent_for_an_active_session ... ok
+test search_loaded_scope_matches_body_thinking_and_tool_with_coverage ... ok
+test second_steer_while_first_sending_is_dropped_and_editor_retains_it ... ok
+test session_update_response_after_loop_finished_retains_info_and_saved_next_turn ... ok
+test send_failed_steer_restores_unsent_paused_and_preserves_editor ... ok
+test settings_apply_persists_atomically_without_reloading_agent ... ok
+test shutdown_drains_after_child_exit_until_rpc_channel_ends ... ok
+test session_close_and_delete_command_lifecycle ... ok
+test search_jump_expands_a_fold_temporarily_and_restores_it_on_close ... ok
+test send_response_registers_direct_wait_and_durable_history_replaces_live ... ok
+test session_selector_defaults_to_current_workspace_recent_activity ... ok
+test shutdown_send_turn_in_flight_response_registers_wait ... ok
+test shutdown_ok_after_known_failed_preserves_unsaved_and_last_result ... ok
+test slash_reload_does_not_disturb_an_existing_turn_wait ... ok
+test slash_reload_starts_with_agent_reload_and_leaves_the_retained_turn_alone ... ok
+test stale_session_state_response_cannot_regress_a_newer_query ... ok
+test startup_continue_falls_back_to_the_selector_without_cross_project_guessing ... ok
+test slash_reload_without_retained_turn_enqueues_no_wait ... ok
+test slash_cancel_sends_exact_turn_cancel_and_wait_reconciles ... ok
+test stale_gap_revision_history_reply_cannot_release_a_new_event_gap ... ok
+test steer_queue_full_retains_composer_input_and_shows_warning ... ok
+test tool_completion_updates_in_place_without_duplicate_or_reorder ... ok
+test steering_history_not_recorded_vs_unconfirmed ... ok
+test tool_events_before_started_are_retained_and_mark_a_gap ... ok
+test turn_result_completed_and_persistence_failed ... ok
+test turn_result_cancelled_user_and_unknown ... ok
+test switching_sessions_keeps_independent_composers_and_background_loops ... ok
+test startup_session_flag_opens_the_exact_id_without_a_selector ... ok
+test turn_result_failed_and_persisted_with_model_error ... ok
+test startup_continue_matches_only_the_current_workspace ... ok
+test steering_ack_only_clears_the_same_editor_revision ... ok
+test session_selector_scope_defaults_to_current_workspace_with_an_explicit_all ... ok
+test update_and_steer_fifo_duplicate_text_history_reconciliation ... ok
+test search_caps_matches_and_reports_truncation_instead_of_guessing ... ok
+test update_request_started_before_update_response_confirms_applied ... ok
+test draft_budget_refuses_new_input_and_keeps_existing_drafts ... ok
+test session_footer_new_invalidates_prepared_header_cache ... ok
+test new_session_and_empty_created_session_keep_startup_header ... ok
+test prompt_jumps_skip_steering_and_read_an_unloaded_window ... ok
+test external_editor_updates_only_the_current_draft_and_rejects_stale_return ... ok
+test raw_export_streams_oversized_item_bytes_without_decoding ... ok
+
+test result: ok. 137 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/backpressure_baseline.rs (target/debug/deps/backpressure_baseline-0e9ec974fafdb59c)
+
+running 4 tests
+test ui_command_dispatch_uses_synchronous_admission_and_owned_jobs ... ok
+test an_oversized_line_is_rejected_before_any_write ... ok
+test normal_admission_is_synchronous_and_bounded_at_28 ... ok
+test four_control_slots_stay_reserved_after_the_normal_class_is_full ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/baseline_defects.rs (target/debug/deps/baseline_defects-5a0f5a088a60be22)
+
+running 13 tests
+test control_sequences_are_escaped_at_the_display_boundary ... ok
+test history_read_uses_chunked_runtime_items_not_the_display_dto ... ok
+test bootstrap_accepts_the_pinned_agent_0_5_protocol_v1 ... ok
+test bootstrap_rejects_a_backend_missing_required_capabilities ... ok
+test inbound_wire_budget_is_released_by_frame_ownership ... ok
+test ping_result_carries_protocol_version_and_capabilities ... ok
+test session_state_represents_compaction_and_control_methods_exist ... ok
+test run_commands_admits_synchronously_and_owns_the_clipboard ... ok
+test tool_projection_uses_one_index_and_never_rescans_blocks ... ok
+test ui_admission_is_synchronous_with_28_normal_and_4_control_slots ... ok
+test agent_stderr_is_never_stored_as_content ... ok
+test reload_does_not_stage_a_full_history_replacement ... ok
+test turn_result_recovery_exists_and_is_settled_by_exact_turn ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/performance.rs (target/debug/deps/performance-c5f2aea180aff261)
+
+running 11 tests
+test measure_all_lines_clone_latency ... ignored, manual performance measurement; run with --ignored --nocapture
+test measure_c2_stable_layout_and_viewport_ownership ... ignored, manual performance measurement; run with --ignored --nocapture
+test measure_c2b_worker_over_50k_rows_and_1000_output_deltas ... ignored, C2b acceptance; run with --ignored --nocapture
+test measure_c2c_release_workload_120x40 ... ignored, C2c release workload; run with --ignored --nocapture
+test measure_live_delta_rebuild_cost ... ignored, manual performance measurement; run with --ignored --nocapture
+test measure_prepare_frame_path_over_50k_rows ... ignored, manual performance measurement; run with --ignored --nocapture
+test durable_layout_snapshot_shares_tool_presentation_storage ... ok
+test production_layout_worker_installs_current_width_only ... ok
+test production_layout_worker_fences_stale_theme_result ... ok
+test baseline_prepared_rows_scale_with_total_history ... ok
+test baseline_all_lines_materializes_full_transcript ... ok
+
+test result: ok. 5 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/preparing_baseline.rs (target/debug/deps/preparing_baseline-6184d85dfe692fa9)
+
+running 4 tests
+test preparing_status_is_visible ... ok
+test baseline_cannot_cancel_a_preparing_submission_before_turn_ref ... ok
+test wait_is_registered_once_and_turn_result_recovery_exists ... ok
+test preparation_observes_context_and_operation_identity ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/protocol.rs (target/debug/deps/protocol-64a86e227eb88404)
+
+running 8 tests
+test ping_builder_matches_json_rpc_shape ... ok
+test discovery_fixtures_decode_real_agent_shapes ... ok
+test history_fixture_decodes_contiguous_indexed_items ... ok
+test event_fixtures_keep_request_index_and_tool_outcome ... ok
+test unknown_fields_and_usage_defaults_and_outcome_tolerance ... ok
+test session_state_uses_an_active_loop_object ... ok
+test turn_wait_is_a_direct_turn_result_view ... ok
+test unknown_reasoning_is_rejected_but_unknown_read_only_fields_are_ignored ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/rail_fixtures.rs (target/debug/deps/rail_fixtures-20fa64b597bd1a80)
+
+running 9 tests
+test provenance_file_is_present_and_pinned ... ok
+test rust_editor_height_formula_matches_source_terminal_sizes ... ok
+test rust_surface_primitives_match_source_rail_and_content_geometry ... ok
+test rust_reasoning_fold_rows_match_source_threshold_fixtures ... ok
+test rust_tool_state_colors_and_hidden_count_boundaries_match_source_facts ... ok
+test rust_slash_enter_states_match_the_fixed_native_editor ... ok
+test pinned_reference_fixtures_are_well_formed_and_complete ... ok
+test rust_scrollbar_cells_match_pi_0851_positions_glyphs_and_colors ... ok
+test rust_editor_and_paste_rows_match_the_fixed_native_editor ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/read_chunks.rs (target/debug/deps/read_chunks-c0203e5d57d5df18)
+
+running 14 tests
+test complete_chunk_with_wrong_byte_count_is_rejected ... ok
+test assembled_item_round_trips_the_canonical_bytes ... ok
+test malformed_history_pages_do_not_advance_or_fabricate_completion ... ok
+test continuation_offset_is_strict ... ok
+test records_truncated_is_reported ... ok
+test pending_turn_result_does_not_freeze_a_zero_total_snapshot ... ok
+test turn_result_pages_decode_all_availabilities ... ok
+test unknown_encoding_is_refused ... ok
+test valid_snapshot_pins_require_the_agent_revision_shape ... ok
+test trailing_incomplete_tail_is_not_fabricated ... ok
+test turn_result_window_keeps_turn_local_indexes_outside_session_history ... ok
+test paged_chunks_reconstruct_real_runtime_items_exactly ... ok
+test oversized_item_becomes_a_placeholder ... ok
+test large_item_gap_is_rejected_before_placeholder_installation ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/render_snapshots.rs (target/debug/deps/render_snapshots-f8e0695c0fb9aebf)
+
+running 4 tests
+test empty_dark_scene_matches_the_committed_snapshot ... ok
+test empty_light_scene_matches_the_committed_snapshot ... ok
+test help_dark_scene_matches_the_committed_snapshot ... ok
+test render_is_read_only_the_app_is_left_untouched ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/rpc_io.rs (target/debug/deps/rpc_io-f04797b8871b3c0d)
+
+running 2 tests
+test spawn_rejects_a_missing_config_with_a_plain_error ... ok
+test spawn_reports_an_unusable_agent_binary ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/terminal_restore.rs (target/debug/deps/terminal_restore-2396e2897c3d667c)
+
+running 7 tests
+test child_test ... ok
+test real_pty_editor_suspend_and_resume_round_trip ... ignored, requires a real terminal: run with cargo test --ignored from a TTY
+test real_pty_enter_and_restore_round_trip ... ignored, requires a real terminal: run with `cargo test --ignored` from a TTY
+test panic_hook_drop_child ... ok
+test terminal_guard_owns_one_restore_path_and_is_send ... ok
+test panic_hook_normal_drop_and_nested_guards_restore_safely ... ok
+test panic_hook_drop_during_unwind_is_a_normal_panic ... ok
+
+test result: ok. 5 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/tool_streams.rs (target/debug/deps/tool_streams-ca59e0dcc860413b)
+
+running 12 tests
+test empty_gap_is_not_eof_and_clears_unicode_tail ... ok
+test event_gap_does_not_skip_bytes_that_an_authoritative_page_can_recover ... ok
+test late_page_eof_cannot_hide_newer_event_bytes ... ok
+test overlap_event_query_does_not_duplicate_raw_bytes ... ok
+test every_pinned_output_fixture_decodes_using_raw_offsets ... ok
+test stream_debug_never_logs_content ... ok
+test true_empty_eof_is_available_not_unavailable ... ok
+test utf8_cross_page_invalid_bytes_and_controls_keep_raw_cursor ... ok
+test pinned_read_fixtures_preserve_policy_and_recording_facts ... ok
+test detail_result_pages_share_the_existing_toolfacts_body ... ok
+test window_capacity_is_bounded_and_offsets_survive_head_eviction ... ok
+test tiny_process_events_coalesce_without_mutating_inflight_layout_snapshots ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/word_oracle.rs (target/debug/deps/word_oracle-0751d5b875329828)
+
+running 2 tests
+test paragraph_line_selection_is_the_full_native_width ... ok
+test word_cell_bounds_matches_the_pinned_native_pi_word_selector ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/workspace.rs (target/debug/deps/workspace-48095057a17c7f7d)
+
+running 6 tests
+test grep_ranges_are_utf8_bytes_not_character_or_cell_indexes ... ok
+test deadline_is_partial_without_a_cursor ... ok
+test quoted_path_tokens_roundtrip_without_attaching_content ... ok
+test raw_chunks_crlf_same_line_unicode_and_copy_without_softwrap_or_numbers ... ok
+test pinned_workspace_schemas_additive_fields_and_malformed_known_fields ... ok
+test huge_line_and_tiny_chunks_stay_bounded_and_controls_do_not_execute ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
