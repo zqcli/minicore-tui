@@ -6,9 +6,27 @@ flows, Ratatui `TestBackend` snapshots, and terminal lifecycle checks. It does
 not call a real provider, require an installed Agent, read a user config, or
 enter an alternate screen during normal CI tests.
 
-## Current Patch Verification
+## Current 0.3.0 Verification Boundary
 
-The current same-version **TUI 0.2.8 / Agent 0.3.3** source pair is TUI `a604e55`
+The current package is TUI **0.3.0**, paired with Agent **0.5.0** and Runtime
+**0.4.1**. The fixed source revisions are recorded in
+[`docs/backend.md`](backend.md), and the phase-F query-lifecycle regression is
+in commit `d5d1609`. The E3 Linux records below are historical evidence for the
+implementation before this final F review delta; the new hosted workflow has
+not run in this workspace and is not claimed as passed.
+
+The default local commands remain offline after dependencies have been fetched:
+
+```bash
+cargo fmt --all -- --check
+cargo test --locked --offline --all-targets
+cargo clippy --locked --offline --all-targets -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --offline --no-deps
+```
+
+## Historical Patch Verification
+
+The historical same-version **TUI 0.2.8 / Agent 0.3.3** source pair is TUI `a604e55`
 / Agent `f1697f7`; see the [public reload correction](verification/reload-refresh/README.md).
 Fresh committed source archives passed **508 TUI tests / 19 ignored** on stable
 and Rust 1.85, plus all **18 real-Agent E2E tests** separately on both toolchains.
@@ -54,11 +72,11 @@ Run these commands from the repository root:
 
 ```bash
 cargo fmt --all -- --check
-cargo test --locked --all-targets
-cargo clippy --locked --all-targets -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps
-cargo tree -p crossterm
-cargo metadata --locked --no-deps --format-version 1
+cargo test --locked --offline --all-targets
+cargo clippy --locked --offline --all-targets -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --offline --no-deps
+cargo tree --locked --offline -p crossterm
+cargo metadata --locked --offline --no-deps --format-version 1
 ```
 
 Final6 delivery verification used Rust `1.85.0` and stable on an isolated
@@ -165,7 +183,7 @@ The E2E tests are ignored by default:
 
 ```bash
 MINICORE_AGENT_BIN=/path/to/minicore-agent \
-cargo test --locked --test agent_e2e -- --ignored --test-threads=1 --nocapture
+cargo test --locked --offline --test agent_e2e -- --ignored --test-threads=1 --nocapture
 ```
 
 The test harness creates an isolated configuration, data directory, workspace,
@@ -231,20 +249,23 @@ this pair passed on the Linux builder (cross-clippy `-D warnings` and all-target
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) defines:
 
-- Ubuntu quality: fmt, clippy with denied warnings, rustdoc, and one
+- Ubuntu stable quality: fmt, Clippy with denied warnings, rustdoc, and one
   Crossterm version;
-- locked tests on Ubuntu, macOS, and Windows;
-- locked tests with Rust 1.85.0 on Ubuntu.
+- locked offline tests on Ubuntu, macOS, and Windows for Rust 1.85.0 and stable;
+- a separate pinned Agent/Runtime source checkout and offline build;
+- a serial ignored real-Agent E2E job using only the in-test loopback provider
+  and no provider credentials.
 
-GitHub Actions Linux, macOS, and Windows jobs were not run in final6. Remote
-Linux tests and cross-target checks are separate evidence, not a substitute for
-those platform jobs. See [verification.md](verification.md) for the exact
-delivery evidence.
+The workflow first fetches locked dependencies, then uses `--offline` for the
+actual checks. Hosted jobs have not been run for this release branch yet, so
+this file is CI configuration rather than execution evidence. Remote Linux
+records and local focused tests remain separate evidence.
 
 ## Secret Hygiene
 
 Do not put API keys, bearer tokens, provider credentials, raw Agent frames,
 user messages, reasoning, tool arguments, tool output, or real workspace paths
 in fixtures, snapshots, debug logs, E2E configs, or documentation. The debug
-log records only request metadata. The E2E safety checker exists to enforce
+log records only request metadata and is bounded to 200 lines / 4096 bytes per
+line. The E2E safety checker exists to enforce
 this boundary for its temporary config.

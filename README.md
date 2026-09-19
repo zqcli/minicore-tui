@@ -32,14 +32,10 @@ Since 0.2.7, Debug builds use `opt-level=1` for this package and level 2 for
 dependencies. Debug information and assertions remain enabled, but optimization
 can affect stepping and local-variable visibility. Terminal output batches small
 ANSI writes through a 64 KiB buffer; render rates are unchanged. The Release
-profile is unchanged. The current release is **0.2.8**, paired with Agent
-**0.3.3**; see [release notes](docs/release-0.2.8.md).
-Same-version [Tool, reload and native subagent follow-ups](docs/verification/followups/README.md)
-have separate source commits, remote/native verification and installed artifacts.
-The [public reload correction](docs/verification/reload-refresh/README.md) also
-restores the old command's exact-turn result reread and fences late wait replies.
-The current installed source pair is TUI `a604e55` / Agent `f1697f7`; version
-strings alone do not distinguish it from the older 0.2.8/0.3.3 binaries.
+profile is unchanged. The current release line is **0.3.0**, paired with Agent
+**0.5.0** and Runtime **0.4.1** over Protocol v1; the fixed revisions are
+listed in [the backend contract](docs/backend.md). The older 0.2.x release
+notes remain historical and are not evidence for this release.
 
 For a macOS x86_64 cross-build, put LLVM's `clang` and `ld64.lld` on `PATH`,
 set `SDKROOT` to a macOS SDK, and run `scripts/build-macos-x86_64.sh`.
@@ -79,14 +75,17 @@ cargo run --locked -- \
 
 | Option | Meaning |
 |---|---|
+| `--config <PATH>` | Local TUI preferences; Agent credentials/catalogs are never loaded from it. |
 | `--agent-bin <PATH>` | Agent executable; defaults to `minicore-agent` on `PATH`. |
-| `--agent-config <PATH>` | Agent TOML configuration; required in run mode. |
+| `--agent-config <PATH>` | Agent TOML configuration; required in run mode unless supplied by `--config`. |
 | `--workspace <PATH>` | Workspace string used by a new session; defaults to the current directory. |
+| `--continue` | Open the most recent session for the current workspace without prompting. |
+| `--session <ID>` | Open this exact session ID without guessing. |
 | `--profile <ID>` | Default profile for a new session. |
 | `--model <ID>` | Default model for a new session. |
 | `--reasoning <LEVEL>` | `auto`, `disabled`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; default is Agent/profile selection. |
 | `--theme <dark\|light>` | Built-in palette; default is `dark`. |
-| `--debug` | Append request metadata (method, id, byte count, duration) to a local temporary log; never message or tool content. |
+| `--debug` | Write a bounded local temporary log (200 lines, 4096 bytes/line) with request metadata (method, id, byte count, duration); never message or tool content. |
 | `--help`, `-h` | Print usage and exit. |
 | `--version`, `-V` | Print the TUI version and exit. |
 
@@ -111,8 +110,8 @@ tool work, and model B therefore remain separate request views. A turn sends
 `turn.send` and registers `turn.wait` immediately. If submitted while a loop
 is running, the composer routes the text to `turn.steer`. Agent events are
 best-effort live display data and may be dropped. `turn.wait`, `session.state`,
-and `session.history` are the authoritative sources; completed turns
-reconcile the live view with durable history items.
+and the paged `session.read` path are authoritative; `session.history` remains a
+compatibility/diagnostic method and is not the application history path.
 
 Tools run automatically under the Agent. Bash is not sandboxed. The TUI supports
 mid-turn steering via `turn.steer`. It does not add approval, live Bash PTY output,
@@ -148,17 +147,20 @@ The [r2 backend record](docs/backend.md) is historical. `persisted` acknowledges
 appending the process's durable items, not transaction/fsync/crash durability.
 A failed append blocks the Session while retaining its in-process completion.
 
-- Agent 0.3.3 commit `f1697f78ce48c8f5f3fde0dc9903c153022bfd9e`;
+- Agent 0.5.0 commit `061743369459299e66be97bf97d2b27352a39914`;
 - Runtime 0.4.1 commit `6cd2bdbc634437dea925495c61c7eb0be10ba171`;
-- RPC version `0.3.x`;
+- TUI release-branch source baseline `c118077`;
+- RPC Protocol v1 with the required capability set;
 - NDJSON over stdio, with one TUI writer, one stdout reader, one stderr reader,
   bounded frames (up to 32 MiB), request IDs, response/event interleaving, and no event replay.
 
 The Agent executes native stateless `subagent` single/parallel/chain calls;
 the TUI displays their ordinary Tool results. Persistent subagent orchestration,
-manager/tree UI, approval UI, compaction controls, live Bash/PTY output, MCP,
-plugins, skills, remote agents and image input remain outside this delivery.
-The TUI now supports a bounded direct external-editor draft workflow; OSC52 copy remains optional follow-up work.
+manager/tree UI, approval UI, live Bash/PTY output, MCP, plugins, skills,
+remote agents and image input remain outside this delivery. The TUI supports
+bounded tool details, workspace file/search and preview views, read-only Changes/
+Diff and Context views, local settings, and a direct external-editor draft
+workflow. OSC52 copy remains outside the release boundary.
 
 ## Platform And Troubleshooting
 
@@ -182,18 +184,16 @@ Common errors:
 
 The default suite is offline and uses protocol fixtures, a production-driven
 fake Agent harness, app-flow tests, TestBackend snapshots, and terminal
-lifecycle tests. See [docs/testing.md](docs/testing.md) for the remote Rust
-1.85 commands, snapshot inventory, ignored tests, Windows checks, and E2E
-procedure. Stage 3 Session-panel verification and its requirement matrix are
-in [docs/verification/stage3-session-panel/README.md](docs/verification/stage3-session-panel/README.md).
-See [docs/acceptance.md](docs/acceptance.md) for the historical MIG-001..160 migration
-status note and [docs/verification.md](docs/verification.md) for the current
-delivery evidence. The concise implementation and verification summary is in
-[docs/final-report.md](docs/final-report.md).
+lifecycle tests. See [docs/testing.md](docs/testing.md) for the Rust 1.85/stable
+commands, snapshot inventory, platform matrix, and E2E procedure. The current
+refactor matrix is [docs/refactor-acceptance.md](docs/refactor-acceptance.md);
+[docs/acceptance.md](docs/acceptance.md) is the historical v0.2 migration matrix.
 
-A real-Agent E2E is ignored by default and must use a loopback mock endpoint;
-it does not require or permit access to a real provider. Do not put secrets or
-real user data in fixtures, logs, E2E config, or snapshots.
+A real-Agent E2E is ignored by default and must use the pinned Agent binary plus
+a loopback mock endpoint; it does not require or permit access to a real
+provider. Do not put secrets or real user data in fixtures, logs, E2E config, or
+snapshots. Hosted CI builds the fixed Agent/Runtime sources separately and runs
+the serial E2E job without provider credentials.
 
 ## License
 

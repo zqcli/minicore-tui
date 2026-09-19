@@ -820,21 +820,41 @@ impl DebugLog {
             };
         }
         let path = std::env::temp_dir().join("minicore-tui-debug.log");
+        Self::new_at(path)
+    }
+
+    fn new_at(path: std::path::PathBuf) -> Self {
         let (sender, receiver) = std::sync::mpsc::sync_channel::<String>(Self::QUEUE_CAPACITY);
         let writer = std::thread::spawn(move || {
             use std::io::Write;
             let mut file = std::fs::OpenOptions::new()
                 .create(true)
-                .append(true)
+                .truncate(true)
+                .write(true)
                 .open(path)
                 .ok();
+            if let Some(file) = file.as_ref() {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+                }
+            }
+            let mut written = 0;
             for line in receiver {
+                if written >= Self::MAX_LINES {
+                    continue;
+                }
                 let Some(file) = file.as_mut() else {
                     break;
                 };
-                if file.write_all(line.as_bytes()).is_err() {
+                if file
+                    .write_all(bound_debug_log_line(line).as_bytes())
+                    .is_err()
+                {
                     break;
                 }
+                written += 1;
             }
         });
         Self {
@@ -849,6 +869,26 @@ impl DebugLog {
             let _ = sender.try_send(line);
         }
     }
+
+    const MAX_LINES: usize = 200;
+}
+
+const MAX_DEBUG_LOG_LINE_BYTES: usize = 4096;
+
+fn bound_debug_log_line(mut line: String) -> String {
+    if !line.ends_with('\n') {
+        line.push('\n');
+    }
+    if line.len() <= MAX_DEBUG_LOG_LINE_BYTES {
+        return line;
+    }
+    let mut end = MAX_DEBUG_LOG_LINE_BYTES.saturating_sub(1);
+    while end > 0 && !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    line.truncate(end);
+    line.push('\n');
+    line
 }
 
 impl Drop for DebugLog {
@@ -909,6 +949,31 @@ mod tests {
         // The disabled logger allocates no thread and drops lines silently.
         let disabled = DebugLog::new(false);
         disabled.record("ignored".to_owned());
+
+        let path = std::env::temp_dir().join(format!(
+            "minicore-tui-debug-test-{}-{}",
+            std::process::id(),
+            Instant::now().elapsed().as_nanos()
+        ));
+        std::fs::write(&path, "stale\n").expect("seed debug log");
+        let logger = DebugLog::new_at(path.clone());
+        for _ in 0..DebugLog::MAX_LINES + 5 {
+            logger.record("request\n".to_owned());
+        }
+        drop(logger);
+        let contents = std::fs::read(&path).expect("read bounded debug log");
+        assert!(contents.iter().filter(|byte| **byte == b'\n').count() <= DebugLog::MAX_LINES);
+        assert!(contents.len() <= DebugLog::MAX_LINES * MAX_DEBUG_LOG_LINE_BYTES);
+        assert!(!contents.windows(5).any(|window| window == b"stale"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn debug_log_lines_are_bounded_on_utf8_boundaries() {
+        let line = bound_debug_log_line(format!("{}\n", "界".repeat(MAX_DEBUG_LOG_LINE_BYTES)));
+        assert!(line.len() <= MAX_DEBUG_LOG_LINE_BYTES);
+        assert!(line.ends_with('\n'));
+        assert!(std::str::from_utf8(line.as_bytes()).is_ok());
     }
 
     #[test]

@@ -13,6 +13,7 @@
 
 use super::*;
 use crate::app::history::ReadPage;
+use crate::app::queries::QueryScope;
 use crate::state::search::{
     SearchCoverage, SearchMatch, SearchPanelMode, SearchPanelState, SearchScope, SearchSource,
     SearchStatus,
@@ -93,9 +94,16 @@ impl App {
 
     /// Closes the search panel and restores every temporary fold override.
     pub(super) fn close_search(&mut self) {
+        let scope = self.search_panel().map(|panel| QueryScope::Search {
+            session_id: panel.session_id.clone(),
+            generation: panel.generation,
+        });
         self.restore_search_folds();
         self.pending_search_jump = None;
         self.search_scan = None;
+        if let Some(scope) = scope {
+            self.invalidate_query_scope(&scope);
+        }
         if matches!(self.dock, Dock::Search(_)) {
             self.dock = Dock::Composer;
         }
@@ -222,16 +230,24 @@ impl App {
     /// Stops the running scan. Coverage stays honest: the matches already
     /// found are kept and the panel reports the scan as incomplete.
     pub(super) fn search_stop(&mut self) {
-        let Some(panel) = self.search_panel_mut() else {
+        let Some(panel) = self.search_panel() else {
             return;
         };
         if !panel.scanning() {
             return;
         }
+        let scope = QueryScope::Search {
+            session_id: panel.session_id.clone(),
+            generation: panel.generation,
+        };
+        let Some(panel) = self.search_panel_mut() else {
+            return;
+        };
         panel.status = SearchStatus::Stopped;
         panel.coverage.stopped = true;
         panel.coverage.complete = false;
         self.search_scan = None;
+        self.invalidate_query_scope(&scope);
         self.notice(
             NoticeLevel::Info,
             "search stopped; the matches found so far are kept",
@@ -250,11 +266,16 @@ impl App {
         let scope = panel.scope;
         let session_id = panel.session_id.clone();
         let session_epoch = panel.session_epoch;
+        let old_scope = QueryScope::Search {
+            session_id: session_id.clone(),
+            generation: panel.generation,
+        };
         let generation = self.search_generation.wrapping_add(1);
         self.search_generation = generation;
         // A new generation invalidates the previous in-flight work; its
         // result is dropped by the identity check below.
         self.search_scan = None;
+        self.invalidate_query_scope(&old_scope);
         let Some(panel) = self.search_panel_mut() else {
             return Vec::new();
         };
@@ -1308,7 +1329,14 @@ impl App {
             .search_scan
             .as_ref()
             .and_then(|scan| scan.stop_reason.clone());
+        let scope = self.search_scan.as_ref().map(|scan| QueryScope::Search {
+            session_id: scan.session_id.clone(),
+            generation: scan.generation,
+        });
         self.search_scan = None;
+        if let Some(scope) = scope {
+            self.invalidate_query_scope(&scope);
+        }
         let Some(panel) = self.search_panel_mut() else {
             return;
         };

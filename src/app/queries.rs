@@ -107,6 +107,10 @@ impl QuerySlots {
         self.waiting.len()
     }
 
+    pub(super) fn ready_contains(&self, key: &QueryKey) -> bool {
+        self.ready.contains(key)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.in_flight.is_empty()
     }
@@ -123,12 +127,15 @@ impl QuerySlots {
             self.refresh_needed.insert(key);
             return QueryAdmission::Coalesced;
         }
-        if self.ready.remove(&key) {
-            if self.in_flight.len() < Self::CAPACITY {
-                self.in_flight.push((request_id, key));
-                return QueryAdmission::Admitted;
+        if self.ready.contains(&key) {
+            if self.in_flight.len() >= Self::CAPACITY {
+                // A ready key came from the FIFO and must not be copied into
+                // `waiting` while its reservation is still retained.
+                return QueryAdmission::Busy;
             }
-            self.ready.insert(key.clone());
+            self.ready.remove(&key);
+            self.in_flight.push((request_id, key));
+            return QueryAdmission::Admitted;
         }
         if self.waiting_set.contains(&key) {
             return QueryAdmission::Coalesced;
@@ -209,6 +216,8 @@ pub enum QueryScope {
     Changes(String),
     Workspace { session_id: String, file: bool },
     Tool(crate::state::tool::ToolKey),
+    Search { session_id: String, generation: u64 },
+    Export { session_id: String, export_id: u64 },
     Session(String),
     All,
 }
@@ -227,6 +236,26 @@ impl QueryScope {
                 matches!(key, QueryKey::Workspace { session_id: id, file: f } if id == session_id && f == file)
             }
             Self::Tool(tool) => matches!(key, QueryKey::Tool { key } if key == tool),
+            Self::Search {
+                session_id,
+                generation,
+            } => matches!(
+                key,
+                QueryKey::Search {
+                    session_id: id,
+                    generation: g,
+                } if id == session_id && g == generation
+            ),
+            Self::Export {
+                session_id,
+                export_id,
+            } => matches!(
+                key,
+                QueryKey::Export {
+                    session_id: id,
+                    export_id: current,
+                } if id == session_id && current == export_id
+            ),
             Self::Session(session_id) => match key {
                 QueryKey::Changes { session_id: id }
                 | QueryKey::WorkspaceStatus { session_id: id } => id == session_id,
@@ -269,6 +298,8 @@ impl App {
 
     pub(super) fn drain_query_followups(&mut self, commands: &mut Vec<AppCommand>) {
         while let Some(key) = self.pending_query_followups.pop_front() {
+            let was_ready = self.queries.ready_contains(&key);
+            let followup_key = key.clone();
             let command = match key {
                 QueryKey::Changes { .. } => {
                     commands.extend(self.poll_changes());
@@ -348,6 +379,13 @@ impl App {
             };
             if let Some(command) = command {
                 commands.push(command);
+            } else if was_ready && self.queries.ready_contains(&followup_key) {
+                // The FIFO reservation remains owned by QuerySlots when a
+                // different read filled the last free slot before this
+                // follow-up was drained. Keep the intent for the next pass
+                // instead of losing it or duplicating it in `waiting`.
+                self.pending_query_followups.push_front(followup_key);
+                break;
             }
         }
     }
@@ -595,6 +633,42 @@ mod tests {
     }
 
     #[test]
+    fn a_ready_fifo_key_is_not_duplicated_when_another_read_takes_the_slot() {
+        let mut slots = QuerySlots::new();
+        let first = history("ses_1");
+        let second = history("ses_2");
+        let ready = history("ses_3");
+        assert_eq!(
+            slots.request_query(first, RequestId(1)),
+            QueryAdmission::Admitted
+        );
+        assert_eq!(
+            slots.request_query(second, RequestId(2)),
+            QueryAdmission::Admitted
+        );
+        assert_eq!(
+            slots.request_query(ready.clone(), RequestId(3)),
+            QueryAdmission::Busy
+        );
+        slots.on_query_finished(RequestId(1));
+        assert!(slots.ready_contains(&ready));
+        assert_eq!(
+            slots.request_query(history("ses_4"), RequestId(4)),
+            QueryAdmission::Admitted
+        );
+        assert_eq!(
+            slots.request_query(ready.clone(), RequestId(5)),
+            QueryAdmission::Busy
+        );
+        assert_eq!(slots.waiting_len(), 0);
+        slots.on_query_finished(RequestId(2));
+        assert_eq!(
+            slots.request_query(ready, RequestId(6)),
+            QueryAdmission::Admitted
+        );
+    }
+
+    #[test]
     fn app_scope_invalidation_removes_detached_followups_after_close_or_reopen() {
         let mut app = crate::app::App::new(std::path::PathBuf::from("/project"));
         app.pending_query_followups.push_back(history("ses_1"));
@@ -606,6 +680,65 @@ mod tests {
             app.pending_query_followups.into_iter().collect::<Vec<_>>(),
             vec![history("ses_2")],
             "a detached follow-up must not survive a session lifecycle boundary"
+        );
+    }
+
+    #[test]
+    fn search_and_export_scope_invalidation_drops_stale_ready_intents() {
+        let mut slots = QuerySlots::new();
+        let search = QueryKey::Search {
+            session_id: "ses_1".to_owned(),
+            generation: 7,
+        };
+        let export = QueryKey::Export {
+            session_id: "ses_1".to_owned(),
+            export_id: 8,
+        };
+        slots.request_query(history("ses_0"), RequestId(1));
+        slots.request_query(
+            QueryKey::TurnResult {
+                session_id: "ses_0".to_owned(),
+                loop_id: "loop_0".to_owned(),
+            },
+            RequestId(2),
+        );
+        assert_eq!(
+            slots.request_query(search.clone(), RequestId(3)),
+            QueryAdmission::Busy
+        );
+        assert_eq!(
+            slots.request_query(export.clone(), RequestId(4)),
+            QueryAdmission::Busy
+        );
+
+        slots.invalidate_scope(&QueryScope::Search {
+            session_id: "ses_1".to_owned(),
+            generation: 7,
+        });
+        slots.invalidate_scope(&QueryScope::Export {
+            session_id: "ses_1".to_owned(),
+            export_id: 8,
+        });
+        assert_eq!(slots.waiting_len(), 0);
+        slots.on_query_finished(RequestId(1));
+        assert_eq!(
+            slots.on_query_finished(RequestId(2)),
+            Some((
+                QueryKey::TurnResult {
+                    session_id: "ses_0".to_owned(),
+                    loop_id: "loop_0".to_owned(),
+                },
+                false,
+                None,
+            ))
+        );
+        assert_eq!(
+            slots.request_query(search, RequestId(5)),
+            QueryAdmission::Admitted
+        );
+        assert_eq!(
+            slots.request_query(export, RequestId(6)),
+            QueryAdmission::Admitted
         );
     }
 

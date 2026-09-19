@@ -10,6 +10,7 @@
 
 use super::*;
 use crate::app::history::ReadPage;
+use crate::app::queries::QueryScope;
 use crate::jobs::{ExportHeader, ExportInbound, ExportOutcome, ExportRecord};
 use crate::state::export::{ExportLimitations, header_notes, unsaved_markdown, validate_target};
 
@@ -212,8 +213,15 @@ impl App {
     /// cancelled vs unknown. The owned job (and its bounded channel) is kept
     /// alive until that outcome arrives.
     pub fn cancel_export(&mut self) {
+        let scope = self.export_scan.as_ref().map(|scan| QueryScope::Export {
+            session_id: scan.session_id.clone(),
+            export_id: scan.export_id,
+        });
         if let Some(scan) = self.export_scan.as_mut() {
             scan.stop = true;
+        }
+        if let Some(scope) = scope {
+            self.invalidate_query_scope(&scope);
         }
         // The shared cancel token is observed by the writer's own wait loop,
         // so a full channel can never trap the abort. The owned job still owns
@@ -875,7 +883,14 @@ impl App {
             .map(|scan| scan.limitations)
             .unwrap_or_default();
         self.queue_export_message(ExportInbound::Finish(Box::new(limitations)));
+        let scope = self.export_scan.as_ref().map(|scan| QueryScope::Export {
+            session_id: scan.session_id.clone(),
+            export_id: scan.export_id,
+        });
         self.export_scan = None;
+        if let Some(scope) = scope {
+            self.invalidate_query_scope(&scope);
+        }
         if let Some(form) = self.export_form_mut() {
             form.limitations = limitations;
         }
@@ -934,7 +949,14 @@ impl App {
     fn note_export_writer_gone(&mut self) {
         self.export_outbox.clear();
         self.export_hold = false;
+        let scope = self.export_scan.as_ref().map(|scan| QueryScope::Export {
+            session_id: scan.session_id.clone(),
+            export_id: scan.export_id,
+        });
         self.export_scan = None;
+        if let Some(scope) = scope {
+            self.invalidate_query_scope(&scope);
+        }
         if let Some(form) = self.export_form_mut() {
             form.phase = crate::state::export::ExportPhase::Failed;
             form.notice = Some(

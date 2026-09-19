@@ -13,13 +13,16 @@ through `--agent-bin`; its config and data directory belong to the Agent.
 
 | Component | Repository | Revision | Package |
 |---|---|---|---|
-| TUI | `zqcli/minicore-tui` | `9d11ee69c4efa02ef1e5bff143662b48dc3194de` | `0.2.8` |
+| TUI | `zqcli/minicore-tui` | `c118077` (release-branch source baseline) | `0.3.0` |
 | Agent | `zqcli/minicore-agent` | `061743369459299e66be97bf97d2b27352a39914` | `0.5.0` |
 | Runtime | `zqcli/minicore-runtime` | `6cd2bdbc634437dea925495c61c7eb0be10ba171` | `0.4.1` |
 
-These were re-checked at the start of stage A. All three match the spec's
-baseline; no protocol-difference check was triggered. The refactor does not
-upgrade dependencies and does not modify the Agent or Runtime source.
+The Agent and Runtime revisions are fixed inputs for the 0.3.0 release line;
+the TUI source baseline above includes the phase-F query-lifecycle fix and
+package/CI changes. The TUI does not link either backend crate, does not modify
+the Agent or Runtime source, and does not read the Agent Store. Hosted CI checks
+that the separate source checkouts resolve to these exact revisions before
+building them.
 
 ## Handshake
 
@@ -50,9 +53,11 @@ repository's fixtures/E2E remain the release gate.
 passes bootstrap, and the reducer tests
 `bootstrap_accepts_the_pinned_agent_0_5_protocol_v1` and
 `bootstrap_rejects_a_backend_missing_required_capabilities` measure both
-directions. The current D3 tree has also been validated against the pinned
-Agent with all 28 serial E2E scenarios passing; protocol v1 equality remains a
-necessary condition, not the only release gate.
+directions. The E3 record contains 34 serial loopback E2E scenarios; the
+phase-F query-lifecycle fix adds regression coverage for detached follow-ups,
+and the new hosted workflow reruns the fixed-Agent suite without provider
+credentials. Protocol v1 equality remains necessary, not sufficient, for
+release acceptance.
 
 ## Method surface (33 methods)
 
@@ -157,8 +162,8 @@ C2 enforces the local side of those limits (spec §5.2/§5.4 and §21):
   layout worker, each with bounded admission, result ownership, cancellation,
   and joinable shutdown. Clipboard writes and JSON decoding never run on the
   reducer path. The debug log uses a dedicated writer thread fed by bounded
-  `try_send`, so no file IO ever runs on the UI path; `agent.stderr` frames
-  carry `{bytes, dropped}` only.
+  `try_send`, truncates each run to 200 lines of at most 4096 bytes, and keeps
+  file IO off the UI path; `agent.stderr` frames carry `{bytes, dropped}` only.
 - Presentation/history budgets are centralized: history bodies 32 MiB, layout
   cache 48 MiB, live output 4 MiB per loop/16 MiB per session, tool facts 1 MiB
   per stream/16 MiB per session, composer drafts 256 KiB per draft/8 MiB total,
@@ -240,12 +245,13 @@ cargo test --release --locked --test performance -- --ignored --nocapture
 
 Last verified current-tree result under Rust 1.85: `fmt --check` clean;
 full test and Clippy counts are recorded in `docs/refactor-acceptance.md`.
-The pinned Agent 0.5.0 serial E2E run passed 28/28 scenarios, including the
-D3 editor/background-turn coexistence case and the real multi-page D2
-search/export chain. The release performance suite passed 6/6 ignored
-workloads, including the 1000-delta C2b probe and the 120×40 C2c probe. The
-latest C2c sample recorded `p95_us=7610` and `p99_us=7932` for synthetic frame
-processing; reruns can vary with host scheduling, and these are not terminal
+The recorded E3 pinned-Agent serial E2E run passed 34/34 scenarios on the
+remote Linux builder, including the editor/background-turn coexistence case and
+the multi-page search/export plus workspace/Changes/Context workflows. The new
+hosted CI job builds the fixed Agent and Runtime separately and reruns the E2E
+suite with the loopback mock. Until that hosted job runs, its result is not
+claimed as release evidence. The release performance suite passed 6/6 ignored
+workloads in the E3 record; its synthetic frame timings are not terminal
 input-to-frame latency measurements.
 
 When reusing the existing `tui-target` directory after an rsync, run
@@ -258,14 +264,15 @@ by default and are evidence only when explicitly run with their required
 binary/options. `docs/refactor-acceptance.md` tracks which REF rows remain
 open.
 
-C2/D status: the B1/B2 lifecycle and `session.read` migration, serialized
+C2/F status: the B1/B2 lifecycle and `session.read` migration, serialized
 bounded decode worker, shared immutable layout worker, `ScrollAnchor`,
 viewport/neighbor/recent-result history protection, ToolFacts monotonic
 terminal handling, shared body/display owners, bounded SourceMap copy facts,
-and the 32 MiB/48 MiB owner budgets are landed and verified. The current
-boundary intentionally does not add automatic typed decoding above 8 MiB or
-claim mathematically exact allocator/RSS accounting; oversized items remain
-explicit placeholders on the automatic history path. D2 search/copy/export is
-implemented and validated separately. D3 adds local TOML settings, direct
-external-editor jobs with terminal suspend/resume, and startup error
-classification; workspace/file/changes/diff workflows remain deferred.
+query-slot invalidation, and the 32 MiB/48 MiB owner budgets are landed. D2
+search/copy/export, D3 settings/editor lifecycle, E1 tool details, E2
+workspace/file workflows, and E3 Changes/status/Context are implemented. The
+current boundary intentionally does not add automatic typed decoding above
+8 MiB or claim mathematically exact allocator/RSS accounting; oversized items
+remain explicit placeholders on the automatic history path. Native/manual
+terminal behavior, hosted CI execution, and real-provider checks remain
+separate acceptance evidence rather than being implied here.
