@@ -210,7 +210,12 @@ impl App {
     }
 
     pub(super) fn request_session_context(&mut self, session_id: &SessionId) -> Option<AppCommand> {
-        if self.reload.is_some() || !self.can_send_requests() {
+        if !self.context_supported
+            || self.deferred_pending() + self.queries.in_flight_len() >= MAX_DEFERRED_REQUESTS
+            || self.context_query_pending(session_id)
+            || self.reload.is_some()
+            || !self.can_send_requests()
+        {
             return None;
         }
         let poll = self.context_polls.get(session_id).cloned()?;
@@ -2098,6 +2103,37 @@ impl App {
         owner: ContextQueryOwner,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
+        if self
+            .sessions
+            .known
+            .get(session_id)
+            .is_none_or(|v| v.context_query_generation != generation)
+            || matches!(&owner,ContextQueryOwner::Panel(g) if self.context_panel().is_none_or(|c|c.session!=*session_id || c.generation!=*g))
+        {
+            return Vec::new();
+        }
+        if response.error.as_ref().is_some_and(|e| e.code == -32601) {
+            self.context_supported = false;
+            self.compact_supported = false;
+            self.context_polls.clear();
+            self.notice(
+                NoticeLevel::Warning,
+                "Agent 不兼容 session.context；已禁用手动 compact",
+            );
+            return Vec::new();
+        }
+        // An explicit panel read may precede a B-owned operation. Never
+        // overwrite that newer execution poll owner with the old read purpose.
+        let owner = self
+            .context_polls
+            .get(session_id)
+            .filter(|p| {
+                matches!(
+                    p.owner,
+                    ContextQueryOwner::ManualCompact(_) | ContextQueryOwner::Submission(_)
+                )
+            })
+            .map_or(owner, |p| p.owner.clone());
         let context = match response.parse_session_context() {
             Ok(context) if context.session_id == *session_id => context,
             Ok(_) => {
@@ -2157,6 +2193,7 @@ impl App {
             };
             let keep_polling = current_operation.is_some()
                 || automatic_active
+                || view.manual_compact.as_ref().is_some_and(|m|m.result.is_none())
                 || matches!(owner, ContextQueryOwner::Submission(_))
                     && self
                         .submissions
@@ -2184,7 +2221,7 @@ impl App {
                     due,
                 },
             );
-        } else if !matches!(owner, ContextQueryOwner::Explicit) {
+        } else {
             self.context_polls.remove(session_id);
         }
 

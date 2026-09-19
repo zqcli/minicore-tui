@@ -35,6 +35,8 @@ use minicore_tui::state::{FoldOverride, ToolKey};
 use minicore_tui::theme::ThemeKind;
 use serde_json::json;
 
+#[path = "agent_e2e/changes.rs"]
+mod changes_e2e;
 #[path = "agent_e2e/workspace.rs"]
 mod workspace_e2e;
 

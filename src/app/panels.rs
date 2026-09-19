@@ -201,6 +201,21 @@ impl App {
         self.focus = Focus::Editor;
         let (session, epoch, scroll, scope) = match std::mem::take(&mut self.main_view) {
             MainView::Conversation => return,
+            MainView::Context(c) => {
+                if self
+                    .context_polls
+                    .get(&c.session)
+                    .is_some_and(|p| p.owner == ContextQueryOwner::Panel(c.generation))
+                {
+                    self.context_polls.remove(&c.session);
+                }
+                (
+                    c.session.clone(),
+                    c.epoch,
+                    c.conversation_scroll,
+                    QueryScope::Context(c.session),
+                )
+            }
             MainView::Changes(s) => (
                 s.session.clone(),
                 s.epoch,

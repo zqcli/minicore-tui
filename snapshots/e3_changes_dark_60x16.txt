@@ -1,0 +1,16 @@
+ ← 返 回  · Changes 只 读  · Tab 范 围 /比 较  · F5 刷 新
+ workspace · 归 属 未 知 （ 含 工 具 、 Bash、 用 户 /外 部 编 辑 ）
+ 1/1 Live complete:true local_limit:false [DetailsUnavailabl
+ 正 文 焦 点  · Enter 详 情  · Ctrl+N 更 多  · F6 编 辑  · Esc 返 回
+ › src/main.rs · Modified Unknown Unavailable detail:false
+
+
+
+
+
+
+ ▎
+ ▎preserved draft
+ ▎
+ ▎
+ ▸ project@seen:master · deep · high · ● ready         ctx ?

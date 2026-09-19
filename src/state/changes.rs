@@ -44,7 +44,7 @@ impl StatusObservation {
         }
         if value.detached {
             return format!(
-                "detached:{} [{suffix}]",
+                "{suffix}:detached:{}",
                 value
                     .head_oid
                     .as_deref()
@@ -54,7 +54,7 @@ impl StatusObservation {
                     .collect::<String>()
             );
         }
-        format!("{} [{suffix}]", value.branch.as_deref().unwrap_or("git?"))
+        format!("{suffix}:{}", value.branch.as_deref().unwrap_or("git?"))
     }
 }
 pub struct ChangesState {
@@ -73,6 +73,7 @@ pub struct ChangesState {
     pub limited: bool,
     pub detail: Option<DiffState>,
     pub in_diff: bool,
+    pub scrollbar_grab: Option<usize>,
 }
 pub struct DiffState {
     pub record: ChangeRecord,
@@ -129,6 +130,9 @@ impl DiffState {
         }
     }
     pub fn accept(&mut self, mut page: DiffPage) -> Result<(), &'static str> {
+        if !page.base_version.valid() || !page.target_version.valid() {
+            return Err("invalid diff version");
+        }
         if page.change_ref != self.record.change_ref
             || page.path != self.record.path
             || page.origin != self.record.origin
@@ -183,6 +187,9 @@ pub struct DiffSourceLine {
 pub struct DiffBuffer {
     pub lines: Vec<Arc<DiffSourceLine>>,
     pub bytes: usize,
+    hunk: Option<HunkKey>,
+    next_old: usize,
+    next_new: usize,
 }
 impl DiffBuffer {
     pub fn append(&mut self, hunks: Vec<DiffHunk>) -> Result<(), &'static str> {
@@ -238,6 +245,28 @@ impl DiffBuffer {
                 if line.line_byte_offset == 0 {
                     if next.lines.last().is_some_and(|l| !l.complete) {
                         return Err("incomplete diff line before next line");
+                    }
+                    if next.hunk != Some(key) {
+                        if next.hunk.is_some_and(|h| {
+                            key.old_start < h.old_start + h.old_count
+                                || key.new_start < h.new_start + h.new_count
+                        }) {
+                            return Err("overlapping or reordered diff hunk");
+                        }
+                        next.hunk = Some(key);
+                        next.next_old = key.old_start;
+                        next.next_new = key.new_start;
+                    }
+                    if line.old_index.is_some_and(|i| i != next.next_old)
+                        || line.new_index.is_some_and(|i| i != next.next_new)
+                    {
+                        return Err("diff line gap or duplicate");
+                    }
+                    if line.old_index.is_some() {
+                        next.next_old += 1;
+                    }
+                    if line.new_index.is_some() {
+                        next.next_new += 1;
                     }
                     if next.lines.len() >= crate::limits::DIFF_LINES {
                         return Err("diff line limit reached; loaded prefix only");
@@ -296,6 +325,7 @@ pub struct DiffLayout {
     pub text: Arc<str>,
     pub copy_text: Arc<str>,
     pub rows: Vec<DiffRow>,
+    pub display_limited: bool,
 }
 impl std::fmt::Debug for DiffLayout {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -315,6 +345,7 @@ impl DiffLayout {
         let mut text = String::new();
         let mut copy = String::new();
         let mut rows = Vec::new();
+        let mut display_limited = false;
         let mut hunk = None;
         for line in &request.buffer.lines {
             if request.cancel.load(Ordering::Relaxed) {
@@ -330,12 +361,16 @@ impl DiffLayout {
                     k.new_start + usize::from(k.new_count > 0),
                     k.new_count
                 ));
-                rows.push(DiffRow {
-                    text: start..text.len(),
-                    kind: None,
-                    old: None,
-                    new: None,
-                });
+                if rows.len() < crate::limits::DIFF_LAYOUT_ROWS {
+                    rows.push(DiffRow {
+                        text: start..text.len(),
+                        kind: None,
+                        old: None,
+                        new: None,
+                    });
+                } else {
+                    display_limited = true;
+                }
                 hunk = Some(k);
             }
             let built = FileLayout::build(FileLayoutRequest {
@@ -346,9 +381,14 @@ impl DiffLayout {
             // Copy is explicitly line-source text, not an applicable patch. It
             // never includes colors, +/- signs, hunk/line labels or soft wraps.
             copy.push_str(&built.copy_text);
+            display_limited |= built.display_limited;
             let base = text.len();
             text.push_str(&built.text);
             for row in built.rows {
+                if rows.len() >= crate::limits::DIFF_LAYOUT_ROWS {
+                    display_limited = true;
+                    break;
+                }
                 rows.push(DiffRow {
                     text: base + row.text.start..base + row.text.end,
                     kind: Some(line.kind),
@@ -362,6 +402,7 @@ impl DiffLayout {
             text: Arc::from(text),
             copy_text: Arc::from(copy),
             rows,
+            display_limited,
         })
     }
 }

@@ -59,6 +59,9 @@ impl App {
             .collect();
         let mut commands = vec![];
         for (session, epoch, generation) in targets {
+            if self.deferred_pending() + self.queries.in_flight_len() >= MAX_DEFERRED_REQUESTS {
+                break;
+            }
             let key = QueryKey::WorkspaceStatus {
                 session_id: session.clone(),
             };
@@ -122,7 +125,43 @@ impl App {
                 v.workspace_status.stale = true;
             }
         }
+        self.enforce_status_budget();
         vec![]
+    }
+    fn enforce_status_budget(&mut self) {
+        let bytes = |s: &WorkspaceStatus| {
+            std::mem::size_of::<WorkspaceStatus>()
+                + s.branch.as_ref().map_or(0, String::capacity)
+                + s.head_oid.as_ref().map_or(0, String::capacity)
+                + s.warnings.capacity() * std::mem::size_of::<StatusWarning>()
+        };
+        let mut total = self
+            .sessions
+            .known
+            .values()
+            .filter_map(|v| v.workspace_status.value.as_ref())
+            .map(bytes)
+            .sum::<usize>();
+        while total > crate::limits::STATUS_CACHE_BYTES {
+            let victim = self
+                .sessions
+                .known
+                .iter()
+                .filter_map(|(id, v)| {
+                    v.workspace_status
+                        .value
+                        .as_ref()
+                        .map(|s| (id.clone(), bytes(s)))
+                })
+                .max_by_key(|(id, size)| (self.sessions.active.as_ref() != Some(id), *size));
+            let Some((id, size)) = victim else {
+                break;
+            };
+            let status = &mut self.sessions.known.get_mut(&id).unwrap().workspace_status;
+            status.value = None;
+            status.stale = true;
+            total = total.saturating_sub(size);
+        }
     }
     pub fn open_changes(&mut self, scope: ChangeScope) -> Vec<AppCommand> {
         let Some(session) = self.sessions.active.clone() else {
@@ -160,6 +199,7 @@ impl App {
             limited: false,
             detail: None,
             in_diff: false,
+            scrollbar_grab: None,
         }));
         self.focus = Focus::Main;
         self.slash_completion = None;
@@ -290,6 +330,15 @@ impl App {
                         return Ok(());
                     }
                     for record in std::mem::take(&mut p.records) {
+                        if !record.before.valid()
+                            || !record.after.valid()
+                            || record
+                                .tool_ref
+                                .as_ref()
+                                .is_some_and(|t| t.session_id != session)
+                        {
+                            return Err("invalid change revision or ToolRef");
+                        }
                         let bytes = record_bytes(&record);
                         if s.records.len() >= crate::limits::CHANGE_RECORDS
                             || s.records.iter().map(record_bytes).sum::<usize>() + bytes
@@ -333,6 +382,7 @@ impl App {
             s.detail = Some(DiffState::new(record));
         }
         s.in_diff = true;
+        s.scrollbar_grab = None;
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
         s.generation = self.workspace_generation;
         if let Some(d) = &mut s.detail {
@@ -348,6 +398,7 @@ impl App {
             return false;
         }
         s.in_diff = false;
+        s.scrollbar_grab = None;
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
         s.generation = self.workspace_generation;
         if let Some(d) = &mut s.detail {
@@ -464,16 +515,23 @@ impl App {
         let Some(layout) = &d.layout else {
             return vec![];
         };
+        if layout.identity.width != self.main_body_area().width.saturating_sub(17).max(1) {
+            self.notice(NoticeLevel::Info, "等待当前宽度的 diff 布局后复制");
+            return vec![];
+        }
         let text = layout.copy_text.to_string();
         if d.stale
             || d.error.is_some()
             || d.buffer.partial_line()
-            || d.meta.as_ref().is_none_or(|p| !p.complete || p.truncated)
+            || layout.display_limited
+            || d.meta.as_ref().is_none_or(|p| {
+                !p.complete || p.truncated || p.availability != DiffAvailability::Available
+            })
             || layout.identity.revision != d.revision
         {
             self.notice(
                 NoticeLevel::Warning,
-                "仅复制已显示 diff 行源文本；含旧/部分数据或未完整行，不是完整 patch",
+                "复制当前布局快照的行源文本；旧/部分/显示受限或未完整行，不是完整 patch",
             );
         }
         vec![self.capture_copy(text)]
@@ -545,6 +603,60 @@ impl App {
             self,
             ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1),
         );
+        let body = crate::ui::workspace::file_body(screen.transcript);
+        let s = self.changes().unwrap();
+        let (total, offset) = if s.in_diff {
+            let d = s.detail.as_ref().unwrap();
+            let total = d.layout.as_ref().map_or(0, |l| l.rows.len());
+            (
+                total,
+                if d.follow {
+                    total.saturating_sub(body.height as usize)
+                } else {
+                    d.offset
+                },
+            )
+        } else {
+            (s.records.len(), s.offset)
+        };
+        if matches!(self.dock, Dock::Composer)
+            && (s.scrollbar_grab.is_some()
+                || mouse.column == body.right().saturating_sub(1)
+                    && body.contains((mouse.column, mouse.row).into()))
+        {
+            if let Some(g) = crate::ui::scrollbar::geometry(body, total, offset) {
+                match mouse.kind {
+                    K::Down(MouseButton::Left) | K::Drag(MouseButton::Left) => {
+                        let grab = s.scrollbar_grab.unwrap_or_else(|| {
+                            (mouse.row as usize)
+                                .saturating_sub(g.thumb_top)
+                                .min(g.thumb_height.saturating_sub(1))
+                        });
+                        let offset =
+                            crate::ui::scrollbar::scroll_top_at(g, mouse.row as usize, grab);
+                        if let MainView::Changes(s) = &mut self.main_view {
+                            s.scrollbar_grab = Some(grab);
+                            if s.in_diff {
+                                let d = s.detail.as_mut().unwrap();
+                                d.follow = false;
+                                d.offset = offset;
+                            } else {
+                                s.offset = offset;
+                            }
+                        }
+                        self.focus = Focus::Main;
+                        return Some(vec![]);
+                    }
+                    K::Up(_) => {
+                        if let MainView::Changes(s) = &mut self.main_view {
+                            s.scrollbar_grab = None;
+                        }
+                        return Some(vec![]);
+                    }
+                    _ => {}
+                }
+            }
+        }
         if !screen.transcript.contains((mouse.column, mouse.row).into()) {
             if matches!(mouse.kind, K::Down(MouseButton::Left)) {
                 self.focus = Focus::Editor;

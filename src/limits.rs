@@ -10,8 +10,10 @@
 pub const FILE_PREVIEW_BYTES: usize = 512 * 1024;
 pub const DIFF_BODY_BYTES: usize = 1024 * 1024;
 pub const DIFF_LINES: usize = 16_384;
+pub const DIFF_LAYOUT_ROWS: usize = 131_072;
 pub const CHANGE_RECORDS: usize = 500;
 pub const CHANGE_RECORD_BYTES: usize = 1024 * 1024;
+pub const STATUS_CACHE_BYTES: usize = 1024 * 1024;
 pub const WORKSPACE_CANDIDATE_BYTES: usize = 1024 * 1024;
 pub const WORKSPACE_CANDIDATES: usize = 500;
 

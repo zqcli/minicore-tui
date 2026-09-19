@@ -160,3 +160,46 @@ fn opaque_references_and_cursors_are_not_decoded_or_rebuilt() {
     assert_eq!(req.params["cursor"], cursor);
     assert_eq!(req.params["max_bytes"], 65536);
 }
+
+#[test]
+fn completed_lines_cannot_be_duplicated_or_reordered() {
+    let mut b = DiffBuffer::default();
+    b.append(fragment(0, "中🙂\r\n", true)).unwrap();
+    assert!(b.append(fragment(0, "中🙂\r\n", true)).is_err());
+    assert_eq!(b.bytes, 9);
+    let mut malformed = fragment(0, "中🙂\r\n", true);
+    malformed[0].old_start = usize::MAX;
+    malformed[0].old_count = 1;
+    assert!(DiffBuffer::default().append(malformed).is_err());
+    let revision: ChangeRevision = serde_json::from_value(
+        json!({"kind":"content","sha256":"provider-secret-not-a-hash","bytes":1}),
+    )
+    .unwrap();
+    assert!(!revision.valid());
+}
+
+#[test]
+fn extreme_width_diff_layout_is_bounded_and_labels_its_display_limit() {
+    use minicore_tui::{limits, state::workspace::FileLayoutIdentity};
+    use std::sync::{Arc, atomic::AtomicBool};
+    let size = 200_000;
+    let mut h = fragment(0, "", true);
+    h[0].lines[0].line_byte_len = size;
+    h[0].lines[0].text = "a".repeat(size);
+    let mut b = DiffBuffer::default();
+    b.append(h).unwrap();
+    let layout = DiffLayout::build(DiffLayoutRequest {
+        identity: FileLayoutIdentity {
+            generation: 1,
+            revision: 1,
+            width: 1,
+        },
+        buffer: b,
+        cancel: Arc::new(AtomicBool::new(false)),
+    })
+    .unwrap();
+    assert!(layout.display_limited);
+    assert_eq!(layout.rows.len(), limits::DIFF_LAYOUT_ROWS);
+    assert_eq!(layout.copy_text.len(), size);
+    assert!(layout.retained_bytes() < limits::LAYOUT_CACHE_BYTES);
+}

@@ -411,6 +411,9 @@ fn prepare_frame_with_jobs(app: &mut App, jobs: &mut LocalJobs, area: Rect) {
         return;
     }
     let screen = ui::layout::screen_layout(app, area);
+    if app.context_panel().is_some() {
+        return;
+    }
     if app.changes().is_some() {
         let body = ui::workspace::file_body(screen.transcript);
         if let Some(request) = app.diff_layout_request(body.width.saturating_sub(17).max(1)) {

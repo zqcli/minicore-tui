@@ -31,7 +31,7 @@ fn request(a: &mut App, scope: ChangeScope) -> OutgoingRequest {
         .unwrap()
 }
 #[test]
-fn changes_two_levels_restore_draft_and_keep_independent_records() {
+fn changes_two_levels_restore_draft_and_ignore_hidden_diff_response() {
     let mut a = app();
     a.composer.type_text("draft");
     let r = request(&mut a, ChangeScope::Workspace);
@@ -51,6 +51,46 @@ fn changes_two_levels_restore_draft_and_keep_independent_records() {
     a.close_main_detail();
     assert_eq!(a.composer.content(), "draft");
     assert!(a.queries.is_empty());
+}
+
+#[test]
+fn fragmented_diff_copy_uses_visible_safe_source_and_late_layout_cannot_install_in_file() {
+    use crate::state::{changes::DiffLayout, workspace::ReturnTarget};
+    let mut a = app();
+    let list_request = request(&mut a, ChangeScope::Workspace);
+    respond(&mut a, &list_request, list());
+    let first = take_requests(a.changes_select()).remove(0);
+    let reference = first.params["change_ref"].clone();
+    let cursor = json!({"session_id":"ses_1","change_ref":reference,"ops_fingerprint":"a".repeat(64),"context_lines":3,"hunk_index":0,"line_index":0,"line_byte_offset":3,"future":"opaque additive"});
+    let page = |offset, text: &str, complete: bool, next: Value| {
+        let mut p = fixture("changes-diff-workspace");
+        p["comparison"] = "head_to_worktree".into();
+        p["complete"] = complete.into();
+        p["truncated"] = (!complete).into();
+        p["next_cursor"] = next;
+        p["hunks"] = json!([{"old_start":0,"old_count":0,"new_start":0,"new_count":1,"lines":[{"kind":"added","new_index":0,"line_byte_offset":offset,"line_byte_len":9,"line_complete":complete,"text":text}]}]);
+        p
+    };
+    respond(&mut a, &first, page(0, "中", false, cursor.clone()));
+    let width = a.main_body_area().width.saturating_sub(17).max(1);
+    let layout = a.diff_layout_request(width).unwrap();
+    a.mark_diff_layout_pending(layout.identity.clone());
+    a.update(AppEvent::DiffLayoutPrepared(
+        DiffLayout::build(layout).unwrap(),
+    ));
+    let next = take_requests(a.changes_more(false)).remove(0);
+    assert_eq!(next.params["cursor"], cursor);
+    respond(&mut a, &next, page(3, "🙂\r\n", true, Value::Null));
+    let copy = a.copy_diff();
+    assert!(matches!(&copy[0],AppCommand::CopySelection(text) if text.as_str()=="中"));
+    assert!(a.notices.back().unwrap().text.contains("部分"));
+    let pending = a.diff_layout_request(width).unwrap();
+    a.mark_diff_layout_pending(pending.identity.clone());
+    a.open_file_preview("other".into(), None, ReturnTarget::Conversation);
+    a.update(AppEvent::DiffLayoutPrepared(
+        DiffLayout::build(pending).unwrap(),
+    ));
+    assert!(a.file_preview().unwrap().layout.is_none());
 }
 #[test]
 fn changes_late_scope_and_comparison_pages_only_release_real_slots() {
@@ -80,7 +120,7 @@ fn workspace_status_is_explicit_and_errors_do_not_claim_no_git_or_use_presentati
     respond(&mut a, &r, status);
     let v = a.sessions.known.get_mut("ses_1").unwrap();
     v.presentation.as_mut().unwrap().git_branch = Some("old-presentation".into());
-    assert!(v.workspace_status.label().starts_with("new-observed"));
+    assert!(v.workspace_status.label().contains("new-observed"));
     a.arm_workspace_status("ses_1", false);
     let r = take_requests(a.poll_workspace_status()).remove(0);
     testapp::respond_rpc_error(&mut a, &r, -32000, "private workspace");

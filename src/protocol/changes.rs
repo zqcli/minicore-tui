@@ -45,6 +45,16 @@ impl fmt::Debug for ChangeRevision {
             .finish()
     }
 }
+impl ChangeRevision {
+    pub fn valid(&self) -> bool {
+        match self {
+            Self::Content { sha256, .. } => {
+                sha256.len() == 64 && sha256.bytes().all(|b| b.is_ascii_hexdigit())
+            }
+            _ => true,
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommitState {

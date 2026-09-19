@@ -16,6 +16,17 @@ pub enum MainView {
     ToolDetail(Box<ToolDetailState>),
     FilePreview(Box<crate::state::workspace::FilePreviewState>),
     Changes(Box<crate::state::changes::ChangesState>),
+    Context(Box<ContextState>),
+}
+#[derive(Debug)]
+pub struct ContextState {
+    pub session: String,
+    pub epoch: u64,
+    pub generation: u64,
+    pub conversation_scroll: Option<crate::state::session::ScrollState>,
+    pub offset: usize,
+    pub action: usize,
+    pub scrollbar_grab: Option<usize>,
 }
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {

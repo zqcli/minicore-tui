@@ -16,7 +16,10 @@ fn version(v: &ChangeRevision) -> String {
     match v {
         ChangeRevision::Missing => "missing".into(),
         ChangeRevision::Unknown => "unknown".into(),
-        ChangeRevision::Content { sha256, bytes } => format!("sha256:{} ({bytes}B)", safe(sha256)),
+        ChangeRevision::Content { sha256, bytes } => format!(
+            "{}…/{bytes}B",
+            safe(&sha256.chars().take(8).collect::<String>())
+        ),
         ChangeRevision::Metadata {
             bytes,
             modified_unix_ms,
@@ -33,10 +36,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let body = super::workspace::file_body(area);
     let focused = app.focused_region() == crate::state::panels::Focus::Main;
     if s.in_diff {
+        headers[0] = Line::from("← Diff · F5刷新 F6编辑 ^N更多 ^⇧C复制行源");
         let d = s.detail.as_ref().unwrap();
         headers.push(Line::from(format!(
             "{} · {:?} · {:?}",
-            safe(&d.record.path),
+            d.record.original_path.as_ref().map_or_else(
+                || safe(&d.record.path),
+                |old| format!("{} → {}", safe(old), safe(&d.record.path))
+            ),
             d.comparison,
             d.record.origin
         )));
@@ -55,14 +62,25 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             safe(e)
         } else if let Some(p) = &d.meta {
             format!(
-                "{:?} · {:?}/{:?} · complete:{} truncated:{} fragment:{} next:{}",
-                p.availability,
+                "{} · {:?}/{:?} page:{} next:{} {}",
+                if d.layout.as_ref().is_some_and(|l| l.display_limited) {
+                    "display-limit".into()
+                } else {
+                    format!("{:?}", p.availability)
+                },
                 p.commit_state,
                 p.coverage,
-                p.complete,
-                p.truncated,
-                d.buffer.partial_line(),
-                d.cursor.is_some()
+                if p.complete && !p.truncated {
+                    "all"
+                } else {
+                    "partial"
+                },
+                d.cursor.is_some(),
+                if d.buffer.partial_line() {
+                    "line-partial"
+                } else {
+                    ""
+                }
             )
         } else {
             "等待比较；Esc 返回列表，F6 编辑；关闭不取消执行".into()
@@ -86,7 +104,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                         Some(DiffKind::Added) => "+",
                         Some(DiffKind::Removed) => "-",
                         Some(DiffKind::Context) => " ",
-                        None => "@",
+                        None => " ",
                     };
                     let num = |n: Option<usize>| {
                         n.map(|i| i.saturating_add(1).to_string())
@@ -122,9 +140,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             || {
                 s.list_page.as_ref().map_or("读取中".into(), |p| {
                     format!(
-                        "{} / {} records · complete:{} local_limit:{} · {:?}",
+                        "{}/{} {:?} complete:{} local_limit:{} {:?}",
                         s.records.len(),
                         p.total,
+                        p.consistency,
                         p.complete,
                         s.limited,
                         p.warnings
@@ -169,7 +188,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 })
             })
             .collect();
-        frame.render_widget(Paragraph::new(rows), body);
+        frame.render_widget(
+            Paragraph::new(rows),
+            Rect::new(body.x, body.y, body.width.saturating_sub(1), body.height),
+        );
+        super::scrollbar::render(frame, body, s.records.len(), s.offset, theme, focused);
     }
     frame.render_widget(
         Paragraph::new(headers).style(Style::new().fg(theme.muted)),

@@ -201,6 +201,7 @@ impl QuerySlots {
 /// read object.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QueryScope {
+    Context(String),
     Changes(String),
     Workspace { session_id: String, file: bool },
     Tool(crate::state::tool::ToolKey),
@@ -212,6 +213,9 @@ impl QueryScope {
     fn matches(&self, key: &QueryKey) -> bool {
         match self {
             Self::All => true,
+            Self::Context(session) => {
+                matches!(key, QueryKey::Context {session_id,..} if session_id==session)
+            }
             Self::Changes(session) => {
                 matches!(key, QueryKey::Changes { session_id } if session_id == session)
             }
@@ -235,28 +239,6 @@ impl QueryScope {
 }
 
 impl App {
-    pub(super) fn read_context_command(&mut self) -> Vec<AppCommand> {
-        let Some(session_id) = self.sessions.active.clone() else {
-            self.notice(NoticeLevel::Info, "no active session to inspect");
-            return Vec::new();
-        };
-        if !self
-            .sessions
-            .known
-            .get(&session_id)
-            .is_some_and(|view| view.info.loaded)
-        {
-            self.notice(
-                NoticeLevel::Info,
-                "open the session before inspecting context",
-            );
-            return Vec::new();
-        }
-        self.arm_context_poll(&session_id, ContextQueryOwner::Explicit, true)
-            .into_iter()
-            .collect()
-    }
-
     /// Releases the read-only slot owned by a finished request. A key that was
     /// asked to refresh while in flight runs once more, so a burst of requests
     /// coalesces into at most one follow-up read (spec §5.3).
@@ -377,10 +359,21 @@ impl App {
         owner: ContextQueryOwner,
         immediate: bool,
     ) -> Option<AppCommand> {
-        let owner = if matches!(&owner, ContextQueryOwner::Explicit) {
+        let owner = if matches!(
+            &owner,
+            ContextQueryOwner::Explicit | ContextQueryOwner::Panel(_)
+        ) {
             self.context_polls
                 .get(session_id)
-                .filter(|poll| !matches!(&poll.owner, ContextQueryOwner::Explicit))
+                .filter(|poll| {
+                    matches!(
+                        &poll.owner,
+                        ContextQueryOwner::ManualCompact(_) | ContextQueryOwner::Submission(_)
+                    ) || matches!(
+                        (&owner, &poll.owner),
+                        (ContextQueryOwner::Panel(_), ContextQueryOwner::Explicit)
+                    )
+                })
                 .map_or(owner.clone(), |poll| poll.owner.clone())
         } else {
             owner
@@ -431,7 +424,10 @@ impl App {
         session_id: &SessionId,
         owner: &ContextQueryOwner,
     ) {
-        if matches!(owner, ContextQueryOwner::Explicit) {
+        if matches!(
+            owner,
+            ContextQueryOwner::Explicit | ContextQueryOwner::Panel(_)
+        ) {
             self.context_polls.remove(session_id);
             return;
         }

@@ -122,6 +122,76 @@ fn workspace_e2_panels() {
 }
 
 #[test]
+fn review_e3_panels_at_three_sizes() {
+    use crate::{protocol::changes::ChangeScope, state::changes::DiffLayout};
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    let fixture = |name: &str| -> serde_json::Value {
+        serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(format!("tests/fixtures/agent-v1/{name}.json")).unwrap(),
+        )
+        .unwrap()["result"]
+            .clone()
+    };
+    for (theme, width, height, label) in [
+        (ThemeKind::Dark, 60, 16, "dark"),
+        (ThemeKind::Light, 80, 24, "light"),
+        (ThemeKind::Dark, 120, 40, "dark"),
+    ] {
+        let mut app = testapp::open_empty(theme, "ses_1", None, "high");
+        app.update(AppEvent::TerminalSize { width, height });
+        app.composer_mut().type_text("preserved draft");
+        let requests = testapp::take_requests(app.open_changes(ChangeScope::Workspace));
+        for r in &requests {
+            let mut value = fixture(if r.method == "workspace.status" {
+                "workspace-status"
+            } else {
+                "changes-list-workspace"
+            });
+            if r.method == "changes.list" {
+                value["session_id"] = "ses_1".into();
+            }
+            testapp::respond(&mut app, r, value);
+        }
+        snapshot(
+            &app,
+            &format!("e3_changes_{label}_{width}x{height}"),
+            width,
+            height,
+        );
+        let request = testapp::take_requests(app.update(AppEvent::Terminal(Event::Key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        ))))
+        .remove(0);
+        let mut value = fixture("changes-diff-workspace");
+        value["comparison"] = request.params["comparison"].clone();
+        testapp::respond(&mut app, &request, value);
+        let request = app
+            .diff_layout_request(app.main_body_area().width.saturating_sub(17).max(1))
+            .unwrap();
+        app.mark_diff_layout_pending(request.identity.clone());
+        app.update(AppEvent::DiffLayoutPrepared(
+            DiffLayout::build(request).unwrap(),
+        ));
+        snapshot(
+            &app,
+            &format!("e3_diff_{label}_{width}x{height}"),
+            width,
+            height,
+        );
+        let request = testapp::take_requests(app.open_context()).remove(0);
+        let mut value = fixture("session-context-after-compact");
+        value["session_id"] = "ses_1".into();
+        testapp::respond(&mut app, &request, value);
+        snapshot(
+            &app,
+            &format!("e3_context_{label}_{width}x{height}"),
+            width,
+            height,
+        );
+    }
+}
+
+#[test]
 fn empty_light_80x24() {
     snapshot(
         &testapp::fresh(ThemeKind::Light),

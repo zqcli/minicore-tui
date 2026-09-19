@@ -13,6 +13,7 @@
 pub mod assistant;
 pub mod changes;
 pub mod composer;
+pub mod context;
 pub mod editor_layout;
 pub mod error;
 pub mod export;
@@ -94,7 +95,9 @@ pub fn render(frame: &mut Frame, app: &App) {
         return;
     }
     let screen = layout::screen_layout(app, area);
-    if app.changes().is_some() {
+    if app.context_panel().is_some() {
+        context::render(frame, screen.transcript, app, &theme);
+    } else if app.changes().is_some() {
         changes::render(frame, screen.transcript, app, &theme);
     } else if app.file_preview().is_some() {
         workspace::render_file(frame, screen.transcript, app, &theme);

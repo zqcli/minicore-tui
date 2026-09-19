@@ -56,6 +56,9 @@ use crate::ui::transcript::{
 pub mod changes;
 #[cfg(test)]
 mod changes_tests;
+pub mod context;
+#[cfg(test)]
+mod context_tests;
 pub mod copy;
 pub mod export;
 pub mod history;
@@ -331,6 +334,7 @@ pub enum RequestKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextQueryOwner {
+    Panel(u64),
     Submission(LocalSubmissionId),
     ManualCompact(String),
     Explicit,
@@ -592,6 +596,9 @@ pub struct App {
     submissions: HashMap<LocalSubmissionId, Submission>,
     context_polls: HashMap<SessionId, ContextPoll>,
     next_operation_id: u64,
+    pub context_supported: bool,
+    pub compact_supported: bool,
+    pub compact_cancel_supported: bool,
     /// Read keys whose slot became available while a response was being
     /// reduced. They are converted to requests only after the page/result
     /// handler has installed its newest cursor.
@@ -808,6 +815,9 @@ impl App {
             submissions: HashMap::new(),
             context_polls: HashMap::new(),
             next_operation_id: 0,
+            context_supported: true,
+            compact_supported: true,
+            compact_cancel_supported: true,
             pending_query_followups: VecDeque::new(),
             next_request_id: RequestId(0),
             next_state_query: 0,
@@ -1367,6 +1377,16 @@ impl App {
         // has been fully handled, so it observes the newest cursor and never
         // overtakes that reducer pass.
         self.drain_query_followups(&mut commands);
+        if self.context_panel().is_some_and(|c| {
+            self.sessions.active.as_ref() != Some(&c.session)
+                || self
+                    .sessions
+                    .known
+                    .get(&c.session)
+                    .is_none_or(|v| !v.info.loaded || v.session_epoch != c.epoch)
+        }) {
+            self.close_main_detail();
+        }
         commands.extend(self.poll_tool_detail());
         commands.extend(self.poll_workspace());
         commands.extend(self.poll_changes());
@@ -1441,6 +1461,17 @@ impl App {
     pub(crate) fn set_active_session(&mut self, next: Option<SessionId>) {
         if self.sessions.active == next {
             return;
+        }
+        // A foreground 500ms deadline must not follow its Session into the
+        // background. Start the slower observation interval at this boundary.
+        let background_due = self.instant_now() + Duration::from_secs(2);
+        if let Some(poll) = self
+            .sessions
+            .active
+            .as_ref()
+            .and_then(|id| self.context_polls.get_mut(id))
+        {
+            poll.due = poll.due.max(background_due);
         }
         if let Some(current) = self.sessions.active.take() {
             match self.sessions.known.get_mut(&current) {
@@ -3561,7 +3592,8 @@ impl App {
             WorkspaceMove(delta) => self.workspace_move(delta),
             WorkspaceSelect(preview) => self.workspace_select(preview),
             WorkspaceMore(refresh) => self.workspace_more(refresh),
-            ChangesSelect => self.changes_select(),
+            DetailActivate if self.context_panel().is_some() => self.context_action(),
+            DetailActivate => self.changes_select(),
             FileMore if self.changes().is_some() => self.changes_more(false),
             FileMore => self.file_more(false),
             PreviewReference => self.preview_reference(),
@@ -3574,10 +3606,16 @@ impl App {
                 Vec::new()
             }
             DetailEscape => self.detail_escape(),
+            DetailTab(step) if self.context_panel().is_some() => {
+                self.context_tab(step);
+                Vec::new()
+            }
             DetailTab(step) if self.changes().is_some() => self.changes_tab(step),
             DetailTab(step) => self.detail_tab(step),
             DetailScroll(delta) => {
-                if self.changes().is_some() {
+                if self.context_panel().is_some() {
+                    self.scroll_context(delta, false);
+                } else if self.changes().is_some() {
                     self.scroll_changes(delta, false);
                 } else if self.file_preview().is_some() {
                     self.scroll_file(delta, false);
@@ -3587,7 +3625,9 @@ impl App {
                 Vec::new()
             }
             DetailEnd => {
-                if self.changes().is_some() {
+                if self.context_panel().is_some() {
+                    self.scroll_context(0, true);
+                } else if self.changes().is_some() {
                     self.scroll_changes(0, true);
                 } else if self.file_preview().is_some() {
                     self.scroll_file(0, true);
@@ -3597,6 +3637,7 @@ impl App {
                 Vec::new()
             }
             DetailRefresh if self.file_preview().is_some() => self.file_more(true),
+            DetailRefresh if self.context_panel().is_some() => self.refresh_context_panel(),
             DetailRefresh if self.changes().is_some() => self.changes_more(true),
             DetailRefresh => self.refresh_tool_detail(),
             DetailCopy if self.file_preview().is_some() => self.copy_file(),
@@ -4240,7 +4281,7 @@ impl App {
             LocalCommand::Help => self.open_dock(Dock::Help),
             LocalCommand::Logs => self.open_dock(Dock::Logs),
             LocalCommand::Cancel => self.cancel_active_turn(),
-            LocalCommand::Context => self.read_context_command(),
+            LocalCommand::Context => self.open_context(),
             LocalCommand::Diff(scope) => self.open_changes(scope),
             LocalCommand::Compact => self.start_manual_compact(),
             LocalCommand::Reload => self.reload(),
@@ -5894,6 +5935,9 @@ impl App {
                     if let Some(info) = listed_info {
                         self.upsert_session_list(info);
                     }
+                }
+                if info_changed {
+                    self.arm_workspace_status(&session_id, true);
                 }
                 if needs_state
                     && self.reload.is_none()

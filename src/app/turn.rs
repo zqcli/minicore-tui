@@ -446,6 +446,13 @@ impl App {
     }
 
     pub(super) fn start_manual_compact(&mut self) -> Vec<AppCommand> {
+        if !self.compact_supported || !self.context_supported {
+            self.notice(
+                NoticeLevel::Warning,
+                "Agent 不兼容 compact/context，入口已禁用",
+            );
+            return Vec::new();
+        }
         if !self.guard_ready() {
             return Vec::new();
         }
@@ -457,21 +464,7 @@ impl App {
             self.notice(NoticeLevel::Info, "no active session to compact");
             return Vec::new();
         };
-        let allowed = self.sessions.known.get(&session_id).is_some_and(|view| {
-            view.info.loaded
-                && !view.closing
-                && !view.is_blocked()
-                && !view.is_preparing()
-                && view.live.is_none()
-                && view.unsaved_loop.is_none()
-                && !view.event_gap
-                && view.transcript.complete
-                && view.state.as_ref().map(|state| state.status) == Some(SessionStatusWire::Idle)
-                && view
-                    .manual_compact
-                    .as_ref()
-                    .is_none_or(|compact| compact.result.is_some())
-        });
+        let allowed = self.can_manual_compact();
         if !allowed {
             self.notice(
                 NoticeLevel::Warning,
@@ -934,6 +927,15 @@ impl App {
         operation_id: &str,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
+        if response.error.as_ref().is_some_and(|e| e.code == -32601) {
+            self.compact_supported = false;
+            self.finish_compact_failure(session_id, operation_id);
+            self.notice(
+                NoticeLevel::Warning,
+                "Agent 不兼容 session.compact；入口已禁用",
+            );
+            return Vec::new();
+        }
         let result = match response.parse_session_compact() {
             Ok(result) if result.operation_id == operation_id => result,
             Ok(_) => {
@@ -1046,10 +1048,27 @@ impl App {
         operation_id: &str,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
+        if response.error.as_ref().is_some_and(|e| e.code == -32601) {
+            self.compact_cancel_supported = false;
+            self.notice(
+                NoticeLevel::Warning,
+                "Agent 不兼容 session.compact.cancel；不会改用 turn.cancel",
+            );
+            return Vec::new();
+        }
         let owns_operation = self.sessions.known.get(session_id).is_some_and(|view| {
             view.manual_compact.as_ref().is_some_and(|compact| {
                 compact.operation_id == operation_id && compact.result.is_none()
-            })
+            }) || view
+                .context
+                .as_ref()
+                .and_then(|c| c.current_operation.as_ref())
+                .is_some_and(|o| o.operation_id == operation_id)
+                || view
+                    .state
+                    .as_ref()
+                    .and_then(|s| s.compaction.as_ref())
+                    .is_some_and(|o| o.operation_id == operation_id)
         });
         if !owns_operation {
             self.notice(
@@ -1074,13 +1093,22 @@ impl App {
                 format!("compaction cancel {operation_id} failed: {error}"),
             ),
         }
-        self.arm_context_poll(
-            session_id,
-            ContextQueryOwner::ManualCompact(operation_id.to_owned()),
-            true,
-        )
-        .into_iter()
-        .collect()
+        let owner = if self
+            .sessions
+            .known
+            .get(session_id)
+            .and_then(|v| v.manual_compact.as_ref())
+            .is_some_and(|m| m.operation_id == operation_id && m.result.is_none())
+        {
+            ContextQueryOwner::ManualCompact(operation_id.to_owned())
+        } else if let Some(poll) = self.context_polls.get(session_id) {
+            poll.owner.clone()
+        } else {
+            return Vec::new();
+        };
+        self.arm_context_poll(session_id, owner, true)
+            .into_iter()
+            .collect()
     }
 
     pub(super) fn request_compact_cancel(
@@ -1088,6 +1116,18 @@ impl App {
         session_id: &SessionId,
         operation_id: &str,
     ) -> Option<AppCommand> {
+        if !self.compact_cancel_supported {
+            return None;
+        }
+        // Panel actions use the same exact-operation cancellation intent as
+        // Esc during deferred preparation, never a fallback turn.cancel.
+        for submission in self.submissions.values_mut().filter(|s| {
+            s.preparation
+                .as_ref()
+                .is_some_and(|o| o.session_id == *session_id && o.operation_id == operation_id)
+        }) {
+            submission.cancel_requested = true;
+        }
         if self.pending_requests.values().any(|kind| {
             matches!(kind, RequestKind::CompactCancel { session_id: pending, operation_id: id } if pending == session_id && id == operation_id)
         }) || self.retry_pending(&RetryKey::CancelCompact {

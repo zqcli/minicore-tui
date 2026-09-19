@@ -320,6 +320,9 @@ impl App {
     }
 
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent) -> Vec<AppCommand> {
+        if let Some(commands) = self.context_mouse(mouse) {
+            return commands;
+        }
         if let Some(commands) = self.review_mouse(mouse) {
             return commands;
         }
@@ -1437,7 +1440,8 @@ impl App {
     pub(super) fn cancel_scrollbar_drag(&mut self) {
         match &mut self.main_view {
             crate::state::panels::MainView::Conversation => {}
-            crate::state::panels::MainView::Changes(_) => {}
+            crate::state::panels::MainView::Changes(s) => s.scrollbar_grab = None,
+            crate::state::panels::MainView::Context(c) => c.scrollbar_grab = None,
             crate::state::panels::MainView::ToolDetail(detail) => detail.scrollbar_grab = None,
             crate::state::panels::MainView::FilePreview(file) => file.scrollbar_grab = None,
         }
