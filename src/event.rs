@@ -240,4 +240,7 @@ pub enum JobOutcome {
         revision: u64,
         result: Result<(), String>,
     },
+    /// The one owned export writer finished (spec §17.4). The outcome carries
+    /// the target so a stale completion for another target is never shown.
+    Export { outcome: crate::jobs::ExportOutcome },
 }

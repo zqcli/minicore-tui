@@ -29,6 +29,9 @@ pub enum QueryKey {
     /// One explicit full-session search scan chain (spec §17.1). It uses the
     /// same two read-only slots as every other read.
     Search { session_id: String, generation: u64 },
+    /// One explicit export read chain (spec §17.4). It shares the same two
+    /// read-only slots and holds its pin until the export finishes.
+    Export { session_id: String, export_id: u64 },
 }
 
 /// The result of asking to start a read.
@@ -180,6 +183,7 @@ impl QueryScope {
                 QueryKey::TurnResult { session_id: id, .. } => id == session_id,
                 QueryKey::Context { session_id: id, .. } => id == session_id,
                 QueryKey::Search { session_id: id, .. } => id == session_id,
+                QueryKey::Export { session_id: id, .. } => id == session_id,
             },
         }
     }
@@ -275,6 +279,13 @@ impl App {
                     .resume_search_scan(&session_id, generation)
                     .into_iter()
                     .next(),
+                crate::app::queries::QueryKey::Export {
+                    session_id,
+                    export_id,
+                } => {
+                    let commands = self.resume_export_scan(&session_id, export_id);
+                    commands.into_iter().next()
+                }
             };
             if let Some(command) = command {
                 commands.push(command);

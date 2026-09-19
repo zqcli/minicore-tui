@@ -48,7 +48,8 @@ pub(super) enum FoldRestore {
 
 impl App {
     /// The open search panel, if the dock currently owns it.
-    pub(crate) fn search_panel(&self) -> Option<&SearchPanelState> {
+    /// Read-only view of the search panel, for the renderer and tests.
+    pub fn search_panel(&self) -> Option<&SearchPanelState> {
         match &self.dock {
             Dock::Search(state) => Some(state),
             _ => None,
@@ -977,6 +978,28 @@ impl App {
         vec![AppCommand::Rpc(request)]
     }
 
+    /// A scan page whose admission was queued can miss the response that freed
+    /// the slot before the follow-up was drained. This idempotent retry runs on
+    /// every update pass: it only fires while the chain needs a page and no
+    /// scan read is in flight, so it can never duplicate a request.
+    pub(super) fn resume_idle_search_page(&mut self) -> Vec<AppCommand> {
+        let needs_page = self
+            .search_scan
+            .as_ref()
+            .is_some_and(|scan| scan.page.is_none() && !scan.terminal && !scan.stop);
+        if !needs_page {
+            return Vec::new();
+        }
+        let in_flight = self
+            .pending_requests
+            .values()
+            .any(|kind| matches!(kind, RequestKind::SearchRead { .. }));
+        if in_flight {
+            return Vec::new();
+        }
+        self.request_search_page()
+    }
+
     /// Re-issues a queued scan page after a read slot became available.
     pub(super) fn resume_search_scan(
         &mut self,
@@ -1152,6 +1175,7 @@ impl App {
             fingerprint: crate::app::history::encoded_item_fingerprint(&item),
             item,
             cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            export: None,
             scan: Some(Box::new(crate::state::search::ScanSpec {
                 needle,
                 include_thinking,

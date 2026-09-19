@@ -14,6 +14,7 @@ pub mod assistant;
 pub mod composer;
 pub mod editor_layout;
 pub mod error;
+pub mod export;
 pub mod footer;
 pub mod header;
 pub mod help;
@@ -110,6 +111,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         Dock::Help => help::render(frame, screen.panel, app, &theme),
         Dock::Logs => logs::render(frame, screen.panel, app, &theme),
         Dock::Search(_) => search::render(frame, screen.panel, app, &theme),
+        Dock::Export(form) => export::render(frame, screen.panel, &theme, form),
     }
     footer::render(frame, screen.footer, app, &theme);
 }

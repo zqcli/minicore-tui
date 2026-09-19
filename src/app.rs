@@ -26,6 +26,7 @@ use crate::protocol::{
 use crate::rpc::{RpcError, SendClass};
 use crate::state::catalog::CatalogState;
 use crate::state::composer::{Composer, MAX_COMPOSER_BYTES};
+use crate::state::export::ExportSpec;
 use crate::state::selection::{
     Dock, NewSessionField, NewSessionState, SelectorKind, SelectorState, SessionConfirmChoice,
     SessionPanelAction, SessionPanelMode, SessionSelectorState, filtered_models, filtered_profiles,
@@ -53,6 +54,7 @@ use crate::ui::transcript::{
 };
 
 pub mod copy;
+pub mod export;
 pub mod history;
 pub mod queries;
 pub mod search;
@@ -251,6 +253,12 @@ pub enum RequestKind {
     SearchRead {
         session_id: SessionId,
         generation: u64,
+    },
+    /// One page of the explicit export read chain (spec §17.4). It uses the
+    /// same two read-only slots and never touches the history window.
+    ExportRead {
+        session_id: SessionId,
+        export_id: u64,
     },
     SendTurn {
         session_id: SessionId,
@@ -506,6 +514,21 @@ pub struct App {
     pending_search_jump: Option<(SessionId, search::PendingSearchJump)>,
     /// The explicit full-session search scan chain, if one is running.
     search_scan: Option<search::SearchScan>,
+    /// The one owned export chain, if an export is running (spec §17.4).
+    export_scan: Option<export::ExportScan>,
+    /// Monotonic identity for the current export, so a completion for an older
+    /// target or session is never shown.
+    export_id: u64,
+    /// Content options captured when the export started: the form can no
+    /// longer change them while the file is being written.
+    export_spec: ExportSpec,
+    export_include_unsaved: bool,
+    /// The bounded hand-off to the owned export writer.
+    export_tx: Option<tokio::sync::mpsc::Sender<crate::jobs::ExportInbound>>,
+    /// At most one record waiting for room in the bounded channel. Paging is
+    /// paused while it is set (backpressure, never an unbounded buffer).
+    export_outbox: VecDeque<crate::jobs::ExportInbound>,
+    export_hold: bool,
     /// Paged authoritative result bodies keyed by their exact TurnRef. Their
     /// item indexes are turn-local and never enter the session history window.
     turn_results: HashMap<TurnRef, crate::app::history::TurnResultWindow>,
@@ -680,6 +703,13 @@ impl App {
             search_fold_restores: Vec::new(),
             pending_search_jump: None,
             search_scan: None,
+            export_scan: None,
+            export_id: 0,
+            export_spec: ExportSpec::default(),
+            export_include_unsaved: false,
+            export_tx: None,
+            export_outbox: VecDeque::new(),
+            export_hold: false,
             turn_results: HashMap::new(),
             retained_results: HashMap::new(),
             retained_result_order: VecDeque::new(),
@@ -997,7 +1027,10 @@ impl App {
         }
         let header_visible_before = crate::ui::header::visible(self);
         self.dirty = true;
-        let mut commands = match event {
+        // A slow export writer only pauses its own chain: every update retries
+        // the one parked record before reducing anything else.
+        let mut commands = self.pump_export();
+        commands.extend(match event {
             AppEvent::Bootstrap => self.bootstrap(),
             AppEvent::SubmitTurn { session_id, text } => self.submit_turn(session_id, text),
             AppEvent::SteerTurn { session_id, text } => self.steer_turn(&session_id, text),
@@ -1173,7 +1206,7 @@ impl App {
             }
             AppEvent::HistoryItemDecoded(outcome) => self.on_history_item_decoded(*outcome),
             AppEvent::LocalScanFinished(outcome) => self.on_local_scan_finished(*outcome),
-        };
+        });
         if header_visible_before != crate::ui::header::visible(self) {
             self.prepared_conversation = None;
         }
@@ -1200,6 +1233,13 @@ impl App {
         // has been fully handled, so it observes the newest cursor and never
         // overtakes that reducer pass.
         self.drain_query_followups(&mut commands);
+        // A queued scan page may have missed the slot that freed before its
+        // follow-up drained; both chains retry idempotently while they need a
+        // page and no read is in flight.
+        let search_page = self.resume_idle_search_page();
+        commands.extend(search_page);
+        let export_page = self.resume_idle_export_page();
+        commands.extend(export_page);
         if progress_signal {
             commands.extend(self.drain_rpc_retries());
         }
@@ -2328,6 +2368,7 @@ impl App {
             Dock::ReasoningSelector(_) => Target::ReasoningSelector,
             Dock::ProfileSelector(_) => Target::ProfileSelector,
             Dock::Help | Dock::Logs | Dock::Search(_) => Target::Composer,
+            Dock::Export(_) => Target::Composer,
         };
         match target {
             Target::Composer => Vec::new(),
@@ -2359,6 +2400,7 @@ impl App {
             Form,
             Panel,
             Search,
+            Export,
         }
         let target = match &self.dock {
             Dock::Composer => Target::Composer,
@@ -2369,10 +2411,14 @@ impl App {
             }
             Dock::Help | Dock::Logs => Target::Panel,
             Dock::Search(_) => Target::Search,
+            Dock::Export(_) => Target::Export,
         };
         match target {
             Target::Composer => {}
             Target::Search => self.close_search(),
+            Target::Export => {
+                self.export_escape();
+            }
             Target::SessionSelector => self.dock = Dock::Composer,
             Target::NewSession => {
                 self.draft = None;
@@ -3457,6 +3503,36 @@ impl App {
                 Vec::new()
             }
             SearchEscape => self.search_escape(),
+            ExportTypeChar(c) => {
+                self.export_type_char(c);
+                Vec::new()
+            }
+            ExportBackspace => {
+                self.export_backspace();
+                Vec::new()
+            }
+            ExportClear => {
+                self.export_clear();
+                Vec::new()
+            }
+            ExportSubmit => self.export_submit(),
+            ExportToggleThinking => {
+                self.export_toggle_thinking();
+                Vec::new()
+            }
+            ExportToggleTool => {
+                self.export_toggle_tool();
+                Vec::new()
+            }
+            ExportToggleUnsaved => {
+                self.export_toggle_unsaved();
+                Vec::new()
+            }
+            ExportToggleOverwrite => {
+                self.export_toggle_overwrite();
+                Vec::new()
+            }
+            ExportEscape => self.export_escape(),
             SessionBrowse => self.browse_selected_session(),
             SessionContinue => self.continue_selected_session(),
             SessionScopeToggle => self.toggle_session_scope(),
@@ -3836,6 +3912,7 @@ impl App {
             }
             LocalCommand::Search { query, scope } => self.open_search(query, scope),
             LocalCommand::Copy { target } => self.copy_command(target),
+            LocalCommand::Export { target } => self.open_export_form(target),
             LocalCommand::PromptJump(direction) => self.prompt_jump(direction),
             LocalCommand::Latest => self.jump_latest(),
             LocalCommand::Clear => self.clear_transcript(),
@@ -5033,6 +5110,10 @@ impl App {
                 session_id,
                 generation,
             } => self.on_search_read_response(&session_id, generation, &response),
+            RequestKind::ExportRead {
+                session_id,
+                export_id,
+            } => self.on_export_read_response(&session_id, export_id, &response),
             RequestKind::SendTurn {
                 session_id,
                 local_submission,

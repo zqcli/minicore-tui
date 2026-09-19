@@ -25,6 +25,9 @@ pub enum Dock {
     /// The conversation search panel (spec §17.1): a one-line query input
     /// plus bounded match summaries. The transcript stays visible.
     Search(SearchPanelState),
+    /// The local export form (spec §17.4): a target path, the explicit
+    /// content choices and the export's progress/limitations.
+    Export(crate::state::export::ExportFormState),
 }
 
 /// The highlighted field in the new-session form (spec 25.3).

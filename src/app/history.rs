@@ -1352,6 +1352,10 @@ impl App {
                 session_id: pending,
                 ..
             } => pending == session_id,
+            crate::jobs::DecodeTarget::ExportItem {
+                session_id: pending,
+                ..
+            } => pending == session_id,
         };
         if self
             .pending_decode
@@ -1460,6 +1464,7 @@ impl App {
             item,
             cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             scan: None,
+            export: None,
         };
         self.decode_in_flight = Some(identity);
         self.pending_decode = Some(request);
@@ -1519,6 +1524,7 @@ impl App {
             item,
             cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             scan: None,
+            export: None,
         };
         self.decode_in_flight = Some(identity);
         self.pending_decode = Some(request);
@@ -1999,6 +2005,14 @@ impl App {
             .is_some_and(crate::app::search::SearchScan::has_pending_decode)
         {
             self.queue_search_decode();
+            return;
+        }
+        if self
+            .export_scan
+            .as_ref()
+            .is_some_and(crate::app::export::ExportScan::has_pending_decode)
+        {
+            self.queue_export_decode();
         }
     }
 
@@ -2043,6 +2057,17 @@ impl App {
             } => self.finish_search_item_decoded(
                 &session_id,
                 generation,
+                index,
+                outcome.fingerprint,
+                &outcome,
+            ),
+            crate::jobs::DecodeTarget::ExportItem {
+                session_id,
+                export_id,
+                index,
+            } => self.finish_export_item_decoded(
+                &session_id,
+                export_id,
                 index,
                 outcome.fingerprint,
                 &outcome,

@@ -854,6 +854,7 @@ impl App {
                 }
                 Err(error) => self.notice(NoticeLevel::Warning, error),
             },
+            JobOutcome::Export { outcome } => return self.on_export_job_finished(outcome),
         }
         Vec::new()
     }
@@ -2135,7 +2136,7 @@ impl App {
                 self.restore_unsent_turn(&session_id, local_submission);
                 self.notice(NoticeLevel::Warning, format!("turn send failed: {error}"));
             }
-            RequestKind::SearchRead { .. } => {}
+            RequestKind::SearchRead { .. } | RequestKind::ExportRead { .. } => {}
             RequestKind::WaitTurn(turn) => {
                 let wait_is_current = self
                     .sessions

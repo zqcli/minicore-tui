@@ -51,6 +51,14 @@ pub enum DecodeTarget {
         generation: u64,
         index: usize,
     },
+    /// One item of an explicit export: the worker decodes it and renders the
+    /// bounded Markdown for the owned writer, then drops the body (spec
+    /// §17.4). The App never walks a history body.
+    ExportItem {
+        session_id: String,
+        export_id: u64,
+        index: usize,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -69,6 +77,9 @@ pub struct DecodeRequest {
     /// When set, the worker scans the decoded item for this literal and
     /// returns only bounded match summaries.
     pub scan: Option<Box<crate::state::search::ScanSpec>>,
+    /// When set, the worker renders this item's export Markdown (spec §17.4)
+    /// and returns only that bounded text.
+    pub export: Option<Box<crate::state::export::ExportSpec>>,
 }
 
 /// The bounded result of scanning one decoded item. The item body is not
@@ -77,6 +88,15 @@ pub struct DecodeRequest {
 pub struct ScanItemOutcome {
     pub index: usize,
     pub matches: Vec<crate::state::search::SearchMatch>,
+}
+
+/// One rendered export item. It is produced on the decode worker's blocking
+/// thread; the item body itself never returns to the App.
+#[derive(Debug)]
+pub struct ExportItemOutcome {
+    pub index: usize,
+    pub markdown: String,
+    pub opaque_parts: usize,
 }
 
 #[derive(Debug)]
@@ -88,6 +108,8 @@ pub struct DecodeOutcome {
     /// Present for a `DecodeTarget::SearchScan` request; `result` then holds
     /// the decoded item only so the worker's decode status stays uniform.
     pub scan: Option<Box<ScanItemOutcome>>,
+    /// Present for a `DecodeTarget::ExportItem` request.
+    pub export: Option<Box<ExportItemOutcome>>,
 }
 
 /// Identity of one loaded-content search scan. A late result whose identity or
@@ -144,6 +166,75 @@ pub struct LocalScanOutcome {
     pub truncated: bool,
 }
 
+/// One message for the owned export writer. The channel is bounded: when the
+/// disk is slower than the read→decode chain, `try_send` reports `Full` and
+/// the App pauses its paging instead of buffering the conversation.
+pub enum ExportInbound {
+    /// The file header: where the content came from and the choices made.
+    Header(Box<ExportHeader>),
+    /// One rendered item, or an oversized placeholder (`oversized` bytes).
+    Item(Box<ExportRecord>),
+    /// The read chain reached its end: write the trailing limitation notes and
+    /// commit the file with an atomic rename.
+    Finish(Box<crate::state::export::ExportLimitations>),
+    /// The user cancelled: remove the uncommitted temp file.
+    Abort,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ExportHeader {
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ExportRecord {
+    pub markdown: String,
+    /// `Some(total_bytes)` marks a placeholder for an oversized item.
+    pub oversized: Option<usize>,
+}
+
+impl std::fmt::Debug for ExportInbound {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Header(header) => formatter
+                .debug_struct("Header")
+                .field("notes", &header.notes.len())
+                .finish(),
+            Self::Item(record) => formatter
+                .debug_struct("Item")
+                .field("markdown_bytes", &record.markdown.len())
+                .field("oversized", &record.oversized)
+                .finish(),
+            Self::Finish(limitations) => {
+                formatter.debug_tuple("Finish").field(limitations).finish()
+            }
+            Self::Abort => formatter.write_str("Abort"),
+        }
+    }
+}
+
+/// The final state of one owned export job.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum ExportOutcome {
+    /// The temp file was renamed onto the target.
+    Finished {
+        target: String,
+        bytes: usize,
+        items: usize,
+    },
+    /// The target exists and the user has not confirmed overwriting it yet.
+    WouldOverwrite { target: String },
+    /// The job was cancelled; the temp file was removed.
+    Cancelled { target: String },
+    /// The export stopped with an error. `temp_removed` says whether deleting
+    /// the uncommitted temp file was confirmed.
+    Failed {
+        target: String,
+        error: String,
+        temp_removed: bool,
+    },
+}
+
 /// Owner-local identifier for one started job. It is only used for tests and
 /// diagnostics; results are identified by their capture identity.
 pub type JobId = u64;
@@ -179,6 +270,7 @@ pub struct LocalJobs {
     decode_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     scan_tx: Option<mpsc::Sender<LocalScanRequest>>,
     scan_task: Option<JoinHandle<()>>,
+    export_task: Option<JoinHandle<()>>,
 }
 
 impl Default for LocalJobs {
@@ -299,6 +391,7 @@ impl LocalJobs {
                 let fingerprint = request.fingerprint;
                 let item = request.item;
                 let scan = request.scan.map(|scan| *scan);
+                let export = request.export.map(|spec| *spec);
                 let cancel = Arc::clone(&request.cancel);
                 if cancel.load(Ordering::Relaxed) {
                     let _ = decode_events
@@ -308,38 +401,54 @@ impl LocalJobs {
                             result: Err("history decode cancelled".to_owned()),
                             cancelled: true,
                             scan: None,
+                            export: None,
                         })))
                         .await;
                     continue;
                 }
                 let cancel_for_decode = Arc::clone(&cancel);
-                let (result, scan_outcome) = tokio::task::spawn_blocking(move || {
-                    if cancel_for_decode.load(Ordering::Relaxed) {
-                        return (Err("history decode cancelled".to_owned()), None);
-                    }
-                    let decoded = crate::protocol::read::decode_item(&item.data);
-                    match (decoded, scan) {
-                        (Ok(decoded), Some(scan)) => {
-                            let mut plan = crate::state::search::ScanPlan::new(
-                                &scan.needle,
-                                scan.include_thinking,
-                            );
-                            plan.scan_item(item.index, &decoded);
-                            (
-                                Ok(decoded),
-                                Some(Box::new(ScanItemOutcome {
-                                    index: item.index,
-                                    matches: plan.collector.matches,
-                                })),
-                            )
+                let (result, scan_outcome, export_outcome) =
+                    tokio::task::spawn_blocking(move || {
+                        if cancel_for_decode.load(Ordering::Relaxed) {
+                            return (Err("history decode cancelled".to_owned()), None, None);
                         }
-                        (decoded, _) => (decoded, None),
-                    }
-                })
-                .await
-                .unwrap_or_else(|error| {
-                    (Err(format!("history decode worker failed: {error}")), None)
-                });
+                        let decoded = crate::protocol::read::decode_item(&item.data);
+                        let (scan_outcome, export_outcome) = match &decoded {
+                            Ok(decoded) => {
+                                let scan_outcome = scan.map(|scan| {
+                                    let mut plan = crate::state::search::ScanPlan::new(
+                                        &scan.needle,
+                                        scan.include_thinking,
+                                    );
+                                    plan.scan_item(item.index, decoded);
+                                    Box::new(ScanItemOutcome {
+                                        index: item.index,
+                                        matches: plan.collector.matches,
+                                    })
+                                });
+                                let export_outcome = export.map(|spec| {
+                                    let rendered =
+                                        crate::state::export::item_markdown(decoded, spec);
+                                    Box::new(ExportItemOutcome {
+                                        index: item.index,
+                                        markdown: rendered.markdown,
+                                        opaque_parts: rendered.opaque_parts,
+                                    })
+                                });
+                                (scan_outcome, export_outcome)
+                            }
+                            Err(_) => (None, None),
+                        };
+                        (decoded, scan_outcome, export_outcome)
+                    })
+                    .await
+                    .unwrap_or_else(|error| {
+                        (
+                            Err(format!("history decode worker failed: {error}")),
+                            None,
+                            None,
+                        )
+                    });
                 let cancelled = cancel.load(Ordering::Relaxed);
                 if decode_events
                     .send(AppEvent::HistoryItemDecoded(Box::new(DecodeOutcome {
@@ -352,6 +461,7 @@ impl LocalJobs {
                         },
                         cancelled,
                         scan: scan_outcome.filter(|_| !cancelled),
+                        export: export_outcome.filter(|_| !cancelled),
                     })))
                     .await
                     .is_err()
@@ -395,6 +505,7 @@ impl LocalJobs {
             decode_cancel: None,
             scan_tx: Some(scan_tx),
             scan_task: Some(scan_task),
+            export_task: None,
         }
     }
 
@@ -546,6 +657,33 @@ impl LocalJobs {
         CopyAdmission::Started(id)
     }
 
+    /// Starts the one owned export job. It owns the target path, the temp
+    /// file and every byte of file I/O; the returned receiver is held by the
+    /// App so the bounded channel provides backpressure for paging.
+    pub fn start_export(
+        &mut self,
+        target: std::path::PathBuf,
+        overwrite: bool,
+        rx: mpsc::Receiver<ExportInbound>,
+    ) -> JobId {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        let events = self.events_tx.clone();
+        let handle = tokio::task::spawn_blocking(move || {
+            let outcome = run_export_job(&target, overwrite, rx);
+            let _ = events.blocking_send(AppEvent::JobFinished(JobOutcome::Export { outcome }));
+        });
+        self.export_task = Some(handle);
+        id
+    }
+
+    /// Whether an export job is still running.
+    pub fn has_export_in_flight(&self) -> bool {
+        self.export_task
+            .as_ref()
+            .is_some_and(|handle| !handle.is_finished())
+    }
+
     /// Joins the clipboard job if it already finished and drops its handle.
     /// Never waits for a running job, so it is safe on the input path.
     pub async fn reap_finished(&mut self) {
@@ -555,6 +693,15 @@ impl LocalJobs {
             .is_some_and(|handle| handle.is_finished())
         {
             if let Some(handle) = self.clipboard.take() {
+                let _ = handle.await;
+            }
+        }
+        if self
+            .export_task
+            .as_ref()
+            .is_some_and(|handle| handle.is_finished())
+        {
+            if let Some(handle) = self.export_task.take() {
                 let _ = handle.await;
             }
         }
@@ -604,6 +751,15 @@ impl LocalJobs {
             }
             let _ = task.await;
         }
+        // Dropping the export sender closes its channel: a job still holding an
+        // uncommitted temp file aborts and removes it before it returns.
+        if let Some(task) = self.export_task.take() {
+            while !task.is_finished() {
+                while self.events_rx.try_recv().is_ok() {}
+                tokio::task::yield_now().await;
+            }
+            let _ = task.await;
+        }
         let Some(handle) = self.clipboard.take() else {
             return;
         };
@@ -613,6 +769,117 @@ impl LocalJobs {
             tokio::task::yield_now().await;
         }
         let _ = handle.await;
+    }
+}
+
+/// The owned export writer loop. Everything here runs on a blocking thread:
+/// creating the temp file, writing records, the trailing notes, the atomic
+/// rename and the cancel cleanup. The bounded channel is the only input, so
+/// the App's `try_send` can never block the UI.
+pub fn run_export_job(
+    target: &std::path::Path,
+    overwrite: bool,
+    mut rx: mpsc::Receiver<ExportInbound>,
+) -> ExportOutcome {
+    use crate::state::export::{
+        EXPORT_OVERSIZED_NOTE, ExportStartError, ExportWriter, header_text,
+    };
+    let target_display = target.display().to_string();
+    let mut writer = match ExportWriter::create(target, overwrite) {
+        Ok(writer) => writer,
+        Err(ExportStartError::TargetExists) => {
+            return ExportOutcome::WouldOverwrite {
+                target: target_display,
+            };
+        }
+        Err(ExportStartError::Io(error)) => {
+            return ExportOutcome::Failed {
+                target: target_display,
+                error,
+                temp_removed: true,
+            };
+        }
+    };
+    let mut items = 0usize;
+    let mut failure: Option<String> = None;
+    let mut cancelled = false;
+    loop {
+        let Some(message) = rx.blocking_recv() else {
+            // The App dropped the sender (shutdown or cancel): the temp file is
+            // uncommitted and must not survive.
+            cancelled = true;
+            break;
+        };
+        let write = match message {
+            ExportInbound::Header(header) => writer.write(&header_text(&header.notes)),
+            ExportInbound::Item(record) => {
+                let text = match record.oversized {
+                    Some(bytes) => format!("<!-- {EXPORT_OVERSIZED_NOTE} ({bytes} bytes) -->\n\n"),
+                    None => record.markdown,
+                };
+                let result = writer.write(&text);
+                if result.is_ok() {
+                    items += 1;
+                }
+                result
+            }
+            ExportInbound::Finish(limitations) => {
+                let notes = limitations.notes();
+                let result = if notes.is_empty() {
+                    Ok(())
+                } else {
+                    let text = crate::state::export::limitations_text(&notes);
+                    writer.write(&text)
+                };
+                if let Err(error) = result {
+                    failure = Some(format!("cannot write the export notes: {error}"));
+                }
+                break;
+            }
+            ExportInbound::Abort => {
+                cancelled = true;
+                break;
+            }
+        };
+        if let Err(error) = write {
+            failure = Some(format!("cannot write the export: {error}"));
+            break;
+        }
+    }
+    if let Some(error) = failure {
+        let temp_removed = writer.abort().is_ok();
+        return ExportOutcome::Failed {
+            target: target_display,
+            error,
+            temp_removed,
+        };
+    }
+    if cancelled {
+        // An unconfirmed removal is reported as a failure, never as a clean
+        // cancel: an unknown I/O state must not claim a rollback.
+        return match writer.abort() {
+            Ok(()) => ExportOutcome::Cancelled {
+                target: target_display,
+            },
+            Err(error) => ExportOutcome::Failed {
+                target: target_display,
+                error,
+                temp_removed: false,
+            },
+        };
+    }
+    let bytes = writer.bytes();
+    match writer.finish() {
+        Ok(_) => ExportOutcome::Finished {
+            target: target_display,
+            bytes,
+            items,
+        },
+        Err(error) => ExportOutcome::Failed {
+            target: target_display,
+            error,
+            temp_removed: false,
+        },
     }
 }
 
@@ -662,6 +929,7 @@ mod tests {
             fingerprint,
             cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             scan: None,
+            export: None,
         }));
         let event = jobs.events().recv().await.expect("decode completion");
         match event {
@@ -701,6 +969,7 @@ mod tests {
             fingerprint: 0,
             cancel,
             scan: None,
+            export: None,
         }));
         let event = jobs.events().recv().await.expect("cancel completion");
         match event {

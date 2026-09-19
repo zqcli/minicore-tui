@@ -23,8 +23,33 @@ pub enum AppCommand {
     CopySelection(ClipboardText),
     /// Start one owned loaded-content search scan.
     LocalScan(Box<crate::jobs::LocalScanRequest>),
+    /// Start the one owned export writer with an already-validated target and
+    /// the bounded channel it drains (spec §17.4).
+    StartExport(Box<StartExportRequest>),
     /// The agent process is fully gone (or never existed); leave the TUI.
     Exit,
+}
+
+/// Everything the owned export writer needs. The receiver is the bounded
+/// channel the App feeds; the path was validated without touching the file
+/// system.
+pub struct StartExportRequest {
+    pub target: std::path::PathBuf,
+    pub overwrite: bool,
+    pub rx: tokio::sync::mpsc::Receiver<crate::jobs::ExportInbound>,
+    pub spec: crate::state::export::ExportSpec,
+}
+
+impl std::fmt::Debug for StartExportRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StartExportRequest")
+            .field("target", &self.target.display().to_string())
+            .field("overwrite", &self.overwrite)
+            .field("include_thinking", &self.spec.include_thinking)
+            .field("include_tool", &self.spec.include_tool)
+            .finish()
+    }
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -91,6 +116,9 @@ pub enum LocalCommand {
     /// Copy already-rendered text through the single clipboard owner
     /// (spec §17.3). `/copy` without an argument copies the last reply.
     Copy { target: CopyTarget },
+    /// Open the local export form, optionally pre-filled with a target path
+    /// (spec §17.4). Nothing is written until the form is submitted.
+    Export { target: String },
     /// Open the session selector.
     Resume,
     /// Open the session selector.
@@ -183,6 +211,8 @@ pub enum CommandArgs {
     Search,
     /// `/copy [last|message|code|selection]`.
     Copy,
+    /// `/export [path]`: the path is the rest of the line.
+    OptionalPath,
 }
 
 /// Every command the reducer can execute. Methods added in a later stage must
@@ -205,6 +235,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         usage: "/copy [last|message|code|selection]",
         summary: "copy the last reply, the current message, its code, or the selection",
         args: CommandArgs::Copy,
+    },
+    CommandSpec {
+        name: "export",
+        usage: "/export [path]",
+        summary: "write this conversation's saved history to a local Markdown file",
+        args: CommandArgs::OptionalPath,
     },
     CommandSpec {
         name: "prev",
@@ -477,6 +513,9 @@ pub fn parse_command(input: &str) -> Result<LocalCommand, CommandIssue> {
             }),
             _ => Err(CommandIssue::InvalidArgs(format!("usage: {}", spec.usage))),
         },
+        ("export", _) => Ok(LocalCommand::Export {
+            target: args.to_owned(),
+        }),
         ("prev", _) => no_args(LocalCommand::PromptJump(-1)),
         ("next", _) => no_args(LocalCommand::PromptJump(1)),
         ("latest", _) => no_args(LocalCommand::Latest),

@@ -4,6 +4,7 @@
 
 pub mod catalog;
 pub mod composer;
+pub mod export;
 pub mod search;
 pub mod selection;
 pub mod session;
@@ -14,6 +15,7 @@ pub mod view;
 
 pub use catalog::CatalogState;
 pub use composer::{Composer, PasteRange};
+pub use export::{ExportFormState, ExportLimitations, ExportPhase, ExportSpec};
 pub use selection::{
     Dock, NewSessionField, NewSessionState, SelectorKind, SelectorState, SessionConfirmChoice,
     SessionPanelAction, SessionPanelMode, SessionSelectorState,

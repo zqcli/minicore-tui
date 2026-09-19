@@ -95,6 +95,21 @@ pub enum Action {
     SearchStop,
     /// Search panel Esc: leave the result list, then close the search.
     SearchEscape,
+    /// Export form: edit the local target path.
+    ExportTypeChar(char),
+    ExportBackspace,
+    ExportClear,
+    /// Export form Enter: validate and start the export.
+    ExportSubmit,
+    /// Export form Ctrl+T/Ctrl+P/Ctrl+U: optional content and the separate
+    /// unsaved-turn choice.
+    ExportToggleThinking,
+    ExportToggleTool,
+    ExportToggleUnsaved,
+    /// Export form Ctrl+Y: the explicit overwrite confirmation.
+    ExportToggleOverwrite,
+    /// Export form Esc: close the form (cancelling a running export).
+    ExportEscape,
     SessionDeleteToggle,
     SessionRenameChar(char),
     SessionRenameBackspace,
@@ -164,6 +179,12 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
     // search before anything can cancel a turn (spec §17).
     if let Dock::Search(state) = &app.dock {
         return search_keys(key, press, typing, state.mode);
+    }
+
+    // The export form is modal too. Its keys are local: typing edits the
+    // target, and the toggles use Ctrl chords so a path can never trigger one.
+    if let Dock::Export(form) = &app.dock {
+        return export_keys(key, press, typing, form.running());
     }
 
     if press {
@@ -306,9 +327,9 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
         | Dock::ReasoningSelector(_)
         | Dock::ProfileSelector(_) => selector_keys(key, press, typing),
         Dock::Help | Dock::Logs => panel_keys(key, press, typing),
-        // The search panel is handled before this match (it owns the
-        // keyboard while open).
-        Dock::Search(_) => Action::None,
+        // The search and export panels are handled before this match (they own
+        // the keyboard while open).
+        Dock::Search(_) | Dock::Export(_) => Action::None,
     }
 }
 
@@ -457,6 +478,27 @@ fn search_keys(
         KeyCode::Char('p') if results => Action::SearchStep(-1),
         KeyCode::Char('s') if results => Action::SearchStop,
         KeyCode::Char(c) if !ctrl(&key) && !alt(&key) => Action::SearchTypeChar(c),
+        _ => Action::None,
+    }
+}
+
+/// Panel-local keys for the export form (spec §17.4). Typing always edits the
+/// target; every toggle requires Ctrl so a path character can never change the
+/// export contract.
+fn export_keys(key: KeyEvent, press: bool, typing: bool, running: bool) -> Action {
+    if !(press || typing) {
+        return Action::None;
+    }
+    match key.code {
+        KeyCode::Esc => Action::ExportEscape,
+        KeyCode::Enter => Action::ExportSubmit,
+        KeyCode::Backspace => Action::ExportBackspace,
+        KeyCode::Char('u') if ctrl(&key) => Action::ExportClear,
+        KeyCode::Char('t') if ctrl(&key) && !running => Action::ExportToggleThinking,
+        KeyCode::Char('p') if ctrl(&key) && !running => Action::ExportToggleTool,
+        KeyCode::Char('n') if ctrl(&key) && !running => Action::ExportToggleUnsaved,
+        KeyCode::Char('y') if ctrl(&key) && !running => Action::ExportToggleOverwrite,
+        KeyCode::Char(c) if !ctrl(&key) && !alt(&key) && !running => Action::ExportTypeChar(c),
         _ => Action::None,
     }
 }

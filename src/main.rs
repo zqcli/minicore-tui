@@ -599,6 +599,12 @@ async fn run_commands(
                 // and its generation-checked result is ignored anyway.
                 jobs.try_schedule_scan(*request);
             }
+            AppCommand::StartExport(request) => {
+                let request = *request;
+                // The owned writer owns the target path, the temp file and the
+                // bounded receiver. No file I/O happens on the main loop.
+                jobs.start_export(request.target, request.overwrite, request.rx);
+            }
             AppCommand::KillChild => process.kill_child(),
             AppCommand::CopySelection(text) => {
                 match jobs.copy_to_clipboard(

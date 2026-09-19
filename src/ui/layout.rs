@@ -131,6 +131,8 @@ pub fn screen_layout(app: &App, area: Rect) -> ScreenLayout {
         // The search panel is taller while results are listed so the
         // transcript above it stays visible (spec §17.1).
         Dock::Search(_) => search_panel_height(content.height),
+        // The export form is a compact fixed-height form.
+        Dock::Export(_) => panel_height(short).saturating_add(4),
         Dock::SessionSelector(state) => panel_height(short).saturating_add(u16::from(!matches!(
             &state.mode,
             crate::state::selection::SessionPanelMode::Browse
