@@ -7791,3 +7791,43 @@ fn clear_close_and_delete_keep_their_local_and_closed_only_contracts() {
     let delete = driver.request("session.delete");
     assert_eq!(delete.params["session_id"], "ses_2");
 }
+
+/// D1c regression: every request the rename command registers is also
+/// returned as a command. A registered-but-unsent request would keep the app
+/// panel-busy forever (found by the real-Agent E2E).
+#[test]
+fn rename_command_never_leaks_an_unsent_pending_request() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+
+    for command in ["/rename leaked check", "/rename"] {
+        let before = driver
+            .app
+            .pending_requests
+            .keys()
+            .map(|id| id.0)
+            .collect::<Vec<_>>();
+        driver.app.composer.set_text(command);
+        let commands = driver.app.submit_composer();
+        let sent = commands
+            .iter()
+            .filter_map(|command| match command {
+                AppCommand::Rpc(request) => Some(request.id.0),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for id in driver.app.pending_requests.keys() {
+            if before.contains(&id.0) {
+                continue;
+            }
+            assert!(
+                sent.contains(&id.0),
+                "{command} registered request {} without returning it",
+                id.0
+            );
+        }
+        // Clear the queue for the next iteration without driving the app.
+        driver.queue.clear();
+    }
+}

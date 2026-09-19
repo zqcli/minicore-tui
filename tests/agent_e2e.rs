@@ -17,7 +17,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
-use minicore_tui::app::{App, ConnectionState, RequestKind};
+use minicore_tui::app::{App, CliPrefs, ConnectionState, RequestKind, StartupSession};
 use minicore_tui::command::AppCommand;
 use minicore_tui::event::{AppEvent, RpcEvent};
 use minicore_tui::protocol::{
@@ -26,6 +26,7 @@ use minicore_tui::protocol::{
     TurnRef, TurnResultViewWire,
 };
 use minicore_tui::rpc::RpcProcess;
+use minicore_tui::state::selection::{Dock, SessionPanelMode};
 use minicore_tui::state::session::ConfigUpdateState;
 use minicore_tui::state::transcript::{AssistantPart, TranscriptBlock};
 use minicore_tui::state::turn::{LivePart, PendingSteerState};
@@ -755,11 +756,59 @@ async fn pump_until(
     let deadline = Instant::now() + TIMEOUT;
     while !predicate(app) {
         if Instant::now() >= deadline {
-            return Err(format!("e2e pump timed out: {:?}", app.connection));
+            return Err(format!(
+                "e2e pump timed out: {:?} (active {:?}, pending {:?}, list {:?}, dock {:?})",
+                app.connection,
+                app.sessions.active,
+                app.pending_requests
+                    .iter()
+                    .map(|(id, kind)| format!("{}:{kind:?}", id.0))
+                    .collect::<Vec<_>>(),
+                app.sessions
+                    .list
+                    .iter()
+                    .map(|session| (session.session_id.clone(), session.loaded))
+                    .collect::<Vec<_>>(),
+                app.dock,
+            ));
         }
         pump_step(process, app).await?;
     }
     Ok(())
+}
+
+/// Creates a session while another one may already be active and waits for the
+/// new session's own view (the create ACK is what activates it).
+async fn create_additional_session(
+    process: &mut RpcProcess,
+    app: &mut App,
+    workspace: &std::path::Path,
+    title: &str,
+) -> String {
+    let before = app.sessions.active.clone();
+    dispatch(
+        process,
+        app,
+        AppEvent::CreateSession {
+            workspace: workspace.to_string_lossy().into_owned(),
+            profile: Some("coding".to_owned()),
+            model: Some("deep".to_owned()),
+            reasoning: Some(Reasoning::High),
+            title: Some(title.to_owned()),
+        },
+    )
+    .await
+    .unwrap();
+    pump_until(process, app, |a| {
+        a.sessions.active.is_some() && a.sessions.active != before
+    })
+    .await
+    .unwrap();
+    let session_id = app.sessions.active.clone().unwrap();
+    wait_for_session_ready(process, app, &session_id)
+        .await
+        .unwrap();
+    session_id
 }
 
 async fn dispatch(process: &mut RpcProcess, app: &mut App, event: AppEvent) -> Result<(), String> {
@@ -3407,6 +3456,47 @@ async fn submit_slash_command(
     .await
 }
 
+/// Sends already-reduced commands exactly as the main loop would.
+async fn dispatch_commands(
+    process: &mut RpcProcess,
+    commands: Vec<AppCommand>,
+) -> Result<(), String> {
+    for command in commands {
+        match command {
+            AppCommand::Rpc(req) => {
+                process.send(req).await.map_err(|e| e.to_string())?;
+            }
+            AppCommand::KillChild => process.kill_child(),
+            AppCommand::CopySelection(_) => {}
+            AppCommand::Exit => return Ok(()),
+        }
+    }
+    Ok(())
+}
+
+/// Runs a slash line through the composer entry point. The command is set
+/// directly because some of these cases intentionally run while another dock
+/// owns the keyboard; the reducer path after `submit_composer` is the same one
+/// the Enter key uses.
+async fn run_slash_command(
+    process: &mut RpcProcess,
+    app: &mut App,
+    command: &str,
+) -> Result<(), String> {
+    app.composer_mut().set_text(command);
+    let commands = app.submit_composer();
+    dispatch_commands(process, commands).await
+}
+
+async fn type_draft(process: &mut RpcProcess, app: &mut App, text: &str) -> Result<(), String> {
+    dispatch(
+        process,
+        app,
+        AppEvent::Terminal(CrosstermEvent::Paste(text.to_owned())),
+    )
+    .await
+}
+
 fn compact_status(app: &App, session_id: &str) -> Option<CompactStatusWire> {
     app.sessions
         .known
@@ -3819,6 +3909,606 @@ fn e2e_automatic_preparation_is_observable_and_cancellable() {
 
         let report = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
         assert!(report.shutdown_ok && report.seen_eof && report.seen_exit);
+        process.terminate().await;
+    });
+}
+
+// ============================================================================
+// D1 real-Agent coverage: browse, startup selection, drafts, command paths.
+// ============================================================================
+
+/// D1 (spec §10.1): a closed session stays readable through `session.read`
+/// alone after its workspace directory is deleted and its model's provider is
+/// unreachable. No `session.open` is issued, so neither the workspace nor the
+/// model is required to browse.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_browse_closed_session_survives_deleted_workspace_and_dead_model() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    env._server
+        .enqueue_sse(sse_text_response("browsed durable answer."));
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::CreateSession {
+                workspace: env.workspace_path.to_string_lossy().into_owned(),
+                profile: Some("coding".to_owned()),
+                model: Some("deep".to_owned()),
+                reasoning: Some(Reasoning::High),
+                title: Some("Browsed after teardown".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+        let session_id = wait_for_active_session(&mut process, &mut app)
+            .await
+            .unwrap();
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: "the durable prompt".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        wait_turn_landed(&mut process, &mut app, &session_id)
+            .await
+            .unwrap();
+
+        run_slash_command(&mut process, &mut app, "/close confirm")
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.closed.contains(&session_id)
+                && a.sessions
+                    .known
+                    .get(&session_id)
+                    .is_some_and(|view| !view.info.loaded)
+        })
+        .await
+        .unwrap();
+
+        // Remove the workspace and point the model at a dead provider.
+        std::fs::remove_dir_all(&env.workspace_path).unwrap();
+        let config = std::fs::read_to_string(&env.config_path).unwrap();
+        let config = config.replace(
+            &format!("base_url = \"{}\"", env._server.url()),
+            "base_url = \"http://127.0.0.1:1\"",
+        );
+        std::fs::write(&env.config_path, config).unwrap();
+        dispatch(&mut process, &mut app, AppEvent::Reload)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            !a.pending_requests.values().any(|kind| {
+                matches!(
+                    kind,
+                    RequestKind::Reload { .. }
+                        | RequestKind::ReloadModels { .. }
+                        | RequestKind::ReloadProfiles { .. }
+                        | RequestKind::ReloadSessions { .. }
+                )
+            })
+        })
+        .await
+        .unwrap();
+        assert!(
+            !std::path::Path::new(&env.workspace_path).exists(),
+            "the workspace is really gone"
+        );
+
+        // Panel: the only row is the closed session in this workspace.
+        dispatch(&mut process, &mut app, AppEvent::OpenSessionSelector)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            !a.pending_requests.values().any(|kind| {
+                matches!(
+                    kind,
+                    RequestKind::RefreshSessions { .. } | RequestKind::ListSessions
+                )
+            }) && matches!(&a.dock, Dock::SessionSelector(state) if state
+                .selected_session_id
+                .as_deref()
+                == Some(session_id.as_str()))
+        })
+        .await
+        .unwrap();
+
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+                KeyCode::Char('b'),
+                KeyModifiers::CONTROL,
+            ))),
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.known.get(&session_id).is_some_and(|view| {
+                view.browsing
+                    && view
+                        .transcript
+                        .window
+                        .items()
+                        .any(|(_, entry)| matches!(entry.as_ref(), TranscriptBlock::User(_)))
+            })
+        })
+        .await
+        .unwrap();
+
+        assert!(
+            !app.pending_requests.values().any(|kind| {
+                matches!(kind, RequestKind::OpenSession { session_id: pending, .. } if pending == &session_id)
+            }),
+            "browse must not open the session"
+        );
+        let view = &app.sessions.known[&session_id];
+        assert!(view.browsing, "the view stays read-only");
+        assert_eq!(view.info.model, "deep");
+
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok && rep.seen_eof && rep.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// D1 (spec §6.1, §10.2): `--session <id>` opens exactly that id and
+/// `--continue` matches only the current workspace; neither path ever sends a
+/// prompt. A `--continue` miss falls back to the selector without guessing.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_startup_selection_opens_without_auto_prompt() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    let other_workspace = env.temp_dir.join("other_workspace");
+    std::fs::create_dir_all(&other_workspace).unwrap();
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        // Seed the store with one session per workspace.
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+        let here =
+            create_compact_session(&mut process, &mut app, &env.workspace_path, "Startup here")
+                .await;
+        let elsewhere = create_compact_session(
+            &mut process,
+            &mut app,
+            &other_workspace,
+            "Startup elsewhere",
+        )
+        .await;
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok && rep.seen_eof && rep.seen_exit);
+        process.terminate().await;
+
+        // `--session <id>`: the exact id, no selector, no prompt.
+        let mut process = env.spawn_agent(&agent_bin);
+        let prefs = CliPrefs {
+            startup_session: Some(StartupSession::Exact(elsewhere.clone())),
+            ..CliPrefs::default()
+        };
+        let mut app = App::with_cli_prefs(env.workspace_path.clone(), prefs);
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.active.as_deref() == Some(elsewhere.as_str())
+                && a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+        assert!(!matches!(app.dock, Dock::SessionSelector(_)));
+        assert!(
+            !app.pending_requests.values().any(|kind| matches!(
+                kind,
+                RequestKind::SendTurn { .. } | RequestKind::SteerTurn { .. }
+            )),
+            "--session never sends a prompt"
+        );
+        assert!(
+            env._server.recorded_requests().is_empty(),
+            "--session never reaches the provider"
+        );
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok && rep.seen_eof && rep.seen_exit);
+        process.terminate().await;
+
+        // `--continue` in this workspace: the session that lives here, never
+        // the newer one in the other project.
+        let mut process = env.spawn_agent(&agent_bin);
+        let prefs = CliPrefs {
+            startup_session: Some(StartupSession::ContinueCurrentWorkspace),
+            ..CliPrefs::default()
+        };
+        let mut app = App::with_cli_prefs(env.workspace_path.clone(), prefs);
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.active.as_deref() == Some(here.as_str())
+                && a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+        assert!(
+            !app.pending_requests.values().any(|kind| matches!(
+                kind,
+                RequestKind::SendTurn { .. } | RequestKind::SteerTurn { .. }
+            )),
+            "--continue never sends a prompt"
+        );
+        assert!(env._server.recorded_requests().is_empty());
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok && rep.seen_eof && rep.seen_exit);
+        process.terminate().await;
+
+        // A `--continue` miss opens the selector instead of guessing.
+        let empty_workspace = env.temp_dir.join("empty_workspace");
+        std::fs::create_dir_all(&empty_workspace).unwrap();
+        let mut process = env.spawn_agent(&agent_bin);
+        let prefs = CliPrefs {
+            startup_session: Some(StartupSession::ContinueCurrentWorkspace),
+            ..CliPrefs::default()
+        };
+        let mut app = App::with_cli_prefs(empty_workspace, prefs);
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+                && matches!(a.dock, Dock::SessionSelector(_))
+                && !a.pending_requests.values().any(|kind| {
+                    matches!(
+                        kind,
+                        RequestKind::RefreshSessions { .. } | RequestKind::ListSessions
+                    )
+                })
+        })
+        .await
+        .unwrap();
+        assert!(
+            app.sessions.active.is_none(),
+            "no cross-project guess opens"
+        );
+        assert!(
+            !app.pending_requests.values().any(|kind| {
+                matches!(
+                    kind,
+                    RequestKind::OpenSession { .. } | RequestKind::SendTurn { .. }
+                )
+            }),
+            "a miss opens nothing"
+        );
+        assert!(env._server.recorded_requests().is_empty());
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok && rep.seen_eof && rep.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// D1 (spec §10.3): switching sessions keeps each draft (text, cursor, paste
+/// markers) and leaves a running loop alive in the background.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_session_switch_keeps_drafts_and_running_background_loop() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    let gate = Arc::new(AtomicBool::new(false));
+    env._server
+        .enqueue_gated(sse_text_response("background answer."), gate.clone(), None);
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+
+        let first =
+            create_compact_session(&mut process, &mut app, &env.workspace_path, "Draft A").await;
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::SubmitTurn {
+                session_id: first.clone(),
+                text: "start the background turn".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .known
+                .get(&first)
+                .is_some_and(|view| view.live.is_some())
+                && !env._server.recorded_requests().is_empty()
+        })
+        .await
+        .unwrap();
+
+        // Draft in the running session, then create and draft in a second one.
+        type_draft(&mut process, &mut app, "alpha draft")
+            .await
+            .unwrap();
+        assert_eq!(app.composer().content(), "alpha draft");
+
+        let second =
+            create_additional_session(&mut process, &mut app, &env.workspace_path, "Draft B").await;
+        assert_eq!(
+            app.composer().content(),
+            "",
+            "a new session starts with an empty draft"
+        );
+        type_draft(&mut process, &mut app, "beta draft")
+            .await
+            .unwrap();
+        assert_eq!(app.composer().content(), "beta draft");
+
+        // Switching back restores the first session's draft and leaves its
+        // loop running in the background.
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::OpenSession {
+                session_id: first.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.active.as_deref() == Some(first.as_str())
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            app.composer().content(),
+            "alpha draft",
+            "the first session's draft follows the switch"
+        );
+        assert!(
+            app.sessions.known[&first].live.is_some(),
+            "the background loop survives the switch"
+        );
+
+        // And the second draft is still its own.
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::OpenSession {
+                session_id: second.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.active.as_deref() == Some(second.as_str())
+        })
+        .await
+        .unwrap();
+        assert_eq!(app.composer().content(), "beta draft");
+
+        // Release the provider and let the background turn land.
+        gate.store(true, Ordering::Relaxed);
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.known.get(&first).is_some_and(|view| {
+                view.live.is_none()
+                    && view
+                        .transcript
+                        .window
+                        .items()
+                        .any(|(_, entry)| matches!(entry.as_ref(), TranscriptBlock::Assistant(_)))
+            })
+        })
+        .await
+        .unwrap();
+
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok && rep.seen_eof && rep.seen_exit);
+        process.terminate().await;
+    });
+}
+
+/// D1 (spec §10.4): `/new` creates quickly in this workspace with the recent
+/// explicit configuration, `/new form` still opens the custom form, and
+/// `/rename`, `/close` and `/delete` work end to end against the real Agent.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_new_form_rename_close_delete_commands() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.connection == ConnectionState::Ready
+        })
+        .await
+        .unwrap();
+
+        // `/new` without an active session: quick create, no form.
+        run_slash_command(&mut process, &mut app, "/new")
+            .await
+            .unwrap();
+        let session_id = wait_for_active_session(&mut process, &mut app)
+            .await
+            .unwrap();
+        assert!(app.new_session().is_none(), "/new never opens the form");
+        let view = &app.sessions.known[&session_id];
+        assert_eq!(
+            view.info.workspace,
+            env.workspace_path.to_string_lossy()
+        );
+        assert_eq!(view.info.model, "deep");
+        assert_eq!(view.info.profile, "coding");
+
+        // `/new form` still reaches the custom form.
+        run_slash_command(&mut process, &mut app, "/new form")
+            .await
+            .unwrap();
+        assert!(app.new_session().is_some(), "/new form opens the custom form");
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+                KeyCode::Esc,
+                KeyModifiers::empty(),
+            ))),
+        )
+        .await
+        .unwrap();
+        assert!(!matches!(app.dock, Dock::NewSession(_)));
+
+        // `/rename <title>` through the safe mutation path.
+        run_slash_command(&mut process, &mut app, "/rename E2E renamed")
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .known
+                .get(&session_id)
+                .is_some_and(|view| view.info.title.as_deref() == Some("E2E renamed"))
+        })
+        .await
+        .unwrap();
+
+        // `/close` keeps the view; `/delete` needs the closed session and an
+        // explicit confirm.
+        run_slash_command(&mut process, &mut app, "/close confirm")
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.closed.contains(&session_id)
+                && a.sessions
+                    .known
+                    .get(&session_id)
+                    .is_some_and(|view| !view.info.loaded)
+        })
+        .await
+        .unwrap();
+
+        dispatch(&mut process, &mut app, AppEvent::OpenSessionSelector)
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            !a.pending_requests.values().any(|kind| {
+                matches!(
+                    kind,
+                    RequestKind::RefreshSessions { .. } | RequestKind::ListSessions
+                )
+            })
+        })
+        .await
+        .unwrap();
+        // The close removed the row from the last catalog snapshot; F5 makes
+        // the closed session selectable again (the panel's own refresh).
+        dispatch(
+            &mut process,
+            &mut app,
+            AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+                KeyCode::F(5),
+                KeyModifiers::empty(),
+            ))),
+        )
+        .await
+        .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            !a.pending_requests.values().any(|kind| {
+                matches!(
+                    kind,
+                    RequestKind::RefreshSessions { .. } | RequestKind::ListSessions
+                )
+            }) && matches!(&a.dock, Dock::SessionSelector(state) if state
+                .selected_session_id
+                .as_deref()
+                == Some(session_id.as_str()))
+        })
+        .await
+        .unwrap();
+
+        run_slash_command(&mut process, &mut app, "/delete")
+            .await
+            .unwrap();
+        assert!(
+            !app.pending_requests.values().any(|kind| {
+                matches!(kind, RequestKind::DeleteSession { session_id: pending } if pending == &session_id)
+            }),
+            "delete waits for the explicit confirm"
+        );
+        run_slash_command(&mut process, &mut app, "/delete confirm")
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| session_absent(a, &session_id))
+            .await
+            .unwrap();
+
+        // The rename survives the reloaded catalog and the row is gone.
+        run_slash_command(&mut process, &mut app, "/sessions")
+            .await
+            .unwrap();
+        pump_until(&mut process, &mut app, |a| {
+            !a.pending_requests.values().any(|kind| {
+                matches!(
+                    kind,
+                    RequestKind::RefreshSessions { .. } | RequestKind::ListSessions
+                )
+            }) && !a
+                .sessions
+                .list
+                .iter()
+                .any(|session| session.session_id == session_id)
+        })
+        .await
+        .unwrap();
+        match &app.dock {
+            Dock::SessionSelector(state) => assert!(matches!(
+                state.mode,
+                SessionPanelMode::Browse
+            )),
+            dock => panic!("expected the session selector, got {dock:?}"),
+        }
+
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok && rep.seen_eof && rep.seen_exit);
         process.terminate().await;
     });
 }

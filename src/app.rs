@@ -2824,7 +2824,10 @@ impl App {
     /// as the dialog, so an ACK-lost rename rereads metadata instead of
     /// blind-rewriting (spec §10.4).
     fn rename_session_title(&mut self, session_id: &SessionId, title: String) -> Vec<AppCommand> {
-        self.open_selector(SelectorKind::Session);
+        // The selector refresh command must be returned: dropping it would
+        // register a pending request that is never sent (and the app would
+        // stay panel-busy forever).
+        let mut commands = self.open_selector(SelectorKind::Session);
         if let Some(state) = self.session_selector_state_mut() {
             state.selected_session_id = Some(session_id.clone());
             state.scope = crate::state::selection::SessionScope::CurrentWorkspace;
@@ -2835,7 +2838,8 @@ impl App {
                 submitting: false,
             };
         }
-        self.submit_session_rename(session_id)
+        commands.extend(self.submit_session_rename(session_id));
+        commands
     }
 
     fn submit_session_rename(&mut self, session_id: &SessionId) -> Vec<AppCommand> {

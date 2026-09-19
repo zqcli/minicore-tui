@@ -1003,12 +1003,15 @@ impl App {
         match title {
             Some(title) => self.rename_session_title(&session_id, title),
             None => {
-                self.open_selector(SelectorKind::Session);
+                // Keep the selector refresh command so the registered pending
+                // request is actually sent.
+                let mut commands = self.open_selector(SelectorKind::Session);
                 if let Some(state) = self.session_selector_state_mut() {
                     state.selected_session_id = Some(session_id);
                     state.scope = crate::state::selection::SessionScope::CurrentWorkspace;
                 }
-                self.begin_session_rename()
+                commands.extend(self.begin_session_rename());
+                commands
             }
         }
     }
