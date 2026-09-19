@@ -8,18 +8,21 @@ Protocol v1 / Agent 0.5.0 release line.
 
 ## Current 0.3.0 Note
 
-The current code/test/snapshot baseline is
-`0aa64c5e4d9211351123db059547beddb15c2cce`. Local rustc 1.98.0 validation
-passed **828 tests, 0 failed, 43 ignored**, including **137/137** in `tests/app_flow.rs`
-and **6/6** ignored release performance workloads. The fixed Agent/Runtime
-remote run, final-source serial E2E, hosted CI, and native/manual acceptance
-are not represented by this historical MIG matrix; their statuses remain in
-[`refactor-acceptance.md`](refactor-acceptance.md).
+The core source/test/snapshot baseline is
+`0aa64c5e4d9211351123db059547beddb15c2cce`; F-review remediation is `daa944a`.
+The current remote Rust 1.85/stable suites each pass **830 tests, 0 failed, 48
+ignored**, including **137/137** in `tests/app_flow.rs`; the fixed-backend
+isolated job passes **34/34** loopback E2Es. This historical MIG matrix does
+not relabel those current Protocol v1 results, hosted CI, or native/manual
+acceptance; statuses remain in [`refactor-acceptance.md`](refactor-acceptance.md).
+The older local Rust 1.98.0 record is disclosed provenance only.
 
 `PASS` requires the cited executable test or exact dependency/source check to have passed in the
 remote final6 runs. Pins, dependency absence, and evidence-recording requirements use source audits,
 not invented runtime tests. `NOT RUN` means the criterion was not executed; a remote Linux run never substitutes
-for an unrun GitHub Actions platform job. The implementer did not run local Cargo/Rust tools.
+for an unrun GitHub Actions platform job. The historical final6 implementer run did not run local Cargo/Rust tools; the
+later local Rust 1.98.0 execution deviation is disclosed in the current v0.3.0
+records and is not used for current acceptance.
 
 ## Remote Final6/Post-review Evidence
 

@@ -58,20 +58,21 @@ editor process before restoring the terminal.
 
 ## Verification
 
-The current code/test/snapshot baseline is
-`0aa64c5e4d9211351123db059547beddb15c2cce`. Local rustc 1.98.0 validation
-passed 828 tests with no failures and 43 ignored, `tests/app_flow.rs` passed 137/137,
-and the six ignored release performance workloads passed. The default Rust tests
-remain offline and use fixtures/fake-Agent paths.
+The core source/test/snapshot baseline is
+`0aa64c5e4d9211351123db059547beddb15c2cce`; F-review remediation is `daa944a`.
+The current remote Rust 1.85.0 and stable suites each pass 830 tests with no
+failures and 48 ignored. The isolated fixed-backend job checks the pinned
+Agent/Runtime revisions and passes 34/34 serial loopback E2Es. The current
+Release performance set passes 7/7, and Linux kernel-PTY lifecycle/input/
+resize/shutdown evidence passes through
+[`verification/v03-f/README.md`](verification/v03-f/README.md).
 
-Hosted CI is configured to test Rust 1.85.0 and stable on Ubuntu, macOS, and
-Windows. A separate Ubuntu job checks out and builds the fixed Agent/Runtime
-revisions, then runs the ignored serial `agent_e2e` suite against its loopback
-mock without provider credentials. The final-source remote Rust 1.85/stable
-checks, fixed backend builds, and 34/34 serial Agent E2Es have passed. Hosted
-jobs, native manual terminal interaction, exact RSS accounting, and oversized
-real-Agent item generation remain separate acceptance statuses until those
-environments are available.
+The older local rustc 1.98.0 run is retained as a disclosed execution
+deviation from the remote-only procedure, not current release evidence. Hosted
+CI is configured for Rust 1.85.0 and stable on Ubuntu, macOS, and Windows, but
+no hosted run exists for this branch. Native macOS/Windows execution, manual
+iTerm2/IME behavior, exact allocator/RSS accounting, external providers, and
+real oversized-Agent item generation remain separate `Not run` boundaries.
 
 The current detailed matrix is in
 [`docs/refactor-acceptance.md`](refactor-acceptance.md); the fixed wire facts

@@ -26,15 +26,18 @@ The 0.3.0 package targets the fixed `minicore-agent` 0.5.0 and
 - Add offline-capable Rust 1.85/stable CI coverage on Ubuntu, macOS, and
   Windows, plus a separately pinned Agent/Runtime build and loopback E2E job.
 
-Current acceptance remains conservative: the current code/test/snapshot baseline
-is `0aa64c5e4d9211351123db059547beddb15c2cce`; local rustc 1.98.0 validation
-passed 828 tests with no failures and 43 ignored, and the release performance
-suite passed 6/6. The final-source remote Rust 1.85/stable checks, fixed
-Agent/Runtime builds, and 34/34 pinned-Agent E2Es passed on both toolchains.
-Hosted CI, native/manual terminal interaction, exact RSS accounting, provider
-access, and oversized real-Agent items remain unrun where the environment
-cannot verify them. See
-[`docs/refactor-acceptance.md`](docs/refactor-acceptance.md).
+Current acceptance remains conservative: the core baseline is
+`0aa64c5e4d9211351123db059547beddb15c2cce` and F-review remediation is
+`daa944a`. Remote Rust 1.85/stable checks each passed **830 tests with no
+failures and 48 ignored**; the isolated fixed-backend job passed 34/34
+loopback E2Es; and the current Release performance set passed 7/7. Linux
+kernel-PTY lifecycle/input/resize/shutdown and 30-second idle evidence passed.
+Hosted CI, native/manual iTerm2/IME use, exact allocator/RSS accounting,
+provider access, and oversized real-Agent items remain unrun where the
+environment cannot verify them. The older local rustc 1.98.0 record is
+retained as a disclosed execution deviation, not current acceptance evidence.
+See [`docs/refactor-acceptance.md`](docs/refactor-acceptance.md) and
+[`docs/verification/v03-f/README.md`](docs/verification/v03-f/README.md).
 
 ## Historical releases
 

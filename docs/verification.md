@@ -4,7 +4,10 @@ The current release line is TUI 0.3.0 / Agent 0.5.0 / Runtime 0.4.1. Use
 [`refactor-acceptance.md`](refactor-acceptance.md),
 [`backend.md`](backend.md), and [`testing.md`](testing.md) for current evidence.
 This index preserves the earlier 0.2.x delivery records and must not be read as
-current 0.3.0 acceptance.
+current 0.3.0 acceptance. The current F-review evidence is in
+[`verification/v03-f/README.md`](verification/v03-f/README.md), including the
+remote-only execution boundary, Linux OS-PTY report, Spec 25 measurements, and
+independent `9d11ee6` baseline comparison.
 
 ## Historical Delivery: 0.2.8 — Fullscreen Scrollbar
 

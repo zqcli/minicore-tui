@@ -4,7 +4,7 @@ This file preserves the frozen stage-A inventory of user-visible commands, E2E
 scenarios, and core behaviors that every later stage had to migrate rather than
 drop (Spec §22.2, §28.2). It is a historical baseline, not the current release
 matrix. The current 0.3.0 migration guide is
-[`migration-v0.2-to-v0.3.md`](migration-v0.2-to-v0.3.md), and the current
+[`migration-0.2-to-v0.3.md`](migration-0.2-to-v0.3.md), and the current
 acceptance statuses are in [`refactor-acceptance.md`](refactor-acceptance.md).
 
 The delivered v0.3 surface now includes E1 tool details, E2 workspace/file

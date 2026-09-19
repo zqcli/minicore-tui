@@ -9,29 +9,32 @@ Status values are deliberately strict:
   validation has not been run on the current tree.
 - **Not applicable** — the criterion does not apply to this project.
 
-## Current Local Verification
+## Current Remote Verification
 
-The current code/test/snapshot baseline is `0aa64c5e4d9211351123db059547beddb15c2cce`.
-On the local rustc 1.98.0 environment (the package MSRV is 1.85.0) it passed:
+The core code/test/snapshot baseline is
+`0aa64c5e4d9211351123db059547beddb15c2cce`; F-review remediation is commit
+`daa944a` and the current remote validation tree includes that remediation.
+On the authorized builder `root@192.168.20.199`, Rust 1.85.0 and stable each
+passed **830 passed, 0 failed, 48 ignored**, with fmt, strict Clippy, and
+warning-denied rustdoc passing. The ignored count includes the PTY and Spec 25
+probes; it is not hosted/native acceptance.
 
-- `cargo fmt --all -- --check`;
-- `cargo test --locked --offline --all-targets`: **828 passed, 0 failed,
-  43 ignored**;
-- `cargo clippy --locked --offline --all-targets -- -D warnings`;
-- `RUSTDOCFLAGS='-D warnings' cargo doc --locked --offline --no-deps`;
-- `git diff --check`;
-- `cargo test --locked --offline --test app_flow`: **137/137**; and
-- the ignored release performance suite: **6/6**.
+The fixed Agent/Runtime source checkouts resolved exactly to Agent
+`061743369459299e66be97bf97d2b27352a39914` / 0.5.0 and Runtime
+`6cd2bdbc634437dea925495c61c7eb0be10ba171` / 0.4.1. The isolated fixed job
+performed a clean TUI/backend locked fetch, offline backend builds, and passed
+**34/34** loopback E2Es. The current Rust 1.85 Release performance set passed
+**7/7**, including the 256 KiB draft probe. Linux OS-PTY validation passed the
+terminal lifecycle, panic, input/resize, real-TUI shutdown, and 30-second idle
+cases. See [`verification/v03-f/`](verification/v03-f/README.md) for exact
+commands, measurements, archive hashes, and remote log paths.
 
-The authorized remote final-source run also passed on both Rust 1.85.0 and
-stable 1.97.1: each all-target suite reported **828 passed, 0 failed, 43
-ignored**, with fmt, strict Clippy, and warning-denied rustdoc passing. The
-fixed Agent/Runtime manifests built offline on both toolchains; the recorded
-fixed Agent 0.5.0 binary hash is
-`661b32976ad6ae2fbe2b33411c7d0d082f9782da70745e4e4a6602c87fb7b273`. Serial
-loopback E2E passed **34/34** on each toolchain. The Rust 1.85 release
-performance suite passed **6/6**. Hosted CI, macOS/Windows execution, and
-native/manual terminal acceptance remain separate evidence.
+### Local Execution Deviation
+
+Before the remote-only F-review instruction, the local rustc 1.98.0
+environment had already run the older 828-test/6-workload record. That fact is
+retained as provenance, excluded from current acceptance counts, and was not
+rerun or used as a substitute for the remote evidence above.
 
 The same 368-path build/test/snapshot input list used by the historical E3
 receipt has current-content digest
@@ -56,9 +59,8 @@ The authoritative builder is `root@192.168.20.199`, workspace
 included the bounded serialized canonical-item decode worker, shared history
 owners, monotonic ToolFacts presentation ownership, content-based ScrollAnchor
 restoration, viewport/neighbor/recent-result eviction protection, layout
-batching, budgets, and SourceMap copy metadata. The current local baseline
-retains those boundaries and adds the phase-F fixes above; earlier C2b/C2c
-release logs remain historical context only.
+batching, budgets, and SourceMap copy metadata. The current remote F-review baseline retains those boundaries and adds the
+phase-F fixes above; earlier C2b/C2c release logs remain historical context only.
 
 The preceding D3 C2 release baseline was:
 
@@ -167,9 +169,9 @@ review remains pending.**
 | REF-51 | Existing CJK/IME/mouse/scrollbar/terminal restore behavior | **Passed** | UI, Rail, terminal, and snapshot tests. |
 | REF-52 | Common command table/completion/help stay consistent | **Passed** | `command::COMMANDS` is the single static table driving parsing, completion and the help panel; tests assert every table entry parses and is offered, unlisted names are unknown, and the help panel renders every entry. |
 | REF-53 | No approval/plugin/Subagent/PTY/Git-write/auto-reconnect feature | **Passed** | Source audit. |
-| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Passed** | Final-source serial loopback E2E passed 34/34 on both Rust 1.85.0 and stable 1.97.1 against fixed Agent 0.5.0 / Runtime 0.4.1, including synthetic-Git paging/status/diff/stale and native provenance/Turn/Context workflows. Fixed Agent binary SHA-256: `661b32976ad6ae2fbe2b33411c7d0d082f9782da70745e4e4a6602c87fb7b273`. |
-| REF-55 | Rust 1.85/stable and original tests on three platforms | **Not run** | Final-source Rust 1.85.0 and stable 1.97.1 remote Linux suites pass; hosted Linux/macOS/Windows jobs, native macOS/Windows execution, and terminal manual acceptance remain Not run. |
-| REF-56 | Release before/after performance evidence uses real data | **Passed** | The current local rustc 1.98.0 probes and the authorized remote Rust 1.85 C2b/C2c release suite passed; the remote suite completed all 6/6 workloads. Workload units are recorded in `docs/performance.md`. |
+| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Passed** | The isolated current job checked Agent `061743369459299e66be97bf97d2b27352a39914` and Runtime `6cd2bdbc634437dea925495c61c7eb0be10ba171`, built offline, and passed 34/34 serial loopback E2Es. Accepted fixed-Agent binary SHA-256: `661b32976ad6ae2fbe2b33411c7d0d082f9782da70745e4e4a6602c87fb7b273`; isolated CI build SHA-256 `867325ae6f599d89f3c7f3f476559c5f1ed0824de64f1142b84fe94291a27d8f` is separate build-directory evidence. |
+| REF-55 | Rust 1.85/stable and original tests on three platforms | **Not run** | Current remote Rust 1.85.0 and stable suites each pass 830/0/48; hosted Linux/macOS/Windows jobs, native macOS/Windows execution, and manual iTerm2/IME acceptance remain Not run. |
+| REF-56 | Release before/after performance evidence uses real data | **Passed** | Remote Rust 1.85 Release performance passed 7/7, including the 256 KiB P95 probe, and the independent 9d11ee6 baseline was measured remotely. The evidence excludes terminal input-to-frame latency and exact allocator/RSS claims. |
 
 ## Counts
 
@@ -191,16 +193,16 @@ review remains pending.**
 - **D/E**: D1/D2/D3, E1 tool details, E2 file references/candidates/preview/
   literal search and E3 Changes/status/Context are implemented with automated
   evidence. E3 parent review is pending.
-- **F review**: **Focused local review passed.** Query scope invalidation now
+- **F review**: **Remote validation passed.** Query scope invalidation now
   clears `waiting`, `ready`, coalesced refreshes, and detached follow-ups for
   close, reopen, delete, and panel teardown while retaining real in-flight
   request IDs until their responses release slots. It also retires
   never-written session retries and reissues coalesced Tool refreshes after
-  stale responses. The final Tool Detail capability-retention, reopen-reasoning,
-  export no-clobber, memory-bound, privacy, shutdown, and completion-owner
-  regressions pass in the current local suite; final remote Rust/Agent
-  validation also passed. Hosted CI, native platform acceptance, parent review,
-  and the remaining manual/measurement checks remain **Not run**.
+  stale responses. The Tool Detail capability-retention, reopen-reasoning,
+  export no-clobber, memory-bound, privacy, shutdown, completion-owner, PTY,
+  draw-scheduling, and 256 KiB editor regressions pass on the remote builder.
+  Hosted CI, native platform acceptance, parent review, exact allocator/RSS,
+  provider, and oversized real-Agent checks remain **Not run**.
 
 ## D Status
 
@@ -264,7 +266,7 @@ for the criteria below, on the tree validated by the logs above:
 - **D1/D2/D3 parent review**: the parent/independent review of these commits
   has not been recorded here; "Passed" reflects the current tree's own measured
   evidence. Later E authorizations and E3's pending parent review are recorded
-  in Current Local Verification above; this historical D entry is not release acceptance.
+  in Current Remote Verification above; this historical D entry is not release acceptance.
 
 ## Phase-F Follow-ups
 
@@ -272,12 +274,12 @@ for the criteria below, on the tree validated by the logs above:
    the workflow configuration and remote Linux run are not substitutes for
    hosted platform jobs.
 2. Obtain parent/independent review of the final E3/F state.
-3. Keep manual iTerm2/editor/IME, exact RSS, real-provider, and oversized
-   real-Agent checks conservative.
+3. Keep manual iTerm2/editor/IME, exact RSS, real-provider, oversized
+   real-Agent, and the two exact OS/Agent Spec §25 scenarios conservative.
 
 ## Current C2c Follow-ups
 
-1. Keep the passed dual-toolchain fmt/tests/clippy/rustdoc, six Release probes
+1. Keep the passed dual-toolchain fmt/tests/clippy/rustdoc, seven Release probes
    and 34-scenario Agent E2E evidence tied to the recorded workload units.
 2. Keep oversized automatic history decoding explicit and bounded; no complete
    body may be fabricated from an 8 MiB placeholder path.

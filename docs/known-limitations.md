@@ -6,12 +6,16 @@ These are the explicit 0.3.0 boundaries, not hidden fallback behavior:
   8 MiB. They remain explicit placeholders; `/export raw` is a separate,
   bounded path and does not raise the automatic decode ceiling.
 - Exact allocator/RSS accounting, decode-throughput qualification, terminal
-  input-to-frame latency, and a real external provider are not claimed.
-- The final source baseline has local Rust evidence only until the authorized
-  remote Rust 1.85/stable and fixed-Agent runs complete. Native macOS/Windows
-  execution, hosted CI, interactive iTerm2/IME/clipboard behavior, and the
-  real-PTY editor round trip remain environment-dependent acceptance checks
-  until they are run.
+  input-to-frame latency, and a real external provider are not claimed. The
+  exact two-second OS clipboard-helper cancellation scenario and the paused
+  Agent/large-stdout scenario from Spec §25 are also not run; injected worker
+  and RPC backpressure coverage is not relabeled as those exact scenarios.
+- Current Rust evidence is from the authorized remote Linux builder: Rust
+  1.85.0 and stable each pass 830 tests with 48 ignored, and the fixed-Agent
+  loopback job passes 34/34. Native macOS/Windows execution, hosted CI,
+  interactive iTerm2/IME/clipboard behavior, and external-provider access
+  remain environment-dependent acceptance checks. Linux kernel-PTY evidence
+  is recorded separately and does not imply native/manual terminal acceptance.
 - There is no approval UI, MCP, plugin, skill, persistent subagent manager,
   session tree/fork/branch, automatic reconnect/restart, full Bash/PTY output,
   OSC52 copy, Git mutation, or patch export.

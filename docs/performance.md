@@ -8,51 +8,52 @@ The current refactor package is **0.3.0**. The E1–E3 measurements below are
 recorded remote-Linux evidence; they do not imply that the new hosted matrix or
 native macOS/Windows execution has already run.
 
-## Current Local Final-Source Run
+## Current Remote F-Review Run
 
-The current code/test/snapshot baseline is `0aa64c5e4d9211351123db059547beddb15c2cce`.
-The local rustc 1.98.0 release performance suite passed all **6/6** ignored
-workloads. Recorded outputs were:
-
-```text
-live delta: 1000 deltas, 51101 -> 51234 history rows, 133 delta rows,
-            push_ms=47.58
-all_lines: 20 clones, 140020 total rows, per_call_ms=20.63
-prepare 50k rows: per_call_ms=111.85
-C2 stable layout: 1000 frames, 250 deltas, elapsed_ms=1651.99,
-                  layout_calls=0, history_bytes_cloned=0
-C2c 120x40: p95_us=2503 p99_us=2880 durable_rows=43870,
-            viewport_bytes=4396336 retained_layout_bytes_estimate=8035080
-C2b worker: durable_rows=51101 deltas=1000,
-            layout_calls=0 history_bytes_cloned=0 viewport_bytes=2986911
-```
-
-These local measurements are workload evidence only. They do not measure
-terminal input-to-frame latency, exact RSS, or allocator behavior.
-
-## Current Remote Final-Source Run
-
-The authorized Rust 1.85.0 Release run on the final source baseline passed all
-**6/6** ignored workloads:
+The current remote tree contains core baseline `0aa64c5e4d9211351123db059547beddb15c2cce`
+and remediation `daa944a`. Rust 1.85.0 Release performance passed **7/7**:
 
 ```text
-all_lines: 20 clones, rows_total=140020, per_call_ms=20.69
-live delta: 1000 deltas, 51101 -> 51234 history rows, 133 delta rows,
-            push_ms=81.36
-prepare 50k rows: per_call_ms=138.68
-C2 stable layout: 1000 frames, 250 deltas, live_rows=28,
-                  layout_calls_delta=0, history_bytes_cloned=0,
-                  viewport_rows=40000, viewport_bytes=2742348,
-                  elapsed_ms=5494.91
-C2c 120x40: p95_us=8180 p99_us=8549 durable_rows=43870,
-            viewport_bytes=4396336 retained_layout_bytes_estimate=8035080
+production App 256 KiB draft: edits=4096 p95_us=761 p99_us=868,
+  draft_bytes=258048 retained_capacity_estimate=5402688 composer_full_joins_delta=0
+same direct Composer workload: p95_us=237 p99_us=238,
+  draft_bytes=258048 retained_capacity_estimate=5402688 composer_full_joins_delta=0
+C2 stable layout: layout_calls_delta=0 history_bytes_cloned=0 viewport_rows=40000
+C2c 120x40: p95_us=3380 p99_us=3617 durable_rows=43870,
+  layout_calls=0 history_bytes_cloned=0 viewport_bytes=4396336
 C2b worker: durable_rows=51101 deltas=1000,
-            layout_calls=0 history_bytes_cloned=0 viewport_bytes=2986911
+  layout_calls=0 history_bytes_cloned=0 viewport_bytes=2986911
 ```
 
-Stable-history layout calls and history-body cloning remained zero in the
-structural probes. These are fixed-workload samples, not terminal input latency
-or exact RSS/allocator measurements.
+The 256 KiB P95 is local edit processing, not terminal input-to-frame latency.
+The direct production draw counter recorded 10 draws during the interaction
+probe and 2 draws during 30 seconds of idle. The idle probe had zero stable
+history layout calls and zero historical body clones. Python `resource` also
+recorded process CPU and peak-RSS observations for the Linux PTY processes;
+exact allocator/RSS accounting remains unclaimed.
+
+The independent remote 0.2.8 archive at `9d11ee6` recorded P95 1492 µs and
+P99 1907 µs for the same direct Composer workload, versus 237 µs and 238 µs
+for the current tree. This is a fixed-workload comparison, not a general
+application speedup or terminal input-to-frame claim; archive details and the
+hash are in [`verification/v03-f/README.md`](verification/v03-f/README.md).
+
+## Excluded Local Execution Deviation
+
+Before the remote-only F-review instruction, local rustc 1.98.0 had already
+run an older six-workload record. Its values remain below only as provenance;
+they are not current acceptance evidence and were not rerun:
+
+```text
+local rustc 1.98.0: 6/6 older workloads; C2c p95_us=2503 p99_us=2880
+```
+
+## Prior Remote Final-Source Run
+
+The pre-remediation remote final-F release set passed the older **6/6**
+structural workloads. Those fixed-workload values remain historical context;
+the current F-review values and the new PTY/baseline evidence are recorded in
+[`verification/v03-f/README.md`](verification/v03-f/README.md).
 
 ## Environment
 
@@ -113,8 +114,8 @@ c2c_max_tree_vm_hwm_kib=47172
 The samples are synthetic frame-processing measurements for the fixed 120×40
 workload; reruns can vary with host scheduling. They are **not** terminal input
 latency or terminal input-to-frame P95/P99 measurements. The historical focused
-C2b/C2c probes passed; the current local and authorized remote final-source
-release suites are recorded above. The source/perf workload is 1000 deltas,
+C2b/C2c probes passed; the current remote F-review Release suite is recorded
+above. The source/perf workload is 1000 deltas,
 7300 history blocks, 43,870 durable rows, a 119-column content width, and a
 40-row viewport; these units must remain in future logs.
 
@@ -261,9 +262,11 @@ ownership. No performance number is inferred from that test.
 - exact allocation-capacity and RSS accounting, which is intentionally not
   attempted here;
 - terminal input-to-frame latency under real interactive streaming;
-- interactive iTerm2/IME/clipboard/real-TTY validation and a real external
-  Provider; E2 workspace and E3 Changes/Context have the automated evidence
-  above. D2 search/copy/export and D3 editor/settings measurements remain in
+- manual iTerm2/IME/clipboard validation, the exact two-second OS clipboard
+  helper cancellation scenario, and the paused-Agent/large-stdout scenario;
+  injected worker and RPC backpressure tests are not relabeled as those exact
+  cases. E2 workspace and E3 Changes/Context have the automated evidence above.
+  D2 search/copy/export and D3 editor/settings measurements remain in
   `docs/refactor-acceptance.md`. Hosted CI and native macOS/Windows execution
-  remain **Not run** until those jobs execute; Linux validation passed on both
-  toolchains.
+  remain **Not run** until those jobs execute; Linux kernel-PTY validation
+  passed on both toolchains.

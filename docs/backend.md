@@ -13,7 +13,7 @@ through `--agent-bin`; its config and data directory belong to the Agent.
 
 | Component | Repository | Revision | Package |
 |---|---|---|---|
-| TUI | `zqcli/minicore-tui` | `0aa64c5e4d9211351123db059547beddb15c2cce` (current code/test/snapshot baseline) | `0.3.0` |
+| TUI | `zqcli/minicore-tui` | `daa944a` (F-review source/test baseline; core baseline `0aa64c5e4d9211351123db059547beddb15c2cce`) | `0.3.0` |
 | Agent | `zqcli/minicore-agent` | `061743369459299e66be97bf97d2b27352a39914` | `0.5.0` |
 | Runtime | `zqcli/minicore-runtime` | `6cd2bdbc634437dea925495c61c7eb0be10ba171` | `0.4.1` |
 
@@ -52,12 +52,15 @@ repository's fixtures/E2E remain the release gate.
 `is_supported_agent_version` package-minor gate and replaced it with
 `validate_backend(protocol_version, capabilities)`. The pinned Agent 0.5.0
 contract is covered by fixtures and reducer tests, including acceptance and
-rejection of the required Protocol v1 capability set. The current local
-`0aa64c5` tree passes its full offline all-target suite on rustc 1.98.0 and
-strict quality gates. The authorized final-source remote Rust 1.85/stable runs
-also pass their full suites and 34/34 fixed-Agent E2Es; the recorded Agent
-binary hash is `661b32976ad6ae2fbe2b33411c7d0d082f9782da70745e4e4a6602c87fb7b273`.
-Protocol v1 equality remains necessary, not sufficient, for release acceptance.
+rejection of the required Protocol v1 capability set. The authorized remote
+Rust 1.85/stable runs for the F-review tree each pass 830 tests with 48 ignored
+and strict quality gates; the isolated fixed-Agent job passes 34/34 loopback
+E2Es. The accepted fixed-Agent binary hash is
+`661b32976ad6ae2fbe2b33411c7d0d082f9782da70745e4e4a6602c87fb7b273`; the
+isolated CI build hash is separate evidence. Protocol v1 equality remains
+necessary, not sufficient, for release acceptance. The older local Rust 1.98.0
+result is retained as an execution deviation and is not current acceptance
+evidence.
 
 ## Method surface (33 methods)
 
@@ -226,7 +229,7 @@ agent  binary  /root/minicore-tui-v03-refactor/agent-target/debug/minicore-agent
 agent  head    061743369459299e66be97bf97d2b27352a39914
 runtime head   6cd2bdbc634437dea925495c61c7eb0be10ba171
 tui    base    9d11ee69c4efa02ef1e5bff143662b48dc3194de (stage-A baseline)
-tui    head    0aa64c5e4d9211351123db059547beddb15c2cce (current code/test/snapshot baseline)
+tui    head    daa944a (F-review source/test baseline; core baseline 0aa64c5e4d9211351123db059547beddb15c2cce)
 CARGO_TARGET_DIR=/root/minicore-tui-v03-refactor/tui-target
 ```
 
@@ -234,25 +237,31 @@ Verification commands:
 
 ```bash
 cd /root/minicore-tui-v03-refactor/tui
+RUSTUP_TOOLCHAIN=1.85.0 cargo fetch --locked
 RUSTUP_TOOLCHAIN=1.85.0 cargo fmt --all -- --check
-RUSTUP_TOOLCHAIN=1.85.0 cargo test --locked --all-targets --no-fail-fast
-RUSTUP_TOOLCHAIN=1.85.0 cargo clippy --locked --all-targets -- -D warnings
-python3 scripts/generate_agent_v1_fixtures.py \
-  --agent-bin /root/minicore-tui-v03-refactor/agent-target/debug/minicore-agent \
-  --out tests/fixtures/agent-v1
-cargo test --release --locked --test performance -- --ignored --nocapture
+RUSTUP_TOOLCHAIN=1.85.0 cargo test --locked --offline --all-targets --no-fail-fast
+RUSTUP_TOOLCHAIN=1.85.0 cargo clippy --locked --offline --all-targets -- -D warnings
+RUSTDOCFLAGS="-D warnings" RUSTUP_TOOLCHAIN=1.85.0 cargo doc --locked --offline --no-deps
+RUSTUP_TOOLCHAIN=1.85.0 cargo test --locked --offline --release --test performance -- --ignored --nocapture
+TERMINAL_TEST_BIN=$(find /root/minicore-tui-v03-refactor/tui-target/f-review/debug/deps -maxdepth 1 -type f -perm -111 -name 'terminal_restore-*' -print -quit)
+FAKE_AGENT_BIN=$(find /root/minicore-tui-v03-refactor/tui-target/f-review/debug/deps -maxdepth 1 -type f -perm -111 -name 'agent_process-*' -print -quit)
+test -n "$TERMINAL_TEST_BIN" -a -n "$FAKE_AGENT_BIN"
+python3 scripts/pty_terminal_validation.py \
+  --terminal-test-bin "$TERMINAL_TEST_BIN" \
+  --tui-bin /root/minicore-tui-v03-refactor/tui-target/f-review/release/minicore-tui \
+  --fake-agent-bin "$FAKE_AGENT_BIN" \
+  --output /root/minicore-tui-v03-refactor/logs/final-f-review/pty-report.json
 ```
 
-The current local `0aa64c5` source baseline passed `cargo fmt --check`,
-`cargo test --locked --offline --all-targets` on rustc 1.98.0 (828 passed, 0
-failed, 43 ignored), strict Clippy, warning-denied rustdoc, `git diff --check`,
-the 137-test
-`app_flow` target, and all 6 ignored release performance workloads. These local
-checks are complemented by the authorized remote Rust 1.85/stable runs, fixed
-backend builds, 34/34 E2Es on each toolchain, and the Rust 1.85 release
-performance run. The hosted CI job builds the fixed Agent and Runtime
-separately and reruns the E2E suite with the loopback mock, but has not run.
-Synthetic frame timings are not terminal input-to-frame latency measurements.
+The authorized remote Rust 1.85/stable F-review runs each pass 830 tests with
+48 ignored, strict Clippy, warning-denied rustdoc, and formatting. The isolated
+fixed backend job builds the exact Agent/Runtime revisions and passes 34/34
+loopback E2Es; the current Release performance set passes 7/7. The Linux
+kernel-PTY report passes terminal lifecycle/input/resize/shutdown and idle draw
+checks. The hosted CI job builds the fixed Agent and Runtime separately and
+reruns the E2E suite with the loopback mock, but no hosted run exists for this
+branch. Synthetic frame and editor timings are not terminal input-to-frame
+latency measurements.
 
 When reusing the existing `tui-target` directory after an rsync, run
 `cargo clean -p minicore-tui` (or touch the sources) before the build: rsync

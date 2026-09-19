@@ -152,7 +152,7 @@ retaining its in-process completion.
 
 - Agent 0.5.0 commit `061743369459299e66be97bf97d2b27352a39914`;
 - Runtime 0.4.1 commit `6cd2bdbc634437dea925495c61c7eb0be10ba171`;
-- TUI code/test/snapshot baseline `0aa64c5e4d9211351123db059547beddb15c2cce`;
+- TUI core code/test/snapshot baseline `0aa64c5e4d9211351123db059547beddb15c2cce`, with F-review remediation `daa944a`;
 - RPC Protocol v1 with the required capability set;
 - NDJSON over stdio, with one TUI writer, one stdout reader, one stderr reader,
   bounded frames (up to 32 MiB), request IDs, response/event interleaving, and no event replay.
@@ -194,11 +194,13 @@ refactor matrix is [docs/refactor-acceptance.md](docs/refactor-acceptance.md);
 
 A real-Agent E2E is ignored by default and must use the pinned Agent binary plus
 a loopback mock endpoint; it does not require or permit access to a real
-provider. The final-source remote Rust 1.85/stable runs passed 34/34 serial
-E2Es on each toolchain; hosted CI remains a separate unrun matrix. Do not put
-secrets or real user data in fixtures, logs, E2E config, or snapshots. Hosted CI
-builds the fixed Agent/Runtime sources separately and runs the serial E2E job
-without provider credentials.
+provider. The current remote Rust 1.85/stable runs each pass 830 tests with
+48 ignored, the isolated fixed-backend job passes 34/34 serial E2Es, and the
+current Release performance set passes 7/7. Linux kernel-PTY evidence covers
+terminal lifecycle, input/resize, shutdown, and idle draw scheduling; it is not
+manual iTerm2/IME or native macOS/Windows evidence. Hosted CI remains a
+separate unrun matrix. Do not put secrets or real user data in fixtures, logs,
+E2E config, or snapshots. See [the F-review evidence](docs/verification/v03-f/README.md).
 
 ## License
 

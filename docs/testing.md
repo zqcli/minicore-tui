@@ -9,28 +9,36 @@ enter an alternate screen during normal CI tests.
 ## Current 0.3.0 Verification Boundary
 
 The current package is TUI **0.3.0**, paired with Agent **0.5.0** and Runtime
-**0.4.1**. The current code/test/snapshot baseline is
-`0aa64c5e4d9211351123db059547beddb15c2cce`; fixed backend revisions are
-recorded in [`docs/backend.md`](backend.md). Phase-F review and the final
-Tool Detail/history/export fixes pass the focused current local suite.
+**0.4.1**. Core source/test/snapshot baseline is
+`0aa64c5e4d9211351123db059547beddb15c2cce`; F-review remediation is `daa944a`.
+All current Rust/Cargo evidence below was executed on the authorized remote
+Linux builder, not locally.
 
-The default local commands remain offline after dependencies have been fetched:
+Remote quality commands use locked dependencies and offline execution after a
+single fetch:
 
 ```bash
-cargo fmt --all -- --check
-cargo test --locked --offline --all-targets
-cargo clippy --locked --offline --all-targets -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --locked --offline --no-deps
+RUSTUP_TOOLCHAIN=1.85.0 cargo fetch --locked
+RUSTUP_TOOLCHAIN=1.85.0 cargo fmt --all -- --check
+RUSTUP_TOOLCHAIN=1.85.0 cargo test --locked --offline --all-targets
+RUSTUP_TOOLCHAIN=1.85.0 cargo clippy --locked --offline --all-targets -- -D warnings
+RUSTDOCFLAGS="-D warnings" RUSTUP_TOOLCHAIN=1.85.0 cargo doc --locked --offline --no-deps
 ```
 
-The current local rustc 1.98.0 result is **828 passed, 0 failed, 43 ignored** across the
-all-targets suite; `tests/app_flow.rs` is **137/137**, and the ignored release
-performance suite is **6/6**. The authorized final-source remote Rust 1.85.0
-and stable runs also report **828 passed, 0 failed, 43 ignored** with fmt,
-Clippy and rustdoc passing. Fixed Agent/Runtime builds passed on both toolchains,
-and the serial fixed-Agent E2E passed **34/34** on each. Hosted CI and
-native/manual terminal checks remain separate acceptance evidence and are not
-claimed here.
+Rust 1.85.0 and stable each reported **830 passed, 0 failed, 48 ignored**;
+`tests/app_flow.rs` remained **137/137**. The fixed-backend isolated job passed
+34/34 loopback E2Es. The current Release performance set passed 7/7, and the
+Linux OS-PTY report passed the lifecycle, panic, input/resize, shutdown, and
+idle cases. The independent 0.2.8 direct Composer baseline measured P95 1492 µs
+and P99 1907 µs, versus the current 237 µs and 238 µs. See
+[`verification/v03-f/README.md`](verification/v03-f/README.md) for scope and
+limitations.
+
+### Local Execution Deviation
+
+Before the remote-only F-review instruction, local rustc 1.98.0 had already
+run an older 828-test/6-workload record. It remains disclosed provenance only,
+is excluded from current counts, and was not rerun.
 
 ## Historical Patch Verification
 
@@ -120,9 +128,11 @@ against portable fixtures, so it also runs on Linux without macOS tools.
 targets. The `agent_process` target has `harness = false`, so it is an executable
 fake-Agent harness and intentionally has no libtest `test result` line. For the
 other targets, count the `passed`, `failed`, and `ignored` fields from each
-`test result: ok` line in the unabridged `cargo test` output. The current local
-all-target run totals **828 passed, 0 failed, 43 ignored**. Do not count compile
-messages or the harness-free executable as tests.
+`test result: ok` line in the unabridged `cargo test` output. The current
+remote Rust 1.85/stable all-target runs each total **830 passed, 0 failed, 48
+ignored**. Do not count compile messages or the harness-free
+executable as tests. The older local Rust 1.98.0 total is disclosed as an
+execution deviation only.
 
 ## Snapshots
 
@@ -169,22 +179,20 @@ comparison is deterministic and works without a review tool.
 
 ## Terminal Tests
 
-`tests/terminal_restore.rs` contains the normal offline tests and the ignored
-real-PTY round trip. The panic-hook regression launches the same test binary
-with `--exact child_test`, redirects the silent status run to null stdio, and
-uses a ten-second parent timeout. A second invocation captures output to check
-that no recursive destructor-panic diagnostic appears. The child status must
-be non-success with ordinary panic exit code 101; on Unix it must not be
-signal-terminated. The parent never installs a test-global panic hook.
+`tests/terminal_restore.rs` contains the normal offline tests and ignored
+real-PTY cases. `scripts/pty_terminal_validation.py` attaches the test binary
+and the Release TUI to a Linux kernel PTY, injects input, changes the PTY size,
+checks alternate-screen/raw-mode restoration, runs the panic child with
+inherited descriptors, and reads the post-exit slave `termios` state. The final
+remote report passed all lifecycle/input/resize/shutdown cases and recorded
+2 actual draws during 30 seconds of idle. It also records process CPU and
+peak-RSS observations through Python `resource`; these are not allocator
+qualification and do not substitute for iTerm2/manual testing.
 
-Run the ignored PTY check only from an actual terminal:
-
-```bash
-cargo test --locked --test terminal_restore -- --ignored --nocapture
-```
-
-The PTY check is not part of the default offline suite because a non-TTY
-cannot safely exercise terminal modes.
+The reproducible remote command is summarized in
+[`verification/v03-f/README.md`](verification/v03-f/README.md). A plain
+`cargo test --ignored` outside a PTY remains intentionally non-evidence; the
+new tests fail rather than skip when `MINICORE_TUI_REQUIRE_PTY=1` is set.
 
 ## Real-Agent E2E
 
