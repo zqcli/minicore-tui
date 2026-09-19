@@ -203,6 +203,7 @@ impl LiveRequest {
                 *used = (*used).saturating_add(result.len());
             }
             if let Some(display) = &mut tool.display {
+                let display = Arc::make_mut(display);
                 trim_string(&mut display.detail, budget, used);
                 if let Some(input) = &mut display.expanded_input {
                     trim_string(input, budget, used);

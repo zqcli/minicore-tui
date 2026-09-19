@@ -659,6 +659,7 @@ pub struct ScrollState {
     pub offset: usize,
     pub follow_tail: bool,
     pub new_content: bool,
+    pub anchor: Option<crate::state::view::ScrollAnchor>,
 }
 
 impl Default for ScrollState {
@@ -667,6 +668,7 @@ impl Default for ScrollState {
             offset: 0,
             follow_tail: true,
             new_content: false,
+            anchor: None,
         }
     }
 }

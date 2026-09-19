@@ -343,6 +343,7 @@ fn prepare_conversation_inner(
     let mut live_source = String::new();
     let mut live_copy_meta = Vec::new();
     for (rows, copy_start) in &copy_start_for_live {
+        let section_source_start = live_source.len();
         for row in rows.clone() {
             let section = live_sections
                 .iter()
@@ -356,6 +357,7 @@ fn prepare_conversation_inner(
                 row,
                 *copy_start,
                 start..end,
+                start.saturating_sub(section_source_start),
                 section_copy_is_decorative(section, row, &text),
             ));
             live_source.push('\n');
@@ -364,14 +366,17 @@ fn prepare_conversation_inner(
     let live_source: Arc<str> = live_source.into();
     let live_copy: Vec<CopyRange> = live_copy_meta
         .into_iter()
-        .map(|(row, copy_start, source_range, decorative)| CopyRange {
-            row,
-            columns: copy_start..width as usize,
-            source: Arc::clone(&live_source),
-            source_range,
-            hard_break_after: true,
-            decorative,
-        })
+        .map(
+            |(row, copy_start, source_range, source_offset, decorative)| CopyRange {
+                row,
+                columns: copy_start..width as usize,
+                source: Arc::clone(&live_source),
+                source_offset,
+                source_range,
+                hard_break_after: true,
+                decorative,
+            },
+        )
         .collect();
     let live_sections: Vec<SectionRange> = live_sections
         .into_iter()
@@ -935,6 +940,10 @@ fn make_section_layout(
         return None;
     }
     link_cells.resize_with(lines.len(), Vec::new);
+    // A Summary section without a logical source is the explicit large-item
+    // placeholder. It is visible as a bounded notice, but it is not a
+    // complete source range and must never enter copy/selection text.
+    let copyable = !(key.section.kind == SectionKind::Summary && source_hint.is_none());
     let range = SectionRange {
         id: key.section.clone(),
         rows: 0..lines.len(),
@@ -945,7 +954,10 @@ fn make_section_layout(
     let row_texts = (0..lines.len())
         .map(|row| {
             let text = section_copy_text(&range, row, &lines, range.content_columns.start);
-            (text.clone(), section_copy_is_decorative(&range, row, &text))
+            (
+                text.clone(),
+                !copyable || section_copy_is_decorative(&range, row, &text),
+            )
         })
         .collect::<Vec<_>>();
     let source: Arc<str> = source_hint.map(Arc::<str>::from).unwrap_or_else(|| {
@@ -986,6 +998,7 @@ fn make_section_layout(
             row,
             columns: range.content_columns.clone(),
             source: Arc::clone(&copy_source),
+            source_offset: logical_ranges.get(row).map_or(0, |range| range.start),
             source_range: copy_ranges_in_source.get(row).cloned().unwrap_or(0..0),
             hard_break_after: hard_break_rows.get(row).copied().unwrap_or(false),
             decorative,
@@ -1049,12 +1062,20 @@ fn source_ranges(
     rows.iter()
         .enumerate()
         .map(|(row, (text, decorative))| {
-            if *decorative || text.is_empty() {
+            if *decorative {
                 return cursor..cursor;
             }
             let Some((line_start, line_end, next_line)) = logical_lines.get(line).copied() else {
                 return source.len()..source.len();
             };
+            if text.is_empty() {
+                let range = cursor..cursor;
+                if hard_breaks.get(row).copied().unwrap_or(false) {
+                    line = line.saturating_add(1);
+                    cursor = next_line;
+                }
+                return range;
+            }
             cursor = cursor.max(line_start).min(line_end);
             let start = cursor;
             let wanted = text.len().min(line_end.saturating_sub(cursor));
@@ -1084,7 +1105,7 @@ fn hard_break_rows(
     let content_rows: Vec<usize> = rows
         .iter()
         .enumerate()
-        .filter_map(|(row, (text, decorative))| (!*decorative && !text.is_empty()).then_some(row))
+        .filter_map(|(row, (_text, decorative))| (!*decorative).then_some(row))
         .collect();
     let Some(source) = source else {
         if last_content_row < breaks.len() {
@@ -1469,7 +1490,7 @@ fn tool_display<'a, V: DurableLayoutSource>(
             tool.request_index,
             &tool.tool_call_id,
         ))
-        .map(|presentation| &presentation.display)
+        .map(|presentation| presentation.display.as_ref())
 }
 
 fn tool_hidden_line_count(
@@ -1850,7 +1871,7 @@ fn live_tool_render(
     let display = view
         .tool_presentations
         .get(&tool_key)
-        .map(|presentation| &presentation.display);
+        .map(|presentation| presentation.display.as_ref());
     let mut render_tool = tool.clone();
     render_tool.expanded = effective_live_tool_expanded(view, &tool_key, &render_tool);
     (
@@ -2172,6 +2193,19 @@ pub(crate) fn marker_area(area: Rect, label: &str, scrollbar: bool) -> Rect {
 mod source_map_tests {
     use super::*;
 
+    fn copied_text(layout: &SectionLayout) -> String {
+        let mut out = String::new();
+        let mut hard_break = false;
+        for copy in layout.copy_ranges.iter().filter(|copy| !copy.decorative) {
+            if hard_break {
+                out.push('\n');
+            }
+            out.push_str(copy.text());
+            hard_break = copy.hard_break_after;
+        }
+        out
+    }
+
     fn key(kind: SectionKind) -> LayoutKey {
         LayoutKey {
             section: SectionId {
@@ -2229,9 +2263,13 @@ mod source_map_tests {
         let theme = crate::theme::Theme::dark();
         let renderer = crate::markdown::MarkdownRenderer::new(&theme);
         let source = "one\n\n[three](https://example.test)";
-        let (lines, links) = renderer.render_with_links(source, 40, Style::default());
+        let (lines, links) = renderer.render_with_links(source, 11, Style::default());
+        let lines = lines
+            .into_iter()
+            .map(|line| crate::ui::rail::inset_row(12, 1, line))
+            .collect();
         let layout = make_section_layout(
-            key(SectionKind::AssistantText),
+            key(SectionKind::Summary),
             lines,
             links,
             false,
@@ -2256,6 +2294,7 @@ mod source_map_tests {
                 .iter()
                 .any(|row| row.hard_break_after)
         );
+        assert!(copied_text(&layout).contains("one\n\nthree"));
     }
 
     #[test]
@@ -2280,5 +2319,81 @@ mod source_map_tests {
                 .all(|row| source.is_char_boundary(row.source_range.start)
                     && source.is_char_boundary(row.source_range.end))
         );
+    }
+
+    #[test]
+    fn copy_source_preserves_soft_wraps_wide_text_code_indent_and_blank_lines() {
+        let source = "中文🙂abcdef\n\n    code 中文🙂";
+        let lines = crate::markdown::wrap_plain(source, 11, Style::default())
+            .into_iter()
+            .map(|line| crate::ui::rail::inset_row(12, 1, line))
+            .collect();
+        let links = Vec::new();
+        let layout = make_section_layout(
+            key(SectionKind::Summary),
+            lines,
+            links,
+            false,
+            false,
+            0,
+            Some(source),
+        )
+        .expect("wide/code section");
+        let copied = copied_text(&layout);
+        assert!(copied.contains("中文🙂"));
+        assert!(copied.contains("code 中文🙂"));
+        assert!(copied.contains("\n\n"));
+        assert!(copied.contains(' '));
+    }
+
+    #[test]
+    fn link_wrapping_keeps_link_cells_and_does_not_invent_newlines() {
+        let theme = crate::theme::Theme::dark();
+        let renderer = crate::markdown::MarkdownRenderer::new(&theme);
+        let source = "[中文链接](https://example.test/path)";
+        let (lines, links) = renderer.render_with_links(source, 11, Style::default());
+        let lines = lines
+            .into_iter()
+            .map(|line| crate::ui::rail::inset_row(12, 1, line))
+            .collect();
+        let layout = make_section_layout(
+            key(SectionKind::Summary),
+            lines,
+            links,
+            false,
+            false,
+            0,
+            Some(source),
+        )
+        .expect("link section");
+        let copied = copied_text(&layout);
+        assert!(copied.contains("中文链接"));
+        assert!(!copied.contains('\n'));
+        assert!(layout.link_cells.iter().flatten().count() >= 2);
+        assert!(
+            layout
+                .source_map
+                .rows
+                .iter()
+                .all(|row| row.source_range.end <= source.len())
+        );
+    }
+
+    #[test]
+    fn unloaded_placeholder_is_visible_but_not_copyable() {
+        let layout = make_section_layout(
+            key(SectionKind::Summary),
+            vec![Line::from("[large history item: read explicitly]")],
+            Vec::new(),
+            false,
+            false,
+            0,
+            None,
+        )
+        .expect("placeholder section");
+
+        assert!(layout.copy_ranges.iter().all(|copy| copy.decorative));
+        assert!(layout.source_map.rows.iter().all(|row| row.decorative));
+        assert!(copied_text(&layout).is_empty());
     }
 }

@@ -31,11 +31,19 @@ impl ToolKey {
 /// running.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolFacts {
-    pub display: ToolDisplayWire,
+    pub display: Arc<ToolDisplayWire>,
     pub result: Option<Arc<str>>,
     pub result_truncated: bool,
     pub status: ToolStatus,
     pub outcome: Option<crate::protocol::ToolOutcomeWire>,
+    pub needs_read: bool,
+    pub conflict: Option<ToolConflict>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolConflict {
+    pub retained_outcome: crate::protocol::ToolOutcomeWire,
+    pub observed_outcome: crate::protocol::ToolOutcomeWire,
 }
 
 /// Compatibility name retained for existing render/source APIs. The map in
@@ -50,10 +58,11 @@ impl ToolFacts {
     }
 
     pub fn accept_started(&mut self, name: &str) {
-        self.display.detail = name.to_owned();
-        if matches!(self.status, ToolStatus::Pending | ToolStatus::Running) {
-            self.status = ToolStatus::Running;
+        if self.is_terminal() {
+            return;
         }
+        Arc::make_mut(&mut self.display).detail = name.to_owned();
+        self.status = ToolStatus::Running;
     }
 
     pub fn accept_finished(
@@ -62,6 +71,16 @@ impl ToolFacts {
         result: Option<Arc<str>>,
         truncated: bool,
     ) {
+        if self.is_terminal() && self.outcome != Some(outcome) {
+            self.needs_read = true;
+            self.conflict = Some(ToolConflict {
+                retained_outcome: self.outcome.unwrap_or(outcome),
+                observed_outcome: outcome,
+            });
+            self.result_truncated |= truncated;
+            Arc::make_mut(&mut self.display).truncated |= truncated;
+            return;
+        }
         let same_terminal = self.is_terminal() && self.outcome == Some(outcome);
         if !self.is_terminal() {
             self.status = match outcome {
@@ -78,14 +97,14 @@ impl ToolFacts {
             self.result = result;
         }
         if self.display.hidden_line_count.is_none() {
-            self.display.hidden_line_count = self
+            Arc::make_mut(&mut self.display).hidden_line_count = self
                 .result
                 .as_deref()
                 .filter(|text| !text.is_empty())
                 .map(|text| text.split('\n').count());
         }
         self.result_truncated |= truncated;
-        self.display.truncated |= truncated;
+        Arc::make_mut(&mut self.display).truncated |= truncated;
     }
 
     pub fn is_terminal(&self) -> bool {
@@ -97,8 +116,9 @@ impl ToolFacts {
 
     pub fn truncate_to_bytes(&mut self, budget: usize) {
         let mut used = 0;
-        truncate_string(&mut self.display.detail, budget, &mut used);
-        if let Some(input) = &mut self.display.expanded_input {
+        let display = Arc::make_mut(&mut self.display);
+        truncate_string(&mut display.detail, budget, &mut used);
+        if let Some(input) = &mut display.expanded_input {
             truncate_string(input, budget, &mut used);
         }
         if let Some(result) = &mut self.result {
@@ -146,7 +166,7 @@ pub struct LiveTool {
     pub progress: Option<String>,
     /// Agent-owned bounded display data, merged by full loop/request/call
     /// identity and never used to execute a tool.
-    pub display: Option<ToolDisplayWire>,
+    pub display: Option<Arc<ToolDisplayWire>>,
     pub result: Option<Arc<str>>,
     pub result_truncated: bool,
     pub expanded: bool,
@@ -159,17 +179,19 @@ mod tests {
 
     fn facts() -> ToolFacts {
         ToolFacts {
-            display: ToolDisplayWire {
+            display: Arc::new(ToolDisplayWire {
                 detail: "tool".to_owned(),
                 expanded_input: None,
                 input_line_count: None,
                 hidden_line_count: None,
                 truncated: false,
-            },
+            }),
             result: None,
             result_truncated: false,
             status: ToolStatus::Pending,
             outcome: None,
+            needs_read: false,
+            conflict: None,
         }
     }
 
@@ -187,7 +209,15 @@ mod tests {
         assert!(Arc::ptr_eq(facts.result.as_ref().unwrap(), &first));
         assert!(facts.result_truncated);
         assert!(facts.display.truncated);
-        assert_eq!(facts.display.detail, "late-name");
+        assert_eq!(facts.display.detail, "tool");
+        assert!(facts.needs_read);
+        assert_eq!(
+            facts.conflict,
+            Some(ToolConflict {
+                retained_outcome: ToolOutcomeWire::Success,
+                observed_outcome: ToolOutcomeWire::Failed,
+            })
+        );
     }
 
     #[test]

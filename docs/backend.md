@@ -46,13 +46,13 @@ repository's fixtures/E2E remain the release gate.
 
 **Current status:** stage B1 (commit `afd2894`) removed the
 `is_supported_agent_version` package-minor gate and replaced it with
-`validate_backend(protocol_version, capabilities)`, so a pinned Agent 0.5.0
-now passes bootstrap. The reducer tests
+`validate_backend(protocol_version, capabilities)`. The pinned Agent 0.5.0
+passes bootstrap, and the reducer tests
 `bootstrap_accepts_the_pinned_agent_0_5_protocol_v1` and
 `bootstrap_rejects_a_backend_missing_required_capabilities` measure both
-directions. The 18 real-Agent E2E scenarios are still `#[ignore]`d on this
-host because they need `MINICORE_AGENT_BIN` and the loopback mock; protocol v1
-equality is a necessary condition, not a release pass.
+directions. The current C2 tree has also been validated against the pinned
+Agent with all 22 serial E2E scenarios passing; protocol v1 equality remains a
+necessary condition, not the only release gate.
 
 ## Method surface (33 methods)
 
@@ -135,7 +135,7 @@ TUI targets 2 read-query slots and ≤16 outstanding deferred requests. Domain
 error codes are unchanged from `docs/rpc.md` (`-32001`..`-32022`); error data
 carries only `{kind, retryable}` plus a short stable message.
 
-C1 enforces the local side of those limits (spec §5.2/§5.4):
+C2 enforces the local side of those limits (spec §5.2/§5.4 and §21):
 
 - Outbound FIFO: 32 slots total, 28 ordinary + 4 reserved for control
   (`turn.cancel`, `session.compact.cancel`, `session.close`, `agent.shutdown`).
@@ -153,12 +153,17 @@ C1 enforces the local side of those limits (spec §5.2/§5.4):
   read-only slots with `MAX_WAITING = 16` queued; `app.rs` keeps at most 16
   deferred `turn.wait`/`turn.result`/`session.compact` intents and coalesces
   retries by exact target.
-- Local jobs: `LocalJobs` owns exactly one clipboard job (a second copy is
-  refused immediately and the selection stays in the app) with a bounded
-  result channel and a joinable shutdown; the clipboard write and wait share
-  one deadline. The debug log uses a dedicated writer thread fed by a bounded
+- Local jobs: `LocalJobs` owns one clipboard job and one serialized decode and
+  layout worker, each with bounded admission, result ownership, cancellation,
+  and joinable shutdown. Clipboard writes and JSON decoding never run on the
+  reducer path. The debug log uses a dedicated writer thread fed by bounded
   `try_send`, so no file IO ever runs on the UI path; `agent.stderr` frames
   carry `{bytes, dropped}` only.
+- Presentation/history budgets are centralized: history bodies 32 MiB, layout
+  cache 48 MiB, live output 4 MiB per loop/16 MiB per session, tool facts 1 MiB
+  per stream/16 MiB per session, composer drafts 256 KiB per draft/8 MiB total,
+  and automatic typed decoding 8 MiB per item. Oversized items remain explicit
+  placeholders until a later explicit raw-read/export workflow exists.
 
 ## Fixtures
 
@@ -215,7 +220,7 @@ agent  binary  /root/minicore-tui-v03-refactor/agent-target/debug/minicore-agent
 agent  head    061743369459299e66be97bf97d2b27352a39914
 runtime head   6cd2bdbc634437dea925495c61c7eb0be10ba171
 tui    base    9d11ee69c4efa02ef1e5bff143662b48dc3194de (stage-A baseline)
-tui    head    c1l tree (C1: full quality gate green, 22 real-Agent E2E)
+tui    head    current local C2 tree (not pushed)
 CARGO_TARGET_DIR=/root/minicore-tui-v03-refactor/tui-target
 ```
 
@@ -232,34 +237,32 @@ python3 scripts/generate_agent_v1_fixtures.py \
 cargo test --release --locked --test performance -- --ignored --nocapture
 ```
 
-Last verified result (C1, logs `c1l-fmt.log` / `c1l-tests.log` /
-`c1l-clippy.log`): `fmt` clean, `test` 620 passed / 0 failed / 27 ignored,
-`clippy -D warnings` clean, tree md5
-`a146e3db83b2414950af2e2cf4f042bb`, all under Rust 1.85. Per-slice logs:
-`c1a-*` (job ownership + bounded retries), `c1b/c1c-*` (confirmation model),
-`c1d/c1e-*` (reload narrowing + catalog generation), `c1f`/`c1l-agent-e2e.log`
-(real Agent), `c1g`..`c1k-*` (module splits), plus the earlier
-`c1-io-tests4.log` and `c1-history-tests.log`; B1/B2 logs are `b1-*.log` /
-`b2-*.log`. The 22 real-Agent E2E scenarios were run against the pinned binary
-and all pass (`c1l-agent-e2e.log`), including the three manual-compaction
-scenarios and the automatic-preparation scenario.
+Last verified current-tree result under Rust 1.85: `fmt --check` clean,
+`test --locked --all-targets --no-fail-fast` passed all non-ignored library,
+binary, and integration tests (457 library tests; no failures), and
+`clippy --locked --all-targets -- -D warnings` clean. The pinned Agent 0.5.0
+serial E2E run passed 22/22 scenarios. The release performance suite passed
+6/6 ignored workloads, including the 1000-delta C2b probe and the 120×40 C2c
+probe. The latest C2c sample recorded `p95_us=7497` and `p99_us=7931` for
+synthetic frame processing; reruns can vary with host scheduling, and these are
+not terminal input-to-frame latency measurements.
 
 When reusing the existing `tui-target` directory after an rsync, run
 `cargo clean -p minicore-tui` (or touch the sources) before the build: rsync
 preserves source mtimes, and a newer stale rlib otherwise shadows the synced
 source, producing confusing "variant not found" errors.
 
-The 27 ignored tests are the 22 real-Agent E2E scenarios plus 5 release/perf
-tests; they are not evidence. `docs/refactor-acceptance.md` tracks which REF
-rows remain open.
+The 22 Agent E2E scenarios and six release/performance workloads are ignored
+by default and are evidence only when explicitly run with their required
+binary/options. `docs/refactor-acceptance.md` tracks which REF rows remain
+open.
 
-C1 status: the synchronous-admission/IO slice (`c843105`), the history-read
-state convergence (`d47d837`), the owned-job/bounded-retry slice (`3d159a7`),
-the confirmation model (`f440741`, `b3eeda8`), the reload narrowing
-(`fe59a49`), catalog generations (`77c0ebf`), the compaction E2E (`c91a686`)
-the module splits into `app/history.rs` (read/result chain),
-`app/session.rs` (session lifecycle), `app/turn.rs` (turn state machine) and
-`app/queries.rs` (query slots/context polling), and the real-Agent
-automatic-preparation scenario are landed and verified. No C1 item is left
-open; the remaining REF rows are C2/C3 work and the acceptance matrix lists
-them explicitly.
+C2 status: the B1/B2 lifecycle and `session.read` migration, serialized
+bounded decode worker, shared immutable layout worker, `ScrollAnchor`,
+viewport/neighbor/recent-result history protection, ToolFacts monotonic
+terminal handling, shared body/display owners, bounded SourceMap copy facts,
+and the 32 MiB/48 MiB owner budgets are landed and verified. The current
+boundary intentionally does not add automatic typed decoding above 8 MiB or
+claim mathematically exact allocator/RSS accounting; oversized items remain
+explicit placeholders for a future raw-read/export workflow. D/E search,
+workspace, export, and external-editor workflows remain unstarted.

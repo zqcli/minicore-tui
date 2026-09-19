@@ -49,8 +49,8 @@ synchronous durable-layout fallback.
 Current-tree C2c release probe after the decode-worker and ToolFacts changes:
 
 ```text
-p95_us=2876
-p99_us=3154
+p95_us=7497
+p99_us=7931
 durable_rows=43870
 layout_calls=0
 history_bytes_cloned=0
@@ -61,8 +61,8 @@ c2c_max_tree_vm_hwm_kib=47172
 ```
 
 The samples are synthetic frame-processing measurements for the fixed 120×40
-workload. They are **not** terminal input latency or terminal
-input-to-frame P95/P99 measurements. The focused current-tree C2b/C2c probes
+workload; reruns can vary with host scheduling. They are **not** terminal input
+latency or terminal input-to-frame P95/P99 measurements. The focused current-tree C2b/C2c probes
 passed; the full six-test ignored release suite also passed in this validation
 cycle. The source/perf workload is 1000 deltas,
 7300 history blocks, 43,870 durable rows, a 119-column content width, and a
@@ -85,8 +85,9 @@ The deterministic tests cover:
 - stale epoch completion without installation;
 - cancellation completion and queue shutdown ownership.
 
-A fresh release decode-throughput/RSS measurement is **Notrun**. No timing or
-RSS claim is made from the unit tests.
+A fresh release decode-throughput/RSS measurement is **Not run**. No timing or
+RSS claim is made from the unit tests; the exact allocator/RSS proof requested
+by the broader specification is intentionally not claimed.
 
 ## Budgets
 
@@ -106,13 +107,13 @@ gaps. Layout eviction accounts both installed cache entries and in-flight
 partials. These are retained-payload estimates, not exact process RSS or
 allocator-capacity measurements.
 
-## Not Run / Remaining
+## Not run / Remaining
 
 - decode-throughput and RSS measurements for the current serialized decode
   worker;
-- typed explicit decoding/read workflow for items over 8 MiB;
-- final single-Arc body deduplication across `ToolBlock`, `LiveTool`, and every
-  presentation/detail path;
-- exact allocation-capacity and RSS accounting;
+- typed explicit decoding/read workflow for items over 8 MiB; oversized items
+  remain bounded placeholders rather than fabricated complete bodies;
+- exact allocation-capacity and RSS accounting, which is intentionally not
+  attempted here;
 - terminal input-to-frame latency under real interactive streaming;
 - D/E search, export, workspace, and external-editor workflows.

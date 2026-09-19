@@ -45,7 +45,7 @@ use crate::state::turn::{
 };
 use crate::state::view::{
     ConversationLayout, ConversationSelection, FoldOverride, PreparedConversation, PreparedDurable,
-    SelectionPoint,
+    ScrollAnchor, SelectionPoint,
 };
 use crate::theme::ThemeKind;
 use crate::ui::transcript::{
@@ -928,6 +928,7 @@ impl App {
             _ => false,
         };
         if !reuse_layout {
+            self.capture_scroll_anchor();
             self.prepared_conversation = None;
         }
         // Admission-failure retries are only re-emitted after a progress
@@ -1474,6 +1475,7 @@ impl App {
     }
 
     pub(crate) fn install_conversation(&mut self, prepared: PreparedConversation) {
+        self.capture_scroll_anchor();
         let active = self.sessions.active.as_ref();
         let revision = active
             .and_then(|session_id| self.sessions.known.get(session_id))
@@ -1501,8 +1503,98 @@ impl App {
                 view.transcript.render_cache = Some(Arc::clone(durable));
             }
         }
+        self.restore_scroll_anchor(&prepared);
         self.rebase_selection(&prepared);
         self.prepared_conversation = Some(prepared);
+    }
+
+    /// Captures the first retained content row currently visible. The anchor
+    /// is intentionally content-based, not an absolute row: wrapping,
+    /// folding, prepending an earlier page, and live-to-history replacement
+    /// may all change rows before it.
+    fn capture_scroll_anchor(&mut self) {
+        let Some(prepared) = self.prepared_conversation.as_ref() else {
+            return;
+        };
+        let Some(view) = self.active_view() else {
+            return;
+        };
+        if prepared.session_id.as_deref() != Some(view.info.session_id.as_str()) {
+            return;
+        }
+        if view.scroll.follow_tail {
+            if let Some(view) = self.active_session_mut() {
+                view.scroll.anchor = None;
+            }
+            return;
+        }
+        let height = self.viewport.1.max(1);
+        let position = crate::ui::transcript::scroll_position(self, prepared.total_rows(), height);
+        let start = position.offset;
+        let end = start
+            .saturating_add(position.visible_rows)
+            .min(prepared.total_rows());
+        let anchor = (start..end).find_map(|row| {
+            let section = prepared
+                .sections
+                .iter()
+                .find(|section| section.rows.contains(&row))?;
+            let copy = prepared.copy_row(row);
+            if copy.is_some_and(|copy| copy.decorative) {
+                return None;
+            }
+            Some(ScrollAnchor {
+                section_id: section.id,
+                source_offset: copy.map_or(0, |copy| copy.source_offset),
+                screen_row: row.saturating_sub(start),
+            })
+        });
+        if let Some(anchor) = anchor {
+            if let Some(view) = self.active_session_mut() {
+                view.scroll.anchor = Some(anchor);
+            }
+        }
+    }
+
+    fn restore_scroll_anchor(&mut self, prepared: &PreparedConversation) {
+        let Some(anchor) = self
+            .active_view()
+            .and_then(|view| view.scroll.anchor.clone())
+        else {
+            return;
+        };
+        let Some(row) = prepared.row_for_scroll_anchor(&anchor) else {
+            return;
+        };
+        let retained = prepared.has_scroll_anchor_section(&anchor);
+        let visible = self.viewport.1.max(1);
+        let max_offset = prepared.total_rows().saturating_sub(visible);
+        let offset = row.saturating_sub(anchor.screen_row).min(max_offset);
+        let fallback_anchor = (!retained).then(|| {
+            prepared
+                .sections
+                .iter()
+                .find(|section| section.rows.contains(&row))
+                .map(|section| ScrollAnchor {
+                    section_id: section.id.clone(),
+                    source_offset: prepared.copy_row(row).map_or(0, |copy| copy.source_offset),
+                    screen_row: anchor.screen_row,
+                })
+        });
+        if !retained {
+            self.notice(
+                NoticeLevel::Info,
+                "original scroll range is not loaded; showing the nearest retained content",
+            );
+        }
+        if let Some(view) = self.active_session_mut() {
+            view.scroll.follow_tail = false;
+            view.scroll.offset = offset;
+            view.scroll.new_content = false;
+            if let Some(Some(fallback_anchor)) = fallback_anchor {
+                view.scroll.anchor = Some(fallback_anchor);
+            }
+        }
     }
 
     fn rebase_selection(&mut self, prepared: &PreparedConversation) {
@@ -5082,17 +5174,19 @@ impl App {
                 presentations.insert(
                     key.clone(),
                     std::sync::Arc::new(ToolPresentationState {
-                        display: ToolDisplayWire {
+                        display: Arc::new(ToolDisplayWire {
                             detail: tool_name.to_owned(),
                             expanded_input: None,
                             input_line_count: None,
                             hidden_line_count: None,
                             truncated: false,
-                        },
+                        }),
                         result: None,
                         result_truncated: false,
                         status: ToolStatus::Running,
                         outcome: None,
+                        needs_read: false,
+                        conflict: None,
                     }),
                 );
             }
@@ -5326,24 +5420,30 @@ impl App {
             presentations.insert(
                 key.clone(),
                 std::sync::Arc::new(ToolPresentationState {
-                    display: ToolDisplayWire {
+                    display: Arc::new(ToolDisplayWire {
                         detail: fallback_name,
                         expanded_input: None,
                         input_line_count: None,
                         hidden_line_count,
                         truncated: content_truncated,
-                    },
+                    }),
                     result: shared_result,
                     result_truncated: content_truncated,
                     status: tool_outcome_status(outcome),
                     outcome: Some(outcome),
+                    needs_read: false,
+                    conflict: None,
                 }),
             );
         }
-        let accepted = view
-            .tool_presentations
-            .get(&key)
-            .map(|facts| (facts.status, facts.result.clone(), facts.result_truncated));
+        let accepted = view.tool_presentations.get(&key).map(|facts| {
+            (
+                facts.status,
+                facts.result.clone(),
+                facts.result_truncated,
+                facts.display.clone(),
+            )
+        });
         if let Some(live) = view.live.as_mut() {
             if let Some(request) = live
                 .requests
@@ -5355,10 +5455,11 @@ impl App {
                     .iter_mut()
                     .find(|tool| tool.tool_call_id == tool_call_id)
                 {
-                    if let Some((status, result, truncated)) = &accepted {
+                    if let Some((status, result, truncated, display)) = &accepted {
                         tool.status = *status;
                         tool.result = result.clone();
                         tool.result_truncated = *truncated;
+                        tool.display = Some(display.clone());
                     }
                 }
             }
@@ -5403,10 +5504,11 @@ impl App {
                     .find(|tool| tool.tool_call_id == tool_call_id)
             })
             .map(|tool| (tool.result.clone(), tool.result_truncated));
+        let display_owner = Arc::new(display);
         let presentations = std::sync::Arc::make_mut(&mut view.tool_presentations);
         let state = presentations.entry(key).or_insert_with(|| {
             std::sync::Arc::new(ToolPresentationState {
-                display: display.clone(),
+                display: Arc::clone(&display_owner),
                 result: existing_result
                     .as_ref()
                     .and_then(|(result, _)| result.clone()),
@@ -5415,11 +5517,13 @@ impl App {
                     .is_some_and(|(_, truncated)| *truncated),
                 status: ToolStatus::Pending,
                 outcome: None,
+                needs_read: false,
+                conflict: None,
             })
         });
         let state = std::sync::Arc::make_mut(state);
-        state.display = display.clone();
-        let display_for_live = display.clone();
+        state.display = Arc::clone(&display_owner);
+        let display_for_live = Arc::clone(&state.display);
         let _ = state;
         if view.transcript.blocks.iter().any(|block| {
             matches!(
@@ -5736,21 +5840,29 @@ fn install_history_item(
                 &result.call_id,
             );
             let durable_result = Arc::<str>::from(result.output.content.as_str());
-            let (shared_result, accepted_outcome, accepted_status, accepted_truncated) = {
+            let (
+                shared_result,
+                accepted_outcome,
+                accepted_status,
+                accepted_truncated,
+                accepted_display,
+            ) = {
                 let presentations = std::sync::Arc::make_mut(&mut view.tool_presentations);
                 let state = presentations.entry(tool_key.clone()).or_insert_with(|| {
                     std::sync::Arc::new(ToolPresentationState {
-                        display: ToolDisplayWire {
+                        display: Arc::new(ToolDisplayWire {
                             detail: result.tool_name.clone(),
                             expanded_input: None,
                             input_line_count: None,
                             hidden_line_count: None,
                             truncated: false,
-                        },
+                        }),
                         result: None,
                         result_truncated: false,
                         status: ToolStatus::Pending,
                         outcome: None,
+                        needs_read: false,
+                        conflict: None,
                     })
                 });
                 let state = std::sync::Arc::make_mut(state);
@@ -5760,6 +5872,7 @@ fn install_history_item(
                     state.outcome,
                     state.status,
                     state.result_truncated,
+                    state.display.clone(),
                 )
             };
             if let Some(live) = view.live.as_mut() {
@@ -5776,6 +5889,7 @@ fn install_history_item(
                         tool.status = accepted_status;
                         tool.result = Some(Arc::clone(&shared_result));
                         tool.result_truncated = accepted_truncated;
+                        tool.display = Some(Arc::clone(&accepted_display));
                     }
                 }
             }
@@ -6183,6 +6297,270 @@ mod tests {
             }),
         ));
         take_requests(respond(app, history_req, read_page_json(vec![], None, 0)));
+    }
+
+    fn anchor_fixture() -> App {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        for index in 0..10 {
+            view.transcript.push_block(TranscriptBlock::User(UserBlock {
+                index: Some(index),
+                loop_id: Some(format!("loop_{index}")),
+                kind: crate::protocol::UserMessageKindWire::Prompt,
+                text: format!("message {index} {}", "wrapped content ".repeat(3)),
+                pending: false,
+            }));
+        }
+        let prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+        app.install_conversation(prepared);
+        app.viewport = (app.prepared_conversation(79).unwrap().total_rows(), 6);
+        app
+    }
+
+    fn anchor_target_row(app: &App, history_index: usize) -> usize {
+        app.prepared_conversation(79)
+            .unwrap()
+            .sections
+            .iter()
+            .find(|section| section.id.history_index == Some(history_index))
+            .expect("anchor section")
+            .rows
+            .start
+    }
+
+    #[test]
+    fn scroll_anchor_survives_width_resize() {
+        let mut app = anchor_fixture();
+        let target = anchor_target_row(&app, 6);
+        app.active_session_mut().unwrap().scroll.follow_tail = false;
+        app.active_session_mut().unwrap().scroll.offset = target;
+        app.capture_scroll_anchor();
+        let anchor = app.active_view().unwrap().scroll.anchor.clone().unwrap();
+        assert_eq!(anchor.section_id.history_index, Some(6));
+
+        let resized = crate::ui::transcript::prepare_conversation(&app, 24);
+        app.install_conversation(resized.clone());
+        let row = resized.row_for_scroll_anchor(&anchor).unwrap();
+        assert_eq!(
+            app.active_view().unwrap().scroll.offset,
+            row.saturating_sub(anchor.screen_row)
+        );
+    }
+
+    #[test]
+    fn scroll_anchor_survives_reasoning_fold() {
+        let mut app = anchor_fixture();
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        view.transcript
+            .push_block(TranscriptBlock::Assistant(AssistantBlock {
+                index: 20,
+                loop_id: "loop_reasoning".to_owned(),
+                request_index: 0,
+                model: "model".to_owned(),
+                reasoning_level: crate::protocol::Reasoning::High,
+                parts: vec![AssistantPart::Reasoning("long reasoning ".repeat(20))],
+                tool_calls: Vec::new(),
+                usage: Default::default(),
+                finish_reason: "stop".to_owned(),
+                terminal_error: None,
+            }));
+        view.transcript.invalidate();
+        let expanded = crate::ui::transcript::prepare_conversation(&app, 79);
+        let target = expanded
+            .sections
+            .iter()
+            .find(|section| section.id.kind == crate::state::view::SectionKind::Thinking)
+            .unwrap()
+            .rows
+            .start;
+        app.install_conversation(expanded);
+        app.active_session_mut().unwrap().scroll.follow_tail = false;
+        app.active_session_mut().unwrap().scroll.offset = target;
+        app.capture_scroll_anchor();
+        let anchor = app.active_view().unwrap().scroll.anchor.clone().unwrap();
+        app.active_session_mut().unwrap().reasoning_folds.insert(
+            crate::state::view::ReasoningKey::new("loop_reasoning", 0, 0),
+            FoldOverride::Collapsed,
+        );
+        app.active_session_mut().unwrap().transcript.invalidate();
+        let folded = crate::ui::transcript::prepare_conversation(&app, 79);
+        app.install_conversation(folded.clone());
+        let row = folded.row_for_scroll_anchor(&anchor).unwrap();
+        assert_eq!(
+            app.active_view().unwrap().scroll.offset,
+            row.saturating_sub(anchor.screen_row)
+        );
+    }
+
+    #[test]
+    fn scroll_anchor_survives_prepend_and_keeps_tool_identity() {
+        let mut app = anchor_fixture();
+        let target = anchor_target_row(&app, 6);
+        app.active_session_mut().unwrap().scroll.follow_tail = false;
+        app.active_session_mut().unwrap().scroll.offset = target;
+        app.capture_scroll_anchor();
+        let anchor = app.active_view().unwrap().scroll.anchor.clone().unwrap();
+
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        view.transcript.insert_block(
+            0,
+            TranscriptBlock::User(UserBlock {
+                index: Some(100),
+                loop_id: Some("older".to_owned()),
+                kind: crate::protocol::UserMessageKindWire::Prompt,
+                text: "prepended earlier history".to_owned(),
+                pending: false,
+            }),
+        );
+        view.transcript.invalidate();
+        let prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+        app.install_conversation(prepared.clone());
+        let section = prepared
+            .sections
+            .iter()
+            .find(|section| section.id.history_index == Some(6))
+            .unwrap();
+        assert_eq!(section.id, anchor.section_id);
+        let row = prepared.row_for_scroll_anchor(&anchor).unwrap();
+        assert_eq!(
+            app.active_view().unwrap().scroll.offset,
+            row.saturating_sub(anchor.screen_row)
+        );
+    }
+
+    #[test]
+    fn scroll_anchor_rebases_live_tool_to_saved_tool_by_tool_id() {
+        let mut app = anchor_fixture();
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        view.transcript.clear_blocks();
+        let mut live = LiveLoop::new(LocalSubmissionId(1), "run".to_owned());
+        live.reference = Some(make_turn("ses_1", "loop_tool"));
+        let mut request = crate::state::turn::LiveRequest::new(
+            0,
+            0,
+            "model".to_owned(),
+            crate::protocol::Reasoning::High,
+        );
+        request.parts.push(LivePart::Tool {
+            tool_call_id: "call_tool".to_owned(),
+        });
+        request.tools.push(LiveTool {
+            tool_call_id: "call_tool".to_owned(),
+            name: "read".to_owned(),
+            status: ToolStatus::Succeeded,
+            progress: None,
+            display: None,
+            result: Some(Arc::from("live result")),
+            result_truncated: false,
+            expanded: false,
+        });
+        live.requests.push(request);
+        view.live = Some(live);
+        view.transcript.invalidate();
+        let live_prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+        let live_section = live_prepared
+            .sections
+            .iter()
+            .find(|section| section.id.tool_call_id.as_deref() == Some("call_tool"))
+            .unwrap();
+        app.install_conversation(live_prepared);
+        app.viewport = (app.prepared_conversation(79).unwrap().total_rows(), 6);
+        app.active_session_mut().unwrap().scroll.follow_tail = false;
+        app.active_session_mut().unwrap().scroll.offset = live_section.rows.start;
+        app.capture_scroll_anchor();
+        let anchor = app.active_view().unwrap().scroll.anchor.clone().unwrap();
+
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        view.live = None;
+        view.transcript.clear_blocks();
+        view.transcript
+            .push_block(TranscriptBlock::Assistant(AssistantBlock {
+                index: 0,
+                loop_id: "loop_tool".to_owned(),
+                request_index: 0,
+                model: "model".to_owned(),
+                reasoning_level: crate::protocol::Reasoning::High,
+                parts: vec![AssistantPart::ToolCall(crate::protocol::ToolCallViewWire {
+                    tool_call_id: "call_tool".to_owned(),
+                    name: "read".to_owned(),
+                    call_index: 0,
+                    display: None,
+                })],
+                tool_calls: Vec::new(),
+                usage: Default::default(),
+                finish_reason: "stop".to_owned(),
+                terminal_error: None,
+            }));
+        view.transcript.push_block(TranscriptBlock::Tool(ToolBlock {
+            index: Some(1),
+            loop_id: "loop_tool".to_owned(),
+            request_index: 0,
+            tool_call_id: "call_tool".to_owned(),
+            name: "read".to_owned(),
+            result: Some(Arc::from("saved result")),
+            outcome: Some(crate::protocol::ToolOutcomeWire::Success),
+            live_status: None,
+            progress: None,
+            expanded: false,
+        }));
+        view.transcript.invalidate();
+        let saved = crate::ui::transcript::prepare_conversation(&app, 79);
+        app.install_conversation(saved.clone());
+        let saved_section = saved
+            .sections
+            .iter()
+            .find(|section| section.id.tool_call_id.as_deref() == Some("call_tool"))
+            .unwrap();
+        assert_eq!(
+            saved_section.id.tool_call_id,
+            anchor.section_id.tool_call_id
+        );
+        assert_eq!(
+            app.active_view().unwrap().scroll.offset,
+            saved_section.rows.start.saturating_sub(anchor.screen_row)
+        );
+    }
+
+    #[test]
+    fn unloaded_scroll_anchor_falls_back_with_a_notice() {
+        let mut app = anchor_fixture();
+        let prepared = app.prepared_conversation(79).unwrap().clone();
+        app.active_session_mut().unwrap().scroll.follow_tail = false;
+        app.active_session_mut().unwrap().scroll.anchor = Some(ScrollAnchor {
+            section_id: crate::state::view::SectionId {
+                session_id: "ses_1".into(),
+                loop_id: Some("loop_missing".into()),
+                request_index: None,
+                kind: crate::state::view::SectionKind::User,
+                ordinal: 0,
+                tool_call_id: None,
+                history_index: Some(9999),
+            },
+            source_offset: 0,
+            screen_row: 1,
+        });
+
+        app.restore_scroll_anchor(&prepared);
+
+        assert!(
+            app.notices()
+                .iter()
+                .any(|notice| { notice.text.contains("original scroll range is not loaded") })
+        );
+        assert_ne!(
+            app.active_view()
+                .unwrap()
+                .scroll
+                .anchor
+                .as_ref()
+                .unwrap()
+                .section_id
+                .loop_id
+                .as_deref(),
+            Some("loop_missing")
+        );
     }
 
     #[test]
@@ -8451,6 +8829,119 @@ mod tests {
         assert_eq!(presentation.display.detail, "read");
         assert_eq!(presentation.display.hidden_line_count, Some(2));
         assert_eq!(presentation.result.as_deref(), Some("a\nb"));
+    }
+
+    #[test]
+    fn tool_result_body_is_one_arc_across_live_history_and_presentation() {
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+        let turn = make_turn("ses_1", "loop_shared");
+        app.sessions.known.get_mut("ses_1").unwrap().live = Some(LiveLoop {
+            reference: Some(turn.clone()),
+            local_submission: LocalSubmissionId(1),
+            user_text: "run".to_owned(),
+            requests: Vec::new(),
+            pending_steers: Vec::new(),
+            waiting: false,
+            cancel_requested: false,
+            event_gap: false,
+            last_result: None,
+        });
+        app.update(event(wire_event(json!({
+            "type": "tool_started",
+            "data": {
+                "turn": turn_ref_json("ses_1", "loop_shared"),
+                "request_index": 0,
+                "tool_call_id": "call_shared",
+                "tool_name": "read",
+                "meta": meta_json("ses_1", 0)
+            }
+        }))));
+        app.update(event(wire_event(json!({
+            "type": "tool_finished",
+            "data": {
+                "turn": turn_ref_json("ses_1", "loop_shared"),
+                "request_index": 0,
+                "tool_call_id": "call_shared",
+                "result": {
+                    "outcome": "success",
+                    "content_bytes": 6,
+                    "content": "shared",
+                    "content_truncated": false
+                },
+                "meta": meta_json("ses_1", 0)
+            }
+        }))));
+
+        let weak = {
+            let view = app.sessions.known.get_mut("ses_1").unwrap();
+            let item = crate::protocol::read::RawHistoryItem {
+                item: crate::protocol::read::RuntimeItem::ToolResult(
+                    crate::protocol::read::RuntimeToolResultItem {
+                        loop_id: "loop_shared".to_owned(),
+                        request_index: 0,
+                        call_id: "call_shared".to_owned(),
+                        tool_name: "read".to_owned(),
+                        outcome: "success".to_owned(),
+                        output: crate::protocol::read::RuntimeToolOutput {
+                            content: "shared".to_owned(),
+                        },
+                    },
+                ),
+                timestamp: None,
+            };
+            let owner = install_history_item(view, 1, &item).expect("durable owner");
+            let durable_result = match owner.as_ref() {
+                TranscriptBlock::Tool(tool) => tool.result.as_ref().unwrap().clone(),
+                _ => panic!("expected durable tool owner"),
+            };
+            let presentation_result = view.tool_presentations
+                [&ToolKey::new("ses_1", "loop_shared", 0, "call_shared")]
+                .result
+                .as_ref()
+                .unwrap()
+                .clone();
+            let live_result = view.live.as_ref().unwrap().requests[0].tools[0]
+                .result
+                .as_ref()
+                .unwrap()
+                .clone();
+            let presentation_display = view.tool_presentations
+                [&ToolKey::new("ses_1", "loop_shared", 0, "call_shared")]
+                .display
+                .clone();
+            let live_display = view.live.as_ref().unwrap().requests[0].tools[0]
+                .display
+                .as_ref()
+                .unwrap()
+                .clone();
+            assert!(Arc::ptr_eq(&durable_result, &presentation_result));
+            assert!(Arc::ptr_eq(&durable_result, &live_result));
+            assert!(Arc::ptr_eq(&presentation_display, &live_display));
+            let weak = Arc::downgrade(&durable_result);
+            let weak_display = Arc::downgrade(&presentation_display);
+            view.transcript.window.insert_owner(
+                1,
+                Arc::clone(&owner),
+                1,
+                crate::app::history::owner_bytes(&owner),
+            );
+            (weak, weak_display)
+        };
+        app.prepared_conversation = None;
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        view.live = None;
+        view.tool_presentations = Arc::new(std::collections::HashMap::new());
+        view.transcript.clear_blocks();
+        assert!(
+            weak.0.upgrade().is_none(),
+            "all body owners must be released"
+        );
+        assert!(
+            weak.1.upgrade().is_none(),
+            "all display owners must be released"
+        );
     }
 
     #[test]

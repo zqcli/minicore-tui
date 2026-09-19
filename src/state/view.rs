@@ -303,6 +303,10 @@ pub struct CopyRange {
     /// stores a byte range into it instead of owning another row body.
     pub source: Arc<str>,
     pub source_range: std::ops::Range<usize>,
+    /// Byte offset in the section's logical source. For rendered copy text
+    /// this remains separate from `source_range`, whose owner may be a
+    /// bounded display-row source.
+    pub source_offset: usize,
     /// A soft-wrapped row joins directly to the next source range. Hard
     /// newlines, real empty lines, and section boundaries insert `\n`.
     pub hard_break_after: bool,
@@ -335,6 +339,17 @@ pub struct SelectionPoint {
     /// grows or a preceding section changes height.
     pub section_id: Option<SectionId>,
     pub section_row: usize,
+}
+
+/// A content-based scroll position. `screen_row` keeps the anchored content
+/// at the same terminal row while the section's rendered height changes.
+/// `source_offset` survives wrapping, folding, prepending, and live-to-durable
+/// reconciliation as long as the logical section remains available.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScrollAnchor {
+    pub section_id: SectionId,
+    pub source_offset: usize,
+    pub screen_row: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -467,6 +482,7 @@ pub struct CopyView<'a> {
     pub row: usize,
     pub columns: &'a std::ops::Range<usize>,
     pub text: &'a str,
+    pub source_offset: usize,
     pub hard_break_after: bool,
     pub decorative: bool,
 }
@@ -486,6 +502,7 @@ impl CopyIndex {
                             + self.durable_base.saturating_sub(self.durable_skip),
                         columns: &copy.columns,
                         text: copy.text(),
+                        source_offset: copy.source_offset,
                         hard_break_after: copy.hard_break_after,
                         decorative: copy.decorative,
                     })
@@ -495,6 +512,7 @@ impl CopyIndex {
             row: copy.row + self.live_base,
             columns: &copy.columns,
             text: copy.text(),
+            source_offset: copy.source_offset,
             hard_break_after: copy.hard_break_after,
             decorative: copy.decorative,
         }))
@@ -671,6 +689,63 @@ impl PreparedConversation {
     /// row, so this is a lookup, not a scan.
     pub fn copy_row(&self, row: usize) -> Option<CopyView<'_>> {
         self.copy_ranges.row(row)
+    }
+
+    /// Locates an anchor by stable section identity and logical source byte.
+    /// If the original section is unloaded, the nearest retained history
+    /// section is used rather than pretending an absent range is copyable.
+    pub fn has_scroll_anchor_section(&self, anchor: &ScrollAnchor) -> bool {
+        self.sections.iter().any(|section| {
+            section.id.session_id == anchor.section_id.session_id
+                && section.id.loop_id == anchor.section_id.loop_id
+                && section.id.request_index == anchor.section_id.request_index
+                && section.id.kind == anchor.section_id.kind
+                && section.id.ordinal == anchor.section_id.ordinal
+                && section.id.tool_call_id == anchor.section_id.tool_call_id
+                && (section.id.history_index == anchor.section_id.history_index
+                    || section.id.history_index.is_none()
+                    || anchor.section_id.history_index.is_none())
+        })
+    }
+
+    pub fn row_for_scroll_anchor(&self, anchor: &ScrollAnchor) -> Option<usize> {
+        let sections: Vec<SectionView> = self.sections.iter().collect();
+        let stable = |section: &SectionView| {
+            section.id.session_id == anchor.section_id.session_id
+                && section.id.loop_id == anchor.section_id.loop_id
+                && section.id.request_index == anchor.section_id.request_index
+                && section.id.kind == anchor.section_id.kind
+                && section.id.ordinal == anchor.section_id.ordinal
+                && section.id.tool_call_id == anchor.section_id.tool_call_id
+                && (section.id.history_index == anchor.section_id.history_index
+                    || section.id.history_index.is_none()
+                    || anchor.section_id.history_index.is_none())
+        };
+        let selected = sections
+            .iter()
+            .find(|section| stable(section))
+            .or_else(|| {
+                let target = anchor.section_id.history_index?;
+                sections
+                    .iter()
+                    .filter(|section| section.id.history_index.is_some())
+                    .min_by_key(|section| {
+                        let distance = section.id.history_index.unwrap_or(target).abs_diff(target);
+                        (distance, usize::from(section.id.kind != SectionKind::User))
+                    })
+            })
+            .or_else(|| {
+                sections
+                    .iter()
+                    .find(|section| section.id.kind == SectionKind::User)
+            })
+            .or_else(|| sections.first())?;
+        self.copy_ranges
+            .iter()
+            .filter(|copy| selected.rows.contains(&copy.row) && !copy.decorative)
+            .min_by_key(|copy| copy.source_offset.abs_diff(anchor.source_offset))
+            .map(|copy| copy.row)
+            .or(Some(selected.rows.start))
     }
 
     pub fn section_at(&self, row: usize, column: usize) -> Option<SectionView> {

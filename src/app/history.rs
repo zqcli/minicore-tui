@@ -212,11 +212,45 @@ impl HistoryWindow {
         if index >= protect_from {
             return None;
         }
+        self.remove_entry(index)
+    }
+
+    fn remove_entry(&mut self, index: usize) -> Option<(usize, usize)> {
         let item = self.items.remove(&index)?;
         let bytes = item.bytes;
         self.bytes = self.bytes.saturating_sub(bytes);
         self.forget_loaded(index);
         Some((index, bytes))
+    }
+
+    /// Evicts the retained item farthest from the protected source ranges.
+    /// This is the head-browse case: when the viewport is near item zero, the
+    /// tail is allowed to release first instead of making the whole suffix
+    /// effectively protected by one lower-bound index.
+    pub fn evict_farthest_entry(&mut self, protected: &[Range<usize>]) -> Option<(usize, usize)> {
+        if protected.is_empty() {
+            return self.evict_oldest_entry(usize::MAX);
+        }
+        let candidate = self
+            .items
+            .keys()
+            .copied()
+            .filter(|index| !protected.iter().any(|range| range.contains(index)))
+            .max_by_key(|index| {
+                let distance = protected
+                    .iter()
+                    .map(|range| {
+                        if *index < range.start {
+                            range.start.saturating_sub(*index)
+                        } else {
+                            index.saturating_sub(range.end).saturating_add(1)
+                        }
+                    })
+                    .min()
+                    .unwrap_or(0);
+                (distance, *index)
+            })?;
+        self.remove_entry(candidate)
     }
 
     pub fn evict_oldest(&mut self, protect_from: usize) -> Option<usize> {
@@ -1078,28 +1112,120 @@ impl App {
         }
     }
 
-    fn history_protect_from(view: &SessionView, viewport: (usize, usize), tail: usize) -> usize {
-        let mut protect_from = view.transcript.window.protect_from(tail);
-        if tail == 0 {
-            return usize::MAX;
-        }
-        let viewport_start = view.scroll.offset.saturating_sub(tail);
-        let viewport_end = view
-            .scroll
-            .offset
-            .saturating_add(viewport.1)
-            .saturating_add(tail);
-        if let Some(durable) = view.transcript.render_cache.as_ref() {
-            for placement in durable.layout.sections.iter() {
-                if placement.rows.end <= viewport_start || placement.rows.start >= viewport_end {
-                    continue;
+    fn history_protection_ranges(
+        view: &SessionView,
+        viewport: (usize, usize),
+        tail: usize,
+        active: bool,
+        frame_header_rows: usize,
+        durable_skip: usize,
+    ) -> Vec<Range<usize>> {
+        let mut ranges = Vec::new();
+        if active && tail > 0 {
+            let scroll_offset = if view.scroll.follow_tail {
+                view.transcript.render_cache.as_ref().map_or_else(
+                    || {
+                        view.transcript
+                            .window
+                            .items()
+                            .last()
+                            .map_or(0, |(index, _)| *index)
+                    },
+                    |durable| {
+                        durable
+                            .layout
+                            .total_rows
+                            .saturating_sub(viewport.1.max(1))
+                            .saturating_add(frame_header_rows.saturating_sub(durable_skip))
+                    },
+                )
+            } else {
+                view.scroll.offset
+            };
+            let durable_offset = scroll_offset
+                .saturating_sub(frame_header_rows)
+                .saturating_add(durable_skip);
+            let viewport_start = durable_offset.saturating_sub(tail);
+            let viewport_end = durable_offset
+                .saturating_add(viewport.1.max(1))
+                .saturating_add(tail);
+            if let Some(durable) = view.transcript.render_cache.as_ref() {
+                for placement in durable.layout.sections.iter() {
+                    if placement.rows.end <= viewport_start || placement.rows.start >= viewport_end
+                    {
+                        continue;
+                    }
+                    if let Some(index) = placement.layout.key.section.history_index {
+                        ranges.push(index.saturating_sub(tail)..index.saturating_add(tail + 1));
+                    }
                 }
-                if let Some(index) = placement.layout.key.section.history_index {
-                    protect_from = protect_from.min(index.saturating_sub(tail));
+            }
+            if ranges.is_empty() {
+                let indices = view
+                    .transcript
+                    .window
+                    .items()
+                    .map(|(index, _)| *index)
+                    .collect::<Vec<_>>();
+                if let Some((position, _)) = indices
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, index)| (**index).abs_diff(durable_offset))
+                {
+                    let start = position.saturating_sub(tail);
+                    let end = position.saturating_add(tail + 1).min(indices.len());
+                    if let (Some(first), Some(last)) = (indices.get(start), indices.get(end - 1)) {
+                        ranges.push(*first..last.saturating_add(1));
+                    }
                 }
             }
         }
-        protect_from
+
+        let recent_loop = view
+            .last_result
+            .as_ref()
+            .map(|result| result.turn.loop_id.as_str())
+            .or_else(|| {
+                view.live
+                    .as_ref()
+                    .and_then(|live| live.reference.as_ref())
+                    .map(|turn| turn.loop_id.as_str())
+            });
+        if let Some(loop_id) = recent_loop {
+            let result_indices = view
+                .transcript
+                .window
+                .items()
+                .filter_map(|(index, block)| {
+                    let matches = match block.as_ref() {
+                        TranscriptBlock::User(block) => block.loop_id.as_deref() == Some(loop_id),
+                        TranscriptBlock::Assistant(block) => block.loop_id == loop_id,
+                        TranscriptBlock::Tool(block) => block.loop_id == loop_id,
+                        TranscriptBlock::Summary(_) | TranscriptBlock::HistoryPlaceholder(_) => {
+                            false
+                        }
+                    };
+                    matches.then_some(*index)
+                })
+                .collect::<Vec<_>>();
+            if let Some(last) = result_indices.last() {
+                let radius = tail.min(8);
+                ranges.push(last.saturating_sub(radius)..last.saturating_add(radius + 1));
+            }
+        }
+
+        ranges.sort_by_key(|range| range.start);
+        let mut merged: Vec<Range<usize>> = Vec::new();
+        for range in ranges {
+            if let Some(previous) = merged.last_mut() {
+                if range.start <= previous.end {
+                    previous.end = previous.end.max(range.end);
+                    continue;
+                }
+            }
+            merged.push(range);
+        }
+        merged
     }
 
     pub(super) fn retain_result_summary(&mut self, result: crate::protocol::TurnResultViewWire) {
@@ -2864,6 +2990,13 @@ impl App {
             return 0;
         }
         let active = self.sessions.active.clone();
+        let active_durable_offset = self
+            .prepared_conversation
+            .as_ref()
+            .filter(|prepared| prepared.session_id.as_deref() == active.as_deref())
+            .map_or((0, 0), |prepared| {
+                (prepared.header_rows(), prepared.durable_skip)
+            });
         let mut released = 0;
         for _ in 0..crate::limits::HISTORY_EVICTIONS_PER_PASS {
             if total <= budget {
@@ -2878,13 +3011,29 @@ impl App {
                 .iter()
                 .filter(|(_, view)| view.transcript.window.bytes() > 0)
                 .filter(|(id, view)| {
-                    let protect = if Some(id.as_str()) == active.as_deref() {
+                    let is_active = Some(id.as_str()) == active.as_deref();
+                    let protect = if is_active {
                         crate::limits::HISTORY_PROTECT_TAIL_ITEMS
                     } else {
                         crate::limits::HISTORY_PROTECT_TAIL_ITEMS_BACKGROUND
                     };
-                    let protect_from = Self::history_protect_from(view, self.viewport, protect);
-                    view.transcript.window.can_evict(protect_from)
+                    let (header_rows, durable_skip) = if is_active {
+                        active_durable_offset
+                    } else {
+                        (0, 0)
+                    };
+                    let ranges = Self::history_protection_ranges(
+                        view,
+                        self.viewport,
+                        protect,
+                        is_active,
+                        header_rows,
+                        durable_skip,
+                    );
+                    view.transcript
+                        .window
+                        .items()
+                        .any(|(index, _)| !ranges.iter().any(|range| range.contains(index)))
                 })
                 .max_by_key(|(id, view)| {
                     let active_rank = usize::from(Some(id.as_str()) == active.as_deref());
@@ -2894,13 +3043,25 @@ impl App {
             let Some(id) = victim else {
                 break;
             };
-            let protect = if Some(id.as_str()) == active.as_deref() {
+            let is_active = Some(id.as_str()) == active.as_deref();
+            let protect = if is_active {
                 crate::limits::HISTORY_PROTECT_TAIL_ITEMS
             } else {
                 crate::limits::HISTORY_PROTECT_TAIL_ITEMS_BACKGROUND
             };
-            let protect_from =
-                Self::history_protect_from(&self.sessions.known[&id], self.viewport, protect);
+            let (header_rows, durable_skip) = if is_active {
+                active_durable_offset
+            } else {
+                (0, 0)
+            };
+            let ranges = Self::history_protection_ranges(
+                &self.sessions.known[&id],
+                self.viewport,
+                protect,
+                is_active,
+                header_rows,
+                durable_skip,
+            );
             let evicted = self
                 .sessions
                 .known
@@ -2908,7 +3069,7 @@ impl App {
                 .expect("victim session exists")
                 .transcript
                 .window
-                .evict_oldest_entry(protect_from);
+                .evict_farthest_entry(&ranges);
             match evicted {
                 Some((index, bytes)) => {
                     if let Some(view) = self.sessions.known.get_mut(&id) {
@@ -3059,6 +3220,119 @@ mod budget_tests {
             0,
             "the background session gave up its bodies first"
         );
+    }
+
+    #[test]
+    fn active_head_browse_releases_the_far_suffix_within_the_global_budget() {
+        let mut app = crate::ui::testapp::open_with(
+            ThemeKind::Dark,
+            "ses_1",
+            Some("Active"),
+            "high",
+            Vec::new(),
+        );
+        app.sessions.active = Some("ses_1".to_owned());
+        let window = &mut app
+            .sessions
+            .known
+            .get_mut("ses_1")
+            .unwrap()
+            .transcript
+            .window;
+        for index in 0..200 {
+            window.insert(index, item(1_000));
+        }
+        app.viewport = (0, 6);
+        app.active_session_mut().unwrap().scroll.follow_tail = false;
+        app.active_session_mut().unwrap().scroll.offset = 0;
+
+        app.enforce_history_budget_with(80_000);
+
+        assert!(app.history_body_bytes() <= 80_000);
+        assert!(
+            app.sessions.known["ses_1"]
+                .transcript
+                .window
+                .item(0)
+                .is_some()
+        );
+        assert!(
+            app.sessions.known["ses_1"]
+                .transcript
+                .window
+                .item(199)
+                .is_none(),
+            "head browsing must release far suffix bodies"
+        );
+    }
+
+    #[test]
+    fn layout_eviction_releases_the_last_prepared_layout_owner() {
+        use crate::state::view::{
+            ConversationLayout, DurableCacheKey, LayoutKey, SectionId, SectionKind, SectionLayout,
+        };
+        use ratatui::text::{Line, Span};
+
+        let mut app = crate::ui::testapp::open_with(
+            ThemeKind::Dark,
+            "ses_1",
+            Some("Active"),
+            "high",
+            Vec::new(),
+        );
+        let id = SectionId {
+            session_id: Arc::from("ses_1"),
+            loop_id: None,
+            request_index: None,
+            kind: SectionKind::Summary,
+            ordinal: 0,
+            tool_call_id: None,
+            history_index: Some(0),
+        };
+        let section = Arc::new(SectionLayout {
+            key: LayoutKey {
+                section: id,
+                revision: 1,
+                width: 79,
+                theme: ThemeKind::Dark,
+                folded: false,
+                reasoning_visible: true,
+            },
+            order: 0,
+            rows: Arc::new(vec![Line::from(Span::raw(
+                "x".repeat(crate::limits::LAYOUT_CACHE_BYTES + 1),
+            ))]),
+            source: Arc::from("x"),
+            source_map: Arc::new(crate::state::view::SourceMap {
+                source: Arc::from("x"),
+                rows: Arc::new(Vec::new()),
+            }),
+            copy_ranges: Arc::new(Vec::new()),
+            link_cells: Arc::new(Vec::new()),
+            content_columns: 0..1,
+            collapsible: false,
+            folded: false,
+        });
+        let prepared = Arc::new(crate::state::view::PreparedDurable {
+            key: DurableCacheKey {
+                revision: 0,
+                width: 79,
+                theme: ThemeKind::Dark,
+                reasoning_visible: true,
+                tools_expanded: false,
+            },
+            layout: Arc::new(ConversationLayout::from_sections(vec![section])),
+        });
+        let weak = Arc::downgrade(&prepared);
+        app.sessions
+            .known
+            .get_mut("ses_1")
+            .unwrap()
+            .transcript
+            .render_cache = Some(Arc::clone(&prepared));
+        drop(prepared);
+        app.enforce_layout_budget();
+        assert!(weak.upgrade().is_none(), "layout owner must be released");
     }
 }
 
