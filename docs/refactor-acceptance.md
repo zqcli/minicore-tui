@@ -24,10 +24,10 @@ The current-tree C2 release evidence is:
 
 ```text
 C2b: durable_rows=51101 deltas=1000 layout_calls=0 history_bytes_cloned=0
-C2c: p95_us=7497 p99_us=7931 durable_rows=43870 layout_calls=0
+C2c: p95_us=7893 p99_us=8323 durable_rows=43870 layout_calls=0
       history_bytes_cloned=0 viewport_rows=40000 viewport_bytes=4396336
       retained_layout_bytes_estimate=8035080 c2c_max_tree_vm_hwm_kib=47172
-Agent 0.5 serial E2E: 22/22
+Agent 0.5 serial E2E: 27/27
 ```
 
 The C2c P95/P99 values are synthetic frame-processing samples for the fixed
@@ -35,7 +35,7 @@ workload; reruns can vary with host scheduling, and they are not terminal
 input-to-frame latency.
 
 Current-tree validation also passed Rust 1.85.0 `fmt --check`,
-`test --locked --all-targets --no-fail-fast` (706 passed, 0 failed, 35 ignored)
+`test --locked --all-targets --no-fail-fast` (720 passed, 0 failed, 35 ignored)
 and Clippy with `-D warnings` (`d2g-*.log`). The real Agent 0.5 serial run
 passed 27/27 tests (`d2g-e2e.log`: 22 pre-existing + 4 D1 + 1 D2 scenario).
 The six ignored release performance workloads also passed.
@@ -85,9 +85,9 @@ The six ignored release performance workloads also passed.
 | REF-41 | Changes workspace/tool origin and three comparisons | **Not run** | D/E. |
 | REF-42 | Opaque change references and stale/fragment behavior | **Not run** | D/E. |
 | REF-43 | Footer branches from explicit status and renderer performs no I/O | **Not run** | Stage E. |
-| REF-44 | Search coverage distinguishes unloaded/large from global no-match | **Passed** | `/search` scans a loaded snapshot or an explicit pinned full-session `session.read` chain on the owned workers; coverage labels stay incomplete for large/stopped/failed/truncated scans. The real-Agent E2E finds a literal in the durable UTF-8 body with complete coverage. |
+| REF-44 | Search coverage distinguishes unloaded/large from global no-match | **Passed** | `/search` scans a loaded snapshot or an explicit pinned full-session `session.read` chain on the owned workers; coverage labels stay incomplete for large/stopped/failed/truncated scans. The real-Agent E2E scans 22 saved items across more than one page, finds a multi-byte UTF-8 literal, and reports complete coverage. |
 | REF-45 | Prompt jump and temporary folds preserve selection | **Passed** | `/prev`, `/next`, `/latest` and match jumps skip steering, read an unloaded window at the exact index under the captured pin, and install temporary fold overrides that are restored when search closes (reducer tests). |
-| REF-46 | Copy/export has no Rail/fake newline and export uses a fixed bounded pin | **Passed** | `/copy` reuses the rendered copy rows and hit operations with no remote read; `render_with_breaks` reports real logical line ends so a soft wrap never gains a newline and paragraph/code breaks survive. `/export` writes through one owned job from a pinned `session.read` chain with a bounded channel, unique temp file, explicit overwrite confirm, atomic rename, cancel cleanup, explicit oversized placeholders, and no opaque provider data. |
+| REF-46 | Copy/export has no Rail/fake newline and export uses a fixed bounded pin | **Passed** | `/copy` reuses the rendered copy rows and hit operations with no remote read; `render_with_breaks` reports real logical line ends so a soft wrap never gains a newline and paragraph/code breaks survive. `/export` writes through one owned job from a pinned `session.read` chain with a bounded channel, unique temp file, explicit overwrite confirmation, atomic rename, cancel cleanup, explicit oversized placeholders, and an explicit raw-JSON path that verifies offsets/EOF before writing. The real-Agent E2E covers a multi-page UTF-8 history plus an in-progress live turn without mixing it into the saved pin. |
 | REF-47 | External editor does not block RPC or overwrite a newer draft | **Not run** | Stage D. |
 | REF-48 | ANSI/OSC/control-safe display with raw protocol offsets preserved | **Passed** | Safe-display and control-sequence tests. |
 | REF-49 | Logs contain no message/command/result/file/secret content | **Passed** | Content-free stderr/debug logging tests. |
@@ -95,7 +95,7 @@ The six ignored release performance workloads also passed.
 | REF-51 | Existing CJK/IME/mouse/scrollbar/terminal restore behavior | **Passed** | UI, Rail, terminal, and snapshot tests. |
 | REF-52 | Common command table/completion/help stay consistent | **Passed** | `command::COMMANDS` is the single static table driving parsing, completion and the help panel; tests assert every table entry parses and is offered, unlisted names are unknown, and the help panel renders every entry. |
 | REF-53 | No approval/plugin/Subagent/PTY/Git-write/auto-reconnect feature | **Passed** | Source audit. |
-| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Not run** | 22/22 current Agent E2E covers read/tool/compact and lifecycle paths; workspace file/changes/diff workflows are D/E scope and not covered. |
+| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Not run** | 27/27 current Agent E2E covers read/tool/compact, lifecycle, and the D2 multi-page search/export path; workspace file/changes/diff workflows are D/E scope and not covered. |
 | REF-55 | Rust 1.85/stable and original tests on three platforms | **Not run** | Rust 1.85 remote Linux is authoritative; current-tree stable/macOS/Windows coverage is not complete. |
 | REF-56 | Release before/after performance evidence uses real data | **Passed** | Current-tree Rust 1.85 focused C2b/C2c release probes passed; the full six-test ignored release suite also passed in this validation cycle. Workload units are recorded in `docs/performance.md`. |
 
@@ -111,10 +111,11 @@ The six ignored release performance workloads also passed.
 - **C2b**: Passed on the recorded 50k-row / 1000-delta structural workload.
 - **C2c mainline**: Passed on the recorded shared-owner/layout/budget/SourceMap
   workload and serial Agent E2E.
-- **Full C release**: **Not run**. The bounded automatic path is complete
-  through 8 MiB, but the explicit raw-read/export workflow for oversized items
-  and a fresh decode-throughput/RSS measurement are intentionally outside this
-  boundary. Exact allocator/RSS accounting is not claimed.
+- **Full C release**: **Not run**. The bounded automatic history path is
+  complete through 8 MiB, but a general typed/raw history-read workflow for
+  oversized items and a fresh decode-throughput/RSS measurement are outside
+  this boundary. D2's explicit `/export raw` path is separately covered by
+  reducer fixtures; exact allocator/RSS accounting is not claimed.
 - **D/E**: The search/export half of D is now implemented (see `D Status`);
   the workspace/E panels were intentionally not started and must not be
   reported as C defects.
@@ -144,27 +145,28 @@ for the criteria below, on the tree validated by the logs above:
   transcript visible, scans loaded content on the owned worker, and runs the
   explicit full-session scan as a pinned `session.read` chain whose items are
   decoded/scanned by the single decode worker. Coverage never claims a global
-  no-match for large/stopped/failed/truncated scans; `n`/`p`/Enter jumps read
-  an unloaded target window and temporary folds are restored on exit; Esc
-  leaves the search first and never cancels a turn.
+  no-match for large/stopped/failed/truncated scans; the real Agent E2E scans
+  22 saved items over multiple pages and finds a UTF-8 literal. `n`/`p`/Enter
+  jumps read an unloaded target window and temporary folds are restored on
+  exit; Esc leaves the search first and never cancels a turn.
 - **D2 copy**: **Passed.** `/copy [last|message|code|selection]` reuses the
   existing hit/copy operations, never issues a remote read, keeps the
   selection on a clipboard failure, and preserves real newlines without
   inventing one at a soft wrap (renderer-reported row breaks).
 - **D2 export**: **Passed** for the criteria measured here, with the
-  limitations below. The reducer tests run the real writer (temp file beside
-  the target, refusal until the explicit `Ctrl+Y` confirm, atomic rename,
-  cancel removing the uncommitted temp, explicit placeholder plus `partial`
-  note for an oversized item), and the real-Agent E2E exports a session whose
-  file carries the source, the UTF-8 body and the explicitly appended live
-  turn's `unconfirmed` note with no temp file left.
-- **D2 export limitations**: **Not run/limited.** (a) A multi-page export
-  against a *real Agent* was not measured: the E2E session fits one read page,
-  while two-page chaining is covered by reducer fixtures. (b) The chunked
-  raw-JSON path for items above the 8 MiB auto-decode ceiling is **not
-  implemented**: such items are written as explicit placeholders and the file
-  carries a `partial` note instead of a complete body. (c) Stable-toolchain,
-  macOS and Windows runs remain **Not run**.
+  remaining environment limitations below. The reducer tests run the real
+  writer (temp file beside the target, refusal until explicit `Ctrl+Y`,
+  atomic rename, cancel cleanup, explicit placeholder plus `partial` note for
+  an oversized item, raw chunk verification, and writer-slot ownership). The
+  real-Agent E2E exports 22 saved items across multiple pages, preserves the
+  UTF-8 body, keeps the in-progress turn outside the saved pin, and verifies
+  the explicit unsaved inclusion is labeled `Unconfirmed live turn` with no
+  temp file left.
+- **D2 export limitations**: **Not run**. The fixed Agent's runtime model-text
+  ceiling is 256 KiB, so a real-Agent >8 MiB oversized item cannot be produced;
+  the >8 MiB raw-export path is validated with bounded reducer fixtures rather
+  than claimed as a real-Agent measurement. Stable-toolchain, macOS and
+  Windows runs remain **Not run**.
 - **D1 review**: the parent/independent review of these commits has not been
   recorded here; "Passed" reflects the current tree's own measured evidence.
 
@@ -174,6 +176,6 @@ for the criteria below, on the tree validated by the logs above:
    Agent E2E evidence tied to the current workload units.
 2. Keep oversized automatic history decoding explicit and bounded; no complete
    body may be fabricated from an 8 MiB placeholder path.
-3. Leave the explicit oversized raw-read/export workflow and decode-throughput/
-   RSS measurement as **Not run**; do not convert the synthetic frame P95/P99
-   into terminal input-to-frame latency.
+3. Leave the general oversized history-read workflow and
+   decode-throughput/RSS measurement as **Not run**; do not convert the
+   synthetic frame P95/P99 into terminal input-to-frame latency.

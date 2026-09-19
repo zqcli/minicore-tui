@@ -163,7 +163,8 @@ C2 enforces the local side of those limits (spec §5.2/§5.4 and §21):
   cache 48 MiB, live output 4 MiB per loop/16 MiB per session, tool facts 1 MiB
   per stream/16 MiB per session, composer drafts 256 KiB per draft/8 MiB total,
   and automatic typed decoding 8 MiB per item. Oversized items remain explicit
-  placeholders until a later explicit raw-read/export workflow exists.
+  placeholders on the automatic history path; D2's separate `/export raw`
+  workflow streams verified sanitized JSON chunks without raising that ceiling.
 
 ## Fixtures
 
@@ -238,21 +239,22 @@ cargo test --release --locked --test performance -- --ignored --nocapture
 ```
 
 Last verified current-tree result under Rust 1.85: `fmt --check` clean,
-`test --locked --all-targets --no-fail-fast` passed all non-ignored library,
-binary, and integration tests (457 library tests; no failures), and
+`test --locked --all-targets --no-fail-fast` passed 720 tests with zero
+failures (482 library tests; 35 ignored across the targets), and
 `clippy --locked --all-targets -- -D warnings` clean. The pinned Agent 0.5.0
-serial E2E run passed 22/22 scenarios. The release performance suite passed
-6/6 ignored workloads, including the 1000-delta C2b probe and the 120×40 C2c
-probe. The latest C2c sample recorded `p95_us=7497` and `p99_us=7931` for
-synthetic frame processing; reruns can vary with host scheduling, and these are
-not terminal input-to-frame latency measurements.
+serial E2E run passed 27/27 scenarios, including the real multi-page D2
+search/export chain. The release performance suite passed 6/6 ignored
+workloads, including the 1000-delta C2b probe and the 120×40 C2c probe. The
+latest C2c sample recorded `p95_us=7893` and `p99_us=8323` for synthetic frame
+processing; reruns can vary with host scheduling, and these are not terminal
+input-to-frame latency measurements.
 
 When reusing the existing `tui-target` directory after an rsync, run
 `cargo clean -p minicore-tui` (or touch the sources) before the build: rsync
 preserves source mtimes, and a newer stale rlib otherwise shadows the synced
 source, producing confusing "variant not found" errors.
 
-The 22 Agent E2E scenarios and six release/performance workloads are ignored
+The 27 Agent E2E scenarios and six release/performance workloads are ignored
 by default and are evidence only when explicitly run with their required
 binary/options. `docs/refactor-acceptance.md` tracks which REF rows remain
 open.
@@ -264,5 +266,6 @@ terminal handling, shared body/display owners, bounded SourceMap copy facts,
 and the 32 MiB/48 MiB owner budgets are landed and verified. The current
 boundary intentionally does not add automatic typed decoding above 8 MiB or
 claim mathematically exact allocator/RSS accounting; oversized items remain
-explicit placeholders for a future raw-read/export workflow. D/E search,
-workspace, export, and external-editor workflows remain unstarted.
+explicit placeholders on the automatic history path. D2 search/copy/export is
+implemented and validated separately; workspace and external-editor workflows
+remain unstarted.
