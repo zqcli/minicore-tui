@@ -213,9 +213,11 @@ impl QuerySlots {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QueryScope {
     Context(String),
+    ContextGeneration { session_id: String, generation: u64 },
     Changes(String),
     Workspace { session_id: String, file: bool },
     Tool(crate::state::tool::ToolKey),
+    HistoryGeneration { session_id: String, generation: u64 },
     Search { session_id: String, generation: u64 },
     Export { session_id: String, export_id: u64 },
     Session(String),
@@ -229,6 +231,16 @@ impl QueryScope {
             Self::Context(session) => {
                 matches!(key, QueryKey::Context {session_id,..} if session_id==session)
             }
+            Self::ContextGeneration {
+                session_id,
+                generation,
+            } => matches!(
+                key,
+                QueryKey::Context {
+                    session_id: id,
+                    generation: current,
+                } if id == session_id && current == generation
+            ),
             Self::Changes(session) => {
                 matches!(key, QueryKey::Changes { session_id } if session_id == session)
             }
@@ -236,6 +248,16 @@ impl QueryScope {
                 matches!(key, QueryKey::Workspace { session_id: id, file: f } if id == session_id && f == file)
             }
             Self::Tool(tool) => matches!(key, QueryKey::Tool { key } if key == tool),
+            Self::HistoryGeneration {
+                session_id,
+                generation,
+            } => matches!(
+                key,
+                QueryKey::History {
+                    session_id: id,
+                    generation: current,
+                } if id == session_id && current == generation
+            ),
             Self::Search {
                 session_id,
                 generation,
@@ -320,12 +342,27 @@ impl App {
                         None
                     }
                 }
-                crate::app::queries::QueryKey::History { session_id, .. } => {
+                crate::app::queries::QueryKey::History {
+                    session_id,
+                    generation,
+                } => {
+                    let current = self
+                        .sessions
+                        .known
+                        .get(&session_id)
+                        .is_some_and(|view| view.history_query_generation == generation);
+                    if !current {
+                        self.invalidate_query_scope(&QueryScope::HistoryGeneration {
+                            session_id,
+                            generation,
+                        });
+                        continue;
+                    }
                     if self.history_decode_pending(&session_id) {
                         self.pending_query_followups.push_front(
                             crate::app::queries::QueryKey::History {
                                 session_id,
-                                generation: 0,
+                                generation,
                             },
                         );
                         break;
@@ -359,8 +396,25 @@ impl App {
                         .map(|window| (turn.clone(), window.cursor))
                         .and_then(|(turn, cursor)| self.request_turn_result_page(turn, cursor))
                 }
-                crate::app::queries::QueryKey::Context { session_id, .. } => {
-                    self.request_session_context(&session_id)
+                crate::app::queries::QueryKey::Context {
+                    session_id,
+                    generation,
+                } => {
+                    let current = self
+                        .sessions
+                        .known
+                        .get(&session_id)
+                        .is_some_and(|view| view.context_query_generation == generation)
+                        && self.context_polls.contains_key(&session_id);
+                    if !current {
+                        self.invalidate_query_scope(&QueryScope::ContextGeneration {
+                            session_id,
+                            generation,
+                        });
+                        None
+                    } else {
+                        self.request_session_context(&session_id)
+                    }
                 }
                 crate::app::queries::QueryKey::Search {
                     session_id,

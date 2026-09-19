@@ -457,6 +457,7 @@ impl ToolFacts {
 
     pub fn retained_bytes(&self) -> usize {
         self.invocation_bytes()
+            + self.execution_bytes()
             + self.display.detail.capacity()
             + self
                 .display
@@ -468,8 +469,10 @@ impl ToolFacts {
 
     fn invocation_bytes(&self) -> usize {
         self.invocation.as_ref().map_or(0, |invocation| {
-            invocation.name.capacity()
+            tool_ref_bytes(&invocation.tool_ref)
+                + invocation.name.capacity()
                 + invocation.input.preview.capacity()
+                + invocation.input.encoding.capacity()
                 + match &invocation.subject {
                     crate::protocol::ToolSubjectWire::Command { script, cwd } => {
                         script.capacity() + cwd.capacity()
@@ -477,6 +480,15 @@ impl ToolFacts {
                     crate::protocol::ToolSubjectWire::File { path } => path.capacity(),
                     crate::protocol::ToolSubjectWire::Other => 0,
                 }
+        })
+    }
+
+    fn execution_bytes(&self) -> usize {
+        self.execution.as_ref().map_or(0, |execution| {
+            tool_ref_bytes(&execution.tool_ref)
+                + execution.name.capacity()
+                + execution.started_at.as_ref().map_or(0, String::capacity)
+                + execution.finished_at.as_ref().map_or(0, String::capacity)
         })
     }
 
@@ -539,13 +551,20 @@ impl ToolFacts {
 
     pub fn truncate_to_bytes(&mut self, budget: usize) {
         let invocation_bytes = self.invocation_bytes();
-        let budget = if invocation_bytes > budget {
+        let mut budget = if invocation_bytes > budget {
             self.invocation = None;
             Arc::make_mut(&mut self.display).truncated = true;
             budget
         } else {
             budget - invocation_bytes
         };
+        let execution_bytes = self.execution_bytes();
+        if execution_bytes > budget {
+            self.execution = None;
+            Arc::make_mut(&mut self.display).truncated = true;
+        } else {
+            budget -= execution_bytes;
+        }
         let mut used = 0;
         let display = Arc::make_mut(&mut self.display);
         truncate_string(&mut display.detail, budget, &mut used);
@@ -564,6 +583,10 @@ impl ToolFacts {
             }
         }
     }
+}
+
+fn tool_ref_bytes(tool_ref: &crate::protocol::ToolRefWire) -> usize {
+    tool_ref.session_id.capacity() + tool_ref.loop_id.capacity() + tool_ref.tool_call_id.capacity()
 }
 
 fn truncate_string(value: &mut String, budget: usize, used: &mut usize) {
@@ -686,5 +709,53 @@ mod tests {
         facts.truncate_to_bytes(2);
         assert_eq!(facts.display.detail, "to");
         assert!(facts.retained_bytes() <= 2);
+    }
+
+    #[test]
+    fn retained_bytes_accounts_for_owned_tool_metadata() {
+        let mut facts = facts();
+        facts.invocation = Some(Arc::new(crate::protocol::ToolInvocationWire {
+            tool_ref: crate::protocol::ToolRefWire {
+                session_id: "session".repeat(64),
+                loop_id: "loop".repeat(64),
+                request_index: 0,
+                tool_call_id: "call".repeat(64),
+            },
+            name: "name".repeat(64),
+            subject: crate::protocol::ToolSubjectWire::File {
+                path: "path".repeat(64),
+            },
+            subject_truncated: false,
+            input: crate::protocol::ToolInputSummaryWire {
+                total_bytes: 0,
+                preview: "preview".repeat(64),
+                truncated: false,
+                encoding: "utf8".to_owned(),
+            },
+        }));
+        facts.execution = Some(Arc::new(crate::protocol::ToolExecutionWire {
+            tool_ref: facts.invocation.as_ref().unwrap().tool_ref.clone(),
+            name: "execution".repeat(64),
+            state: crate::protocol::ToolExecutionStateWire::Running,
+            phase: None,
+            started_at: Some("started".repeat(64)),
+            finished_at: None,
+            outcome: None,
+            input_availability: Availability::Available,
+            output_availability: Availability::Pending,
+            input_bytes: 0,
+            result_bytes: 0,
+            input_truncated: false,
+            result_truncated: false,
+            command: None,
+            recording: crate::protocol::ToolRecordingStateWire::MemoryOnly,
+        }));
+
+        let retained = facts.retained_bytes();
+        assert!(retained > facts.display.detail.len());
+        facts.truncate_to_bytes(1);
+        assert!(facts.invocation.is_none());
+        assert!(facts.execution.is_none());
+        assert!(facts.retained_bytes() <= 1);
     }
 }
