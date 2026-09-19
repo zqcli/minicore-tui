@@ -3338,6 +3338,7 @@ impl App {
     }
 
     pub(crate) fn enforce_history_budget_with(&mut self, budget: usize) -> usize {
+        self.prune_history_metadata();
         let mut total = self.history_body_bytes();
         crate::perf::set(crate::perf::Counter::HistoryBodyBytes, total as u64);
         if total <= budget {
@@ -3441,6 +3442,20 @@ impl App {
         }
         crate::perf::set(crate::perf::Counter::HistoryBodyBytes, total as u64);
         released
+    }
+
+    fn prune_history_metadata(&mut self) {
+        for view in self.sessions.known.values_mut() {
+            let window = &view.transcript.window;
+            if view
+                .user_timestamps
+                .keys()
+                .any(|index| window.item(*index).is_none())
+            {
+                Arc::make_mut(&mut view.user_timestamps)
+                    .retain(|index, _| window.item(*index).is_some());
+            }
+        }
     }
 }
 
