@@ -94,7 +94,12 @@ fn render_editor(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let draw_col = cell_col.min(content_w.saturating_sub(1));
     let x = area.x + rail::RAIL_WIDTH as u16 + draw_col as u16;
     let y = area.y + cell_row as u16;
-    if x < area.x + area.width && y < area.y + area.height && content_w > 0 && area.height > 0 {
+    if app.focused_region() == crate::state::panels::Focus::Editor
+        && x < area.x + area.width
+        && y < area.y + area.height
+        && content_w > 0
+        && area.height > 0
+    {
         if let Some(cell) = frame.buffer_mut().cell_mut((x, y)) {
             cell.set_bg(theme.user_message_bg);
             cell.set_style(Style::default().add_modifier(ratatui::style::Modifier::REVERSED));

@@ -473,6 +473,7 @@ impl App {
 
     pub(super) fn request_session_id(kind: &RequestKind) -> Option<&str> {
         match kind {
+            RequestKind::ToolDetail { key, .. } => Some(&key.session_id),
             RequestKind::OpenSession { session_id, .. }
             | RequestKind::CloseSession { session_id }
             | RequestKind::CloseVerifyState { session_id }
@@ -1544,6 +1545,17 @@ impl App {
         }
         match response.parse_delete() {
             Ok(_) => {
+                self.queries
+                    .invalidate_scope(&crate::app::queries::QueryScope::Session(
+                        session_id.clone(),
+                    ));
+                for (id, request) in &mut self.pending_requests {
+                    if Self::request_session_id(request) == Some(session_id.as_str())
+                        && self.queries.owns_request(*id)
+                    {
+                        *request = RequestKind::StaleRead;
+                    }
+                }
                 self.pending_requests.retain(|_, request| {
                     Self::request_session_id(request) != Some(session_id.as_str())
                 });

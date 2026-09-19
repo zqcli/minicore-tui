@@ -3258,6 +3258,10 @@ impl App {
             .sum::<usize>();
         cached
             + self
+                .tool_detail()
+                .and_then(|detail| detail.layout.as_ref())
+                .map_or(0, crate::state::panels::ToolTextLayout::retained_bytes)
+            + self
                 .layout_partial
                 .as_ref()
                 .map_or(0, |(_, layout)| layout.retained_bytes())

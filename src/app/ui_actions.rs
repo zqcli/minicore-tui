@@ -320,6 +320,36 @@ impl App {
     }
 
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent) -> Vec<AppCommand> {
+        if let Some(commands) = self.handle_tool_mouse(mouse) {
+            return commands;
+        }
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && matches!(self.dock, Dock::Composer)
+        {
+            let screen = crate::ui::layout::screen_layout(
+                self,
+                ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1),
+            );
+            if let Some(prepared) = self.prepared_conversation(screen.transcript.width) {
+                let position = crate::ui::transcript::scroll_position(
+                    self,
+                    prepared.total_rows(),
+                    screen.transcript.height as usize,
+                );
+                let key = crate::ui::tool_detail::detail_hits(
+                    prepared,
+                    screen.transcript,
+                    position.offset,
+                    position.visible_rows,
+                )
+                .into_iter()
+                .find(|(hit, _)| hit.contains((mouse.column, mouse.row).into()))
+                .map(|(_, key)| key);
+                if let Some(key) = key {
+                    return self.open_tool_detail(key);
+                }
+            }
+        }
         if !self.scrollbar_allowed() && self.scrollbar_drag.is_some() {
             self.cancel_scrollbar_drag();
         }
@@ -515,6 +545,7 @@ impl App {
                     return Vec::new();
                 }
                 if self.move_composer_cursor(mouse.column, mouse.row) {
+                    self.focus = crate::state::panels::Focus::Editor;
                     self.clear_selection();
                     let point = self.composer_point_at(mouse.column, mouse.row);
                     let offset = point.map(|point| self.composer_display_offset(point));

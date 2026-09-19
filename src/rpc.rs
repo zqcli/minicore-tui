@@ -996,6 +996,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tool_detail_late_response_through_fragmented_transport_releases_only_its_slot() {
+        use crate::event::AppEvent;
+        use crate::state::tool::ToolKey;
+        use crate::ui::testapp::{open_empty, take_requests};
+        let mut app = open_empty(crate::theme::ThemeKind::Dark, "ses_1", None, "high");
+        let a = ToolKey::new("ses_1", "loop_a", 0, "same_call");
+        let b = ToolKey::new("ses_1", "loop_b", 0, "same_call");
+        let request_a = take_requests(app.open_tool_detail(a.clone())).remove(0);
+        let request_b = take_requests(app.open_tool_detail(b.clone())).remove(0);
+        assert_eq!(app.queries.in_flight_len(), 2);
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/agent-v1/tool-read-terminal.json"
+        ))
+        .unwrap();
+        let mut result = fixture["result"].clone();
+        result["execution"]["tool_ref"] =
+            serde_json::to_value(crate::protocol::ToolRefWire::from(&a)).unwrap();
+        result["invocation"]["tool_ref"] = result["execution"]["tool_ref"].clone();
+        let payload = format!(
+            "{}\n",
+            json!({"jsonrpc":"2.0","id":request_a.id,"result":result})
+        );
+        let (mut client, server) = duplex(16 * 1024);
+        let (events_tx, mut events_rx) = mpsc::channel(4);
+        tokio::spawn(stdout_reader(
+            server,
+            events_tx,
+            test_wire(),
+            test_frame_bytes(),
+        ));
+        for part in payload.as_bytes().chunks(7) {
+            client.write_all(part).await.unwrap();
+        }
+        let commands = app.update(AppEvent::Rpc(next_event(&mut events_rx).await));
+        assert!(commands.is_empty());
+        assert_eq!(app.queries.in_flight_len(), 1);
+        assert!(app.pending_requests.contains_key(&request_b.id));
+        assert_eq!(app.tool_detail().unwrap().key, b);
+        assert!(
+            !app.active_view()
+                .unwrap()
+                .tool_presentations
+                .contains_key(&a)
+        );
+    }
+
+    #[tokio::test]
     async fn reader_accepts_exactly_max_size_frames() {
         let (mut client, server) = duplex(8192);
         let (events_tx, mut events_rx) = mpsc::channel(8);

@@ -56,6 +56,9 @@ use crate::ui::transcript::{
 pub mod copy;
 pub mod export;
 pub mod history;
+pub mod panels;
+#[cfg(test)]
+mod panels_tests;
 pub mod queries;
 pub mod search;
 pub mod session;
@@ -196,6 +199,12 @@ struct ScrollbarDrag {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequestKind {
     Ping,
+    ToolDetail {
+        key: ToolKey,
+        epoch: u64,
+        generation: u64,
+        stream: Option<crate::protocol::ToolDataStreamWire>,
+    },
     /// A read request retired by a completed reload. Its response is
     /// consumed and intentionally ignored.
     StaleRead,
@@ -426,6 +435,9 @@ pub struct App {
     composer_preferred_visual_col: Option<usize>,
     /// The dock panel below the transcript (spec 24.1).
     pub dock: Dock,
+    pub main_view: crate::state::panels::MainView,
+    pub focus: crate::state::panels::Focus,
+    tool_generation: u64,
     /// Measured transcript geometry for scroll math (total wrapped rows,
     /// visible rows); written only via `AppEvent::Viewport` from the main
     /// loop, never by the renderer.
@@ -705,6 +717,9 @@ impl App {
             slash_completion: None,
             composer_preferred_visual_col: None,
             dock: Dock::Composer,
+            main_view: Default::default(),
+            focus: Default::default(),
+            tool_generation: 0,
             viewport: (0, 0),
             last_total: 0,
             panel_scroll: 0,
@@ -877,6 +892,17 @@ impl App {
             let remaining = deadline.saturating_duration_since(now);
             earliest = Some(earliest.map_or(remaining, |e| e.min(remaining)));
         }
+        if let Some(deadline) = self.tool_detail().and_then(|detail| detail.due) {
+            let remaining = deadline.saturating_duration_since(now);
+            // A queued/in-flight query wakes on its actual completion, not a
+            // zero-duration timer spin while both shared slots are occupied.
+            if !self.queries.contains(&crate::app::queries::QueryKey::Tool {
+                key: self.tool_detail().unwrap().key.clone(),
+            }) {
+                let remaining = remaining.max(Duration::from_millis(50));
+                earliest = Some(earliest.map_or(remaining, |e| e.min(remaining)));
+            }
+        }
         for poll in self.context_polls.values() {
             let remaining = poll.due.saturating_duration_since(now);
             earliest = Some(earliest.map_or(remaining, |e| e.min(remaining)));
@@ -1014,6 +1040,7 @@ impl App {
                 if matches!(mouse.kind, crossterm::event::MouseEventKind::ScrollUp | crossterm::event::MouseEventKind::ScrollDown)
                     || (mouse.kind == crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left) && self.scrollbar_drag.is_some())))
             && queues_empty
+            && self.tool_detail().is_none()
             && matches!(self.dock, Dock::Composer)
             && self.selection.is_none()
             && self.editor_selection.is_none()
@@ -1256,6 +1283,10 @@ impl App {
                 self.install_conversation(prepared);
                 Vec::new()
             }
+            AppEvent::ToolLayoutPrepared(layout) => {
+                self.install_tool_layout(layout);
+                Vec::new()
+            }
             AppEvent::DurableLayoutPrepared(result) => {
                 self.install_durable_layout(result);
                 Vec::new()
@@ -1289,6 +1320,7 @@ impl App {
         // has been fully handled, so it observes the newest cursor and never
         // overtakes that reducer pass.
         self.drain_query_followups(&mut commands);
+        commands.extend(self.poll_tool_detail());
         // A queued scan page may have missed the slot that freed before its
         // follow-up drained; both chains retry idempotently while they need a
         // page and no read is in flight.
@@ -3423,6 +3455,11 @@ impl App {
                 let action = keymap::map(self, key);
                 self.apply_action(action)
             }
+            CrosstermEvent::Paste(_)
+                if self.focused_region() == crate::state::panels::Focus::Main =>
+            {
+                Vec::new()
+            }
             CrosstermEvent::Paste(text) => ui_actions::handle_paste(self, text),
             CrosstermEvent::Mouse(mouse) => ui_actions::handle_mouse(self, mouse),
             CrosstermEvent::FocusLost | CrosstermEvent::FocusGained => {
@@ -3447,6 +3484,30 @@ impl App {
         }
         match action {
             None => Vec::new(),
+            DetailFocus => {
+                self.focus = if self.focus == crate::state::panels::Focus::Main {
+                    crate::state::panels::Focus::Editor
+                } else {
+                    crate::state::panels::Focus::Main
+                };
+                Vec::new()
+            }
+            DetailEscape => self.detail_escape(),
+            DetailTab(step) => self.detail_tab(step),
+            DetailScroll(delta) => {
+                self.scroll_tool(delta, false);
+                Vec::new()
+            }
+            DetailEnd => {
+                self.scroll_tool(0, true);
+                Vec::new()
+            }
+            DetailRefresh => self.refresh_tool_detail(),
+            DetailCopy => self.copy_tool_detail(),
+            ClearSelection => {
+                self.clear_selection();
+                Vec::new()
+            }
             Quit => self.request_shutdown(),
             FirstCtrlC => self.ctrl_c(),
             CtrlD => {
@@ -4003,6 +4064,7 @@ impl App {
             LocalCommand::Sessions => self.open_selector(SelectorKind::Session),
             LocalCommand::Model => self.open_selector(SelectorKind::Model),
             LocalCommand::Reasoning => self.open_selector(SelectorKind::Reasoning),
+            LocalCommand::Tool(key) => self.tool_command(key),
             LocalCommand::Settings => self.open_settings(),
             LocalCommand::Editor => self.open_external_editor(),
             LocalCommand::Theme(kind) => {
@@ -4035,7 +4097,10 @@ impl App {
                     }
                 }
             }
-            LocalCommand::Search { query, scope } => self.open_search(query, scope),
+            LocalCommand::Search { query, scope } => {
+                self.close_tool_detail();
+                self.open_search(query, scope)
+            }
             LocalCommand::Copy { target } => self.copy_command(target),
             LocalCommand::Export {
                 target,
@@ -4044,6 +4109,7 @@ impl App {
             LocalCommand::PromptJump(direction) => self.prompt_jump(direction),
             LocalCommand::Latest => self.jump_latest(),
             LocalCommand::Clear => self.clear_transcript(),
+            LocalCommand::Refresh if self.tool_detail().is_some() => self.refresh_tool_detail(),
             LocalCommand::Refresh => self.refresh_view_data(),
             LocalCommand::Rename { title } => self.rename_from_command(title),
             LocalCommand::Help => self.open_dock(Dock::Help),
@@ -4666,7 +4732,7 @@ impl App {
     /// Whether a new deferred request fits the local target. A refused request
     /// is retained as a retry intent by its caller, never silently dropped.
     fn deferred_admission_ok(&self) -> bool {
-        self.deferred_pending() < MAX_DEFERRED_REQUESTS
+        self.deferred_pending() + self.queries.in_flight_len() < MAX_DEFERRED_REQUESTS
     }
 
     /// Issues the next `session.read` page for one session. The cursor is
@@ -5353,6 +5419,12 @@ impl App {
             return Vec::new();
         }
         match kind {
+            RequestKind::ToolDetail {
+                key,
+                epoch,
+                generation,
+                stream,
+            } => self.on_tool_detail_response(key, epoch, generation, stream, &response),
             RequestKind::StaleRead => Vec::new(),
             RequestKind::TurnResult(turn) => self.on_turn_result_response(&turn, &response),
             RequestKind::Reload { generation } => self.on_reload_response(generation, &response),
@@ -5772,18 +5844,17 @@ impl App {
                     &data.progress,
                 );
             }
-            // `tool_invocation`/`tool_execution`/`tool_process` extend the tool
-            // facts (subject, availability, raw streams). B1 decodes and
-            // gap-tracks them; their bodies are rendered in B2. They are never
-            // treated as errors, and a dropped one still marks the event gap.
             AgentEventWire::ToolInvocation { data } => {
                 self.mark_gap(&data.meta);
+                self.accept_tool_invocation(data.data);
             }
             AgentEventWire::ToolExecution { data } => {
                 self.mark_gap(&data.meta);
+                self.accept_tool_execution(data.data, false);
             }
             AgentEventWire::ToolProcess { data } => {
                 self.mark_gap(&data.meta);
+                self.accept_tool_process(data.data);
             }
             AgentEventWire::ToolFinished { data } => {
                 self.mark_gap(&data.meta);
@@ -5979,6 +6050,9 @@ impl App {
                         outcome: None,
                         needs_read: false,
                         conflict: None,
+                        invocation: None,
+                        execution: None,
+                        command: None,
                     }),
                 );
             }
@@ -6225,6 +6299,9 @@ impl App {
                     outcome: Some(outcome),
                     needs_read: false,
                     conflict: None,
+                    invocation: None,
+                    execution: None,
+                    command: None,
                 }),
             );
         }
@@ -6311,6 +6388,9 @@ impl App {
                 outcome: None,
                 needs_read: false,
                 conflict: None,
+                invocation: None,
+                execution: None,
+                command: None,
             })
         });
         let state = std::sync::Arc::make_mut(state);
@@ -6655,6 +6735,9 @@ fn install_history_item(
                         outcome: None,
                         needs_read: false,
                         conflict: None,
+                        invocation: None,
+                        execution: None,
+                        command: None,
                     })
                 });
                 let state = std::sync::Arc::make_mut(state);

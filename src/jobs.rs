@@ -337,12 +337,17 @@ const JOB_EVENTS_CAPACITY: usize = 4;
 
 /// Owns every local job for this process: one clipboard write and one
 /// serialized durable-layout worker.
+enum LayoutWork {
+    Conversation(Box<crate::ui::transcript::DurableLayoutRequest>),
+    Tool(crate::state::panels::ToolLayoutRequest),
+}
+
 pub struct LocalJobs {
     next_id: JobId,
     clipboard: Option<JoinHandle<()>>,
     events_tx: mpsc::Sender<AppEvent>,
     events_rx: mpsc::Receiver<AppEvent>,
-    layout_tx: Option<mpsc::Sender<crate::ui::transcript::DurableLayoutRequest>>,
+    layout_tx: Option<mpsc::Sender<LayoutWork>>,
     layout_task: Option<JoinHandle<()>>,
     layout_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     decode_tx: Option<mpsc::Sender<DecodeRequest>>,
@@ -368,8 +373,7 @@ impl Default for LocalJobs {
 impl LocalJobs {
     pub fn new() -> Self {
         let (events_tx, events_rx) = mpsc::channel(JOB_EVENTS_CAPACITY);
-        let (layout_tx, mut layout_rx) =
-            mpsc::channel::<crate::ui::transcript::DurableLayoutRequest>(1);
+        let (layout_tx, mut layout_rx) = mpsc::channel::<LayoutWork>(1);
         let layout_events = events_tx.clone();
         let layout_task = tokio::spawn(async move {
             while let Some(request) = layout_rx.recv().await {
@@ -377,6 +381,25 @@ impl LocalJobs {
                 while let Ok(newer) = layout_rx.try_recv() {
                     request = newer;
                 }
+                let request = match request {
+                    LayoutWork::Tool(request) => {
+                        if let Ok(Some(layout)) = tokio::task::spawn_blocking(move || {
+                            crate::state::panels::ToolTextLayout::build(request)
+                        })
+                        .await
+                        {
+                            if layout_events
+                                .send(AppEvent::ToolLayoutPrepared(layout))
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+                    LayoutWork::Conversation(request) => *request,
+                };
                 if request.cancel.load(Ordering::Relaxed) {
                     continue;
                 }
@@ -607,6 +630,22 @@ impl LocalJobs {
         request: crate::ui::transcript::DurableLayoutRequest,
     ) -> bool {
         let cancel = Arc::clone(&request.cancel);
+        self.try_schedule_layout_work(LayoutWork::Conversation(Box::new(request)), cancel)
+    }
+
+    pub fn try_schedule_tool_layout(
+        &mut self,
+        request: crate::state::panels::ToolLayoutRequest,
+    ) -> bool {
+        let cancel = Arc::clone(&request.cancel);
+        self.try_schedule_layout_work(LayoutWork::Tool(request), cancel)
+    }
+
+    fn try_schedule_layout_work(
+        &mut self,
+        request: LayoutWork,
+        cancel: Arc<std::sync::atomic::AtomicBool>,
+    ) -> bool {
         let Some(sender) = self.layout_tx.as_ref() else {
             return false;
         };

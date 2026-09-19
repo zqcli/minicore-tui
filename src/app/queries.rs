@@ -19,19 +19,37 @@ use super::*;
 /// path, or "most recent call" is never a key because those repeat.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum QueryKey {
+    Tool {
+        key: crate::state::tool::ToolKey,
+    },
     /// A `session.read` page chain for one session (main history and its
     /// read-back share the key so a second chain cannot start for one view).
-    History { session_id: String, generation: u64 },
+    History {
+        session_id: String,
+        generation: u64,
+    },
     /// An authoritative `turn.result` read-back, keyed by the exact turn.
-    TurnResult { session_id: String, loop_id: String },
+    TurnResult {
+        session_id: String,
+        loop_id: String,
+    },
     /// A bounded context snapshot used by preparation/compaction polling.
-    Context { session_id: String, generation: u64 },
+    Context {
+        session_id: String,
+        generation: u64,
+    },
     /// One explicit full-session search scan chain (spec §17.1). It uses the
     /// same two read-only slots as every other read.
-    Search { session_id: String, generation: u64 },
+    Search {
+        session_id: String,
+        generation: u64,
+    },
     /// One explicit export read chain (spec §17.4). It shares the same two
     /// read-only slots and holds its pin until the export finishes.
-    Export { session_id: String, export_id: u64 },
+    Export {
+        session_id: String,
+        export_id: u64,
+    },
 }
 
 /// The result of asking to start a read.
@@ -70,6 +88,9 @@ impl QuerySlots {
 
     pub fn in_flight_len(&self) -> usize {
         self.in_flight.len()
+    }
+    pub fn owns_request(&self, id: RequestId) -> bool {
+        self.in_flight.iter().any(|(request, _)| *request == id)
     }
 
     pub fn waiting_len(&self) -> usize {
@@ -170,6 +191,7 @@ impl QuerySlots {
 /// read object.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QueryScope {
+    Tool(crate::state::tool::ToolKey),
     Session(String),
     All,
 }
@@ -178,7 +200,9 @@ impl QueryScope {
     fn matches(&self, key: &QueryKey) -> bool {
         match self {
             Self::All => true,
+            Self::Tool(tool) => matches!(key, QueryKey::Tool { key } if key == tool),
             Self::Session(session_id) => match key {
+                QueryKey::Tool { key } => &key.session_id == session_id,
                 QueryKey::History { session_id: id, .. } => id == session_id,
                 QueryKey::TurnResult { session_id: id, .. } => id == session_id,
                 QueryKey::Context { session_id: id, .. } => id == session_id,
@@ -230,6 +254,13 @@ impl App {
     pub(super) fn drain_query_followups(&mut self, commands: &mut Vec<AppCommand>) {
         while let Some(key) = self.pending_query_followups.pop_front() {
             let command = match key {
+                QueryKey::Tool { key } => {
+                    if self.tool_detail().is_some_and(|detail| detail.key == key) {
+                        self.poll_tool_detail().into_iter().next()
+                    } else {
+                        None
+                    }
+                }
                 crate::app::queries::QueryKey::History { session_id, .. } => {
                     if self.history_decode_pending(&session_id) {
                         self.pending_query_followups.push_front(

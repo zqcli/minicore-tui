@@ -2162,6 +2162,14 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
         height: slice.len() as u16,
     };
     frame.render_widget(ratatui::widgets::Paragraph::new(slice), body_area);
+    for (hit, _) in crate::ui::tool_detail::detail_hits(prepared, area, offset, budget) {
+        layout::clear_wide_overlay_edges(frame.buffer_mut(), hit);
+        frame.render_widget(
+            ratatui::widgets::Paragraph::new("[详情]")
+                .style(Style::new().fg(theme.scrollbar_thumb).bg(theme.page_bg)),
+            hit,
+        );
+    }
     if marker {
         let marker_y = area.y.saturating_add(height as u16).saturating_sub(1);
         let marker_area = Rect {

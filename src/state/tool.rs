@@ -42,9 +42,28 @@ pub struct StreamView {
     pub availability: Availability,
     pub truncated: bool,
     pub gap: bool,
-    pub chunks: std::collections::VecDeque<Arc<[u8]>>,
+    pub chunks: std::collections::VecDeque<StreamChunk>,
     pub retained_bytes: usize,
     pub revision: u64,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub enum StreamChunk {
+    Raw(Arc<[u8]>),
+    /// Output already owned by ToolFacts/cards is borrowed, not copied into a
+    /// second detail body. A response must match the original byte range.
+    Result {
+        source: Arc<str>,
+        range: std::ops::Range<usize>,
+    },
+}
+impl StreamChunk {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Raw(bytes) => bytes,
+            Self::Result { source, range } => &source.as_bytes()[range.clone()],
+        }
+    }
 }
 
 impl std::fmt::Debug for StreamView {
@@ -78,19 +97,40 @@ impl StreamView {
         &mut self,
         page: &crate::protocol::tool::ToolOutputPage,
     ) -> Result<(), &'static str> {
+        self.accept_page_with_result(page, None)
+    }
+
+    pub fn accept_page_with_result(
+        &mut self,
+        page: &crate::protocol::tool::ToolOutputPage,
+        result: Option<&Arc<str>>,
+    ) -> Result<(), &'static str> {
         if page.stream != self.stream {
             return Err("wrong tool stream");
         }
         let bytes = decode_stream(self.stream, &page.encoding, &page.data)?;
+        let stale = page.next_offset < self.next_offset;
         self.append(
             page.base_offset,
             page.next_offset,
             page.observed_end,
             &bytes,
+            result.filter(|result| {
+                self.stream == Stream::Output && result.len() <= crate::limits::TOOL_STREAM_BYTES
+            }),
         )?;
-        self.eof = page.eof;
-        self.availability = page.availability;
+        self.eof = page.eof && !stale;
+        if !stale {
+            self.availability = page.availability;
+        }
         self.truncated |= page.truncated;
+        if self.base_offset == 0
+            && self.next_offset >= self.observed_end
+            && !self.truncated
+            && self.availability == Availability::Available
+        {
+            self.gap = false;
+        }
         self.revision = self.revision.wrapping_add(1);
         Ok(())
     }
@@ -103,11 +143,26 @@ impl StreamView {
             return Err("wrong tool stream");
         }
         let bytes = decode_stream(self.stream, &chunk.encoding, &chunk.data)?;
+        if chunk.base_offset > chunk.next_offset
+            || chunk.next_offset > chunk.observed_end
+            || chunk.next_offset - chunk.base_offset != bytes.len() as u64
+        {
+            return Err("invalid raw tool event range");
+        }
+        if chunk.base_offset > self.next_offset || chunk.expired {
+            // Notifications are hints, not proof that the missing range was
+            // evicted. Keep the cursor so tool.output can recover that range.
+            self.gap = true;
+            self.truncated |= chunk.expired;
+            self.observed_end = self.observed_end.max(chunk.observed_end);
+            return Ok(());
+        }
         self.append(
             chunk.base_offset,
             chunk.next_offset,
             chunk.observed_end,
             &bytes,
+            None,
         )?;
         self.truncated |= chunk.dropped || chunk.expired;
         self.availability = if chunk.expired {
@@ -119,7 +174,14 @@ impl StreamView {
         Ok(())
     }
 
-    fn append(&mut self, base: u64, next: u64, end: u64, bytes: &[u8]) -> Result<(), &'static str> {
+    fn append(
+        &mut self,
+        base: u64,
+        next: u64,
+        end: u64,
+        bytes: &[u8],
+        result: Option<&Arc<str>>,
+    ) -> Result<(), &'static str> {
         if base > next || next > end || next - base != bytes.len() as u64 {
             return Err("invalid raw tool stream range");
         }
@@ -143,8 +205,23 @@ impl StreamView {
                 self.base_offset = base + skip as u64;
             }
             let bytes = &bytes[skip..];
-            for chunk in bytes.chunks(crate::limits::TOOL_PAGE_BYTES) {
-                self.chunks.push_back(Arc::from(chunk));
+            for (index, chunk) in bytes.chunks(crate::limits::TOOL_PAGE_BYTES).enumerate() {
+                let start = usize::try_from(base).ok().and_then(|base| {
+                    base.checked_add(skip + index * crate::limits::TOOL_PAGE_BYTES)
+                });
+                let shared = result.zip(start).filter(|(source, start)| {
+                    source
+                        .as_bytes()
+                        .get(*start..start.saturating_add(chunk.len()))
+                        == Some(chunk)
+                });
+                self.chunks.push_back(match shared {
+                    Some((source, start)) => StreamChunk::Result {
+                        source: source.clone(),
+                        range: start..start + chunk.len(),
+                    },
+                    None => StreamChunk::Raw(Arc::from(chunk)),
+                });
                 self.retained_bytes += chunk.len();
             }
         }
@@ -152,8 +229,8 @@ impl StreamView {
         self.observed_end = self.observed_end.max(end);
         while self.retained_bytes > crate::limits::TOOL_STREAM_BYTES {
             let old = self.chunks.pop_front().expect("charged chunk");
-            self.retained_bytes -= old.len();
-            self.base_offset += old.len() as u64;
+            self.retained_bytes -= old.bytes().len();
+            self.base_offset += old.bytes().len() as u64;
             self.truncated = true;
             self.gap = true;
         }
@@ -167,7 +244,7 @@ impl StreamView {
         let bytes: Vec<u8> = self
             .chunks
             .iter()
-            .flat_map(|chunk| chunk.iter().copied())
+            .flat_map(|chunk| chunk.bytes().iter().copied())
             .collect();
         let mut rest = bytes.as_slice();
         let mut text = String::new();
@@ -244,6 +321,9 @@ pub struct ToolFacts {
     pub outcome: Option<crate::protocol::ToolOutcomeWire>,
     pub needs_read: bool,
     pub conflict: Option<ToolConflict>,
+    pub invocation: Option<Arc<crate::protocol::ToolInvocationWire>>,
+    pub execution: Option<Arc<crate::protocol::ToolExecutionWire>>,
+    pub command: Option<Arc<crate::protocol::CommandResultWire>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -257,10 +337,100 @@ pub struct ToolConflict {
 pub type ToolPresentationState = ToolFacts;
 
 impl ToolFacts {
+    pub fn new(name: &str) -> Self {
+        Self {
+            display: Arc::new(ToolDisplayWire {
+                detail: name.to_owned(),
+                expanded_input: None,
+                input_line_count: None,
+                hidden_line_count: None,
+                truncated: false,
+            }),
+            result: None,
+            result_truncated: false,
+            status: ToolStatus::Pending,
+            outcome: None,
+            needs_read: false,
+            conflict: None,
+            invocation: None,
+            execution: None,
+            command: None,
+        }
+    }
+
+    pub fn accept_execution(
+        &mut self,
+        mut execution: crate::protocol::ToolExecutionWire,
+        authoritative: bool,
+    ) {
+        if self.is_terminal() && !execution.state.is_terminal() {
+            return;
+        }
+        if !authoritative && self.is_terminal() && self.outcome != execution.outcome {
+            if let Some(outcome) = execution.outcome {
+                self.accept_finished(outcome, None, execution.result_truncated);
+            }
+            self.needs_read = true;
+            return;
+        }
+        if authoritative {
+            self.needs_read = false;
+            self.conflict = None;
+        }
+        if let Some(outcome) = execution.outcome {
+            if authoritative {
+                self.status = ToolStatus::Pending;
+            }
+            self.accept_finished(outcome, None, execution.result_truncated);
+        } else {
+            self.status = if matches!(
+                execution.state,
+                crate::protocol::ToolExecutionStateWire::Running
+                    | crate::protocol::ToolExecutionStateWire::Cancelling
+            ) {
+                ToolStatus::Running
+            } else {
+                ToolStatus::Pending
+            };
+        }
+        if let Some(command) = execution.command.take() {
+            self.accept_command(command);
+        }
+        self.execution = Some(Arc::new(execution));
+    }
+
+    pub fn accept_command(&mut self, command: crate::protocol::CommandResultWire) {
+        use crate::protocol::CommandStatusWire::{Cancelling, Running};
+        if self
+            .command
+            .as_ref()
+            .is_some_and(|old| !matches!(old.status, Running | Cancelling))
+            && matches!(command.status, Running | Cancelling)
+        {
+            return;
+        }
+        self.command = Some(Arc::new(command));
+    }
+
     pub fn retained_bytes(&self) -> usize {
-        self.display.detail.len()
+        self.invocation_bytes()
+            + self.display.detail.len()
             + self.display.expanded_input.as_ref().map_or(0, String::len)
             + self.result.as_ref().map_or(0, |result| result.len())
+    }
+
+    fn invocation_bytes(&self) -> usize {
+        self.invocation.as_ref().map_or(0, |invocation| {
+            invocation.name.capacity()
+                + invocation.input.preview.capacity()
+                + match &invocation.subject {
+                    crate::protocol::ToolSubjectWire::Command { script, cwd } => {
+                        script.capacity() + cwd.capacity()
+                    }
+                    crate::protocol::ToolSubjectWire::File { path } => path.capacity(),
+                    crate::protocol::ToolSubjectWire::Other => 0,
+                }
+        })
     }
 
     pub fn accept_started(&mut self, name: &str) {
@@ -321,6 +491,14 @@ impl ToolFacts {
     }
 
     pub fn truncate_to_bytes(&mut self, budget: usize) {
+        let invocation_bytes = self.invocation_bytes();
+        let budget = if invocation_bytes > budget {
+            self.invocation = None;
+            Arc::make_mut(&mut self.display).truncated = true;
+            budget
+        } else {
+            budget - invocation_bytes
+        };
         let mut used = 0;
         let display = Arc::make_mut(&mut self.display);
         truncate_string(&mut display.detail, budget, &mut used);
@@ -398,6 +576,9 @@ mod tests {
             outcome: None,
             needs_read: false,
             conflict: None,
+            invocation: None,
+            execution: None,
+            command: None,
         }
     }
 

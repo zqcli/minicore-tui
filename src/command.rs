@@ -121,6 +121,7 @@ impl fmt::Debug for ClipboardText {
 /// resulting requests (e.g. a transcript reload) hit the wire.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalCommand {
+    Tool(crate::state::tool::ToolKey),
     /// Create a session directly in the current workspace with the most
     /// recent explicit configuration (spec §10.4); no catalog-form detour.
     New,
@@ -137,12 +138,17 @@ pub enum LocalCommand {
     Latest,
     /// Copy already-rendered text through the single clipboard owner
     /// (spec §17.3). `/copy` without an argument copies the last reply.
-    Copy { target: CopyTarget },
+    Copy {
+        target: CopyTarget,
+    },
     /// Open the local export form, optionally pre-filled with a target path
     /// (spec §17.4). `raw_oversized` selects the explicit raw-JSON streaming
     /// entry for items above the automatic decode ceiling. Nothing is written
     /// until the form is submitted.
-    Export { target: String, raw_oversized: bool },
+    Export {
+        target: String,
+        raw_oversized: bool,
+    },
     /// Open the session selector.
     Resume,
     /// Open the session selector.
@@ -172,15 +178,21 @@ pub enum LocalCommand {
     /// Re-read only this session's view data (history/presentation).
     Refresh,
     /// Rename a session; `None` opens the rename dialog (spec §10.4).
-    Rename { title: Option<String> },
+    Rename {
+        title: Option<String>,
+    },
     /// Reload Agent configuration and refresh safe read-only TUI state.
     Reload,
     /// Normal shutdown intent (`agent.shutdown` arrives in Phase 6).
     Quit,
     /// Close the active session (spec 12, 52).
-    Close { confirm: bool },
+    Close {
+        confirm: bool,
+    },
     /// Delete a session (spec 12).
-    Delete { confirm: bool },
+    Delete {
+        confirm: bool,
+    },
 }
 
 /// What `/copy` takes (spec §17.3). Reusing the existing hit/copy operations
@@ -224,6 +236,7 @@ pub struct CommandSpec {
 /// Argument shapes the parser knows how to validate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandArgs {
+    ToolRef,
     /// No arguments accepted.
     None,
     /// `/theme <dark|light>`.
@@ -246,6 +259,12 @@ pub enum CommandArgs {
 /// Every command the reducer can execute. Methods added in a later stage must
 /// be listed here only together with their reducer arm.
 pub const COMMANDS: &[CommandSpec] = &[
+    CommandSpec {
+        name: "tool",
+        usage: "/tool <session_id> <loop_id> <request_index> <tool_call_id>",
+        summary: "inspect one exact tool invocation; closing never cancels it",
+        args: CommandArgs::ToolRef,
+    },
     CommandSpec {
         name: "new",
         usage: "/new [form]",
@@ -526,6 +545,21 @@ pub fn parse_command(input: &str) -> Result<LocalCommand, CommandIssue> {
     };
 
     match (spec.name, spec.args) {
+        ("tool", _) => {
+            let fields: Vec<_> = args.split_whitespace().collect();
+            if fields.len() != 4 {
+                return Err(CommandIssue::InvalidArgs(format!("usage: {}", spec.usage)));
+            }
+            let request_index = fields[2]
+                .parse()
+                .map_err(|_| CommandIssue::InvalidArgs(format!("usage: {}", spec.usage)))?;
+            Ok(LocalCommand::Tool(crate::state::tool::ToolKey::new(
+                fields[0],
+                fields[1],
+                request_index,
+                fields[3],
+            )))
+        }
         ("search", _) => {
             let (scope, query) = match args.strip_prefix("full") {
                 Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => {
@@ -621,7 +655,7 @@ mod tests {
     fn the_static_table_drives_parsing_and_completion() {
         for spec in COMMANDS {
             let parsed = parse_command(&format!("/{}", spec.name));
-            if spec.args == CommandArgs::Theme {
+            if matches!(spec.args, CommandArgs::Theme | CommandArgs::ToolRef) {
                 // A required argument: the table still owns the name, and the
                 // bare form reports its usage instead of "unknown command".
                 assert!(
@@ -630,6 +664,12 @@ mod tests {
                     spec.name
                 );
                 assert!(parse_command("/theme dark").is_ok());
+                assert_eq!(
+                    parse_command("/tool ses_1 lup_2 3 call_4"),
+                    Ok(LocalCommand::Tool(crate::state::tool::ToolKey::new(
+                        "ses_1", "lup_2", 3, "call_4"
+                    )))
+                );
             } else {
                 assert!(
                     parsed.is_ok(),

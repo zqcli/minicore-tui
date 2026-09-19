@@ -31,6 +31,7 @@ pub mod settings;
 pub mod status;
 pub mod steer_queue;
 pub mod tool;
+pub mod tool_detail;
 pub mod transcript;
 pub mod user;
 
@@ -91,7 +92,11 @@ pub fn render(frame: &mut Frame, app: &App) {
         return;
     }
     let screen = layout::screen_layout(app, area);
-    transcript::render(frame, screen.transcript, app, &theme);
+    if app.tool_detail().is_some() {
+        tool_detail::render(frame, screen.transcript, app, &theme);
+    } else {
+        transcript::render(frame, screen.transcript, app, &theme);
+    }
 
     if let Some(status_area) = screen.status {
         status::render(frame, status_area, app, &theme);

@@ -12,6 +12,14 @@ use crate::state::selection::{Dock, SessionPanelMode};
 /// side effects; the map never touches the app mutably.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
+    DetailFocus,
+    DetailEscape,
+    DetailTab(i32),
+    DetailScroll(i32),
+    DetailEnd,
+    DetailRefresh,
+    DetailCopy,
+    ClearSelection,
     None,
     /// Leave the TUI (q on Help/Fatal, second Ctrl+C, idle Ctrl+D).
     Quit,
@@ -200,6 +208,63 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
         return settings_keys(key, press, typing, state.submitting);
     }
 
+    if typing && matches!(app.dock, Dock::Composer) {
+        if key.code == KeyCode::F(6) {
+            return if press {
+                Action::DetailFocus
+            } else {
+                Action::None
+            };
+        }
+        if key.code == KeyCode::Esc && app.has_text_selection() {
+            return Action::ClearSelection;
+        }
+        if key.code == KeyCode::Esc
+            && app.focused_region() == crate::state::panels::Focus::Editor
+            && app.slash_completion.is_some()
+        {
+            return Action::CompletionCancel;
+        }
+        if app.tool_detail().is_some() {
+            if key.code == KeyCode::Esc {
+                return Action::DetailEscape;
+            }
+            if app.focused_region() == crate::state::panels::Focus::Main {
+                return match key.code {
+                    KeyCode::Tab if press => Action::DetailTab(1),
+                    KeyCode::BackTab if press => Action::DetailTab(-1),
+                    KeyCode::PageUp => {
+                        Action::DetailScroll(-(i32::from(app.tool_body_area().height).max(1)))
+                    }
+                    KeyCode::PageDown => {
+                        Action::DetailScroll(i32::from(app.tool_body_area().height).max(1))
+                    }
+                    KeyCode::Up => Action::DetailScroll(-1),
+                    KeyCode::Down => Action::DetailScroll(1),
+                    KeyCode::End => Action::DetailEnd,
+                    KeyCode::F(5) => Action::DetailRefresh,
+                    KeyCode::Char('c') if ctrl(&key) && shift(&key) => Action::DetailCopy,
+                    _ => Action::None,
+                };
+            }
+            match key.code {
+                KeyCode::PageUp => return Action::CursorMove(EditorCursor::Up),
+                KeyCode::PageDown => return Action::CursorMove(EditorCursor::Down),
+                KeyCode::End => return Action::LineEnd,
+                _ => {}
+            }
+        } else if app.focused_region() == crate::state::panels::Focus::Main {
+            return match key.code {
+                KeyCode::PageUp => Action::ScrollWindow(-1),
+                KeyCode::PageDown => Action::ScrollWindow(1),
+                KeyCode::Up => Action::ScrollRows(-1),
+                KeyCode::Down => Action::ScrollRows(1),
+                KeyCode::End => Action::ScrollBottom,
+                KeyCode::Esc if press && cancellable => Action::CancelTurn,
+                _ => Action::None,
+            };
+        }
+    }
     if press {
         // `q` quits only from the help panel and the fatal overlay; it is
         // an ordinary character everywhere else (spec 22.1).

@@ -1,7 +1,7 @@
 # Keys And Slash Commands
 
 The keymap is fixed in `src/keymap.rs`. It is pure and compiled into the
-binary; v0.2 has no user keybinding configuration. All key actions become
+binary; there is no user keybinding DSL. All key actions become
 `AppEvent`s and are applied by `App::update`.
 
 ## Global Keys
@@ -20,9 +20,10 @@ binary; v0.2 has no user keybinding configuration. All key actions become
 | `PageUp` / `PageDown` | Scroll the transcript, or page the focused selector/Help/Logs panel. |
 | `Ctrl+Home` / `Ctrl+End` | Jump the transcript to the top or tail. |
 | `Home` / `End` | Move to the composer line start/end; outside the composer, jump the transcript to the top/tail. |
-| `Esc` | Close an open dock; otherwise cancel the active turn from the composer. |
+| `F6` | With the composer dock open, switch focus between the main area and Editor. |
+| `Esc` | Dismiss confirmation/search/selection/completion first, then leave a detail; only the conversation root may cancel the active operation. |
 | `q` | Quit only from Help or the fatal overlay. In the composer it is an ordinary character. |
-| Mouse wheel | Scroll the transcript by three rows, or move a selector by one item. |
+| Mouse wheel | Scroll the conversation by one row (five with Alt), a tool detail by three, or move a selector by one item. |
 
 A release event is ignored. Repeated text and cursor events are accepted;
 one-shot global shortcuts require a key press.
@@ -48,7 +49,31 @@ count and rejects an over-limit insertion. When the session is idle, `Enter`
 submits a new turn. While the loop is in a
 running model/tool state, `Enter` submits a mid-turn steering message via
 `turn.steer`; WaitingForInput and Finishing disable submission. `Esc` remains
-the cancellation action.
+the cancellation action only after higher-priority views/selections are closed.
+
+## Tool Detail (v0.3 E1)
+
+The Tool card's existing click-to-fold behavior is unchanged. Its separate
+`[详情]` title target opens a read-only main-area detail. The exact alternative is
+`/tool <session_id> <loop_id> <request_index> <tool_call_id>`; names and “latest
+Bash” are not identities. The session must be the active one.
+
+The detail keeps the same Editor, per-session draft and one-line Footer.
+Closing restores the conversation scroll state and never sends a cancel.
+
+| Focus/key | Behavior |
+|---|---|
+| Main: `Tab` / `Shift+Tab` | Change the available stdout/stderr/result/input tab; no synthetic Changes tab. |
+| Main: `PageUp` / `PageDown`, arrows, wheel | Scroll only this stream and stop follow-tail. |
+| Main: `End` | Resume this stream's follow-tail. |
+| Main: `F5`, `[刷新]`, or `/refresh` from Editor | Explicitly reread facts and the selected stream from byte zero. Retention may prevent recovering the prefix. |
+| Main: `Ctrl+Shift+C` or `[复制]` | Copy the safe, loaded stream window (not raw control bytes); partial data is disclosed. |
+| `F6` / click Editor | Move focus without submitting anything. Editor retains completion/reasoning keys; its Page keys move its cursor, not the detail. |
+| `Esc` / `← 对话` | Return to the conversation without cancelling the tool. |
+
+Letters, Enter and bracketed paste do not edit or submit the draft while the
+detail main area owns focus. `/cancel` from Editor still explicitly stops the
+current operation through the existing precise TurnRef/compaction path.
 
 ## Session Panel
 
@@ -100,8 +125,8 @@ Unknown commands and invalid arguments produce a local notice and no RPC.
 
 | Command | Behavior |
 |---|---|
-| `/new` | Open a new-session form. |
-| `/resume` / `/sessions` | Open the session selector. |
+| `/new [form]` | Quickly create here using recent explicit settings; `form` opens the full form. |
+| `/resume` / `/sessions` | Continue a browsed session / open the session selector. |
 | `/model` | Open the model selector for a draft or active-session update. |
 | `/reasoning` | Open the reasoning selector for a draft or active-session update. |
 | `/theme dark` / `/theme light` | Change the local palette; no Agent request. |
@@ -111,7 +136,16 @@ Unknown commands and invalid arguments produce a local notice and no RPC.
 | `/close [confirm]` | Close the active session; blocked/unsaved/running sessions require `confirm`. |
 | `/delete [confirm]` | Delete the active session; destructive state requires `confirm`. |
 | `/cancel` | Cancel the active loop with `turn.cancel`; the existing `turn.wait` remains in flight. |
-| `/reload` | Send empty `agent.reload` params, then refresh catalogs and safe active-session state/history without replacing an active turn. |
+| `/reload` | Send empty `agent.reload` params, then refresh catalogs without reloading history. |
+| `/tool <session> <loop> <request_index> <call>` | Open that exact read-only tool detail. |
+| `/refresh` | Refresh the active detail, or explicitly refresh the conversation. |
+| `/search [full] [literal]` | Search loaded content, or explicitly scan a pinned full session. |
+| `/prev` / `/next` / `/latest` | Navigate user prompts. |
+| `/copy [last\|message\|code\|selection]` | Copy loaded conversation content; default is the last completed reply. |
+| `/export [raw] [path]` | Open the explicit bounded export form. |
+| `/rename [title]` | Rename, or open its title dialog. |
+| `/compact` / `/context` | Start manual compaction / read the current context snapshot (not an E2 detail page). |
+| `/settings` / `/editor` | Local preferences / external editing of the current draft only. |
 | `/quit` | Request normal Agent shutdown. |
 
 `/cancel` and `/reload` remain local command entries even when a session is
@@ -119,7 +153,7 @@ Blocked or Finishing; ordinary prompt/steer/update submissions remain refused.
 The internal one-shot `turn.wait` path remains available to the reducer for
 retained-result reconciliation.
 The following are deliberately not implemented: `!command`, `@file`,
-`/fork`, `/branch`, `/compact`, `/steer`, `/queue`, `/settings`, `/login`,
+`/fork`, `/branch`, `/steer`, `/queue`, `/login`,
 `/plugin`, and `/mcp`.
 
 ## Status And Limits
@@ -129,5 +163,5 @@ same shutdown state machine. A live turn is cancelled only with its exact
 `TurnRef`; the TUI then waits for an outcome and reconciles durable history.
 
 Tools run automatically under the Agent. Bash is not sandboxed. The TUI supports
-mid-turn steering via `turn.steer`. There is no approval UI, compaction control,
-live Bash/PTY output, External Editor, or OSC52 copy.
+mid-turn steering via `turn.steer`. Tool detail stdout/stderr are non-PTY byte
+streams, not terminal emulation. There is no approval UI, full PTY, or OSC52 copy.

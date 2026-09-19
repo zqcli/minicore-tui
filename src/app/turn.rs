@@ -662,6 +662,16 @@ impl App {
     /// user-visible input (never silently drop it) and say so.
     pub(super) fn abandon_retry(&mut self, entry: RetryEntry) {
         match entry.kind {
+            RequestKind::ToolDetail {
+                key, generation, ..
+            } => {
+                let now = self.instant_now();
+                if let crate::state::panels::MainView::ToolDetail(detail) = &mut self.main_view {
+                    if detail.key == key && detail.generation == generation {
+                        detail.due = Some(now + Duration::from_millis(500));
+                    }
+                }
+            }
             RequestKind::SendTurn {
                 session_id,
                 local_submission,
@@ -2151,6 +2161,16 @@ impl App {
             } => {
                 self.restore_unsent_turn(&session_id, local_submission);
                 self.notice(NoticeLevel::Warning, format!("turn send failed: {error}"));
+            }
+            RequestKind::ToolDetail {
+                key, generation, ..
+            } => {
+                if let crate::state::panels::MainView::ToolDetail(detail) = &mut self.main_view {
+                    if detail.key == key && detail.generation == generation {
+                        detail.error = Some("tool query was not sent; F5 to retry".to_owned());
+                        detail.due = None;
+                    }
+                }
             }
             RequestKind::SearchRead { .. } | RequestKind::ExportRead { .. } => {}
             RequestKind::WaitTurn(turn) => {

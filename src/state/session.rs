@@ -665,7 +665,7 @@ pub struct RequestConfigEvidence {
 
 /// Scroll bookkeeping for the transcript renderer; the render
 /// phase owns the offset math. New sessions follow the tail by default.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ScrollState {
     pub offset: usize,
     pub follow_tail: bool,

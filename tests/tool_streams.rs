@@ -136,3 +136,54 @@ fn stream_debug_never_logs_content() {
     view.accept_page(&page).unwrap();
     assert!(!format!("{page:?} {view:?}").contains("secret-content"));
 }
+
+#[test]
+fn late_page_eof_cannot_hide_newer_event_bytes() {
+    let mut view = StreamView::new(Stream::Stdout);
+    view.accept_page(&page(0, b"newer", false)).unwrap();
+    let mut stale = page(0, b"", true);
+    stale.availability = Availability::Pending;
+    view.accept_page(&stale).unwrap();
+    assert!(!view.eof);
+    assert_eq!(view.availability, Availability::Available);
+    assert_eq!(view.next_offset, 5);
+    assert_eq!(view.display_text(), "newer");
+}
+
+#[test]
+fn detail_result_pages_share_the_existing_toolfacts_body() {
+    use minicore_tui::state::tool::StreamChunk;
+    use std::sync::Arc;
+    let body: Arc<str> = Arc::from("中🙂".repeat(8000));
+    let mut view = StreamView::new(Stream::Output);
+    let mut page = page(0, b"", true);
+    page.stream = Stream::Output;
+    page.encoding = "utf8".into();
+    page.data = body.to_string();
+    page.next_offset = body.len() as u64;
+    page.observed_end = page.next_offset;
+    view.accept_page_with_result(&page, Some(&body)).unwrap();
+    assert!(view.chunks.iter().all(
+        |chunk| matches!(chunk, StreamChunk::Result { source, .. } if Arc::ptr_eq(source, &body))
+    ));
+    assert_eq!(view.display_text(), body.as_ref());
+}
+
+#[test]
+fn event_gap_does_not_skip_bytes_that_an_authoritative_page_can_recover() {
+    let mut view = StreamView::new(Stream::Stdout);
+    let event = minicore_tui::protocol::ToolProcessChunkWire {
+        stream: Stream::Stdout,
+        encoding: "base64".into(),
+        data: STANDARD.encode(b"tail"),
+        base_offset: 4,
+        next_offset: 8,
+        observed_end: 8,
+        dropped: false,
+        expired: false,
+    };
+    view.accept_event(&event).unwrap();
+    assert_eq!(view.next_offset, 0);
+    view.accept_page(&page(0, b"headtail", true)).unwrap();
+    assert_eq!(view.display_text(), "headtail");
+}

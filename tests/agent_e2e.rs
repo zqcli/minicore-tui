@@ -630,7 +630,11 @@ impl Drop for E2eEnvironment {
 async fn pump_step(process: &mut RpcProcess, app: &mut App) -> Result<(), String> {
     let commands = drain_editor_jobs(app).await?;
     dispatch_commands(process, app, commands).await?;
-    let wait = if editor_job_in_flight() {
+    let wait = if app.tool_detail().is_some() {
+        app.next_tick()
+            .unwrap_or(Duration::from_millis(500))
+            .min(Duration::from_millis(500))
+    } else if editor_job_in_flight() {
         Duration::from_millis(20)
     } else {
         Duration::from_secs(10)
@@ -651,7 +655,10 @@ async fn pump_step(process: &mut RpcProcess, app: &mut App) -> Result<(), String
             // the Agent sent, or a preparation retry would run too early.
             let editor_commands = drain_editor_jobs(app).await?;
             dispatch_commands(process, app, editor_commands).await?;
-            if app.export_running() || matches!(app.dock, Dock::Search(_)) || editor_job_in_flight()
+            if app.export_running()
+                || matches!(app.dock, Dock::Search(_))
+                || editor_job_in_flight()
+                || app.tool_detail().is_some()
             {
                 let commands = app.update(AppEvent::Tick);
                 dispatch_commands(process, app, commands).await?;
@@ -3741,6 +3748,251 @@ async fn type_draft(process: &mut RpcProcess, app: &mut App, text: &str) -> Resu
         AppEvent::Terminal(CrosstermEvent::Paste(text.to_owned())),
     )
     .await
+}
+
+fn enable_bash_profile(env: &E2eEnvironment) {
+    let mut config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&env.config_path).unwrap()).unwrap();
+    config["profiles"]["coding"]["tools"] =
+        toml::Value::Array(vec![toml::Value::String("bash".into())]);
+    std::fs::write(&env.config_path, toml::to_string(&config).unwrap()).unwrap();
+}
+
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; real non-PTY Bash streams and tool detail"]
+fn e2e_tool_detail_drains_real_nonpty_stdout_and_stderr_after_terminal() {
+    use minicore_tui::protocol::ToolDataStreamWire as Stream;
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    enable_bash_profile(&env);
+    let command = "if test -t 1; then printf PTY; else printf PIPE; fi; i=0; while [ $i -lt 8000 ]; do printf '中🙂\\n'; i=$((i+1)); done; printf ERR >&2; exit 7";
+    env._server.enqueue_sse(sse_tool_call_response(
+        "bash_detail",
+        "bash",
+        &json!({"command": command}).to_string(),
+    ));
+    env._server
+        .enqueue_sse(sse_text_response("completed command"));
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async move {
+            let mut process = env.spawn_agent(&agent_bin);
+            let mut app = App::new(env.workspace_path.clone());
+            dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+                .await
+                .unwrap();
+            pump_until(&mut process, &mut app, |app| {
+                app.connection == ConnectionState::Ready
+            })
+            .await
+            .unwrap();
+            let session = create_additional_session(
+                &mut process,
+                &mut app,
+                &env.workspace_path,
+                "tool detail",
+            )
+            .await;
+            dispatch(
+                &mut process,
+                &mut app,
+                AppEvent::SubmitTurn {
+                    session_id: session.clone(),
+                    text: "run synthetic command".into(),
+                },
+            )
+            .await
+            .unwrap();
+            pump_until_with_decode(&mut process, &mut app, |app| {
+                app.active_view()
+                    .is_some_and(|view| view.live.is_none() && view.transcript.complete)
+            })
+            .await
+            .unwrap();
+            let key = app
+                .active_view()
+                .unwrap()
+                .tool_presentations
+                .keys()
+                .find(|key| key.tool_call_id == "bash_detail")
+                .unwrap()
+                .clone();
+            app.composer_mut().set_text("independent draft");
+            let commands = app.open_tool_detail(key.clone());
+            dispatch_commands(&mut process, &mut app, commands)
+                .await
+                .unwrap();
+            pump_until_with_decode(&mut process, &mut app, |app| {
+                app.tool_detail()
+                    .is_some_and(|detail| detail.tab == Stream::Stdout && detail.stream().eof)
+            })
+            .await
+            .unwrap();
+            let stream = app.tool_detail().unwrap().stream();
+            assert_eq!(stream.next_offset, 4 + ("中🙂\n".len() * 8000) as u64);
+            assert_eq!(
+                stream.display_text(),
+                format!("PIPE{}", "中🙂\n".repeat(8000))
+            );
+            let command = app.tool_facts().unwrap().command.as_ref().unwrap();
+            assert_eq!(command.exit_code, Some(7));
+            assert!(command.output_complete);
+            assert!(
+                app.tool_detail().unwrap().error.is_none(),
+                "nonzero exit is not RPC failure"
+            );
+            press_key(&mut process, &mut app, KeyCode::Tab)
+                .await
+                .unwrap();
+            pump_until_with_decode(&mut process, &mut app, |app| {
+                app.tool_detail()
+                    .is_some_and(|detail| detail.tab == Stream::Stderr && detail.stream().eof)
+            })
+            .await
+            .unwrap();
+            assert_eq!(app.tool_detail().unwrap().stream().display_text(), "ERR");
+            press_key(&mut process, &mut app, KeyCode::Esc)
+                .await
+                .unwrap();
+            assert!(app.tool_detail().is_none());
+            assert_eq!(app.composer().content(), "independent draft");
+            assert!(
+                drain_shutdown_strict(&mut process, &mut app)
+                    .await
+                    .unwrap()
+                    .shutdown_ok
+            );
+            process.terminate().await;
+        });
+}
+
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; real Bash cancellation by exact LoopRef"]
+fn e2e_tool_detail_close_does_not_cancel_then_exact_turn_cancel_drains() {
+    use minicore_tui::protocol::ToolDataStreamWire as Stream;
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    enable_bash_profile(&env);
+    env._server.enqueue_sse(sse_tool_call_response(
+        "bash_cancel",
+        "bash",
+        &json!({"command": "printf running; sleep 20; printf should-not-run"}).to_string(),
+    ));
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async move {
+            let mut process = env.spawn_agent(&agent_bin);
+            let mut app = App::new(env.workspace_path.clone());
+            dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+                .await
+                .unwrap();
+            pump_until(&mut process, &mut app, |app| {
+                app.connection == ConnectionState::Ready
+            })
+            .await
+            .unwrap();
+            let session = create_additional_session(
+                &mut process,
+                &mut app,
+                &env.workspace_path,
+                "tool cancellation",
+            )
+            .await;
+            dispatch(
+                &mut process,
+                &mut app,
+                AppEvent::SubmitTurn {
+                    session_id: session.clone(),
+                    text: "run cancellable command".into(),
+                },
+            )
+            .await
+            .unwrap();
+            pump_until(&mut process, &mut app, |app| {
+                app.active_view().is_some_and(|view| {
+                    view.tool_presentations.iter().any(|(key, facts)| {
+                        key.tool_call_id == "bash_cancel" && facts.command.is_some()
+                    })
+                })
+            })
+            .await
+            .unwrap();
+            let key = app
+                .active_view()
+                .unwrap()
+                .tool_presentations
+                .keys()
+                .find(|key| key.tool_call_id == "bash_cancel")
+                .unwrap()
+                .clone();
+            let commands = app.open_tool_detail(key.clone());
+            dispatch_commands(&mut process, &mut app, commands)
+                .await
+                .unwrap();
+            pump_until(&mut process, &mut app, |app| {
+                app.tool_detail()
+                    .is_some_and(|detail| detail.streams[Stream::Stdout.index()].next_offset >= 7)
+            })
+            .await
+            .unwrap();
+            let close = app.update(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+                KeyCode::Esc,
+                KeyModifiers::NONE,
+            ))));
+            assert!(
+                close.is_empty(),
+                "closing a read-only detail must not cancel"
+            );
+            assert!(app.active_view().unwrap().live.is_some());
+            let commands = app.update(AppEvent::CancelTurn {
+                session_id: session.clone(),
+            });
+            let cancel = commands
+                .iter()
+                .find_map(|command| match command {
+                    AppCommand::Rpc(request) if request.method == "turn.cancel" => Some(request),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(cancel.params["session_id"], key.session_id);
+            assert_eq!(cancel.params["loop_id"], key.loop_id);
+            dispatch_commands(&mut process, &mut app, commands)
+                .await
+                .unwrap();
+            pump_until_with_decode(&mut process, &mut app, |app| {
+                app.active_view()
+                    .is_some_and(|view| view.live.is_none() && view.transcript.complete)
+            })
+            .await
+            .unwrap();
+            let commands = app.open_tool_detail(key);
+            dispatch_commands(&mut process, &mut app, commands)
+                .await
+                .unwrap();
+            pump_until_with_decode(&mut process, &mut app, |app| {
+                app.tool_detail()
+                    .is_some_and(|detail| detail.tab == Stream::Stdout && detail.stream().eof)
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                app.tool_detail().unwrap().stream().display_text(),
+                "running"
+            );
+            let command = app.tool_facts().unwrap().command.as_ref().unwrap();
+            assert_eq!(
+                command.status,
+                minicore_tui::protocol::CommandStatusWire::Cancelled
+            );
+            assert!(command.termination_confirmed);
+            assert!(
+                drain_shutdown_strict(&mut process, &mut app)
+                    .await
+                    .unwrap()
+                    .shutdown_ok
+            );
+            process.terminate().await;
+        });
 }
 
 fn compact_status(app: &App, session_id: &str) -> Option<CompactStatusWire> {

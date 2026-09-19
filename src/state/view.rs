@@ -418,6 +418,43 @@ pub struct SectionIndex {
 }
 
 impl SectionIndex {
+    pub fn at_row(&self, row: usize) -> Option<SectionView> {
+        if let Some(layout) = &self.durable {
+            if row >= self.durable_base {
+                let source_row = row - self.durable_base + self.durable_skip;
+                let index = layout
+                    .sections
+                    .partition_point(|section| section.rows.end <= source_row);
+                if let Some(section) = layout
+                    .sections
+                    .get(index)
+                    .filter(|section| section.rows.contains(&source_row))
+                {
+                    return Some(SectionView {
+                        id: section.layout.key.section.clone(),
+                        rows: section.rows.start.saturating_sub(self.durable_skip)
+                            + self.durable_base
+                            ..section.rows.end.saturating_sub(self.durable_skip)
+                                + self.durable_base,
+                        content_columns: section.layout.content_columns.clone(),
+                        collapsible: section.layout.collapsible,
+                        folded: section.layout.folded,
+                    });
+                }
+            }
+        }
+        let index = self.live.partition_point(|section| section.rows.end <= row);
+        self.live
+            .get(index)
+            .filter(|section| section.rows.contains(&row))
+            .map(|section| SectionView {
+                id: section.id.clone(),
+                rows: section.rows.clone(),
+                content_columns: section.content_columns.clone(),
+                collapsible: section.collapsible,
+                folded: section.folded,
+            })
+    }
     pub fn iter(&self) -> impl Iterator<Item = SectionView> + '_ {
         let durable = self
             .durable

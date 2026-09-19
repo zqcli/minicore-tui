@@ -196,7 +196,8 @@ assertions remain, with the usual optimized-code stepping/variable tradeoffs.
 There is no Cell cache. The render budget remains 30 FPS; the Working glyph has
 an independent 100 ms monotonic deadline. Selection auto-scroll retains its own
 50 ms deadline. Idle disarms periodic ticks; a transient scrollbar can arm one
-absolute hide deadline. Large live snapshots still copy history rows.
+absolute hide deadline. Stable history uses shared section layouts, not full
+history-row copies on each delta (see the refactor acceptance evidence).
 
 Live and durable Tool clicks resolve the same full Tool identity and expansion
 policy. Live-only folds discard the combined snapshot without invalidating the
@@ -261,17 +262,52 @@ bounded per batch. `dirty` is cleared only by `AppEvent::Rendered`; idle loops
 have no render deadline, and busy rendering is capped at 30 FPS while spinner
 and expiry work use their own deadlines.
 
+## Tool Detail Ownership (v0.3 E1)
+
+`app/panels.rs` routes the one `MainView::ToolDetail` and concrete
+Main/Editor/Dock/Search/Confirmation focus. It uses the existing App request
+registry and two `QuerySlots`; a full `ToolKey` owns at most one read/output
+request, including across close/reopen and tab changes. Generation/epoch checks
+discard stale results but never release a slot before its real response.
+
+`state/tool.rs::ToolFacts` is still the semantic owner. Invocation, Runtime
+execution, command termination/output completion, and auxiliary recording are
+separate facts. A process command may precede tool.read/execution, so its one
+owner is not conditional on receiving either. Terminal execution cannot regress
+on a late start; conflicting outcomes schedule an authoritative tool.read.
+
+The detail's four `StreamView` windows hold bounded chunks, at most 1 MiB per
+stream and at most 4 MiB for the single open detail (below the 16 MiB global
+stream allowance). Closing releases them. Existing result body Arcs are reused
+when authoritative output bytes match; the detail does not duplicate that
+already-owned body. Only server raw-byte next_offset continues paging. Event
+gaps request the authoritative range; empty gap notices advance to the retained
+start without claiming EOF. Incomplete UTF-8 suffixes are withheld before EOF,
+invalid bytes are replaced for display, and controls never affect raw cursors.
+
+Process hints are throttled to 250 ms; silent-running reads fall back to 500 ms.
+Only the current tab polls. Terminal output still drains to real EOF. A query
+error stops the chain with explicit retry, not recursive fallback. Hidden cards
+do not fetch full streams. There is no stdout/stderr merged timeline.
+
+The existing single serialized layout worker accepts either conversation or
+tool work; there is no second worker/RPC owner or generic panel framework.
+Tool text is decoded/sanitized and indexed by grapheme-safe wrap ranges off the
+update/draw path; render materializes only visible rows. Its retained text/index
+capacity is charged to the existing 48 MiB layout cache budget. Details preserve
+the original Editor/Footer and saved conversation scroll state. Card title
+detail hits share draw geometry; the original card folding target stays intact.
+
 ## Explicit Non-Goals
 
 This frontend intentionally does not implement:
 
 - provider access, Agent loop logic, workspace/store parsing, or shell
   execution;
-- approval UI, follow-up queues, compaction controls, or live Bash
-  stdout/stderr/PTY display;
+- approval UI, implicit cross-loop follow-up queues, or full PTY emulation;
 - MCP, plugins, skills, subagents, remote Agents, session forks/branches, or
   automatic reconnect/restart;
-- External Editor and OSC52 copy in v0.2.
+- OSC52 copy and workspace/changes/context main-area pages (later E slices).
 
 Those omissions are backend and product-boundary decisions, not hidden
 fallbacks. The complete wire boundary is pinned in

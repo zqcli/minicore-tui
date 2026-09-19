@@ -5,6 +5,7 @@
 pub mod catalog;
 pub mod composer;
 pub mod export;
+pub mod panels;
 pub mod search;
 pub mod selection;
 pub mod session;

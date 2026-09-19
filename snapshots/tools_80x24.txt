@@ -9,11 +9,11 @@
  ▎   line 58 of a long file
  ▎   line 59 of a long file
 
- ▎ bash
+ ▎ bash                                                                [详 情 ]
  ▎ bash
  ▎   not allowed
 
- ▎ edit
+ ▎ edit                                                                [详 情 ]
  ▎ edit
  ▎   edit rejected
 
