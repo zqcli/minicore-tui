@@ -85,8 +85,10 @@ pub fn render_file(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 "显示含超长 grapheme 占位；复制无行号/软换行"
             } else if app.focused_region() == crate::state::panels::Focus::Editor {
                 "Editor 焦点 · F6 返回正文 · 保持原输入键 · Esc 返回"
-            } else {
+            } else if app.focused_region() == crate::state::panels::Focus::Main {
                 "正文焦点 · F6 编辑 · Ctrl+N 更多 · F5 刷新 · Esc 返回"
+            } else {
+                "Dock 焦点 · Esc 先关闭 Dock，不会取消执行"
             },
         ),
     ];
@@ -188,6 +190,29 @@ pub fn match_snippet(item: &FileMatch) -> Line<'static> {
     Line::from(spans)
 }
 pub fn render_browser(frame: &mut Frame, area: Rect, b: &WorkspaceBrowser, theme: &Theme) {
+    // Keep IME/caret positioning on the actual input field. The source remains
+    // raw; only the visible safe representation is measured in terminal cells.
+    if area.width > 0 && area.height > 2 {
+        let (prefix, input, row) = if b.scope_focused {
+            (
+                if b.kind == BrowserKind::Files {
+                    "▸ directory: "
+                } else {
+                    "▸ paths: "
+                },
+                b.scope.as_str(),
+                2,
+            )
+        } else {
+            ("▸ query: ", b.query.as_str(), 1)
+        };
+        let cells =
+            crate::markdown::column_width(prefix) + crate::markdown::column_width(&safe(input));
+        frame.set_cursor_position((
+            area.x + cells.min(area.width.saturating_sub(1) as usize) as u16,
+            area.y + row,
+        ));
+    }
     let title = if b.kind == BrowserKind::Files {
         "Files · 引用路径，模型需要时再读 · Enter 插入 / F4 预览"
     } else {

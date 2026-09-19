@@ -496,6 +496,54 @@ fn file_scrollbar_drag_is_local_and_focus_loss_releases_it() {
 }
 
 #[test]
+fn workspace_dock_owns_focus_and_places_ime_caret_by_visible_cells() {
+    use ratatui::{
+        Terminal,
+        backend::{Backend, TestBackend},
+        layout::Rect,
+    };
+    let mut a = app();
+    a.terminal_size = (80, 24);
+    let r = take_requests(file(&mut a, "source")).remove(0);
+    respond(&mut a, &r, page("source", "data", 1, Value::Null, "r"));
+    layout(&mut a);
+    for kind in [BrowserKind::Files, BrowserKind::Grep] {
+        a.open_workspace_browser(kind, "中🙂".into(), false);
+        assert_eq!(
+            a.focused_region(),
+            if kind == BrowserKind::Files {
+                Focus::Dock
+            } else {
+                Focus::Search
+            }
+        );
+        let screen = crate::ui::layout::screen_layout(&a, Rect::new(0, 0, 80, 24));
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|f| crate::ui::render(f, &a)).unwrap();
+        let cursor = terminal.backend_mut().get_cursor_position().unwrap();
+        assert_eq!(cursor.x, screen.panel.x + 13); // nine prefix cells + two wide glyphs
+        assert_eq!(cursor.y, screen.panel.y + 1);
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("Dock"));
+        a.workspace_edit(None, false, true, false);
+        a.workspace_edit(Some("路径"), false, false, false);
+        terminal.draw(|f| crate::ui::render(f, &a)).unwrap();
+        let cursor = terminal.backend_mut().get_cursor_position().unwrap();
+        assert_eq!(cursor.y, screen.panel.y + 2);
+        assert_eq!(
+            cursor.x,
+            screen.panel.x + if kind == BrowserKind::Files { 17 } else { 13 }
+        );
+    }
+}
+
+#[test]
 fn excessive_paths_malformed_ranges_and_candidate_retention_stop_explicitly() {
     let mut a = app();
     a.open_workspace_browser(BrowserKind::Grep, "needle".into(), false);

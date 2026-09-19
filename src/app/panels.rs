@@ -143,6 +143,11 @@ impl App {
         match &self.dock {
             Dock::Composer => self.focus,
             Dock::Search(_) => Focus::Search,
+            Dock::Workspace(browser)
+                if browser.kind == crate::state::workspace::BrowserKind::Grep =>
+            {
+                Focus::Search
+            }
             Dock::SessionSelector(state) if !matches!(state.mode, SessionPanelMode::Browse) => {
                 Focus::Confirmation
             }
