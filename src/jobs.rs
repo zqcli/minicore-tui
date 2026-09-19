@@ -951,6 +951,9 @@ impl LocalJobs {
     }
 
     /// Joins the clipboard job if it already finished and drops its handle.
+    /// Completion-owned jobs are reaped only by [`Self::reap_completion`],
+    /// after their typed completion has been consumed; otherwise a finished
+    /// handle could be released while its event was still queued.
     /// Never waits for a running job, so it is safe on the input path.
     pub async fn reap_finished(&mut self) {
         if self
@@ -961,34 +964,6 @@ impl LocalJobs {
             if let Some(handle) = self.clipboard.take() {
                 let _ = handle.await;
             }
-        }
-        if self
-            .export_task
-            .as_ref()
-            .is_some_and(|handle| handle.is_finished())
-        {
-            if let Some(handle) = self.export_task.take() {
-                let _ = handle.await;
-            }
-        }
-        if self
-            .config_task
-            .as_ref()
-            .is_some_and(|handle| handle.is_finished())
-        {
-            if let Some(handle) = self.config_task.take() {
-                let _ = handle.await;
-            }
-        }
-        if self
-            .editor_task
-            .as_ref()
-            .is_some_and(|handle| handle.is_finished())
-        {
-            if let Some(handle) = self.editor_task.take() {
-                let _ = handle.await;
-            }
-            self.editor_cancel = None;
         }
     }
 
