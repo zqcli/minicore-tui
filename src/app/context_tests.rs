@@ -48,6 +48,19 @@ fn context_idle_and_closed_panel_stop_polling_and_late_only_releases_slot() {
         a.context_polls.is_empty(),
         "panel-only observation stops even when an operation was observed"
     );
+    assert!(a.active_view().unwrap().context.is_none());
+    assert!(
+        a.active_view().unwrap().is_preparing(),
+        "closing the panel does not finish the operation"
+    );
+    let state = a.request_session_state(&"ses_1".into());
+    let state = take_requests(vec![state]).remove(0);
+    respond(
+        &mut a,
+        &state,
+        json!({"session_id":"ses_1","status":"idle","active_loop":null,"block_reason":null}),
+    );
+    assert!(!a.active_view().unwrap().is_preparing());
 }
 #[test]
 fn context_active_polls_obey_foreground_and_background_minimums() {
@@ -251,4 +264,42 @@ fn context_focus_scrollbar_and_exact_automatic_cancel_keep_editor_and_operation(
     assert!(a.detail_escape().is_empty());
     assert!(a.context_panel().is_none());
     assert_eq!(a.composer.content(), "draftx");
+}
+
+#[test]
+fn context_confirmation_resumes_when_retired_read_releases_its_actual_slot() {
+    let mut a = app();
+    let requests = take_requests(a.start_manual_compact());
+    let compact = requests
+        .iter()
+        .find(|r| r.method == "session.compact")
+        .unwrap();
+    let old = requests
+        .iter()
+        .find(|r| r.method == "session.context")
+        .unwrap();
+    assert!(
+        respond(
+            &mut a,
+            compact,
+            json!({"operation_id":compact.params["operation_id"],"status":"failed"})
+        )
+        .is_empty()
+    );
+    assert_eq!(a.queries.in_flight_len(), 1);
+    assert!(
+        a.next_tick().is_none_or(|wait| !wait.is_zero()),
+        "an occupied read must not cause a zero-deadline spin"
+    );
+    let next = take_requests(respond(&mut a, old, fixture("session-context-preparing")));
+    assert_eq!(
+        next.len(),
+        1,
+        "the confirmation is due and must resume after the old read actually finishes"
+    );
+    assert_eq!(next[0].method, "session.context");
+    assert_ne!(next[0].id, old.id);
+    respond(&mut a, &next[0], fixture("session-context-idle"));
+    assert!(a.context_polls.is_empty());
+    assert!(!a.active_view().unwrap().is_preparing());
 }

@@ -208,6 +208,17 @@ impl App {
                     .is_some_and(|p| p.owner == ContextQueryOwner::Panel(c.generation))
                 {
                     self.context_polls.remove(&c.session);
+                    // This was only a panel observation, not B's execution
+                    // or settlement poll. Do not leave an unmaintained active
+                    // context snapshot as a permanent execution fence. The
+                    // authoritative state/operation and local B owner remain.
+                    if let Some(view) = self.sessions.known.get_mut(&c.session) {
+                        if view.context.as_ref().is_some_and(|x| {
+                            x.current_operation.is_some() || x.automatic.current.is_some()
+                        }) {
+                            view.context = None;
+                        }
+                    }
                 }
                 (
                     c.session.clone(),

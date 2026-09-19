@@ -952,7 +952,10 @@ impl App {
                 }
             }
         }
-        for poll in self.context_polls.values() {
+        for (session, poll) in &self.context_polls {
+            if self.context_query_pending(session) {
+                continue;
+            }
             let remaining = poll.due.saturating_duration_since(now);
             earliest = Some(earliest.map_or(remaining, |e| e.min(remaining)));
         }
@@ -1391,6 +1394,10 @@ impl App {
         commands.extend(self.poll_workspace());
         commands.extend(self.poll_changes());
         commands.extend(self.poll_workspace_status());
+        // A newer confirmation can be parked behind a retired context read.
+        // Resume due work when that read actually releases its slot, not only
+        // on a later timer. The poll owner still enforces its real deadline.
+        commands.extend(self.poll_contexts());
         // A queued scan page may have missed the slot that freed before its
         // follow-up drained; both chains retry idempotently while they need a
         // page and no read is in flight.

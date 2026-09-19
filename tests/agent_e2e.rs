@@ -641,7 +641,10 @@ async fn pump_step(process: &mut RpcProcess, app: &mut App) -> Result<(), String
     // before the export captures it, creating a timing-only false failure.
     let wait = if editor_job_in_flight() || app.export_running() {
         Duration::from_millis(20)
-    } else if app.has_main_detail() || app.workspace_browser().is_some() {
+    } else if app.has_main_detail()
+        || app.workspace_browser().is_some()
+        || app.next_tick().is_some()
+    {
         app.next_tick()
             .unwrap_or(Duration::from_millis(500))
             .min(Duration::from_millis(500))
@@ -659,9 +662,9 @@ async fn pump_step(process: &mut RpcProcess, app: &mut App) -> Result<(), String
         // it waits for the next frame. The tick is what retries a queued read
         // slot or a parked export record.
         Err(_) => {
-            // Only the scan/export chains need an idle pass to retry a read
-            // slot or a parked record; other flows must see exactly the events
-            // the Agent sent, or a preparation retry would run too early.
+            // Honor the same deadlines as the real main loop, including B's
+            // parked context confirmation. Tick polls only work whose actual
+            // deadline is due; a quiet transport must not starve that owner.
             let editor_commands = drain_editor_jobs(app).await?;
             dispatch_commands(process, app, editor_commands).await?;
             if app.export_running()
@@ -669,6 +672,7 @@ async fn pump_step(process: &mut RpcProcess, app: &mut App) -> Result<(), String
                 || editor_job_in_flight()
                 || app.has_main_detail()
                 || app.workspace_browser().is_some()
+                || app.next_tick().is_some()
             {
                 let commands = app.update(AppEvent::Tick);
                 dispatch_commands(process, app, commands).await?;
