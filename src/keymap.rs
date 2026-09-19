@@ -12,6 +12,7 @@ use crate::state::selection::{Dock, SessionPanelMode};
 /// side effects; the map never touches the app mutably.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
+    ChangesSelect,
     WorkspaceType(char),
     WorkspaceBackspace,
     WorkspaceClear,
@@ -266,6 +267,7 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
             }
             if app.focused_region() == crate::state::panels::Focus::Main {
                 return match key.code {
+                    KeyCode::Enter if press && app.changes().is_some() => Action::ChangesSelect,
                     KeyCode::Tab if press => Action::DetailTab(1),
                     KeyCode::BackTab if press => Action::DetailTab(-1),
                     KeyCode::PageUp => {
@@ -278,7 +280,10 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
                     KeyCode::Down => Action::DetailScroll(1),
                     KeyCode::End => Action::DetailEnd,
                     KeyCode::F(5) => Action::DetailRefresh,
-                    KeyCode::Char('n') if ctrl(&key) && app.file_preview().is_some() => {
+                    KeyCode::Char('n')
+                        if ctrl(&key)
+                            && (app.file_preview().is_some() || app.changes().is_some()) =>
+                    {
                         Action::FileMore
                     }
                     KeyCode::Char('c') if ctrl(&key) && shift(&key) => Action::DetailCopy,

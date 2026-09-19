@@ -222,6 +222,7 @@ pub enum AppEvent {
     DurableLayoutPrepared(crate::ui::transcript::DurableLayoutResult),
     ToolLayoutPrepared(crate::state::panels::ToolTextLayout),
     FileLayoutPrepared(crate::state::workspace::FileLayout),
+    DiffLayoutPrepared(crate::state::changes::DiffLayout),
     /// One canonical Runtime history item finished in the single serialized
     /// decode worker. The identity is checked before any state mutation.
     HistoryItemDecoded(Box<crate::jobs::DecodeOutcome>),

@@ -121,6 +121,7 @@ impl fmt::Debug for ClipboardText {
 /// resulting requests (e.g. a transcript reload) hit the wire.
 #[derive(Clone, PartialEq, Eq)]
 pub enum LocalCommand {
+    Diff(crate::protocol::changes::ChangeScope),
     Files(String),
     Grep(String),
     Tool(crate::state::tool::ToolKey),
@@ -261,6 +262,12 @@ pub enum CommandArgs {
 /// Every command the reducer can execute. Methods added in a later stage must
 /// be listed here only together with their reducer arm.
 pub const COMMANDS: &[CommandSpec] = &[
+    CommandSpec {
+        name: "diff",
+        usage: "/diff [workspace|session|turn <loop_id>]",
+        summary: "read-only changes; session/turn cover native writes only",
+        args: CommandArgs::OptionalPath,
+    },
     CommandSpec {
         name: "files",
         usage: "/files [path filter]",
@@ -560,6 +567,20 @@ pub fn parse_command(input: &str) -> Result<LocalCommand, CommandIssue> {
 
     match (spec.name, spec.args) {
         ("files", _) => Ok(LocalCommand::Files(args.to_owned())),
+        ("diff", _) => {
+            use crate::protocol::changes::ChangeScope;
+            let fields: Vec<_> = args.split_whitespace().collect();
+            match fields.as_slice() {
+                [] | ["workspace"] => Ok(LocalCommand::Diff(ChangeScope::Workspace)),
+                ["session"] => Ok(LocalCommand::Diff(ChangeScope::Session)),
+                ["turn", id] => Ok(LocalCommand::Diff(ChangeScope::Turn {
+                    loop_id: (*id).into(),
+                })),
+                _ => Err(CommandIssue::InvalidArgs(
+                    "usage: /diff [workspace|session|turn <loop_id>]".into(),
+                )),
+            }
+        }
         ("grep", _) => Ok(LocalCommand::Grep(args.to_owned())),
         ("tool", _) => {
             let fields: Vec<_> = args.split_whitespace().collect();

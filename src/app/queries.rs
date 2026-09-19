@@ -19,6 +19,12 @@ use super::*;
 /// path, or "most recent call" is never a key because those repeat.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum QueryKey {
+    Changes {
+        session_id: String,
+    },
+    WorkspaceStatus {
+        session_id: String,
+    },
     Workspace {
         session_id: String,
         file: bool,
@@ -195,6 +201,7 @@ impl QuerySlots {
 /// read object.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QueryScope {
+    Changes(String),
     Workspace { session_id: String, file: bool },
     Tool(crate::state::tool::ToolKey),
     Session(String),
@@ -205,11 +212,16 @@ impl QueryScope {
     fn matches(&self, key: &QueryKey) -> bool {
         match self {
             Self::All => true,
+            Self::Changes(session) => {
+                matches!(key, QueryKey::Changes { session_id } if session_id == session)
+            }
             Self::Workspace { session_id, file } => {
                 matches!(key, QueryKey::Workspace { session_id: id, file: f } if id == session_id && f == file)
             }
             Self::Tool(tool) => matches!(key, QueryKey::Tool { key } if key == tool),
             Self::Session(session_id) => match key {
+                QueryKey::Changes { session_id: id }
+                | QueryKey::WorkspaceStatus { session_id: id } => id == session_id,
                 QueryKey::Workspace { session_id: id, .. } => id == session_id,
                 QueryKey::Tool { key } => &key.session_id == session_id,
                 QueryKey::History { session_id: id, .. } => id == session_id,
@@ -263,6 +275,14 @@ impl App {
     pub(super) fn drain_query_followups(&mut self, commands: &mut Vec<AppCommand>) {
         while let Some(key) = self.pending_query_followups.pop_front() {
             let command = match key {
+                QueryKey::Changes { .. } => {
+                    commands.extend(self.poll_changes());
+                    None
+                }
+                QueryKey::WorkspaceStatus { .. } => {
+                    commands.extend(self.poll_workspace_status());
+                    None
+                }
                 QueryKey::Workspace { .. } => {
                     commands.extend(self.poll_workspace());
                     None

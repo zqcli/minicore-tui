@@ -341,6 +341,7 @@ enum LayoutWork {
     Conversation(Box<crate::ui::transcript::DurableLayoutRequest>),
     Tool(crate::state::panels::ToolLayoutRequest),
     File(crate::state::workspace::FileLayoutRequest),
+    Diff(crate::state::changes::DiffLayoutRequest),
 }
 
 pub struct LocalJobs {
@@ -383,6 +384,22 @@ impl LocalJobs {
                     request = newer;
                 }
                 let request = match request {
+                    LayoutWork::Diff(request) => {
+                        if let Ok(Some(layout)) = tokio::task::spawn_blocking(move || {
+                            crate::state::changes::DiffLayout::build(request)
+                        })
+                        .await
+                        {
+                            if layout_events
+                                .send(AppEvent::DiffLayoutPrepared(layout))
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        continue;
+                    }
                     LayoutWork::File(request) => {
                         if let Ok(Some(layout)) = tokio::task::spawn_blocking(move || {
                             crate::state::workspace::FileLayout::build(request)
@@ -658,6 +675,13 @@ impl LocalJobs {
         self.try_schedule_layout_work(LayoutWork::Tool(request), cancel)
     }
 
+    pub fn try_schedule_diff_layout(
+        &mut self,
+        request: crate::state::changes::DiffLayoutRequest,
+    ) -> bool {
+        let cancel = request.cancel.clone();
+        self.try_schedule_layout_work(LayoutWork::Diff(request), cancel)
+    }
     pub fn try_schedule_file_layout(
         &mut self,
         request: crate::state::workspace::FileLayoutRequest,

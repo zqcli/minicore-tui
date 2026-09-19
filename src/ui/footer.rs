@@ -108,11 +108,20 @@ fn footer_parts(app: &App, theme: &Theme) -> FooterParts {
         FooterStatus::Ready
     };
     let workspace = workspace_basename(&view.info.workspace);
-    let branch = view
-        .presentation
-        .as_ref()
-        .and_then(|presentation| presentation.git_branch.as_deref())
-        .map(str::to_owned);
+    // A confirmed non-repository retains the plain workspace identity. An
+    // unknown/failed observation has an explicit git? / stale marker instead.
+    let observed = &view.workspace_status;
+    let branch = if !observed.stale
+        && !observed.error
+        && observed
+            .value
+            .as_ref()
+            .is_some_and(|v| v.complete && !v.repo_available)
+    {
+        None
+    } else {
+        Some(observed.label())
+    };
     let model = current_model(view);
     let model = short_model(model);
     let reasoning = current_reasoning(view);

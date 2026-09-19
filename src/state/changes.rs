@@ -57,7 +57,6 @@ impl StatusObservation {
         format!("{} [{suffix}]", value.branch.as_deref().unwrap_or("git?"))
     }
 }
-#[derive(Debug)]
 pub struct ChangesState {
     pub session: String,
     pub epoch: u64,
@@ -73,8 +72,8 @@ pub struct ChangesState {
     pub error: Option<String>,
     pub limited: bool,
     pub detail: Option<DiffState>,
+    pub in_diff: bool,
 }
-#[derive(Debug)]
 pub struct DiffState {
     pub record: ChangeRecord,
     pub comparison: Comparison,
@@ -89,6 +88,22 @@ pub struct DiffState {
     pub follow: bool,
     pub layout: Option<DiffLayout>,
     pub pending: Option<FileLayoutIdentity>,
+}
+impl std::fmt::Debug for ChangesState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChangesState")
+            .field("records", &self.records.len())
+            .field("in_diff", &self.in_diff)
+            .finish()
+    }
+}
+impl std::fmt::Debug for DiffState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiffState")
+            .field("comparison", &self.comparison)
+            .field("bytes", &self.buffer.bytes)
+            .finish()
+    }
 }
 impl DiffState {
     pub fn new(record: ChangeRecord) -> Self {
@@ -174,6 +189,11 @@ impl DiffBuffer {
         // Validate a bounded candidate before publishing any part of a malformed page.
         let mut next = self.clone();
         for h in hunks {
+            if h.old_start.checked_add(h.old_count).is_none()
+                || h.new_start.checked_add(h.new_count).is_none()
+            {
+                return Err("diff hunk range overflow");
+            }
             let key = HunkKey {
                 old_start: h.old_start,
                 old_count: h.old_count,

@@ -3258,6 +3258,11 @@ impl App {
             .sum::<usize>();
         cached
             + self
+                .changes()
+                .and_then(|s| s.detail.as_ref())
+                .and_then(|d| d.layout.as_ref())
+                .map_or(0, crate::state::changes::DiffLayout::retained_bytes)
+            + self
                 .file_preview()
                 .and_then(|file| file.layout.as_ref())
                 .map_or(0, crate::state::workspace::FileLayout::retained_bytes)

@@ -249,6 +249,15 @@ pub(crate) fn open_with(
         .iter()
         .find(|r| r.method == "session.presentation")
         .unwrap();
+    let status = requests
+        .iter()
+        .find(|r| r.method == "workspace.status")
+        .unwrap();
+    take_requests(respond(
+        &mut app,
+        status,
+        json!({"repo_available":false,"head_oid":null,"branch":null,"detached":false,"staged":0,"unstaged":0,"untracked":0,"conflicted":0,"entries":[],"skipped_paths":0,"complete":true,"warnings":[],"consistency":"live","observed_at_unix_ms":1}),
+    ));
     take_requests(respond(&mut app, state, state_json(session_id, "idle")));
     take_requests(respond(
         &mut app,

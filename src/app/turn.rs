@@ -662,6 +662,12 @@ impl App {
     /// user-visible input (never silently drop it) and say so.
     pub(super) fn abandon_retry(&mut self, entry: RetryEntry) {
         match entry.kind {
+            RequestKind::Changes { generation, .. } => self.changes_send_failed(generation),
+            RequestKind::WorkspaceStatus {
+                session_id,
+                epoch,
+                generation,
+            } => self.status_send_failed(&session_id, epoch, generation),
             RequestKind::Workspace {
                 generation, kind, ..
             } => self.workspace_send_failed(generation, kind),
@@ -2158,6 +2164,12 @@ impl App {
         }
         let mut commands = Vec::new();
         match kind {
+            RequestKind::Changes { generation, .. } => self.changes_send_failed(generation),
+            RequestKind::WorkspaceStatus {
+                session_id,
+                epoch,
+                generation,
+            } => self.status_send_failed(&session_id, epoch, generation),
             RequestKind::Workspace {
                 generation, kind, ..
             } => self.workspace_send_failed(generation, kind),

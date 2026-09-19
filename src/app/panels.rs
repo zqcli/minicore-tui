@@ -201,6 +201,12 @@ impl App {
         self.focus = Focus::Editor;
         let (session, epoch, scroll, scope) = match std::mem::take(&mut self.main_view) {
             MainView::Conversation => return,
+            MainView::Changes(s) => (
+                s.session.clone(),
+                s.epoch,
+                s.conversation_scroll,
+                QueryScope::Changes(s.session),
+            ),
             MainView::ToolDetail(detail) => (
                 detail.key.session_id.clone(),
                 detail.epoch,
@@ -232,7 +238,7 @@ impl App {
     pub(super) fn detail_escape(&mut self) -> Vec<AppCommand> {
         if self.selection.is_some() || self.editor_selection.is_some() {
             self.clear_selection();
-        } else {
+        } else if !self.changes_back() {
             self.return_main_detail();
         }
         Vec::new()

@@ -474,6 +474,8 @@ impl App {
     pub(super) fn request_session_id(kind: &RequestKind) -> Option<&str> {
         match kind {
             RequestKind::ToolDetail { key, .. } => Some(&key.session_id),
+            RequestKind::Changes { session_id, .. }
+            | RequestKind::WorkspaceStatus { session_id, .. } => Some(session_id),
             RequestKind::Workspace { session_id, .. }
             | RequestKind::OpenSession { session_id, .. }
             | RequestKind::CloseSession { session_id }
@@ -1670,6 +1672,7 @@ impl App {
         ui_actions::clear_selection(self);
         self.set_active_session(Some(session_id.clone()));
 
+        self.arm_workspace_status(&session_id, true);
         if self.reload.is_some() {
             // The lifecycle ACK crossed the reload boundary. The response
             // supplies metadata only; state still needs fresh post-reload

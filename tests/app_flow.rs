@@ -150,6 +150,9 @@ impl Driver {
     fn commands(&mut self, commands: Vec<AppCommand>) {
         for command in commands {
             match command {
+                AppCommand::Rpc(request) if request.method == "workspace.status" => {
+                    self.respond(request,json!({"repo_available":false,"head_oid":null,"branch":null,"detached":false,"staged":0,"unstaged":0,"untracked":0,"conflicted":0,"entries":[],"skipped_paths":0,"complete":true,"warnings":[],"consistency":"live","observed_at_unix_ms":1}));
+                }
                 AppCommand::Rpc(request) if request.method == "session.presentation" => {
                     let session_id = request.params["session_id"]
                         .as_str()
@@ -199,6 +202,9 @@ impl Driver {
     fn step(&mut self, event: AppEvent) {
         for command in self.app.update(event) {
             match command {
+                AppCommand::Rpc(request) if request.method == "workspace.status" => {
+                    self.respond(request,json!({"repo_available":false,"head_oid":null,"branch":null,"detached":false,"staged":0,"unstaged":0,"untracked":0,"conflicted":0,"entries":[],"skipped_paths":0,"complete":true,"warnings":[],"consistency":"live","observed_at_unix_ms":1}));
+                }
                 AppCommand::Rpc(request) if request.method == "session.presentation" => {
                     let session_id = request.params["session_id"]
                         .as_str()

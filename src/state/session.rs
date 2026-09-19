@@ -181,6 +181,7 @@ pub struct SessionView {
     /// deferred preparation.
     pub context: Option<SessionContextWire>,
     pub context_query_generation: u64,
+    pub workspace_status: crate::state::changes::StatusObservation,
     pub manual_compact: Option<ManualCompactState>,
     /// Read-only Agent presentation snapshot for the footer/detail surface.
     pub presentation: Option<SessionPresentationWire>,
@@ -294,6 +295,7 @@ impl SessionView {
             session_epoch: 0,
             context: None,
             context_query_generation: 0,
+            workspace_status: Default::default(),
             manual_compact: None,
             browsing: false,
             presentation: None,

@@ -13,4 +13,4 @@
  │  tiny  8k context  ✓ tools  • disabled/low              │
  │(2/3)                                                    │
  └─────────────────────────────────────────────────────────┘
- ▸ project · deep · high · ● ready                     ctx ?
+ ▸ project@git? · deep · high · ● ready                ctx ?

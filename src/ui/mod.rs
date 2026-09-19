@@ -11,6 +11,7 @@
 //! conversation snapshot is shared by all transcript consumers.
 
 pub mod assistant;
+pub mod changes;
 pub mod composer;
 pub mod editor_layout;
 pub mod error;
@@ -93,7 +94,9 @@ pub fn render(frame: &mut Frame, app: &App) {
         return;
     }
     let screen = layout::screen_layout(app, area);
-    if app.file_preview().is_some() {
+    if app.changes().is_some() {
+        changes::render(frame, screen.transcript, app, &theme);
+    } else if app.file_preview().is_some() {
         workspace::render_file(frame, screen.transcript, app, &theme);
     } else if app.tool_detail().is_some() {
         tool_detail::render(frame, screen.transcript, app, &theme);

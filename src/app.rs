@@ -53,6 +53,9 @@ use crate::ui::transcript::{
     DurableLayoutIdentity, DurableLayoutRequest, DurableLayoutResult, DurableLayoutSnapshot,
 };
 
+pub mod changes;
+#[cfg(test)]
+mod changes_tests;
 pub mod copy;
 pub mod export;
 pub mod history;
@@ -202,6 +205,17 @@ struct ScrollbarDrag {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequestKind {
     Ping,
+    Changes {
+        session_id: String,
+        epoch: u64,
+        generation: u64,
+        diff: bool,
+    },
+    WorkspaceStatus {
+        session_id: String,
+        epoch: u64,
+        generation: u64,
+    },
     Workspace {
         session_id: String,
         epoch: u64,
@@ -1312,6 +1326,10 @@ impl App {
                 self.install_file_layout(layout);
                 Vec::new()
             }
+            AppEvent::DiffLayoutPrepared(layout) => {
+                self.install_diff_layout(layout);
+                Vec::new()
+            }
             AppEvent::ToolLayoutPrepared(layout) => {
                 self.install_tool_layout(layout);
                 Vec::new()
@@ -1351,6 +1369,8 @@ impl App {
         self.drain_query_followups(&mut commands);
         commands.extend(self.poll_tool_detail());
         commands.extend(self.poll_workspace());
+        commands.extend(self.poll_changes());
+        commands.extend(self.poll_workspace_status());
         // A queued scan page may have missed the slot that freed before its
         // follow-up drained; both chains retry idempotently while they need a
         // page and no read is in flight.
@@ -3541,6 +3561,8 @@ impl App {
             WorkspaceMove(delta) => self.workspace_move(delta),
             WorkspaceSelect(preview) => self.workspace_select(preview),
             WorkspaceMore(refresh) => self.workspace_more(refresh),
+            ChangesSelect => self.changes_select(),
+            FileMore if self.changes().is_some() => self.changes_more(false),
             FileMore => self.file_more(false),
             PreviewReference => self.preview_reference(),
             DetailFocus => {
@@ -3552,9 +3574,12 @@ impl App {
                 Vec::new()
             }
             DetailEscape => self.detail_escape(),
+            DetailTab(step) if self.changes().is_some() => self.changes_tab(step),
             DetailTab(step) => self.detail_tab(step),
             DetailScroll(delta) => {
-                if self.file_preview().is_some() {
+                if self.changes().is_some() {
+                    self.scroll_changes(delta, false);
+                } else if self.file_preview().is_some() {
                     self.scroll_file(delta, false);
                 } else {
                     self.scroll_tool(delta, false);
@@ -3562,7 +3587,9 @@ impl App {
                 Vec::new()
             }
             DetailEnd => {
-                if self.file_preview().is_some() {
+                if self.changes().is_some() {
+                    self.scroll_changes(0, true);
+                } else if self.file_preview().is_some() {
                     self.scroll_file(0, true);
                 } else {
                     self.scroll_tool(0, true);
@@ -3570,8 +3597,10 @@ impl App {
                 Vec::new()
             }
             DetailRefresh if self.file_preview().is_some() => self.file_more(true),
+            DetailRefresh if self.changes().is_some() => self.changes_more(true),
             DetailRefresh => self.refresh_tool_detail(),
             DetailCopy if self.file_preview().is_some() => self.copy_file(),
+            DetailCopy if self.changes().is_some() => self.copy_diff(),
             DetailCopy => self.copy_tool_detail(),
             ClearSelection => {
                 self.clear_selection();
@@ -4212,6 +4241,7 @@ impl App {
             LocalCommand::Logs => self.open_dock(Dock::Logs),
             LocalCommand::Cancel => self.cancel_active_turn(),
             LocalCommand::Context => self.read_context_command(),
+            LocalCommand::Diff(scope) => self.open_changes(scope),
             LocalCommand::Compact => self.start_manual_compact(),
             LocalCommand::Reload => self.reload(),
             LocalCommand::Quit => self.request_shutdown(),
@@ -5515,6 +5545,17 @@ impl App {
             return Vec::new();
         }
         match kind {
+            RequestKind::Changes {
+                session_id,
+                epoch,
+                generation,
+                diff,
+            } => self.on_changes_response(&session_id, epoch, generation, diff, &response),
+            RequestKind::WorkspaceStatus {
+                session_id,
+                epoch,
+                generation,
+            } => self.on_workspace_status(&session_id, epoch, generation, &response),
             RequestKind::Workspace {
                 session_id,
                 epoch,
@@ -7283,7 +7324,16 @@ mod tests {
             json!({"session": session_info(session_id)}),
         );
         let requests = take_requests(commands);
-        assert_eq!(requests.len(), 3);
+        assert_eq!(requests.len(), 4);
+        let status_req = requests
+            .iter()
+            .find(|r| r.method == "workspace.status")
+            .unwrap();
+        take_requests(respond(
+            app,
+            status_req,
+            json!({"repo_available":false,"head_oid":null,"branch":null,"detached":false,"staged":0,"unstaged":0,"untracked":0,"conflicted":0,"entries":[],"skipped_paths":0,"complete":true,"warnings":[],"consistency":"live","observed_at_unix_ms":1}),
+        ));
         let state_req = requests
             .iter()
             .find(|r| r.method == "session.state")
@@ -9148,7 +9198,17 @@ mod tests {
         assert_eq!(create.method, "session.create");
         let commands = respond(&mut app, create, json!({"session": session_info("ses_1")}));
         let requests = take_requests(commands);
-        assert_eq!(requests.len(), 3);
+        assert_eq!(requests.len(), 4);
+        let status = requests
+            .iter()
+            .find(|r| r.method == "workspace.status")
+            .unwrap();
+        take_requests(respond_error(
+            &mut app,
+            status,
+            -32000,
+            "status unavailable",
+        ));
         let state_request = requests
             .iter()
             .find(|r| r.method == "session.state")
