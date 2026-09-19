@@ -7513,7 +7513,7 @@ mod tests {
         app.active_session_mut().unwrap().scroll.offset = target;
         app.capture_scroll_anchor();
         let anchor = app.active_view().unwrap().scroll.anchor.clone().unwrap();
-        app.active_session_mut().unwrap().reasoning_folds.insert(
+        Arc::make_mut(&mut app.active_session_mut().unwrap().reasoning_folds).insert(
             crate::state::view::ReasoningKey::new("loop_reasoning", 0, 0),
             FoldOverride::Collapsed,
         );

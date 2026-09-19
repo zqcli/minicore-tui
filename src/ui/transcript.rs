@@ -31,8 +31,8 @@ pub struct DurableLayoutSnapshot {
     pub session_id: String,
     pub session_epoch: u64,
     pub blocks: Arc<Vec<Arc<TranscriptBlock>>>,
-    pub reasoning_folds: HashMap<crate::state::view::ReasoningKey, FoldOverride>,
-    pub tool_folds: HashMap<ToolKey, FoldOverride>,
+    pub reasoning_folds: Arc<HashMap<crate::state::view::ReasoningKey, FoldOverride>>,
+    pub tool_folds: Arc<HashMap<ToolKey, FoldOverride>>,
     pub tool_presentations: Arc<HashMap<ToolKey, Arc<ToolPresentationState>>>,
     pub tools_expanded: bool,
     pub user_timestamps: Arc<HashMap<usize, String>>,
@@ -75,8 +75,8 @@ impl DurableLayoutSnapshot {
             session_id: view.info.session_id.clone(),
             session_epoch: view.session_epoch,
             blocks: Arc::clone(&view.transcript.blocks),
-            reasoning_folds: view.reasoning_folds.clone(),
-            tool_folds: view.tool_folds.clone(),
+            reasoning_folds: Arc::clone(&view.reasoning_folds),
+            tool_folds: Arc::clone(&view.tool_folds),
             tool_presentations: Arc::clone(&view.tool_presentations),
             tools_expanded: view.tools_expanded,
             user_timestamps: Arc::clone(&view.user_timestamps),
@@ -114,11 +114,11 @@ impl DurableLayoutSource for SessionView {
     }
 
     fn reasoning_folds(&self) -> &HashMap<crate::state::view::ReasoningKey, FoldOverride> {
-        &self.reasoning_folds
+        self.reasoning_folds.as_ref()
     }
 
     fn tool_folds(&self) -> &HashMap<ToolKey, FoldOverride> {
-        &self.tool_folds
+        self.tool_folds.as_ref()
     }
 
     fn tool_presentations(&self) -> &HashMap<ToolKey, Arc<ToolPresentationState>> {

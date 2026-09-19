@@ -712,7 +712,7 @@ impl App {
                 if previous == Some(FoldOverride::Expanded) {
                     return;
                 }
-                view.reasoning_folds
+                Arc::make_mut(&mut view.reasoning_folds)
                     .insert(key.clone(), FoldOverride::Expanded);
                 self.search_fold_restores
                     .push(FoldRestore::Reasoning { key, previous });
@@ -734,7 +734,7 @@ impl App {
                 if previous == Some(FoldOverride::Expanded) {
                     return;
                 }
-                view.tool_folds.insert(key.clone(), FoldOverride::Expanded);
+                Arc::make_mut(&mut view.tool_folds).insert(key.clone(), FoldOverride::Expanded);
                 self.search_fold_restores
                     .push(FoldRestore::Tool { key, previous });
                 view.transcript.invalidate();
@@ -760,10 +760,10 @@ impl App {
                     };
                     match previous {
                         Some(value) => {
-                            view.tool_folds.insert(key, value);
+                            Arc::make_mut(&mut view.tool_folds).insert(key, value);
                         }
                         None => {
-                            view.tool_folds.remove(&key);
+                            Arc::make_mut(&mut view.tool_folds).remove(&key);
                         }
                     }
                     view.transcript.invalidate();
@@ -779,10 +779,10 @@ impl App {
                     };
                     match previous {
                         Some(value) => {
-                            view.reasoning_folds.insert(key, value);
+                            Arc::make_mut(&mut view.reasoning_folds).insert(key, value);
                         }
                         None => {
-                            view.reasoning_folds.remove(&key);
+                            Arc::make_mut(&mut view.reasoning_folds).remove(&key);
                         }
                     }
                     view.transcript.invalidate();

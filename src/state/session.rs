@@ -280,8 +280,8 @@ pub struct SessionView {
     /// retain the table without cloning large tool result/display strings.
     pub tool_presentations: Arc<HashMap<ToolKey, Arc<ToolFacts>>>,
     /// Stable per-section fold choices. These are local UI state only.
-    pub tool_folds: HashMap<ToolKey, FoldOverride>,
-    pub reasoning_folds: HashMap<ReasoningKey, FoldOverride>,
+    pub tool_folds: Arc<HashMap<ToolKey, FoldOverride>>,
+    pub reasoning_folds: Arc<HashMap<ReasoningKey, FoldOverride>>,
     /// This session's own draft: text, cursor, undo/redo, paste markers and
     /// editor revision. Switching sessions swaps the whole composer, never a
     /// text-only copy (spec §10.3, §12).
@@ -332,8 +332,8 @@ impl SessionView {
             gap_revision: 0,
             tools_expanded: false,
             tool_presentations: Arc::new(HashMap::new()),
-            tool_folds: HashMap::new(),
-            reasoning_folds: HashMap::new(),
+            tool_folds: Arc::new(HashMap::new()),
+            reasoning_folds: Arc::new(HashMap::new()),
             composer: crate::state::composer::Composer::default(),
         }
     }

@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
@@ -1596,7 +1597,7 @@ impl App {
                             return;
                         };
                         let expanded = !current;
-                        view.tool_folds.insert(
+                        Arc::make_mut(&mut view.tool_folds).insert(
                             key,
                             if expanded {
                                 FoldOverride::Expanded
@@ -1624,7 +1625,7 @@ impl App {
                             .reasoning_folds
                             .get(&key)
                             .is_some_and(FoldOverride::expanded);
-                        view.reasoning_folds.insert(
+                        Arc::make_mut(&mut view.reasoning_folds).insert(
                             key,
                             if expanded {
                                 FoldOverride::Expanded
@@ -1673,7 +1674,7 @@ pub(super) fn set_all_tools_expanded(view: &mut SessionView, expanded: bool) {
         }
     }
     for key in keys {
-        view.tool_folds.insert(
+        Arc::make_mut(&mut view.tool_folds).insert(
             key,
             if expanded {
                 FoldOverride::Expanded
@@ -1969,7 +1970,7 @@ pub(super) fn toggle_tool(
             }
         }
     }
-    view.tool_folds.insert(
+    Arc::make_mut(&mut view.tool_folds).insert(
         key,
         if expanded {
             FoldOverride::Expanded
@@ -2038,7 +2039,7 @@ pub(super) fn toggle_reasoning_section(
         .reasoning_folds
         .get(&key)
         .is_none_or(|override_| !override_.expanded());
-    view.reasoning_folds.insert(
+    Arc::make_mut(&mut view.reasoning_folds).insert(
         key,
         if expanded {
             FoldOverride::Expanded

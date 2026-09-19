@@ -1066,15 +1066,10 @@ fn durable_tool_fold_override_is_honored_by_the_prepared_transcript() {
     app.update(AppEvent::ToggleTools {
         session_id: "ses_1".to_owned(),
     }); // collapse everything
-    app.sessions
-        .known
-        .get_mut("ses_1")
-        .unwrap()
-        .tool_folds
-        .insert(
-            crate::state::tool::ToolKey::new("ses_1", "loop_1", 0, "call-1"),
-            crate::state::view::FoldOverride::Expanded,
-        );
+    std::sync::Arc::make_mut(&mut app.sessions.known.get_mut("ses_1").unwrap().tool_folds).insert(
+        crate::state::tool::ToolKey::new("ses_1", "loop_1", 0, "call-1"),
+        crate::state::view::FoldOverride::Expanded,
+    );
     let prepared = crate::ui::transcript::prepare_conversation(&app, 79);
     let tool_sections: Vec<_> = prepared
         .sections
@@ -1097,12 +1092,7 @@ fn durable_tool_fold_override_is_honored_by_the_prepared_transcript() {
     );
     // Without the override the same card defaults to folded (60-line result), so
     // the fold override alone must be the thing widening it.
-    app.sessions
-        .known
-        .get_mut("ses_1")
-        .unwrap()
-        .tool_folds
-        .clear();
+    std::sync::Arc::make_mut(&mut app.sessions.known.get_mut("ses_1").unwrap().tool_folds).clear();
     let prepared_collapsed = crate::ui::transcript::prepare_conversation(&app, 79);
     let read_section_collapsed = prepared_collapsed
         .sections
