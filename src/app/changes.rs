@@ -405,8 +405,8 @@ impl App {
             d.wanted = false;
             d.pending = None;
         }
-        self.queries
-            .invalidate_scope(&QueryScope::Changes(s.session.clone()));
+        let session = s.session.clone();
+        self.invalidate_query_scope(&QueryScope::Changes(session));
         true
     }
     pub(super) fn changes_tab(&mut self, step: i32) -> Vec<AppCommand> {

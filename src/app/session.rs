@@ -817,6 +817,9 @@ impl App {
             self.pending_requests.insert(id, RequestKind::StaleRead);
         }
         self.context_polls.remove(session_id);
+        self.invalidate_query_scope(&crate::app::queries::QueryScope::Session(
+            session_id.to_owned(),
+        ));
         if let Some(view) = self.sessions.known.get_mut(session_id) {
             view.context_query_generation = view
                 .context_query_generation
@@ -1553,10 +1556,9 @@ impl App {
         }
         match response.parse_delete() {
             Ok(_) => {
-                self.queries
-                    .invalidate_scope(&crate::app::queries::QueryScope::Session(
-                        session_id.clone(),
-                    ));
+                self.invalidate_query_scope(&crate::app::queries::QueryScope::Session(
+                    session_id.clone(),
+                ));
                 for (id, request) in &mut self.pending_requests {
                     if Self::request_session_id(request) == Some(session_id.as_str())
                         && self.queries.owns_request(*id)

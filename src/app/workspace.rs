@@ -194,7 +194,7 @@ impl App {
     pub(super) fn close_workspace_browser(&mut self) {
         if let Some(browser) = self.workspace_browser() {
             let session = browser.session.clone();
-            self.queries.invalidate_scope(&QueryScope::Workspace {
+            self.invalidate_query_scope(&QueryScope::Workspace {
                 session_id: session,
                 file: false,
             });
@@ -342,7 +342,7 @@ impl App {
         let return_target = match std::mem::replace(&mut self.dock, Dock::Composer) {
             Dock::Workspace(mut browser) => {
                 browser.due = None;
-                self.queries.invalidate_scope(&QueryScope::Workspace {
+                self.invalidate_query_scope(&QueryScope::Workspace {
                     session_id: browser.session.clone(),
                     file: false,
                 });

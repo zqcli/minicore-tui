@@ -189,6 +189,10 @@ impl QuerySlots {
             }
         }
         self.waiting = retained;
+        // Keep the index exact even if a future admission path changes the
+        // queue representation. In-flight ownership is intentionally left
+        // alone: only its real response can release that slot.
+        self.waiting_set.retain(|key| !scope.matches(key));
     }
 
     /// Whether a refresh was requested for `key` while it was in flight.
@@ -239,6 +243,15 @@ impl QueryScope {
 }
 
 impl App {
+    /// Invalidates every queued intent for a query scope, including follow-up
+    /// keys already detached from `QuerySlots` by a completed response.
+    /// In-flight request ownership remains until the matching response arrives.
+    pub(super) fn invalidate_query_scope(&mut self, scope: &QueryScope) {
+        self.queries.invalidate_scope(scope);
+        self.pending_query_followups
+            .retain(|key| !scope.matches(key));
+    }
+
     /// Releases the read-only slot owned by a finished request. A key that was
     /// asked to refresh while in flight runs once more, so a burst of requests
     /// coalesces into at most one follow-up read (spec §5.3).
@@ -535,6 +548,64 @@ mod tests {
             slots.on_query_finished(RequestId(1)),
             Some((history("ses_1"), false, None)),
             "a closed view does not schedule a follow-up read"
+        );
+    }
+
+    #[test]
+    fn invalidating_a_scope_drops_ready_and_waiting_keys_but_not_other_sessions() {
+        let mut slots = QuerySlots::new();
+        slots.request_query(history("ses_1"), RequestId(1));
+        slots.request_query(history("ses_2"), RequestId(2));
+        assert_eq!(
+            slots.request_query(
+                QueryKey::Context {
+                    session_id: "ses_1".to_owned(),
+                    generation: 1,
+                },
+                RequestId(3),
+            ),
+            QueryAdmission::Busy
+        );
+        assert_eq!(
+            slots.request_query(
+                QueryKey::Context {
+                    session_id: "ses_2".to_owned(),
+                    generation: 1,
+                },
+                RequestId(4),
+            ),
+            QueryAdmission::Busy
+        );
+
+        slots.invalidate_scope(&QueryScope::Session("ses_1".to_owned()));
+        assert_eq!(slots.waiting_len(), 1, "the other session remains queued");
+        assert_eq!(
+            slots.on_query_finished(RequestId(1)),
+            Some((
+                history("ses_1"),
+                false,
+                Some(QueryKey::Context {
+                    session_id: "ses_2".to_owned(),
+                    generation: 1,
+                })
+            )),
+            "only the non-invalidated key becomes ready"
+        );
+        assert_eq!(slots.waiting_len(), 0);
+    }
+
+    #[test]
+    fn app_scope_invalidation_removes_detached_followups_after_close_or_reopen() {
+        let mut app = crate::app::App::new(std::path::PathBuf::from("/project"));
+        app.pending_query_followups.push_back(history("ses_1"));
+        app.pending_query_followups.push_back(history("ses_2"));
+
+        app.invalidate_query_scope(&QueryScope::Session("ses_1".to_owned()));
+
+        assert_eq!(
+            app.pending_query_followups.into_iter().collect::<Vec<_>>(),
+            vec![history("ses_2")],
+            "a detached follow-up must not survive a session lifecycle boundary"
         );
     }
 

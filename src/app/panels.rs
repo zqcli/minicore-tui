@@ -249,7 +249,7 @@ impl App {
                 },
             ),
         };
-        self.queries.invalidate_scope(&scope);
+        self.invalidate_query_scope(&scope);
         if let Some(view) = self
             .sessions
             .known
