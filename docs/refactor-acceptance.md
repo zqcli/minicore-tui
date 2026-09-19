@@ -35,9 +35,9 @@ workload; reruns can vary with host scheduling, and they are not terminal
 input-to-frame latency.
 
 Current-tree validation also passed Rust 1.85.0 `fmt --check`,
-`test --locked --all-targets --no-fail-fast` (457 library tests, all binary and
-integration suites with zero failures), and Clippy with `-D warnings`. The real
-Agent 0.5 serial run passed 22/22 tests. The six ignored release performance
+`test --locked --all-targets --no-fail-fast` (676 passed, 0 failed, 34 ignored)
+and Clippy with `-D warnings`. The real Agent 0.5 serial run passed 26/26
+tests (22 pre-existing + 4 D1 scenarios). The six ignored release performance
 workloads also passed.
 
 | ID | Required behavior | Status | Evidence / remaining work |
@@ -53,7 +53,7 @@ workloads also passed.
 | REF-09 | `session.read` reconstructs Runtime items across UTF-8 pages | **Passed** | `tests/read_chunks.rs` plus Agent fixtures; assembler now emits encoded items and production JSON decode is owned by `LocalJobs`. |
 | REF-10 | Pinned prefix, cursor offsets, and new-pin rules | **Passed** | Read-chain pin/cursor tests. |
 | REF-11 | Session-global and Turn-local indexes stay separate | **Passed** | History/result window tests. |
-| REF-12 | Read-only browse does not open a Session or require Workspace | **Not run** | Stage E. |
+| REF-12 | Read-only browse does not open a Session or require Workspace | **Passed** | `Ctrl+B` browse issues `session.read` only; a real-Agent E2E browses a closed session after its workspace directory was deleted and its model's provider became unreachable (`e2e_browse_closed_session_survives_deleted_workspace_and_dead_model`), plus reducer tests for no-`session.open`, explicit continue and draft retention. |
 | REF-13 | Large/missing/records-truncated/trailing-incomplete data is never fabricated | **Passed** | Bounded placeholder and malformed-page tests. |
 | REF-14 | Deferred send has visible preparation and no automatic resend | **Passed** | B2 reducer and Agent preparation E2E. |
 | REF-15 | Cancellation routes by exact operation ID or TurnRef | **Passed** | Operation ownership and cancellation tests. |
@@ -66,8 +66,8 @@ workloads also passed.
 | REF-22 | Failed save remains readable and Blocked/unknown facts are retained | **Passed** | Persistence-failure/result-retention tests. |
 | REF-23 | Cancel does not claim rollback; close retains in-flight result | **Passed** | Lifecycle tests. |
 | REF-24 | Reload does not stage or replace History/Live/draft state | **Passed** | Catalog-only reload tests and Agent E2E. |
-| REF-25 | Per-session drafts, undo, paste, and cursor are independent | **Not run** | Per-session draft workflow is D scope and has not been covered. |
-| REF-26 | New/continue/rename/delete are explicit and project-safe | **Not run** | Reducer coverage exists; final workflow coverage is not complete. |
+| REF-25 | Per-session drafts, undo, paste, and cursor are independent | **Passed** | Each `SessionView` owns a whole `Composer` swapped on session change; reducer tests cover text/cursor/undo/paste markers plus the all-drafts admission budget (no silent truncation, one warning), and `e2e_session_switch_keeps_drafts_and_running_background_loop` proves independent drafts and a surviving background loop against the real Agent. |
+| REF-26 | New/continue/rename/delete are explicit and project-safe | **Passed** | `/new` quick-creates in the current workspace with the catalog's recent explicit configuration (`/new form` and Ctrl+N keep the custom form); `--session <id>` is exact and `--continue` matches only the current workspace with a selector fallback; `/rename` uses the mutation-safe path; `/delete` is closed-only with an explicit confirm. Reducer tests plus `e2e_new_form_rename_close_delete_commands` and `e2e_startup_selection_opens_without_auto_prompt` (no auto-send, no cross-project guess) cover it. |
 | REF-27 | One shared body owner and one ToolKey projection index | **Passed** | `tool_result_body_is_one_arc_across_live_history_and_presentation` proves ptr-equal body ownership across durable/live/presentation plus shared display ownership and weak-pointer release; ToolKey lookup remains indexed. |
 | REF-28 | Live update has zero full-history clone and zero stable re-layout | **Passed** | C2b/C2c structural probes measured 1000 deltas, zero layout calls, zero historical text cloning, and viewport-only materialization. |
 | REF-29 | Viewport/click/copy share layout; soft-wrap adds no copied newline | **Passed** | Shared immutable layout, SourceMap hard/soft-break tests, CJK/emoji/code-indent/blank-line/link tests, grapheme tests, and an unloaded-placeholder non-copy test. |
@@ -93,7 +93,7 @@ workloads also passed.
 | REF-49 | Logs contain no message/command/result/file/secret content | **Passed** | Content-free stderr/debug logging tests. |
 | REF-50 | All cache/queue owners are bounded and background sessions release bodies | **Passed** | Budget tests cover viewport/neighbor/recent-result protection, farthest-first active-head eviction under the 32 MiB cap, 48 MiB layout eviction, background-first ordering, and weak-pointer release of history/layout owners; RSS remains an observation, not a mathematical proof. |
 | REF-51 | Existing CJK/IME/mouse/scrollbar/terminal restore behavior | **Passed** | UI, Rail, terminal, and snapshot tests. |
-| REF-52 | Common command table/completion/help stay consistent | **Failed** | The command surface still has known divergence; D scope. |
+| REF-52 | Common command table/completion/help stay consistent | **Passed** | `command::COMMANDS` is the single static table driving parsing, completion and the help panel; tests assert every table entry parses and is offered, unlisted names are unknown, and the help panel renders every entry. |
 | REF-53 | No approval/plugin/Subagent/PTY/Git-write/auto-reconnect feature | **Passed** | Source audit. |
 | REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Not run** | 22/22 current Agent E2E covers read/tool/compact and lifecycle paths; workspace file/changes/diff workflows are D/E scope and not covered. |
 | REF-55 | Rust 1.85/stable and original tests on three platforms | **Not run** | Rust 1.85 remote Linux is authoritative; current-tree stable/macOS/Windows coverage is not complete. |
@@ -101,9 +101,9 @@ workloads also passed.
 
 ## Counts
 
-- **Passed**: 34
-- **Failed**: 1
-- **Not run**: 21
+- **Passed**: 38
+- **Failed**: 0
+- **Not run**: 18
 - **Not applicable**: 0
 
 ## C Status
@@ -117,6 +117,32 @@ workloads also passed.
   boundary. Exact allocator/RSS accounting is not claimed.
 - **D/E**: Search/export/workspace workflows are intentionally not started and
   must not be reported as C defects.
+
+## D Status
+
+Stage D1 (per-session drafts, read-only browse, command surface) is complete
+for the criteria below, on the tree validated by the logs above:
+
+- **D1a per-session Composer**: **Passed.** Whole-composer swap on session
+  change, scratch owner for no-session drafts, and a real admission budget:
+  at 8 MiB retained across all drafts further typing/pasting is refused with
+  one explicit warning and existing drafts are never truncated.
+- **D1b read-only browse and startup selection**: **Passed.** Browse uses
+  `session.read` alone after a closed session's workspace is deleted and its
+  model is unusable; continuing is the explicit `Ctrl+G`/`/resume` action that
+  opens without sending, and an open failure keeps the history and draft.
+  `--session`/`--continue` never auto-prompt and never guess across projects.
+- **D1c commands**: **Passed.** `/new` quick create with the current workspace
+  and recent explicit configuration, `/new form` custom form, `/rename`
+  mutation-safe rename, `/refresh` (view data) separate from `/reload`
+  (configuration), `/clear` local reread, `/close` result reception and
+  closed-only `/delete confirm`.
+- **D1d command table**: **Passed.** One static table drives parse, help and
+  completion; no unimplemented command is advertised.
+- **D2 search/export, E panels, stable/macOS/Windows**: **Not run**, not
+  started.
+- **D1 review**: the parent/independent review of these commits has not been
+  recorded here; "Passed" reflects the current tree's own measured evidence.
 
 ## Current C2c Follow-ups
 
