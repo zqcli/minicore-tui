@@ -3527,6 +3527,10 @@ impl App {
                 .reasoning_folds
                 .keys()
                 .any(|key| !reasoning_keys.contains(key))
+                // During a replacement read, blocks and the authoritative
+                // window are temporarily out of sync; pruning here would
+                // discard valid local folds before the new page is installed.
+                && !view.history_read.is_loading()
             {
                 Arc::make_mut(&mut view.reasoning_folds)
                     .retain(|key, _| reasoning_keys.contains(key));

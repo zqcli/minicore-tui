@@ -309,7 +309,8 @@ impl App {
         }) {
             tabs.push(Stream::Output);
         }
-        if facts.invocation.is_some()
+        if facts.input_available
+            || facts.invocation.is_some()
             || facts.execution.as_ref().is_some_and(|execution| {
                 matches!(
                     execution.input_availability,
@@ -509,6 +510,7 @@ impl App {
         let key = ToolKey::from(&invocation.tool_ref);
         let name = invocation.name.clone();
         if let Some(facts) = self.tool_facts_mut(&key, &name) {
+            facts.input_available = true;
             facts.invocation = Some(Arc::new(invocation));
         }
     }

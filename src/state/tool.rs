@@ -363,6 +363,7 @@ pub struct ToolFacts {
     pub status: ToolStatus,
     pub outcome: Option<crate::protocol::ToolOutcomeWire>,
     pub needs_read: bool,
+    pub input_available: bool,
     pub conflict: Option<ToolConflict>,
     pub invocation: Option<Arc<crate::protocol::ToolInvocationWire>>,
     pub execution: Option<Arc<crate::protocol::ToolExecutionWire>>,
@@ -394,6 +395,7 @@ impl ToolFacts {
             status: ToolStatus::Pending,
             outcome: None,
             needs_read: false,
+            input_available: false,
             conflict: None,
             invocation: None,
             execution: None,
@@ -409,6 +411,10 @@ impl ToolFacts {
         if self.is_terminal() && !execution.state.is_terminal() {
             return;
         }
+        self.input_available |= matches!(
+            execution.input_availability,
+            Availability::Available | Availability::Partial | Availability::Expired
+        );
         if !authoritative && self.is_terminal() && self.outcome != execution.outcome {
             if let Some(outcome) = execution.outcome {
                 self.accept_finished(outcome, None, execution.result_truncated);
@@ -648,6 +654,7 @@ mod tests {
             status: ToolStatus::Pending,
             outcome: None,
             needs_read: false,
+            input_available: false,
             conflict: None,
             invocation: None,
             execution: None,

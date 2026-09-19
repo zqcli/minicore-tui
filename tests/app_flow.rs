@@ -759,7 +759,7 @@ fn submit_command(driver: &mut Driver, command: &str) {
 
 fn assert_startup_header(app: &App, expected: bool) {
     assert_eq!(
-        rendered_text(app, 80, 24).contains("MINICORE  v0.2.8"),
+        rendered_text(app, 80, 24).contains("MINICORE  v0.3.0"),
         expected
     );
 }
@@ -868,7 +868,7 @@ fn new_session_and_empty_created_session_keep_startup_header() {
     );
 
     let old_screen = rendered_text(&driver.app, 80, 24);
-    assert!(!old_screen.contains("MINICORE  v0.2.8"));
+    assert!(!old_screen.contains("MINICORE  v0.3.0"));
     assert_eq!(driver.app.sessions.active.as_deref(), Some("ses_1"));
 
     // `/new` now creates quickly with the current workspace and the recent
@@ -883,7 +883,7 @@ fn new_session_and_empty_created_session_keep_startup_header() {
     submit_command(&mut driver, "/new form");
     let form_screen = rendered_text(&driver.app, 120, 40);
     for expected in [
-        "MINICORE  v0.2.8",
+        "MINICORE  v0.3.0",
         "Coding agent TUI",
         "Open a session — /new, Ctrl+R, or F1 for help",
         "New session",
@@ -935,19 +935,19 @@ fn new_session_and_empty_created_session_keep_startup_header() {
     driver.respond(create, json!({"session": session("ses_2")}));
     assert_eq!(driver.app.sessions.active.as_deref(), Some("ses_2"));
     assert!(
-        !rendered_text(&driver.app, 80, 24).contains("MINICORE  v0.2.8"),
+        !rendered_text(&driver.app, 80, 24).contains("MINICORE  v0.3.0"),
         "an empty history still loading must not look confirmed empty"
     );
 
     driver.respond_method("session.read", history(Vec::new(), None, 0));
     assert!(
-        !rendered_text(&driver.app, 80, 24).contains("MINICORE  v0.2.8"),
+        !rendered_text(&driver.app, 80, 24).contains("MINICORE  v0.3.0"),
         "empty history cannot confirm the header while session state is unknown"
     );
     driver.respond_method("session.state", state("ses_2", "idle", Value::Null));
     let empty_screen = rendered_text(&driver.app, 80, 24);
     for expected in [
-        "MINICORE  v0.2.8",
+        "MINICORE  v0.3.0",
         "Coding agent TUI",
         "Open a session — /new, Ctrl+R, or F1 for help",
     ] {
@@ -976,7 +976,7 @@ fn new_session_and_empty_created_session_keep_startup_header() {
         text: "pending prompt".to_owned(),
     });
     assert!(
-        !rendered_text(&driver.app, 80, 24).contains("MINICORE  v0.2.8"),
+        !rendered_text(&driver.app, 80, 24).contains("MINICORE  v0.3.0"),
         "a live prompt without output must not make the header flicker back"
     );
 }
@@ -1087,7 +1087,7 @@ fn session_footer_new_invalidates_prepared_header_cache() {
     )));
     assert!(driver.app.new_session().is_some());
     assert!(driver.app.prepared_conversation(79).is_none());
-    assert!(rendered_text(&driver.app, 120, 40).contains("MINICORE  v0.2.8"));
+    assert!(rendered_text(&driver.app, 120, 40).contains("MINICORE  v0.3.0"));
 }
 
 #[test]
@@ -8797,6 +8797,10 @@ fn export_page(index: usize, item: &Value, next: Option<usize>, total: usize) ->
 /// body for every queued item, mirroring `main.rs`'s decode hand-off.
 fn export_advance(driver: &mut Driver, page: Value) {
     let request = driver.request("session.read");
+    export_advance_request(driver, request, page);
+}
+
+fn export_advance_request(driver: &mut Driver, request: OutgoingRequest, page: Value) {
     driver.respond(request, page);
     while let Some(decode) = driver.app.pending_decode_request() {
         let spec = decode
@@ -9072,7 +9076,8 @@ fn a_target_created_during_an_export_is_not_overwritten() {
     // now, after the writer's pre-flight check.
     let request = driver.request("session.read");
     std::fs::write(&target, "created during export").expect("interloper target");
-    driver.respond(
+    export_advance_request(
+        &mut driver,
         request,
         export_page(0, &user(0, "loop_1", "hello"), None, 1),
     );
