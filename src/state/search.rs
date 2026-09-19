@@ -111,6 +111,11 @@ pub struct SearchCoverage {
     pub truncated: bool,
     pub records_truncated: bool,
     pub stopped: bool,
+    /// Why a strict validation rule ended the scan early (stale pin, large item
+    /// that cannot be searched, a page that failed validation). It is shown
+    /// with the coverage so an incomplete scan is never read as a global
+    /// no-match (spec §17.1).
+    pub stopped_reason: Option<String>,
     pub complete: bool,
 }
 
@@ -148,7 +153,10 @@ impl SearchCoverage {
             parts.push("turn records truncated".to_owned());
         }
         if self.stopped {
-            parts.push("stopped early — coverage is partial".to_owned());
+            match self.stopped_reason.as_deref() {
+                Some(reason) => parts.push(format!("stopped early — {reason}")),
+                None => parts.push("stopped early — coverage is partial".to_owned()),
+            }
         }
         if self.truncated {
             parts.push(format!("first {MAX_SEARCH_MATCHES} matches shown"));

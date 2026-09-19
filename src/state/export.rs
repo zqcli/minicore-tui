@@ -6,7 +6,9 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::protocol::read::{RawHistoryItem, RuntimeAssistantPart, RuntimeItem, RuntimeUserKind};
+use crate::protocol::read::{
+    RawHistoryItem, ReadChunk, RuntimeAssistantPart, RuntimeItem, RuntimeUserKind,
+};
 use crate::safe_text::safe_display;
 
 /// The raw-item ceiling above which a read yields a placeholder instead of a
@@ -20,6 +22,11 @@ pub const EXPORT_OVERSIZED_NOTE: &str = "oversized history item: not exported";
 pub struct ExportSpec {
     pub include_thinking: bool,
     pub include_tool: bool,
+    /// Stream items above the automatic decode ceiling as their raw sanitized
+    /// Runtime JSON chunks instead of writing a placeholder (spec §17.4). The
+    /// 8 MiB automatic decode ceiling itself is never raised: a raw item is
+    /// never typed-decoded, only byte-verified and copied.
+    pub raw_oversized: bool,
 }
 
 /// Everything that keeps an export from claiming to be the complete
@@ -31,6 +38,15 @@ pub struct ExportLimitations {
     pub oversized_items: usize,
     pub opaque_parts: usize,
     pub unsaved_turns: usize,
+    /// Items above the auto-decode ceiling that were streamed verbatim as raw
+    /// sanitized Runtime JSON (never typed-decoded).
+    pub raw_items: usize,
+    /// A raw item whose chunk byte count/offset/complete did not agree: its
+    /// bytes are not claimed to be a complete item.
+    pub raw_mismatched: usize,
+    /// The pinned read chain stopped before the captured end because a page
+    /// failed validation. Later items may be missing.
+    pub read_stopped: bool,
 }
 
 impl ExportLimitations {
@@ -39,6 +55,8 @@ impl ExportLimitations {
             || self.read_failed > 0
             || self.oversized_items > 0
             || self.opaque_parts > 0
+            || self.raw_mismatched > 0
+            || self.read_stopped
     }
 
     /// One note per limitation, in a stable order.
@@ -71,6 +89,29 @@ impl ExportLimitations {
                 self.opaque_parts
             ));
         }
+        if self.raw_items > 0 {
+            notes.push(format!(
+                "raw: {} item(s) above the {}-byte auto-decode ceiling were written as \
+                 raw sanitized Runtime JSON chunks; they were never typed-decoded and \
+                 carry no provider-opaque (encrypted/signature) data",
+                self.raw_items,
+                crate::protocol::read::MAX_AUTO_ITEM_BYTES
+            ));
+        }
+        if self.raw_mismatched > 0 {
+            notes.push(format!(
+                "partial: {} raw item(s) had a chunk byte/offset/complete mismatch and are \
+                 not claimed to be complete",
+                self.raw_mismatched
+            ));
+        }
+        if self.read_stopped {
+            notes.push(
+                "partial: the pinned read chain stopped early because a page failed \
+                 validation; later history items may be missing"
+                    .to_owned(),
+            );
+        }
         if self.unsaved_turns > 0 {
             notes.push(format!(
                 "unconfirmed: {} live turn(s) that are not in the saved history were \
@@ -82,14 +123,43 @@ impl ExportLimitations {
     }
 }
 
-/// The export panel phase. `Editing` owns the target input; every other phase
-/// is read-only feedback for the one owned job.
+/// The export panel phase. `Editing` owns the target input; `Cancelling` is a
+/// real in-flight state: a cancel was requested but the owned job has not yet
+/// reported whether it committed, aborted, or failed (spec §17.4). Every other
+/// phase is read-only feedback for the one owned job.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExportPhase {
     Editing,
     Running,
+    Cancelling,
     Done,
     Failed,
+}
+
+/// The typed, final outcome of the one owned job. The App keeps this so the
+/// UI can distinguish a committed file from a cancelled one and from an
+/// unknown target state, instead of inferring it from a stale notice.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ExportCompletion {
+    /// The file was committed to this exact target.
+    Committed {
+        target: String,
+        bytes: usize,
+        items: usize,
+    },
+    /// The job was cancelled; the temp file was removed and nothing committed.
+    Cancelled { target: String },
+    /// The target existed at commit time and was not replaced. Nothing was
+    /// written; the form stays editable.
+    TargetExists { target: String },
+    /// The job failed. `temp_removed` is the removal fact; `target_unknown`
+    /// means a commit attempt could not prove the target was untouched.
+    Failed {
+        target: String,
+        error: String,
+        temp_removed: bool,
+        target_unknown: bool,
+    },
 }
 
 /// The small export form (spec §17.4): a local target plus the optional
@@ -103,6 +173,9 @@ pub struct ExportFormState {
     pub overwrite: bool,
     pub phase: ExportPhase,
     pub notice: Option<String>,
+    /// The typed final outcome of the last owned job, if any. This is the
+    /// authority for committed/cancelled/unknown, not the notice string.
+    pub completion: Option<ExportCompletion>,
     pub limitations: ExportLimitations,
     pub items: usize,
     pub bytes: usize,
@@ -117,6 +190,7 @@ impl ExportFormState {
             overwrite: false,
             phase: ExportPhase::Editing,
             notice: None,
+            completion: None,
             limitations: ExportLimitations::default(),
             items: 0,
             bytes: 0,
@@ -124,7 +198,7 @@ impl ExportFormState {
     }
 
     pub fn running(&self) -> bool {
-        self.phase == ExportPhase::Running
+        matches!(self.phase, ExportPhase::Running | ExportPhase::Cancelling)
     }
 }
 
@@ -247,9 +321,26 @@ pub fn unsaved_markdown(blocks: &[(String, String)]) -> String {
     text
 }
 
-/// The file header: where the content came from and what is missing.
+/// The file header: where the content came from and what is missing. An
+/// unsaved live turn changes the file's very first statement, so an
+/// `unconfirmed`/`possibly incomplete` marker is visible at the top of the
+/// file rather than only in the trailing notes (spec §17.4).
 pub fn header_notes(source: &str, limitations: &ExportLimitations) -> Vec<String> {
     let mut notes = vec![format!("source: {source}")];
+    let unsaved_requested = source.contains("explicitly appended live turns");
+    if limitations.unsaved_turns > 0 {
+        notes.push(format!(
+            "UNCONFIRMED / POSSIBLY INCOMPLETE: this file appends {} live turn(s) that are \
+             not in the saved history; their save status is unconfirmed",
+            limitations.unsaved_turns
+        ));
+    } else if unsaved_requested {
+        notes.push(
+            "UNCONFIRMED / POSSIBLY INCOMPLETE: explicit live-turn inclusion was requested; \
+             any appended turn is not confirmed saved"
+                .to_owned(),
+        );
+    }
     notes.extend(limitations.notes());
     notes
 }
@@ -344,14 +435,135 @@ pub enum ExportStartError {
     Io(String),
 }
 
+/// Why the atomic commit failed. `TargetExists` is the no-clobber race: the
+/// target appeared after the export began, so the existing file was not
+/// replaced (spec §17.4).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ExportCommitError {
+    TargetExists,
+    Io {
+        error: String,
+        temp_removed: bool,
+        target_state_unknown: bool,
+    },
+}
+
+/// The heading written before a raw oversized item's verbatim chunks.
+pub fn raw_item_start_text(index: usize, total_bytes: usize) -> String {
+    format!(
+        "### Raw item {index} — sanitized Runtime JSON, {total_bytes} bytes\n\n\
+         The bytes below are the item's canonical JSON as returned by the Agent; they were \
+         streamed verbatim and never typed-decoded. Provider-opaque fields (encrypted \
+         reasoning / signatures) were already removed by the Agent's sanitizer.\n\n```json\n"
+    )
+}
+
+/// Closes the raw item block, recording a chunk byte/offset/complete mismatch
+/// instead of claiming a complete item.
+pub fn raw_item_end_text(index: usize, complete: bool) -> String {
+    if complete {
+        "\n```\n\n".to_owned()
+    } else {
+        format!(
+            "\n<!-- raw item {index} is NOT complete: its chunk byte/offset/complete data did \
+             not agree -->\n```\n\n"
+        )
+    }
+}
+
+/// Verifies one raw oversized item's chunks without ever decoding them. It
+/// enforces the same `utf8_json` encoding, monotonic offsets and declared
+/// `total_bytes` as the bounded assembler, but keeps no body: the caller
+/// forwards each verified chunk straight to the writer (spec §17.4).
+#[derive(Debug, Default)]
+pub struct RawItemStream {
+    pub index: usize,
+    pub total_bytes: usize,
+    pub next_offset: usize,
+    pub complete: bool,
+    pub mismatch: bool,
+}
+
+impl RawItemStream {
+    pub fn start(index: usize, total_bytes: usize) -> Self {
+        Self {
+            index,
+            total_bytes,
+            next_offset: 0,
+            complete: false,
+            mismatch: false,
+        }
+    }
+
+    /// Accepts one chunk. `Ok(true)` means the item is complete; `Err` records
+    /// a real mismatch so the file never claims a complete body it does not
+    /// have.
+    pub fn push(&mut self, chunk: &ReadChunk) -> Result<bool, String> {
+        if chunk.encoding != "utf8_json" {
+            self.mismatch = true;
+            return Err(format!(
+                "raw item {} used encoding '{}', expected utf8_json",
+                chunk.index, chunk.encoding
+            ));
+        }
+        if chunk.index != self.index {
+            self.mismatch = true;
+            return Err(format!(
+                "raw item {} received chunk for item {}",
+                self.index, chunk.index
+            ));
+        }
+        if chunk.total_bytes != self.total_bytes {
+            self.mismatch = true;
+            return Err(format!(
+                "raw item {} declared {} bytes, chunk says {}",
+                self.index, self.total_bytes, chunk.total_bytes
+            ));
+        }
+        if chunk.offset != self.next_offset {
+            self.mismatch = true;
+            return Err(format!(
+                "raw item {} expected offset {}, chunk starts at {}",
+                self.index, self.next_offset, chunk.offset
+            ));
+        }
+        // `data` is already the outer JSON-decoded string, so its `len()` is
+        // the canonical item's UTF-8 byte length (spec §6.2).
+        let delivered = chunk.data.len();
+        self.next_offset = self.next_offset.saturating_add(delivered);
+        if self.next_offset > self.total_bytes {
+            self.mismatch = true;
+            return Err(format!(
+                "raw item {} delivered {} bytes, declared {}",
+                self.index, self.next_offset, self.total_bytes
+            ));
+        }
+        if chunk.complete {
+            if self.next_offset != self.total_bytes {
+                self.mismatch = true;
+                return Err(format!(
+                    "raw item {} ended at {} bytes, declared {}",
+                    self.index, self.next_offset, self.total_bytes
+                ));
+            }
+            self.complete = true;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+}
+
 /// One owned Markdown writer. All file I/O happens on the export job's thread;
-/// a unique temp file is created next to the target and only renamed onto it
-/// after a successful flush, so an interrupted export never replaces a
-/// complete target file.
+/// a uniquely named temp file is created in the target's parent directory and
+/// only moved onto the target after a successful flush and sync. The default
+/// commit uses an atomic **no-clobber** move, so a target created while the
+/// export was running is never replaced without the explicit confirmation
+/// (spec §17.4).
 pub struct ExportWriter {
     target: PathBuf,
-    temp: PathBuf,
+    temp: Option<tempfile::NamedTempFile>,
     file: Option<std::io::BufWriter<std::fs::File>>,
+    overwrite: bool,
     bytes: usize,
 }
 
@@ -360,7 +572,13 @@ impl std::fmt::Debug for ExportWriter {
         formatter
             .debug_struct("ExportWriter")
             .field("target", &self.target.display().to_string())
-            .field("temp", &self.temp.display().to_string())
+            .field(
+                "temp",
+                &self
+                    .temp
+                    .as_ref()
+                    .map(|temp| temp.path().display().to_string()),
+            )
             .field("bytes", &self.bytes)
             .finish()
     }
@@ -368,8 +586,20 @@ impl std::fmt::Debug for ExportWriter {
 
 impl ExportWriter {
     pub fn create(target: &Path, overwrite: bool) -> Result<Self, ExportStartError> {
-        if !overwrite && target.exists() {
-            return Err(ExportStartError::TargetExists);
+        // A definite pre-flight refusal: no temp file is even created. The
+        // commit enforces the same rule atomically, so this is only a fast
+        // path and the race is closed later.
+        if !overwrite {
+            match std::fs::symlink_metadata(target) {
+                Ok(_) => return Err(ExportStartError::TargetExists),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(ExportStartError::Io(format!(
+                        "cannot inspect {}: {error}",
+                        target.display()
+                    )));
+                }
+            }
         }
         let name = target
             .file_name()
@@ -378,18 +608,31 @@ impl ExportWriter {
             })?
             .to_string_lossy()
             .into_owned();
-        let temp = target.with_file_name(format!(".{name}.{}.part", std::process::id()));
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)
+        // The target's own parent keeps the move atomic (same filesystem) and
+        // never creates a directory implicitly. A unique random name avoids the
+        // stale/fixed-pid collision the previous spelling allowed.
+        let parent = target
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let temp = tempfile::Builder::new()
+            .prefix(&format!(".{name}."))
+            .suffix(".part")
+            .tempfile_in(parent)
             .map_err(|error| {
-                ExportStartError::Io(format!("cannot create {}: {error}", temp.display()))
+                ExportStartError::Io(format!(
+                    "cannot create a temporary file next to {}: {error}",
+                    target.display()
+                ))
             })?;
+        let file = temp.reopen().map_err(|error| {
+            ExportStartError::Io(format!("cannot open the temporary file: {error}"))
+        })?;
         Ok(Self {
             target: target.to_path_buf(),
-            temp,
+            temp: Some(temp),
             file: Some(std::io::BufWriter::new(file)),
+            overwrite,
             bytes: 0,
         })
     }
@@ -407,49 +650,117 @@ impl ExportWriter {
         self.bytes
     }
 
-    pub fn temp_path(&self) -> &Path {
-        &self.temp
+    pub fn temp_path(&self) -> Option<&Path> {
+        self.temp.as_ref().map(|temp| temp.path())
     }
 
-    /// Flushes, syncs and atomically renames the temp file onto the target.
-    pub fn finish(mut self) -> Result<PathBuf, String> {
-        let Some(file) = self.file.take() else {
-            return Err("the export writer is closed".to_owned());
+    /// Flushes, syncs and atomically moves the temp file onto the target. The
+    /// default path refuses to replace a file that appeared after the export
+    /// started; the explicit overwrite path replaces exactly this target.
+    pub fn finish(mut self) -> Result<PathBuf, ExportCommitError> {
+        let Some(writer) = self.file.take() else {
+            return Err(ExportCommitError::Io {
+                error: "the export writer is closed".to_owned(),
+                temp_removed: self.remove_temp(),
+                target_state_unknown: false,
+            });
         };
-        let file = file
-            .into_inner()
-            .map_err(|error| format!("cannot flush the temporary file: {error}"))?;
-        file.sync_all()
-            .map_err(|error| format!("cannot sync the temporary file: {error}"))?;
+        let file = match writer.into_inner() {
+            Ok(file) => file,
+            Err(error) => {
+                return Err(ExportCommitError::Io {
+                    error: format!("cannot flush: {error}"),
+                    temp_removed: self.remove_temp(),
+                    target_state_unknown: false,
+                });
+            }
+        };
+        if let Err(error) = file.sync_all() {
+            drop(file);
+            return Err(ExportCommitError::Io {
+                error: format!("cannot sync: {error}"),
+                temp_removed: self.remove_temp(),
+                target_state_unknown: false,
+            });
+        }
         drop(file);
-        std::fs::rename(&self.temp, &self.target).map_err(|error| {
-            format!(
-                "cannot move {} onto {}: {error}",
-                self.temp.display(),
-                self.target.display()
-            )
-        })?;
-        Ok(self.target.clone())
-    }
-
-    /// Cancels without a rename. `Err` means the temporary file could not be
-    /// confirmed removed: an unknown I/O state is never reported as rolled
-    /// back.
-    pub fn abort(mut self) -> Result<(), String> {
-        drop(self.file.take());
-        match std::fs::remove_file(&self.temp) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(format!(
-                "could not remove the temporary file {}: {error}",
-                self.temp.display()
-            )),
+        let Some(temp) = self.temp.take() else {
+            return Err(ExportCommitError::Io {
+                error: "the temporary file is already gone".to_owned(),
+                temp_removed: true,
+                target_state_unknown: false,
+            });
+        };
+        let target = self.target.clone();
+        let result = if self.overwrite {
+            temp.persist(&target)
+        } else {
+            temp.persist_noclobber(&target)
+        };
+        match result {
+            Ok(_) => Ok(target),
+            Err(error) => {
+                let kind = error.error.kind();
+                let detail = error.error.to_string();
+                let temp_removed = error.file.close().is_ok();
+                if !self.overwrite && kind == std::io::ErrorKind::AlreadyExists {
+                    if temp_removed {
+                        Err(ExportCommitError::TargetExists)
+                    } else {
+                        Err(ExportCommitError::Io {
+                            error: format!(
+                                "target {} already exists; could not confirm temporary cleanup: {detail}",
+                                target.display()
+                            ),
+                            temp_removed: false,
+                            target_state_unknown: false,
+                        })
+                    }
+                } else {
+                    Err(ExportCommitError::Io {
+                        error: format!(
+                            "cannot move the temporary file onto {}: {detail}",
+                            target.display()
+                        ),
+                        temp_removed,
+                        target_state_unknown: true,
+                    })
+                }
+            }
         }
     }
 
-    /// The target this writer would rename onto.
+    fn remove_temp(&mut self) -> bool {
+        let Some(temp) = self.temp.take() else {
+            return true;
+        };
+        temp.close().is_ok()
+    }
+
+    /// Removes the uncommitted temp file. `Err` means removal could not be
+    /// confirmed: an unknown I/O state is never reported as rolled back.
+    pub fn abort(mut self) -> Result<(), String> {
+        self.file.take();
+        let Some(temp) = self.temp.take() else {
+            return Ok(());
+        };
+        let path = temp.path().to_path_buf();
+        temp.close()
+            .map_err(|error| format!("could not remove {}: {error}", path.display()))
+    }
+
+    /// The target this writer would move onto.
     pub fn target(&self) -> &Path {
         &self.target
+    }
+}
+
+impl Drop for ExportWriter {
+    fn drop(&mut self) {
+        // A writer dropped without `finish`/`abort` (e.g. a panic) must not
+        // leave its temp file behind. A committed writer already took the temp.
+        self.file.take();
+        self.temp.take();
     }
 }
 
@@ -534,6 +845,7 @@ mod tests {
             ExportSpec {
                 include_thinking: true,
                 include_tool: true,
+                raw_oversized: false,
             },
         );
         assert!(text.markdown.contains("### Thinking"));
@@ -551,6 +863,9 @@ mod tests {
             oversized_items: 1,
             opaque_parts: 3,
             unsaved_turns: 1,
+            raw_items: 1,
+            raw_mismatched: 0,
+            read_stopped: false,
         };
         let notes = header_notes("saved history (session_read snapshot)", &limitations);
         let text = header_text(&notes);
@@ -559,7 +874,27 @@ mod tests {
         assert!(text.contains("2 history item(s)"));
         assert!(text.contains("1 oversized history item(s)"));
         assert!(text.contains("3 provider-only part(s)"));
+        assert!(text.contains("raw: 1 item(s)"));
         assert!(text.contains("unconfirmed: 1 live turn(s)"));
+    }
+
+    /// An unsaved live turn marks the file unconfirmed at the very top, not
+    /// only in the trailing notes (spec §17.4).
+    #[test]
+    fn an_unsaved_turn_marks_the_header_unconfirmed() {
+        let limitations = ExportLimitations {
+            unsaved_turns: 1,
+            ..ExportLimitations::default()
+        };
+        let notes = header_notes(
+            "saved history plus explicitly appended live turns",
+            &limitations,
+        );
+        let text = header_text(&notes);
+        let unconfirmed = text
+            .find("UNCONFIRMED / POSSIBLY INCOMPLETE")
+            .expect("the header names the unsaved turn");
+        assert!(unconfirmed < 200, "the marker is in the file header");
     }
 
     #[test]
@@ -591,8 +926,55 @@ mod tests {
         );
         let mut writer = ExportWriter::create(&target, true).expect("overwrite admitted");
         writer.write("new body").unwrap();
-        writer.finish().expect("atomic rename");
+        writer.finish().expect("explicit replace");
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "new body");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The parent-review race: the target is created after the writer's
+    /// pre-flight check. The default commit must refuse to replace it and must
+    /// leave the pre-existing file untouched (spec §17.4).
+    #[test]
+    fn a_target_created_after_create_is_never_overwritten() {
+        let dir = std::env::temp_dir().join(format!("mctui-export-race-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let target = dir.join("chat.md");
+        let _ = std::fs::remove_file(&target);
+        let mut writer = ExportWriter::create(&target, false).expect("temp only");
+        writer.write("export body").unwrap();
+        // The race: another writer creates the target while this export runs.
+        std::fs::write(&target, "created during export").unwrap();
+        assert_eq!(writer.finish().err(), Some(ExportCommitError::TargetExists));
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "created during export",
+            "the default commit is a no-clobber commit"
+        );
+        // The refused temp file was removed.
+        let leftovers: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "chat.md")
+            .collect();
+        assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A temp name is unique per writer: two exports targeting the same file
+    /// never collide on a stale pid-derived name.
+    #[test]
+    fn two_writers_for_one_target_use_distinct_temp_files() {
+        let dir = std::env::temp_dir().join(format!("mctui-export-temp-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let target = dir.join("chat.md");
+        let first = ExportWriter::create(&target, false).expect("first temp");
+        let second = ExportWriter::create(&target, false).expect("second temp");
+        assert_ne!(first.temp_path(), second.temp_path());
+        assert!(first.temp_path().is_some_and(|path| path.exists()));
+        assert!(second.temp_path().is_some_and(|path| path.exists()));
+        let _ = first.abort();
+        let _ = second.abort();
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -603,10 +985,27 @@ mod tests {
         let target = dir.join("chat.md");
         let _ = std::fs::remove_file(&target);
         let mut writer = ExportWriter::create(&target, false).expect("temp");
-        let temp = writer.temp_path().to_path_buf();
+        let temp = writer.temp_path().expect("temp path").to_path_buf();
         writer.write("half").unwrap();
         writer.abort().expect("temp removed");
         assert!(!temp.exists());
+        assert!(!target.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A writer dropped without `finish`/`abort` (a panic path) still removes
+    /// its uncommitted temp file.
+    #[test]
+    fn a_dropped_writer_leaves_no_temp_file() {
+        let dir = std::env::temp_dir().join(format!("mctui-export-drop-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let target = dir.join("chat.md");
+        let temp = {
+            let mut writer = ExportWriter::create(&target, false).expect("temp");
+            writer.write("half").unwrap();
+            writer.temp_path().expect("temp path").to_path_buf()
+        };
+        assert!(!temp.exists(), "Drop removes the uncommitted temp");
         assert!(!target.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -618,6 +1017,61 @@ mod tests {
         let error = ExportWriter::create(&target, false).expect_err("no implicit mkdir");
         assert!(matches!(error, ExportStartError::Io(_)));
         assert!(!dir.exists());
+    }
+
+    #[test]
+    fn raw_item_stream_verifies_bytes_without_decoding() {
+        let json = "{\"item\":{\"type\":\"summary\",\"data\":{\"content\":\"x\"}}}";
+        let total = json.len();
+        let mut stream = RawItemStream::start(4, total);
+        let head = &json[..10];
+        let head_chunk = ReadChunk {
+            index: 4,
+            offset: 0,
+            total_bytes: total,
+            encoding: "utf8_json".to_owned(),
+            data: head.to_owned(),
+            complete: false,
+        };
+        assert_eq!(stream.push(&head_chunk), Ok(false));
+        let tail = ReadChunk {
+            index: 4,
+            offset: 10,
+            total_bytes: total,
+            encoding: "utf8_json".to_owned(),
+            data: json[10..].to_owned(),
+            complete: true,
+        };
+        assert_eq!(stream.push(&tail), Ok(true));
+        assert!(stream.complete && !stream.mismatch);
+        assert_eq!(stream.next_offset, total);
+    }
+
+    #[test]
+    fn raw_item_stream_records_a_real_mismatch() {
+        let mut stream = RawItemStream::start(0, 100);
+        let wrong_offset = ReadChunk {
+            index: 0,
+            offset: 5,
+            total_bytes: 100,
+            encoding: "utf8_json".to_owned(),
+            data: "x".to_owned(),
+            complete: false,
+        };
+        assert!(stream.push(&wrong_offset).is_err());
+        assert!(stream.mismatch);
+        // A short complete chunk that does not reach total_bytes also mismatches.
+        let mut short = RawItemStream::start(0, 100);
+        let complete = ReadChunk {
+            index: 0,
+            offset: 0,
+            total_bytes: 100,
+            encoding: "utf8_json".to_owned(),
+            data: "x".to_owned(),
+            complete: true,
+        };
+        assert!(short.push(&complete).is_err());
+        assert!(short.mismatch);
     }
 
     #[test]

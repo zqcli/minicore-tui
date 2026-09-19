@@ -873,6 +873,9 @@ pub(super) struct SearchScan {
     pub generation: u64,
     pub session_epoch: u64,
     pub pin: Option<crate::protocol::read::SnapshotPin>,
+    /// The captured `total`, fixed for the whole chain: a later page may not
+    /// change it (spec §17.1).
+    pub total: Option<usize>,
     pub next: Option<crate::protocol::ReadCursor>,
     /// The persistent assembler for the scan chain; an item may span pages.
     pub page: Option<ReadPage>,
@@ -882,6 +885,8 @@ pub(super) struct SearchScan {
     /// replaced mid-scan.
     pub scanned: usize,
     pub large: usize,
+    /// The recorded reason a strict validation rule stopped the scan.
+    pub stop_reason: Option<String>,
 }
 
 impl App {
@@ -915,12 +920,14 @@ impl App {
             generation,
             session_epoch: epoch,
             pin,
+            total: None,
             next: None,
             page: None,
             stop: false,
             terminal: false,
             scanned: 0,
             large: 0,
+            stop_reason: None,
         });
         self.request_search_page()
     }
@@ -1033,6 +1040,10 @@ impl App {
         let page = match response.parse_session_read() {
             Ok(page) => page,
             Err(error) => {
+                if let Some(scan) = self.search_scan.as_mut() {
+                    scan.stop = true;
+                    scan.stop_reason = Some(format!("search page is not readable: {error}"));
+                }
                 self.notice(
                     NoticeLevel::Warning,
                     format!("search page for {session_id} is not readable: {error}"),
@@ -1042,83 +1053,108 @@ impl App {
             }
         };
         if page.session.session_id != *session_id {
+            if let Some(scan) = self.search_scan.as_mut() {
+                scan.stop = true;
+                scan.stop_reason = Some("search page belongs to another session".to_owned());
+            }
+            self.notice(
+                NoticeLevel::Warning,
+                "search stopped: the page belongs to another session",
+            );
             self.finish_search_scan(false, 1);
             return Vec::new();
         }
-        let pin = page.pin();
-        let next = page.next_cursor;
-        let records_truncated = page.records_truncated;
-        let total = page.total;
-        let next_is_none = next.is_none();
-        let previous_cursor = self
-            .search_scan
-            .as_ref()
-            .and_then(|scan| scan.page.as_ref().map(|page| page.cursor))
-            .unwrap_or_else(crate::protocol::ReadCursor::start);
-        let (cursor, mut page_state) = {
+        // The same pinned-chain validation the main history window and the
+        // export chain use: fixed pin/total, assembler byte checks, contiguous
+        // item indexes and a backend cursor that agrees with the delivery
+        // (spec §17.1 reuses the §6 rules instead of loosening them).
+        let (mut page_state, mut pin, mut total) = {
             let Some(scan) = self.search_scan.as_mut() else {
                 return Vec::new();
             };
-            if scan.pin.is_none() {
-                scan.pin = Some(pin.clone());
+            if scan.stop {
+                return Vec::new();
             }
-            scan.next = next;
-            scan.terminal = next_is_none;
+            let requested = scan.next.unwrap_or_else(crate::protocol::ReadCursor::start);
             let page_state = scan
                 .page
                 .take()
-                .unwrap_or_else(|| ReadPage::new(previous_cursor, None, 0));
-            let cursor = page_state.cursor;
-            (cursor, page_state)
+                .unwrap_or_else(|| ReadPage::new(requested, None, 0));
+            (page_state, scan.pin.clone(), scan.total)
         };
-        let want_pin = self.search_scan.as_ref().and_then(|scan| scan.pin.clone());
-        page_state.cursor = cursor;
-        page_state.want_pin = want_pin;
-        page_state.pending_page = None;
+        let outcome =
+            crate::app::history::advance_chain_page(&mut page_state, &mut pin, &mut total, &page);
+        let (records_truncated, capture_to) = {
+            let Some(scan) = self.search_scan.as_mut() else {
+                return Vec::new();
+            };
+            scan.pin = pin;
+            scan.total = total;
+            scan.next = outcome.next;
+            scan.terminal = outcome.terminal;
+            (outcome.records_truncated, total)
+        };
+        if let Some(known) = capture_to {
+            if let Some(panel) = self.search_panel_mut() {
+                panel.coverage.total_items = known;
+            }
+        }
         if records_truncated {
             if let Some(panel) = self.search_panel_mut() {
                 panel.coverage.records_truncated = true;
             }
         }
-        if let Some(panel) = self.search_panel_mut() {
-            panel.coverage.total_items = total;
-        }
-        let mut failure = None;
-        for chunk in &page.items {
-            match page_state.assembler.push(chunk.clone()) {
-                Ok(crate::protocol::read::Assembled::Pending) => {}
-                Ok(crate::protocol::read::Assembled::EncodedItem { item }) => {
-                    page_state.pending_encoded.push_back(item);
-                }
-                Ok(crate::protocol::read::Assembled::LargeItem { .. }) => {
-                    if let Some(scan) = self.search_scan.as_mut() {
-                        scan.large += 1;
-                    }
-                }
-                Ok(crate::protocol::read::Assembled::LargeItemPending { index, .. }) => {
-                    if let Some(scan) = self.search_scan.as_mut() {
-                        scan.large += 1;
-                    }
-                    failure = Some(format!(
-                        "large item {index} cannot be searched automatically; coverage is incomplete"
-                    ));
-                    break;
-                }
-                Err(error) => {
-                    failure = Some(error.to_string());
-                    break;
-                }
-            }
-        }
         let Some(scan) = self.search_scan.as_mut() else {
             return Vec::new();
         };
-        scan.page = Some(page_state);
-        if let Some(detail) = failure {
-            self.notice(NoticeLevel::Warning, format!("search scan: {detail}"));
+        if let Some(error) = outcome.stale {
+            // The pinned prefix is gone: keep the found matches but never
+            // claim a complete scan for a generation that no longer exists.
+            scan.stop = true;
+            scan.stop_reason = Some(format!("the pinned history became stale: {error}"));
+            self.notice(
+                NoticeLevel::Warning,
+                format!("search stopped: the pinned history became stale ({error})"),
+            );
             self.finish_search_scan(false, 0);
             return Vec::new();
         }
+        if let Some(error) = outcome.failed {
+            scan.stop = true;
+            scan.stop_reason = Some(format!("a search page failed validation: {error}"));
+            self.notice(
+                NoticeLevel::Warning,
+                format!("search stopped: a page failed validation ({error})"),
+            );
+            self.finish_search_scan(false, 1);
+            return Vec::new();
+        }
+        if let Some(large) = outcome.large {
+            // A large item cannot be searched automatically. Its bytes are not
+            // in memory, so coverage records it and the scan stops honestly
+            // rather than reporting a global no-match.
+            scan.large += 1;
+            scan.stop = true;
+            scan.stop_reason = Some(format!(
+                "large item {} cannot be searched automatically",
+                large.index
+            ));
+            self.notice(
+                NoticeLevel::Warning,
+                format!(
+                    "search scan: large item {} cannot be searched automatically; coverage is incomplete",
+                    large.index
+                ),
+            );
+            self.finish_search_scan(false, 0);
+            return Vec::new();
+        }
+        page_state.pending_encoded.clear();
+        page_state.pending_page = None;
+        for crate::app::history::ChainItem::Encoded(item) in outcome.items {
+            page_state.pending_encoded.push_back(item);
+        }
+        scan.page = Some(page_state);
         if !self
             .search_scan
             .as_ref()
@@ -1189,15 +1225,17 @@ impl App {
     pub(super) fn finish_search_item_decoded(
         &mut self,
         session_id: &SessionId,
+        session_epoch: u64,
         generation: u64,
         index: usize,
         fingerprint: u64,
         outcome: &crate::jobs::DecodeOutcome,
     ) -> Vec<AppCommand> {
-        let owned = self
-            .search_scan
-            .as_ref()
-            .is_some_and(|scan| scan.session_id == *session_id && scan.generation == generation);
+        let owned = self.search_scan.as_ref().is_some_and(|scan| {
+            scan.session_id == *session_id
+                && scan.session_epoch == session_epoch
+                && scan.generation == generation
+        });
         if !owned {
             return Vec::new();
         }
@@ -1270,6 +1308,10 @@ impl App {
         let scanned = self.search_scan.as_ref().map_or(0, |scan| scan.scanned);
         let large = self.search_scan.as_ref().map_or(0, |scan| scan.large);
         let stopped = self.search_scan.as_ref().is_some_and(|scan| scan.stop);
+        let stopped_reason = self
+            .search_scan
+            .as_ref()
+            .and_then(|scan| scan.stop_reason.clone());
         self.search_scan = None;
         let Some(panel) = self.search_panel_mut() else {
             return;
@@ -1278,6 +1320,9 @@ impl App {
         panel.coverage.large_items = large;
         panel.coverage.failed_items = panel.coverage.failed_items.saturating_add(failed);
         panel.coverage.stopped = stopped;
+        if stopped_reason.is_some() {
+            panel.coverage.stopped_reason = stopped_reason;
+        }
         panel.coverage.complete = reached_end
             && !stopped
             && large == 0

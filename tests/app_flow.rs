@@ -43,7 +43,10 @@ struct Driver {
     /// One receiver per owned export writer the reducer started. The harness
     /// runs the identical production job on a real thread, so the file it
     /// writes is the file the product writes.
-    exports: Vec<std::sync::mpsc::Receiver<minicore_tui::jobs::ExportOutcome>>,
+    exports: Vec<(
+        minicore_tui::jobs::ExportCapture,
+        std::sync::mpsc::Receiver<minicore_tui::jobs::ExportOutcome>,
+    )>,
     exited: bool,
 }
 
@@ -70,19 +73,25 @@ impl Driver {
 
     fn start_export(&mut self, request: minicore_tui::command::StartExportRequest) {
         let (tx, rx) = std::sync::mpsc::channel();
+        let capture = request.capture.clone();
+        let cancel = request.cancel.clone();
         std::thread::spawn(move || {
-            let outcome =
-                minicore_tui::jobs::run_export_job(&request.target, request.overwrite, request.rx);
+            let outcome = minicore_tui::jobs::run_export_job(
+                &request.target,
+                request.overwrite,
+                request.rx,
+                cancel,
+            );
             let _ = tx.send(outcome);
         });
-        self.exports.push(rx);
+        self.exports.push((capture, rx));
     }
 
     /// Feeds every finished export job back to the reducer. The harness is
     /// synchronous, so completion is polled instead of awaited.
     fn drain_exports(&mut self) -> bool {
         let mut finished = Vec::new();
-        for (index, rx) in self.exports.iter().enumerate() {
+        for (index, (_, rx)) in self.exports.iter().enumerate() {
             match rx.try_recv() {
                 Ok(outcome) => finished.push((index, outcome)),
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
@@ -91,9 +100,9 @@ impl Driver {
         }
         let progressed = !finished.is_empty();
         for (index, outcome) in finished.into_iter().rev() {
-            self.exports.remove(index);
+            let (capture, _) = self.exports.remove(index);
             let more = self.app.update(AppEvent::JobFinished(
-                minicore_tui::event::JobOutcome::Export { outcome },
+                minicore_tui::event::JobOutcome::Export { capture, outcome },
             ));
             self.commands(more);
         }
@@ -8175,6 +8184,83 @@ fn full_session_search_scans_a_pinned_chain_and_never_claims_complete_on_large_i
 }
 
 #[test]
+fn full_session_search_continues_across_more_than_one_page() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    let loaded: Vec<Value> = (0..21)
+        .map(|index| user(index, "loop_page", &format!("page item {index}")))
+        .collect();
+    open_chat_with(&mut driver, loaded.clone());
+
+    slash(&mut driver, "/search full page item");
+    let first = driver.request("session.read");
+    assert_eq!(first.params["cursor"]["item"], 0);
+    driver.respond(
+        first,
+        history(
+            loaded[..20].to_vec(),
+            Some(json!({"item": 20, "offset": 0})),
+            21,
+        ),
+    );
+    while let Some(decode) = driver.app.pending_decode_request() {
+        let scan = decode.scan.as_ref().expect("full search scan request");
+        let item = minicore_tui::protocol::read::decode_item(&decode.item.data)
+            .expect("search item decodes");
+        let mut plan =
+            minicore_tui::state::search::ScanPlan::new(&scan.needle, scan.include_thinking);
+        plan.scan_item(decode.item.index, &item);
+        driver.app.mark_decode_scheduled();
+        let more = driver.app.update(AppEvent::HistoryItemDecoded(Box::new(
+            minicore_tui::jobs::DecodeOutcome {
+                identity: decode.identity.clone(),
+                fingerprint: decode.fingerprint,
+                result: Ok(item),
+                cancelled: false,
+                scan: Some(Box::new(minicore_tui::jobs::ScanItemOutcome {
+                    index: decode.item.index,
+                    matches: plan.collector.matches,
+                })),
+                export: None,
+            },
+        )));
+        driver.commands(more);
+    }
+
+    let second = driver.request("session.read");
+    assert_eq!(second.params["cursor"]["item"], 20);
+    driver.respond(second, history(vec![loaded[20].clone()], None, 21));
+    while let Some(decode) = driver.app.pending_decode_request() {
+        let scan = decode.scan.as_ref().expect("full search scan request");
+        let item = minicore_tui::protocol::read::decode_item(&decode.item.data)
+            .expect("search item decodes");
+        let mut plan =
+            minicore_tui::state::search::ScanPlan::new(&scan.needle, scan.include_thinking);
+        plan.scan_item(decode.item.index, &item);
+        driver.app.mark_decode_scheduled();
+        let more = driver.app.update(AppEvent::HistoryItemDecoded(Box::new(
+            minicore_tui::jobs::DecodeOutcome {
+                identity: decode.identity.clone(),
+                fingerprint: decode.fingerprint,
+                result: Ok(item),
+                cancelled: false,
+                scan: Some(Box::new(minicore_tui::jobs::ScanItemOutcome {
+                    index: decode.item.index,
+                    matches: plan.collector.matches,
+                })),
+                export: None,
+            },
+        )));
+        driver.commands(more);
+    }
+
+    let panel = search_panel(&driver.app);
+    assert_eq!(panel.coverage.scanned_items, 21);
+    assert!(panel.coverage.complete, "{panel:?}");
+    assert_eq!(panel.matches.len(), 21);
+}
+
+#[test]
 fn full_session_search_can_be_stopped_without_losing_found_matches() {
     let mut driver = Driver::new();
     bootstrap(&mut driver);
@@ -8688,10 +8774,16 @@ fn finish_export(driver: &mut Driver, pages: &mut VecDeque<Value>) {
             "the export did not finish: {:?}",
             driver.app.export_form().map(|form| form.notice.clone())
         );
-        if let Some(page) = pages.pop_front() {
+        let has_read = driver
+            .queue
+            .iter()
+            .any(|request| request.method == "session.read");
+        if has_read {
+            let page = pages.pop_front().expect("a page for every read");
             export_advance(driver, page);
         } else {
-            // A parked record is retried by the next reducer pass.
+            // A parked record is retried by the next reducer pass. This also
+            // models a slow writer freeing one bounded channel slot.
             driver.step(AppEvent::Tick);
             std::thread::yield_now();
         }
@@ -8886,4 +8978,531 @@ fn cancelling_an_export_removes_the_uncommitted_temp_file() {
     }
     assert!(!target.exists(), "a cancelled export commits nothing");
     assert!(dir.entries().is_empty(), "{:?}", dir.entries());
+}
+
+// ---- D2 review fixes: no-clobber race, typed cancel, busy owner, raw export ----
+
+/// The parent-review race: a target created while the export is running is
+/// never overwritten by the default commit. The form reports the typed
+/// `TargetExists` outcome, the existing file is intact, and no temp remains.
+#[test]
+fn a_target_created_during_an_export_is_not_overwritten() {
+    let dir = ExportDir::new("no-clobber-race");
+    let target = dir.target("chat.md");
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    set_terminal(&mut driver);
+    open_chat_with(&mut driver, vec![user(0, "loop_1", "hello")]);
+
+    slash(&mut driver, &format!("/export {}", target.display()));
+    press(&mut driver, KeyCode::Enter);
+    // The export is running with an uncommitted temp file. The target appears
+    // now, after the writer's pre-flight check.
+    let request = driver.request("session.read");
+    std::fs::write(&target, "created during export").expect("interloper target");
+    driver.respond(
+        request,
+        export_page(0, &user(0, "loop_1", "hello"), None, 1),
+    );
+    // Run the owned job to its typed completion.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        driver.drain_exports();
+        if !driver.app.export_running() {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "race export finish");
+        std::thread::yield_now();
+    }
+    assert_eq!(
+        std::fs::read_to_string(&target).unwrap(),
+        "created during export",
+        "the default commit is a no-clobber commit"
+    );
+    let form = driver.app.export_form().expect("form open");
+    assert_eq!(
+        form.completion,
+        Some(
+            minicore_tui::state::export::ExportCompletion::TargetExists {
+                target: target.display().to_string(),
+            }
+        )
+    );
+    assert!(
+        form.notice
+            .as_deref()
+            .is_some_and(|notice| notice.contains("already exists")),
+        "{:?}",
+        form.notice
+    );
+    assert_eq!(
+        dir.entries(),
+        vec!["chat.md".to_owned()],
+        "no temp file survives the refused commit"
+    );
+}
+
+/// A cancel immediately says `Cancelling`, never "no file was written"; the
+/// typed job outcome then reports the real state. The temp file is removed and
+/// no partial or complete target appears. Both the open-form path and the
+/// Esc-closed path are covered.
+#[test]
+fn cancelling_waits_for_the_typed_job_outcome() {
+    let dir = ExportDir::new("cancel-typed");
+    let target = dir.target("chat.md");
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    set_terminal(&mut driver);
+    open_chat_with(&mut driver, vec![user(0, "loop_1", "hello")]);
+
+    slash(&mut driver, &format!("/export {}", target.display()));
+    press(&mut driver, KeyCode::Enter);
+    // One page is loaded, then the user cancels before the writer commits.
+    export_advance(
+        &mut driver,
+        export_page(0, &user(0, "loop_1", "hello"), Some(1), 2),
+    );
+    assert!(driver.app.export_running());
+    // A direct cancel keeps the form open and shows the honest intermediate
+    // state instead of a premature "no file was written".
+    driver.app.cancel_export();
+    let form = driver.app.export_form().expect("form stays open");
+    assert_eq!(
+        form.phase,
+        minicore_tui::state::export::ExportPhase::Cancelling,
+        "a cancel is not reported as a local rollback"
+    );
+    assert!(
+        form.notice
+            .as_deref()
+            .is_some_and(|notice| notice.contains("cancelling")),
+        "{:?}",
+        form.notice
+    );
+    assert!(
+        !form
+            .notice
+            .as_deref()
+            .is_some_and(|notice| notice.contains("no file was written")),
+        "the cancel must not claim a result before the job reports"
+    );
+
+    // Esc closes the form while the cancel is pending; the typed outcome is
+    // then delivered as a notice.
+    press(&mut driver, KeyCode::Esc);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !driver.drain_exports() {
+        assert!(std::time::Instant::now() < deadline, "cancel outcome");
+        std::thread::yield_now();
+    }
+    assert!(!target.exists(), "a cancelled export commits nothing");
+    assert!(dir.entries().is_empty(), "{:?}", dir.entries());
+    let notice = driver
+        .app
+        .notices()
+        .iter()
+        .map(|notice| notice.text.clone())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(notice.contains("cancelled"), "{notice}");
+    assert!(notice.contains("nothing was written"), "{notice}");
+    assert!(
+        !driver.app.export_running(),
+        "the typed completion released the writer slot"
+    );
+}
+
+/// The one writer slot is never overwritten by a second export: while the
+/// previous completion has not been drained, a new submit is refused and the
+/// old owner is kept, so no orphaned job can write a stale file.
+#[test]
+fn a_second_export_waits_for_the_owned_writer_slot() {
+    let dir = ExportDir::new("busy-owner");
+    let first_target = dir.target("first.md");
+    let second_target = dir.target("second.md");
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    set_terminal(&mut driver);
+    open_chat_with(&mut driver, vec![user(0, "loop_1", "hello")]);
+
+    slash(&mut driver, &format!("/export {}", first_target.display()));
+    press(&mut driver, KeyCode::Enter);
+    assert!(driver.app.export_running());
+    assert_eq!(
+        driver.exports.len(),
+        1,
+        "exactly one owned writer is running"
+    );
+
+    // The form is closed while its job is still running; a new export is
+    // refused until that job reports.
+    driver.step(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+        KeyCode::Esc,
+        KeyModifiers::empty(),
+    ))));
+    slash(&mut driver, &format!("/export {}", second_target.display()));
+    press(&mut driver, KeyCode::Enter);
+    assert_eq!(
+        driver.exports.len(),
+        1,
+        "the second export never overwrote the owner handle"
+    );
+    assert!(!second_target.exists());
+
+    // Drain the first job: it commits only the first target.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while driver.app.export_owner_busy() {
+        assert!(std::time::Instant::now() < deadline, "first export settles");
+        driver.drain_exports();
+        driver.step(AppEvent::Tick);
+        std::thread::yield_now();
+    }
+    assert!(!driver.app.export_running(), "the first owner settled");
+    assert!(
+        !first_target.exists(),
+        "cancelled first export commits nothing"
+    );
+}
+
+#[test]
+fn cancelling_export_keeps_input_responsive_while_writer_finishes() {
+    let dir = ExportDir::new("input-during-cancel");
+    let target = dir.target("chat.md");
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    set_terminal(&mut driver);
+    open_chat_with(&mut driver, vec![user(0, "loop_1", "hello")]);
+
+    slash(&mut driver, &format!("/export {}", target.display()));
+    press(&mut driver, KeyCode::Enter);
+    assert!(driver.app.export_owner_busy());
+
+    // Closing the form requests cancellation but keeps the owned writer alive
+    // until its typed outcome. Input must still reach the Composer meanwhile.
+    press(&mut driver, KeyCode::Esc);
+    type_search_text(&mut driver, "draft while export cancels");
+    assert_eq!(
+        driver.app.composer().content(),
+        "draft while export cancels"
+    );
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while driver.app.export_owner_busy() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "cancelled writer did not report"
+        );
+        driver.drain_exports();
+        driver.step(AppEvent::Tick);
+        std::thread::yield_now();
+    }
+    assert!(!target.exists());
+    assert_eq!(
+        driver.app.composer().content(),
+        "draft while export cancels"
+    );
+}
+
+/// The explicit raw-export entry streams an oversized item's sanitized JSON
+/// chunks verbatim, verifies byte count/offset/complete, and never typed
+/// decodes it or raises the 8 MiB automatic ceiling. The written file carries
+/// the raw item and a `raw:` note.
+#[test]
+fn raw_export_streams_oversized_item_bytes_without_decoding() {
+    let dir = ExportDir::new("raw");
+    let target = dir.target("chat.md");
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    set_terminal(&mut driver);
+    open_chat_with(&mut driver, vec![user(0, "loop_1", "hello")]);
+
+    slash(&mut driver, &format!("/export raw {}", target.display()));
+    let form = driver.app.export_form().expect("form open");
+    assert!(form.spec.raw_oversized, "the raw entry is registered");
+    press(&mut driver, KeyCode::Enter);
+
+    // A canonical sanitized Runtime item strictly above the 8 MiB automatic
+    // decode ceiling. Its bytes are streamed verbatim in three chunks; the
+    // export never assembles or JSON-parses the whole body.
+    let filler = "raw-body-line\n".repeat(900_000);
+    let raw_body = serde_json::to_string(&json!({
+        "item": {"type": "summary", "data": {"content": filler}},
+        "timestamp": "2026-01-01T00:00:00Z",
+    }))
+    .unwrap();
+    assert!(
+        raw_body.len() > minicore_tui::protocol::read::MAX_AUTO_ITEM_BYTES,
+        "the fixture must exceed the automatic ceiling: {}",
+        raw_body.len()
+    );
+    let total = raw_body.len();
+    let cut = total / 3;
+    let cut = (cut..)
+        .find(|index| raw_body.is_char_boundary(*index))
+        .expect("a char boundary exists");
+    let cut2 = (cut..total)
+        .find(|index| raw_body.is_char_boundary(*index) && *index > cut)
+        .unwrap_or(total);
+    let raw_page = |offset: usize, end: usize| -> Value {
+        json!({
+            "session": session("ses_1"),
+            "items": [{
+                "index": 1, "offset": offset, "total_bytes": total,
+                "encoding": "utf8_json", "data": &raw_body[offset..end],
+                "complete": end == total,
+            }],
+            "total": 3,
+            "records": [],
+            "records_truncated": false,
+            "history_revision": "0".repeat(64),
+            "captured_end": 3,
+            "trailing_incomplete": false,
+            "next_cursor": if end == total { Some(json!({"item": 2, "offset": 0})) } else { Some(json!({"item": 1, "offset": end})) },
+        })
+    };
+    // The discovery page surfaces the oversized item before its bytes are
+    // exhausted; the assembler discards the prefix and the export restarts at
+    // the item's own start for the explicit raw read.
+    let discovery = json!({
+        "session": session("ses_1"),
+        "items": [{
+            "index": 1, "offset": 0, "total_bytes": total,
+            "encoding": "utf8_json", "data": &raw_body[..8], "complete": false,
+        }],
+        "total": 3,
+        "records": [],
+        "records_truncated": false,
+        "history_revision": "0".repeat(64),
+        "captured_end": 3,
+        "trailing_incomplete": false,
+    });
+    let mut pages = VecDeque::from(vec![
+        export_page(0, &user(0, "loop_1", "hello"), Some(1), 3),
+        discovery,
+        raw_page(0, cut),
+        raw_page(cut, cut2),
+        raw_page(cut2, total),
+        export_page(2, &user(2, "loop_2", "after raw"), None, 3),
+    ]);
+    finish_export(&mut driver, &mut pages);
+    let written = std::fs::read_to_string(&target).expect("raw export file");
+    assert!(
+        written.contains("Raw item 1"),
+        "{}",
+        &written[..400.min(written.len())]
+    );
+    assert!(
+        written.contains("raw-body-line"),
+        "the raw bytes are present"
+    );
+    assert!(
+        written.contains("after raw"),
+        "the chain continued past the raw item: tail={}",
+        &written[written.len().saturating_sub(400)..]
+    );
+    assert!(
+        written.contains("raw: 1 item(s)"),
+        "the raw note is recorded"
+    );
+    let form = driver.app.export_form().expect("form stays open");
+    assert_eq!(form.limitations.raw_items, 1);
+    assert_eq!(form.limitations.oversized_items, 0);
+    assert!(
+        !form.limitations.is_partial(),
+        "verified raw bytes are complete: {:?}",
+        form.limitations
+    );
+}
+
+/// The full-session scan reuses the strict pinned-chain rules (spec §17.1):
+/// a page whose `total` disagrees with the captured prefix, or whose items are
+/// non-contiguous, stops the scan honestly instead of mixing generations.
+#[test]
+fn full_search_stops_on_a_total_change_instead_of_splicing_generations() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    // The loaded window's total is the session total (40), as the backend
+    // reports it; only the one newest item is resident.
+    let items: Vec<Value> = (0..40)
+        .map(|index| user(index, "loop_1", &format!("prompt {index}")))
+        .collect();
+    driver.step(AppEvent::OpenSession {
+        session_id: "ses_1".to_owned(),
+    });
+    driver.respond_method("session.open", json!({"session": session("ses_1")}));
+    driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
+    let request = driver.request("session.read");
+    // A 40-item prefix delivered as one page with the backend's own cursor.
+    let pin = "1".repeat(64);
+    driver.respond(
+        request,
+        json!({
+            "session": session("ses_1"),
+            "items": encode_item(&items[0]),
+            "total": 40,
+            "records": [],
+            "records_truncated": false,
+            "history_revision": pin,
+            "captured_end": 40,
+            "trailing_incomplete": false,
+            "next_cursor": {"item": 1, "offset": 0},
+        }),
+    );
+    slash(&mut driver, "/search full needle");
+    let first = driver.request("session.read");
+    driver.respond(
+        first,
+        json!({
+            "session": session("ses_1"),
+            "items": encode_item(&user(0, "loop_1", "needle here")),
+            "total": 40,
+            "records": [],
+            "records_truncated": false,
+            "history_revision": pin,
+            "captured_end": 40,
+            "trailing_incomplete": false,
+            "next_cursor": {"item": 1, "offset": 0},
+        }),
+    );
+    while let Some(decode) = driver.app.pending_decode_request() {
+        let item = minicore_tui::protocol::read::decode_item(&decode.item.data).expect("item");
+        driver.app.mark_decode_scheduled();
+        let decoded = minicore_tui::jobs::DecodeOutcome {
+            identity: decode.identity.clone(),
+            fingerprint: decode.fingerprint,
+            result: Ok(item),
+            cancelled: false,
+            scan: Some(Box::new(minicore_tui::jobs::ScanItemOutcome {
+                index: 0,
+                matches: Vec::new(),
+            })),
+            export: None,
+        };
+        let more = driver
+            .app
+            .update(AppEvent::HistoryItemDecoded(Box::new(decoded)));
+        driver.commands(more);
+    }
+    // The next page claims a different total for the same captured prefix: the
+    // scan stops and never fabricates a complete scan across the two totals.
+    let second = driver.request("session.read");
+    driver.respond(
+        second,
+        json!({
+            "session": session("ses_1"),
+            "items": encode_item(&user(1, "loop_1", "needle two")),
+            "total": 99,
+            "records": [],
+            "records_truncated": false,
+            "history_revision": pin,
+            "captured_end": 40,
+            "trailing_incomplete": false,
+        }),
+    );
+    let panel = search_panel(&driver.app);
+    assert!(!panel.coverage.complete, "a changed total is not complete");
+    assert!(panel.coverage.stopped);
+    let label = panel.status_label();
+    assert!(label.contains("stopped early"), "{label}");
+    assert!(!label.contains("complete"), "{label}");
+}
+
+/// A raw item whose chunk byte/offset/complete data disagrees is never claimed
+/// complete: the reducer records the mismatch and stops the chain instead of
+/// resuming on bytes it could not verify. Byte verification itself is unit
+/// tested in `state::export::tests`.
+#[test]
+fn raw_export_records_a_chunk_mismatch_instead_of_claiming_complete() {
+    let dir = ExportDir::new("raw-mismatch");
+    let target = dir.target("chat.md");
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    set_terminal(&mut driver);
+    open_chat_with(&mut driver, vec![user(0, "loop_1", "hello")]);
+
+    slash(&mut driver, &format!("/export raw {}", target.display()));
+    press(&mut driver, KeyCode::Enter);
+    assert!(driver.app.export_running());
+
+    // Page 0: a normal item. Page 1: the discovery page surfaces the oversized
+    // item. Page 2: the raw continuation starts at the wrong offset.
+    let mut pages = VecDeque::from(vec![
+        export_page(0, &user(0, "loop_1", "hello"), Some(1), 2),
+        json!({
+            "session": session("ses_1"),
+            "items": [{
+                "index": 1, "offset": 0, "total_bytes": 9_000_000,
+                "encoding": "utf8_json", "data": "x", "complete": false,
+            }],
+            "total": 2,
+            "records": [],
+            "records_truncated": false,
+            "history_revision": "0".repeat(64),
+            "captured_end": 2,
+            "trailing_incomplete": false,
+        }),
+        json!({
+            "session": session("ses_1"),
+            "items": [{
+                "index": 1, "offset": 5, "total_bytes": 9_000_000,
+                "encoding": "utf8_json", "data": "yyyy", "complete": false,
+            }],
+            "total": 2,
+            "records": [],
+            "records_truncated": false,
+            "history_revision": "0".repeat(64),
+            "captured_end": 2,
+            "trailing_incomplete": false,
+        }),
+    ]);
+    // Drive the reducer with the same retry discipline `finish_export` uses,
+    // but stop once the mismatch has been recorded.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while driver
+        .app
+        .export_form()
+        .is_some_and(|form| form.limitations.raw_mismatched == 0)
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "raw mismatch recorded"
+        );
+        if !driver
+            .queue
+            .iter()
+            .any(|request| request.method == "session.read")
+        {
+            // The bounded writer may need one reducer pass to drain its
+            // outbox before the next continuation is admitted.
+            driver.step(AppEvent::Tick);
+            std::thread::yield_now();
+            continue;
+        }
+        let page = pages.pop_front().expect("a page for every request");
+        export_advance(&mut driver, page);
+        // The reducer's own update pass retries an admission that was
+        // coalesced while a slot was busy, exactly as `main.rs` does.
+        driver.step(AppEvent::Tick);
+    }
+    assert!(
+        pages.is_empty(),
+        "the mismatch settled before the last page"
+    );
+    let form = driver.app.export_form().expect("form stays open");
+    assert_eq!(form.limitations.raw_mismatched, 1);
+    assert!(form.limitations.is_partial());
+
+    // The typed job outcome reports the committed (partial) file.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !driver.drain_exports() {
+        assert!(std::time::Instant::now() < deadline, "raw mismatch settles");
+        driver.step(AppEvent::Tick);
+        std::thread::yield_now();
+    }
+    let written = std::fs::read_to_string(&target).expect("written file");
+    assert!(
+        written.contains("NOT complete"),
+        "the mismatch is recorded: {}",
+        &written[..600.min(written.len())]
+    );
 }

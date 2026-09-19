@@ -30,6 +30,8 @@ pub enum PinError {
     TotalRegressed { known: usize, found: usize },
     #[error("history page did not advance from cursor item {item}")]
     CursorStalled { item: usize },
+    #[error("history revision digest is invalid: {0}")]
+    InvalidPinDigest(String),
 }
 
 /// A stable, byte-bounded window over one pinned history prefix. `items` is a
@@ -791,6 +793,236 @@ impl TurnResultWindow {
             terminal && page.next_cursor.is_none() && self.pending_large_items.is_empty();
         Ok(())
     }
+}
+
+/// One complete item produced by [`advance_chain_page`]. An item above the
+/// automatic decode ceiling is reported separately through
+/// [`ChainPageOutcome::large`] instead of being typed-decoded.
+#[derive(Debug)]
+pub(crate) enum ChainItem {
+    Encoded(crate::protocol::read::EncodedHistoryItem),
+}
+
+/// A large item that ended a page: items after it in the same page are not
+/// assembled, so the caller re-requests from this item's start.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct LargeBoundary {
+    pub index: usize,
+    pub total_bytes: usize,
+    /// The page already delivered the whole item (its bytes were discarded);
+    /// the caller re-reads it from item start.
+    pub complete: bool,
+}
+
+/// The validated result of one page of a pinned streaming chain (spec §6.3).
+#[derive(Debug, Default)]
+pub(crate) struct ChainPageOutcome {
+    pub items: Vec<ChainItem>,
+    pub next: Option<ReadCursor>,
+    pub records_truncated: bool,
+    pub terminal: bool,
+    /// A real protocol violation. The caller records it honestly and stops the
+    /// chain instead of continuing on unvalidated data.
+    pub failed: Option<ReadError>,
+    /// A snapshot-pin/total disagreement. The pinned prefix is gone, so two
+    /// generations must never be spliced.
+    pub stale: Option<PinError>,
+    /// An item above the auto-decode ceiling ended this page (spec §6.2).
+    pub large: Option<LargeBoundary>,
+}
+
+/// Validates the fixed pin and total of one page of a pinned streaming chain
+/// (spec §6.3/§17.1/§17.4). Exported so the raw-chunk path uses exactly the
+/// same generation rules as the assembler path.
+pub(crate) fn validate_chain_pin(
+    pin: &Option<SnapshotPin>,
+    total: &Option<usize>,
+    result: &crate::protocol::ReadSessionResult,
+) -> Result<(), PinError> {
+    result
+        .pin()
+        .validate()
+        .map_err(|error| PinError::InvalidPinDigest(error.to_string()))?;
+    if let Some(want) = pin.as_ref() {
+        if want.captured_end != result.captured_end
+            || want.history_revision != result.history_revision
+        {
+            return Err(PinError::RevisionChanged);
+        }
+        if want.total != result.total {
+            return Err(PinError::TotalRegressed {
+                known: want.total,
+                found: result.total,
+            });
+        }
+    }
+    if let Some(known) = total {
+        if *known != result.total {
+            return Err(PinError::TotalRegressed {
+                known: *known,
+                found: result.total,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Validates and feeds one `session.read` page for a pinned streaming chain.
+///
+/// This is the **same** validation the main history window applies: the page's
+/// pin must match the captured prefix, `total` may not regress or change
+/// within one chain, the chunk assembler owns encoding/offset/`total_bytes`
+/// verification, and the backend's `next_cursor` must agree with the items
+/// actually delivered. Export and full-session search both use it, so a chain
+/// can never advance on data that would be refused for the main window.
+pub(crate) fn advance_chain_page(
+    page: &mut ReadPage,
+    pin: &mut Option<SnapshotPin>,
+    total: &mut Option<usize>,
+    result: &crate::protocol::ReadSessionResult,
+) -> ChainPageOutcome {
+    let mut outcome = ChainPageOutcome {
+        records_truncated: result.records_truncated,
+        ..ChainPageOutcome::default()
+    };
+    if let Err(error) = result.pin().validate() {
+        outcome.failed = Some(error);
+        return outcome;
+    }
+    // Pin and total are fixed for the whole chain (spec §17.1/§17.4): a
+    // mismatch means the pinned prefix is no longer this generation.
+    if let Err(stale) = validate_chain_pin(pin, total, result) {
+        outcome.stale = Some(stale);
+        return outcome;
+    }
+    if pin.is_none() {
+        *pin = Some(result.pin());
+    }
+    if total.is_none() {
+        *total = Some(result.total);
+    }
+
+    let previous = page.cursor;
+    let mut expected = previous.item;
+    let mut explicit_large = false;
+    for chunk in &result.items {
+        match page.assembler.push(chunk.clone()) {
+            Ok(Assembled::Pending) => {}
+            Ok(Assembled::EncodedItem { item }) => {
+                if item.index != expected {
+                    outcome.failed = Some(ReadError::NonContiguous {
+                        expected,
+                        found: item.index,
+                    });
+                    return outcome;
+                }
+                expected = item.index.saturating_add(1);
+                outcome.items.push(ChainItem::Encoded(item));
+            }
+            Ok(Assembled::LargeItem { index, total_bytes }) => {
+                if index != expected {
+                    outcome.failed = Some(ReadError::NonContiguous {
+                        expected,
+                        found: index,
+                    });
+                    return outcome;
+                }
+                expected = index.saturating_add(1);
+                explicit_large = true;
+                outcome.large = Some(LargeBoundary {
+                    index,
+                    total_bytes,
+                    complete: true,
+                });
+                break;
+            }
+            Ok(Assembled::LargeItemPending { index, total_bytes }) => {
+                if index != expected {
+                    outcome.failed = Some(ReadError::NonContiguous {
+                        expected,
+                        found: index,
+                    });
+                    return outcome;
+                }
+                explicit_large = true;
+                outcome.large = Some(LargeBoundary {
+                    index,
+                    total_bytes,
+                    complete: false,
+                });
+                break;
+            }
+            Err(error) => {
+                outcome.failed = Some(error);
+                return outcome;
+            }
+        }
+    }
+    // A large item boundary ends the page: the bytes after it were not
+    // assembled, so the caller restarts from the item and re-requests. The
+    // cursor is therefore not validated against this page's tail.
+    if let Some(large) = outcome.large {
+        outcome.next = Some(ReadCursor {
+            item: large.index,
+            offset: 0,
+        });
+        outcome.terminal = false;
+        let _ = explicit_large;
+        return outcome;
+    }
+    // The backend cursor must agree with the chunks just delivered, exactly as
+    // for the main window: a stalled cursor would loop without progress.
+    if let Some(next) = result.next_cursor {
+        if next.item != expected {
+            outcome.failed = Some(ReadError::CursorStalled {
+                item: previous.item,
+            });
+            return outcome;
+        }
+        if next == previous && !explicit_large {
+            outcome.failed = Some(ReadError::CursorStalled {
+                item: previous.item,
+            });
+            return outcome;
+        }
+        if let Some(partial) = page.assembler.next_cursor() {
+            if next != partial {
+                outcome.failed = Some(ReadError::CursorOffsetMismatch {
+                    expected: partial.offset,
+                    found: next.offset,
+                });
+                return outcome;
+            }
+        } else if next.offset != 0 {
+            outcome.failed = Some(ReadError::CursorOffsetMismatch {
+                expected: 0,
+                found: next.offset,
+            });
+            return outcome;
+        }
+        page.cursor = next;
+        outcome.next = Some(next);
+        outcome.terminal = false;
+    } else {
+        if page.assembler.current_index().is_some() {
+            outcome.failed = Some(ReadError::CursorStalled { item: expected });
+            return outcome;
+        }
+        if expected != result.total {
+            outcome.failed = Some(ReadError::NonContiguous {
+                expected,
+                found: result.total,
+            });
+            return outcome;
+        }
+        page.cursor = ReadCursor {
+            item: expected,
+            offset: 0,
+        };
+        outcome.next = None;
+        outcome.terminal = true;
+    }
+    outcome
 }
 
 /// What one applied page contributed.
@@ -2056,6 +2288,7 @@ impl App {
                 index,
             } => self.finish_search_item_decoded(
                 &session_id,
+                outcome.identity.session_epoch,
                 generation,
                 index,
                 outcome.fingerprint,
@@ -2067,6 +2300,7 @@ impl App {
                 index,
             } => self.finish_export_item_decoded(
                 &session_id,
+                outcome.identity.session_epoch,
                 export_id,
                 index,
                 outcome.fingerprint,

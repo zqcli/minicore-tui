@@ -174,8 +174,14 @@ pub enum ExportInbound {
     Header(Box<ExportHeader>),
     /// One rendered item, or an oversized placeholder (`oversized` bytes).
     Item(Box<ExportRecord>),
+    /// Begin a raw oversized item: its verified canonical chunks follow. The
+    /// writer never typed-decodes these bytes.
+    RawStart { index: usize, total_bytes: usize },
+    /// One verbatim chunk of the current raw item. The writer re-verifies the
+    /// encoding/offset/`total_bytes`/`complete` agreement itself.
+    RawChunk(Box<crate::protocol::read::ReadChunk>),
     /// The read chain reached its end: write the trailing limitation notes and
-    /// commit the file with an atomic rename.
+    /// commit the file with an atomic no-clobber move.
     Finish(Box<crate::state::export::ExportLimitations>),
     /// The user cancelled: remove the uncommitted temp file.
     Abort,
@@ -205,6 +211,18 @@ impl std::fmt::Debug for ExportInbound {
                 .field("markdown_bytes", &record.markdown.len())
                 .field("oversized", &record.oversized)
                 .finish(),
+            Self::RawStart { index, total_bytes } => formatter
+                .debug_struct("RawStart")
+                .field("index", index)
+                .field("total_bytes", total_bytes)
+                .finish(),
+            Self::RawChunk(chunk) => formatter
+                .debug_struct("RawChunk")
+                .field("index", &chunk.index)
+                .field("offset", &chunk.offset)
+                .field("data_bytes", &chunk.data.len())
+                .field("complete", &chunk.complete)
+                .finish(),
             Self::Finish(limitations) => {
                 formatter.debug_tuple("Finish").field(limitations).finish()
             }
@@ -213,25 +231,46 @@ impl std::fmt::Debug for ExportInbound {
     }
 }
 
+/// Identifies the one export job whose result is being reported. The App
+/// records the same capture when it starts the export, so a completion for an
+/// older target/session/epoch can never decorate a newer export (spec §17.4).
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ExportCapture {
+    pub export_id: u64,
+    pub session_id: String,
+    pub session_epoch: u64,
+}
+
+/// The one owned writer slot is still occupied by an earlier export whose
+/// typed completion has not been drained. The caller keeps the newer request
+/// unstarted instead of overwriting the owner handle (spec §17.4).
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct ExportBusyError;
+
 /// The final state of one owned export job.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ExportOutcome {
-    /// The temp file was renamed onto the target.
+    /// The temp file was moved onto the target (a no-clobber commit or an
+    /// explicitly confirmed replace). A late cancel cannot undo this.
     Finished {
         target: String,
         bytes: usize,
         items: usize,
     },
-    /// The target exists and the user has not confirmed overwriting it yet.
+    /// The target exists and was created after the export began, so the
+    /// no-clobber commit refused to replace it. Nothing was written.
     WouldOverwrite { target: String },
-    /// The job was cancelled; the temp file was removed.
+    /// The job was cancelled before committing; the temp file was removed.
     Cancelled { target: String },
     /// The export stopped with an error. `temp_removed` says whether deleting
-    /// the uncommitted temp file was confirmed.
+    /// the uncommitted temp file was confirmed. `target_state_unknown` is set
+    /// when a commit attempt failed without proving the target was untouched:
+    /// the UI must not claim a rollback.
     Failed {
         target: String,
         error: String,
         temp_removed: bool,
+        target_state_unknown: bool,
     },
 }
 
@@ -271,6 +310,9 @@ pub struct LocalJobs {
     scan_tx: Option<mpsc::Sender<LocalScanRequest>>,
     scan_task: Option<JoinHandle<()>>,
     export_task: Option<JoinHandle<()>>,
+    /// Set by `shutdown` (and by a stray writer loss) to wake a writer blocked
+    /// on its channel even while the App still holds its sender.
+    export_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Default for LocalJobs {
@@ -506,6 +548,7 @@ impl LocalJobs {
             scan_tx: Some(scan_tx),
             scan_task: Some(scan_task),
             export_task: None,
+            export_cancel: None,
         }
     }
 
@@ -660,28 +703,55 @@ impl LocalJobs {
     /// Starts the one owned export job. It owns the target path, the temp
     /// file and every byte of file I/O; the returned receiver is held by the
     /// App so the bounded channel provides backpressure for paging.
+    ///
+    /// The single writer slot is never overwritten: while a previous export is
+    /// still running (or its completion has not been drained) this returns
+    /// `Err(ExportBusy)` and the caller keeps the request unstarted, so no
+    /// owner handle is orphaned and no second writer races the same target.
     pub fn start_export(
         &mut self,
+        capture: ExportCapture,
         target: std::path::PathBuf,
         overwrite: bool,
+        cancel: Arc<std::sync::atomic::AtomicBool>,
         rx: mpsc::Receiver<ExportInbound>,
-    ) -> JobId {
+    ) -> Result<JobId, ExportBusyError> {
+        if self.export_task.is_some() {
+            return Err(ExportBusyError);
+        }
+        self.export_cancel = Some(Arc::clone(&cancel));
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
         let events = self.events_tx.clone();
         let handle = tokio::task::spawn_blocking(move || {
-            let outcome = run_export_job(&target, overwrite, rx);
-            let _ = events.blocking_send(AppEvent::JobFinished(JobOutcome::Export { outcome }));
+            let outcome = run_export_job(&target, overwrite, rx, cancel);
+            let _ = events.blocking_send(AppEvent::JobFinished(JobOutcome::Export {
+                capture,
+                outcome,
+            }));
         });
         self.export_task = Some(handle);
-        id
+        Ok(id)
     }
 
-    /// Whether an export job is still running.
+    /// Whether an export job handle is still owned (running or not yet
+    /// reaped). The App uses this to refuse a second start.
     pub fn has_export_in_flight(&self) -> bool {
-        self.export_task
-            .as_ref()
-            .is_some_and(|handle| !handle.is_finished())
+        self.export_task.is_some()
+    }
+
+    /// Signals the owned export writer to abort now. It does not wait for the
+    /// writer to finish; `shutdown` joins the handle right after.
+    fn request_export_abort(&mut self) {
+        if let Some(cancel) = self.export_cancel.as_ref() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Whether the owned export writer slot is currently free. `true` means a
+    /// new export may be started (spec §17.4).
+    pub fn export_slot_free(&self) -> bool {
+        self.export_task.is_none()
     }
 
     /// Joins the clipboard job if it already finished and drops its handle.
@@ -751,8 +821,12 @@ impl LocalJobs {
             }
             let _ = task.await;
         }
-        // Dropping the export sender closes its channel: a job still holding an
-        // uncommitted temp file aborts and removes it before it returns.
+        // The export job's bounded channel is closed first: a job still holding
+        // an uncommitted temp file aborts and removes it before it returns. The
+        // App is gone by now, so the channel closes on its own; the completion
+        // send uses `blocking_send` on a bounded channel that shutdown drains.
+        self.request_export_abort();
+        self.export_cancel = None;
         if let Some(task) = self.export_task.take() {
             while !task.is_finished() {
                 while self.events_rx.try_recv().is_ok() {}
@@ -772,6 +846,27 @@ impl LocalJobs {
     }
 }
 
+/// Waits for the next export message without ever blocking indefinitely: a
+/// cancel token or a closed channel both end the wait, so `shutdown` and a
+/// user cancel never depend on the bounded channel having room.
+fn next_export_message(
+    rx: &mut mpsc::Receiver<ExportInbound>,
+    cancel: &Arc<std::sync::atomic::AtomicBool>,
+) -> Option<ExportInbound> {
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Some(ExportInbound::Abort);
+        }
+        match rx.try_recv() {
+            Ok(message) => return Some(message),
+            Err(mpsc::error::TryRecvError::Empty) => {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            Err(mpsc::error::TryRecvError::Disconnected) => return None,
+        }
+    }
+}
+
 /// The owned export writer loop. Everything here runs on a blocking thread:
 /// creating the temp file, writing records, the trailing notes, the atomic
 /// rename and the cancel cleanup. The bounded channel is the only input, so
@@ -780,9 +875,11 @@ pub fn run_export_job(
     target: &std::path::Path,
     overwrite: bool,
     mut rx: mpsc::Receiver<ExportInbound>,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
 ) -> ExportOutcome {
     use crate::state::export::{
-        EXPORT_OVERSIZED_NOTE, ExportStartError, ExportWriter, header_text,
+        EXPORT_OVERSIZED_NOTE, ExportCommitError, ExportStartError, ExportWriter, RawItemStream,
+        header_text, raw_item_end_text, raw_item_start_text,
     };
     let target_display = target.display().to_string();
     let mut writer = match ExportWriter::create(target, overwrite) {
@@ -797,14 +894,18 @@ pub fn run_export_job(
                 target: target_display,
                 error,
                 temp_removed: true,
+                target_state_unknown: false,
             };
         }
     };
     let mut items = 0usize;
     let mut failure: Option<String> = None;
     let mut cancelled = false;
+    // The one raw item currently being streamed, if any. It owns the byte
+    // verification; the writer only sees chunks that already passed it.
+    let mut raw: Option<RawItemStream> = None;
     loop {
-        let Some(message) = rx.blocking_recv() else {
+        let Some(message) = next_export_message(&mut rx, &cancel) else {
             // The App dropped the sender (shutdown or cancel): the temp file is
             // uncommitted and must not survive.
             cancelled = true;
@@ -823,7 +924,36 @@ pub fn run_export_job(
                 }
                 result
             }
+            ExportInbound::RawStart { index, total_bytes } => {
+                raw = Some(RawItemStream::start(index, total_bytes));
+                writer.write(&raw_item_start_text(index, total_bytes))
+            }
+            ExportInbound::RawChunk(chunk) => match raw.as_mut() {
+                Some(stream) => {
+                    let outcome = stream.push(&chunk);
+                    match outcome {
+                        Ok(_) => writer.write(&chunk.data),
+                        Err(_) => {
+                            // The mismatch is recorded in the stream and the
+                            // file marks the item incomplete at its end; the
+                            // bytes already written stay, but the file never
+                            // claims a complete item.
+                            Ok(())
+                        }
+                    }
+                }
+                None => Ok(()),
+            },
             ExportInbound::Finish(limitations) => {
+                // A raw item that never received its closing chunk is not
+                // silently closed: mark it incomplete before the notes.
+                if let Some(stream) = raw.take() {
+                    let complete = stream.complete && !stream.mismatch;
+                    if let Err(error) = writer.write(&raw_item_end_text(stream.index, complete)) {
+                        failure = Some(format!("cannot write the export: {error}"));
+                        break;
+                    }
+                }
                 let notes = limitations.notes();
                 let result = if notes.is_empty() {
                     Ok(())
@@ -845,6 +975,17 @@ pub fn run_export_job(
             failure = Some(format!("cannot write the export: {error}"));
             break;
         }
+        // Close a raw item as soon as its last chunk verified. The App sends
+        // the closing marker through `Finish`, so a stored raw stream is only
+        // closed there or on an error.
+        if raw.as_ref().is_some_and(|stream| stream.complete) {
+            let stream = raw.take().expect("present");
+            if let Err(error) = writer.write(&raw_item_end_text(stream.index, !stream.mismatch)) {
+                failure = Some(format!("cannot write the export: {error}"));
+                break;
+            }
+            items += 1;
+        }
     }
     if let Some(error) = failure {
         let temp_removed = writer.abort().is_ok();
@@ -852,6 +993,7 @@ pub fn run_export_job(
             target: target_display,
             error,
             temp_removed,
+            target_state_unknown: false,
         };
     }
     if cancelled {
@@ -865,6 +1007,7 @@ pub fn run_export_job(
                 target: target_display,
                 error,
                 temp_removed: false,
+                target_state_unknown: false,
             },
         };
     }
@@ -875,10 +1018,18 @@ pub fn run_export_job(
             bytes,
             items,
         },
-        Err(error) => ExportOutcome::Failed {
+        Err(ExportCommitError::TargetExists) => ExportOutcome::WouldOverwrite {
+            target: target_display,
+        },
+        Err(ExportCommitError::Io {
+            error,
+            temp_removed,
+            target_state_unknown,
+        }) => ExportOutcome::Failed {
             target: target_display,
             error,
-            temp_removed: false,
+            temp_removed,
+            target_state_unknown,
         },
     }
 }

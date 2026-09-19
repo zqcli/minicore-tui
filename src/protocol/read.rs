@@ -389,6 +389,10 @@ pub enum ReadError {
     ItemChanged { index: usize },
     #[error("invalid history snapshot pin: {detail}")]
     InvalidPin { detail: String },
+    #[error("page pin no longer matches the captured prefix")]
+    PinMismatch,
+    #[error("history total changed from {expected} to {found} within one pinned chain")]
+    TotalChanged { expected: usize, found: usize },
     #[error("turn result total changed from {expected} to {found}")]
     TurnTotalMismatch { expected: usize, found: usize },
     #[error("turn result cursor offset {found} does not continue at {expected}")]

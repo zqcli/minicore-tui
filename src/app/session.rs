@@ -1090,6 +1090,25 @@ impl App {
             .get(session_id)
             .and_then(|view| view.retired_loop.clone());
         self.retire_reopened_session(session_id);
+        // Fence read/search/export work as soon as reopen is requested, not
+        // only when `session.open` responds. Old pages must release their
+        // query slots without reaching a newer epoch.
+        self.retire_session_operations(session_id);
+        self.invalidate_decode_for_session(session_id);
+        if self
+            .search_scan
+            .as_ref()
+            .is_some_and(|scan| scan.session_id == *session_id)
+        {
+            self.close_search();
+        }
+        if self
+            .export_scan
+            .as_ref()
+            .is_some_and(|scan| scan.session_id == *session_id)
+        {
+            self.cancel_export();
+        }
         vec![self.request(
             RequestKind::OpenSession {
                 session_id: session_id.clone(),
@@ -1862,6 +1881,20 @@ impl App {
             .and_then(|turn| self.retained_results.get(turn))
             .cloned();
         self.invalidate_decode_for_session(&session_id);
+        if self
+            .search_scan
+            .as_ref()
+            .is_some_and(|scan| scan.session_id == session_id)
+        {
+            self.close_search();
+        }
+        if self
+            .export_scan
+            .as_ref()
+            .is_some_and(|scan| scan.session_id == session_id)
+        {
+            self.cancel_export();
+        }
         // A turn-result window may still own encoded items from the retired
         // session epoch. Retain the authoritative summary, but force any
         // later read-back to create a fresh window/read chain instead of

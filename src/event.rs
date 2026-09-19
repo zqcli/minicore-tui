@@ -240,7 +240,11 @@ pub enum JobOutcome {
         revision: u64,
         result: Result<(), String>,
     },
-    /// The one owned export writer finished (spec §17.4). The outcome carries
-    /// the target so a stale completion for another target is never shown.
-    Export { outcome: crate::jobs::ExportOutcome },
+    /// The one owned export writer finished (spec §17.4). The capture carries
+    /// the export id, session and epoch the App recorded at start, so a stale
+    /// completion is routed by identity and never decorates a newer export.
+    Export {
+        capture: crate::jobs::ExportCapture,
+        outcome: crate::jobs::ExportOutcome,
+    },
 }

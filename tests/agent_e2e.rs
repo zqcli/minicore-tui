@@ -329,7 +329,7 @@ fn handle_connection(
 
     if let Some(gate) = &resp.gate {
         let wait_start = Instant::now();
-        let gate_timeout = Duration::from_secs(10);
+        let gate_timeout = Duration::from_secs(120);
         while !gate.load(Ordering::Relaxed) && running.load(Ordering::Relaxed) {
             if wait_start.elapsed() > gate_timeout {
                 break;
@@ -827,17 +827,22 @@ fn handle_local_scan(app: &mut App, request: &minicore_tui::jobs::LocalScanReque
 /// the blocking pool, exactly as `main.rs` starts it; the handles are awaited
 /// by the pump so the completion event reaches the App.
 static EXPORT_HANDLES: std::sync::Mutex<
-    Vec<tokio::task::JoinHandle<minicore_tui::jobs::ExportOutcome>>,
+    Vec<(
+        minicore_tui::jobs::ExportCapture,
+        tokio::task::JoinHandle<minicore_tui::jobs::ExportOutcome>,
+    )>,
 > = std::sync::Mutex::new(Vec::new());
 
 fn handle_start_export(request: minicore_tui::command::StartExportRequest) {
+    let capture = request.capture.clone();
+    let cancel = request.cancel.clone();
     let handle = tokio::task::spawn_blocking(move || {
-        minicore_tui::jobs::run_export_job(&request.target, request.overwrite, request.rx)
+        minicore_tui::jobs::run_export_job(&request.target, request.overwrite, request.rx, cancel)
     });
     EXPORT_HANDLES
         .lock()
         .expect("export handle lock")
-        .push(handle);
+        .push((capture, handle));
 }
 
 /// Feeds every finished export job's outcome back to the reducer.
@@ -847,7 +852,7 @@ async fn drain_export_jobs(app: &mut App) -> Result<Vec<AppCommand>, String> {
         let mut finished = Vec::new();
         let mut index = 0;
         while index < guard.len() {
-            if guard[index].is_finished() {
+            if guard[index].1.is_finished() {
                 finished.push(guard.remove(index));
             } else {
                 index += 1;
@@ -856,9 +861,12 @@ async fn drain_export_jobs(app: &mut App) -> Result<Vec<AppCommand>, String> {
         finished
     };
     let mut commands = Vec::new();
-    for handle in finished {
+    for (capture, handle) in finished {
         let outcome = handle.await.map_err(|error| error.to_string())?;
-        commands.extend(app.update(AppEvent::JobFinished(JobOutcome::Export { outcome })));
+        commands.extend(app.update(AppEvent::JobFinished(JobOutcome::Export {
+            capture,
+            outcome,
+        })));
     }
     Ok(commands)
 }
@@ -4676,12 +4684,23 @@ fn e2e_new_form_rename_close_delete_commands() {
 fn e2e_full_search_and_export_real_agent_chain() {
     let agent_bin = require_agent_bin();
     let (env, _) = E2eEnvironment::setup();
-    env._server.enqueue_sse(sse_text_response(
-        "café ☕ answer with a distinctive needle",
-    ));
+    // Eleven completed turns produce 22+ saved history items, forcing the
+    // real session.read search/export chains across the 20-item page limit.
+    // The combined saved history exceeds one read page, and the final answer
+    // contains a multi-byte needle in the streamed body.
+    for index in 0..11 {
+        let text = if index == 10 {
+            format!(
+                "{}café ☕ cross-chunk needle{}",
+                "x".repeat(12_000),
+                "y".repeat(12_000)
+            )
+        } else {
+            format!("durable answer {index}")
+        };
+        env._server.enqueue_sse(sse_text_response(&text));
+    }
     let gate = Arc::new(AtomicBool::new(false));
-    env._server
-        .enqueue_gated(sse_text_response("live unsaved body"), gate.clone(), None);
     let dir = std::env::temp_dir().join(format!(
         "mctui-e2e-export-{}-{}",
         std::process::id(),
@@ -4707,19 +4726,45 @@ fn e2e_full_search_and_export_real_agent_chain() {
         .unwrap();
         let session =
             create_compact_session(&mut process, &mut app, &env.workspace_path, "Export A").await;
-        dispatch(
-            &mut process,
-            &mut app,
-            AppEvent::SubmitTurn {
-                session_id: session.clone(),
-                text: "durable question".to_owned(),
-            },
-        )
-        .await
-        .unwrap();
-        wait_turn_landed(&mut process, &mut app, &session)
+        for index in 0..11 {
+            dispatch(
+                &mut process,
+                &mut app,
+                AppEvent::SubmitTurn {
+                    session_id: session.clone(),
+                    text: format!("durable question {index}"),
+                },
+            )
             .await
             .unwrap();
+            let expected_items = (index + 1) * 2;
+            pump_until(&mut process, &mut app, |a| {
+                a.sessions.known.get(&session).is_some_and(|view| {
+                    view.live.is_none() && view.transcript.total >= expected_items
+                })
+            })
+            .await
+            .unwrap_or_else(|error| {
+                let view = app.sessions.known.get(&session).unwrap();
+                panic!(
+                    "turn {index} expected {expected_items} items, got total={} loaded={} complete={} live={:?}: {error}",
+                    view.transcript.total,
+                    view.transcript.loaded_count,
+                    view.transcript.complete,
+                    view.live.as_ref().map(|live| &live.reference)
+                )
+            });
+        }
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions
+                .known
+                .get(&session)
+                .is_some_and(|view| view.transcript.total >= 22)
+        })
+        .await
+        .unwrap();
+        env._server
+            .enqueue_gated(sse_text_response("live unsaved body"), gate.clone(), None);
 
         // The explicit full-session scan runs on the real read chain and
         // finds the literal in the durable body.
@@ -4734,6 +4779,7 @@ fn e2e_full_search_and_export_real_agent_chain() {
         .unwrap();
         let panel = app.search_panel().expect("search panel");
         assert_eq!(panel.matches.len(), 1, "{:?}", panel.matches);
+        assert!(panel.coverage.scanned_items > 20, "{:?}", panel.coverage);
         assert!(panel.coverage.complete, "{:?}", panel.coverage);
         press_key(&mut process, &mut app, KeyCode::Esc)
             .await
@@ -4787,8 +4833,17 @@ fn e2e_full_search_and_export_real_agent_chain() {
             }
             assert!(
                 Instant::now() < deadline,
-                "export did not finish: {:?}",
-                app.export_form().map(|form| form.notice.clone())
+                "export did not finish: phase={:?} notice={:?} running={} owner={} pending_requests={:?} decode_pending={} dock={:?}",
+                app.export_form().map(|form| form.phase),
+                app.export_form().and_then(|form| form.notice.clone()),
+                app.export_running(),
+                app.export_owner_busy(),
+                app.pending_requests
+                    .iter()
+                    .map(|(id, kind)| format!("{}:{kind:?}", id.0))
+                    .collect::<Vec<_>>(),
+                app.pending_decode_request().is_some(),
+                app.dock
             );
             pump_step(&mut process, &mut app).await.unwrap();
             let commands = drain_pending_decode(&mut app);
@@ -4798,8 +4853,7 @@ fn e2e_full_search_and_export_real_agent_chain() {
         }
         let written = std::fs::read_to_string(&target).expect("exported file");
         assert!(written.contains("Conversation export"), "{written}");
-        assert!(written.contains("café ☕ answer"), "{written}");
-        assert!(written.contains("distinctive needle"), "{written}");
+        assert!(written.contains("café ☕ cross-chunk needle"), "{written}");
         assert!(written.contains("saved history plus"), "{written}");
         assert!(written.contains("Unconfirmed live turn"), "{written}");
         assert!(written.contains("unsaved question"), "{written}");

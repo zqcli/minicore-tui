@@ -34,8 +34,12 @@ pub enum AppCommand {
 /// channel the App feeds; the path was validated without touching the file
 /// system.
 pub struct StartExportRequest {
+    pub capture: crate::jobs::ExportCapture,
     pub target: std::path::PathBuf,
     pub overwrite: bool,
+    /// The App and the job share this token: setting it makes the writer abort
+    /// immediately even while its bounded channel is full.
+    pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub rx: tokio::sync::mpsc::Receiver<crate::jobs::ExportInbound>,
     pub spec: crate::state::export::ExportSpec,
 }
@@ -48,6 +52,7 @@ impl std::fmt::Debug for StartExportRequest {
             .field("overwrite", &self.overwrite)
             .field("include_thinking", &self.spec.include_thinking)
             .field("include_tool", &self.spec.include_tool)
+            .field("raw_oversized", &self.spec.raw_oversized)
             .finish()
     }
 }
@@ -117,8 +122,10 @@ pub enum LocalCommand {
     /// (spec §17.3). `/copy` without an argument copies the last reply.
     Copy { target: CopyTarget },
     /// Open the local export form, optionally pre-filled with a target path
-    /// (spec §17.4). Nothing is written until the form is submitted.
-    Export { target: String },
+    /// (spec §17.4). `raw_oversized` selects the explicit raw-JSON streaming
+    /// entry for items above the automatic decode ceiling. Nothing is written
+    /// until the form is submitted.
+    Export { target: String, raw_oversized: bool },
     /// Open the session selector.
     Resume,
     /// Open the session selector.
@@ -238,7 +245,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "export",
-        usage: "/export [path]",
+        usage: "/export [raw] [path]",
         summary: "write this conversation's saved history to a local Markdown file",
         args: CommandArgs::OptionalPath,
     },
@@ -513,9 +520,20 @@ pub fn parse_command(input: &str) -> Result<LocalCommand, CommandIssue> {
             }),
             _ => Err(CommandIssue::InvalidArgs(format!("usage: {}", spec.usage))),
         },
-        ("export", _) => Ok(LocalCommand::Export {
-            target: args.to_owned(),
-        }),
+        ("export", _) => {
+            // `/export raw <path>` selects the explicit raw-JSON streaming
+            // entry for oversized items; `/export <path>` keeps placeholders.
+            let (raw_oversized, path) = match args.strip_prefix("raw") {
+                Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => {
+                    (true, rest.trim())
+                }
+                _ => (false, args),
+            };
+            Ok(LocalCommand::Export {
+                target: path.to_owned(),
+                raw_oversized,
+            })
+        }
         ("prev", _) => no_args(LocalCommand::PromptJump(-1)),
         ("next", _) => no_args(LocalCommand::PromptJump(1)),
         ("latest", _) => no_args(LocalCommand::Latest),

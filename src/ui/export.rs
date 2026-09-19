@@ -46,6 +46,7 @@ fn panel_title(form: &ExportFormState) -> String {
     let phase = match form.phase {
         ExportPhase::Editing => "form",
         ExportPhase::Running => "writing",
+        ExportPhase::Cancelling => "cancelling",
         ExportPhase::Done => "done",
         ExportPhase::Failed => "stopped",
     };
@@ -107,6 +108,9 @@ fn render_progress(frame: &mut Frame, area: Rect, form: &ExportFormState, theme:
     let text = match form.phase {
         ExportPhase::Editing => "saved history only; nothing has been written yet".to_owned(),
         ExportPhase::Running => format!("writing… {} item(s) forwarded", form.items),
+        ExportPhase::Cancelling => {
+            "cancelling: waiting for the writer to confirm whether it committed".to_owned()
+        }
         ExportPhase::Done => format!("wrote {} item(s), {} bytes", form.items, form.bytes),
         ExportPhase::Failed => "no file was committed".to_owned(),
     };
@@ -161,6 +165,7 @@ fn render_notes(frame: &mut Frame, area: Rect, form: &ExportFormState, theme: &T
 fn render_hints(frame: &mut Frame, area: Rect, form: &ExportFormState, theme: &Theme) {
     let hint = match form.phase {
         ExportPhase::Running => "Esc cancel · the temporary file is removed",
+        ExportPhase::Cancelling => "waiting for the writer's typed outcome…",
         ExportPhase::Editing | ExportPhase::Done | ExportPhase::Failed => {
             "Enter export · Ctrl+T/P/N/Y options · Esc close"
         }

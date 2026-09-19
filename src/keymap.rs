@@ -108,6 +108,8 @@ pub enum Action {
     ExportToggleUnsaved,
     /// Export form Ctrl+Y: the explicit overwrite confirmation.
     ExportToggleOverwrite,
+    /// Export form Ctrl+R: stream oversized items as raw sanitized JSON.
+    ExportToggleRaw,
     /// Export form Esc: close the form (cancelling a running export).
     ExportEscape,
     SessionDeleteToggle,
@@ -498,6 +500,7 @@ fn export_keys(key: KeyEvent, press: bool, typing: bool, running: bool) -> Actio
         KeyCode::Char('p') if ctrl(&key) && !running => Action::ExportToggleTool,
         KeyCode::Char('n') if ctrl(&key) && !running => Action::ExportToggleUnsaved,
         KeyCode::Char('y') if ctrl(&key) && !running => Action::ExportToggleOverwrite,
+        KeyCode::Char('r') if ctrl(&key) && !running => Action::ExportToggleRaw,
         KeyCode::Char(c) if !ctrl(&key) && !alt(&key) && !running => Action::ExportTypeChar(c),
         _ => Action::None,
     }

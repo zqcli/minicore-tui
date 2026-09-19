@@ -525,6 +525,12 @@ pub struct App {
     export_include_unsaved: bool,
     /// The bounded hand-off to the owned export writer.
     export_tx: Option<tokio::sync::mpsc::Sender<crate::jobs::ExportInbound>>,
+    /// The identity of the export the App last started. A completion is routed
+    /// by this capture, so a stale result can never decorate a newer form.
+    export_capture: Option<crate::jobs::ExportCapture>,
+    /// The cancel token shared with the owned writer: setting it makes the
+    /// writer abort without waiting for channel room.
+    export_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// At most one record waiting for room in the bounded channel. Paging is
     /// paused while it is set (backpressure, never an unbounded buffer).
     export_outbox: VecDeque<crate::jobs::ExportInbound>,
@@ -708,6 +714,8 @@ impl App {
             export_spec: ExportSpec::default(),
             export_include_unsaved: false,
             export_tx: None,
+            export_capture: None,
+            export_cancel: None,
             export_outbox: VecDeque::new(),
             export_hold: false,
             turn_results: HashMap::new(),
@@ -3532,6 +3540,10 @@ impl App {
                 self.export_toggle_overwrite();
                 Vec::new()
             }
+            ExportToggleRaw => {
+                self.export_toggle_raw();
+                Vec::new()
+            }
             ExportEscape => self.export_escape(),
             SessionBrowse => self.browse_selected_session(),
             SessionContinue => self.continue_selected_session(),
@@ -3912,7 +3924,10 @@ impl App {
             }
             LocalCommand::Search { query, scope } => self.open_search(query, scope),
             LocalCommand::Copy { target } => self.copy_command(target),
-            LocalCommand::Export { target } => self.open_export_form(target),
+            LocalCommand::Export {
+                target,
+                raw_oversized,
+            } => self.open_export_form(target, raw_oversized),
             LocalCommand::PromptJump(direction) => self.prompt_jump(direction),
             LocalCommand::Latest => self.jump_latest(),
             LocalCommand::Clear => self.clear_transcript(),

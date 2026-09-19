@@ -602,8 +602,37 @@ async fn run_commands(
             AppCommand::StartExport(request) => {
                 let request = *request;
                 // The owned writer owns the target path, the temp file and the
-                // bounded receiver. No file I/O happens on the main loop.
-                jobs.start_export(request.target, request.overwrite, request.rx);
+                // bounded receiver. No file I/O happens on the main loop. If
+                // the single slot is still busy the request is not started and
+                // the App keeps its unstarted owner instead of orphaning one.
+                let capture = request.capture.clone();
+                let target = request.target.clone();
+                match jobs.start_export(
+                    request.capture,
+                    request.target,
+                    request.overwrite,
+                    request.cancel,
+                    request.rx,
+                ) {
+                    Ok(_) => {}
+                    Err(_busy) => {
+                        // This should be unreachable because App keeps the
+                        // writer owner busy until its typed outcome arrives.
+                        // Still settle the exact capture if the defensive
+                        // guard fires; otherwise App would retain a sender
+                        // forever and the next export could never start.
+                        let more = app.update(AppEvent::JobFinished(JobOutcome::Export {
+                            capture,
+                            outcome: minicore_tui::jobs::ExportOutcome::Failed {
+                                target: target.display().to_string(),
+                                error: "the export writer slot is busy".to_owned(),
+                                temp_removed: true,
+                                target_state_unknown: false,
+                            },
+                        }));
+                        queue.extend(more);
+                    }
+                }
             }
             AppCommand::KillChild => process.kill_child(),
             AppCommand::CopySelection(text) => {

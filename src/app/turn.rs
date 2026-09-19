@@ -854,7 +854,9 @@ impl App {
                 }
                 Err(error) => self.notice(NoticeLevel::Warning, error),
             },
-            JobOutcome::Export { outcome } => return self.on_export_job_finished(outcome),
+            JobOutcome::Export { capture, outcome } => {
+                return self.on_export_job_finished(capture, outcome);
+            }
         }
         Vec::new()
     }

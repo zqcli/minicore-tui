@@ -20,6 +20,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 pulldown-cmark = { version = "=0.12.2", default-features = false }
 unicode-width = "=0.2.0"
 unicode-segmentation = "=1.13.3"
+# Reliable unique temp files for the Markdown export (spec §17.4/§23.1).
+# Pinned to a release whose MSRV is below our Rust 1.85 floor; it also
+# provides the atomic no-clobber persist used to commit an export.
+tempfile = "=3.14.0"
 # RFC3339 parsing plus OS-local timezone conversion for Rail timestamps.
 time = { version = "=0.3.45", default-features = false, features = ["std", "parsing", "local-offset"] }
 icu_segmenter = { version = "=2.1.2", default-features = false, features = ["compiled_data", "auto"] }
