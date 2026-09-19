@@ -116,8 +116,9 @@ including all previous 32. All six Release workloads passed. Final synthetic C2c
 P95/P99 was **7999/8335 μs**, with zero stable-history layout calls/body copies.
 The **368-file** local/remote source manifest, commands, logs, retained red
 tests, boundaries and remaining manual checks are in
-[`verification/v03-e3/README.md`](verification/v03-e3/README.md). **E3 parent
-review remains pending.**
+[`verification/v03-e3/README.md`](verification/v03-e3/README.md). Parent source/contract
+review and final remote evidence reconciliation are recorded in
+[`refactor-delivery.md`](refactor-delivery.md); native release gates remain open.
 
 | ID | Required behavior | Status | Evidence / remaining work |
 |---|---|---|---|
@@ -190,14 +191,16 @@ review remains pending.**
 - **C2b**: Passed on the recorded 50k-row / 1000-delta structural workload.
 - **C2c mainline**: Passed on the recorded shared-owner/layout/budget/SourceMap
   workload and serial Agent E2E.
-- **Full C release**: **Not run**. The bounded automatic history path is
-  complete through 8 MiB, but a general typed/raw history-read workflow for
-  oversized items and a fresh decode-throughput/RSS measurement are outside
-  this boundary. D2's explicit `/export raw` path is separately covered by
-  reducer fixtures; exact allocator/RSS accounting is not claimed.
+- **C implementation and automated gates**: Passed for the bounded automatic
+  history/decode path, shared owners, source anchors, budgets, and the measured
+  workloads. Oversized items remain explicit placeholders with D2's raw export
+  covered by bounded fixtures, not automatic unbounded typed decoding. Exact
+  allocator accounting and terminal input-to-frame latency remain unclaimed;
+  the complete cross-platform release gate is still open.
 - **D/E**: D1/D2/D3, E1 tool details, E2 file references/candidates/preview/
   literal search and E3 Changes/status/Context are implemented with automated
-  evidence. E3 parent review is pending.
+  evidence and parent source/contract review. Review is not native-platform
+  or manual-terminal acceptance.
 - **F review**: **Remote validation passed.** Query scope invalidation now
   clears `waiting`, `ready`, coalesced refreshes, and detached follow-ups for
   close, reopen, delete, and panel teardown while retaining real in-flight
@@ -206,8 +209,9 @@ review remains pending.**
   stale responses. The Tool Detail capability-retention, reopen-reasoning,
   export no-clobber, memory-bound, privacy, shutdown, completion-owner, PTY,
   draw-scheduling, and 256 KiB editor regressions pass on the remote builder.
-  Hosted CI, native platform acceptance, parent review, exact allocator/RSS,
-  provider, and oversized real-Agent checks remain **Not run**.
+  Parent review reconciled the final source manifest and remote logs. Hosted CI,
+  native platform acceptance, exact allocator accounting, Provider, and oversized
+  real-Agent generation checks remain **Not run**.
 
 ## D Status
 
@@ -268,17 +272,18 @@ for the criteria below, on the tree validated by the logs above:
   RPC/App/jobs alive, resumes and fences session/epoch/revision on return, and
   kills/waits/cleans up on shutdown. Startup failures retain executable,
   config-path, Agent-config, protocol, provider, and storage categories.
-- **D1/D2/D3 parent review**: the parent/independent review of these commits
-  has not been recorded here; "Passed" reflects the current tree's own measured
-  evidence. Later E authorizations and E3's pending parent review are recorded
-  in Current Remote Verification above; this historical D entry is not release acceptance.
+- **D1/D2/D3 parent review**: source/contract reviews and requested corrections
+  were performed before later-stage authorization. The final scope and remote
+  evidence checks are recorded in [refactor-delivery.md](refactor-delivery.md).
+  These reviews do not substitute for native-platform or manual acceptance.
 
 ## Phase-F Follow-ups
 
 1. Execute the hosted matrix before changing platform statuses from **Not run**;
    the workflow configuration and remote Linux run are not substitutes for
    hosted platform jobs.
-2. Obtain parent/independent review of the final E3/F state.
+2. Preserve the recorded parent E3/F review and rerun the affected remote gates
+   for any subsequent source change; do not relabel it as an external audit.
 3. Keep manual iTerm2/editor/IME, exact RSS, real-provider, and oversized
    real-Agent checks conservative; the exact Linux OS-child Spec §25 scenarios
    are covered but do not imply native desktop or hosted evidence.
