@@ -13,7 +13,7 @@ through `--agent-bin`; its config and data directory belong to the Agent.
 
 | Component | Repository | Revision | Package |
 |---|---|---|---|
-| TUI | `zqcli/minicore-tui` | `daa944a` (F-review source/test baseline; core baseline `0aa64c5e4d9211351123db059547beddb15c2cce`) | `0.3.0` |
+| TUI | `zqcli/minicore-tui` | `9e399d9` (current source; prior F-review `daa944a`; core baseline `0aa64c5e4d9211351123db059547beddb15c2cce` is historical) | `0.3.0` |
 | Agent | `zqcli/minicore-agent` | `061743369459299e66be97bf97d2b27352a39914` | `0.5.0` |
 | Runtime | `zqcli/minicore-runtime` | `6cd2bdbc634437dea925495c61c7eb0be10ba171` | `0.4.1` |
 
@@ -53,14 +53,14 @@ repository's fixtures/E2E remain the release gate.
 `validate_backend(protocol_version, capabilities)`. The pinned Agent 0.5.0
 contract is covered by fixtures and reducer tests, including acceptance and
 rejection of the required Protocol v1 capability set. The authorized remote
-Rust 1.85/stable runs for the F-review tree each pass 830 tests with 48 ignored
+Rust 1.85/stable runs for the current F-review tree each pass 830 tests with 53 ignored
 and strict quality gates; the isolated fixed-Agent job passes 34/34 loopback
 E2Es. The accepted fixed-Agent binary hash is
 `661b32976ad6ae2fbe2b33411c7d0d082f9782da70745e4e4a6602c87fb7b273`; the
 isolated CI build hash is separate evidence. Protocol v1 equality remains
-necessary, not sufficient, for release acceptance. The older local Rust 1.98.0
-result is retained as an execution deviation and is not current acceptance
-evidence.
+necessary, not sufficient, for release acceptance. Phase F once violated the
+original remote-only Rust/Cargo requirement; the older local Rust 1.98.0 result
+is retained as excluded provenance and is not current acceptance evidence.
 
 ## Method surface (33 methods)
 
@@ -229,8 +229,8 @@ agent  binary  /root/minicore-tui-v03-refactor/agent-target/debug/minicore-agent
 agent  head    061743369459299e66be97bf97d2b27352a39914
 runtime head   6cd2bdbc634437dea925495c61c7eb0be10ba171
 tui    base    9d11ee69c4efa02ef1e5bff143662b48dc3194de (stage-A baseline)
-tui    head    daa944a (F-review source/test baseline; core baseline 0aa64c5e4d9211351123db059547beddb15c2cce)
-CARGO_TARGET_DIR=/root/minicore-tui-v03-refactor/tui-target
+tui    head    9e399d9 (current source; prior F-review daa944a; core baseline 0aa64c5e4d9211351123db059547beddb15c2cce is historical)
+CARGO_TARGET_DIR=/root/minicore-tui-v03-refactor/tui-target/f-review-current
 ```
 
 Verification commands:
@@ -243,22 +243,24 @@ RUSTUP_TOOLCHAIN=1.85.0 cargo test --locked --offline --all-targets --no-fail-fa
 RUSTUP_TOOLCHAIN=1.85.0 cargo clippy --locked --offline --all-targets -- -D warnings
 RUSTDOCFLAGS="-D warnings" RUSTUP_TOOLCHAIN=1.85.0 cargo doc --locked --offline --no-deps
 RUSTUP_TOOLCHAIN=1.85.0 cargo test --locked --offline --release --test performance -- --ignored --nocapture
-TERMINAL_TEST_BIN=$(find /root/minicore-tui-v03-refactor/tui-target/f-review/debug/deps -maxdepth 1 -type f -perm -111 -name 'terminal_restore-*' -print -quit)
-FAKE_AGENT_BIN=$(find /root/minicore-tui-v03-refactor/tui-target/f-review/debug/deps -maxdepth 1 -type f -perm -111 -name 'agent_process-*' -print -quit)
+TERMINAL_TEST_BIN=$(find /root/minicore-tui-v03-refactor/tui-target/f-review-current/debug/deps -maxdepth 1 -type f -perm -111 -name 'terminal_restore-*' -print -quit)
+FAKE_AGENT_BIN=$(find /root/minicore-tui-v03-refactor/tui-target/f-review-current/debug/deps -maxdepth 1 -type f -perm -111 -name 'agent_process-*' -print -quit)
 test -n "$TERMINAL_TEST_BIN" -a -n "$FAKE_AGENT_BIN"
 python3 scripts/pty_terminal_validation.py \
   --terminal-test-bin "$TERMINAL_TEST_BIN" \
-  --tui-bin /root/minicore-tui-v03-refactor/tui-target/f-review/release/minicore-tui \
+  --tui-bin /root/minicore-tui-v03-refactor/tui-target/f-review-current/release/minicore-tui \
   --fake-agent-bin "$FAKE_AGENT_BIN" \
-  --output /root/minicore-tui-v03-refactor/logs/final-f-review/pty-report.json
+  --output /root/minicore-tui-v03-refactor/logs/final-f-review-current/pty-report-with-clipboard.json
 ```
 
-The authorized remote Rust 1.85/stable F-review runs each pass 830 tests with
-48 ignored, strict Clippy, warning-denied rustdoc, and formatting. The isolated
+The authorized remote Rust 1.85/stable current-source F-review runs each pass 830 tests with
+53 ignored, strict Clippy, warning-denied rustdoc, and formatting. The isolated
 fixed backend job builds the exact Agent/Runtime revisions and passes 34/34
-loopback E2Es; the current Release performance set passes 7/7. The Linux
-kernel-PTY report passes terminal lifecycle/input/resize/shutdown and idle draw
-checks. The hosted CI job builds the fixed Agent and Runtime separately and
+loopback E2Es on both toolchains; the current Release performance set passes
+9/9 on both. The Linux
+kernel-PTY report passes terminal lifecycle, negative same-slave raw-mode,
+input/resize/shutdown, clipboard-child, and idle draw checks. The hosted CI job
+builds the fixed Agent and Runtime separately and
 reruns the E2E suite with the loopback mock, but no hosted run exists for this
 branch. Synthetic frame and editor timings are not terminal input-to-frame
 latency measurements.
@@ -268,10 +270,10 @@ When reusing the existing `tui-target` directory after an rsync, run
 preserves source mtimes, and a newer stale rlib otherwise shadows the synced
 source, producing confusing "variant not found" errors.
 
-The 34 Agent E2E scenarios and six release/performance workloads are ignored
+The 34 Agent E2E scenarios and nine release/performance workloads are ignored
 by default and are evidence only when explicitly run with their required
-binary/options. The authorized final-source run executed 34/34 E2Es on both
-Rust toolchains and all six performance workloads on Rust 1.85.0.
+binary/options. The authorized current-source run executed 34/34 E2Es and all
+nine performance workloads on both Rust toolchains.
 `docs/refactor-acceptance.md` tracks which REF rows remain open.
 
 C2/F status: the B1/B2 lifecycle and `session.read` migration, serialized

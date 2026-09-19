@@ -58,17 +58,20 @@ editor process before restoring the terminal.
 
 ## Verification
 
-The core source/test/snapshot baseline is
-`0aa64c5e4d9211351123db059547beddb15c2cce`; F-review remediation is `daa944a`.
-The current remote Rust 1.85.0 and stable suites each pass 830 tests with no
-failures and 48 ignored. The isolated fixed-backend job checks the pinned
-Agent/Runtime revisions and passes 34/34 serial loopback E2Es. The current
-Release performance set passes 7/7, and Linux kernel-PTY lifecycle/input/
-resize/shutdown evidence passes through
+The current source/test tree is `9e399d9`, after F-review remediation
+`daa944a`; `0aa64c5e4d9211351123db059547beddb15c2cce` is historical core
+baseline provenance. The current remote Rust 1.85.0 and stable suites each pass
+830 tests with no failures and 53 ignored. The isolated fixed-backend job checks
+the pinned Agent/Runtime revisions and passes 34/34 serial loopback E2Es on both
+toolchains. The current Release performance set passes 9/9 on both, and Linux
+kernel-PTY lifecycle, negative same-slave raw-mode, input/resize/shutdown, idle,
+and clipboard-child evidence passes through
 [`verification/v03-f/README.md`](verification/v03-f/README.md).
 
-The older local rustc 1.98.0 run is retained as a disclosed execution
-deviation from the remote-only procedure, not current release evidence. Hosted
+Phase F once violated the original remote-only Rust/Cargo requirement by
+running locally. The older local rustc 1.98.0 run is retained as excluded
+provenance, not current release evidence; the affected validation was rerun
+remotely. Hosted
 CI is configured for Rust 1.85.0 and stable on Ubuntu, macOS, and Windows, but
 no hosted run exists for this branch. Native macOS/Windows execution, manual
 iTerm2/IME behavior, exact allocator/RSS accounting, external providers, and

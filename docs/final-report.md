@@ -17,17 +17,19 @@ The [0.2.6 changes](release-0.2.6.md) retain dependency-level optimization, and 
 painting and coalesced preparation.
 The [0.2.4 changes](release-0.2.4.md) retain true reasoning-part boundaries,
 paired Steer receipts and the gray FIFO queue above Working. Runtime remains untouched.
-The current 0.3.0 core code/test/snapshot baseline is
-`0aa64c5e4d9211351123db059547beddb15c2cce`; F-review remediation is `daa944a`.
-It is paired with Agent `061743369459299e66be97bf97d2b27352a39914` and Runtime
-`6cd2bdbc634437dea925495c61c7eb0be10ba171`. Authorized remote Rust 1.85/stable
-F-review checks each pass 830 tests with no failures and 48 ignored; the
-isolated fixed backend job passes 34/34 serial loopback E2Es; and the current
-Release performance set passes 7/7. Linux kernel-PTY lifecycle/input/resize/
-shutdown evidence passes, including 30-second idle draw evidence. The older
-local rustc 1.98.0 run is disclosed as an execution deviation only. Hosted CI,
-native/manual iTerm2/IME, exact allocator/RSS, provider, and real oversized-
-Agent checks remain separate and are not claimed by this historical report.
+The current 0.3.0 source/test tree is `9e399d9`, after F-review remediation
+`daa944a`; `0aa64c5e4d9211351123db059547beddb15c2cce` is historical core
+baseline provenance. It is paired with Agent `061743369459299e66be97bf97d2b27352a39914`
+and Runtime `6cd2bdbc634437dea925495c61c7eb0be10ba171`. Authorized remote Rust
+1.85/stable F-review checks each pass 830 tests with no failures and 53 ignored;
+the isolated fixed backend job passes 34/34 serial loopback E2Es on both
+toolchains; and the current Release performance set passes 9/9 on both. Linux
+kernel-PTY lifecycle, same-slave negative raw-mode, input/resize/shutdown,
+clipboard-child, and 30-second idle evidence passes. Phase F once violated the
+original remote-only Rust/Cargo requirement; the older local rustc 1.98.0 run is
+retained as excluded provenance only. Hosted CI, native/manual iTerm2/IME,
+exact allocator/RSS, provider, and real oversized-Agent checks remain separate
+and are not claimed by this historical report.
 
 The [0.2.3 Footer fixes](release-0.2.3.md) remain, but its pending-Steer User-card
 UI is superseded by the 0.2.4 queue. The [0.2.2 fixes](release-0.2.2.md) cover

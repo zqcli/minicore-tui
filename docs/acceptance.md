@@ -8,14 +8,17 @@ Protocol v1 / Agent 0.5.0 release line.
 
 ## Current 0.3.0 Note
 
-The core source/test/snapshot baseline is
-`0aa64c5e4d9211351123db059547beddb15c2cce`; F-review remediation is `daa944a`.
-The current remote Rust 1.85/stable suites each pass **830 tests, 0 failed, 48
-ignored**, including **137/137** in `tests/app_flow.rs`; the fixed-backend
-isolated job passes **34/34** loopback E2Es. This historical MIG matrix does
+The current source/test tree is `9e399d9`, after F-review remediation
+`daa944a`; `0aa64c5e4d9211351123db059547beddb15c2cce` is historical core
+baseline provenance. The current remote Rust 1.85/stable suites each pass
+**830 tests, 0 failed, 53 ignored**, including **137/137** in
+`tests/app_flow.rs`; the fixed-backend isolated job passes **34/34** loopback
+E2Es on both toolchains. This historical MIG matrix does
 not relabel those current Protocol v1 results, hosted CI, or native/manual
 acceptance; statuses remain in [`refactor-acceptance.md`](refactor-acceptance.md).
-The older local Rust 1.98.0 record is disclosed provenance only.
+Phase F once violated the original remote-only Rust/Cargo requirement by
+running locally; the older local Rust 1.98.0 record is disclosed excluded
+provenance only.
 
 `PASS` requires the cited executable test or exact dependency/source check to have passed in the
 remote final6 runs. Pins, dependency absence, and evidence-recording requirements use source audits,

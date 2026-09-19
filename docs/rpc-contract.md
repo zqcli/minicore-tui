@@ -9,7 +9,7 @@ pinned Agent contract and updating the local DTOs and fixtures together.
 
 | Item | Value |
 |---|---|
-| TUI core baseline / F-review remediation | `0aa64c5e4d9211351123db059547beddb15c2cce` / `daa944a` |
+| TUI current source / prior F-review remediation | `9e399d9` / `daa944a` (historical core baseline `0aa64c5e4d9211351123db059547beddb15c2cce`) |
 | Agent repository | `https://github.com/zqcli/minicore-agent` |
 | Agent commit | `061743369459299e66be97bf97d2b27352a39914` (`0.5.0`) |
 | Runtime commit | `6cd2bdbc634437dea925495c61c7eb0be10ba171` (`0.4.1`) |

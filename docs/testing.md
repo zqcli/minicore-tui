@@ -9,8 +9,8 @@ enter an alternate screen during normal CI tests.
 ## Current 0.3.0 Verification Boundary
 
 The current package is TUI **0.3.0**, paired with Agent **0.5.0** and Runtime
-**0.4.1**. Core source/test/snapshot baseline is
-`0aa64c5e4d9211351123db059547beddb15c2cce`; F-review remediation is `daa944a`.
+**0.4.1**. Current source/test tree is `9e399d9`, after F-review remediation
+`daa944a`; core baseline `0aa64c5e4d9211351123db059547beddb15c2cce` is historical.
 All current Rust/Cargo evidence below was executed on the authorized remote
 Linux builder, not locally.
 
@@ -25,20 +25,22 @@ RUSTUP_TOOLCHAIN=1.85.0 cargo clippy --locked --offline --all-targets -- -D warn
 RUSTDOCFLAGS="-D warnings" RUSTUP_TOOLCHAIN=1.85.0 cargo doc --locked --offline --no-deps
 ```
 
-Rust 1.85.0 and stable each reported **830 passed, 0 failed, 48 ignored**;
+Rust 1.85.0 and stable each reported **830 passed, 0 failed, 53 ignored**;
 `tests/app_flow.rs` remained **137/137**. The fixed-backend isolated job passed
-34/34 loopback E2Es. The current Release performance set passed 7/7, and the
-Linux OS-PTY report passed the lifecycle, panic, input/resize, shutdown, and
-idle cases. The independent 0.2.8 direct Composer baseline measured P95 1492 µs
-and P99 1907 µs, versus the current 237 µs and 238 µs. See
+34/34 loopback E2Es. The current Release performance set passed 9/9 on both
+Rust toolchains, and the Linux OS-PTY report passed the lifecycle, negative
+same-slave raw-mode, panic, input/resize, shutdown, idle, and production
+clipboard cases. The independent 0.2.8 direct Composer baseline measured P95 1492 µs
+and P99 1907 µs, versus current Rust 1.85 values of 209 µs and 248 µs (stable:
+186 µs and 220 µs). See
 [`verification/v03-f/README.md`](verification/v03-f/README.md) for scope and
 limitations.
 
 ### Local Execution Deviation
 
-Before the remote-only F-review instruction, local rustc 1.98.0 had already
-run an older 828-test/6-workload record. It remains disclosed provenance only,
-is excluded from current counts, and was not rerun.
+Phase F once violated the original remote-only Rust/Cargo requirement by
+running locally. That older 828-test/6-workload record is disclosed provenance
+only, excluded from current counts, and was rerun remotely rather than reused.
 
 ## Historical Patch Verification
 
@@ -129,10 +131,10 @@ targets. The `agent_process` target has `harness = false`, so it is an executabl
 fake-Agent harness and intentionally has no libtest `test result` line. For the
 other targets, count the `passed`, `failed`, and `ignored` fields from each
 `test result: ok` line in the unabridged `cargo test` output. The current
-remote Rust 1.85/stable all-target runs each total **830 passed, 0 failed, 48
+remote Rust 1.85/stable all-target runs each total **830 passed, 0 failed, 53
 ignored**. Do not count compile messages or the harness-free
-executable as tests. The older local Rust 1.98.0 total is disclosed as an
-execution deviation only.
+executable as tests. The older local Rust 1.98.0 total is disclosed as
+excluded provenance only.
 
 ## Snapshots
 
@@ -180,7 +182,9 @@ comparison is deterministic and works without a review tool.
 ## Terminal Tests
 
 `tests/terminal_restore.rs` contains the normal offline tests and ignored
-real-PTY cases. `scripts/pty_terminal_validation.py` attaches the test binary
+real-PTY cases. `scripts/pty_terminal_validation.py` creates an explicit
+master/slave PTY pair with `setsid`/`TIOCSCTTY`, retains the original slave FD,
+and attaches the test binary
 and the Release TUI to a Linux kernel PTY, injects input, changes the PTY size,
 checks alternate-screen/raw-mode restoration, runs the panic child with
 inherited descriptors, and reads the post-exit slave `termios` state. The final

@@ -11,38 +11,43 @@ Status values are deliberately strict:
 
 ## Current Remote Verification
 
-The core code/test/snapshot baseline is
-`0aa64c5e4d9211351123db059547beddb15c2cce`; F-review remediation is commit
-`daa944a` and the current remote validation tree includes that remediation.
+The current source/test tree is commit `9e399d9`, after F-review commit
+`daa944a`; `0aa64c5e4d9211351123db059547beddb15c2cce` is historical core
+baseline provenance, not the current source hash. The remote source manifest
+covers 375 `src/scripts/tests/snapshots` entries and has SHA-256
+`607a4b52d4b865b6210f8865473f3a8aa8126b15d374b604f050fc4ebb09ba00`.
 On the authorized builder `root@192.168.20.199`, Rust 1.85.0 and stable each
-passed **830 passed, 0 failed, 48 ignored**, with fmt, strict Clippy, and
-warning-denied rustdoc passing. The ignored count includes the PTY and Spec 25
-probes; it is not hosted/native acceptance.
+passed **830 passed, 0 failed, 53 ignored**, with fmt, strict Clippy, and
+warning-denied rustdoc passing. The ignored count includes the new PTY,
+clipboard, stdout-flood, and Release probes; it is not hosted/native acceptance.
 
 The fixed Agent/Runtime source checkouts resolved exactly to Agent
 `061743369459299e66be97bf97d2b27352a39914` / 0.5.0 and Runtime
 `6cd2bdbc634437dea925495c61c7eb0be10ba171` / 0.4.1. The isolated fixed job
 performed a clean TUI/backend locked fetch, offline backend builds, and passed
-**34/34** loopback E2Es. The current Rust 1.85 Release performance set passed
-**7/7**, including the 256 KiB draft probe. Linux OS-PTY validation passed the
-terminal lifecycle, panic, input/resize, real-TUI shutdown, and 30-second idle
-cases. See [`verification/v03-f/`](verification/v03-f/README.md) for exact
+**34/34** loopback E2Es. The current Rust 1.85.0 and stable Release performance sets each passed
+**9/9**, including the 256 KiB draft and real
+clipboard probes. Linux OS-PTY validation passed the terminal lifecycle,
+negative same-slave raw-mode detection, panic, input/resize, real-TUI shutdown,
+and 30-second idle cases. See [`verification/v03-f/`](verification/v03-f/README.md) for exact
 commands, measurements, archive hashes, and remote log paths.
 
 ### Local Execution Deviation
 
-Before the remote-only F-review instruction, the local rustc 1.98.0
-environment had already run the older 828-test/6-workload record. That fact is
-retained as provenance, excluded from current acceptance counts, and was not
-rerun or used as a substitute for the remote evidence above.
+Phase F once violated the original remote-only Rust/Cargo requirement by
+running locally; that older local 828-test/6-workload result is retained only as
+provenance and excluded from acceptance. The affected validation was rerun on
+the authorized remote Rust 1.85.0 and stable environments.
 
-The same 368-path build/test/snapshot input list used by the historical E3
-receipt has current-content digest
-`1180a6f1ca4be7c61b1e7f3cab287b1f79aed63f8f9933629897fdf33bea6813` on both
-local and remote; the 60 committed snapshot files have sorted-content digest
+The historical E3 368-path build/test/snapshot input list retains content
+digest
+`1180a6f1ca4be7c61b1e7f3cab287b1f79aed63f8f9933629897fdf33bea6813`; the
+current 375-entry manifest is recorded above. The 60 committed snapshot files
+have sorted-content digest
 `b8913f5f47d8a6a57bbfae09a54e98a283aa88e468c9df7bfa9e6f7691e325e2`.
-Raw final-F logs remain on the authorized builder under
-`/root/minicore-tui-v03-refactor/logs/final-f/`; they are not copied into the
+Raw current F-review logs remain on the authorized builder under
+`/root/minicore-tui-v03-refactor/logs/final-f-review-current/`; they are not
+copied into the
 repository.
 
 ## Historical E3 Remote Evidence And Phase-F Delta
@@ -169,9 +174,9 @@ review remains pending.**
 | REF-51 | Existing CJK/IME/mouse/scrollbar/terminal restore behavior | **Passed** | UI, Rail, terminal, and snapshot tests. |
 | REF-52 | Common command table/completion/help stay consistent | **Passed** | `command::COMMANDS` is the single static table driving parsing, completion and the help panel; tests assert every table entry parses and is offered, unlisted names are unknown, and the help panel renders every entry. |
 | REF-53 | No approval/plugin/Subagent/PTY/Git-write/auto-reconnect feature | **Passed** | Source audit. |
-| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Passed** | The isolated current job checked Agent `061743369459299e66be97bf97d2b27352a39914` and Runtime `6cd2bdbc634437dea925495c61c7eb0be10ba171`, built offline, and passed 34/34 serial loopback E2Es. Accepted fixed-Agent binary SHA-256: `661b32976ad6ae2fbe2b33411c7d0d082f9782da70745e4e4a6602c87fb7b273`; isolated CI build SHA-256 `867325ae6f599d89f3c7f3f476559c5f1ed0824de64f1142b84fe94291a27d8f` is separate build-directory evidence. |
-| REF-55 | Rust 1.85/stable and original tests on three platforms | **Not run** | Current remote Rust 1.85.0 and stable suites each pass 830/0/48; hosted Linux/macOS/Windows jobs, native macOS/Windows execution, and manual iTerm2/IME acceptance remain Not run. |
-| REF-56 | Release before/after performance evidence uses real data | **Passed** | Remote Rust 1.85 Release performance passed 7/7, including the 256 KiB P95 probe, and the independent 9d11ee6 baseline was measured remotely. The evidence excludes terminal input-to-frame latency and exact allocator/RSS claims. |
+| REF-54 | Fixed-Agent E2E covers read/tool/compact/file/diff | **Passed** | The isolated current job checked Agent `061743369459299e66be97bf97d2b27352a39914` and Runtime `6cd2bdbc634437dea925495c61c7eb0be10ba171`, built offline, and passed 34/34 serial loopback E2Es on both Rust 1.85.0 and stable. Accepted fixed-Agent binary SHA-256: `661b32976ad6ae2fbe2b33411c7d0d082f9782da70745e4e4a6602c87fb7b273`; isolated CI build SHA-256 `867325ae6f599d89f3c7f3f476559c5f1ed0824de64f1142b84fe94291a27d8f` is separate build-directory evidence. |
+| REF-55 | Rust 1.85/stable and original tests on three platforms | **Not run** | Current remote Rust 1.85.0 and stable suites each pass 830/0/53; hosted Linux/macOS/Windows jobs, native macOS/Windows execution, and manual iTerm2/IME acceptance remain Not run. |
+| REF-56 | Release before/after performance evidence uses real data | **Passed** | Remote Rust 1.85.0 and stable Release performance each passed 9/9, including the real clipboard, 256 KiB P95, and structural probes; the independent 9d11ee6 baseline was measured remotely. The evidence excludes terminal input-to-frame latency and exact allocator/RSS claims. |
 
 ## Counts
 
@@ -274,12 +279,13 @@ for the criteria below, on the tree validated by the logs above:
    the workflow configuration and remote Linux run are not substitutes for
    hosted platform jobs.
 2. Obtain parent/independent review of the final E3/F state.
-3. Keep manual iTerm2/editor/IME, exact RSS, real-provider, oversized
-   real-Agent, and the two exact OS/Agent Spec §25 scenarios conservative.
+3. Keep manual iTerm2/editor/IME, exact RSS, real-provider, and oversized
+   real-Agent checks conservative; the exact Linux OS-child Spec §25 scenarios
+   are covered but do not imply native desktop or hosted evidence.
 
 ## Current C2c Follow-ups
 
-1. Keep the passed dual-toolchain fmt/tests/clippy/rustdoc, seven Release probes
+1. Keep the passed dual-toolchain fmt/tests/clippy/rustdoc, nine Release probes
    and 34-scenario Agent E2E evidence tied to the recorded workload units.
 2. Keep oversized automatic history decoding explicit and bounded; no complete
    body may be fabricated from an 8 MiB placeholder path.

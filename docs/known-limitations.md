@@ -7,11 +7,11 @@ These are the explicit 0.3.0 boundaries, not hidden fallback behavior:
   bounded path and does not raise the automatic decode ceiling.
 - Exact allocator/RSS accounting, decode-throughput qualification, terminal
   input-to-frame latency, and a real external provider are not claimed. The
-  exact two-second OS clipboard-helper cancellation scenario and the paused
-  Agent/large-stdout scenario from Spec §25 are also not run; injected worker
-  and RPC backpressure coverage is not relabeled as those exact scenarios.
+  exact Linux OS clipboard-helper cancellation and paused-Agent/large-stdout
+  Spec §25 scenarios are covered; that evidence does not imply native desktop
+  or hosted CI behavior.
 - Current Rust evidence is from the authorized remote Linux builder: Rust
-  1.85.0 and stable each pass 830 tests with 48 ignored, and the fixed-Agent
+  1.85.0 and stable each pass 830 tests with 53 ignored, and the fixed-Agent
   loopback job passes 34/34. Native macOS/Windows execution, hosted CI,
   interactive iTerm2/IME/clipboard behavior, and external-provider access
   remain environment-dependent acceptance checks. Linux kernel-PTY evidence

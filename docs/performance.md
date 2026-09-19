@@ -10,39 +10,49 @@ native macOS/Windows execution has already run.
 
 ## Current Remote F-Review Run
 
-The current remote tree contains core baseline `0aa64c5e4d9211351123db059547beddb15c2cce`
-and remediation `daa944a`. Rust 1.85.0 Release performance passed **7/7**:
+The current remote tree is source commit `9e399d9`, after remediation
+`daa944a`; core baseline `0aa64c5e4d9211351123db059547beddb15c2cce` is historical
+provenance. The current source manifest is 375 entries with SHA-256
+`607a4b52d4b865b6210f8865473f3a8aa8126b15d374b604f050fc4ebb09ba00`. Rust
+1.85.0 and stable Release performance each passed **9/9**:
 
 ```text
-production App 256 KiB draft: edits=4096 p95_us=761 p99_us=868,
+Rust 1.85 production App 256 KiB draft: edits=4096 p95_us=659 p99_us=738,
   draft_bytes=258048 retained_capacity_estimate=5402688 composer_full_joins_delta=0
-same direct Composer workload: p95_us=237 p99_us=238,
+Rust 1.85 same direct Composer workload: p95_us=209 p99_us=248,
   draft_bytes=258048 retained_capacity_estimate=5402688 composer_full_joins_delta=0
 C2 stable layout: layout_calls_delta=0 history_bytes_cloned=0 viewport_rows=40000
-C2c 120x40: p95_us=3380 p99_us=3617 durable_rows=43870,
+Rust 1.85 C2c 120x40: p95_us=3404 p99_us=3594 durable_rows=43870,
   layout_calls=0 history_bytes_cloned=0 viewport_bytes=4396336
 C2b worker: durable_rows=51101 deltas=1000,
   layout_calls=0 history_bytes_cloned=0 viewport_bytes=2986911
+Rust stable production App 256 KiB draft: p95_us=728 p99_us=773;
+Rust stable direct Composer: p95_us=186 p99_us=220;
+Rust stable C2c 120x40: p95_us=2955 p99_us=3824.
+real NativeClipboard helper: 2003 ms (Rust 1.85), 2002 ms (stable), direct PID
+observed and reaped; run_commands/input/scroll/cancel kept progressing.
 ```
 
 The 256 KiB P95 is local edit processing, not terminal input-to-frame latency.
 The direct production draw counter recorded 10 draws during the interaction
-probe and 2 draws during 30 seconds of idle. The idle probe had zero stable
-history layout calls and zero historical body clones. Python `resource` also
+probe and 2 draws during 30 seconds of idle on both toolchains. The idle probe
+had zero stable history layout calls and zero historical body clones. Python
+`resource` also
 recorded process CPU and peak-RSS observations for the Linux PTY processes;
 exact allocator/RSS accounting remains unclaimed.
 
 The independent remote 0.2.8 archive at `9d11ee6` recorded P95 1492 µs and
-P99 1907 µs for the same direct Composer workload, versus 237 µs and 238 µs
-for the current tree. This is a fixed-workload comparison, not a general
+P99 1907 µs for the same direct Composer workload, versus current Rust 1.85
+values of 209 µs and 248 µs (stable: 186 µs and 220 µs). This is a
+fixed-workload comparison, not a general
 application speedup or terminal input-to-frame claim; archive details and the
 hash are in [`verification/v03-f/README.md`](verification/v03-f/README.md).
 
 ## Excluded Local Execution Deviation
 
-Before the remote-only F-review instruction, local rustc 1.98.0 had already
-run an older six-workload record. Its values remain below only as provenance;
-they are not current acceptance evidence and were not rerun:
+Phase F once violated the original remote-only Rust/Cargo requirement by
+running locally. Its older six-workload values remain below only as excluded
+provenance; they are not current acceptance evidence:
 
 ```text
 local rustc 1.98.0: 6/6 older workloads; C2c p95_us=2503 p99_us=2880
@@ -262,10 +272,12 @@ ownership. No performance number is inferred from that test.
 - exact allocation-capacity and RSS accounting, which is intentionally not
   attempted here;
 - terminal input-to-frame latency under real interactive streaming;
-- manual iTerm2/IME/clipboard validation, the exact two-second OS clipboard
-  helper cancellation scenario, and the paused-Agent/large-stdout scenario;
-  injected worker and RPC backpressure tests are not relabeled as those exact
-  cases. E2 workspace and E3 Changes/Context have the automated evidence above.
+- manual iTerm2/IME/clipboard validation, exact allocator/RSS accounting,
+  terminal input-to-frame latency, and external-provider validation remain
+  unrun. The exact Linux OS clipboard-helper cancellation and paused-Agent/
+  large-stdout scenarios are covered by the current child-process probes; they
+  do not imply native desktop or hosted CI behavior. E2 workspace and E3
+  Changes/Context have the automated evidence above.
   D2 search/copy/export and D3 editor/settings measurements remain in
   `docs/refactor-acceptance.md`. Hosted CI and native macOS/Windows execution
   remain **Not run** until those jobs execute; Linux kernel-PTY validation
