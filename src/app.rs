@@ -13,7 +13,7 @@ use crossterm::event::Event as CrosstermEvent;
 
 use crate::command::{AppCommand, CommandIssue, LocalCommand, is_slash_command, parse_command};
 use crate::event::{AppEvent, JobOutcome, RpcEvent};
-use crate::jobs::{DecodeIdentity, DecodeRequest};
+use crate::jobs::{DecodeIdentity, DecodeRequest, LocalScanIdentity, LocalScanRequest};
 use crate::keymap::{self, Action, EditorCursor};
 use crate::protocol::{
     AgentEventWire, EventMetaWire, IncomingFrame, METHOD_LIST_MODELS, METHOD_LIST_PROFILES,
@@ -45,7 +45,7 @@ use crate::state::turn::{
 };
 use crate::state::view::{
     ConversationLayout, ConversationSelection, FoldOverride, PreparedConversation, PreparedDurable,
-    ScrollAnchor, SelectionPoint,
+    ReasoningKey, ScrollAnchor, SectionId, SelectionPoint,
 };
 use crate::theme::ThemeKind;
 use crate::ui::transcript::{
@@ -54,6 +54,7 @@ use crate::ui::transcript::{
 
 pub mod history;
 pub mod queries;
+pub mod search;
 pub mod session;
 pub mod turn;
 pub mod ui_actions;
@@ -243,6 +244,12 @@ pub enum RequestKind {
     History {
         session_id: SessionId,
         read: ReadRequest,
+    },
+    /// One page of the explicit full-session search scan (spec §17.1). It
+    /// shares the two read-only slots and never touches the history window.
+    SearchRead {
+        session_id: SessionId,
+        generation: u64,
     },
     SendTurn {
         session_id: SessionId,
@@ -486,6 +493,18 @@ pub struct App {
     /// The two read-only in-flight slots (spec §5.3). Execution waits are
     /// counted separately and never take a slot.
     pub queries: crate::app::queries::QuerySlots,
+    /// Search generation: only the newest one may install results.
+    search_generation: u64,
+    /// Item-window read attempts for the current jump, bounded so an
+    /// unloadable target cannot loop.
+    search_jump_attempts: u32,
+    /// Fold overrides a search jump installed temporarily; closing the search
+    /// restores the exact previous user choice.
+    search_fold_restores: Vec<search::FoldRestore>,
+    /// A jump whose target item is not resident yet.
+    pending_search_jump: Option<(SessionId, search::PendingSearchJump)>,
+    /// The explicit full-session search scan chain, if one is running.
+    search_scan: Option<search::SearchScan>,
     /// Paged authoritative result bodies keyed by their exact TurnRef. Their
     /// item indexes are turn-local and never enter the session history window.
     turn_results: HashMap<TurnRef, crate::app::history::TurnResultWindow>,
@@ -655,6 +674,11 @@ impl App {
             session_list_requests: std::collections::BTreeMap::new(),
             selection_revision: 0,
             queries: crate::app::queries::QuerySlots::new(),
+            search_generation: 0,
+            search_jump_attempts: 0,
+            search_fold_restores: Vec::new(),
+            pending_search_jump: None,
+            search_scan: None,
             turn_results: HashMap::new(),
             retained_results: HashMap::new(),
             retained_result_order: VecDeque::new(),
@@ -1147,6 +1171,7 @@ impl App {
                 Vec::new()
             }
             AppEvent::HistoryItemDecoded(outcome) => self.on_history_item_decoded(*outcome),
+            AppEvent::LocalScanFinished(outcome) => self.on_local_scan_finished(*outcome),
         };
         if header_visible_before != crate::ui::header::visible(self) {
             self.prepared_conversation = None;
@@ -1545,7 +1570,10 @@ impl App {
     }
 
     fn scrollbar_allowed(&self) -> bool {
-        matches!(self.dock, Dock::Composer | Dock::Help | Dock::Logs)
+        matches!(
+            self.dock,
+            Dock::Composer | Dock::Help | Dock::Logs | Dock::Search(_)
+        )
     }
 
     fn scroll_visual_state(&self) -> Option<(usize, bool, bool, bool, bool)> {
@@ -2298,7 +2326,7 @@ impl App {
             Dock::ModelSelector(_) => Target::ModelSelector,
             Dock::ReasoningSelector(_) => Target::ReasoningSelector,
             Dock::ProfileSelector(_) => Target::ProfileSelector,
-            Dock::Help | Dock::Logs => Target::Composer,
+            Dock::Help | Dock::Logs | Dock::Search(_) => Target::Composer,
         };
         match target {
             Target::Composer => Vec::new(),
@@ -2329,6 +2357,7 @@ impl App {
             NewSession,
             Form,
             Panel,
+            Search,
         }
         let target = match &self.dock {
             Dock::Composer => Target::Composer,
@@ -2338,9 +2367,11 @@ impl App {
                 Target::Form
             }
             Dock::Help | Dock::Logs => Target::Panel,
+            Dock::Search(_) => Target::Search,
         };
         match target {
             Target::Composer => {}
+            Target::Search => self.close_search(),
             Target::SessionSelector => self.dock = Dock::Composer,
             Target::NewSession => {
                 self.draft = None;
@@ -3401,6 +3432,30 @@ impl App {
             RefreshSessions => self.refresh_sessions(),
             SessionRename => self.begin_session_rename(),
             SessionClose => self.begin_session_close(),
+            SearchTypeChar(c) => {
+                self.search_type_char(c);
+                Vec::new()
+            }
+            SearchBackspace => {
+                self.search_backspace();
+                Vec::new()
+            }
+            SearchClear => {
+                self.search_clear();
+                Vec::new()
+            }
+            SearchMove(delta) => {
+                self.search_move(delta);
+                Vec::new()
+            }
+            SearchConfirm => self.search_confirm(),
+            SearchStep(delta) => self.search_step(delta),
+            SearchScopeToggle => self.search_toggle_scope(),
+            SearchStop => {
+                self.search_stop();
+                Vec::new()
+            }
+            SearchEscape => self.search_escape(),
             SessionBrowse => self.browse_selected_session(),
             SessionContinue => self.continue_selected_session(),
             SessionScopeToggle => self.toggle_session_scope(),
@@ -3778,6 +3833,9 @@ impl App {
                     }
                 }
             }
+            LocalCommand::Search { query, scope } => self.open_search(query, scope),
+            LocalCommand::PromptJump(direction) => self.prompt_jump(direction),
+            LocalCommand::Latest => self.jump_latest(),
             LocalCommand::Clear => self.clear_transcript(),
             LocalCommand::Refresh => self.refresh_view_data(),
             LocalCommand::Rename { title } => self.rename_from_command(title),
@@ -4969,6 +5027,10 @@ impl App {
             RequestKind::History { session_id, read } => {
                 self.on_history_response(&session_id, &read, &response)
             }
+            RequestKind::SearchRead {
+                session_id,
+                generation,
+            } => self.on_search_read_response(&session_id, generation, &response),
             RequestKind::SendTurn {
                 session_id,
                 local_submission,

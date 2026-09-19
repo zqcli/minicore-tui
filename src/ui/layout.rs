@@ -128,6 +128,9 @@ pub fn screen_layout(app: &App, area: Rect) -> ScreenLayout {
         Dock::Composer => composer_height_phase5(app, content.width, content.height, short)
             .saturating_add(composer_completion_rows(app)),
         Dock::Help | Dock::Logs => help_panel_height(content.height),
+        // The search panel is taller while results are listed so the
+        // transcript above it stays visible (spec §17.1).
+        Dock::Search(_) => search_panel_height(content.height),
         Dock::SessionSelector(state) => panel_height(short).saturating_add(u16::from(!matches!(
             &state.mode,
             crate::state::selection::SessionPanelMode::Browse
@@ -253,6 +256,16 @@ pub fn composer_completion_rows(app: &App) -> u16 {
 /// Help/Logs panels take at most 60% of the screen (spec 24.2).
 pub fn help_panel_height(screen_height: u16) -> u16 {
     (screen_height * 6 / 10).clamp(4, screen_height)
+}
+
+/// Search panel height: a one-line query, a coverage line, the bounded match
+/// list, and one hint row. It never consumes more than 60% of the screen, so
+/// the conversation stays visible while searching (spec §17.1).
+pub fn search_panel_height(screen_height: u16) -> u16 {
+    let desired = 4 + 10;
+    desired
+        .min((screen_height * 6 / 10).max(6))
+        .min(screen_height)
 }
 
 /// Selector / new-session panel height: 8-14 rows, short terminals get the

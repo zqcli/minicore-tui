@@ -594,6 +594,11 @@ async fn run_commands(
                     }
                 }
             }
+            AppCommand::LocalScan(request) => {
+                // One owned scan worker; a superseded queued scan is dropped
+                // and its generation-checked result is ignored anyway.
+                jobs.try_schedule_scan(*request);
+            }
             AppCommand::KillChild => process.kill_child(),
             AppCommand::CopySelection(text) => {
                 match jobs.copy_to_clipboard(

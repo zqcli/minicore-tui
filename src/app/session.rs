@@ -483,6 +483,7 @@ impl App {
             | RequestKind::UpdateSession { session_id, .. }
             | RequestKind::RenameSession { session_id }
             | RequestKind::History { session_id, .. }
+            | RequestKind::SearchRead { session_id, .. }
             | RequestKind::SessionState { session_id, .. }
             | RequestKind::SessionContext { session_id, .. }
             | RequestKind::Compact { session_id, .. }

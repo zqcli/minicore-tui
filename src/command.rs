@@ -10,6 +10,7 @@ use crate::theme::ThemeKind;
 
 /// A side effect the main loop must perform on behalf of `App::update`.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum AppCommand {
     /// Write one already-numbered request line to the agent. The request id
     /// was allocated and registered in `pending_requests` inside `update`,
@@ -20,6 +21,8 @@ pub enum AppCommand {
     /// Copy already-sanitized selected presentation text through the single
     /// clipboard adapter. Its Debug output is length-only.
     CopySelection(ClipboardText),
+    /// Start one owned loaded-content search scan.
+    LocalScan(Box<crate::jobs::LocalScanRequest>),
     /// The agent process is fully gone (or never existed); leave the TUI.
     Exit,
 }
@@ -76,6 +79,15 @@ pub enum LocalCommand {
     New,
     /// Open the pre-filled new-session form (`/new form`, Ctrl+N).
     NewForm,
+    /// Open the conversation search with an optional literal (spec §17.1).
+    Search {
+        query: String,
+        scope: crate::state::search::SearchScope,
+    },
+    /// Jump to the previous/next user prompt (`/prev`, `/next`).
+    PromptJump(i32),
+    /// Jump to the newest user prompt (`/latest`).
+    Latest,
     /// Open the session selector.
     Resume,
     /// Open the session selector.
@@ -138,6 +150,9 @@ pub enum CommandArgs {
     OptionalTitle,
     /// `/new [form]`.
     NewForm,
+    /// `/search [full] [literal]`: the literal is the rest of the line; the
+    /// leading `full` keyword starts the explicit full-session scan.
+    Search,
 }
 
 /// Every command the reducer can execute. Methods added in a later stage must
@@ -148,6 +163,30 @@ pub const COMMANDS: &[CommandSpec] = &[
         usage: "/new [form]",
         summary: "create a session here with the recent explicit model/profile/reasoning",
         args: CommandArgs::NewForm,
+    },
+    CommandSpec {
+        name: "search",
+        usage: "/search [full] [literal]",
+        summary: "find literal text in loaded content, or scan the full session",
+        args: CommandArgs::Search,
+    },
+    CommandSpec {
+        name: "prev",
+        usage: "/prev",
+        summary: "jump to the previous user prompt",
+        args: CommandArgs::None,
+    },
+    CommandSpec {
+        name: "next",
+        usage: "/next",
+        summary: "jump to the next user prompt",
+        args: CommandArgs::None,
+    },
+    CommandSpec {
+        name: "latest",
+        usage: "/latest",
+        summary: "jump to the newest user prompt and follow the tail",
+        args: CommandArgs::None,
     },
     CommandSpec {
         name: "resume",
@@ -375,6 +414,21 @@ pub fn parse_command(input: &str) -> Result<LocalCommand, CommandIssue> {
     };
 
     match (spec.name, spec.args) {
+        ("search", _) => {
+            let (scope, query) = match args.strip_prefix("full") {
+                Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => {
+                    (crate::state::search::SearchScope::FullSession, rest.trim())
+                }
+                _ => (crate::state::search::SearchScope::Loaded, args),
+            };
+            Ok(LocalCommand::Search {
+                query: query.to_owned(),
+                scope,
+            })
+        }
+        ("prev", _) => no_args(LocalCommand::PromptJump(-1)),
+        ("next", _) => no_args(LocalCommand::PromptJump(1)),
+        ("latest", _) => no_args(LocalCommand::Latest),
         ("resume", _) => no_args(LocalCommand::Resume),
         ("sessions", _) => no_args(LocalCommand::Sessions),
         ("model", _) => no_args(LocalCommand::Model),

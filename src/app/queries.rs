@@ -26,6 +26,9 @@ pub enum QueryKey {
     TurnResult { session_id: String, loop_id: String },
     /// A bounded context snapshot used by preparation/compaction polling.
     Context { session_id: String, generation: u64 },
+    /// One explicit full-session search scan chain (spec §17.1). It uses the
+    /// same two read-only slots as every other read.
+    Search { session_id: String, generation: u64 },
 }
 
 /// The result of asking to start a read.
@@ -176,6 +179,7 @@ impl QueryScope {
                 QueryKey::History { session_id: id, .. } => id == session_id,
                 QueryKey::TurnResult { session_id: id, .. } => id == session_id,
                 QueryKey::Context { session_id: id, .. } => id == session_id,
+                QueryKey::Search { session_id: id, .. } => id == session_id,
             },
         }
     }
@@ -264,6 +268,13 @@ impl App {
                 crate::app::queries::QueryKey::Context { session_id, .. } => {
                     self.request_session_context(&session_id)
                 }
+                crate::app::queries::QueryKey::Search {
+                    session_id,
+                    generation,
+                } => self
+                    .resume_search_scan(&session_id, generation)
+                    .into_iter()
+                    .next(),
             };
             if let Some(command) = command {
                 commands.push(command);

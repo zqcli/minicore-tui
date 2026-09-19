@@ -7,6 +7,7 @@ use std::cmp::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::protocol::{ModelInfo, ProfileInfo, Reasoning, SessionInfo};
+use crate::state::search::SearchPanelState;
 use crate::state::session::SessionId;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -21,6 +22,9 @@ pub enum Dock {
     ProfileSelector(SelectorState),
     Help,
     Logs,
+    /// The conversation search panel (spec §17.1): a one-line query input
+    /// plus bounded match summaries. The transcript stays visible.
+    Search(SearchPanelState),
 }
 
 /// The highlighted field in the new-session form (spec 25.3).

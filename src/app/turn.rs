@@ -2135,6 +2135,7 @@ impl App {
                 self.restore_unsent_turn(&session_id, local_submission);
                 self.notice(NoticeLevel::Warning, format!("turn send failed: {error}"));
             }
+            RequestKind::SearchRead { .. } => {}
             RequestKind::WaitTurn(turn) => {
                 let wait_is_current = self
                     .sessions

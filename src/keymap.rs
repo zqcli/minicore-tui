@@ -79,6 +79,22 @@ pub enum Action {
     SessionContinue,
     /// Toggle the session selector between this workspace and all projects.
     SessionScopeToggle,
+    /// Search panel: edit the one-line query.
+    SearchTypeChar(char),
+    SearchBackspace,
+    SearchClear,
+    /// Search panel: move the result cursor by `delta` matches.
+    SearchMove(i32),
+    /// Search panel Enter: start a generation, then jump to the match.
+    SearchConfirm,
+    /// Search panel `n`/`p`: move and jump.
+    SearchStep(i32),
+    /// Search panel Ctrl+A: switch loaded content and full session.
+    SearchScopeToggle,
+    /// Search panel `s`: stop the running scan.
+    SearchStop,
+    /// Search panel Esc: leave the result list, then close the search.
+    SearchEscape,
     SessionDeleteToggle,
     SessionRenameChar(char),
     SessionRenameBackspace,
@@ -141,6 +157,13 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
         if matches!(&state.mode, SessionPanelMode::Rename { .. }) {
             return session_rename_keys(key, press, typing);
         }
+    }
+
+    // The search panel owns the keyboard while it is open. It adds no global
+    // shortcut: every binding here is local to this panel, and Esc leaves the
+    // search before anything can cancel a turn (spec §17).
+    if let Dock::Search(state) = &app.dock {
+        return search_keys(key, press, typing, state.mode);
     }
 
     if press {
@@ -283,6 +306,9 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
         | Dock::ReasoningSelector(_)
         | Dock::ProfileSelector(_) => selector_keys(key, press, typing),
         Dock::Help | Dock::Logs => panel_keys(key, press, typing),
+        // The search panel is handled before this match (it owns the
+        // keyboard while open).
+        Dock::Search(_) => Action::None,
     }
 }
 
@@ -401,6 +427,40 @@ fn panel_keys(key: KeyEvent, press: bool, typing: bool) -> Action {
         _ => Action::None,
     }
 }
+/// Panel-local keys for the conversation search (spec §17.1/§17.2). Typing
+/// always edits the query; `n`/`p` and the stop/scope keys are result-list
+/// actions so a letter can never be swallowed while the user types.
+fn search_keys(
+    key: KeyEvent,
+    press: bool,
+    typing: bool,
+    mode: crate::state::search::SearchPanelMode,
+) -> Action {
+    use crate::state::search::SearchPanelMode;
+    if !(press || typing && matches!(mode, SearchPanelMode::Input)) {
+        return Action::None;
+    }
+    let results = matches!(mode, SearchPanelMode::Results);
+    match key.code {
+        KeyCode::Esc => Action::SearchEscape,
+        KeyCode::Enter => Action::SearchConfirm,
+        KeyCode::Backspace => Action::SearchBackspace,
+        KeyCode::Up => Action::SearchMove(-1),
+        KeyCode::Down => Action::SearchMove(1),
+        KeyCode::PageUp => Action::SearchMove(-10),
+        KeyCode::PageDown => Action::SearchMove(10),
+        KeyCode::Home => Action::SearchMove(-1000),
+        KeyCode::End => Action::SearchMove(1000),
+        KeyCode::Char('u') if ctrl(&key) => Action::SearchClear,
+        KeyCode::Char('a') if ctrl(&key) && results => Action::SearchScopeToggle,
+        KeyCode::Char('n') if results => Action::SearchStep(1),
+        KeyCode::Char('p') if results => Action::SearchStep(-1),
+        KeyCode::Char('s') if results => Action::SearchStop,
+        KeyCode::Char(c) if !ctrl(&key) && !alt(&key) => Action::SearchTypeChar(c),
+        _ => Action::None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

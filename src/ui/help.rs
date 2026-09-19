@@ -13,10 +13,11 @@ use crate::theme::Theme;
 use crate::ui::layout;
 use crate::ui::panel::{self, PanelSpec};
 
-/// The help renderer builds a fixed, one-row-per-entry list. The reducer uses
-/// this count with the shared content rectangle for Home/End/Page scrolling.
+/// The real content height of the Help panel. The command table grows with
+/// the implemented command surface, so the scroll bound is derived from the
+/// same lines the renderer builds instead of a hardcoded count.
 pub(crate) fn content_line_count() -> usize {
-    37
+    content_lines(&Theme::dark(), 80).len()
 }
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
@@ -30,6 +31,24 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         panel.title,
     );
     let width = panel.content.width as usize;
+    let lines = content_lines(theme, width);
+    frame.render_widget(
+        Paragraph::new(vec![Line::from(Span::styled(
+            "Esc or F1 closes this panel",
+            Style::new().fg(theme.dim),
+        ))]),
+        panel.footer,
+    );
+
+    let scroll = app
+        .panel_scroll
+        .min(lines.len().saturating_sub(panel.content.height as usize));
+    panel::render_window(frame, panel.content, &lines, scroll);
+}
+
+/// Builds the Help panel body. Shared by the renderer and the scroll bound so
+/// the two can never disagree (spec §18.3).
+fn content_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {
     let mut lines = vec![Line::default()];
     lines.push(section(theme, "Global", width));
     for (key, what) in [
@@ -96,18 +115,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             Style::new().fg(theme.muted),
         )));
     }
-    frame.render_widget(
-        Paragraph::new(vec![Line::from(Span::styled(
-            "Esc or F1 closes this panel",
-            Style::new().fg(theme.dim),
-        ))]),
-        panel.footer,
-    );
-
-    let scroll = app
-        .panel_scroll
-        .min(lines.len().saturating_sub(panel.content.height as usize));
-    panel::render_window(frame, panel.content, &lines, scroll);
+    lines
 }
 
 fn section(theme: &Theme, title: &str, _width: usize) -> Line<'static> {

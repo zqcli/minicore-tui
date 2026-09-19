@@ -223,6 +223,9 @@ pub enum AppEvent {
     /// One canonical Runtime history item finished in the single serialized
     /// decode worker. The identity is checked before any state mutation.
     HistoryItemDecoded(Box<crate::jobs::DecodeOutcome>),
+    /// One loaded-content search scan finished in its owned worker. The
+    /// identity and generation are checked before any state mutation.
+    LocalScanFinished(Box<crate::jobs::LocalScanOutcome>),
 }
 
 /// The result of one owned local job (clipboard now; export and the draft

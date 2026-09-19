@@ -24,6 +24,7 @@ pub mod panel;
 pub mod rail;
 pub mod reasoning;
 pub mod scrollbar;
+pub mod search;
 pub mod selector;
 pub mod status;
 pub mod steer_queue;
@@ -108,6 +109,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         | Dock::ProfileSelector(_) => selector::render(frame, screen.panel, app, &theme),
         Dock::Help => help::render(frame, screen.panel, app, &theme),
         Dock::Logs => logs::render(frame, screen.panel, app, &theme),
+        Dock::Search(_) => search::render(frame, screen.panel, app, &theme),
     }
     footer::render(frame, screen.footer, app, &theme);
 }

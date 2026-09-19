@@ -3717,6 +3717,27 @@ fn selectors_render_on_both_themes_without_panicking() {
 
 // ---- Phase 5: input rendering -------------------------------------------
 
+/// Every rendered page of the Help panel, concatenated. The command table is
+/// long enough that a single top/bottom pair no longer covers it, so the test
+/// pages to the end instead of assuming a fixed height.
+fn accumulated_help_text(app: &mut App, width: u16, height: u16) -> String {
+    let mut all = text(&draw(app, width, height));
+    for _ in 0..80 {
+        app.update(AppEvent::Terminal(crossterm::event::Event::Key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::PageDown,
+                crossterm::event::KeyModifiers::empty(),
+            ),
+        )));
+        let page = text(&draw(app, width, height));
+        if all.ends_with(&page) {
+            break;
+        }
+        all.push_str(&page);
+    }
+    all
+}
+
 #[test]
 fn help_panel_lists_keys_and_safety_notes() {
     let app = testapp::help(ThemeKind::Dark);
@@ -3727,19 +3748,10 @@ fn help_panel_lists_keys_and_safety_notes() {
     assert!(any_cell_matching(&terminal, |cell| cell.symbol() == "┌"
         && cell.fg == Theme::dark().border_accent));
 
-    // A wide terminal shows the single command table without wrapping; the
-    // first and last page together cover the whole panel.
+    // A wide terminal shows the single command table without wrapping; every
+    // page is accumulated because the table grew with the D2 commands.
     let mut wide = testapp::help(ThemeKind::Dark);
-    let mut wide_content = text(&draw(&wide, 140, 50));
-    for _ in 0..200 {
-        wide.update(AppEvent::Terminal(crossterm::event::Event::Key(
-            crossterm::event::KeyEvent::new(
-                crossterm::event::KeyCode::Down,
-                crossterm::event::KeyModifiers::empty(),
-            ),
-        )));
-    }
-    wide_content.push_str(&text(&draw(&wide, 140, 50)));
+    let wide_content = accumulated_help_text(&mut wide, 140, 50);
     assert!(wide_content.contains("Slash commands"));
     assert!(wide_content.contains("/cancel"));
     assert!(wide_content.contains("/reload"));
@@ -3754,16 +3766,7 @@ fn help_panel_lists_keys_and_safety_notes() {
 #[test]
 fn help_panel_lists_every_table_command() {
     let mut app = testapp::help(ThemeKind::Dark);
-    let mut content = text(&draw(&app, 120, 60));
-    for _ in 0..200 {
-        app.update(AppEvent::Terminal(crossterm::event::Event::Key(
-            crossterm::event::KeyEvent::new(
-                crossterm::event::KeyCode::Down,
-                crossterm::event::KeyModifiers::empty(),
-            ),
-        )));
-    }
-    content.push_str(&text(&draw(&app, 120, 60)));
+    let content = accumulated_help_text(&mut app, 120, 60);
     for spec in crate::command::COMMANDS {
         assert!(
             content.contains(spec.name),

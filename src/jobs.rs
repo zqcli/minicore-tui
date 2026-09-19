@@ -36,8 +36,21 @@ use crate::protocol::read::{EncodedHistoryItem, RawHistoryItem};
 /// session epoch or read chain.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DecodeTarget {
-    History { session_id: String, index: usize },
-    TurnResult { turn: TurnRef, index: usize },
+    History {
+        session_id: String,
+        index: usize,
+    },
+    TurnResult {
+        turn: TurnRef,
+        index: usize,
+    },
+    /// One item of an explicit full-session search scan: the worker decodes
+    /// and scans it, then drops the body (spec §17.1).
+    SearchScan {
+        session_id: String,
+        generation: u64,
+        index: usize,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -53,6 +66,17 @@ pub struct DecodeRequest {
     pub item: EncodedHistoryItem,
     pub fingerprint: u64,
     pub cancel: Arc<std::sync::atomic::AtomicBool>,
+    /// When set, the worker scans the decoded item for this literal and
+    /// returns only bounded match summaries.
+    pub scan: Option<Box<crate::state::search::ScanSpec>>,
+}
+
+/// The bounded result of scanning one decoded item. The item body is not
+/// returned to the App.
+#[derive(Debug)]
+pub struct ScanItemOutcome {
+    pub index: usize,
+    pub matches: Vec<crate::state::search::SearchMatch>,
 }
 
 #[derive(Debug)]
@@ -61,6 +85,63 @@ pub struct DecodeOutcome {
     pub fingerprint: u64,
     pub result: Result<RawHistoryItem, String>,
     pub cancelled: bool,
+    /// Present for a `DecodeTarget::SearchScan` request; `result` then holds
+    /// the decoded item only so the worker's decode status stays uniform.
+    pub scan: Option<Box<ScanItemOutcome>>,
+}
+
+/// Identity of one loaded-content search scan. A late result whose identity or
+/// generation no longer matches the open panel is dropped (spec §17.1).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocalScanIdentity {
+    pub session_id: String,
+    pub session_epoch: u64,
+    pub generation: u64,
+}
+
+/// One live-loop text piece captured for a loaded-content scan. Live text is
+/// bounded by the running turn, so it is copied here; durable history is
+/// shared by `Arc` and never copied.
+#[derive(Clone, Debug)]
+pub struct LiveScanText {
+    pub source: crate::state::search::SearchSource,
+    pub index: Option<usize>,
+    pub loop_id: Option<String>,
+    pub request_index: Option<u32>,
+    pub ordinal: u32,
+    pub tool_call_id: Option<String>,
+    pub text: String,
+}
+
+/// One loaded-content literal scan. It runs in an owned worker: the App never
+/// walks a large body on its update thread (spec §17.1). The Debug impl is
+/// length-only: a scan request must never print the bodies it walks.
+pub struct LocalScanRequest {
+    pub identity: LocalScanIdentity,
+    pub needle: String,
+    pub include_thinking: bool,
+    pub blocks: Arc<Vec<Arc<crate::state::transcript::TranscriptBlock>>>,
+    pub live: Vec<LiveScanText>,
+}
+
+impl std::fmt::Debug for LocalScanRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LocalScanRequest")
+            .field("session_id", &self.identity.session_id)
+            .field("generation", &self.identity.generation)
+            .field("needle_bytes", &self.needle.len())
+            .field("blocks", &self.blocks.len())
+            .field("live", &self.live.len())
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+pub struct LocalScanOutcome {
+    pub identity: LocalScanIdentity,
+    pub matches: Vec<crate::state::search::SearchMatch>,
+    pub truncated: bool,
 }
 
 /// Owner-local identifier for one started job. It is only used for tests and
@@ -96,6 +177,8 @@ pub struct LocalJobs {
     decode_tx: Option<mpsc::Sender<DecodeRequest>>,
     decode_task: Option<JoinHandle<()>>,
     decode_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    scan_tx: Option<mpsc::Sender<LocalScanRequest>>,
+    scan_task: Option<JoinHandle<()>>,
 }
 
 impl Default for LocalJobs {
@@ -215,6 +298,7 @@ impl LocalJobs {
                 let identity = request.identity.clone();
                 let fingerprint = request.fingerprint;
                 let item = request.item;
+                let scan = request.scan.map(|scan| *scan);
                 let cancel = Arc::clone(&request.cancel);
                 if cancel.load(Ordering::Relaxed) {
                     let _ = decode_events
@@ -223,20 +307,39 @@ impl LocalJobs {
                             fingerprint,
                             result: Err("history decode cancelled".to_owned()),
                             cancelled: true,
+                            scan: None,
                         })))
                         .await;
                     continue;
                 }
                 let cancel_for_decode = Arc::clone(&cancel);
-                let result = tokio::task::spawn_blocking(move || {
+                let (result, scan_outcome) = tokio::task::spawn_blocking(move || {
                     if cancel_for_decode.load(Ordering::Relaxed) {
-                        return Err("history decode cancelled".to_owned());
+                        return (Err("history decode cancelled".to_owned()), None);
                     }
-                    crate::protocol::read::decode_item(&item.data)
+                    let decoded = crate::protocol::read::decode_item(&item.data);
+                    match (decoded, scan) {
+                        (Ok(decoded), Some(scan)) => {
+                            let mut plan = crate::state::search::ScanPlan::new(
+                                &scan.needle,
+                                scan.include_thinking,
+                            );
+                            plan.scan_item(item.index, &decoded);
+                            (
+                                Ok(decoded),
+                                Some(Box::new(ScanItemOutcome {
+                                    index: item.index,
+                                    matches: plan.collector.matches,
+                                })),
+                            )
+                        }
+                        (decoded, _) => (decoded, None),
+                    }
                 })
                 .await
-                .map_err(|error| format!("history decode worker failed: {error}"))
-                .and_then(|result| result);
+                .unwrap_or_else(|error| {
+                    (Err(format!("history decode worker failed: {error}")), None)
+                });
                 let cancelled = cancel.load(Ordering::Relaxed);
                 if decode_events
                     .send(AppEvent::HistoryItemDecoded(Box::new(DecodeOutcome {
@@ -248,7 +351,30 @@ impl LocalJobs {
                             result
                         },
                         cancelled,
+                        scan: scan_outcome.filter(|_| !cancelled),
                     })))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        let (scan_tx, mut scan_rx) = mpsc::channel::<LocalScanRequest>(1);
+        let scan_events = events_tx.clone();
+        let scan_task = tokio::spawn(async move {
+            while let Some(request) = scan_rx.recv().await {
+                // The literal scan runs on a blocking thread: a large loaded
+                // body must never stall the async runtime or the UI.
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::state::search::run_local_scan(&request)
+                })
+                .await;
+                let Ok(outcome) = result else {
+                    continue;
+                };
+                if scan_events
+                    .send(AppEvent::LocalScanFinished(Box::new(outcome)))
                     .await
                     .is_err()
                 {
@@ -267,6 +393,8 @@ impl LocalJobs {
             decode_tx: Some(decode_tx),
             decode_task: Some(decode_task),
             decode_cancel: None,
+            scan_tx: Some(scan_tx),
+            scan_task: Some(scan_task),
         }
     }
 
@@ -315,6 +443,21 @@ impl LocalJobs {
                 false
             }
             Err(mpsc::error::TrySendError::Closed(_)) => false,
+        }
+    }
+
+    /// Schedules one loaded-content scan. The single queue slot drops a
+    /// superseded queued scan; the generation check already refuses its
+    /// result, so no state can be overwritten by an old generation.
+    pub fn try_schedule_scan(&mut self, request: LocalScanRequest) -> bool {
+        let Some(sender) = self.scan_tx.as_ref() else {
+            return false;
+        };
+        match sender.try_send(request) {
+            Ok(()) => true,
+            Err(mpsc::error::TrySendError::Full(_)) | Err(mpsc::error::TrySendError::Closed(_)) => {
+                false
+            }
         }
     }
 
@@ -453,6 +596,14 @@ impl LocalJobs {
             }
             let _ = task.await;
         }
+        self.scan_tx.take();
+        if let Some(task) = self.scan_task.take() {
+            while !task.is_finished() {
+                while self.events_rx.try_recv().is_ok() {}
+                tokio::task::yield_now().await;
+            }
+            let _ = task.await;
+        }
         let Some(handle) = self.clipboard.take() else {
             return;
         };
@@ -510,6 +661,7 @@ mod tests {
             item,
             fingerprint,
             cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            scan: None,
         }));
         let event = jobs.events().recv().await.expect("decode completion");
         match event {
@@ -548,6 +700,7 @@ mod tests {
             },
             fingerprint: 0,
             cancel,
+            scan: None,
         }));
         let event = jobs.events().recv().await.expect("cancel completion");
         match event {

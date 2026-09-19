@@ -1348,6 +1348,10 @@ impl App {
                 ..
             } => pending == session_id,
             crate::jobs::DecodeTarget::TurnResult { turn, .. } => turn.session_id == *session_id,
+            crate::jobs::DecodeTarget::SearchScan {
+                session_id: pending,
+                ..
+            } => pending == session_id,
         };
         if self
             .pending_decode
@@ -1455,6 +1459,7 @@ impl App {
             fingerprint: encoded_item_fingerprint(&item),
             item,
             cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            scan: None,
         };
         self.decode_in_flight = Some(identity);
         self.pending_decode = Some(request);
@@ -1513,6 +1518,7 @@ impl App {
             fingerprint: encoded_item_fingerprint(&item),
             item,
             cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            scan: None,
         };
         self.decode_in_flight = Some(identity);
         self.pending_decode = Some(request);
@@ -1649,6 +1655,19 @@ impl App {
     /// live loop when the chain completes. The chunk assembler lives on the
     /// view so an item spanning pages is never rebuilt from scratch.
     pub(super) fn continue_read_chain(
+        &mut self,
+        session_id: &SessionId,
+        read: &ReadRequest,
+        page: &crate::protocol::ReadSessionResult,
+    ) -> Vec<AppCommand> {
+        // A pending search/prompt jump resumes as soon as its target item
+        // window is resident, on both the async-decode and fixture paths.
+        let mut commands = self.continue_read_chain_inner(session_id, read, page);
+        commands.extend(self.on_search_history_progress(session_id));
+        commands
+    }
+
+    fn continue_read_chain_inner(
         &mut self,
         session_id: &SessionId,
         read: &ReadRequest,
@@ -1972,6 +1991,14 @@ impl App {
             .find_map(|(turn, window)| (!window.pending_encoded.is_empty()).then(|| turn.clone()))
         {
             self.queue_turn_result_decode(&turn);
+            return;
+        }
+        if self
+            .search_scan
+            .as_ref()
+            .is_some_and(crate::app::search::SearchScan::has_pending_decode)
+        {
+            self.queue_search_decode();
         }
     }
 
@@ -2009,6 +2036,17 @@ impl App {
                     outcome.fingerprint,
                     outcome.result,
                 ),
+            crate::jobs::DecodeTarget::SearchScan {
+                session_id,
+                generation,
+                index,
+            } => self.finish_search_item_decoded(
+                &session_id,
+                generation,
+                index,
+                outcome.fingerprint,
+                &outcome,
+            ),
         };
         self.queue_any_pending_decode();
         commands
@@ -2063,8 +2101,9 @@ impl App {
                 .insert_owner(index, owner, fingerprint, bytes);
         }
         if has_more {
+            let commands = self.on_search_history_progress(session_id);
             self.queue_history_decode(session_id);
-            return Vec::new();
+            return commands;
         }
         let page_state = view.read_page.take().expect("decode page remains owned");
         let Some(pending) = pending else {

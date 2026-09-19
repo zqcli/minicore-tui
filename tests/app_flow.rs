@@ -79,6 +79,16 @@ impl Driver {
                     );
                 }
                 AppCommand::Rpc(request) => self.queue.push_back(request),
+                AppCommand::LocalScan(request) => {
+                    // The owned worker runs the identical scan body; the
+                    // reducer harness runs it inline so assertions are
+                    // deterministic.
+                    let outcome = minicore_tui::state::search::run_local_scan(&request);
+                    let more = self
+                        .app
+                        .update(AppEvent::LocalScanFinished(Box::new(outcome)));
+                    self.commands(more);
+                }
                 AppCommand::KillChild => {}
                 AppCommand::CopySelection(text) => self.copies.push(text.as_str().to_owned()),
                 AppCommand::Exit => self.exited = true,
@@ -103,6 +113,13 @@ impl Driver {
                     );
                 }
                 AppCommand::Rpc(request) => self.queue.push_back(request),
+                AppCommand::LocalScan(request) => {
+                    let outcome = minicore_tui::state::search::run_local_scan(&request);
+                    let more = self
+                        .app
+                        .update(AppEvent::LocalScanFinished(Box::new(outcome)));
+                    self.commands(more);
+                }
                 AppCommand::KillChild => {}
                 AppCommand::CopySelection(text) => self.copies.push(text.as_str().to_owned()),
                 AppCommand::Exit => self.exited = true,
@@ -7830,4 +7847,504 @@ fn rename_command_never_leaks_an_unsent_pending_request() {
         // Clear the queue for the next iteration without driving the app.
         driver.queue.clear();
     }
+}
+
+// ---- D2: conversation search, navigation and jumps (spec §17.1/§17.2) ----
+
+use minicore_tui::state::search::{SearchPanelMode, SearchScope, SearchSource, SearchStatus};
+
+fn search_panel(app: &App) -> &minicore_tui::state::search::SearchPanelState {
+    match &app.dock {
+        Dock::Search(state) => state,
+        other => panic!("expected the search panel, got {other:?}"),
+    }
+}
+
+fn press(driver: &mut Driver, code: KeyCode) {
+    driver.step(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+        code,
+        KeyModifiers::empty(),
+    ))));
+}
+
+fn type_search_text(driver: &mut Driver, text: &str) {
+    for character in text.chars() {
+        press(driver, KeyCode::Char(character));
+    }
+}
+
+fn open_chat_with(driver: &mut Driver, items: Vec<Value>) {
+    driver.step(AppEvent::OpenSession {
+        session_id: "ses_1".to_owned(),
+    });
+    driver.respond_method("session.open", json!({"session": session("ses_1")}));
+    driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
+    let total = items.len();
+    let request = driver.request("session.read");
+    driver.respond(request, history(items, None, total));
+}
+
+#[test]
+fn search_loaded_scope_matches_body_thinking_and_tool_with_coverage() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_chat_with(
+        &mut driver,
+        vec![
+            user(0, "loop_1", "deploy the needle widget"),
+            assistant_with_reasoning(
+                1,
+                "loop_1",
+                0,
+                "deep",
+                "the needle body answer",
+                "needle reasoning",
+            ),
+            tool_result(
+                2,
+                "loop_1",
+                0,
+                "call_1",
+                "needle-read",
+                "ok",
+                "needle tool output",
+            ),
+        ],
+    );
+
+    slash(&mut driver, "/search needle");
+    let panel = search_panel(&driver.app);
+    assert_eq!(panel.scope, SearchScope::Loaded);
+    assert_eq!(panel.matches.len(), 5, "{:?}", panel.matches);
+    let sources: Vec<SearchSource> = panel.matches.iter().map(|m| m.source).collect();
+    assert!(sources.contains(&SearchSource::Prompt));
+    assert!(sources.contains(&SearchSource::AssistantText));
+    assert!(sources.contains(&SearchSource::Thinking));
+    assert!(sources.contains(&SearchSource::ToolName));
+    assert!(sources.contains(&SearchSource::ToolResult));
+    assert_eq!(panel.coverage.loaded_items, 3);
+    assert_eq!(panel.coverage.total_items, 3);
+    assert!(panel.coverage.complete);
+    assert_eq!(panel.status, SearchStatus::Ready);
+    let label = panel.status_label();
+    assert!(label.contains("loaded content"), "{label}");
+    assert!(label.contains("complete"), "{label}");
+
+    // Esc leaves the search instead of cancelling the turn.
+    press(&mut driver, KeyCode::Esc);
+    assert!(matches!(
+        search_panel(&driver.app).mode,
+        SearchPanelMode::Input
+    ));
+    press(&mut driver, KeyCode::Esc);
+    assert!(matches!(driver.app.dock, Dock::Composer));
+    assert!(
+        driver
+            .app
+            .pending_requests
+            .values()
+            .all(|kind| !matches!(kind, RequestKind::CancelTurn(_))),
+        "Esc in the search must never cancel the running turn"
+    );
+}
+
+#[test]
+fn search_input_restarts_the_generation_and_a_late_scan_cannot_install() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_chat_with(
+        &mut driver,
+        vec![
+            user(0, "loop_1", "needle one"),
+            user(1, "loop_2", "other two"),
+        ],
+    );
+    slash(&mut driver, "/search needle");
+    let first = search_panel(&driver.app);
+    assert_eq!(first.matches.len(), 1);
+    let stale_generation = first.generation;
+    let stale_session = first.session_id.clone();
+
+    // Edit the query and rerun: the new generation replaces the matches.
+    // Ctrl+U clears the line, then typing edits it (any character switches
+    // the panel back to its input mode).
+    driver.step(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+        KeyCode::Char('u'),
+        KeyModifiers::CONTROL,
+    ))));
+    type_search_text(&mut driver, "other two");
+    press(&mut driver, KeyCode::Enter);
+    let panel = search_panel(&driver.app);
+    assert!(panel.generation > stale_generation);
+    assert_eq!(panel.matches.len(), 1);
+    assert!(panel.matches[0].preview.contains("other two"));
+
+    // A late completion from the old generation is ignored.
+    let stale = minicore_tui::jobs::LocalScanOutcome {
+        identity: minicore_tui::jobs::LocalScanIdentity {
+            session_id: stale_session,
+            session_epoch: 1,
+            generation: stale_generation,
+        },
+        matches: vec![minicore_tui::state::search::SearchMatch {
+            index: Some(0),
+            source: SearchSource::Prompt,
+            loop_id: Some("loop_1".to_owned()),
+            request_index: None,
+            ordinal: 0,
+            tool_call_id: None,
+            preview: "stale".to_owned(),
+            source_offset: 0,
+            byte_range: 0..6,
+        }],
+        truncated: false,
+    };
+    driver
+        .app
+        .update(AppEvent::LocalScanFinished(Box::new(stale)));
+    let panel = search_panel(&driver.app);
+    assert_eq!(panel.matches.len(), 1);
+    assert!(panel.matches[0].preview.contains("other two"));
+}
+
+#[test]
+fn search_caps_matches_and_reports_truncation_instead_of_guessing() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    let repeated = "needle ".repeat(700);
+    open_chat_with(&mut driver, vec![user(0, "loop_1", &repeated)]);
+    slash(&mut driver, "/search needle");
+    let panel = search_panel(&driver.app);
+    assert_eq!(
+        panel.matches.len(),
+        minicore_tui::state::search::MAX_SEARCH_MATCHES
+    );
+    assert!(panel.coverage.truncated);
+    assert!(!panel.coverage.complete);
+    let label = panel.status_label();
+    assert!(label.contains("first 500 matches shown"), "{label}");
+}
+
+#[test]
+fn full_session_search_scans_a_pinned_chain_and_never_claims_complete_on_large_items() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_chat_with(
+        &mut driver,
+        vec![
+            user(0, "loop_1", "loaded prompt"),
+            assistant(1, "loop_1", 0, "deep", "loaded answer"),
+            user(2, "loop_2", "another prompt"),
+        ],
+    );
+    let session_pin = "0".repeat(64);
+    slash(&mut driver, "/search full needle");
+    let panel = search_panel(&driver.app);
+    assert_eq!(panel.scope, SearchScope::FullSession);
+    assert_eq!(panel.status, SearchStatus::ScanningFull);
+
+    // The scan reuses the session's captured prefix and starts at item 0.
+    let first = driver.request("session.read");
+    assert_eq!(first.params["cursor"]["item"], 0);
+    assert_eq!(
+        first.params.get("captured_end").and_then(Value::as_u64),
+        Some(3)
+    );
+    driver.respond(
+        first,
+        json!({
+            "session": session("ses_1"),
+            "items": encode_item(&user(0, "loop_1", "needle in the durable body")),
+            "total": 3,
+            "records": [],
+            "records_truncated": true,
+            "history_revision": session_pin,
+            "captured_end": 3,
+            "trailing_incomplete": false,
+            "next_cursor": {"item": 1, "offset": 0},
+        }),
+    );
+    // The item is decoded and scanned by the owned worker; the harness runs
+    // the exact worker body inline and feeds the result back.
+    let decode = driver.app.pending_decode_request().expect("decode queued");
+    let scan = decode
+        .scan
+        .as_ref()
+        .expect("a scan spec is carried")
+        .clone();
+    let item = minicore_tui::protocol::read::decode_item(&decode.item.data).expect("item decodes");
+    let mut plan = minicore_tui::state::search::ScanPlan::new(&scan.needle, scan.include_thinking);
+    plan.scan_item(0, &item);
+    driver.app.mark_decode_scheduled();
+    let decoded = minicore_tui::jobs::DecodeOutcome {
+        identity: decode.identity.clone(),
+        fingerprint: decode.fingerprint,
+        result: Ok(item),
+        cancelled: false,
+        scan: Some(Box::new(minicore_tui::jobs::ScanItemOutcome {
+            index: 0,
+            matches: plan.collector.matches,
+        })),
+    };
+    let more = driver
+        .app
+        .update(AppEvent::HistoryItemDecoded(Box::new(decoded)));
+    driver.commands(more);
+    let panel = search_panel(&driver.app);
+    assert_eq!(panel.matches.len(), 1, "{:?}", panel.matches);
+    assert!(panel.coverage.records_truncated);
+
+    // The next page continues under the captured pin; its large item stops
+    // the scan with explicit, incomplete coverage.
+    let second = driver.request("session.read");
+    assert_eq!(
+        second.params.get("captured_end").and_then(Value::as_u64),
+        Some(3)
+    );
+    assert_eq!(
+        second
+            .params
+            .get("history_revision")
+            .and_then(Value::as_str),
+        Some(session_pin.as_str())
+    );
+    driver.respond(
+        second,
+        json!({
+            "session": session("ses_1"),
+            "items": [{
+                "index": 1, "offset": 0, "total_bytes": 9_000_000,
+                "encoding": "utf8_json", "data": "x", "complete": false,
+            }],
+            "total": 3,
+            "records": [],
+            "records_truncated": true,
+            "history_revision": session_pin,
+            "captured_end": 3,
+            "trailing_incomplete": false,
+        }),
+    );
+    let panel = search_panel(&driver.app);
+    assert_eq!(panel.coverage.large_items, 1);
+    assert!(!panel.coverage.complete);
+    assert_ne!(panel.status, SearchStatus::ScanningFull);
+    let label = panel.status_label();
+    assert!(label.contains("large item"), "{label}");
+    assert!(!label.ends_with("complete"), "{label}");
+}
+
+#[test]
+fn full_session_search_can_be_stopped_without_losing_found_matches() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_chat_with(&mut driver, vec![user(0, "loop_1", "loaded prompt")]);
+    slash(&mut driver, "/search full loaded");
+    let request = driver.request("session.read");
+    let scan_pin = "1".repeat(64);
+    driver.respond(
+        request,
+        json!({
+            "session": session("ses_1"),
+            "items": encode_item(&user(0, "loop_1", "loaded prompt")),
+            "total": 40,
+            "records": [],
+            "records_truncated": false,
+            "history_revision": scan_pin,
+            "captured_end": 40,
+            "trailing_incomplete": false,
+            "next_cursor": {"item": 1, "offset": 0},
+        }),
+    );
+    // Stop while the next page request is queued.
+    driver.app.composer.set_text("");
+    press(&mut driver, KeyCode::Esc);
+    press(&mut driver, KeyCode::Esc);
+    assert!(matches!(driver.app.dock, Dock::Composer));
+}
+
+#[test]
+fn search_jump_expands_a_fold_temporarily_and_restores_it_on_close() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    let reasoning = "needle reasoning line\nsecond\nthird\nfourth";
+    open_chat_with(
+        &mut driver,
+        vec![assistant_with_reasoning(
+            0, "loop_1", 0, "deep", "answer", reasoning,
+        )],
+    );
+    let key = minicore_tui::state::view::ReasoningKey::new("loop_1", 0, 0);
+    assert_eq!(
+        driver
+            .app
+            .sessions
+            .known
+            .get("ses_1")
+            .and_then(|view| view.reasoning_folds.get(&key))
+            .copied(),
+        None,
+        "the user has no manual override yet"
+    );
+
+    slash(&mut driver, "/search needle");
+    press(&mut driver, KeyCode::Enter);
+    assert_eq!(
+        driver
+            .app
+            .sessions
+            .known
+            .get("ses_1")
+            .and_then(|view| view.reasoning_folds.get(&key))
+            .copied(),
+        Some(minicore_tui::state::view::FoldOverride::Expanded),
+        "a jump expands the folded run it targets"
+    );
+
+    press(&mut driver, KeyCode::Esc);
+    press(&mut driver, KeyCode::Esc);
+    assert_eq!(
+        driver
+            .app
+            .sessions
+            .known
+            .get("ses_1")
+            .and_then(|view| view.reasoning_folds.get(&key))
+            .copied(),
+        None,
+        "closing the search restores the user's own fold state"
+    );
+}
+
+#[test]
+fn prompt_jumps_skip_steering_and_read_an_unloaded_window() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_chat_with(
+        &mut driver,
+        vec![
+            user(0, "loop_1", "first prompt"),
+            user_steering(1, "loop_1", "steer please"),
+            user(2, "loop_2", "second prompt"),
+            assistant(3, "loop_2", 0, "deep", "answer"),
+        ],
+    );
+
+    slash(&mut driver, "/next");
+    assert_eq!(
+        driver
+            .app
+            .sessions
+            .known
+            .get("ses_1")
+            .and_then(|view| view.scroll.anchor.as_ref())
+            .and_then(|anchor| anchor.section_id.history_index),
+        Some(0)
+    );
+    slash(&mut driver, "/next");
+    assert_eq!(
+        driver
+            .app
+            .sessions
+            .known
+            .get("ses_1")
+            .and_then(|view| view.scroll.anchor.as_ref())
+            .and_then(|anchor| anchor.section_id.history_index),
+        Some(2),
+        "/next skips the steering row"
+    );
+    slash(&mut driver, "/latest");
+    assert_eq!(
+        driver
+            .app
+            .sessions
+            .known
+            .get("ses_1")
+            .and_then(|view| view.scroll.anchor.as_ref())
+            .and_then(|anchor| anchor.section_id.history_index),
+        Some(2)
+    );
+    slash(&mut driver, "/prev");
+    assert_eq!(
+        driver
+            .app
+            .sessions
+            .known
+            .get("ses_1")
+            .and_then(|view| view.scroll.anchor.as_ref())
+            .and_then(|anchor| anchor.section_id.history_index),
+        Some(0)
+    );
+    // No extra read was needed: every prompt was already resident.
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "session.read")
+    );
+
+    // An unloaded older window is read at the exact item index with the pin.
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    driver.step(AppEvent::OpenSession {
+        session_id: "ses_1".to_owned(),
+    });
+    driver.respond_method("session.open", json!({"session": session("ses_1")}));
+    driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
+    let probe = driver.request("session.read");
+    let pin_revision = "2".repeat(64);
+    driver.respond(
+        probe,
+        read(
+            &[user(0, "loop_0", "very old prompt")],
+            Some(json!({"item": 1, "offset": 0})),
+            202,
+        ),
+    );
+    // 202 items open at the tail window [2, 202); index 0 stays unloaded.
+    let mut tail_items = vec![user(2, "loop_2", "recent prompt")];
+    tail_items.extend(
+        (3..202).map(|index| user(index, &format!("loop_{index}"), &format!("filler {index}"))),
+    );
+    let tail = driver.request("session.read");
+    assert_eq!(tail.params["cursor"]["item"], 2);
+    driver.respond(tail, read(&tail_items, None, 202));
+    assert!(
+        driver
+            .app
+            .sessions
+            .known
+            .get("ses_1")
+            .is_some_and(|view| view.transcript.window.item(0).is_none()),
+        "index 0 is outside the opened tail window"
+    );
+
+    slash(&mut driver, "/next");
+    slash(&mut driver, "/prev");
+    let windowed = driver.request("session.read");
+    assert_eq!(windowed.params["cursor"]["item"], 1);
+    assert_eq!(
+        windowed.params.get("captured_end").and_then(Value::as_u64),
+        Some(202),
+        "a windowed read beyond the loaded range keeps the captured pin"
+    );
+    let _ = pin_revision;
+    driver.respond(
+        windowed,
+        read(
+            &[user(1, "loop_1", "older prompt")],
+            Some(json!({"item": 2, "offset": 0})),
+            202,
+        ),
+    );
+    assert_eq!(
+        driver
+            .app
+            .sessions
+            .known
+            .get("ses_1")
+            .and_then(|view| view.scroll.anchor.as_ref())
+            .and_then(|anchor| anchor.section_id.history_index),
+        Some(1),
+        "the jump lands on the prompt the windowed read loaded"
+    );
 }

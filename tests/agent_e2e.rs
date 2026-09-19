@@ -643,6 +643,7 @@ async fn pump_step(process: &mut RpcProcess, app: &mut App) -> Result<(), String
             AppCommand::Rpc(req) => {
                 process.send(req).await.map_err(|e| e.to_string())?;
             }
+            AppCommand::LocalScan(request) => handle_local_scan(app, &request),
             AppCommand::KillChild => process.kill_child(),
             AppCommand::CopySelection(_) => {}
             AppCommand::Exit => return Ok(()),
@@ -686,6 +687,7 @@ async fn wait_for_request0_and_wait_turn(
                         AppCommand::Rpc(req) => {
                             process.send(req).await.map_err(|e| e.to_string())?;
                         }
+                        AppCommand::LocalScan(request) => handle_local_scan(app, &request),
                         AppCommand::KillChild => process.kill_child(),
                         AppCommand::CopySelection(_) => {}
                         AppCommand::Exit => return Ok(()),
@@ -811,6 +813,13 @@ async fn create_additional_session(
     session_id
 }
 
+/// Runs the owned loaded-content scan inline: the production worker executes
+/// this exact body, so the E2E assertions observe the real matcher.
+fn handle_local_scan(app: &mut App, request: &minicore_tui::jobs::LocalScanRequest) {
+    let outcome = minicore_tui::state::search::run_local_scan(request);
+    let _ = app.update(AppEvent::LocalScanFinished(Box::new(outcome)));
+}
+
 async fn dispatch(process: &mut RpcProcess, app: &mut App, event: AppEvent) -> Result<(), String> {
     let commands = app.update(event);
     for command in commands {
@@ -818,6 +827,7 @@ async fn dispatch(process: &mut RpcProcess, app: &mut App, event: AppEvent) -> R
             AppCommand::Rpc(req) => {
                 process.send(req).await.map_err(|e| e.to_string())?;
             }
+            AppCommand::LocalScan(request) => handle_local_scan(app, &request),
             AppCommand::KillChild => process.kill_child(),
             AppCommand::CopySelection(_) => {}
             AppCommand::Exit => return Ok(()),
@@ -3459,6 +3469,7 @@ async fn submit_slash_command(
 /// Sends already-reduced commands exactly as the main loop would.
 async fn dispatch_commands(
     process: &mut RpcProcess,
+    app: &mut App,
     commands: Vec<AppCommand>,
 ) -> Result<(), String> {
     for command in commands {
@@ -3466,6 +3477,7 @@ async fn dispatch_commands(
             AppCommand::Rpc(req) => {
                 process.send(req).await.map_err(|e| e.to_string())?;
             }
+            AppCommand::LocalScan(request) => handle_local_scan(app, &request),
             AppCommand::KillChild => process.kill_child(),
             AppCommand::CopySelection(_) => {}
             AppCommand::Exit => return Ok(()),
@@ -3485,7 +3497,7 @@ async fn run_slash_command(
 ) -> Result<(), String> {
     app.composer_mut().set_text(command);
     let commands = app.submit_composer();
-    dispatch_commands(process, commands).await
+    dispatch_commands(process, app, commands).await
 }
 
 async fn type_draft(process: &mut RpcProcess, app: &mut App, text: &str) -> Result<(), String> {
