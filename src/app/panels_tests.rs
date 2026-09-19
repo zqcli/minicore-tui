@@ -321,6 +321,60 @@ fn detail_scroll_stops_follow_and_end_resumes_only_detail() {
     assert!(app.tool_detail().unwrap().follow[2]);
     assert_eq!(app.active_view().unwrap().scroll.offset, before);
 }
+
+#[test]
+fn copy_uses_the_visible_snapshot_while_new_process_bytes_await_layout() {
+    use base64::Engine;
+    let mut app = app();
+    app.terminal_size = (80, 24);
+    let req = take_requests(app.open_tool_detail(key("a"))).remove(0);
+    let output = take_requests(respond(&mut app, &req, read(&key("a"), false))).remove(0);
+    respond(
+        &mut app,
+        &output,
+        page(&key("a"), Stream::Stdout, 0, "visible", false),
+    );
+    install_layout(&mut app);
+    app.accept_tool_process(ToolProcessWire {
+        tool_ref: (&key("a")).into(),
+        command: None,
+        chunk: Some(crate::protocol::ToolProcessChunkWire {
+            stream: Stream::Stdout,
+            encoding: "base64".into(),
+            data: base64::engine::general_purpose::STANDARD.encode(b" pending"),
+            base_offset: 7,
+            next_offset: 15,
+            observed_end: 15,
+            dropped: false,
+            expired: false,
+        }),
+    });
+    let commands = app.copy_tool_detail();
+    assert!(
+        matches!(commands.as_slice(), [AppCommand::CopySelection(text)] if text.as_str() == "visible")
+    );
+    assert_eq!(
+        app.tool_detail().unwrap().stream().display_text(),
+        "visible pending"
+    );
+    assert!(app.notices.back().unwrap().text.contains("不完整"));
+}
+
+#[test]
+fn input_tab_survives_preview_eviction_when_authoritative_input_is_available() {
+    let mut app = app();
+    let req = take_requests(app.open_tool_detail(key("a"))).remove(0);
+    respond(&mut app, &req, read(&key("a"), true));
+    app.detail_tab(-1);
+    assert_eq!(app.tool_detail().unwrap().tab, Stream::Input);
+    let view = app.active_session_mut().unwrap();
+    let facts = Arc::make_mut(&mut view.tool_presentations)
+        .get_mut(&key("a"))
+        .unwrap();
+    Arc::make_mut(facts).truncate_to_bytes(0);
+    assert!(app.tool_facts().unwrap().invocation.is_none());
+    assert!(app.tool_tabs().contains(&Stream::Input));
+}
 #[test]
 fn detail_render_is_safe_narrow_and_keeps_the_existing_editor_footer_geometry() {
     let mut app = app();

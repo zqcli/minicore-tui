@@ -17,16 +17,22 @@ impl App {
         let Some(detail) = self.tool_detail() else {
             return Vec::new();
         };
+        // Copy the same immutable snapshot the user can see. A newer stream
+        // revision waiting on the worker must not starve copy during output.
+        let width = self.tool_body_area().width.saturating_sub(1).max(1);
         let Some(layout) = detail
             .layout
             .as_ref()
-            .filter(|layout| layout.identity.revision == detail.stream().revision)
+            .filter(|layout| layout.identity.width == width)
         else {
             self.notice(NoticeLevel::Info, "工具输出仍在布局，请稍后复制");
             return Vec::new();
         };
         let text = layout.text.to_string();
-        let partial = detail.stream().gap || detail.stream().truncated || !detail.stream().eof;
+        let partial = detail.stream().gap
+            || detail.stream().truncated
+            || !detail.stream().eof
+            || layout.identity.revision != detail.stream().revision;
         if partial {
             self.notice(NoticeLevel::Warning, "仅复制当前已保留窗口，输出可能不完整");
         }
@@ -241,7 +247,16 @@ impl App {
         }) {
             tabs.push(Stream::Output);
         }
-        if facts.invocation.is_some() {
+        if facts.invocation.is_some()
+            || facts.execution.as_ref().is_some_and(|execution| {
+                matches!(
+                    execution.input_availability,
+                    crate::protocol::ToolDataAvailabilityWire::Available
+                        | crate::protocol::ToolDataAvailabilityWire::Partial
+                        | crate::protocol::ToolDataAvailabilityWire::Expired
+                )
+            })
+        {
             tabs.push(Stream::Input);
         }
         if tabs.is_empty() {
