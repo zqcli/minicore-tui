@@ -1,0 +1,24 @@
+ MINICORE  v0.2.8
+
+ Coding agent TUI
+ q / Ctrl+C to quit
+
+ Open a session — /new, Ctrl+R, or F1 for help
+
+
+
+ Files · 引 用 路 径 ， 模 型 需 要 时 再 读  · Enter 插 入  / F4 预 览
+ ▸ query:
+   directory:
+ ▸ README.md [File]
+   binary.dat [File]
+   huge.txt [File]
+   needles.txt [File]
+   src [Directory]
+   src/main.rs [File]
+
+
+ 本 页  partial:false scan_complete:true stopped_by:End
+ 本 页  skipped:0 · received:6 · cursor:false · local_limit:false
+ Tab 查 询 /范 围  · Ctrl+U 清 空  · Ctrl+N 下 一 页  · F5 刷 新
+ ▸ project · deep · high · ● ready                                         ctx ?

@@ -19,6 +19,10 @@ use super::*;
 /// path, or "most recent call" is never a key because those repeat.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum QueryKey {
+    Workspace {
+        session_id: String,
+        file: bool,
+    },
     Tool {
         key: crate::state::tool::ToolKey,
     },
@@ -191,6 +195,7 @@ impl QuerySlots {
 /// read object.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QueryScope {
+    Workspace { session_id: String, file: bool },
     Tool(crate::state::tool::ToolKey),
     Session(String),
     All,
@@ -200,8 +205,12 @@ impl QueryScope {
     fn matches(&self, key: &QueryKey) -> bool {
         match self {
             Self::All => true,
+            Self::Workspace { session_id, file } => {
+                matches!(key, QueryKey::Workspace { session_id: id, file: f } if id == session_id && f == file)
+            }
             Self::Tool(tool) => matches!(key, QueryKey::Tool { key } if key == tool),
             Self::Session(session_id) => match key {
+                QueryKey::Workspace { session_id: id, .. } => id == session_id,
                 QueryKey::Tool { key } => &key.session_id == session_id,
                 QueryKey::History { session_id: id, .. } => id == session_id,
                 QueryKey::TurnResult { session_id: id, .. } => id == session_id,
@@ -254,6 +263,10 @@ impl App {
     pub(super) fn drain_query_followups(&mut self, commands: &mut Vec<AppCommand>) {
         while let Some(key) = self.pending_query_followups.pop_front() {
             let command = match key {
+                QueryKey::Workspace { .. } => {
+                    commands.extend(self.poll_workspace());
+                    None
+                }
                 QueryKey::Tool { key } => {
                     if self.tool_detail().is_some_and(|detail| detail.key == key) {
                         self.poll_tool_detail().into_iter().next()

@@ -474,7 +474,8 @@ impl App {
     pub(super) fn request_session_id(kind: &RequestKind) -> Option<&str> {
         match kind {
             RequestKind::ToolDetail { key, .. } => Some(&key.session_id),
-            RequestKind::OpenSession { session_id, .. }
+            RequestKind::Workspace { session_id, .. }
+            | RequestKind::OpenSession { session_id, .. }
             | RequestKind::CloseSession { session_id }
             | RequestKind::CloseVerifyState { session_id }
             | RequestKind::DeleteSession { session_id }

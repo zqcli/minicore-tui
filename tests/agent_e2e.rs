@@ -35,6 +35,9 @@ use minicore_tui::state::{FoldOverride, ToolKey};
 use minicore_tui::theme::ThemeKind;
 use serde_json::json;
 
+#[path = "agent_e2e/workspace.rs"]
+mod workspace_e2e;
+
 /// A deleted session is absent from both the known views and the catalog
 /// list; the catalog generation, not a tombstone set, keeps it deleted.
 fn session_absent(app: &App, session_id: &str) -> bool {
@@ -636,7 +639,7 @@ async fn pump_step(process: &mut RpcProcess, app: &mut App) -> Result<(), String
     // before the export captures it, creating a timing-only false failure.
     let wait = if editor_job_in_flight() || app.export_running() {
         Duration::from_millis(20)
-    } else if app.tool_detail().is_some() {
+    } else if app.has_main_detail() || app.workspace_browser().is_some() {
         app.next_tick()
             .unwrap_or(Duration::from_millis(500))
             .min(Duration::from_millis(500))
@@ -662,7 +665,8 @@ async fn pump_step(process: &mut RpcProcess, app: &mut App) -> Result<(), String
             if app.export_running()
                 || matches!(app.dock, Dock::Search(_))
                 || editor_job_in_flight()
-                || app.tool_detail().is_some()
+                || app.has_main_detail()
+                || app.workspace_browser().is_some()
             {
                 let commands = app.update(AppEvent::Tick);
                 dispatch_commands(process, app, commands).await?;

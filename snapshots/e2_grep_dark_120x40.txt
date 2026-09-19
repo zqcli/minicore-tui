@@ -1,0 +1,40 @@
+ MINICORE  v0.2.8
+
+ Coding agent TUI
+ q / Ctrl+C to quit
+
+ Open a session — /new, Ctrl+R, or F1 for help
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ Grep · literal only · Enter 预 览  · Ctrl+I 大 小 写
+ ▸ query: needle
+   paths:  [ignore case]
+ ▸ needles.txt:1 let needle_one = 1;
+   needles.txt:2 let needle_two = 2;
+
+
+
+
+
+
+ 本 页  partial:false scan_complete:true stopped_by:End
+ 本 页  skipped:2 · received:2 · cursor:false · local_limit:false
+ Tab 查 询 /范 围  · Ctrl+U 清 空  · Ctrl+N 下 一 页  · F5 刷 新
+ ▸ project · deep · high · ● ready                                                                                 ctx ?

@@ -3258,6 +3258,10 @@ impl App {
             .sum::<usize>();
         cached
             + self
+                .file_preview()
+                .and_then(|file| file.layout.as_ref())
+                .map_or(0, crate::state::workspace::FileLayout::retained_bytes)
+            + self
                 .tool_detail()
                 .and_then(|detail| detail.layout.as_ref())
                 .map_or(0, crate::state::panels::ToolTextLayout::retained_bytes)

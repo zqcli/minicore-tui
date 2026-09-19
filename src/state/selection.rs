@@ -14,6 +14,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 /// What occupies the dock area below the transcript (spec 24.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dock {
+    Workspace(Box<crate::state::workspace::WorkspaceBrowser>),
     Composer,
     NewSession(NewSessionState),
     SessionSelector(SessionSelectorState),

@@ -411,6 +411,16 @@ fn prepare_frame_with_jobs(app: &mut App, jobs: &mut LocalJobs, area: Rect) {
         return;
     }
     let screen = ui::layout::screen_layout(app, area);
+    if app.file_preview().is_some() {
+        let body = ui::workspace::file_body(screen.transcript);
+        if let Some(request) = app.file_layout_request(body.width.saturating_sub(9).max(1)) {
+            let identity = request.identity.clone();
+            if jobs.try_schedule_file_layout(request) {
+                app.mark_file_layout_pending(identity);
+            }
+        }
+        return;
+    }
     if app.tool_detail().is_some() {
         let body = ui::tool_detail::body_area(screen.transcript);
         if let Some(request) = app.tool_layout_request(body.width.saturating_sub(1).max(1)) {

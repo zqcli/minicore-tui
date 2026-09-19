@@ -195,6 +195,7 @@ pub struct FilePreviewState {
     pub line_truncated: bool,
     pub offset: usize,
     pub follow: bool,
+    pub scrollbar_grab: Option<usize>,
     pub target: Option<FileRange>,
     pub layout: Option<FileLayout>,
     pub layout_pending: Option<FileLayoutIdentity>,
@@ -384,5 +385,17 @@ impl FileLayout {
 }
 /// A quoted, readable path, never file content or an attachment instruction.
 pub fn reference_token(path: &str) -> String {
-    format!("@{}", serde_json::to_string(path).expect("path string"))
+    use std::fmt::Write;
+    let encoded = serde_json::to_string(path).expect("path string");
+    let mut token = String::from("@");
+    for character in encoded.chars() {
+        if crate::safe_text::is_unsafe_display_control(character) {
+            // The shared unsafe set consists of BMP controls. JSON escapes keep
+            // the exact path reversible without hiding controls in the editor.
+            write!(token, "\\u{:04x}", character as u32).expect("string write");
+        } else {
+            token.push(character);
+        }
+    }
+    token
 }

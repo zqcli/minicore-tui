@@ -55,6 +55,9 @@ pub struct Composer {
     paste_redo: Vec<Vec<PasteRange>>,
     /// Current editor undo capacity; trimming it frees the oldest records.
     undo_capacity: usize,
+    /// Ephemeral source mapping for the last explicit path insertion, not an attachment.
+    /// Any content edit degrades it to ordinary text; cursor movement does not.
+    file_reference: Option<(usize, std::ops::Range<usize>, String)>,
 }
 
 impl std::fmt::Debug for Composer {
@@ -90,6 +93,7 @@ impl Composer {
             paste_undo: Vec::new(),
             paste_redo: Vec::new(),
             undo_capacity: MAX_COMPOSER_HISTORIES,
+            file_reference: None,
         }
     }
 
@@ -229,7 +233,14 @@ impl Composer {
             .map(|range| range.char_count.saturating_mul(4).saturating_add(64))
             .sum::<usize>();
         let recalled = self.history.iter().map(String::len).sum::<usize>() + self.draft.len();
-        self.byte_len + undo + pastes + recalled
+        self.byte_len
+            + undo
+            + pastes
+            + recalled
+            + self
+                .file_reference
+                .as_ref()
+                .map_or(0, |(_, _, path)| path.capacity())
     }
 
     /// Shrinks the retained undo capacity; the editor drops its oldest
@@ -552,8 +563,25 @@ impl Composer {
         self.editor_revision
     }
 
+    pub fn remember_file_reference(
+        &mut self,
+        line: usize,
+        start: usize,
+        chars: usize,
+        path: String,
+    ) {
+        self.file_reference = Some((line, start..start + chars, path));
+    }
+
+    pub fn file_reference_at_cursor(&self) -> Option<&str> {
+        let (line, range, path) = self.file_reference.as_ref()?;
+        let (row, col) = self.cursor();
+        (*line == row && col >= range.start && col <= range.end).then_some(path.as_str())
+    }
+
     fn bump_revision(&mut self) {
         self.editor_revision = self.editor_revision.wrapping_add(1);
+        self.file_reference = None;
     }
 
     // ---- history (spec 22.2, 43.7) ------------------------------------

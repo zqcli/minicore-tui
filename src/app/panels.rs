@@ -158,7 +158,7 @@ impl App {
             return Vec::new();
         };
         let epoch = view.session_epoch;
-        self.close_tool_detail();
+        self.close_main_detail();
         self.capture_scroll_anchor();
         let saved_scroll = self.active_view().map(|view| view.scroll.clone());
         self.tool_generation = self.tool_generation.wrapping_add(1);
@@ -186,31 +186,56 @@ impl App {
         self.open_tool_detail(key)
     }
     pub(super) fn close_tool_detail(&mut self) {
-        if let MainView::ToolDetail(detail) = std::mem::take(&mut self.main_view) {
-            let key = detail.key.clone();
-            self.queries.invalidate_scope(&QueryScope::Tool(key));
-            if let Some(view) = self
-                .sessions
-                .known
-                .get_mut(&detail.key.session_id)
-                .filter(|view| view.session_epoch == detail.epoch)
-            {
-                if let Some(scroll) = detail.conversation_scroll {
-                    view.scroll = scroll;
-                }
+        if self.tool_detail().is_some() {
+            self.close_main_detail();
+        }
+    }
+    /// Exhaustive finite routing: adding a new main view must add its close
+    /// ownership here rather than silently dropping it through an `if let`.
+    pub(super) fn close_main_detail(&mut self) {
+        self.focus = Focus::Editor;
+        let (session, epoch, scroll, scope) = match std::mem::take(&mut self.main_view) {
+            MainView::Conversation => return,
+            MainView::ToolDetail(detail) => (
+                detail.key.session_id.clone(),
+                detail.epoch,
+                detail.conversation_scroll,
+                QueryScope::Tool(detail.key),
+            ),
+            MainView::FilePreview(file) => (
+                file.session.clone(),
+                file.epoch,
+                file.conversation_scroll,
+                QueryScope::Workspace {
+                    session_id: file.session,
+                    file: true,
+                },
+            ),
+        };
+        self.queries.invalidate_scope(&scope);
+        if let Some(view) = self
+            .sessions
+            .known
+            .get_mut(&session)
+            .filter(|view| view.session_epoch == epoch)
+        {
+            if let Some(scroll) = scroll {
+                view.scroll = scroll;
             }
         }
-        self.focus = Focus::Editor;
     }
     pub(super) fn detail_escape(&mut self) -> Vec<AppCommand> {
         if self.selection.is_some() || self.editor_selection.is_some() {
             self.clear_selection();
         } else {
-            self.close_tool_detail();
+            self.return_main_detail();
         }
         Vec::new()
     }
     pub(super) fn detail_tab(&mut self, step: i32) -> Vec<AppCommand> {
+        if self.tool_detail().is_none() {
+            return Vec::new();
+        }
         let tabs = self.tool_tabs();
         let now = self.instant_now();
         self.tool_generation = self.tool_generation.wrapping_add(1);

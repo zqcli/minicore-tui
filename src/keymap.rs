@@ -12,6 +12,16 @@ use crate::state::selection::{Dock, SessionPanelMode};
 /// side effects; the map never touches the app mutably.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
+    WorkspaceType(char),
+    WorkspaceBackspace,
+    WorkspaceClear,
+    WorkspaceField,
+    WorkspaceCase,
+    WorkspaceMove(i32),
+    WorkspaceSelect(bool),
+    WorkspaceMore(bool),
+    FileMore,
+    PreviewReference,
     DetailFocus,
     DetailEscape,
     DetailTab(i32),
@@ -195,6 +205,25 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
     // The search panel owns the keyboard while it is open. It adds no global
     // shortcut: every binding here is local to this panel, and Esc leaves the
     // search before anything can cancel a turn (spec §17).
+    if app.workspace_browser().is_some() {
+        return match key.code {
+            KeyCode::Esc if press => Action::CloseDock,
+            KeyCode::Up => Action::WorkspaceMove(-1),
+            KeyCode::Down => Action::WorkspaceMove(1),
+            KeyCode::PageUp => Action::WorkspaceMove(-5),
+            KeyCode::PageDown => Action::WorkspaceMove(5),
+            KeyCode::Tab | KeyCode::BackTab if press => Action::WorkspaceField,
+            KeyCode::F(4) if press => Action::WorkspaceSelect(true),
+            KeyCode::F(5) if press => Action::WorkspaceMore(true),
+            KeyCode::Enter if press => Action::WorkspaceSelect(false),
+            KeyCode::Char('n') if ctrl(&key) && press => Action::WorkspaceMore(false),
+            KeyCode::Char('i') if ctrl(&key) && press => Action::WorkspaceCase,
+            KeyCode::Backspace => Action::WorkspaceBackspace,
+            KeyCode::Char('u') if ctrl(&key) && press => Action::WorkspaceClear,
+            KeyCode::Char(c) if typing && !ctrl(&key) && !alt(&key) => Action::WorkspaceType(c),
+            _ => Action::None,
+        };
+    }
     if let Dock::Search(state) = &app.dock {
         return search_keys(key, press, typing, state.mode);
     }
@@ -225,7 +254,13 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
         {
             return Action::CompletionCancel;
         }
-        if app.tool_detail().is_some() {
+        if key.code == KeyCode::F(4)
+            && press
+            && app.focused_region() == crate::state::panels::Focus::Editor
+        {
+            return Action::PreviewReference;
+        }
+        if app.has_main_detail() {
             if key.code == KeyCode::Esc {
                 return Action::DetailEscape;
             }
@@ -234,15 +269,18 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
                     KeyCode::Tab if press => Action::DetailTab(1),
                     KeyCode::BackTab if press => Action::DetailTab(-1),
                     KeyCode::PageUp => {
-                        Action::DetailScroll(-(i32::from(app.tool_body_area().height).max(1)))
+                        Action::DetailScroll(-(i32::from(app.main_body_area().height).max(1)))
                     }
                     KeyCode::PageDown => {
-                        Action::DetailScroll(i32::from(app.tool_body_area().height).max(1))
+                        Action::DetailScroll(i32::from(app.main_body_area().height).max(1))
                     }
                     KeyCode::Up => Action::DetailScroll(-1),
                     KeyCode::Down => Action::DetailScroll(1),
                     KeyCode::End => Action::DetailEnd,
                     KeyCode::F(5) => Action::DetailRefresh,
+                    KeyCode::Char('n') if ctrl(&key) && app.file_preview().is_some() => {
+                        Action::FileMore
+                    }
                     KeyCode::Char('c') if ctrl(&key) && shift(&key) => Action::DetailCopy,
                     _ => Action::None,
                 };
@@ -407,7 +445,7 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
         Dock::Help | Dock::Logs => panel_keys(key, press, typing),
         // The search, export, and settings panels are handled before this
         // match (they own the keyboard while open).
-        Dock::Search(_) | Dock::Export(_) | Dock::Settings(_) => Action::None,
+        Dock::Search(_) | Dock::Export(_) | Dock::Settings(_) | Dock::Workspace(_) => Action::None,
     }
 }
 

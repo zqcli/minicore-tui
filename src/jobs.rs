@@ -340,6 +340,7 @@ const JOB_EVENTS_CAPACITY: usize = 4;
 enum LayoutWork {
     Conversation(Box<crate::ui::transcript::DurableLayoutRequest>),
     Tool(crate::state::panels::ToolLayoutRequest),
+    File(crate::state::workspace::FileLayoutRequest),
 }
 
 pub struct LocalJobs {
@@ -382,6 +383,22 @@ impl LocalJobs {
                     request = newer;
                 }
                 let request = match request {
+                    LayoutWork::File(request) => {
+                        if let Ok(Some(layout)) = tokio::task::spawn_blocking(move || {
+                            crate::state::workspace::FileLayout::build(request)
+                        })
+                        .await
+                        {
+                            if layout_events
+                                .send(AppEvent::FileLayoutPrepared(layout))
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        continue;
+                    }
                     LayoutWork::Tool(request) => {
                         if let Ok(Some(layout)) = tokio::task::spawn_blocking(move || {
                             crate::state::panels::ToolTextLayout::build(request)
@@ -639,6 +656,14 @@ impl LocalJobs {
     ) -> bool {
         let cancel = Arc::clone(&request.cancel);
         self.try_schedule_layout_work(LayoutWork::Tool(request), cancel)
+    }
+
+    pub fn try_schedule_file_layout(
+        &mut self,
+        request: crate::state::workspace::FileLayoutRequest,
+    ) -> bool {
+        let cancel = Arc::clone(&request.cancel);
+        self.try_schedule_layout_work(LayoutWork::File(request), cancel)
     }
 
     fn try_schedule_layout_work(

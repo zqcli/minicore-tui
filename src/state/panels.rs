@@ -14,6 +14,7 @@ pub enum MainView {
     #[default]
     Conversation,
     ToolDetail(Box<ToolDetailState>),
+    FilePreview(Box<crate::state::workspace::FilePreviewState>),
 }
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {

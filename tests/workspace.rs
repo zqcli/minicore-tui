@@ -118,9 +118,55 @@ fn grep_ranges_are_utf8_bytes_not_character_or_cell_indexes() {
 }
 #[test]
 fn quoted_path_tokens_roundtrip_without_attaching_content() {
-    for path in ["src/main.rs", "空 格/\"quote\".txt", "a\\b", "line\nname"] {
+    for path in [
+        "src/main.rs",
+        "空 格/\"quote\".txt",
+        "a\\b",
+        "line\nname",
+        "control\u{7f}\u{9b}\u{202e}name",
+    ] {
         let token = reference_token(path);
         assert_eq!(serde_json::from_str::<String>(&token[1..]).unwrap(), path);
         assert!(!token.contains('\n'));
     }
+}
+
+#[test]
+fn grep_highlighting_preserves_combining_clusters_and_uses_cell_widths() {
+    use ratatui::style::Modifier;
+    use unicode_width::UnicodeWidthStr;
+    let item = FileMatch {
+        path: "x".into(),
+        line_number: 1,
+        line_text_byte_offset: 0,
+        match_byte_ranges: vec![MatchRange { start: 6, end: 8 }],
+        line_text: "中 e\u{301} y".into(),
+        line_truncated: false,
+    };
+    // Byte 6 is inside the two-byte combining mark: malformed ranges fail closed.
+    assert!(!item.valid_ranges());
+    let mut item = item;
+    item.match_byte_ranges = vec![MatchRange { start: 5, end: 7 }];
+    let line = minicore_tui::ui::workspace::match_snippet(&item);
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    assert_eq!(text, item.line_text);
+    let highlighted = line
+        .spans
+        .iter()
+        .find(|s| s.style.add_modifier.contains(Modifier::UNDERLINED))
+        .unwrap();
+    assert_eq!(highlighted.content.as_ref(), "e\u{301}");
+    assert_eq!(highlighted.content.width(), 1);
+}
+
+#[test]
+fn pathological_grapheme_is_explicitly_bounded_in_display_not_silently_lost() {
+    let mut content = FileBuffer::default();
+    let text = format!("a{}", "\u{301}".repeat(8000));
+    content.append(text.clone()).unwrap();
+    let view = layout(content, 55);
+    assert!(view.display_limited);
+    assert!(view.text.len() < 64);
+    assert_eq!(view.copy_text.as_ref(), text);
+    assert_eq!(view.rows[0].source_bytes, 0..text.len());
 }

@@ -221,6 +221,7 @@ pub enum AppEvent {
     /// A durable section layout produced by the single owned layout worker.
     DurableLayoutPrepared(crate::ui::transcript::DurableLayoutResult),
     ToolLayoutPrepared(crate::state::panels::ToolTextLayout),
+    FileLayoutPrepared(crate::state::workspace::FileLayout),
     /// One canonical Runtime history item finished in the single serialized
     /// decode worker. The identity is checked before any state mutation.
     HistoryItemDecoded(Box<crate::jobs::DecodeOutcome>),

@@ -131,6 +131,7 @@ pub fn screen_layout(app: &App, area: Rect) -> ScreenLayout {
         // The search panel is taller while results are listed so the
         // transcript above it stays visible (spec §17.1).
         Dock::Search(_) => search_panel_height(content.height),
+        Dock::Workspace(_) => search_panel_height(content.height).max(8),
         // The export form is a compact fixed-height form.
         Dock::Export(_) => panel_height(short).saturating_add(4),
         // Settings needs one row per fixed field plus the footer.

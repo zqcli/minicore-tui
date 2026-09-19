@@ -37,7 +37,7 @@ pub fn safe_display(text: &str) -> Cow<'_, str> {
 /// C0 (except tab/newline), DEL, C1, and the bidirectional override/isolate
 /// controls that can reorder visible text. The zero-width joiner is
 /// deliberately preserved: it is part of legitimate emoji sequences.
-fn is_unsafe_display_control(character: char) -> bool {
+pub(crate) fn is_unsafe_display_control(character: char) -> bool {
     matches!(
         character,
         '\0'..='\u{8}'

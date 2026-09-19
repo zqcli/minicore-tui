@@ -64,6 +64,9 @@ pub mod search;
 pub mod session;
 pub mod turn;
 pub mod ui_actions;
+pub mod workspace;
+#[cfg(test)]
+mod workspace_tests;
 pub use self::ui_actions::SlashCompletionState;
 use self::ui_actions::{EditorSelection, SelectionDrag};
 
@@ -199,6 +202,12 @@ struct ScrollbarDrag {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequestKind {
     Ping,
+    Workspace {
+        session_id: String,
+        epoch: u64,
+        generation: u64,
+        kind: workspace::WorkspaceQuery,
+    },
     ToolDetail {
         key: ToolKey,
         epoch: u64,
@@ -438,6 +447,7 @@ pub struct App {
     pub main_view: crate::state::panels::MainView,
     pub focus: crate::state::panels::Focus,
     tool_generation: u64,
+    workspace_generation: u64,
     /// Measured transcript geometry for scroll math (total wrapped rows,
     /// visible rows); written only via `AppEvent::Viewport` from the main
     /// loop, never by the renderer.
@@ -720,6 +730,7 @@ impl App {
             main_view: Default::default(),
             focus: Default::default(),
             tool_generation: 0,
+            workspace_generation: 0,
             viewport: (0, 0),
             last_total: 0,
             panel_scroll: 0,
@@ -903,6 +914,20 @@ impl App {
                 earliest = Some(earliest.map_or(remaining, |e| e.min(remaining)));
             }
         }
+        if let Some(browser) = self.workspace_browser() {
+            if let Some(deadline) = browser.due.filter(|_| {
+                !(browser.kind == crate::state::workspace::BrowserKind::Grep
+                    && browser.query.is_empty())
+            }) {
+                if self.can_send_requests()
+                    && self.queries.in_flight_len() < queries::QuerySlots::CAPACITY
+                    && self.deferred_pending() + self.queries.in_flight_len() < MAX_DEFERRED_REQUESTS
+                    && !self.pending_requests.values().any(|k| matches!(k, RequestKind::Workspace { kind, .. } if *kind != workspace::WorkspaceQuery::File)) {
+                    let remaining = deadline.saturating_duration_since(now).max(Duration::from_millis(50));
+                    earliest = Some(earliest.map_or(remaining, |e| e.min(remaining)));
+                }
+            }
+        }
         for poll in self.context_polls.values() {
             let remaining = poll.due.saturating_duration_since(now);
             earliest = Some(earliest.map_or(remaining, |e| e.min(remaining)));
@@ -1040,7 +1065,7 @@ impl App {
                 if matches!(mouse.kind, crossterm::event::MouseEventKind::ScrollUp | crossterm::event::MouseEventKind::ScrollDown)
                     || (mouse.kind == crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left) && self.scrollbar_drag.is_some())))
             && queues_empty
-            && self.tool_detail().is_none()
+            && !self.has_main_detail()
             && matches!(self.dock, Dock::Composer)
             && self.selection.is_none()
             && self.editor_selection.is_none()
@@ -1283,6 +1308,10 @@ impl App {
                 self.install_conversation(prepared);
                 Vec::new()
             }
+            AppEvent::FileLayoutPrepared(layout) => {
+                self.install_file_layout(layout);
+                Vec::new()
+            }
             AppEvent::ToolLayoutPrepared(layout) => {
                 self.install_tool_layout(layout);
                 Vec::new()
@@ -1321,6 +1350,7 @@ impl App {
         // overtakes that reducer pass.
         self.drain_query_followups(&mut commands);
         commands.extend(self.poll_tool_detail());
+        commands.extend(self.poll_workspace());
         // A queued scan page may have missed the slot that freed before its
         // follow-up drained; both chains retry idempotently while they need a
         // page and no read is in flight.
@@ -2487,7 +2517,7 @@ impl App {
             Dock::ReasoningSelector(_) => Target::ReasoningSelector,
             Dock::ProfileSelector(_) => Target::ProfileSelector,
             Dock::Help | Dock::Logs | Dock::Search(_) => Target::Composer,
-            Dock::Export(_) | Dock::Settings(_) => Target::Composer,
+            Dock::Export(_) | Dock::Settings(_) | Dock::Workspace(_) => Target::Composer,
         };
         match target {
             Target::Composer => Vec::new(),
@@ -2506,6 +2536,10 @@ impl App {
     }
 
     fn cancel_dock(&mut self) -> Vec<AppCommand> {
+        if self.workspace_browser().is_some() {
+            self.close_workspace_browser();
+            return Vec::new();
+        }
         if self.selector_state().is_some_and(|state| state.submitting) {
             return Vec::new();
         }
@@ -2533,6 +2567,7 @@ impl App {
             Dock::Search(_) => Target::Search,
             Dock::Export(_) => Target::Export,
             Dock::Settings(_) => Target::Settings,
+            Dock::Workspace(_) => Target::Panel,
         };
         match target {
             Target::Composer => {}
@@ -3460,6 +3495,9 @@ impl App {
             {
                 Vec::new()
             }
+            CrosstermEvent::Paste(text) if self.workspace_browser().is_some() => {
+                self.workspace_edit(Some(&text), false, false, false)
+            }
             CrosstermEvent::Paste(text) => ui_actions::handle_paste(self, text),
             CrosstermEvent::Mouse(mouse) => ui_actions::handle_mouse(self, mouse),
             CrosstermEvent::FocusLost | CrosstermEvent::FocusGained => {
@@ -3484,6 +3522,27 @@ impl App {
         }
         match action {
             None => Vec::new(),
+            WorkspaceType(c) => self.workspace_edit(Some(&c.to_string()), false, false, false),
+            WorkspaceClear => {
+                if let Dock::Workspace(browser) = &mut self.dock {
+                    if browser.scope_focused {
+                        browser.scope.clear();
+                    } else {
+                        browser.query.clear();
+                    }
+                }
+                self.workspace_edit(std::option::Option::None, false, false, false)
+            }
+            WorkspaceBackspace => {
+                self.workspace_edit(std::option::Option::None, true, false, false)
+            }
+            WorkspaceField => self.workspace_edit(std::option::Option::None, false, true, false),
+            WorkspaceCase => self.workspace_edit(std::option::Option::None, false, false, true),
+            WorkspaceMove(delta) => self.workspace_move(delta),
+            WorkspaceSelect(preview) => self.workspace_select(preview),
+            WorkspaceMore(refresh) => self.workspace_more(refresh),
+            FileMore => self.file_more(false),
+            PreviewReference => self.preview_reference(),
             DetailFocus => {
                 self.focus = if self.focus == crate::state::panels::Focus::Main {
                     crate::state::panels::Focus::Editor
@@ -3495,14 +3554,24 @@ impl App {
             DetailEscape => self.detail_escape(),
             DetailTab(step) => self.detail_tab(step),
             DetailScroll(delta) => {
-                self.scroll_tool(delta, false);
+                if self.file_preview().is_some() {
+                    self.scroll_file(delta, false);
+                } else {
+                    self.scroll_tool(delta, false);
+                }
                 Vec::new()
             }
             DetailEnd => {
-                self.scroll_tool(0, true);
+                if self.file_preview().is_some() {
+                    self.scroll_file(0, true);
+                } else {
+                    self.scroll_tool(0, true);
+                }
                 Vec::new()
             }
+            DetailRefresh if self.file_preview().is_some() => self.file_more(true),
             DetailRefresh => self.refresh_tool_detail(),
+            DetailCopy if self.file_preview().is_some() => self.copy_file(),
             DetailCopy => self.copy_tool_detail(),
             ClearSelection => {
                 self.clear_selection();
@@ -3526,6 +3595,15 @@ impl App {
                 }
             }
             TypeChar(c) => {
+                let (line, col) = self.composer.cursor();
+                let open_files = c == '@'
+                    && (col == 0
+                        || self
+                            .composer
+                            .lines()
+                            .get(line)
+                            .and_then(|l| l.chars().nth(col - 1))
+                            .is_some_and(char::is_whitespace));
                 if !self.admit_draft_input(c.len_utf8()) {
                     return Vec::new();
                 }
@@ -3536,6 +3614,13 @@ impl App {
                     );
                 }
                 ui_actions::refresh_slash_completion(self);
+                if open_files {
+                    return self.open_workspace_browser(
+                        crate::state::workspace::BrowserKind::Files,
+                        String::new(),
+                        true,
+                    );
+                }
                 Vec::new()
             }
             CompletionMove(delta) => {
@@ -4098,7 +4183,7 @@ impl App {
                 }
             }
             LocalCommand::Search { query, scope } => {
-                self.close_tool_detail();
+                self.close_main_detail();
                 self.open_search(query, scope)
             }
             LocalCommand::Copy { target } => self.copy_command(target),
@@ -4109,6 +4194,17 @@ impl App {
             LocalCommand::PromptJump(direction) => self.prompt_jump(direction),
             LocalCommand::Latest => self.jump_latest(),
             LocalCommand::Clear => self.clear_transcript(),
+            LocalCommand::Files(query) => self.open_workspace_browser(
+                crate::state::workspace::BrowserKind::Files,
+                query,
+                false,
+            ),
+            LocalCommand::Grep(query) => self.open_workspace_browser(
+                crate::state::workspace::BrowserKind::Grep,
+                query,
+                false,
+            ),
+            LocalCommand::Refresh if self.file_preview().is_some() => self.file_more(true),
             LocalCommand::Refresh if self.tool_detail().is_some() => self.refresh_tool_detail(),
             LocalCommand::Refresh => self.refresh_view_data(),
             LocalCommand::Rename { title } => self.rename_from_command(title),
@@ -5419,6 +5515,12 @@ impl App {
             return Vec::new();
         }
         match kind {
+            RequestKind::Workspace {
+                session_id,
+                epoch,
+                generation,
+                kind,
+            } => self.on_workspace_response(session_id, epoch, generation, kind, &response),
             RequestKind::ToolDetail {
                 key,
                 epoch,

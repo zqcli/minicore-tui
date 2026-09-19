@@ -52,6 +52,76 @@ fn empty_dark_80x24() {
 }
 
 #[test]
+fn workspace_e2_panels() {
+    use crate::state::workspace::{BrowserKind, FileLayout, ReturnTarget};
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    let fixture = |name: &str| -> serde_json::Value {
+        serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(format!("tests/fixtures/agent-v1/{name}.json")).unwrap(),
+        )
+        .unwrap()["result"]
+            .clone()
+    };
+    for (theme, width, height, name) in [
+        (ThemeKind::Dark, 60, 16, "e2_file_dark_60x16"),
+        (ThemeKind::Light, 80, 24, "e2_file_light_80x24"),
+    ] {
+        let mut app = testapp::open_empty(theme, "ses_1", None, "high");
+        app.update(AppEvent::TerminalSize { width, height });
+        app.composer_mut().type_text("preserved draft");
+        let request = testapp::take_requests(app.open_file_preview(
+            "src/main.rs".into(),
+            None,
+            ReturnTarget::Conversation,
+        ))
+        .remove(0);
+        testapp::respond(&mut app, &request, fixture("workspace-read-ok"));
+        let request = app
+            .file_layout_request(app.main_body_area().width.saturating_sub(9).max(1))
+            .unwrap();
+        app.mark_file_layout_pending(request.identity.clone());
+        app.update(AppEvent::FileLayoutPrepared(
+            FileLayout::build(request).unwrap(),
+        ));
+        snapshot(&app, name, width, height);
+    }
+    for (kind, width, height, name, source) in [
+        (
+            BrowserKind::Files,
+            80,
+            24,
+            "e2_files_dark_80x24",
+            "workspace-files",
+        ),
+        (
+            BrowserKind::Grep,
+            120,
+            40,
+            "e2_grep_dark_120x40",
+            "workspace-search",
+        ),
+    ] {
+        let mut app = testapp::open_empty(ThemeKind::Dark, "ses_1", None, "high");
+        app.update(AppEvent::TerminalSize { width, height });
+        app.open_workspace_browser(
+            kind,
+            if kind == BrowserKind::Grep {
+                "needle".into()
+            } else {
+                String::new()
+            },
+            false,
+        );
+        let request = testapp::take_requests(app.update(AppEvent::Terminal(Event::Key(
+            KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE),
+        ))))
+        .remove(0);
+        testapp::respond(&mut app, &request, fixture(source));
+        snapshot(&app, name, width, height);
+    }
+}
+
+#[test]
 fn empty_light_80x24() {
     snapshot(
         &testapp::fresh(ThemeKind::Light),

@@ -34,6 +34,7 @@ pub mod tool;
 pub mod tool_detail;
 pub mod transcript;
 pub mod user;
+pub mod workspace;
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
@@ -92,7 +93,9 @@ pub fn render(frame: &mut Frame, app: &App) {
         return;
     }
     let screen = layout::screen_layout(app, area);
-    if app.tool_detail().is_some() {
+    if app.file_preview().is_some() {
+        workspace::render_file(frame, screen.transcript, app, &theme);
+    } else if app.tool_detail().is_some() {
         tool_detail::render(frame, screen.transcript, app, &theme);
     } else {
         transcript::render(frame, screen.transcript, app, &theme);
@@ -108,6 +111,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         error::render_notice(frame, notice_area, &theme, app.notices.back().unwrap());
     }
     match &app.dock {
+        Dock::Workspace(browser) => workspace::render_browser(frame, screen.panel, browser, &theme),
         Dock::Composer => composer::render(frame, screen.panel, app, &theme),
         Dock::NewSession(draft) => new_session::render(frame, screen.panel, &theme, draft),
         Dock::SessionSelector(_)

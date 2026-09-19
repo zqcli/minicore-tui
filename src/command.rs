@@ -119,8 +119,10 @@ impl fmt::Debug for ClipboardText {
 /// A locally-interpreted `/` command (spec 23.2). These never turn into
 /// RPC by themselves; `App::update` maps them to local state and only the
 /// resulting requests (e.g. a transcript reload) hit the wire.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum LocalCommand {
+    Files(String),
+    Grep(String),
     Tool(crate::state::tool::ToolKey),
     /// Create a session directly in the current workspace with the most
     /// recent explicit configuration (spec §10.4); no catalog-form detour.
@@ -259,6 +261,18 @@ pub enum CommandArgs {
 /// Every command the reducer can execute. Methods added in a later stage must
 /// be listed here only together with their reducer arm.
 pub const COMMANDS: &[CommandSpec] = &[
+    CommandSpec {
+        name: "files",
+        usage: "/files [path filter]",
+        summary: "reference paths only; Tab directory, F4 preview, Ctrl+N next page",
+        args: CommandArgs::OptionalPath,
+    },
+    CommandSpec {
+        name: "grep",
+        usage: "/grep [literal]",
+        summary: "literal workspace search; Tab paths, Ctrl+I case, Ctrl+N next page",
+        args: CommandArgs::OptionalPath,
+    },
     CommandSpec {
         name: "tool",
         usage: "/tool <session_id> <loop_id> <request_index> <tool_call_id>",
@@ -545,6 +559,8 @@ pub fn parse_command(input: &str) -> Result<LocalCommand, CommandIssue> {
     };
 
     match (spec.name, spec.args) {
+        ("files", _) => Ok(LocalCommand::Files(args.to_owned())),
+        ("grep", _) => Ok(LocalCommand::Grep(args.to_owned())),
         ("tool", _) => {
             let fields: Vec<_> = args.split_whitespace().collect();
             if fields.len() != 4 {
@@ -635,6 +651,16 @@ pub fn parse_command(input: &str) -> Result<LocalCommand, CommandIssue> {
         ("close", _) => confirm(|confirm| LocalCommand::Close { confirm }),
         ("delete", _) => confirm(|confirm| LocalCommand::Delete { confirm }),
         (other, _) => Err(CommandIssue::Unknown(other.to_owned())),
+    }
+}
+
+// Local command payloads include workspace queries and paths. Diagnostics must
+// not expand them (nor the older search/export payloads).
+impl fmt::Debug for LocalCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("LocalCommand")
+            .field(&std::mem::discriminant(self))
+            .finish()
     }
 }
 
