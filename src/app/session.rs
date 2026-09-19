@@ -816,6 +816,22 @@ impl App {
         for id in stale_ids {
             self.pending_requests.insert(id, RequestKind::StaleRead);
         }
+        let retry_keys: Vec<RetryKey> = self
+            .pending_retries
+            .iter()
+            .filter_map(|(key, entry)| {
+                (Self::request_session_id(&entry.kind) == Some(session_id.as_str()))
+                    .then_some(key.clone())
+            })
+            .collect();
+        for key in retry_keys {
+            if let Some(entry) = self.pending_retries.remove(&key) {
+                // The request was never written, so there can be no late
+                // response to await. Retire it at the same lifecycle boundary
+                // instead of re-emitting it into a closed or newer epoch.
+                self.abandon_retry(entry);
+            }
+        }
         self.context_polls.remove(session_id);
         self.invalidate_query_scope(&crate::app::queries::QueryScope::Session(
             session_id.to_owned(),

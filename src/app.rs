@@ -4867,7 +4867,23 @@ impl App {
         }
         let entries = std::mem::take(&mut self.pending_retries);
         let mut commands = Vec::with_capacity(entries.len());
-        for (_key, entry) in entries {
+        for (retry_key, entry) in entries {
+            if let Some(query_key) = Self::retry_query_key(&entry.kind) {
+                let waiting_before = self.queries.waiting_len();
+                match self.queries.request_query(query_key, entry.request.id) {
+                    crate::app::queries::QueryAdmission::Admitted => {}
+                    crate::app::queries::QueryAdmission::Coalesced => continue,
+                    crate::app::queries::QueryAdmission::Busy => {
+                        // A Busy admission normally queues the key inside
+                        // QuerySlots. If its bounded waiting queue was full,
+                        // preserve the retry entry for a later progress pass.
+                        if self.queries.waiting_len() == waiting_before {
+                            self.pending_retries.insert(retry_key, entry);
+                        }
+                        continue;
+                    }
+                }
+            }
             self.pending_requests.insert(entry.request.id, entry.kind);
             commands.push(AppCommand::Rpc(entry.request));
         }
@@ -9674,6 +9690,50 @@ mod tests {
                 .as_ref()
                 .is_some_and(|live| live.cancel_requested)
         );
+    }
+
+    #[test]
+    fn a_deferred_wait_retry_is_retired_at_a_session_lifecycle_boundary() {
+        let mut app = test_app();
+        let turn = make_turn("ses_1", "loop_1");
+        let kind = RequestKind::WaitTurn(turn.clone());
+        let request_id = app.next_request_id();
+        let request = OutgoingRequest::wait_turn(request_id, &turn);
+        let retry_key = App::retry_key(&kind).expect("wait retry key");
+        app.pending_retries
+            .insert(retry_key, RetryEntry { kind, request });
+
+        app.retire_session_operations(&"ses_1".to_owned());
+
+        assert!(app.pending_retries.is_empty());
+        assert!(
+            app.drain_rpc_retries().is_empty(),
+            "a never-written wait must not be re-emitted after close/reopen"
+        );
+    }
+
+    #[test]
+    fn a_queue_full_turn_result_retry_reclaims_its_query_slot() {
+        let mut app = test_app();
+        let turn = make_turn("ses_1", "loop_1");
+        let request = match app
+            .request_turn_result_page(turn, crate::protocol::ReadCursor::start())
+            .expect("turn.result request")
+        {
+            AppCommand::Rpc(request) => request,
+            other => panic!("expected RPC command, got {other:?}"),
+        };
+        assert_eq!(app.queries.in_flight_len(), 1);
+
+        app.update(AppEvent::RpcQueueFull {
+            request,
+            class: SendClass::Normal,
+        });
+        assert_eq!(app.queries.in_flight_len(), 0);
+        let retry = take_requests(app.update(AppEvent::Tick));
+        assert_eq!(retry.len(), 1);
+        assert!(app.queries.owns_request(retry[0].id));
+        assert_eq!(app.queries.in_flight_len(), 1);
     }
 
     #[test]

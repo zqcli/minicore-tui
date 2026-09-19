@@ -558,6 +558,19 @@ impl App {
         })
     }
 
+    /// Read retries must reclaim the shared query slot before their request is
+    /// written again. This is separate from `RetryKey`: `turn.wait` retries
+    /// use the deferred budget only, while `turn.result` also owns a read slot.
+    pub(super) fn retry_query_key(kind: &RequestKind) -> Option<crate::app::queries::QueryKey> {
+        match kind {
+            RequestKind::TurnResult(turn) => Some(crate::app::queries::QueryKey::TurnResult {
+                session_id: turn.session_id.clone(),
+                loop_id: turn.loop_id.clone(),
+            }),
+            _ => None,
+        }
+    }
+
     /// Whether an identical retry intent is already retained for this target.
     pub(super) fn retry_pending(&self, key: &RetryKey) -> bool {
         self.pending_retries.contains_key(key)

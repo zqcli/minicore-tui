@@ -84,6 +84,23 @@ fn closing_a_and_opening_b_keeps_real_slots_and_ignores_late_a() {
 }
 
 #[test]
+fn reopening_the_same_tool_after_a_late_response_reissues_the_refresh() {
+    let mut app = app();
+    let old = take_requests(app.open_tool_detail(key("a"))).remove(0);
+    assert!(press(&mut app, KeyCode::Esc).is_empty());
+
+    // The old request still owns its real slot. Reopening the same ToolKey
+    // records one coalesced refresh instead of losing the new detail's intent.
+    assert!(app.open_tool_detail(key("a")).is_empty());
+    assert_eq!(app.queries.in_flight_len(), 1);
+
+    let retry = take_requests(respond(&mut app, &old, read(&key("a"), true)));
+    assert_eq!(retry.len(), 1);
+    assert_eq!(retry[0].method, "tool.read");
+    assert_eq!(app.tool_detail().unwrap().key, key("a"));
+}
+
+#[test]
 fn tool_queries_share_the_deferred_budget_with_execution_waits() {
     let mut app = app();
     for index in 0..15 {

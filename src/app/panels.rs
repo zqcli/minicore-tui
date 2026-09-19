@@ -373,9 +373,6 @@ impl App {
         }
         let key = detail.key.clone();
         let query_key = QueryKey::Tool { key: key.clone() };
-        if self.queries.contains(&query_key) {
-            return Vec::new();
-        }
         if self.deferred_pending() + self.queries.in_flight_len() >= MAX_DEFERRED_REQUESTS {
             return Vec::new();
         }
