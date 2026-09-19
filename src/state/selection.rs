@@ -72,6 +72,34 @@ pub struct SessionSelectorState {
     pub selected_session_id: Option<SessionId>,
     pub mode: SessionPanelMode,
     pub error: Option<String>,
+    /// Visible session scope: the current workspace by default, or every
+    /// workspace after an explicit toggle (spec §10.2).
+    pub scope: SessionScope,
+}
+
+/// Which sessions the selector lists (spec §10.2). The default never guesses
+/// across projects; `All` is an explicit user choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SessionScope {
+    #[default]
+    CurrentWorkspace,
+    All,
+}
+
+impl SessionScope {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::CurrentWorkspace => "this workspace",
+            Self::All => "all workspaces",
+        }
+    }
+
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::CurrentWorkspace => Self::All,
+            Self::All => Self::CurrentWorkspace,
+        }
+    }
 }
 
 impl SessionSelectorState {
@@ -81,6 +109,7 @@ impl SessionSelectorState {
             selected_session_id,
             mode: SessionPanelMode::Browse,
             error: None,
+            scope: SessionScope::default(),
         }
     }
 
@@ -114,6 +143,9 @@ pub enum SessionConfirmChoice {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionPanelAction {
     Open,
+    Browse,
+    Continue,
+    Scope,
     New,
     Refresh,
     Rename,

@@ -207,15 +207,22 @@ impl Composer {
         self.byte_len
     }
 
-    /// Bytes this draft retains, including the bounded undo estimate, paste
-    /// projections and recalled messages. The budget must cover these, not
-    /// only the visible text (spec §12.1, §21).
+    /// Bytes this draft retains, including the bounded undo/redo estimate,
+    /// paste projections, paste-history snapshots and recalled messages. The
+    /// budget must cover these, not only the visible text (spec §12.1, §21).
+    /// The estimate is a fixed record count, so this never walks the buffer.
     pub fn retained_bytes(&self) -> usize {
-        let snapshots = self.undo_capacity.min(UNDO_SNAPSHOT_ESTIMATE);
+        // Undo + redo + paste-history records all hold buffer-sized or
+        // range-sized snapshots; charge a measured fixed count of each.
+        let snapshots = self
+            .undo_capacity
+            .min(UNDO_SNAPSHOT_ESTIMATE)
+            .saturating_add(self.paste_undo.len().min(UNDO_SNAPSHOT_ESTIMATE))
+            .saturating_add(self.paste_redo.len().min(UNDO_SNAPSHOT_ESTIMATE));
         let undo = self
             .byte_len
             .saturating_mul(snapshots)
-            .min(MAX_COMPOSER_BYTES.saturating_mul(UNDO_SNAPSHOT_ESTIMATE));
+            .min(MAX_COMPOSER_BYTES.saturating_mul(3 * UNDO_SNAPSHOT_ESTIMATE));
         let pastes = self
             .pastes
             .iter()

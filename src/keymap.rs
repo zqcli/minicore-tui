@@ -74,6 +74,11 @@ pub enum Action {
     /// Open the selected closed session read-only through `session.read`
     /// only (spec §10.1).
     SessionBrowse,
+    /// Explicitly continue the read-only session (Ctrl+G): open it without
+    /// sending anything.
+    SessionContinue,
+    /// Toggle the session selector between this workspace and all projects.
+    SessionScopeToggle,
     SessionDeleteToggle,
     SessionRenameChar(char),
     SessionRenameBackspace,
@@ -159,6 +164,8 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
                 KeyCode::Char('d') if ctrl(&key) => return Action::SessionDelete,
                 KeyCode::Char('w') if ctrl(&key) => return Action::SessionClose,
                 KeyCode::Char('b') if ctrl(&key) => return Action::SessionBrowse,
+                KeyCode::Char('g') if ctrl(&key) => return Action::SessionContinue,
+                KeyCode::Char('a') if ctrl(&key) => return Action::SessionScopeToggle,
                 _ => {}
             }
         }
@@ -180,6 +187,7 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
             KeyCode::Char('n') if ctrl(&key) => return Action::OpenNewSession,
             KeyCode::Char('r') if ctrl(&key) => return Action::OpenSessions,
             KeyCode::Char('l') if ctrl(&key) => return Action::OpenModel,
+            KeyCode::Char('g') if ctrl(&key) => return Action::SessionContinue,
             KeyCode::Char('o') if ctrl(&key) => return Action::ToggleTools,
             KeyCode::Char('t') if ctrl(&key) => return Action::ToggleReasoning,
             KeyCode::Esc => {

@@ -2898,9 +2898,9 @@ impl App {
 }
 
 impl App {
-    /// Enforces the all-drafts budget (spec §21). Undo records are trimmed
-    /// oldest-first; un-sent text is never deleted silently, and a draft that
-    /// alone exceeds the budget reports it instead of dropping content.
+    /// Enforces the all-drafts budget (spec §21). Runs only for a pass that
+    /// changed a draft, trims undo/redo/paste-history capacity in one step and
+    /// reports a single warning while the over-budget condition persists.
     pub(crate) fn enforce_draft_budget(&mut self) -> usize {
         self.enforce_draft_budget_with(crate::limits::COMPOSER_ALL_DRAFTS_BYTES)
     }
@@ -2908,31 +2908,33 @@ impl App {
     /// Budget-parameterized form used by tests; production always passes
     /// [`crate::limits::COMPOSER_ALL_DRAFTS_BYTES`].
     pub fn enforce_draft_budget_with(&mut self, budget: usize) -> usize {
-        let mut retained = self.draft_bytes();
-        if retained <= budget {
+        // One measurement per pass. `draft_bytes` only sums cached lengths,
+        // paste metadata and recalled messages; it never joins a buffer.
+        let before = self.draft_bytes();
+        if before <= budget {
+            self.draft_budget_warned = false;
             return 0;
         }
-        let before = retained;
-        let mut capacity = 32usize;
-        loop {
-            for view in self.sessions.known.values_mut() {
-                view.composer.set_undo_capacity(capacity);
-            }
-            self.composer.set_undo_capacity(capacity);
-            retained = self.draft_bytes();
-            if retained <= budget || capacity <= 1 {
-                break;
-            }
-            capacity = (capacity / 2).max(1);
+        // One step: drop every composer to the smallest undo capacity, then
+        // report only if the draft text itself still exceeds the budget.
+        for view in self.sessions.known.values_mut() {
+            view.composer.set_undo_capacity(1);
         }
+        self.composer.set_undo_capacity(1);
+        let retained = self.draft_bytes();
         if retained > budget {
-            self.notice(
-                NoticeLevel::Warning,
-                format!(
-                    "draft budget: {} KiB retained across sessions; trim or discard a draft (un-sent text is kept)",
-                    retained / 1024
-                ),
-            );
+            if !self.draft_budget_warned {
+                self.draft_budget_warned = true;
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!(
+                        "draft budget: {} KiB of un-sent text is retained across sessions; send or discard a draft to free space (input is refused until then)",
+                        retained / 1024
+                    ),
+                );
+            }
+        } else {
+            self.draft_budget_warned = false;
         }
         before.saturating_sub(retained)
     }

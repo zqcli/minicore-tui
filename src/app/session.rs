@@ -406,7 +406,6 @@ impl App {
         }
         if let Some(view) = self.sessions.known.get_mut(session_id) {
             view.browsing = true;
-            view.pending_continue = None;
             view.history_read.begin(HistoryTrigger::Refresh);
         }
         ui_actions::cancel_scrollbar_drag(self);
@@ -416,60 +415,54 @@ impl App {
         self.notice(
             NoticeLevel::Info,
             format!(
-                "Browsing {session_id} read-only (no session opened). Press Enter to continue it."
+                "Browsing {session_id} read-only (no session opened). Ctrl+G or /resume continues it; sending is disabled until then."
             ),
         );
         self.request_history(session_id).into_iter().collect()
     }
 
-    /// Second Enter in a browsing view: open the session and send the parked
-    /// text once the Agent confirms. The text stays parked until then so an
-    /// open failure can restore it.
+    /// The explicit Continue action for a read-only browse (`Ctrl+G` in the
+    /// session panel or `/resume` while browsing): opens the session and
+    /// keeps the draft untouched. The open ACK never sends anything — the
+    /// user's next normal Enter submits (spec §10.1).
     pub(super) fn continue_browsed_session(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
-        let text = self
+        if !self
             .sessions
             .known
             .get(session_id)
-            .and_then(|view| view.pending_continue.clone());
-        let Some(text) = text else {
+            .is_some_and(|view| view.browsing)
+        {
             return Vec::new();
-        };
+        }
         if let Some(view) = self.sessions.known.get_mut(session_id) {
             view.browsing = false;
         }
         self.notice(
             NoticeLevel::Info,
-            format!("Continuing {session_id}: opening the session to send the parked text"),
+            format!("Continuing {session_id}: opening the session (the draft is kept)"),
         );
         let commands = self.request_open_session(session_id);
         if commands.is_empty() {
-            // The open request was refused (reload, lifecycle fence, ...):
-            // restore the read-only state and the parked text.
+            // Refused by a fence: restore the read-only state; nothing was
+            // parked and the draft was never touched.
             if let Some(view) = self.sessions.known.get_mut(session_id) {
                 view.browsing = true;
             }
             self.notice(
                 NoticeLevel::Info,
-                "session was not opened; the text is still parked — press Enter again to retry",
+                "session was not opened; it is still read-only — try Ctrl+G again",
             );
-            return Vec::new();
         }
-        let _ = text;
         commands
     }
 
-    /// Open failure: keep the browsed history and hand the parked text back
-    /// to the composer (spec §10.1).
-    fn restore_browsed_continue(&mut self, session_id: &SessionId) {
-        let Some(view) = self.sessions.known.get_mut(session_id) else {
-            return;
-        };
-        let Some(text) = view.pending_continue.take() else {
-            return;
-        };
-        view.browsing = true;
-        if self.composer.content().is_empty() {
-            self.composer.set_text(&text);
+    /// A failed continue returns the view to read-only with its loaded
+    /// history and the untouched draft (spec §10.1).
+    fn mark_browse_open_failed(&mut self, session_id: &SessionId) {
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            if !view.browsing {
+                view.browsing = true;
+            }
         }
     }
 
@@ -1705,7 +1698,7 @@ impl App {
                 }
                 _ => format!("session.open failed: {error}"),
             };
-            self.restore_browsed_continue(&session_id);
+            self.mark_browse_open_failed(&session_id);
             if let Dock::SessionSelector(state) = &mut self.dock {
                 state.error = Some(message);
             } else {
@@ -1722,7 +1715,7 @@ impl App {
                     view.retired_loop = Some(retired_loop);
                 }
             }
-            self.restore_browsed_continue(&session_id);
+            self.mark_browse_open_failed(&session_id);
             let message =
                 format!("session.open response does not match requested session {session_id}");
             if let Dock::SessionSelector(state) = &mut self.dock {
@@ -1801,17 +1794,6 @@ impl App {
         if matches!(&self.dock, Dock::SessionSelector(state) if state.selected_session_id.as_deref() == Some(opened_id.as_str()) && matches!(&state.mode, SessionPanelMode::Browse))
         {
             self.dock = Dock::Composer;
-        }
-        // A browse-mode continue sends its parked text only after the Agent
-        // confirmed the open (spec §10.1); an open failure restored it to the
-        // composer in the failure branches above.
-        let parked = self
-            .sessions
-            .known
-            .get_mut(&opened_id)
-            .and_then(|view| view.pending_continue.take());
-        if let Some(text) = parked {
-            commands.extend(self.submit_turn(opened_id, text));
         }
         if self.reload.is_some() {
             commands.extend(self.maybe_finish_reload());

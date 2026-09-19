@@ -188,7 +188,10 @@ impl App {
         match &self.dock {
             Dock::Composer => {
                 self.slash_completion = None;
-                if !self.composer.insert_paste(&normalized) {
+                if !self.admit_draft_input(normalized.len()) {
+                    return Vec::new();
+                }
+                if !self.composer_mut().insert_paste(&normalized) {
                     self.notice(
                         super::NoticeLevel::Warning,
                         format!("composer limit is {MAX_COMPOSER_BYTES} UTF-8 bytes"),

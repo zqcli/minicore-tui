@@ -217,10 +217,6 @@ pub struct SessionView {
     /// closed session whose workspace/model need not exist locally. Sending
     /// from a browsing view requires an explicit continue.
     pub browsing: bool,
-    /// Text parked by a browse-mode submission: it waits for the explicit
-    /// continue confirmation, then rides along the open request so an open
-    /// failure restores it to the composer instead of dropping it.
-    pub pending_continue: Option<String>,
     /// One bounded fence for events from the loop retired by close/reopen.
     /// This is not a result registry.
     pub retired_loop: Option<TurnRef>,
@@ -300,7 +296,6 @@ impl SessionView {
             context_query_generation: 0,
             manual_compact: None,
             browsing: false,
-            pending_continue: None,
             presentation: None,
             presentation_pending: false,
             presentation_refresh_pending: false,

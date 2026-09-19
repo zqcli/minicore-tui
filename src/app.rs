@@ -381,6 +381,9 @@ pub struct App {
     pub notices: VecDeque<Notice>,
     /// CLI startup session intent, consumed once (spec §6.1).
     pub startup_session: Option<StartupSession>,
+    /// One warning per over-budget episode: while admission is blocked the
+    /// same notice is not repeated on every keystroke.
+    pub draft_budget_warned: bool,
     /// Set by every `update` except `Rendered`, which clears it, so the main
     /// loop can throttle draws (max 30 FPS) without missing a change.
     pub dirty: bool,
@@ -645,6 +648,7 @@ impl App {
             shutdown_child_exited: false,
             open_new_session_on_ready: false,
             startup_session: None,
+            draft_budget_warned: false,
             now: SystemTime::now,
             pending_requests: HashMap::new(),
             pending_retries: std::collections::BTreeMap::new(),
@@ -1201,6 +1205,30 @@ impl App {
         &mut self.composer
     }
 
+    /// Admission gate for new composer input (spec §21): while the retained
+    /// all-drafts total is at budget, further typing/pasting is refused with
+    /// one explicit warning instead of growing drafts without bound. Existing
+    /// drafts are never truncated and never silently dropped.
+    pub fn admit_draft_input(&mut self, additional: usize) -> bool {
+        let budget = crate::limits::COMPOSER_ALL_DRAFTS_BYTES;
+        if u64::try_from(self.draft_bytes().saturating_add(additional)).unwrap_or(u64::MAX)
+            <= u64::try_from(budget).unwrap_or(u64::MAX)
+        {
+            return true;
+        }
+        if !self.draft_budget_warned {
+            self.draft_budget_warned = true;
+            self.notice(
+                NoticeLevel::Warning,
+                format!(
+                    "draft budget is full ({} MiB across sessions); input is refused until a draft is sent or discarded — existing drafts are kept",
+                    budget / (1024 * 1024)
+                ),
+            );
+        }
+        false
+    }
+
     /// Switches the displayed session, moving the entire composer (text,
     /// cursor, undo/redo, paste markers, revision) between the scratch owner
     /// and the session view, so every session keeps an independent draft and
@@ -1729,32 +1757,36 @@ impl App {
             .any(|session| session.session_id == session_id)
     }
 
-    fn filtered_session_items(&self, query: &str) -> Vec<&SessionInfo> {
-        let items: Vec<&SessionInfo> = filtered_sessions(&self.sessions.list, query)
-            .into_iter()
-            .filter(|session| self.session_is_visible(&session.session_id))
-            .collect();
-        if !query.trim().is_empty() {
-            return items;
-        }
-        // The selector defaults to the current workspace's recent activity;
-        // other workspaces stay reachable below it (spec §10.2).
+    /// The selector's visible rows for one scope, newest first. `Current`
+    /// lists only the app's workspace; `All` is an explicit toggle and never
+    /// the default (spec §10.2).
+    pub fn session_panel_items(
+        &self,
+        query: &str,
+        scope: crate::state::selection::SessionScope,
+    ) -> Vec<&SessionInfo> {
         let workspace = self
             .catalogs
             .default_workspace
             .to_string_lossy()
             .into_owned();
-        let mut current: Vec<&SessionInfo> = Vec::new();
-        let mut others: Vec<&SessionInfo> = Vec::new();
-        for session in items {
-            if session.workspace == workspace {
-                current.push(session);
-            } else {
-                others.push(session);
-            }
-        }
-        current.extend(others);
-        current
+        filtered_sessions(&self.sessions.list, query)
+            .into_iter()
+            .filter(|session| self.session_is_visible(&session.session_id))
+            .filter(|session| {
+                matches!(scope, crate::state::selection::SessionScope::All)
+                    || session.workspace == workspace
+            })
+            .collect()
+    }
+
+    fn filtered_session_items(&self, query: &str) -> Vec<&SessionInfo> {
+        let scope = self
+            .session_selector_state()
+            .map_or(crate::state::selection::SessionScope::default(), |state| {
+                state.scope
+            });
+        self.session_panel_items(query, scope)
     }
 
     fn session_selector_cursor(&self, state: &SessionSelectorState) -> usize {
@@ -2379,6 +2411,51 @@ impl App {
         self.browse_session(&selected)
     }
 
+    /// Explicit Continue for the selected read-only session (spec §10.1).
+    fn continue_selected_session(&mut self) -> Vec<AppCommand> {
+        if !self.guard_ready() || self.session_panel_busy() {
+            return Vec::new();
+        }
+        // Prefer the active read-only session (Ctrl+G works from the
+        // composer); otherwise continue the panel selection.
+        let active = self.sessions.active.clone().filter(|active| {
+            self.sessions
+                .known
+                .get(active)
+                .is_some_and(|view| view.browsing)
+        });
+        let selected = active.or_else(|| {
+            self.session_selector_state()
+                .and_then(|state| state.selected_session_id.clone())
+                .filter(|selected| {
+                    self.sessions
+                        .known
+                        .get(selected)
+                        .is_some_and(|view| view.browsing)
+                })
+        });
+        let Some(selected) = selected else {
+            self.notice(
+                NoticeLevel::Info,
+                "no read-only session to continue; browse one first (Ctrl+B)",
+            );
+            return Vec::new();
+        };
+        self.continue_browsed_session(&selected)
+    }
+
+    /// Toggles the selector between the current workspace and all projects.
+    fn toggle_session_scope(&mut self) -> Vec<AppCommand> {
+        let Some(state) = self.session_selector_state_mut() else {
+            return Vec::new();
+        };
+        state.scope = state.scope.toggled();
+        let scope = state.scope;
+        self.notice(NoticeLevel::Info, format!("Showing {}", scope.label()));
+        self.reconcile_session_selection(true);
+        Vec::new()
+    }
+
     fn confirm_session_selector(&mut self) -> Vec<AppCommand> {
         if !self.guard_ready() {
             return Vec::new();
@@ -2658,6 +2735,9 @@ impl App {
     fn session_panel_action(&mut self, action: SessionPanelAction) -> Vec<AppCommand> {
         match action {
             SessionPanelAction::Open => self.confirm_session_selector(),
+            SessionPanelAction::Browse => self.browse_selected_session(),
+            SessionPanelAction::Continue => self.continue_selected_session(),
+            SessionPanelAction::Scope => self.toggle_session_scope(),
             SessionPanelAction::New => self.open_new_session(),
             SessionPanelAction::Refresh => self.refresh_sessions(),
             SessionPanelAction::Rename => self.begin_session_rename(),
@@ -3193,7 +3273,10 @@ impl App {
                 }
             }
             TypeChar(c) => {
-                if !self.composer.type_char(c) {
+                if !self.admit_draft_input(c.len_utf8()) {
+                    return Vec::new();
+                }
+                if !self.composer_mut().type_char(c) {
                     self.notice(
                         NoticeLevel::Warning,
                         format!("composer limit is {MAX_COMPOSER_BYTES} UTF-8 bytes"),
@@ -3297,6 +3380,8 @@ impl App {
             SessionRename => self.begin_session_rename(),
             SessionClose => self.begin_session_close(),
             SessionBrowse => self.browse_selected_session(),
+            SessionContinue => self.continue_selected_session(),
+            SessionScopeToggle => self.toggle_session_scope(),
             SessionDelete => self.begin_session_delete(),
             SessionDeleteToggle => self.toggle_session_delete_choice(),
             ToggleTools => {
@@ -3625,9 +3710,19 @@ impl App {
     fn apply_command(&mut self, command: LocalCommand) -> Vec<AppCommand> {
         match command {
             LocalCommand::New => self.open_new_session(),
-            LocalCommand::Resume | LocalCommand::Sessions => {
-                self.open_selector(SelectorKind::Session)
+            LocalCommand::Resume => {
+                let browsing = self.sessions.active.clone().filter(|active| {
+                    self.sessions
+                        .known
+                        .get(active)
+                        .is_some_and(|view| view.browsing)
+                });
+                match browsing {
+                    Some(active) => self.continue_browsed_session(&active),
+                    None => self.open_selector(SelectorKind::Session),
+                }
             }
+            LocalCommand::Sessions => self.open_selector(SelectorKind::Session),
             LocalCommand::Model => self.open_selector(SelectorKind::Model),
             LocalCommand::Reasoning => self.open_selector(SelectorKind::Reasoning),
             LocalCommand::Theme(kind) => {

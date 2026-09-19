@@ -171,7 +171,7 @@ fn reasoning_selector_dark_80x24() {
 #[test]
 fn session_selector_dark_80x24() {
     snapshot(
-        &testapp::session_selector(ThemeKind::Dark),
+        &testapp::session_selector_all(ThemeKind::Dark),
         "session_selector_dark_80x24",
         80,
         24,

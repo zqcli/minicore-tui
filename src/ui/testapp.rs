@@ -643,6 +643,30 @@ pub fn session_selector(theme: ThemeKind) -> App {
     app
 }
 
+/// Like [`session_selector`], but with the selector switched to every
+/// workspace through the real toggle action (fixtures span three projects).
+pub fn session_selector_all(theme: ThemeKind) -> App {
+    let mut app = session_selector(theme);
+    toggle_session_scope(&mut app);
+    app
+}
+
+/// Switches the open session selector to `All` via the real Ctrl+A action.
+pub fn toggle_session_scope(app: &mut App) {
+    take_requests(app.update(AppEvent::Terminal(crossterm::event::Event::Key(
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('a'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ),
+    ))));
+}
+
+/// [`open_session_selector`] followed by the explicit `All` scope toggle.
+pub fn open_session_selector_all(app: &mut App, sessions: Vec<Value>) {
+    open_session_selector(app, sessions);
+    toggle_session_scope(app);
+}
+
 /// The profile selector.
 pub fn profile_selector(theme: ThemeKind) -> App {
     let (models, profiles, sessions) = standard_catalog();

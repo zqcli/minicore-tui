@@ -18,8 +18,8 @@ use crate::markdown::{column_width, line_width};
 use crate::protocol::{ModelInfo, ProfileInfo, Reasoning, SessionInfo};
 use crate::state::selection::{
     SelectorKind, SelectorState, SessionConfirmChoice, SessionPanelAction, SessionPanelMode,
-    SessionSelectorState, filtered_models, filtered_profiles, filtered_sessions, parse_rfc3339,
-    reasoning_description, reasoning_label, supported_reasoning,
+    SessionSelectorState, filtered_models, filtered_profiles, parse_rfc3339, reasoning_description,
+    reasoning_label, supported_reasoning,
 };
 use crate::theme::Theme;
 use crate::ui::layout;
@@ -310,7 +310,7 @@ pub fn render_session(
     panel::render_frame(frame, geometry, theme);
     frame.render_widget(
         Paragraph::new(vec![Line::from(Span::styled(
-            "Select session",
+            format!("Select session — {}", state.scope.label()),
             Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
         ))]),
         geometry.title,
@@ -481,7 +481,7 @@ fn render_form_lines(frame: &mut Frame, area: Rect, mut lines: Vec<Line<'static>
 }
 
 fn session_items<'a>(app: &'a App, state: &SessionSelectorState) -> Vec<&'a SessionInfo> {
-    filtered_sessions(&app.sessions.list, &state.query)
+    app.session_panel_items(&state.query, state.scope)
         .into_iter()
         .filter(|info| {
             !app.sessions.pending_deletes.contains(&info.session_id)
@@ -566,13 +566,16 @@ fn session_footer(
     _selected: Option<usize>,
     panel: panel::PanelLayout,
 ) -> SessionFooter {
-    let rows = [
-        [
+    let rows: [&[(SessionPanelAction, &'static str)]; 2] = [
+        &[
             (SessionPanelAction::Open, "Enter Open"),
+            (SessionPanelAction::Browse, "Ctrl+B Read-only"),
+            (SessionPanelAction::Continue, "Ctrl+G Continue"),
+            (SessionPanelAction::Scope, "Ctrl+A Scope"),
+        ],
+        &[
             (SessionPanelAction::New, "Ctrl+N New"),
             (SessionPanelAction::Refresh, "F5 Refresh"),
-        ],
-        [
             (SessionPanelAction::Rename, "F2 Rename"),
             (SessionPanelAction::Close, "Ctrl+W Close"),
             (SessionPanelAction::Delete, "Del Delete"),
@@ -580,7 +583,7 @@ fn session_footer(
     ];
     let mut lines = Vec::new();
     let mut hits = Vec::new();
-    for (row, actions) in rows.into_iter().enumerate() {
+    for (row, actions) in rows.iter().enumerate() {
         let (line, row_hits) = action_row(theme, panel, row, actions);
         lines.push(line);
         hits.extend(row_hits);
@@ -598,22 +601,22 @@ fn action_row(
     theme: &Theme,
     panel: panel::PanelLayout,
     row: usize,
-    actions: [(SessionPanelAction, &'static str); 3],
+    actions: &[(SessionPanelAction, &'static str)],
 ) -> (Line<'static>, Vec<SessionActionHit>) {
     let mut spans = Vec::new();
     let mut hits = Vec::new();
     let mut x = panel.footer.x;
-    for (index, (action, label)) in actions.into_iter().enumerate() {
+    for (index, (action, label)) in actions.iter().enumerate() {
         if index > 0 {
             spans.push(Span::styled(" · ", Style::new().fg(theme.dim)));
             x = x.saturating_add(3);
         }
         let label_width = column_width(label) as u16;
-        spans.push(Span::styled(label, Style::new().fg(theme.accent)));
+        spans.push(Span::styled(*label, Style::new().fg(theme.accent)));
         let width = label_width.min(panel.footer.right().saturating_sub(x));
         if width > 0 && panel.footer.y.saturating_add(row as u16) < panel.footer.bottom() {
             hits.push(SessionActionHit {
-                action,
+                action: *action,
                 rect: Rect::new(x, panel.footer.y.saturating_add(row as u16), width, 1),
             });
         }

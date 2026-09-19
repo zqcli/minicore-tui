@@ -42,18 +42,6 @@ impl App {
     /// silently swallowed; a missing agent or session gets a notice.
     pub fn submit_composer(&mut self) -> Vec<AppCommand> {
         self.editor_selection = None;
-        // Second Enter in a browsing view confirms the continue even though
-        // the composer is empty (the text is parked on the view).
-        if let Some(active) = self.sessions.active.clone() {
-            if self
-                .sessions
-                .known
-                .get(&active)
-                .is_some_and(|view| view.browsing && view.pending_continue.is_some())
-            {
-                return self.continue_browsed_session(&active);
-            }
-        }
         let text = self.composer.content().trim().to_owned();
         if text.is_empty() {
             return Vec::new();
@@ -70,8 +58,22 @@ impl App {
             return Vec::new();
         }
         if is_slash_command(&text) {
+            // Continuing a read-only browse must not consume the draft: the
+            // text the user typed stays in the composer for the next Enter
+            // (spec §10.1). Every other slash command owns the line it ran.
+            let keeps_draft = matches!(
+                crate::command::parse_command(&text),
+                Ok(crate::command::LocalCommand::Resume)
+            ) && self.sessions.active.as_ref().is_some_and(|active| {
+                self.sessions
+                    .known
+                    .get(active)
+                    .is_some_and(|view| view.browsing)
+            });
             let commands = self.run_command(&text);
-            self.composer.clear();
+            if !keeps_draft {
+                self.composer.clear();
+            }
             return commands;
         }
         let Some(active) = self.sessions.active.clone() else {
@@ -81,23 +83,19 @@ impl App {
             );
             return Vec::new();
         };
-        // Read-only browse (spec §10.1): the first submission parks the text
-        // and asks for an explicit continue; only the second Enter opens the
-        // session and sends it. A draft is never dropped by this gate.
+        // Read-only browse (spec §10.1): sending is disabled until the user
+        // explicitly continues the session (Ctrl+G or /resume). The draft is
+        // kept exactly as typed; Enter alone never opens or sends.
         if self
             .sessions
             .known
             .get(&active)
             .is_some_and(|view| view.browsing)
         {
-            if let Some(view) = self.sessions.known.get_mut(&active) {
-                view.pending_continue = Some(text);
-            }
-            self.composer.clear();
             self.notice(
                 NoticeLevel::Info,
                 format!(
-                    "{active} is open for reading only. Press Enter again to continue it — the text is parked, not sent."
+                    "{active} is open for reading only. Continue it with Ctrl+G or /resume — your draft is kept."
                 ),
             );
             return Vec::new();

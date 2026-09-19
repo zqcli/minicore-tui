@@ -2303,7 +2303,7 @@ fn reasoning_selector_lists_only_supported_levels_with_the_current_session_heade
 
 #[test]
 fn session_selector_sorts_newest_first_and_marks_running_loaded_idle() {
-    let app = testapp::session_selector(ThemeKind::Dark);
+    let app = testapp::session_selector_all(ThemeKind::Dark);
     let terminal = draw(&app, 80, 24);
     let content = text(&terminal);
     // updated_at descending: ses_main (5m) then ses_recent (15m) then ses_old (1d).
@@ -2322,7 +2322,7 @@ fn session_selector_sorts_newest_first_and_marks_running_loaded_idle() {
 fn session_panel_mouse_selection_and_double_click_use_shared_content_rect() {
     let (models, profiles, sessions) = testapp::standard_catalog();
     let mut app = testapp::ready_catalog(ThemeKind::Dark, models, profiles, sessions.clone());
-    testapp::open_session_selector(&mut app, sessions);
+    testapp::open_session_selector_all(&mut app, sessions);
     app.update(AppEvent::TerminalSize {
         width: 80,
         height: 24,
@@ -2452,7 +2452,7 @@ fn session_footer_mouse_refresh_uses_the_action_hit_rect() {
 fn event_gap_blocks_session_panel_close_and_delete_but_allows_rename() {
     let (models, profiles, sessions) = testapp::standard_catalog();
     let mut app = testapp::ready_catalog(ThemeKind::Dark, models, profiles, sessions.clone());
-    testapp::open_session_selector(&mut app, sessions);
+    testapp::open_session_selector_all(&mut app, sessions);
     let view = app.sessions.known.get_mut("ses_main").unwrap();
     view.event_gap = true;
     view.state = Some(crate::protocol::SessionStateWire {
@@ -2607,7 +2607,7 @@ fn new_session_mouse_click_selects_field_and_places_unicode_cursor() {
 
 #[test]
 fn session_panel_rename_uses_id_and_waits_for_complete_ack() {
-    let mut app = testapp::session_selector(ThemeKind::Dark);
+    let mut app = testapp::session_selector_all(ThemeKind::Dark);
     app.update(AppEvent::Terminal(CrosstermEvent::Key(
         crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::F(2),
@@ -2757,7 +2757,7 @@ fn session_panel_rename_uses_id_and_waits_for_complete_ack() {
 
 #[test]
 fn session_selector_refresh_preserves_selected_id_after_reorder() {
-    let mut app = testapp::session_selector(ThemeKind::Dark);
+    let mut app = testapp::session_selector_all(ThemeKind::Dark);
     app.update(AppEvent::MoveSelector { delta: 1 });
     let selected_before = match &app.dock {
         crate::state::selection::Dock::SessionSelector(state) => {
@@ -2841,7 +2841,7 @@ fn session_selector_query_refresh_and_footer_actions_keep_filtered_target() {
                 });
         }
         app.sessions.active = Some("ses_survivor".to_owned());
-        testapp::open_session_selector(&mut app, session_list);
+        testapp::open_session_selector_all(&mut app, session_list);
         app.update(AppEvent::TerminalSize {
             width: 80,
             height: 24,
@@ -3055,7 +3055,7 @@ fn session_rename_dialog_freezes_target_and_reconciles_before_footer_actions() {
                     compaction: None,
                 });
         }
-        testapp::open_session_selector(&mut app, session_list);
+        testapp::open_session_selector_all(&mut app, session_list);
         app.update(AppEvent::SetSelectorQuery {
             query: "Original".to_owned(),
         });
@@ -3281,7 +3281,7 @@ fn session_rename_ack_clears_hidden_target_when_query_has_no_matches() {
                 compaction: None,
             });
     }
-    testapp::open_session_selector(&mut app, sessions);
+    testapp::open_session_selector_all(&mut app, sessions);
     app.update(AppEvent::SetSelectorQuery {
         query: "Original".to_owned(),
     });
@@ -3409,7 +3409,7 @@ fn session_panel_cancel_reconciles_after_frozen_target_updates() {
                     compaction: None,
                 });
         }
-        testapp::open_session_selector(&mut app, session_list);
+        testapp::open_session_selector_all(&mut app, session_list);
         app.update(AppEvent::SetSelectorQuery {
             query: "Original".to_owned(),
         });
@@ -3549,7 +3549,7 @@ fn session_panel_cancel_reconciles_after_frozen_target_updates() {
 fn session_delete_requires_close_then_second_confirmation_and_tombstones_id() {
     let (models, profiles, sessions) = testapp::standard_catalog();
     let mut app = testapp::ready_catalog(ThemeKind::Dark, models, profiles, sessions.clone());
-    testapp::open_session_selector(&mut app, sessions);
+    testapp::open_session_selector_all(&mut app, sessions);
     let press = |code| {
         AppEvent::Terminal(CrosstermEvent::Key(crossterm::event::KeyEvent::new(
             code,
@@ -3872,7 +3872,7 @@ fn short_panels_page_down_moves_help_logs_and_session_selector() {
     }
     let mut selector =
         testapp::ready_catalog(ThemeKind::Dark, models, profiles, many_sessions.clone());
-    testapp::open_session_selector(&mut selector, many_sessions);
+    testapp::open_session_selector_all(&mut selector, many_sessions);
     selector.update(AppEvent::TerminalSize {
         width: 60,
         height: 16,

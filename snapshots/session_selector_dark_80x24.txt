@@ -6,9 +6,9 @@
  Open a session — /new, Ctrl+R, or F1 for help
 
 
-
+ Showing all workspaces
  ┌─────────────────────────────────────────────────────────────────────────────┐
- │Select session                                                               │
+ │Select session — all workspaces                                              │
  │>                                                                            │
  │→ ses_main                                                   deep · high   5m│
  │  ◉ /work/cli                                                                │
@@ -18,7 +18,7 @@
  │  ● /work/rust                                                               │
  │                                                                             │
  │                                                                             │
- │Enter Open · Ctrl+N New · F5 Refresh                                         │
- │F2 Rename · Ctrl+W Close · Del Delete                                        │
+ │Enter Open · Ctrl+B Read-only · Ctrl+G Continue · Ctrl+A Scope               │
+ │Ctrl+N New · F5 Refresh · F2 Rename · Ctrl+W Close · Del Delete              │
  └─────────────────────────────────────────────────────────────────────────────┘
  ● ready

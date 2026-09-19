@@ -896,9 +896,9 @@ fn session_footer_new_invalidates_prepared_header_cache() {
         }
         dock => panic!("unexpected dock: {dock:?}"),
     };
-    let column =
-        panel_area.footer.x + unicode_width::UnicodeWidthStr::width("Enter Open") as u16 + 3 + 1;
-    let row = panel_area.footer.y;
+    // The footer's second row starts with `Ctrl+N New`; click its label.
+    let column = panel_area.footer.x + 1;
+    let row = panel_area.footer.y + 1;
     let mouse = |kind| {
         AppEvent::Terminal(CrosstermEvent::Mouse(crossterm::event::MouseEvent {
             kind,
@@ -7143,6 +7143,29 @@ fn draft_budget_trims_undo_before_touching_text() {
     assert_eq!(driver.app.composer.undo_capacity(), 1);
 }
 
+fn slash(driver: &mut Driver, command: &str) {
+    driver.app.composer.set_text(command);
+    driver.step(enter());
+}
+
+fn drive_ctrl(driver: &mut Driver, c: char) {
+    driver.step(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+        KeyCode::Char(c),
+        KeyModifiers::CONTROL,
+    ))));
+}
+
+/// Brows a closed catalog row and answer its history read.
+fn pending_browse(driver: &mut Driver, id: &str) {
+    panel_with_closed_session(driver, id);
+    drive_ctrl(driver, 'b');
+    let read = driver.request("session.read");
+    driver.respond(
+        read,
+        history(vec![user(0, "loop_old", "browsed prompt")], None, 1),
+    );
+}
+
 fn enter() -> AppEvent {
     AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
         KeyCode::Enter,
@@ -7152,10 +7175,10 @@ fn enter() -> AppEvent {
 
 /// Opens the session panel with one closed catalog row selected.
 fn panel_with_closed_session(driver: &mut Driver, id: &str) {
-    // A closed row whose workspace and model do not exist locally: browse
-    // must not need either (spec §10.1).
+    // A closed row whose model is not available locally. The workspace is
+    // the app's own string; the app never validates that the path exists,
+    // and browse must not need the model either (spec §10.1).
     let mut row = session(id);
-    row["workspace"] = json!("/nonexistent/project");
     row["model"] = json!("model-that-does-not-exist");
     driver.step(AppEvent::OpenSessionSelector);
     driver.respond_method("session.list", json!({"sessions": [row]}));
@@ -7196,24 +7219,14 @@ fn browsing_a_closed_session_reads_history_without_opening_it() {
     assert_eq!(driver.app.sessions.active.as_deref(), Some("ses_closed"));
 }
 
-/// D1 (spec §10.1): the first Enter after a read-only browse parks the text
-/// and asks for an explicit continue; a failed open keeps the browsed
-/// history and returns the text to the composer.
+/// D1 (spec §10.1): Enter in a read-only view never opens and never sends.
+/// The draft is kept verbatim, and the notice names the explicit continue
+/// action.
 #[test]
-fn browsing_requires_an_explicit_continue_and_keeps_text_when_open_fails() {
+fn browsing_refuses_send_and_keeps_the_draft_until_an_explicit_continue() {
     let mut driver = Driver::new();
     bootstrap(&mut driver);
-    panel_with_closed_session(&mut driver, "ses_closed");
-    driver.step(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
-        KeyCode::Char('b'),
-        KeyModifiers::CONTROL,
-    ))));
-    let read = driver.request("session.read");
-    driver.respond(
-        read,
-        history(vec![user(0, "loop_old", "browsed prompt")], None, 1),
-    );
-
+    pending_browse(&mut driver, "ses_closed");
     driver.app.composer.set_text("continue please");
     driver.step(enter());
     assert!(
@@ -7221,59 +7234,202 @@ fn browsing_requires_an_explicit_continue_and_keeps_text_when_open_fails() {
             .queue
             .iter()
             .all(|request| request.method != "turn.send" && request.method != "session.open"),
-        "the first Enter only parks the text"
+        "Enter alone must not open or send"
     );
-    assert!(driver.app.composer.content().is_empty());
     assert_eq!(
-        driver.app.sessions.known["ses_closed"]
-            .pending_continue
-            .as_deref(),
-        Some("continue please")
+        driver.app.composer.content(),
+        "continue please",
+        "the draft is kept exactly as typed"
     );
+    assert!(driver.app.sessions.known["ses_closed"].browsing);
 
-    driver.step(enter());
+    // The explicit continue opens the session and keeps the draft.
+    drive_ctrl(&mut driver, 'g');
+    let open = driver.request("session.open");
+    driver.respond(open, json!({"session": session("ses_closed")}));
     assert!(
         driver
             .queue
             .iter()
-            .any(|request| request.method == "session.open"),
-        "the second Enter opens the session"
+            .all(|request| request.method != "turn.send"),
+        "the open ACK never sends the draft"
     );
+    assert_eq!(driver.app.composer.content(), "continue please");
+    assert!(!driver.app.sessions.known["ses_closed"].browsing);
+
+    // The next normal Enter sends it.
+    driver.step(enter());
+    let send = driver.request("turn.send");
+    assert_eq!(send.params["text"], "continue please");
+}
+
+/// D1 (spec §10.1): the Ctrl+G action is the composer-level explicit
+/// continue; it behaves exactly like `/resume`.
+#[test]
+fn ctrl_g_continues_a_browsed_session_without_sending() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    pending_browse(&mut driver, "ses_closed");
+    drive_ctrl(&mut driver, 'g');
+    let open = driver.request("session.open");
+    driver.respond(open, json!({"session": session("ses_closed")}));
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "turn.send")
+    );
+    assert!(!driver.app.sessions.known["ses_closed"].browsing);
+}
+
+/// D1 (spec §10.1): `/resume` is the command form of the explicit continue;
+/// it opens with an empty composer and never auto-sends.
+#[test]
+fn resume_command_opens_a_browsed_session_without_sending() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    pending_browse(&mut driver, "ses_closed");
+    slash(&mut driver, "/resume");
+    let open = driver.request("session.open");
+    driver.respond(open, json!({"session": session("ses_closed")}));
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "turn.send"),
+        "the open ACK never sends"
+    );
+    assert!(!driver.app.sessions.known["ses_closed"].browsing);
+}
+
+/// D1 (spec §10.1): a failed continue returns to read-only browse with the
+/// loaded history and the untouched draft.
+#[test]
+fn continuing_a_browsed_session_keeps_history_and_draft_when_open_fails() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    pending_browse(&mut driver, "ses_closed");
+    driver.app.composer.set_text("keep me");
+    drive_ctrl(&mut driver, 'g');
     let open = driver.request("session.open");
     driver.respond_error(open, 1234, "session_not_found");
     let view = &driver.app.sessions.known["ses_closed"];
     assert!(view.browsing, "a failed open returns to read-only browse");
     assert_eq!(view.transcript.blocks.len(), 1, "browsed history is kept");
-    assert_eq!(driver.app.composer.content(), "continue please");
+    assert_eq!(driver.app.composer.content(), "keep me");
+    assert!(
+        driver
+            .queue
+            .iter()
+            .all(|request| request.method != "turn.send")
+    );
 }
 
-/// D1 (spec §10.1): after the open ACK, the parked text is sent as the
-/// session's next turn.
+/// D1 (spec §10.2): the selector lists only the current workspace by default
+/// and every workspace only after the explicit scope toggle. The title makes
+/// the active scope visible.
 #[test]
-fn continuing_a_browsed_session_sends_the_parked_text_after_open() {
+fn session_selector_scope_defaults_to_current_workspace_with_an_explicit_all() {
     let mut driver = Driver::new();
     bootstrap(&mut driver);
-    panel_with_closed_session(&mut driver, "ses_closed");
-    driver.step(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
-        KeyCode::Char('b'),
-        KeyModifiers::CONTROL,
-    ))));
-    let read = driver.request("session.read");
-    driver.respond(
-        read,
-        history(vec![user(0, "loop_old", "browsed prompt")], None, 1),
+    driver.step(AppEvent::OpenSessionSelector);
+    let mut other = session("ses_other");
+    other["workspace"] = json!("/other-project");
+    other["updated_at"] = json!("2026-03-01T00:00:00Z");
+    let mut here = session("ses_here");
+    here["updated_at"] = json!("2026-02-01T00:00:00Z");
+    driver.respond_method("session.list", json!({"sessions": [other, here]}));
+    let selected = match &driver.app.dock {
+        Dock::SessionSelector(state) => {
+            assert_eq!(
+                state.scope,
+                minicore_tui::state::selection::SessionScope::CurrentWorkspace
+            );
+            state.selected_session_id.clone()
+        }
+        other => panic!("expected the session selector, got {other:?}"),
+    };
+    assert_eq!(selected.as_deref(), Some("ses_here"));
+    let screen = rendered_text(&driver.app, 80, 24);
+    assert!(
+        screen.contains("this workspace"),
+        "the scope label is visible: {screen}"
     );
-    driver.app.composer.set_text("continue please");
-    driver.step(enter());
-    driver.step(enter());
-    let open = driver.request("session.open");
-    driver.respond(open, json!({"session": session("ses_closed")}));
-    let send = driver.request("turn.send");
-    assert_eq!(send.params["text"], "continue please");
-    assert_eq!(send.params["session_id"], "ses_closed");
-    assert!(!driver.app.sessions.known["ses_closed"].browsing);
+
+    drive_ctrl(&mut driver, 'a');
+    match &driver.app.dock {
+        Dock::SessionSelector(state) => assert_eq!(
+            state.scope,
+            minicore_tui::state::selection::SessionScope::All
+        ),
+        other => panic!("expected the session selector, got {other:?}"),
+    }
+    assert_eq!(
+        driver
+            .app
+            .session_panel_items("", minicore_tui::state::selection::SessionScope::All)
+            .len(),
+        2,
+        "All scope lists every workspace"
+    );
+    let screen = rendered_text(&driver.app, 80, 24);
+    assert!(
+        screen.contains("all workspaces"),
+        "the scope label follows the toggle: {screen}"
+    );
 }
 
+/// D1 (spec §21): the all-drafts budget is an admission gate. At the budget
+/// further typing is refused with one warning, and no existing draft is
+/// truncated or dropped.
+#[test]
+fn draft_budget_refuses_new_input_and_keeps_existing_drafts() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+    let text = "x".repeat(200 * 1024);
+    driver.app.composer_mut().set_text(&text);
+    // Fill four sessions with near-limit drafts; their retained totals
+    // (undo estimates included) exceed the 8 MiB all-drafts budget.
+    for id in ["ses_2", "ses_3", "ses_4"] {
+        open_idle(&mut driver, id);
+    }
+    // Non-active sessions keep their drafts in the view; the active one owns
+    // the scratch composer.
+    for id in ["ses_1", "ses_2", "ses_3"] {
+        driver
+            .app
+            .sessions
+            .known
+            .get_mut(id)
+            .expect("session view")
+            .composer
+            .set_text(&"y".repeat(250 * 1024));
+    }
+    driver.app.composer_mut().set_text(&"z".repeat(250 * 1024));
+    assert!(
+        driver.app.draft_bytes() > minicore_tui::limits::COMPOSER_ALL_DRAFTS_BYTES,
+        "the fixture exceeds the all-drafts budget: {} <= {}",
+        driver.app.draft_bytes(),
+        minicore_tui::limits::COMPOSER_ALL_DRAFTS_BYTES
+    );
+    let before = driver.app.sessions.known["ses_1"].composer.content();
+
+    assert!(!driver.app.admit_draft_input(1));
+    assert_eq!(
+        driver.app.sessions.known["ses_1"].composer.content(),
+        before,
+        "refused input never truncates the existing draft"
+    );
+    assert!(!driver.app.admit_draft_input(1));
+    let warnings = driver
+        .app
+        .notices
+        .iter()
+        .filter(|notice| notice.text.contains("draft budget"))
+        .count();
+    assert!(warnings <= 1, "one warning per over-budget episode");
+}
 /// D1 (spec §6.1): `--session <id>` opens the exact id after bootstrap and
 /// never opens the selector.
 #[test]
