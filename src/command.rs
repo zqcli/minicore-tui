@@ -61,17 +61,38 @@ impl std::fmt::Debug for StartExportRequest {
     }
 }
 
-#[derive(Debug)]
 pub struct PersistConfigRequest {
     pub path: std::path::PathBuf,
     pub config: crate::config::TuiConfig,
 }
 
-#[derive(Debug)]
 pub struct StartEditorRequest {
     pub capture: crate::jobs::EditorCapture,
     pub editor: crate::config::EditorConfig,
     pub draft: String,
+}
+
+impl fmt::Debug for PersistConfigRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PersistConfigRequest")
+            .field("path", &self.path.display().to_string())
+            .field("has_editor", &self.config.editor.is_some())
+            .field("has_agent_paths", &self.config.agent_executable.is_some())
+            .finish()
+    }
+}
+
+impl fmt::Debug for StartEditorRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StartEditorRequest")
+            .field("capture", &self.capture)
+            .field("editor_executable", &self.editor.executable)
+            .field("editor_arg_count", &self.editor.args.len())
+            .field("draft_bytes", &self.draft.len())
+            .finish()
+    }
 }
 
 #[derive(Clone, Eq, PartialEq)]
