@@ -22,6 +22,9 @@ pub const LIVE_TOTAL_BYTES: usize = 16 * 1024 * 1024;
 pub const TOOL_STREAM_BYTES: usize = 1024 * 1024;
 /// Raw stream bytes requested per detail page.
 pub const TOOL_PAGE_BYTES: usize = 16 * 1024;
+/// Metadata is bounded independently of payload size; tiny process events
+/// coalesce into pages instead of allocating one retained Arc per byte.
+pub const TOOL_STREAM_CHUNKS: usize = 128;
 /// Retained presentation output for all tools in one session.
 pub const TOOL_TOTAL_BYTES: usize = 16 * 1024 * 1024;
 /// One Composer draft.

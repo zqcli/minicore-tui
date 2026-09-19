@@ -81,9 +81,49 @@ fn window_capacity_is_bounded_and_offsets_survive_head_eviction() {
             .unwrap();
     }
     assert_eq!(view.retained_bytes, 1024 * 1024);
+    assert!(view.capacity_bytes() <= minicore_tui::limits::TOOL_STREAM_BYTES);
     assert_eq!(view.base_offset, 16 * 16384);
     assert_eq!(view.next_offset, 80 * 16384);
     assert!(view.truncated && view.gap);
+}
+
+#[test]
+fn tiny_process_events_coalesce_without_mutating_inflight_layout_snapshots() {
+    let mut view = StreamView::new(Stream::Stdout);
+    let mut chunk = minicore_tui::protocol::ToolProcessChunkWire {
+        stream: Stream::Stdout,
+        encoding: "base64".into(),
+        data: STANDARD.encode(b"x"),
+        base_offset: 0,
+        next_offset: 1,
+        observed_end: 1,
+        dropped: false,
+        expired: false,
+    };
+    view.accept_event(&chunk).unwrap();
+    let snapshot = view.clone();
+    for index in 1..32_000 {
+        chunk.base_offset = index;
+        chunk.next_offset = index + 1;
+        chunk.observed_end = index + 1;
+        view.accept_event(&chunk).unwrap();
+    }
+    assert_eq!(snapshot.display_text(), "x");
+    assert_eq!(view.next_offset, 32_000);
+    assert_eq!(view.display_text(), "x".repeat(32_000));
+    assert!(
+        view.chunks.len() <= minicore_tui::limits::TOOL_STREAM_CHUNKS,
+        "tiny events must not create an unbounded metadata list"
+    );
+    assert_eq!(
+        view.chunks.len(),
+        2,
+        "tiny raw events coalesce into two pages"
+    );
+    assert_eq!(
+        view.capacity_bytes(),
+        2 * minicore_tui::limits::TOOL_PAGE_BYTES
+    );
 }
 #[test]
 fn pinned_read_fixtures_preserve_policy_and_recording_facts() {

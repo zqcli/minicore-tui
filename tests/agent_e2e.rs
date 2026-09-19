@@ -630,12 +630,16 @@ impl Drop for E2eEnvironment {
 async fn pump_step(process: &mut RpcProcess, app: &mut App) -> Result<(), String> {
     let commands = drain_editor_jobs(app).await?;
     dispatch_commands(process, app, commands).await?;
-    let wait = if app.tool_detail().is_some() {
+    // The real main loop selects local-job completion alongside RPC. The
+    // harness must likewise return to its export/editor result drains promptly:
+    // a 10-second RPC-only wait can let a gated live Provider request time out
+    // before the export captures it, creating a timing-only false failure.
+    let wait = if editor_job_in_flight() || app.export_running() {
+        Duration::from_millis(20)
+    } else if app.tool_detail().is_some() {
         app.next_tick()
             .unwrap_or(Duration::from_millis(500))
             .min(Duration::from_millis(500))
-    } else if editor_job_in_flight() {
-        Duration::from_millis(20)
     } else {
         Duration::from_secs(10)
     };

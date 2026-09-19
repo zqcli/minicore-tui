@@ -49,7 +49,7 @@ pub struct StreamView {
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum StreamChunk {
-    Raw(Arc<[u8]>),
+    Raw(Arc<Vec<u8>>),
     /// Output already owned by ToolFacts/cards is borrowed, not copied into a
     /// second detail body. A response must match the original byte range.
     Result {
@@ -62,6 +62,12 @@ impl StreamChunk {
         match self {
             Self::Raw(bytes) => bytes,
             Self::Result { source, range } => &source.as_bytes()[range.clone()],
+        }
+    }
+    fn capacity_bytes(&self) -> usize {
+        match self {
+            Self::Raw(bytes) => bytes.capacity(),
+            Self::Result { range, .. } => range.len(),
         }
     }
 }
@@ -77,6 +83,35 @@ impl std::fmt::Debug for StreamView {
 }
 
 impl StreamView {
+    pub fn capacity_bytes(&self) -> usize {
+        self.chunks.iter().map(StreamChunk::capacity_bytes).sum()
+    }
+
+    fn push_raw(&mut self, mut bytes: &[u8]) {
+        while !bytes.is_empty() {
+            let page = crate::limits::TOOL_PAGE_BYTES;
+            if let Some(StreamChunk::Raw(last)) = self
+                .chunks
+                .back_mut()
+                .filter(|chunk| chunk.bytes().len() < page)
+            {
+                let last = Arc::make_mut(last);
+                // A layout may share this tail; after copy-on-write reserve
+                // exactly one page, not Vec's potentially doubled capacity.
+                last.reserve_exact(page - last.len());
+                let take = (page - last.len()).min(bytes.len());
+                last.extend_from_slice(&bytes[..take]);
+                bytes = &bytes[take..];
+            } else {
+                let take = page.min(bytes.len());
+                let mut chunk = Vec::with_capacity(page);
+                chunk.extend_from_slice(&bytes[..take]);
+                self.chunks.push_back(StreamChunk::Raw(Arc::new(chunk)));
+                bytes = &bytes[take..];
+            }
+        }
+    }
+
     pub fn new(stream: Stream) -> Self {
         Self {
             stream,
@@ -215,20 +250,28 @@ impl StreamView {
                         .get(*start..start.saturating_add(chunk.len()))
                         == Some(chunk)
                 });
-                self.chunks.push_back(match shared {
-                    Some((source, start)) => StreamChunk::Result {
-                        source: source.clone(),
-                        range: start..start + chunk.len(),
-                    },
-                    None => StreamChunk::Raw(Arc::from(chunk)),
-                });
+                match shared {
+                    Some((source, start)) => {
+                        if let Some(StreamChunk::Result { source: previous, range }) = self.chunks.back_mut().filter(|chunk| matches!(chunk, StreamChunk::Result { source: previous, range } if Arc::ptr_eq(previous, source) && range.end == start)) {
+                            debug_assert!(Arc::ptr_eq(previous, source));
+                            range.end += chunk.len();
+                        } else {
+                            self.chunks.push_back(StreamChunk::Result { source: source.clone(), range: start..start + chunk.len() });
+                        }
+                    }
+                    None => self.push_raw(chunk),
+                }
                 self.retained_bytes += chunk.len();
             }
         }
         self.next_offset = next;
         self.observed_end = self.observed_end.max(end);
-        while self.retained_bytes > crate::limits::TOOL_STREAM_BYTES {
+        let mut capacity = self.capacity_bytes();
+        while capacity > crate::limits::TOOL_STREAM_BYTES
+            || self.chunks.len() > crate::limits::TOOL_STREAM_CHUNKS
+        {
             let old = self.chunks.pop_front().expect("charged chunk");
+            capacity -= old.capacity_bytes();
             self.retained_bytes -= old.bytes().len();
             self.base_offset += old.bytes().len() as u64;
             self.truncated = true;
