@@ -821,7 +821,14 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                     Some(input.source.as_ref()),
                     rendered.hard_breaks.as_deref(),
                 ) {
-                    sections.push(layout);
+                    if !push_layout_section(
+                        layout,
+                        &mut sections,
+                        &mut pending_batch,
+                        &mut batch_sink,
+                    ) {
+                        return None;
+                    }
                     changed += 1;
                 }
             }
@@ -881,7 +888,7 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
             block_source(block),
             None,
         ) {
-            if !push_layout_section(layout, &mut sections, &mut Vec::new(), &mut batch_sink) {
+            if !push_layout_section(layout, &mut sections, &mut pending_batch, &mut batch_sink) {
                 return None;
             }
             changed += 1;

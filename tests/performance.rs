@@ -36,9 +36,11 @@ use minicore_tui::event::{AppEvent, JobOutcome, RpcEvent};
 use minicore_tui::jobs::{CopyAdmission, LocalJobs};
 #[cfg(all(unix, not(target_os = "macos")))]
 use minicore_tui::protocol::RpcResponse;
-use minicore_tui::protocol::{IncomingFrame, RpcNotification, TurnRef};
+use minicore_tui::protocol::{IncomingFrame, RpcNotification, TurnRef, UserMessageKindWire};
 use minicore_tui::state::session::SessionView;
-use minicore_tui::state::transcript::{AssistantBlock, AssistantPart, TranscriptBlock};
+use minicore_tui::state::transcript::{
+    AssistantBlock, AssistantPart, ToolBlock, TranscriptBlock, UserBlock,
+};
 use minicore_tui::ui::transcript::{all_lines, prepare_conversation, total_lines};
 use serde_json::json;
 
@@ -510,6 +512,89 @@ async fn install_worker_layout(app: &mut App, jobs: &mut LocalJobs, width: u16) 
     assert!(app.prepared_conversation(width).is_some());
 }
 
+/// The partial durable-layout hand-off must preserve every section kind;
+/// ToolCall markers must not be the only sections visible after the worker
+/// completes.
+#[tokio::test]
+async fn async_layout_worker_preserves_user_assistant_and_tool_sections() {
+    let mut app = app_with_history(0, 240);
+    {
+        let view = app
+            .sessions
+            .known
+            .get_mut("ses_perf")
+            .expect("performance session");
+        view.transcript.push_block(TranscriptBlock::User(UserBlock {
+            index: Some(0),
+            loop_id: Some("loop_display".to_owned()),
+            kind: UserMessageKindWire::Prompt,
+            text: "user async visible".to_owned(),
+            pending: false,
+        }));
+        view.transcript
+            .push_block(TranscriptBlock::Assistant(AssistantBlock {
+                index: 1,
+                loop_id: "loop_display".to_owned(),
+                request_index: 0,
+                model: "deep".to_owned(),
+                reasoning_level: minicore_tui::protocol::Reasoning::High,
+                parts: vec![
+                    AssistantPart::Text("assistant async visible".to_owned()),
+                    AssistantPart::ToolCall(minicore_tui::protocol::ToolCallViewWire {
+                        tool_call_id: "call_display".to_owned(),
+                        name: "read".to_owned(),
+                        call_index: 0,
+                        display: None,
+                    }),
+                ],
+                tool_calls: vec![],
+                usage: Default::default(),
+                finish_reason: "stop".to_owned(),
+                terminal_error: None,
+            }));
+        view.transcript.push_block(TranscriptBlock::Tool(ToolBlock {
+            index: Some(2),
+            loop_id: "loop_display".to_owned(),
+            request_index: 0,
+            tool_call_id: "call_display".to_owned(),
+            name: "read".to_owned(),
+            result: Some(Arc::from("tool async visible")),
+            outcome: None,
+            live_status: None,
+            progress: None,
+            expanded: true,
+        }));
+        view.transcript.complete = true;
+        view.transcript.invalidate();
+    }
+    app.enable_async_layout();
+    let mut jobs = LocalJobs::new();
+    install_worker_layout(&mut app, &mut jobs, WIDTH).await;
+    let prepared = app
+        .prepared_conversation(WIDTH)
+        .expect("worker layout installed");
+    let text = prepared
+        .lines()
+        .into_iter()
+        .flat_map(|line| line.spans.into_iter())
+        .map(|span| span.content.into_owned())
+        .collect::<String>();
+    assert!(
+        text.contains("user async visible"),
+        "User section missing: {text}"
+    );
+    assert!(
+        text.contains("assistant async visible"),
+        "Assistant section missing: {text}"
+    );
+    assert!(text.contains("read"), "Tool section missing: {text}");
+    assert!(
+        text.contains("tool async visible"),
+        "Tool result missing: {text}"
+    );
+    jobs.shutdown().await;
+}
+
 /// Production-path smoke test: the first durable layout is prepared by the
 /// owned worker, while the App only installs the result and composes the
 /// small live tail. No synchronous durable fallback is permitted in this
@@ -583,9 +668,17 @@ async fn production_layout_worker_fences_stale_theme_result() {
 
     app.update(stale);
     assert!(app.prepared_conversation(WIDTH).is_none());
-    let current = jobs.events().recv().await.expect("current layout result");
-    assert!(matches!(current, AppEvent::DurableLayoutPrepared(_)));
-    app.update(current);
+    loop {
+        let current = jobs.events().recv().await.expect("current layout result");
+        let complete = matches!(
+            &current,
+            AppEvent::DurableLayoutPrepared(result) if result.complete
+        );
+        app.update(current);
+        if complete {
+            break;
+        }
+    }
     assert!(app.prepared_conversation(WIDTH).is_some());
     assert_eq!(app.theme, minicore_tui::theme::ThemeKind::Light);
     jobs.shutdown().await;
