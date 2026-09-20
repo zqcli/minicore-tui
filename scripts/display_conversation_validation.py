@@ -129,6 +129,7 @@ class ModelState:
         self.count = 0
         self.lock = threading.Lock()
         self.requests: list[dict[str, Any]] = []
+        self.completed_responses: list[int] = []
 
     def events(self) -> list[dict[str, Any]]:
         if self.count == 1:
@@ -199,6 +200,8 @@ class ModelHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.flush()
             cursor = boundary
             time.sleep(0.45 if count == 1 else 0.12)
+        with state.lock:
+            state.completed_responses.append(count)
 
 
 class ModelServer:
@@ -355,6 +358,14 @@ class PtySession:
             f"{self.binary} did not render {markers!r};\n{self.screen.flow()}"
         )
 
+    def wait_for_condition(self, predicate: Any, description: str, timeout: float = 15.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            self.read_once(max(0.0, min(0.05, deadline - time.monotonic())))
+        raise RuntimeError(f"{self.binary} did not reach {description};\n{self.screen.flow()}")
+
     def send(self, data: bytes) -> None:
         assert self.master is not None
         view = memoryview(data)
@@ -509,17 +520,25 @@ def run_fixed_conversation(tui: pathlib.Path, agent: pathlib.Path, root: pathlib
         resumed.abort()
         raise
 
-    if server.state.count != 4:
-        raise RuntimeError(f"expected four model requests, observed {server.state.count}")
+    with server.state.lock:
+        request_count = server.state.count
+        completed_responses = list(server.state.completed_responses)
+        requests = list(server.state.requests)
+    if request_count != 4 or set(completed_responses) != {1, 2, 3, 4}:
+        raise RuntimeError(
+            "fixed run did not complete each of four model responses: "
+            f"requests={request_count}, completed={completed_responses}"
+        )
     (output / "loopback.requests.jsonl").write_text(
         "".join(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
-                for record in server.state.requests),
+                for record in requests),
         encoding="utf-8",
     )
     return {
         "first_exit": first_status,
         "continue_exit": continue_status,
-        "requests": server.state.requests,
+        "requests": requests,
+        "completed_responses": completed_responses,
         "streaming_ascii_marker": "assistant-ascii-" in streaming_flow,
         "final": final_assertions,
         "continue": continue_assertions,
@@ -541,7 +560,21 @@ def run_old_negative(tui: pathlib.Path, agent: pathlib.Path, root: pathlib.Path,
         session.wait_for([MARKERS["cjk_assistant"], "ready"])
         session.send((MARKERS["tool_user"] + "\r").encode())
         session.wait_for([MARKERS["tool_before"]])
-        time.sleep(3.0)
+        session.wait_for([MARKERS["tool_result"], "ready"], 20)
+
+        def old_responses_complete() -> bool:
+            with server.state.lock:
+                complete = (
+                    server.state.count == 4
+                    and set(server.state.completed_responses) == {1, 2, 3, 4}
+                )
+            return complete and session.screen.contains("ready")
+
+        session.wait_for_condition(
+            old_responses_complete,
+            "the fourth post-tool response to complete while the TUI is ready",
+            20,
+        )
         for _ in range(80):
             session.read_once(0.025)
         flow = session.screen.flow()
@@ -549,18 +582,35 @@ def run_old_negative(tui: pathlib.Path, agent: pathlib.Path, root: pathlib.Path,
         if MARKERS["tool_result"] not in flow:
             raise RuntimeError("old binary did not render the tool result; negative control is invalid")
         missing = MARKERS["tool_after"] not in flow
+        if not missing:
+            raise RuntimeError("old binary unexpectedly rendered the post-tool assistant marker")
         status = session.shutdown()
         if status != 0:
             raise RuntimeError(f"old binary exited {status}")
     except Exception:
         session.abort()
         raise
-    if not missing:
-        raise RuntimeError("old binary unexpectedly rendered the assistant marker")
+    with server.state.lock:
+        request_count = server.state.count
+        completed_responses = list(server.state.completed_responses)
+        requests = list(server.state.requests)
+    if request_count != 4 or set(completed_responses) != {1, 2, 3, 4}:
+        raise RuntimeError(
+            "old negative did not complete each of four model responses: "
+            f"requests={request_count}, completed={completed_responses}"
+        )
     return {
         "binary": str(tui),
         "binary_sha256": sha256(tui),
+        "source_provenance": {
+            "source_commit": "7fea27e",
+            "role": "exact pre-fix source control binary",
+        },
         "exit": status,
+        "requests": requests,
+        "completed_responses": completed_responses,
+        "expected_request_count": 4,
+        "ready_after_completed_response": True,
         "expected_missing_marker": MARKERS["tool_after"],
         "missing": missing,
         "tool_result_present": True,

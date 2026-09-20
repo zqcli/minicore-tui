@@ -1,6 +1,6 @@
 # Display Bug Verification
 
-This evidence validates the async transcript-section fix from `b1bb062` and the tool-section deduplication fix through a real TUI, fixed Agent, deterministic loopback HTTP Responses model, Linux kernel PTYs, and `pyte` terminal parsing.
+This evidence validates the async transcript-section fix from `b1bb062`, the initial tool-section deduplication fix, and the bounded tool-owner/live-transition fix from `311c5b3` through a real TUI, fixed Agent, deterministic loopback HTTP Responses model, Linux kernel PTYs, and `pyte` terminal parsing.
 
 ## Reproduce
 
@@ -20,10 +20,10 @@ python3 -m venv /tmp/mctui-display-pyte-venv
 For the accepted remote run, the command was executed on `root@192.168.20.199` with:
 
 ```text
-TUI:   /root/minicore-tui-v03-refactor/tui-target/display-bug-duplicate-fixed/release/minicore-tui
+TUI:   /root/minicore-tui-v03-refactor/tui-target/display-bug-review-fixed/release/minicore-tui
 OLD:   /root/minicore-tui-v03-refactor/tui-target/display-bug-old-7fea27e/debug/minicore-tui
 Agent: /root/minicore-tui-v03-refactor/fixedagent-target/debug/minicore-agent
-OUT:   /root/minicore-tui-v03-refactor/logs/display-bug/conversation-validation-duplicate-fixed
+OUT:   /root/minicore-tui-v03-refactor/logs/display-bug/conversation-validation-311c5b3-final
 ```
 
 `pyte.ByteStream` handles UTF-8 and display-cell width, while the harness explicitly maintains primary and alternate buffers for `CSI ?1047/1049 h/l`. The PTY is created with `pty.fork`, `setsid`, and `TIOCSWINSZ`; the harness never reads a pipe or reconstructs the screen from raw substring matching.
@@ -41,12 +41,16 @@ The fixed run uses one isolated workspace and Agent data directory, and one loop
 
 The loopback request log contains four model calls: ASCII, Chinese, tool-call, and post-tool completion. No API key or external Provider is used.
 
+## Tool ownership transition
+
+The durable layout builds its ToolKey index once with the immutable `ConversationLayout`; cached live-tail composition borrows that index and does not scan transcript history. A partial Assistant ToolCall without a matching durable ToolBlock is treated as a history marker, not a complete tool owner, so the live tool card retains its current result/status until the ToolResult arrives. The focused regressions cover partial-history live state, live-to-durable replacement, nonzero viewport ordering, and cached ToolKey-index reuse.
+
 ## Accepted Remote Result
 
 `PROVENANCE.json` records binary hashes and all assertions:
 
 ```text
-/root/minicore-tui-v03-refactor/logs/display-bug/conversation-validation-duplicate-fixed/PROVENANCE.json
+/root/minicore-tui-v03-refactor/logs/display-bug/conversation-validation-311c5b3-final/PROVENANCE.json
 ```
 
 Important results:
@@ -57,6 +61,8 @@ fixed --continue exit:  0
 streaming ASCII:        true
 fixed message markers:  all 1, ordered
 tool result count:      exactly 1 on first and --continue screens
+fixed responses:        requests 1..4 each completed
+old 7fea27e requests:    1..4 each completed, ready observed
 old 7fea27e marker:     tool-after-unique missing (expected)
 ```
 
@@ -82,13 +88,13 @@ This is Linux kernel-PTY and loopback-provider evidence. It is not hosted CI, na
 The current staged macOS artifact is outside the repository at:
 
 ```text
-/tmp/minicore-tui-display-bug-macos-duplicate-fixed/minicore-tui
+/tmp/minicore-tui-display-bug-macos-311c5b3/minicore-tui
 ```
 
-Its SHA-256 is `d0d94976ae54f1197a0dfe59279d5a8d06eff23b99ae84163829db7c17237d2b`; `file`, `codesign --verify --strict`, and x86_64 `--version` all passed. The local staged smoke used the existing x86_64 Agent binary with isolated temporary workspace/data and produced:
+Its SHA-256 is `fb80dd1543124a41fcc354a778d84e8b40e751adb26251b88b65fcbf4570766e`; `file`, `codesign --verify --strict`, and x86_64 `--version` all passed. The local staged smoke used the existing x86_64 Agent binary with isolated temporary workspace/data and produced:
 
 ```text
-/tmp/minicore-tui-display-bug-macos-duplicate-fixed/evidence/PROVENANCE.json
+/tmp/minicore-tui-display-bug-macos-311c5b3/evidence-final/PROVENANCE.json
 ```
 
-The remote cross-build log is at `/root/minicore-tui-v03-refactor/logs/display-bug/duplicate-fix/macos-cross-build.log`. The remote build used Rust 1.85.0, LLVM 19, `MacOSX.sdk`, deployment target 11.0, `CARGO_INCREMENTAL=0`, `-j6`, and locked offline dependencies. The staged macOS old-control binary is `/tmp/minicore-tui-display-bug-macos-duplicate-fixed/minicore-tui-old-7fea27e-macos` with SHA-256 `61da982dccb7c6a1ce8d2982659ded917678c109458e4e9aeb369f704797e027`.
+The remote cross-build log is at `/root/minicore-tui-v03-refactor/logs/display-bug/review-311c5b3/macos-cross-build.log`. The remote build used Rust 1.85.0, LLVM 19, `MacOSX.sdk`, deployment target 11.0, `CARGO_INCREMENTAL=0`, `-j6`, and locked offline dependencies. The staged macOS old-control binary is `/tmp/minicore-tui-display-bug-macos-311c5b3/minicore-tui-old-7fea27e-macos` with SHA-256 `61da982dccb7c6a1ce8d2982659ded917678c109458e4e9aeb369f704797e027`.
