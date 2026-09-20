@@ -1,6 +1,6 @@
 # Display Bug Verification
 
-This evidence validates the async transcript-section fix from `b1bb062`, the initial tool-section deduplication fix, and the bounded tool-owner/live-transition fix from `311c5b3` through a real TUI, fixed Agent, deterministic loopback HTTP Responses model, Linux kernel PTYs, and `pyte` terminal parsing.
+This evidence validates the async transcript-section fix from `b1bb062`, tool-section deduplication, cached tool ownership from `311c5b3`, and history-only tool marker recovery from `d960c8f`. Validation uses the real TUI and fixed Agent, a deterministic loopback HTTP Responses model, Linux and native Intel macOS kernel PTYs, and `pyte` terminal parsing. All Rust compilation was remote; local checks only executed downloaded binaries.
 
 ## Reproduce
 
@@ -20,10 +20,10 @@ python3 -m venv /tmp/mctui-display-pyte-venv
 For the accepted remote run, the command was executed on `root@192.168.20.199` with:
 
 ```text
-TUI:   /root/minicore-tui-v03-refactor/tui-target/display-bug-review-fixed/release/minicore-tui
+TUI:   /root/minicore-tui-v03-refactor/tui-target/display-bug-stateless-recovery/release/minicore-tui
 OLD:   /root/minicore-tui-v03-refactor/tui-target/display-bug-old-7fea27e/debug/minicore-tui
 Agent: /root/minicore-tui-v03-refactor/fixedagent-target/debug/minicore-agent
-OUT:   /root/minicore-tui-v03-refactor/logs/display-bug/conversation-validation-311c5b3-final
+OUT:   /root/minicore-tui-v03-refactor/logs/display-bug/conversation-validation-stateless-recovery
 ```
 
 `pyte.ByteStream` handles UTF-8 and display-cell width, while the harness explicitly maintains primary and alternate buffers for `CSI ?1047/1049 h/l`. The PTY is created with `pty.fork`, `setsid`, and `TIOCSWINSZ`; the harness never reads a pipe or reconstructs the screen from raw substring matching.
@@ -43,14 +43,14 @@ The loopback request log contains four model calls: ASCII, Chinese, tool-call, a
 
 ## Tool ownership transition
 
-The durable layout builds its ToolKey index once with the immutable `ConversationLayout`; cached live-tail composition borrows that index and does not scan transcript history. A partial Assistant ToolCall without a matching durable ToolBlock is treated as a history marker, not a complete tool owner, so the live tool card retains its current result/status until the ToolResult arrives. The focused regressions cover partial-history live state, live-to-durable replacement, nonzero viewport ordering, and cached ToolKey-index reuse.
+The durable layout builds its ToolKey index once with the immutable `ConversationLayout`; cached live-tail composition borrows that index and does not scan transcript history. When a partial Assistant ToolCall lacks a matching durable ToolBlock, a real live tool retains ownership of its current result/status until the ToolResult arrives. If no live owner exists (for example, browsing a partial history window), a fallback card preserves the call and available ToolFacts. The bounded live-owner set participates in layout cache identity so appearing or disappearing live tools cannot reuse a stale fallback layout. Focused regressions cover these transitions, nonzero viewport ordering, and cached ToolKey-index reuse.
 
 ## Accepted Remote Result
 
 `PROVENANCE.json` records binary hashes and all assertions:
 
 ```text
-/root/minicore-tui-v03-refactor/logs/display-bug/conversation-validation-311c5b3-final/PROVENANCE.json
+/root/minicore-tui-v03-refactor/logs/display-bug/conversation-validation-stateless-recovery/PROVENANCE.json
 ```
 
 Important results:
@@ -81,20 +81,42 @@ old-negative/old-final.screen.txt
 old-negative/old.pty.raw
 ```
 
+## Final source verification
+
+The parent independently ran the following on final production revision `d960c8f`, using remote Rust 1.85.0 and locked/offline dependencies:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo test --all-targets`: 836 passed, 0 failed, 53 ignored.
+- `cargo clippy --all-targets -- -D warnings`: passed.
+- `RUSTDOCFLAGS=-Dwarnings cargo doc --no-deps`: passed.
+- Fixed-Agent E2E with `--ignored --test-threads=1 --nocapture`: 34 passed.
+- Release performance with `--ignored --test-threads=1 --nocapture`: 9 passed.
+
+Logs are under `/root/minicore-tui-v03-refactor/logs/display-bug/final-d960c8f-parent/`. An initial E2E invocation omitted CI's serial setting and had two failures (compaction state and editor timeout); its output is preserved as `e2e-nonstandard-parallel.log`. The subsequent CI-equivalent serial run passed without changing assertions. Earlier dual-toolchain results concern `311c5b3`, not the final production revision.
+
+## Installed macOS artifact
+
+The parent compared the downloaded SHA-256 with the exact remote artifact, checked `file`, `codesign --verify --strict`, and `--version`, then installed it at:
+
+```text
+/Users/zzq/Develops/minicore-tui/target/debug/minicore-tui
+SHA-256: c57f97085d671c92013851443687aefa094ce34bdc0b95f1829372cd3f111aee
+```
+
+The exact remote artifact is `/root/minicore-tui-v03-refactor/macos-test-target-stateless-recovery/x86_64-apple-darwin/debug/minicore-tui`. It was cross-built with Rust 1.85.0, LLVM 19, `MacOSX.sdk`, deployment target 11.0, `CARGO_INCREMENTAL=0`, `-j6`, and locked/offline dependencies.
+
+The installed executable was then exercised again through the same strict pyte harness on Intel macOS, with temporary workspace/data and the unchanged local Agent 0.5.0. First run and `--continue` exited 0; every message and tool result occurred exactly once in the expected order, and all four loopback responses completed. The old-control executable displayed the tool result but omitted the post-tool assistant text after completion and ready state.
+
+Committed evidence from that installed-binary run:
+
+- [Provenance](installed-PROVENANCE.json)
+- [Streaming screen](installed-streaming.screen.txt)
+- [Completed conversation](installed-final.screen.txt)
+- [Reopened history](installed-continue.screen.txt)
+- [Old-control screen](old-final.screen.txt)
+
+Full raw PTY artifacts remain at `/tmp/minicore-tui-display-bug-macos-stateless-recovery/installed-evidence/`. The replaced executable is backed up at `/tmp/minicore-tui-display-bug-macos-stateless-recovery/minicore-tui-before-install`. No private configuration, user Store, Agent binary, or Runtime source was changed by the display fix.
+
 ## Boundaries
 
-This is Linux kernel-PTY and loopback-provider evidence. It is not hosted CI, native macOS/Windows terminal execution, manual iTerm2/IME interaction, or external-provider validation. The macOS cross-built executable is validated separately for file integrity and isolated local execution; it is staged pending parent review and was not installed over `target/debug`.
-
-The current staged macOS artifact is outside the repository at:
-
-```text
-/tmp/minicore-tui-display-bug-macos-311c5b3/minicore-tui
-```
-
-Its SHA-256 is `fb80dd1543124a41fcc354a778d84e8b40e751adb26251b88b65fcbf4570766e`; `file`, `codesign --verify --strict`, and x86_64 `--version` all passed. The local staged smoke used the existing x86_64 Agent binary with isolated temporary workspace/data and produced:
-
-```text
-/tmp/minicore-tui-display-bug-macos-311c5b3/evidence-final/PROVENANCE.json
-```
-
-The remote cross-build log is at `/root/minicore-tui-v03-refactor/logs/display-bug/review-311c5b3/macos-cross-build.log`. The remote build used Rust 1.85.0, LLVM 19, `MacOSX.sdk`, deployment target 11.0, `CARGO_INCREMENTAL=0`, `-j6`, and locked offline dependencies. The staged macOS old-control binary is `/tmp/minicore-tui-display-bug-macos-311c5b3/minicore-tui-old-7fea27e-macos` with SHA-256 `61da982dccb7c6a1ce8d2982659ded917678c109458e4e9aeb369f704797e027`.
+These are Linux and Intel macOS kernel-PTY checks using a loopback model, not external-provider validation, manual iTerm2/IME acceptance, a native macOS full Rust suite, Windows validation, or hosted CI. They do verify actual terminal screen state rather than merely received events or raw output substring presence.

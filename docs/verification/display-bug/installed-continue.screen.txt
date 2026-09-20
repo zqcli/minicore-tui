@@ -1,0 +1,40 @@
+ ▎
+ ▎ ascii-normal-unique
+ ▎ 12:22 PM · 9/20/2026
+ ▎
+
+  assistant-ascii-unique
+
+ ▎
+ ▎ 中文普通消息-唯一
+ ▎ 12:22 PM · 9/20/2026
+ ▎
+
+  助手中文-回复-唯一
+
+ ▎
+ ▎ tool-round-unique
+ ▎ 12:22 PM · 9/20/2026
+ ▎
+
+  tool-before-unique
+
+ ▎ read                                                                                                        [详情]
+ ▎ read
+ ▎   1: tool-result-unique
+
+  tool-after-unique
+
+
+
+
+
+
+
+
+
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ workspace@git? [incomplet… · deep · high · ● ready                                              ↑40 ↓48 R0 W0 · ctx ?

@@ -1,0 +1,223 @@
+{
+  "schema": "minicore-display-conversation-v1",
+  "tui": {
+    "path": "/Users/zzq/Develops/minicore-tui/target/debug/minicore-tui",
+    "sha256": "c57f97085d671c92013851443687aefa094ce34bdc0b95f1829372cd3f111aee"
+  },
+  "old_tui": {
+    "path": "/tmp/minicore-tui-display-bug-macos-311c5b3/minicore-tui-old-7fea27e-macos",
+    "sha256": "61da982dccb7c6a1ce8d2982659ded917678c109458e4e9aeb369f704797e027"
+  },
+  "agent": {
+    "path": "/Users/zzq/Develops/minicore-agent/target/debug/minicore-agent",
+    "sha256": "bb9fad0e565e58584dd7169cd8b222d0fe90865f38f89eb32c3d22dfcfe3f371"
+  },
+  "parser": {
+    "library": "pyte.ByteStream",
+    "alternate_screen": "explicit 1047/1049 buffers",
+    "columns": 120,
+    "lines": 40
+  },
+  "fixture": {
+    "workspace_and_data_are_temporary": true,
+    "provider": "loopback HTTP only",
+    "requests_fixed": 4
+  },
+  "fixed": {
+    "first_exit": 0,
+    "continue_exit": 0,
+    "requests": [
+      {
+        "count": 1,
+        "path": "/v1/responses",
+        "model": "stage7-loopback",
+        "input_item_types": [
+          "message",
+          "message"
+        ],
+        "has_tools": true
+      },
+      {
+        "count": 2,
+        "path": "/v1/responses",
+        "model": "stage7-loopback",
+        "input_item_types": [
+          "message",
+          "message",
+          "message",
+          "message"
+        ],
+        "has_tools": true
+      },
+      {
+        "count": 3,
+        "path": "/v1/responses",
+        "model": "stage7-loopback",
+        "input_item_types": [
+          "message",
+          "message",
+          "message",
+          "message",
+          "message",
+          "message"
+        ],
+        "has_tools": true
+      },
+      {
+        "count": 4,
+        "path": "/v1/responses",
+        "model": "stage7-loopback",
+        "input_item_types": [
+          "message",
+          "message",
+          "message",
+          "message",
+          "message",
+          "message",
+          "function_call",
+          "function_call_output"
+        ],
+        "has_tools": true
+      }
+    ],
+    "completed_responses": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "streaming_ascii_marker": true,
+    "final": {
+      "message_marker_counts": {
+        "ascii_user": 1,
+        "ascii_assistant": 1,
+        "cjk_user": 1,
+        "cjk_assistant": 1,
+        "tool_user": 1,
+        "tool_before": 1,
+        "tool_after": 1
+      },
+      "tool_result_occurrences": 1,
+      "marker_order": {
+        "ascii_user": 6,
+        "ascii_assistant": 56,
+        "cjk_user": 86,
+        "cjk_assistant": 126,
+        "tool_user": 144,
+        "tool_before": 192,
+        "tool_result": 351,
+        "tool_after": 373
+      },
+      "alt_enters": 1,
+      "alt_leaves": 0,
+      "active_buffer_before_shutdown": "alternate"
+    },
+    "continue": {
+      "message_marker_counts": {
+        "ascii_user": 1,
+        "ascii_assistant": 1,
+        "cjk_user": 1,
+        "cjk_assistant": 1,
+        "tool_user": 1,
+        "tool_before": 1,
+        "tool_after": 1
+      },
+      "tool_result_occurrences": 1,
+      "marker_order": {
+        "ascii_user": 6,
+        "ascii_assistant": 56,
+        "cjk_user": 86,
+        "cjk_assistant": 126,
+        "tool_user": 144,
+        "tool_before": 192,
+        "tool_result": 344,
+        "tool_after": 366
+      },
+      "alt_enters": 1,
+      "alt_leaves": 0,
+      "active_buffer_before_shutdown": "alternate"
+    }
+  },
+  "old_negative": {
+    "binary": "/tmp/minicore-tui-display-bug-macos-311c5b3/minicore-tui-old-7fea27e-macos",
+    "binary_sha256": "61da982dccb7c6a1ce8d2982659ded917678c109458e4e9aeb369f704797e027",
+    "source_provenance": {
+      "source_commit": "7fea27e",
+      "role": "exact pre-fix source control binary"
+    },
+    "exit": 0,
+    "requests": [
+      {
+        "count": 1,
+        "path": "/v1/responses",
+        "model": "stage7-loopback",
+        "input_item_types": [
+          "message",
+          "message"
+        ],
+        "has_tools": true
+      },
+      {
+        "count": 2,
+        "path": "/v1/responses",
+        "model": "stage7-loopback",
+        "input_item_types": [
+          "message",
+          "message",
+          "message",
+          "message"
+        ],
+        "has_tools": true
+      },
+      {
+        "count": 3,
+        "path": "/v1/responses",
+        "model": "stage7-loopback",
+        "input_item_types": [
+          "message",
+          "message",
+          "message",
+          "message",
+          "message",
+          "message"
+        ],
+        "has_tools": true
+      },
+      {
+        "count": 4,
+        "path": "/v1/responses",
+        "model": "stage7-loopback",
+        "input_item_types": [
+          "message",
+          "message",
+          "message",
+          "message",
+          "message",
+          "message",
+          "function_call",
+          "function_call_output"
+        ],
+        "has_tools": true
+      }
+    ],
+    "completed_responses": [
+      2,
+      1,
+      3,
+      4
+    ],
+    "expected_request_count": 4,
+    "ready_after_completed_response": true,
+    "expected_missing_marker": "tool-after-unique",
+    "missing": true,
+    "tool_result_present": true,
+    "alt_enters": 1,
+    "alt_leaves": 1
+  },
+  "artifacts": {
+    "fixed_final_screen": "/private/tmp/minicore-tui-display-bug-macos-stateless-recovery/installed-evidence/fixed/final.screen.txt",
+    "fixed_continue_screen": "/private/tmp/minicore-tui-display-bug-macos-stateless-recovery/installed-evidence/fixed/continue.screen.txt",
+    "fixed_streaming_screen": "/private/tmp/minicore-tui-display-bug-macos-stateless-recovery/installed-evidence/fixed/streaming-ascii.screen.txt",
+    "old_final_screen": "/private/tmp/minicore-tui-display-bug-macos-stateless-recovery/installed-evidence/old-negative/old-final.screen.txt"
+  }
+}

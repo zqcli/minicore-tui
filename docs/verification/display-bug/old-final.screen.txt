@@ -1,0 +1,40 @@
+
+ ▎ read                                                                                                        [详情]
+ ▎ fixture.txt
+ ▎   1: tool-result-unique
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ▎
+ ▎
+ ▎
+ ▎
+ ▸ workspace@git? [incomplet… · deep · high · ● ready · 0m                                         ↑40 ↓48 R0 W0 · ctx ?
