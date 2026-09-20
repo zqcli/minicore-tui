@@ -1,0 +1,31 @@
+{
+  "schema": "fold-display-v1",
+  "agent_sha256": "bb9fad0e565e58584dd7169cd8b222d0fe90865f38f89eb32c3d22dfcfe3f371",
+  "parser": "existing pyte alternate-screen helper; 10-ms quiescent samples",
+  "limitations": "No terminal draw delimiter; sub-10-ms blank states may be missed. Raw placeholder bytes detect the known old flash even if samples coalesce.",
+  "current": {
+    "passed": true,
+    "flash_detected": false,
+    "placeholder_occurrences": 0,
+    "anchor_loss_samples": 0,
+    "visible_states": 3,
+    "hidden_states": 3,
+    "binary": {
+      "path": "/private/tmp/minicore-tui-fold-6b27cff/minicore-tui-macos-x86_64",
+      "sha256": "cce6a718114837332b18e1d21113d46bde6957236904f95231e12a335c3ced0b"
+    }
+  },
+  "old-negative": {
+    "passed": true,
+    "flash_detected": true,
+    "placeholder_occurrences": 6,
+    "anchor_loss_samples": 6,
+    "visible_states": 3,
+    "hidden_states": 3,
+    "binary": {
+      "path": "/private/tmp/minicore-tui-fold-b844cf5",
+      "sha256": "c57f97085d671c92013851443687aefa094ce34bdc0b95f1829372cd3f111aee"
+    }
+  },
+  "passed": true
+}
