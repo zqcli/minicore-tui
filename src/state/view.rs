@@ -17,6 +17,7 @@ pub struct DurableCacheKey {
     pub theme: crate::theme::ThemeKind,
     pub reasoning_visible: bool,
     pub tools_expanded: bool,
+    pub live_tool_keys: Arc<HashSet<ToolKey>>,
 }
 
 impl DurableCacheKey {
@@ -32,8 +33,34 @@ impl DurableCacheKey {
             theme,
             reasoning_visible,
             tools_expanded: view.tools_expanded,
+            live_tool_keys: live_tool_keys(view),
         }
     }
+}
+
+/// The durable layout only needs to know which live tool cards are real
+/// owners. This scans the bounded live tail, not transcript history, so a
+/// fallback ToolCall section cannot become stale when a live tool first
+/// appears without invalidating every frame's historical rows.
+pub(crate) fn live_tool_keys(view: &crate::state::session::SessionView) -> Arc<HashSet<ToolKey>> {
+    let mut keys = HashSet::new();
+    if let Some(live) = view.live.as_ref() {
+        let loop_id = live
+            .reference
+            .as_ref()
+            .map_or("", |reference| reference.loop_id.as_str());
+        for request in &live.requests {
+            for tool in &request.tools {
+                keys.insert(ToolKey::new(
+                    &view.info.session_id,
+                    loop_id,
+                    request.request_index,
+                    &tool.tool_call_id,
+                ));
+            }
+        }
+    }
+    Arc::new(keys)
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

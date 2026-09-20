@@ -38,7 +38,7 @@ use minicore_tui::jobs::{CopyAdmission, LocalJobs};
 use minicore_tui::protocol::RpcResponse;
 use minicore_tui::protocol::{IncomingFrame, RpcNotification, TurnRef, UserMessageKindWire};
 use minicore_tui::state::session::SessionView;
-use minicore_tui::state::tool::{LiveTool, ToolKey, ToolStatus};
+use minicore_tui::state::tool::{LiveTool, ToolFacts, ToolKey, ToolStatus};
 use minicore_tui::state::transcript::{
     AssistantBlock, AssistantPart, ToolBlock, TranscriptBlock, UserBlock,
 };
@@ -723,6 +723,202 @@ fn partial_durable_tool_prefers_live_state_over_an_incomplete_history_marker() {
         .map(|span| span.content.into_owned())
         .collect::<String>();
     assert!(persisted_text.contains("durable-result-unique"));
+}
+
+#[test]
+fn history_tool_marker_falls_back_to_tool_facts_without_a_live_owner() {
+    let mut app = app_with_history(0, 240);
+    let turn = TurnRef {
+        session_id: "ses_perf".to_owned(),
+        loop_id: "loop_history_marker".to_owned(),
+    };
+    let key = ToolKey::new("ses_perf", &turn.loop_id, 0, "call_history_marker");
+    let view = app
+        .sessions
+        .known
+        .get_mut("ses_perf")
+        .expect("performance session");
+    view.transcript
+        .push_block(TranscriptBlock::Assistant(AssistantBlock {
+            index: 10,
+            loop_id: turn.loop_id.clone(),
+            request_index: 0,
+            model: "deep".to_owned(),
+            reasoning_level: minicore_tui::protocol::Reasoning::High,
+            parts: vec![AssistantPart::ToolCall(
+                minicore_tui::protocol::ToolCallViewWire {
+                    tool_call_id: key.tool_call_id.clone(),
+                    name: "read".to_owned(),
+                    call_index: 0,
+                    display: None,
+                },
+            )],
+            tool_calls: vec![],
+            usage: Default::default(),
+            finish_reason: "tool_calls".to_owned(),
+            terminal_error: None,
+        }));
+    let mut facts = ToolFacts::new("read");
+    facts.status = ToolStatus::Failed;
+    facts.outcome = Some(minicore_tui::protocol::ToolOutcomeWire::Failed);
+    facts.result = Some(Arc::from("facts-fallback-result"));
+    Arc::make_mut(&mut view.tool_presentations).insert(key.clone(), Arc::new(facts));
+    view.transcript.complete = false;
+    view.transcript.invalidate();
+
+    let prepared = prepare_conversation(&app, WIDTH);
+    let matching_sections = prepared
+        .sections
+        .iter()
+        .filter(|section| section.id.tool_call_id.as_deref() == Some(key.tool_call_id.as_str()))
+        .count();
+    assert_eq!(
+        matching_sections, 1,
+        "a history-only ToolCall marker must remain visible without a live owner"
+    );
+    assert!(
+        prepared
+            .durable
+            .as_ref()
+            .expect("durable layout")
+            .layout
+            .tool_keys
+            .contains(&key)
+    );
+    let text = prepared
+        .lines()
+        .into_iter()
+        .flat_map(|line| line.spans.into_iter())
+        .map(|span| span.content.into_owned())
+        .collect::<String>();
+    assert!(
+        text.contains("facts-fallback-result"),
+        "ToolFacts result must populate the fallback card: {text}"
+    );
+    let error_background = app.theme.theme().tool_error_bg;
+    assert!(
+        prepared.lines().iter().any(|line| {
+            line.spans.iter().any(|span| {
+                span.content.contains("facts-fallback-result")
+                    && span.style.bg == Some(error_background)
+            })
+        }),
+        "ToolFacts status must populate the fallback card state: {text}"
+    );
+}
+
+#[test]
+fn fallback_cache_rebuilds_when_a_live_tool_owner_appears() {
+    let mut app = app_with_history(0, 240);
+    let turn = TurnRef {
+        session_id: "ses_perf".to_owned(),
+        loop_id: "loop_cache_owner".to_owned(),
+    };
+    let key = ToolKey::new("ses_perf", &turn.loop_id, 0, "call_cache_owner");
+    {
+        let view = app
+            .sessions
+            .known
+            .get_mut("ses_perf")
+            .expect("performance session");
+        view.transcript
+            .push_block(TranscriptBlock::Assistant(AssistantBlock {
+                index: 10,
+                loop_id: turn.loop_id.clone(),
+                request_index: 0,
+                model: "deep".to_owned(),
+                reasoning_level: minicore_tui::protocol::Reasoning::High,
+                parts: vec![AssistantPart::ToolCall(
+                    minicore_tui::protocol::ToolCallViewWire {
+                        tool_call_id: key.tool_call_id.clone(),
+                        name: "read".to_owned(),
+                        call_index: 0,
+                        display: None,
+                    },
+                )],
+                tool_calls: vec![],
+                usage: Default::default(),
+                finish_reason: "tool_calls".to_owned(),
+                terminal_error: None,
+            }));
+        view.transcript.complete = false;
+        view.transcript.invalidate();
+    }
+    let fallback = prepare_conversation(&app, WIDTH);
+    let fallback_durable = fallback.durable.clone().expect("fallback durable layout");
+    assert!(fallback_durable.layout.tool_keys.contains(&key));
+    app.sessions
+        .known
+        .get_mut("ses_perf")
+        .expect("performance session")
+        .transcript
+        .render_cache = Some(fallback_durable.clone());
+
+    let mut live = LiveLoop::new(LocalSubmissionId(1), "cache owner round".to_owned());
+    live.reference = Some(turn);
+    let mut request = LiveRequest::new(
+        0,
+        0,
+        "deep".to_owned(),
+        minicore_tui::protocol::Reasoning::High,
+    );
+    request.parts.push(LivePart::Tool {
+        tool_call_id: key.tool_call_id.clone(),
+    });
+    request.tools.push(LiveTool {
+        tool_call_id: key.tool_call_id.clone(),
+        name: "read".to_owned(),
+        status: ToolStatus::Failed,
+        progress: None,
+        display: None,
+        result: Some(Arc::from("live-cache-owner-result")),
+        result_truncated: false,
+        expanded: true,
+    });
+    live.requests.push(request);
+    app.sessions
+        .known
+        .get_mut("ses_perf")
+        .expect("performance session")
+        .live = Some(live);
+
+    let prepared = prepare_conversation(&app, WIDTH);
+    assert!(
+        !Arc::ptr_eq(
+            prepared.durable.as_ref().expect("rebuilt durable layout"),
+            &fallback_durable
+        ),
+        "a cache built without the live owner must not be reused"
+    );
+    let matching_sections = prepared
+        .sections
+        .iter()
+        .filter(|section| section.id.tool_call_id.as_deref() == Some(key.tool_call_id.as_str()))
+        .count();
+    assert_eq!(
+        matching_sections, 1,
+        "live owner must replace the fallback once"
+    );
+    assert!(
+        !prepared
+            .durable
+            .as_ref()
+            .expect("rebuilt durable layout")
+            .layout
+            .tool_keys
+            .contains(&key),
+        "the live owner must not be recorded as a durable owner"
+    );
+    let text = prepared
+        .lines()
+        .into_iter()
+        .flat_map(|line| line.spans.into_iter())
+        .map(|span| span.content.into_owned())
+        .collect::<String>();
+    assert!(
+        text.contains("live-cache-owner-result"),
+        "live result was masked: {text}"
+    );
 }
 
 #[test]

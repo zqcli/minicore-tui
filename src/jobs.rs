@@ -441,6 +441,7 @@ impl LocalJobs {
                 let theme_kind = request.identity.theme;
                 let snapshot = request.snapshot;
                 let tools_expanded = snapshot.tools_expanded;
+                let live_tool_keys = Arc::clone(&snapshot.live_tool_keys);
                 let previous = request.previous;
                 let cancel = Arc::clone(&request.cancel);
                 let cancel_for_build = Arc::clone(&cancel);
@@ -453,6 +454,7 @@ impl LocalJobs {
                     theme: identity.theme,
                     reasoning_visible: identity.reasoning_visible,
                     tools_expanded,
+                    live_tool_keys: Arc::clone(&live_tool_keys),
                 };
                 let batch_cancel = Arc::clone(&cancel);
                 let Ok(Some((layout, changed_sections, tool_index_lookups))) =
@@ -506,6 +508,7 @@ impl LocalJobs {
                         theme: identity.theme,
                         reasoning_visible: identity.reasoning_visible,
                         tools_expanded,
+                        live_tool_keys: Arc::clone(&live_tool_keys),
                     },
                     layout,
                 });

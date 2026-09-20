@@ -39,6 +39,7 @@ pub struct DurableLayoutSnapshot {
     pub live_user_timestamp: Option<String>,
     pub live_user_time_accepted: bool,
     pub live_user_loop_id: Option<String>,
+    pub live_tool_keys: Arc<HashSet<ToolKey>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -50,6 +51,7 @@ pub struct DurableLayoutIdentity {
     pub width: u16,
     pub theme: crate::theme::ThemeKind,
     pub reasoning_visible: bool,
+    pub live_tool_keys: Arc<HashSet<ToolKey>>,
 }
 
 pub struct DurableLayoutRequest {
@@ -87,6 +89,7 @@ impl DurableLayoutSnapshot {
                 .as_ref()
                 .and_then(|live| live.reference.as_ref())
                 .map(|turn| turn.loop_id.clone()),
+            live_tool_keys: crate::state::view::live_tool_keys(view),
         }
     }
 }
@@ -102,6 +105,7 @@ pub(crate) trait DurableLayoutSource {
     fn live_user_timestamp(&self) -> Option<&str>;
     fn live_user_time_accepted(&self) -> bool;
     fn live_user_loop_id(&self) -> Option<&str>;
+    fn live_tool_owner(&self, key: &ToolKey) -> bool;
 }
 
 impl DurableLayoutSource for SessionView {
@@ -147,6 +151,25 @@ impl DurableLayoutSource for SessionView {
             .and_then(|live| live.reference.as_ref())
             .map(|turn| turn.loop_id.as_str())
     }
+
+    fn live_tool_owner(&self, key: &ToolKey) -> bool {
+        let Some(live) = self.live.as_ref() else {
+            return false;
+        };
+        let loop_id = live
+            .reference
+            .as_ref()
+            .map_or("", |reference| reference.loop_id.as_str());
+        key.session_id == self.info.session_id
+            && key.loop_id == loop_id
+            && live.requests.iter().any(|request| {
+                request.request_index == key.request_index
+                    && request
+                        .tools
+                        .iter()
+                        .any(|tool| tool.tool_call_id == key.tool_call_id)
+            })
+    }
 }
 
 impl DurableLayoutSource for DurableLayoutSnapshot {
@@ -188,6 +211,10 @@ impl DurableLayoutSource for DurableLayoutSnapshot {
 
     fn live_user_loop_id(&self) -> Option<&str> {
         self.live_user_loop_id.as_deref()
+    }
+
+    fn live_tool_owner(&self, key: &ToolKey) -> bool {
+        self.live_tool_keys.contains(key)
     }
 }
 
@@ -707,21 +734,29 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
             .enumerate()
             {
                 if let Some(call) = &input.tool_call {
-                    let Some(tool) = tool_index
-                        .get(&(
-                            assistant_block.loop_id.as_str(),
-                            assistant_block.request_index,
-                            call.tool_call_id.as_str(),
-                        ))
-                        .map(|tool| {
+                    let tool = match tool_index.get(&(
+                        assistant_block.loop_id.as_str(),
+                        assistant_block.request_index,
+                        call.tool_call_id.as_str(),
+                    )) {
+                        Some(tool) => {
                             tool_index_lookups += 1;
                             (*tool).clone()
-                        })
-                    else {
-                        // An Assistant ToolCall without its durable ToolBlock is
-                        // only a history marker. The live projection owns the
-                        // current status/result until the ToolResult arrives.
-                        continue;
+                        }
+                        None => {
+                            let key = ToolKey::new(
+                                view.session_id(),
+                                &assistant_block.loop_id,
+                                assistant_block.request_index,
+                                &call.tool_call_id,
+                            );
+                            if view.live_tool_owner(&key) {
+                                // A real live Tool owns the current status/result;
+                                // do not let a history-only marker mask it.
+                                continue;
+                            }
+                            fallback_tool_block(view, assistant_block, call)
+                        }
                     };
                     let id = SectionId {
                         session_id: view.session_id().into(),
@@ -923,6 +958,37 @@ fn block_source(block: &TranscriptBlock) -> Option<&str> {
         TranscriptBlock::Tool(block) => block.result.as_deref().or(Some(block.name.as_str())),
         TranscriptBlock::Summary(block) => Some(block.content.as_str()),
         TranscriptBlock::Assistant(_) | TranscriptBlock::HistoryPlaceholder(_) => None,
+    }
+}
+
+fn fallback_tool_block<V: DurableLayoutSource>(
+    view: &V,
+    assistant: &crate::state::transcript::AssistantBlock,
+    call: &crate::protocol::ToolCallViewWire,
+) -> ToolBlock {
+    let key = ToolKey::new(
+        view.session_id(),
+        &assistant.loop_id,
+        assistant.request_index,
+        &call.tool_call_id,
+    );
+    let facts = view.tool_presentations().get(&key);
+    let name = facts
+        .map(|facts| facts.display.detail.as_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(call.name.as_str())
+        .to_owned();
+    ToolBlock {
+        index: None,
+        loop_id: assistant.loop_id.clone(),
+        request_index: assistant.request_index,
+        tool_call_id: call.tool_call_id.clone(),
+        name,
+        result: facts.and_then(|facts| facts.result.clone()),
+        outcome: facts.and_then(|facts| facts.outcome),
+        live_status: facts.map(|facts| facts.status),
+        progress: None,
+        expanded: false,
     }
 }
 

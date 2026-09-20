@@ -3769,6 +3769,7 @@ mod budget_tests {
                 theme: ThemeKind::Dark,
                 reasoning_visible: true,
                 tools_expanded: false,
+                live_tool_keys: Arc::new(std::collections::HashSet::new()),
             },
             layout: Arc::new(ConversationLayout::from_sections(vec![section])),
         });

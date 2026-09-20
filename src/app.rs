@@ -1625,8 +1625,9 @@ impl App {
     }
 
     pub fn layout_request(&mut self, width: u16) -> Option<DurableLayoutRequest> {
-        let (session_id, transcript_revision, snapshot, previous) = {
+        let (session_id, transcript_revision, snapshot, previous, live_tool_keys) = {
             let view = self.active_view()?;
+            let live_tool_keys = crate::state::view::live_tool_keys(view);
             if self.layout_pending.as_ref().is_some_and(|pending| {
                 pending.session_id == view.info.session_id
                     && pending.session_epoch == view.session_epoch
@@ -1634,6 +1635,7 @@ impl App {
                     && pending.width == width
                     && pending.theme == self.theme
                     && pending.reasoning_visible == self.reasoning_visible
+                    && pending.live_tool_keys.as_ref() == live_tool_keys.as_ref()
             }) {
                 return None;
             }
@@ -1658,6 +1660,7 @@ impl App {
                 view.transcript.render_revision,
                 DurableLayoutSnapshot::from_view(view),
                 view.transcript.render_cache.clone(),
+                live_tool_keys,
             )
         };
         self.next_layout_generation = self.next_layout_generation.wrapping_add(1);
@@ -1669,6 +1672,7 @@ impl App {
             width,
             theme: self.theme,
             reasoning_visible: self.reasoning_visible,
+            live_tool_keys,
         };
         Some(DurableLayoutRequest {
             identity,
@@ -1701,6 +1705,8 @@ impl App {
             || view.transcript.render_revision != result.identity.transcript_revision
             || self.theme != result.identity.theme
             || self.reasoning_visible != result.identity.reasoning_visible
+            || crate::state::view::live_tool_keys(view).as_ref()
+                != result.identity.live_tool_keys.as_ref()
         {
             return;
         }
