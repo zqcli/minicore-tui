@@ -85,6 +85,16 @@ impl App {
                     .to_owned(),
             );
         }
+        if section.id.kind == SectionKind::Summary && section.collapsible {
+            return self
+                .section_source_text(&section)
+                .map(CopyPlan::Text)
+                .unwrap_or_else(|| {
+                    CopyPlan::Limitation(
+                        "summary source is not loaded; /export to read it".to_owned(),
+                    )
+                });
+        }
         CopyPlan::Text(section_copy_text(&prepared, &section))
     }
 
@@ -178,6 +188,15 @@ impl App {
         let position = crate::ui::transcript::scroll_position(self, prepared.total_rows(), height);
         (position.offset..position.offset.saturating_add(position.visible_rows).max(1)).find_map(
             |row| {
+                // A collapsed summary has only a decorative label, but still
+                // owns a complete logical source for message/code copying.
+                if let Some(section) = prepared.sections.iter().find(|section| {
+                    section.id.kind == SectionKind::Summary
+                        && section.collapsible
+                        && row == section.rows.start + 1
+                }) {
+                    return Some(section);
+                }
                 let copy = prepared.copy_row(row)?;
                 if copy.decorative {
                     return None;

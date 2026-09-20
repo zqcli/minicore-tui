@@ -7230,13 +7230,22 @@ fn install_history_item(
             Some(owner)
         }
         RuntimeItem::Summary(summary) => {
-            if has_item_index(&view.transcript.blocks, index) {
-                return view
-                    .transcript
-                    .blocks
-                    .iter()
-                    .find(|block| block.index() == Some(index))
-                    .cloned();
+            if let Some(existing) = view
+                .transcript
+                .blocks
+                .iter()
+                .find(|block| block.index() == Some(index))
+            {
+                if matches!(existing.as_ref(), TranscriptBlock::Summary(old) if old.content == summary.content)
+                {
+                    return Some(std::sync::Arc::clone(existing));
+                }
+                // A new authoritative summary may reuse an old history index.
+                // Never return another item's owner or inherit its fold choice.
+                std::sync::Arc::make_mut(&mut view.summary_folds).remove(&index);
+                view.transcript
+                    .blocks_mut()
+                    .retain(|block| block.index() != Some(index));
             }
             let owner = std::sync::Arc::new(TranscriptBlock::Summary(SummaryBlock {
                 index,

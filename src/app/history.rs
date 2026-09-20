@@ -21,6 +21,10 @@ use crate::protocol::read::{
     Assembled, ChunkAssembler, RawHistoryItem, ReadCursor, ReadError, SnapshotPin, TurnResultPage,
 };
 
+#[cfg(test)]
+#[path = "compaction_summary_tests.rs"]
+mod compaction_summary_tests;
+
 /// Why the read chain cannot continue with the pin it holds.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum PinError {
@@ -1949,6 +1953,7 @@ impl App {
         // so a stray chunk below the window is never faked as loaded (§6.3
         // step 3).
         if read.probe {
+            view.reconcile_summary_revision(&page.history_revision);
             let pin = page.pin();
             let window_start = pin.total.saturating_sub(crate::protocol::READ_TAIL_ITEMS);
             view.transcript.window.replace_pin(pin);

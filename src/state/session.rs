@@ -282,6 +282,9 @@ pub struct SessionView {
     /// Stable per-section fold choices. These are local UI state only.
     pub tool_folds: Arc<HashMap<ToolKey, FoldOverride>>,
     pub reasoning_folds: Arc<HashMap<ReasoningKey, FoldOverride>>,
+    /// Summary indexes belong to one authoritative history revision only.
+    pub summary_folds: Arc<HashMap<usize, FoldOverride>>,
+    pub summary_history_revision: Option<String>,
     /// This session's own draft: text, cursor, undo/redo, paste markers and
     /// editor revision. Switching sessions swaps the whole composer, never a
     /// text-only copy (spec §10.3, §12).
@@ -334,8 +337,27 @@ impl SessionView {
             tool_presentations: Arc::new(HashMap::new()),
             tool_folds: Arc::new(HashMap::new()),
             reasoning_folds: Arc::new(HashMap::new()),
+            summary_folds: Arc::new(HashMap::new()),
+            summary_history_revision: None,
             composer: crate::state::composer::Composer::default(),
         }
+    }
+
+    /// A summary's index is meaningful only within its read revision. Clear
+    /// both its projection and UI overrides before installing a different pin.
+    pub(crate) fn reconcile_summary_revision(&mut self, revision: &str) {
+        if self.summary_history_revision.as_deref() == Some(revision) {
+            return;
+        }
+        self.summary_history_revision = Some(revision.to_owned());
+        Arc::make_mut(&mut self.summary_folds).clear();
+        self.transcript.blocks_mut().retain(|block| {
+            !matches!(
+                block.as_ref(),
+                crate::state::transcript::TranscriptBlock::Summary(_)
+            )
+        });
+        self.transcript.invalidate();
     }
 
     /// Whether the last known result still needs the user's attention before a

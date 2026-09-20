@@ -1640,9 +1640,28 @@ impl App {
                     }
                 }
             }
+            crate::state::view::SectionKind::Summary => {
+                if let (Some(index), Some(view)) = (id.history_index, self.active_session_mut()) {
+                    let expanded = !view
+                        .summary_folds
+                        .get(&index)
+                        .is_some_and(FoldOverride::expanded);
+                    Arc::make_mut(&mut view.summary_folds).insert(
+                        index,
+                        if expanded {
+                            FoldOverride::Expanded
+                        } else {
+                            FoldOverride::Collapsed
+                        },
+                    );
+                    view.scroll.follow_tail = false;
+                    view.scroll.offset = position.offset;
+                    view.scroll.new_content = false;
+                    view.transcript.invalidate();
+                }
+            }
             crate::state::view::SectionKind::AssistantText
             | crate::state::view::SectionKind::User
-            | crate::state::view::SectionKind::Summary
             | crate::state::view::SectionKind::Notice => {}
         }
         if live_only {

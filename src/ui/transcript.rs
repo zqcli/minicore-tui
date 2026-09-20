@@ -33,6 +33,7 @@ pub struct DurableLayoutSnapshot {
     pub blocks: Arc<Vec<Arc<TranscriptBlock>>>,
     pub reasoning_folds: Arc<HashMap<crate::state::view::ReasoningKey, FoldOverride>>,
     pub tool_folds: Arc<HashMap<ToolKey, FoldOverride>>,
+    pub summary_folds: Arc<HashMap<usize, FoldOverride>>,
     pub tool_presentations: Arc<HashMap<ToolKey, Arc<ToolPresentationState>>>,
     pub tools_expanded: bool,
     pub user_timestamps: Arc<HashMap<usize, String>>,
@@ -79,6 +80,7 @@ impl DurableLayoutSnapshot {
             blocks: Arc::clone(&view.transcript.blocks),
             reasoning_folds: Arc::clone(&view.reasoning_folds),
             tool_folds: Arc::clone(&view.tool_folds),
+            summary_folds: Arc::clone(&view.summary_folds),
             tool_presentations: Arc::clone(&view.tool_presentations),
             tools_expanded: view.tools_expanded,
             user_timestamps: Arc::clone(&view.user_timestamps),
@@ -99,6 +101,7 @@ pub(crate) trait DurableLayoutSource {
     fn blocks(&self) -> &[Arc<TranscriptBlock>];
     fn reasoning_folds(&self) -> &HashMap<crate::state::view::ReasoningKey, FoldOverride>;
     fn tool_folds(&self) -> &HashMap<ToolKey, FoldOverride>;
+    fn summary_folds(&self) -> &HashMap<usize, FoldOverride>;
     fn tool_presentations(&self) -> &HashMap<ToolKey, Arc<ToolPresentationState>>;
     fn tools_expanded(&self) -> bool;
     fn user_timestamps(&self) -> &HashMap<usize, String>;
@@ -123,6 +126,10 @@ impl DurableLayoutSource for SessionView {
 
     fn tool_folds(&self) -> &HashMap<ToolKey, FoldOverride> {
         self.tool_folds.as_ref()
+    }
+
+    fn summary_folds(&self) -> &HashMap<usize, FoldOverride> {
+        &self.summary_folds
     }
 
     fn tool_presentations(&self) -> &HashMap<ToolKey, Arc<ToolPresentationState>> {
@@ -187,6 +194,10 @@ impl DurableLayoutSource for DurableLayoutSnapshot {
 
     fn tool_folds(&self) -> &HashMap<ToolKey, FoldOverride> {
         &self.tool_folds
+    }
+
+    fn summary_folds(&self) -> &HashMap<usize, FoldOverride> {
+        &self.summary_folds
     }
 
     fn tool_presentations(&self) -> &HashMap<ToolKey, Arc<ToolPresentationState>> {
@@ -897,7 +908,8 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
             );
             matches!(view.tool_folds().get(&key), Some(FoldOverride::Collapsed))
                 || !effective_tool_expanded_for(view, tool)
-        });
+        }) || matches!(block.as_ref(), TranscriptBlock::Summary(summary)
+            if !view.summary_folds().get(&summary.index).is_some_and(FoldOverride::expanded));
         let key = LayoutKey {
             section: id.clone(),
             revision: section_revision(view, &id, block_revision),
@@ -917,17 +929,28 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
             }
             continue;
         }
-        let lines = durable_block_lines(theme, view, block, width as usize, reasoning_visible);
-        let collapsible = matches!(block.as_ref(), TranscriptBlock::Tool(_));
+        let (lines, links, breaks) = if let TranscriptBlock::Summary(summary) = block.as_ref() {
+            compaction_summary_lines(theme, width as usize, &summary.content, folded)
+        } else {
+            (
+                durable_block_lines(theme, view, block, width as usize, reasoning_visible),
+                Vec::new(),
+                Vec::new(),
+            )
+        };
+        let collapsible = matches!(
+            block.as_ref(),
+            TranscriptBlock::Tool(_) | TranscriptBlock::Summary(_)
+        );
         if let Some(layout) = make_section_layout(
             key,
             lines,
-            Vec::new(),
+            links,
             collapsible,
             folded,
             ordinal.saturating_mul(1_000_000),
             block_source(block),
-            None,
+            (!breaks.is_empty()).then_some(breaks.as_slice()),
         ) {
             if !push_layout_section(layout, &mut sections, &mut pending_batch, &mut batch_sink) {
                 return None;
@@ -1271,7 +1294,11 @@ fn section_copy_text(
     lines: &[Line<'static>],
     copy_start: usize,
 ) -> String {
-    if row == decorative_row(section) {
+    if row == decorative_row(section)
+        || (section.id.kind == SectionKind::Summary
+            && section.collapsible
+            && (row == section.rows.start + 1 || section.folded))
+    {
         return String::new();
     }
     lines
@@ -1282,6 +1309,9 @@ fn section_copy_text(
 
 fn section_copy_is_decorative(section: &SectionRange, row: usize, text: &str) -> bool {
     row == decorative_row(section)
+        || (section.id.kind == SectionKind::Summary
+            && section.collapsible
+            && (row == section.rows.start + 1 || section.folded))
         || (text.is_empty() && (row == section.rows.start || row + 1 == section.rows.end))
 }
 
@@ -1442,8 +1472,8 @@ fn select_line_cells(
 fn copy_start_for_kind(kind: &SectionKind) -> usize {
     match kind {
         SectionKind::User | SectionKind::Tool => crate::ui::rail::SURFACE_CONTENT_START,
-        SectionKind::AssistantText | SectionKind::Thinking => 1,
-        SectionKind::Summary | SectionKind::Notice => 0,
+        SectionKind::AssistantText | SectionKind::Thinking | SectionKind::Summary => 1,
+        SectionKind::Notice => 0,
     }
 }
 
@@ -1517,7 +1547,18 @@ fn durable_block_lines<V: DurableLayoutSource>(
             let display = tool_display(view, tool_block);
             tool::durable_with_display(theme, &render_tool, width, false, display)
         }
-        TranscriptBlock::Summary(summary) => summary_lines(theme, width, &summary.content),
+        TranscriptBlock::Summary(summary) => {
+            compaction_summary_lines(
+                theme,
+                width,
+                &summary.content,
+                !view
+                    .summary_folds()
+                    .get(&summary.index)
+                    .is_some_and(FoldOverride::expanded),
+            )
+            .0
+        }
         TranscriptBlock::HistoryPlaceholder(placeholder) => summary_lines(
             theme,
             width,
@@ -2194,6 +2235,55 @@ fn append_live_section(
             folded,
         });
     }
+}
+
+#[cfg(test)]
+#[path = "compaction_summary_tests.rs"]
+mod compaction_summary_tests;
+
+/// Runs on the durable layout worker, with the same per-section byte ceiling
+/// as other history bodies. The logical source remains the raw summary.
+fn compaction_summary_lines(
+    theme: &Theme,
+    width: usize,
+    content: &str,
+    folded: bool,
+) -> (Vec<Line<'static>>, Vec<Vec<Range<usize>>>, Vec<bool>) {
+    let label = if folded {
+        "[compaction] Compaction summary · click to expand"
+    } else if content.len() > crate::limits::LAYOUT_SECTION_BYTES {
+        "[compaction] Compaction summary · exceeds layout budget; /export to read"
+    } else {
+        "[compaction] Compaction summary · click to collapse"
+    };
+    let surface = |line| {
+        crate::ui::rail::surface_row(width, crate::ui::rail::thinking_colors(theme), 1, line)
+    };
+    let mut lines = vec![
+        Line::default(),
+        surface(Line::styled(label, Style::new().fg(theme.muted))),
+    ];
+    let mut links = vec![Vec::new(), Vec::new()];
+    let mut breaks = vec![false, false];
+    if !folded && content.len() <= crate::limits::LAYOUT_SECTION_BYTES {
+        let renderer = crate::markdown::MarkdownRenderer::new(theme);
+        let (body, body_links, body_breaks) = renderer.render_with_breaks(
+            content,
+            width.saturating_sub(1).max(1),
+            Style::new().fg(theme.text),
+        );
+        lines.extend(body.into_iter().map(surface));
+        links.extend(body_links.into_iter().map(|row| {
+            row.into_iter()
+                .map(|range| range.start + 1..range.end + 1)
+                .collect()
+        }));
+        breaks.extend(body_breaks);
+    }
+    lines.push(Line::default());
+    links.push(Vec::new());
+    breaks.push(false);
+    (lines, links, breaks)
 }
 
 fn summary_lines(theme: &Theme, width: usize, content: &str) -> Vec<Line<'static>> {

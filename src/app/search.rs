@@ -37,6 +37,12 @@ pub(super) enum PendingSearchJump {
 /// the exact previous user choice (including "no override").
 #[derive(Debug, Clone)]
 pub(super) enum FoldRestore {
+    Summary {
+        session_id: SessionId,
+        revision: Option<String>,
+        index: usize,
+        previous: Option<FoldOverride>,
+    },
     Tool {
         key: ToolKey,
         previous: Option<FoldOverride>,
@@ -698,6 +704,25 @@ impl App {
             return;
         };
         match target.source {
+            SearchSource::Summary => {
+                let (Some(index), Some(view)) =
+                    (target.index, self.sessions.known.get_mut(&session_id))
+                else {
+                    return;
+                };
+                let previous = view.summary_folds.get(&index).copied();
+                if previous == Some(FoldOverride::Expanded) {
+                    return;
+                }
+                Arc::make_mut(&mut view.summary_folds).insert(index, FoldOverride::Expanded);
+                self.search_fold_restores.push(FoldRestore::Summary {
+                    session_id,
+                    revision: view.summary_history_revision.clone(),
+                    index,
+                    previous,
+                });
+                view.transcript.invalidate();
+            }
             SearchSource::Thinking => {
                 let (Some(loop_id), Some(request_index)) =
                     (target.loop_id.clone(), target.request_index)
@@ -749,6 +774,28 @@ impl App {
         let restores = std::mem::take(&mut self.search_fold_restores);
         for restore in restores.into_iter().rev() {
             match restore {
+                FoldRestore::Summary {
+                    session_id,
+                    revision,
+                    index,
+                    previous,
+                } => {
+                    let Some(view) = self.sessions.known.get_mut(&session_id) else {
+                        continue;
+                    };
+                    if view.summary_history_revision != revision {
+                        continue;
+                    }
+                    match previous {
+                        Some(value) => {
+                            Arc::make_mut(&mut view.summary_folds).insert(index, value);
+                        }
+                        None => {
+                            Arc::make_mut(&mut view.summary_folds).remove(&index);
+                        }
+                    }
+                    view.transcript.invalidate();
+                }
                 FoldRestore::Tool { key, previous } => {
                     let Some(view) = self
                         .sessions
