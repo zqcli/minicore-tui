@@ -90,4 +90,4 @@ Its SHA-256 is `06fe185c61a5962b8e27e6a80fffa11ceb603536955c26497bfe861c14450256
 /tmp/minicore-tui-display-bug-macos-b1bb062/evidence/PROVENANCE.json
 ```
 
-The remote cross-build log is at `/root/minicore-tui-v03-refactor/logs/display-bug/macos-cross-build.log`. The remote build used Rust 1.85.0, LLVM 19, `MacOSX.sdk`, deployment target 11.0, `CARGO_INCREMENTAL=0`, `-j6`, and locked offline dependencies. The staged macOS old-control binary is `/tmp/minicore-tui-display-bug-macos-b1bb062/minicore-tui-old-7fea27e-macos` with SHA-256 `61da982dccb7c6a1ce8d2982659ded917678c109458e4e9aeb369f704797e027`.
+The remote cross-build log is at `/root/minicore-tui-v03-refactor/logs/display-bug/macos-cross-build-success.log`. The remote build used Rust 1.85.0, LLVM 19, `MacOSX.sdk`, deployment target 11.0, `CARGO_INCREMENTAL=0`, `-j6`, and locked offline dependencies. The staged macOS old-control binary is `/tmp/minicore-tui-display-bug-macos-b1bb062/minicore-tui-old-7fea27e-macos` with SHA-256 `61da982dccb7c6a1ce8d2982659ded917678c109458e4e9aeb369f704797e027`.
