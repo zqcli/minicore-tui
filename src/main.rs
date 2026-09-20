@@ -395,7 +395,7 @@ async fn run_fullscreen(
                 }
                 let size = guard.terminal_mut().size()?;
                 prepare_frame_with_jobs(&mut app, jobs, Rect::new(0, 0, size.width, size.height));
-                guard.terminal_mut().draw(|frame| ui::render(frame, &app))?;
+                draw_frame(guard.terminal_mut(), &mut app)?;
                 minicore_tui::perf::count(minicore_tui::perf::Counter::DrawCalls);
                 last_render = Instant::now();
                 app.update(AppEvent::Rendered);
@@ -415,7 +415,7 @@ async fn run_fullscreen(
         if !app.editor_active() && app.dirty && last_render.elapsed() >= RENDER_INTERVAL {
             let size = guard.terminal_mut().size()?;
             prepare_frame_with_jobs(&mut app, jobs, Rect::new(0, 0, size.width, size.height));
-            guard.terminal_mut().draw(|frame| ui::render(frame, &app))?;
+            draw_frame(guard.terminal_mut(), &mut app)?;
             minicore_tui::perf::count(minicore_tui::perf::Counter::DrawCalls);
             last_render = Instant::now();
             app.update(AppEvent::Rendered);
@@ -423,8 +423,23 @@ async fn run_fullscreen(
     }
 }
 
+fn draw_frame<B: ratatui::backend::Backend>(
+    terminal: &mut ratatui::Terminal<B>,
+    app: &mut App,
+) -> io::Result<()> {
+    let completed = terminal.draw(|frame| ui::render(frame, app))?;
+    app.remember_transcript_frame(completed.buffer);
+    Ok(())
+}
+
 /// Layout is coalesced with drawing, not repeated for every queued input/delta.
 fn prepare_frame_with_jobs(app: &mut App, jobs: &mut LocalJobs, area: Rect) {
+    // Resize can arrive after the loop's size observation but before its draw.
+    // Fence old cells using the size of this actual frame, including height.
+    app.update(AppEvent::TerminalSize {
+        width: area.width,
+        height: area.height,
+    });
     if ui::layout::is_too_small(area) {
         return;
     }
@@ -483,12 +498,9 @@ fn prepare_frame_with_jobs(app: &mut App, jobs: &mut LocalJobs, area: Rect) {
         }
     }
     let Some(prepared) = app.prepared_conversation(width) else {
-        if app.viewport != (0, 0) {
-            app.update(AppEvent::Viewport {
-                total_lines: 0,
-                visible_rows: 0,
-            });
-        }
+        // Pending geometry is unknown, not a zero-row conversation. Keep the
+        // last measurement until commit, including across resize, so an async
+        // wait cannot clamp away the user's scroll position/follow state.
         return;
     };
     let total = prepared.total_rows();
@@ -917,6 +929,10 @@ impl Drop for DebugLog {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "async_display_tests.rs"]
+mod async_display_tests;
 
 #[cfg(test)]
 mod tests {

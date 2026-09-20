@@ -425,8 +425,17 @@ pub struct CliPrefs {
     pub startup_session: Option<StartupSession>,
 }
 
-/// All app and UI state. Only `App::update` mutates it; render code reads
-/// the public fields, tasks and executor never touch the app at all.
+struct TranscriptFrame {
+    generation: u64,
+    session_id: String,
+    session_epoch: u64,
+    theme: ThemeKind,
+    terminal_size: (u16, u16),
+    cells: ratatui::buffer::Buffer,
+}
+
+/// All app and UI state. The reducer owns mutations; the main loop also
+/// records successfully drawn transcript cells. Renderers and workers only read.
 pub struct App {
     pub connection: ConnectionState,
     pub catalogs: CatalogState,
@@ -493,6 +502,10 @@ pub struct App {
     /// The single prepared conversation snapshot shared by measurement,
     /// rendering, hit testing, selection, and copying.
     prepared_conversation: Option<PreparedConversation>,
+    /// Only terminal cells, never history/layout ownership. Used while the
+    /// production worker replaces a same-session, same-size conversation.
+    transcript_frame: Option<TranscriptFrame>,
+    prepared_generation: u64,
     /// Production rendering never rebuilds a durable layout synchronously;
     /// the main loop requests it from the single owned worker instead.
     async_layout: bool,
@@ -768,6 +781,8 @@ impl App {
             selection_drag: None,
             editor_selection: None,
             prepared_conversation: None,
+            transcript_frame: None,
+            prepared_generation: 0,
             async_layout: false,
             async_decode: false,
             pending_decode: None,
@@ -1051,6 +1066,53 @@ impl App {
         if matches!(&event, AppEvent::Rendered) {
             self.dirty = false;
             return Vec::new();
+        }
+        if matches!(&event, AppEvent::TerminalSize { width, height }
+            if (*width, *height) == self.terminal_size)
+        {
+            return Vec::new();
+        }
+        // A displayed transition is not the current layout. Never resolve
+        // its cells against new section indices (or a placeholder layout).
+        let scroll_key = self.async_layout
+            && matches!(&event, AppEvent::Terminal(CrosstermEvent::Key(key))
+                if matches!(keymap::map(self, *key), Action::ScrollRows(_)
+                    | Action::ScrollWindow(_) | Action::ScrollTop | Action::ScrollBottom));
+        let transcript_press = self.mouse_down.as_ref().is_some_and(|press| {
+            matches!(
+                &press.target,
+                MouseTarget::Conversation(_) | MouseTarget::Scrollbar
+            )
+        });
+        if self.async_layout
+            && !self.has_main_detail()
+            && (scroll_key
+                || transcript_press
+                || matches!(&event, AppEvent::Terminal(CrosstermEvent::Mouse(_)))
+                || self.selection_drag.is_some()
+                || self.scrollbar_drag.is_some())
+            && !self.transcript_input_ready()
+        {
+            let was_dragging = self.selection_drag.is_some() || self.scrollbar_drag.is_some();
+            self.selection_drag = None;
+            self.scrollbar_drag = None;
+            if transcript_press {
+                self.mouse_down = None;
+                self.mouse_pressed_on_link = false;
+            }
+            if scroll_key && matches!(self.dock, Dock::Composer | Dock::Search(_)) {
+                return Vec::new();
+            }
+            if let AppEvent::Terminal(CrosstermEvent::Mouse(mouse)) = &event {
+                let area =
+                    ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1);
+                let screen = crate::ui::layout::screen_layout(self, area);
+                if screen.transcript.contains((mouse.column, mouse.row).into()) || was_dragging {
+                    self.mouse_down = None;
+                    self.mouse_pressed_on_link = false;
+                    return Vec::new();
+                }
+            }
         }
         if let AppEvent::Terminal(CrosstermEvent::Mouse(mouse)) = &event {
             if mouse.kind == crossterm::event::MouseEventKind::Moved {
@@ -1416,6 +1478,11 @@ impl App {
         if let Some((was_dirty, deadline)) = idle_tick_before {
             self.dirty = was_dirty || deadline != self.scrollbar.hide_at || !commands.is_empty();
         }
+        // Drop screen cells across identity/geometry barriers, even if the
+        // user switches away and back before the next terminal draw.
+        if !self.transcript_frame_matches() {
+            self.transcript_frame = None;
+        }
         // Cache budgets are enforced once per event pass, off the draw path.
         self.enforce_history_budget();
         self.enforce_draft_budget();
@@ -1539,6 +1606,81 @@ impl App {
                     })
                 })
         })
+    }
+
+    fn transcript_input_ready(&self) -> bool {
+        let area = ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1);
+        let screen = crate::ui::layout::screen_layout(self, area);
+        self.prepared_conversation(screen.content.width).is_some()
+            && self.transcript_frame_matches()
+            && self.transcript_frame.as_ref().is_some_and(|saved| {
+                saved.generation == self.prepared_generation
+                    && saved.cells.area == screen.transcript
+            })
+    }
+
+    fn transcript_frame_matches(&self) -> bool {
+        self.transcript_frame.as_ref().is_some_and(|saved| {
+            self.reload.is_none()
+                && saved.terminal_size == self.terminal_size
+                && saved.theme == self.theme
+                && self.active_view().is_some_and(|view| {
+                    saved.session_id == view.info.session_id
+                        && saved.session_epoch == view.session_epoch
+                })
+        })
+    }
+
+    /// Capture only the actually displayed viewport after a successful draw.
+    /// This bounded cell buffer cannot pin evicted transcript sections.
+    pub fn remember_transcript_frame(&mut self, buffer: &ratatui::buffer::Buffer) {
+        let screen = crate::ui::layout::screen_layout(self, buffer.area);
+        if !self.async_layout
+            || self.has_main_detail()
+            || crate::ui::layout::is_too_small(buffer.area)
+            || self.reload.is_some()
+            || matches!(self.connection, ConnectionState::Failed(_))
+        {
+            self.transcript_frame = None;
+            return;
+        }
+        if self.prepared_conversation(screen.content.width).is_none() {
+            return;
+        }
+        let Some(view) = self.active_view() else {
+            self.transcript_frame = None;
+            return;
+        };
+        let mut cells = ratatui::buffer::Buffer::empty(screen.transcript);
+        for y in screen.transcript.y..screen.transcript.bottom() {
+            for x in screen.transcript.x..screen.transcript.right() {
+                cells[(x, y)] = buffer[(x, y)].clone();
+            }
+        }
+        self.transcript_frame = Some(TranscriptFrame {
+            generation: self.prepared_generation,
+            session_id: view.info.session_id.clone(),
+            session_epoch: view.session_epoch,
+            theme: self.theme,
+            terminal_size: self.terminal_size,
+            cells,
+        });
+    }
+
+    /// Display-only fallback. Input must continue to require a current layout.
+    pub fn transition_transcript_frame(
+        &self,
+        area: ratatui::layout::Rect,
+    ) -> Option<&ratatui::buffer::Buffer> {
+        if !self.transcript_frame_matches() {
+            return None;
+        }
+        self.transcript_frame
+            .as_ref()
+            .map(|saved| &saved.cells)
+            .filter(|cells| {
+                cells.area.x == area.x && cells.area.y == area.y && cells.area.width == area.width
+            })
     }
 
     pub fn cached_durable(&self, width: u16) -> Option<Arc<PreparedDurable>> {
@@ -1881,6 +2023,7 @@ impl App {
         self.restore_scroll_anchor(&prepared);
         self.rebase_selection(&prepared);
         self.prepared_conversation = Some(prepared);
+        self.prepared_generation = self.prepared_generation.wrapping_add(1);
     }
 
     /// Captures the first retained content row currently visible. The anchor

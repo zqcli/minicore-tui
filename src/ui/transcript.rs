@@ -2220,6 +2220,17 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
         return;
     }
     if app.async_layout_enabled() && app.prepared_conversation(area.width).is_none() {
+        if let Some(previous) = app.transition_transcript_frame(area) {
+            // Only transcript cells are replayed; composer/footer keep drawing
+            // from current App state. A growing composer simply crops the view.
+            let overlap = area.intersection(previous.area);
+            for y in overlap.y..overlap.bottom() {
+                for x in overlap.x..overlap.right() {
+                    frame.buffer_mut()[(x, y)] = previous[(x, y)].clone();
+                }
+            }
+            return;
+        }
         let line = layout::filled(
             "Preparing conversation...",
             width,
