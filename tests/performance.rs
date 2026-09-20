@@ -38,9 +38,11 @@ use minicore_tui::jobs::{CopyAdmission, LocalJobs};
 use minicore_tui::protocol::RpcResponse;
 use minicore_tui::protocol::{IncomingFrame, RpcNotification, TurnRef, UserMessageKindWire};
 use minicore_tui::state::session::SessionView;
+use minicore_tui::state::tool::{LiveTool, ToolStatus};
 use minicore_tui::state::transcript::{
     AssistantBlock, AssistantPart, ToolBlock, TranscriptBlock, UserBlock,
 };
+use minicore_tui::state::turn::{LiveLoop, LivePart, LiveRequest, LocalSubmissionId};
 use minicore_tui::ui::transcript::{all_lines, prepare_conversation, total_lines};
 use serde_json::json;
 
@@ -593,6 +595,89 @@ async fn async_layout_worker_preserves_user_assistant_and_tool_sections() {
         "Tool result missing: {text}"
     );
     jobs.shutdown().await;
+}
+
+#[test]
+fn durable_tool_key_suppresses_a_live_tool_duplicate_at_a_nonzero_viewport() {
+    let mut app = app_with_history(0, 240);
+    let turn = TurnRef {
+        session_id: "ses_perf".to_owned(),
+        loop_id: "loop_display_tool".to_owned(),
+    };
+    let view = app
+        .sessions
+        .known
+        .get_mut("ses_perf")
+        .expect("performance session");
+    view.transcript
+        .push_block(TranscriptBlock::Assistant(AssistantBlock {
+            index: 10,
+            loop_id: turn.loop_id.clone(),
+            request_index: 0,
+            model: "deep".to_owned(),
+            reasoning_level: minicore_tui::protocol::Reasoning::High,
+            parts: vec![AssistantPart::ToolCall(
+                minicore_tui::protocol::ToolCallViewWire {
+                    tool_call_id: "call_display_tool".to_owned(),
+                    name: "read".to_owned(),
+                    call_index: 0,
+                    display: None,
+                },
+            )],
+            tool_calls: vec![],
+            usage: Default::default(),
+            finish_reason: "tool_calls".to_owned(),
+            terminal_error: None,
+        }));
+    view.transcript.push_block(TranscriptBlock::Tool(ToolBlock {
+        index: Some(11),
+        loop_id: turn.loop_id.clone(),
+        request_index: 0,
+        tool_call_id: "call_display_tool".to_owned(),
+        name: "read".to_owned(),
+        result: Some(Arc::from("tool-result-unique")),
+        outcome: Some(minicore_tui::protocol::ToolOutcomeWire::Success),
+        live_status: None,
+        progress: None,
+        expanded: true,
+    }));
+    let mut live = LiveLoop::new(LocalSubmissionId(1), "tool round".to_owned());
+    live.reference = Some(turn);
+    let mut request = LiveRequest::new(
+        0,
+        0,
+        "deep".to_owned(),
+        minicore_tui::protocol::Reasoning::High,
+    );
+    request.parts.push(LivePart::Tool {
+        tool_call_id: "call_display_tool".to_owned(),
+    });
+    request.tools.push(LiveTool {
+        tool_call_id: "call_display_tool".to_owned(),
+        name: "read".to_owned(),
+        status: ToolStatus::Succeeded,
+        progress: None,
+        display: None,
+        result: Some(Arc::from("tool-result-unique")),
+        result_truncated: false,
+        expanded: true,
+    });
+    live.requests.push(request);
+    view.live = Some(live);
+    view.transcript.complete = true;
+    view.transcript.invalidate();
+    app.viewport = (1, 80);
+
+    let prepared = prepare_conversation(&app, WIDTH);
+    let matching_sections = prepared
+        .sections
+        .iter()
+        .filter(|section| section.id.tool_call_id.as_deref() == Some("call_display_tool"))
+        .count();
+    assert_eq!(
+        matching_sections, 1,
+        "tool card must have one durable owner"
+    );
 }
 
 /// Production-path smoke test: the first durable layout is prepared by the

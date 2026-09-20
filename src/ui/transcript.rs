@@ -304,11 +304,13 @@ fn prepare_conversation_inner(
             .map(|section| section.layout.key.section.kind)
     });
     let mut live_sections = Vec::new();
+    let durable_tool_keys = app.active_view().map(durable_tool_keys).unwrap_or_default();
     let (mut live, mut live_links) = build_live_tail(
         &theme,
         app,
         width as usize,
         last_kind,
+        &durable_tool_keys,
         Some(&mut live_sections),
     );
     // One boundary blank can be shared between the durable block and the
@@ -664,7 +666,31 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
         .unwrap_or_default();
     let mut sections = Vec::new();
     let mut pending_batch = Vec::new();
-    let mut rendered_tools = HashSet::new();
+    let assistant_tool_keys: HashSet<ToolKey> = view
+        .blocks()
+        .iter()
+        .filter_map(|block| match block.as_ref() {
+            TranscriptBlock::Assistant(assistant) => Some(
+                assistant
+                    .parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        crate::state::transcript::AssistantPart::ToolCall(call) => {
+                            Some(ToolKey::new(
+                                view.session_id(),
+                                &assistant.loop_id,
+                                assistant.request_index,
+                                &call.tool_call_id,
+                            ))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .flatten()
+        .collect();
     let mut changed = 0;
     let mut tool_index_lookups = 0;
 
@@ -710,13 +736,6 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                             progress: None,
                             expanded: false,
                         });
-                    let tool_key = ToolKey::new(
-                        view.session_id(),
-                        &tool.loop_id,
-                        tool.request_index,
-                        &tool.tool_call_id,
-                    );
-                    rendered_tools.insert(tool_key);
                     let id = SectionId {
                         session_id: view.session_id().into(),
                         loop_id: Some(tool.loop_id.clone().into()),
@@ -842,7 +861,7 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                 tool.request_index,
                 &tool.tool_call_id,
             );
-            if rendered_tools.contains(&tool_key) {
+            if assistant_tool_keys.contains(&tool_key) {
                 continue;
             }
         }
@@ -1611,11 +1630,41 @@ fn effective_tool_block_for<V: DurableLayoutSource>(view: &V, tool: &ToolBlock) 
 /// Builds the rows after the header and the shared durable block. The durable
 /// rows are never copied here: the frame composes them by reference, so a
 /// live delta costs only the live tail (`spec §11.2`).
+fn durable_tool_keys(view: &SessionView) -> HashSet<ToolKey> {
+    view.transcript
+        .blocks
+        .iter()
+        .flat_map(|block| match block.as_ref() {
+            TranscriptBlock::Assistant(assistant) => assistant
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    crate::state::transcript::AssistantPart::ToolCall(call) => Some(ToolKey::new(
+                        view.session_id(),
+                        &assistant.loop_id,
+                        assistant.request_index,
+                        &call.tool_call_id,
+                    )),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            TranscriptBlock::Tool(tool) => vec![ToolKey::new(
+                view.session_id(),
+                &tool.loop_id,
+                tool.request_index,
+                &tool.tool_call_id,
+            )],
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
 fn build_live_tail(
     theme: &Theme,
     app: &App,
     width: usize,
     durable_last_kind: Option<SectionKind>,
+    durable_tool_keys: &HashSet<ToolKey>,
     live_sections: Option<&mut Vec<SectionRange>>,
 ) -> (Vec<Line<'static>>, Vec<LinkRow>) {
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -1707,6 +1756,7 @@ fn build_live_tail(
                 width,
                 app.reasoning_visible,
                 live_previous_kind,
+                durable_tool_keys,
                 &mut lines,
                 live_sections,
             );
@@ -1790,6 +1840,7 @@ struct LiveRenderContext<'a> {
     request_index: u32,
     width: usize,
     reasoning_visible: bool,
+    durable_tool_keys: &'a HashSet<ToolKey>,
 }
 
 impl LiveRenderContext<'_> {
@@ -1873,6 +1924,15 @@ impl LiveRenderContext<'_> {
         ranges: &mut Option<&mut Vec<SectionRange>>,
         tool: &crate::state::tool::LiveTool,
     ) {
+        let key = ToolKey::new(
+            self.session_id,
+            self.loop_id,
+            self.request_index,
+            &tool.tool_call_id,
+        );
+        if self.durable_tool_keys.contains(&key) {
+            return;
+        }
         let (id, lines, folded) = live_tool_render(
             self.theme,
             self.view,
@@ -1932,6 +1992,7 @@ fn live_section(
     width: usize,
     reasoning_visible: bool,
     previous_kind: Option<SectionKind>,
+    durable_tool_keys: &HashSet<ToolKey>,
     out: &mut Vec<Line<'static>>,
     ranges: Option<&mut Vec<SectionRange>>,
 ) {
@@ -1952,6 +2013,7 @@ fn live_section(
             request_index: req.request_index,
             width,
             reasoning_visible,
+            durable_tool_keys,
         };
         let mut rendered_tool_ids = HashSet::new();
 
