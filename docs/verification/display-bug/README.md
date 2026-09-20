@@ -1,6 +1,6 @@
 # Display Bug Verification
 
-This evidence validates the async transcript-section fix from `b1bb062` through a real TUI, fixed Agent, deterministic loopback HTTP Responses model, Linux kernel PTYs, and `pyte` terminal parsing.
+This evidence validates the async transcript-section fix from `b1bb062` and the tool-section deduplication fix through a real TUI, fixed Agent, deterministic loopback HTTP Responses model, Linux kernel PTYs, and `pyte` terminal parsing.
 
 ## Reproduce
 
@@ -20,10 +20,10 @@ python3 -m venv /tmp/mctui-display-pyte-venv
 For the accepted remote run, the command was executed on `root@192.168.20.199` with:
 
 ```text
-TUI:   /root/minicore-tui-v03-refactor/tui-target/display-bug-pty/release/minicore-tui
+TUI:   /root/minicore-tui-v03-refactor/tui-target/display-bug-duplicate-fixed/release/minicore-tui
 OLD:   /root/minicore-tui-v03-refactor/tui-target/display-bug-old-7fea27e/debug/minicore-tui
 Agent: /root/minicore-tui-v03-refactor/fixedagent-target/debug/minicore-agent
-OUT:   /root/minicore-tui-v03-refactor/logs/display-bug/conversation-validation
+OUT:   /root/minicore-tui-v03-refactor/logs/display-bug/conversation-validation-duplicate-fixed
 ```
 
 `pyte.ByteStream` handles UTF-8 and display-cell width, while the harness explicitly maintains primary and alternate buffers for `CSI ?1047/1049 h/l`. The PTY is created with `pty.fork`, `setsid`, and `TIOCSWINSZ`; the harness never reads a pipe or reconstructs the screen from raw substring matching.
@@ -46,7 +46,7 @@ The loopback request log contains four model calls: ASCII, Chinese, tool-call, a
 `PROVENANCE.json` records binary hashes and all assertions:
 
 ```text
-/root/minicore-tui-v03-refactor/logs/display-bug/conversation-validation/PROVENANCE.json
+/root/minicore-tui-v03-refactor/logs/display-bug/conversation-validation-duplicate-fixed/PROVENANCE.json
 ```
 
 Important results:
@@ -56,10 +56,11 @@ fixed first exit:       0
 fixed --continue exit:  0
 streaming ASCII:        true
 fixed message markers:  all 1, ordered
+tool result count:      exactly 1 on first and --continue screens
 old 7fea27e marker:     tool-after-unique missing (expected)
 ```
 
-The fixed first live screen contained two identical tool-result presentations. The resumed screen contained one. This is recorded as `tool_result_occurrences` (`2` first run, `1` after `--continue`) rather than being counted as a duplicate User/Assistant message. The User/Assistant/pre-tool/post-tool message assertions remain strict. This existing live-versus-durable tool presentation is a residual observation, not a claim that all tool rendering is deduplicated.
+The fixed first and resumed screens each contain exactly one tool-result presentation. The harness treats a tool-result count other than `1` as a failure, while the User/Assistant/pre-tool/post-tool message assertions remain strict.
 
 Artifacts include:
 
@@ -76,18 +77,18 @@ old-negative/old.pty.raw
 
 ## Boundaries
 
-This is Linux kernel-PTY and loopback-provider evidence. It is not hosted CI, native macOS/Windows terminal execution, manual iTerm2/IME interaction, or external-provider validation. The macOS cross-built executable is validated separately for file integrity and isolated local execution; it must not be installed over `target/debug`.
+This is Linux kernel-PTY and loopback-provider evidence. It is not hosted CI, native macOS/Windows terminal execution, manual iTerm2/IME interaction, or external-provider validation. The macOS cross-built executable is validated separately for file integrity and isolated local execution; it is staged pending parent review and was not installed over `target/debug`.
 
 The current staged macOS artifact is outside the repository at:
 
 ```text
-/tmp/minicore-tui-display-bug-macos-b1bb062/minicore-tui
+/tmp/minicore-tui-display-bug-macos-duplicate-fixed/minicore-tui
 ```
 
-Its SHA-256 is `06fe185c61a5962b8e27e6a80fffa11ceb603536955c26497bfe861c14450256`; `file`, `codesign --verify --strict`, and `arch -x86_64 --version` all passed. The local staged smoke used the existing x86_64 Agent binary with isolated temporary workspace/data and produced:
+Its SHA-256 is `d0d94976ae54f1197a0dfe59279d5a8d06eff23b99ae84163829db7c17237d2b`; `file`, `codesign --verify --strict`, and x86_64 `--version` all passed. The local staged smoke used the existing x86_64 Agent binary with isolated temporary workspace/data and produced:
 
 ```text
-/tmp/minicore-tui-display-bug-macos-b1bb062/evidence/PROVENANCE.json
+/tmp/minicore-tui-display-bug-macos-duplicate-fixed/evidence/PROVENANCE.json
 ```
 
-The remote cross-build log is at `/root/minicore-tui-v03-refactor/logs/display-bug/macos-cross-build-success.log`. The remote build used Rust 1.85.0, LLVM 19, `MacOSX.sdk`, deployment target 11.0, `CARGO_INCREMENTAL=0`, `-j6`, and locked offline dependencies. The staged macOS old-control binary is `/tmp/minicore-tui-display-bug-macos-b1bb062/minicore-tui-old-7fea27e-macos` with SHA-256 `61da982dccb7c6a1ce8d2982659ded917678c109458e4e9aeb369f704797e027`.
+The remote cross-build log is at `/root/minicore-tui-v03-refactor/logs/display-bug/duplicate-fix/macos-cross-build.log`. The remote build used Rust 1.85.0, LLVM 19, `MacOSX.sdk`, deployment target 11.0, `CARGO_INCREMENTAL=0`, `-j6`, and locked offline dependencies. The staged macOS old-control binary is `/tmp/minicore-tui-display-bug-macos-duplicate-fixed/minicore-tui-old-7fea27e-macos` with SHA-256 `61da982dccb7c6a1ce8d2982659ded917678c109458e4e9aeb369f704797e027`.

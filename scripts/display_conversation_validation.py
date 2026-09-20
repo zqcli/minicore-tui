@@ -376,10 +376,11 @@ class PtySession:
         # Ctrl-C twice follows the production graceful shutdown path and lets
         # the Agent persist the current session before a later --continue.
         self.send(b"\x03")
-        self._wait_and_drain(0.5)
-        self.send(b"\x03")
         assert self.pid is not None
-        status = self._wait_and_drain(8)
+        status = self._wait_and_drain(0.5)
+        if status is None:
+            self.send(b"\x03")
+            status = self._wait_and_drain(8)
         if status is None:
             # Ctrl-D remains a bounded fallback for a cross-built binary whose
             # signal path is unavailable under the local execution layer.
@@ -418,7 +419,7 @@ def assert_final_screen(screen: PyteTerminal) -> dict[str, Any]:
     missing_or_duplicate = {
         name: count for name, count in message_counts.items() if count != 1
     }
-    if missing_or_duplicate or counts["tool_result"] < 1:
+    if missing_or_duplicate or counts["tool_result"] != 1:
         raise RuntimeError(f"final screen marker counts are invalid: {counts}\n{flow}")
     positions = {name: flow.index(MARKERS[name]) for name in ORDER}
     message_positions = {name: positions[name] for name in MESSAGE_ORDER}
@@ -545,6 +546,8 @@ def run_old_negative(tui: pathlib.Path, agent: pathlib.Path, root: pathlib.Path,
             session.read_once(0.025)
         flow = session.screen.flow()
         save_screen(output / "old-final.screen.txt", session.screen)
+        if MARKERS["tool_result"] not in flow:
+            raise RuntimeError("old binary did not render the tool result; negative control is invalid")
         missing = MARKERS["tool_after"] not in flow
         status = session.shutdown()
         if status != 0:
@@ -560,6 +563,7 @@ def run_old_negative(tui: pathlib.Path, agent: pathlib.Path, root: pathlib.Path,
         "exit": status,
         "expected_missing_marker": MARKERS["tool_after"],
         "missing": missing,
+        "tool_result_present": True,
         "alt_enters": session.screen.alt_enters,
         "alt_leaves": session.screen.alt_leaves,
     }
