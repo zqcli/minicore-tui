@@ -5,7 +5,10 @@
 //! are never persisted to Agent history.
 
 use ratatui::text::Line;
+use std::collections::HashSet;
 use std::sync::Arc;
+
+use crate::state::tool::ToolKey;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DurableCacheKey {
@@ -128,6 +131,9 @@ pub struct ConversationLayout {
     pub sections: Arc<Vec<SectionPlacement>>,
     pub offsets: Arc<Vec<usize>>,
     pub total_rows: usize,
+    /// Durable ToolKeys are built with the immutable layout and reused by
+    /// every live-tail composition; the frame path never rescans history.
+    pub tool_keys: Arc<HashSet<ToolKey>>,
     blank: Line<'static>,
 }
 
@@ -141,6 +147,21 @@ impl ConversationLayout {
 
     pub fn from_sections(mut sections: Vec<Arc<SectionLayout>>) -> Self {
         sections.sort_by_key(|section| section.order);
+        let tool_keys = sections
+            .iter()
+            .filter_map(|section| {
+                let id = &section.key.section;
+                if id.kind != SectionKind::Tool {
+                    return None;
+                }
+                Some(ToolKey::new(
+                    id.session_id.as_ref(),
+                    id.loop_id.as_ref()?.as_ref(),
+                    id.request_index?,
+                    id.tool_call_id.as_ref()?.as_ref(),
+                ))
+            })
+            .collect();
         let mut placements = Vec::with_capacity(sections.len());
         let mut offsets = Vec::with_capacity(sections.len());
         let mut total_rows = 0;
@@ -178,6 +199,7 @@ impl ConversationLayout {
             sections: Arc::new(placements),
             offsets: Arc::new(offsets),
             total_rows,
+            tool_keys: Arc::new(tool_keys),
             blank: Line::default(),
         }
     }

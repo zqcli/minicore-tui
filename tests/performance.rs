@@ -38,7 +38,7 @@ use minicore_tui::jobs::{CopyAdmission, LocalJobs};
 use minicore_tui::protocol::RpcResponse;
 use minicore_tui::protocol::{IncomingFrame, RpcNotification, TurnRef, UserMessageKindWire};
 use minicore_tui::state::session::SessionView;
-use minicore_tui::state::tool::{LiveTool, ToolStatus};
+use minicore_tui::state::tool::{LiveTool, ToolKey, ToolStatus};
 use minicore_tui::state::transcript::{
     AssistantBlock, AssistantPart, ToolBlock, TranscriptBlock, UserBlock,
 };
@@ -598,6 +598,134 @@ async fn async_layout_worker_preserves_user_assistant_and_tool_sections() {
 }
 
 #[test]
+fn partial_durable_tool_prefers_live_state_over_an_incomplete_history_marker() {
+    let mut app = app_with_history(0, 240);
+    let turn = TurnRef {
+        session_id: "ses_perf".to_owned(),
+        loop_id: "loop_partial_tool".to_owned(),
+    };
+    let view = app
+        .sessions
+        .known
+        .get_mut("ses_perf")
+        .expect("performance session");
+    view.transcript
+        .push_block(TranscriptBlock::Assistant(AssistantBlock {
+            index: 10,
+            loop_id: turn.loop_id.clone(),
+            request_index: 0,
+            model: "deep".to_owned(),
+            reasoning_level: minicore_tui::protocol::Reasoning::High,
+            parts: vec![AssistantPart::ToolCall(
+                minicore_tui::protocol::ToolCallViewWire {
+                    tool_call_id: "call_partial_tool".to_owned(),
+                    name: "read".to_owned(),
+                    call_index: 0,
+                    display: None,
+                },
+            )],
+            tool_calls: vec![],
+            usage: Default::default(),
+            finish_reason: "tool_calls".to_owned(),
+            terminal_error: None,
+        }));
+    let mut live = LiveLoop::new(LocalSubmissionId(1), "partial tool round".to_owned());
+    live.reference = Some(turn);
+    let mut request = LiveRequest::new(
+        0,
+        0,
+        "deep".to_owned(),
+        minicore_tui::protocol::Reasoning::High,
+    );
+    request.parts.push(LivePart::Tool {
+        tool_call_id: "call_partial_tool".to_owned(),
+    });
+    request.tools.push(LiveTool {
+        tool_call_id: "call_partial_tool".to_owned(),
+        name: "read".to_owned(),
+        status: ToolStatus::Failed,
+        progress: Some("live-progress-unique".to_owned()),
+        display: None,
+        result: Some(Arc::from("live-result-unique")),
+        result_truncated: false,
+        expanded: true,
+    });
+    live.requests.push(request);
+    view.live = Some(live);
+    view.transcript.complete = false;
+    view.transcript.invalidate();
+
+    let prepared = prepare_conversation(&app, WIDTH);
+    let matching_sections = prepared
+        .sections
+        .iter()
+        .filter(|section| section.id.tool_call_id.as_deref() == Some("call_partial_tool"))
+        .count();
+    assert_eq!(
+        matching_sections, 1,
+        "partial history and live state must still render one tool card"
+    );
+    let text = prepared
+        .lines()
+        .into_iter()
+        .flat_map(|line| line.spans.into_iter())
+        .map(|span| span.content.into_owned())
+        .collect::<String>();
+    assert!(
+        text.contains("live-result-unique"),
+        "the live result must not be hidden by the incomplete durable marker: {text}"
+    );
+    let error_background = app.theme.theme().tool_error_bg;
+    assert!(
+        prepared.lines().iter().any(|line| {
+            line.spans.iter().any(|span| {
+                span.content.contains("live-result-unique")
+                    && span.style.bg == Some(error_background)
+            })
+        }),
+        "the live terminal error state must survive the durable/live transition: {text}"
+    );
+
+    let view = app
+        .sessions
+        .known
+        .get_mut("ses_perf")
+        .expect("performance session");
+    view.live = None;
+    view.transcript.push_block(TranscriptBlock::Tool(ToolBlock {
+        index: Some(11),
+        loop_id: "loop_partial_tool".to_owned(),
+        request_index: 0,
+        tool_call_id: "call_partial_tool".to_owned(),
+        name: "read".to_owned(),
+        result: Some(Arc::from("durable-result-unique")),
+        outcome: Some(minicore_tui::protocol::ToolOutcomeWire::Success),
+        live_status: None,
+        progress: None,
+        expanded: true,
+    }));
+    view.transcript.complete = true;
+    view.transcript.invalidate();
+    let persisted = prepare_conversation(&app, WIDTH);
+    let persisted_matching_sections = persisted
+        .sections
+        .iter()
+        .filter(|section| section.id.tool_call_id.as_deref() == Some("call_partial_tool"))
+        .count();
+    assert_eq!(
+        persisted_matching_sections, 1,
+        "history completion must replace the live card rather than duplicate it"
+    );
+    let persisted_text = persisted
+        .lines()
+        .into_iter()
+        .flat_map(|line| line.spans.into_iter())
+        .map(|span| span.content.into_owned())
+        .collect::<String>();
+    assert!(persisted_text.contains("durable-result-unique"));
+}
+
+#[test]
 fn durable_tool_key_suppresses_a_live_tool_duplicate_at_a_nonzero_viewport() {
     let mut app = app_with_history(0, 240);
     let turn = TurnRef {
@@ -678,6 +806,84 @@ fn durable_tool_key_suppresses_a_live_tool_duplicate_at_a_nonzero_viewport() {
         matching_sections, 1,
         "tool card must have one durable owner"
     );
+}
+
+#[test]
+fn cached_layout_reuses_durable_tool_key_index() {
+    let mut app = app_with_history(0, 240);
+    let view = app
+        .sessions
+        .known
+        .get_mut("ses_perf")
+        .expect("performance session");
+    view.transcript
+        .push_block(TranscriptBlock::Assistant(AssistantBlock {
+            index: 10,
+            loop_id: "loop_cached_tool".to_owned(),
+            request_index: 0,
+            model: "deep".to_owned(),
+            reasoning_level: minicore_tui::protocol::Reasoning::High,
+            parts: vec![AssistantPart::ToolCall(
+                minicore_tui::protocol::ToolCallViewWire {
+                    tool_call_id: "call_cached_tool".to_owned(),
+                    name: "read".to_owned(),
+                    call_index: 0,
+                    display: None,
+                },
+            )],
+            tool_calls: vec![],
+            usage: Default::default(),
+            finish_reason: "tool_calls".to_owned(),
+            terminal_error: None,
+        }));
+    view.transcript.push_block(TranscriptBlock::Tool(ToolBlock {
+        index: Some(11),
+        loop_id: "loop_cached_tool".to_owned(),
+        request_index: 0,
+        tool_call_id: "call_cached_tool".to_owned(),
+        name: "read".to_owned(),
+        result: Some(Arc::from("cached-tool-result")),
+        outcome: Some(minicore_tui::protocol::ToolOutcomeWire::Success),
+        live_status: None,
+        progress: None,
+        expanded: true,
+    }));
+    view.transcript.complete = true;
+    view.transcript.invalidate();
+
+    let first = prepare_conversation(&app, WIDTH);
+    let first_tool_keys = Arc::clone(
+        &first
+            .durable
+            .as_ref()
+            .expect("first durable layout")
+            .layout
+            .tool_keys,
+    );
+    let durable = first.durable.clone().expect("first durable layout");
+    app.sessions
+        .known
+        .get_mut("ses_perf")
+        .expect("performance session")
+        .transcript
+        .render_cache = Some(durable);
+    let second = prepare_conversation(&app, WIDTH);
+    let second_tool_keys = &second
+        .durable
+        .as_ref()
+        .expect("cached durable layout")
+        .layout
+        .tool_keys;
+    assert!(
+        Arc::ptr_eq(&first_tool_keys, second_tool_keys),
+        "live composition must reuse the cached durable ToolKey index"
+    );
+    assert!(second_tool_keys.contains(&ToolKey::new(
+        "ses_perf",
+        "loop_cached_tool",
+        0,
+        "call_cached_tool",
+    )));
 }
 
 /// Production-path smoke test: the first durable layout is prepared by the
