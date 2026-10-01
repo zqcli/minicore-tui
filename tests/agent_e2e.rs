@@ -3036,20 +3036,51 @@ fn e2e_stress_six_loops_ten_requests_no_repeated_final_text() {
             .await
             .unwrap();
 
+        let user_count = |app: &App| {
+            app.sessions.known[&session_id]
+                .transcript
+                .window
+                .items()
+                .filter(|(_, entry)| matches!(entry.as_ref(), TranscriptBlock::User(_)))
+                .count()
+        };
         for index in 0..6 {
-            dispatch(
-                &mut process,
-                &mut app,
-                AppEvent::SubmitTurn {
-                    session_id: session_id.clone(),
-                    text: format!("stress turn {index}"),
-                },
-            )
+            // Durable history may arrive before the final state read. A
+            // previous User item alone does not authorize the next turn.
+            pump_until(&mut process, &mut app, |a| {
+                let view = &a.sessions.known[&session_id];
+                view.live.is_none()
+                    && view.latest_state_query.is_none()
+                    && view.state.as_ref().is_some_and(|state| {
+                        state.status == minicore_tui::protocol::SessionStatusWire::Idle
+                    })
+            })
             .await
             .unwrap();
-            wait_turn_landed(&mut process, &mut app, &session_id)
+            let before = user_count(&app);
+            assert_eq!(before, index, "each prior turn must have landed once");
+            let commands = app.update(AppEvent::SubmitTurn {
+                session_id: session_id.clone(),
+                text: format!("stress turn {index}"),
+            });
+            assert_eq!(
+                commands
+                    .iter()
+                    .filter(|command| matches!(command,
+                        AppCommand::Rpc(request) if request.method == "turn.send"
+                    ))
+                    .count(),
+                1,
+                "stress turn {index} must be admitted exactly once"
+            );
+            dispatch_commands(&mut process, &mut app, commands)
                 .await
                 .unwrap();
+            pump_until(&mut process, &mut app, |a| {
+                a.sessions.known[&session_id].live.is_none() && user_count(a) == before + 1
+            })
+            .await
+            .unwrap();
         }
 
         assert_eq!(
