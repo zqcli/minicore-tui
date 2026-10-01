@@ -252,6 +252,48 @@ pub fn prepare_conversation_from_cache(
     prepare_conversation_inner(app, width, Some(ready_durable), false)
 }
 
+/// A bounded display fallback, never a source/copy range. The durable history
+/// owner and independent full search/export scans are left untouched.
+pub(crate) fn layout_limit_placeholder(
+    view: &SessionView,
+    width: u16,
+    theme: crate::theme::ThemeKind,
+    reasoning_visible: bool,
+) -> Arc<PreparedDurable> {
+    let key = crate::state::view::DurableCacheKey::new(view, width, theme, reasoning_visible);
+    let section = make_section_layout(
+        LayoutKey {
+            section: SectionId {
+                session_id: view.info.session_id.clone().into(),
+                loop_id: None,
+                request_index: None,
+                kind: SectionKind::Summary,
+                ordinal: 0,
+                tool_call_id: None,
+                history_index: None,
+            },
+            revision: key.revision,
+            width,
+            theme,
+            folded: false,
+            reasoning_visible,
+        },
+        wrap_plain(
+            &format!(
+                "Conversation display limit reached ({} MiB)\nSaved history is unchanged\nRead full history: /search full or /export\nWiden the terminal or /refresh to retry",
+                crate::limits::LAYOUT_CACHE_BYTES / (1024 * 1024),
+            ),
+            width as usize,
+            Style::new().fg(theme.theme().muted),
+        ),
+        Vec::new(), false, false, 0, None, None, None,
+    ).expect("the display-limit notice has content");
+    Arc::new(PreparedDurable {
+        key,
+        layout: Arc::new(ConversationLayout::from_sections(vec![section])),
+    })
+}
+
 /// Compatibility name for test harnesses and older integration fixtures. The
 /// production renderer uses [`prepare_conversation_from_cache`] explicitly.
 pub fn prepare_conversation_with_durable(

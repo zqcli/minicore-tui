@@ -9881,3 +9881,132 @@ fn raw_export_records_a_chunk_mismatch_instead_of_claiming_complete() {
         &written[..600.min(written.len())]
     );
 }
+
+#[test]
+fn layout_budget_overflow_keeps_full_search_and_real_export_independent() {
+    use minicore_tui::state::view::{
+        ConversationLayout, DurableCacheKey, LayoutKey, PreparedDurable, SectionId, SectionKind,
+        SectionLayout, SourceMap,
+    };
+    use minicore_tui::ui::transcript::DurableLayoutResult;
+    use std::sync::Arc;
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    set_terminal(&mut driver);
+    let item = user(0, "loop_1", "exact saved needle survives display overflow");
+    open_chat_with(&mut driver, vec![item.clone()]);
+    driver.app.enable_async_layout();
+    let request = driver.app.layout_request(79).unwrap();
+    let identity = request.identity;
+    driver.app.mark_layout_pending(identity.clone());
+    let parts = (0..25)
+        .map(|index| {
+            let source: Arc<str> = "x".repeat(2 * 1024 * 1024).into();
+            Arc::new(SectionLayout {
+                key: LayoutKey {
+                    section: SectionId {
+                        session_id: "ses_1".into(),
+                        loop_id: None,
+                        request_index: None,
+                        kind: SectionKind::Summary,
+                        ordinal: index as u32,
+                        tool_call_id: None,
+                        history_index: Some(index),
+                    },
+                    revision: 0,
+                    width: 79,
+                    theme: driver.app.theme,
+                    folded: false,
+                    reasoning_visible: driver.app.reasoning_visible,
+                },
+                order: index,
+                rows: Arc::new(vec!["visible".into()]),
+                source: Arc::clone(&source),
+                source_map: Arc::new(SourceMap {
+                    source,
+                    rows: Arc::new(vec![]),
+                }),
+                copy_ranges: Arc::new(vec![]),
+                link_cells: Arc::new(vec![]),
+                content_columns: 0..79,
+                collapsible: false,
+                folded: false,
+            })
+        })
+        .collect();
+    let durable = Arc::new(PreparedDurable {
+        key: DurableCacheKey::new(
+            &driver.app.sessions.known["ses_1"],
+            79,
+            driver.app.theme,
+            driver.app.reasoning_visible,
+        ),
+        layout: Arc::new(ConversationLayout::from_sections(parts)),
+    });
+    driver.step(AppEvent::DurableLayoutPrepared(DurableLayoutResult {
+        identity,
+        durable,
+        changed_sections: 0,
+        tool_index_lookups: 0,
+        complete: false,
+    }));
+    let placeholder = driver.app.cached_durable(79).unwrap();
+    assert!(
+        placeholder
+            .layout
+            .sections
+            .iter()
+            .all(|s| s.layout.key.section.history_index.is_none())
+    );
+    assert!(driver.app.layout_request(79).is_none());
+    slash(&mut driver, "/search full needle");
+    let read = driver.request("session.read");
+    assert_eq!(read.params["cursor"]["item"], 0);
+    driver.respond(read, history(vec![item.clone()], None, 1));
+    while let Some(decode) = driver.app.pending_decode_request() {
+        let scan = decode.scan.as_ref().unwrap();
+        let decoded = minicore_tui::protocol::read::decode_item(&decode.item.data).unwrap();
+        let mut plan =
+            minicore_tui::state::search::ScanPlan::new(&scan.needle, scan.include_thinking);
+        plan.scan_item(decode.item.index, &decoded);
+        driver.app.mark_decode_scheduled();
+        let commands = driver.app.update(AppEvent::HistoryItemDecoded(Box::new(
+            minicore_tui::jobs::DecodeOutcome {
+                identity: decode.identity,
+                fingerprint: decode.fingerprint,
+                result: Ok(decoded),
+                cancelled: false,
+                scan: Some(Box::new(minicore_tui::jobs::ScanItemOutcome {
+                    index: decode.item.index,
+                    matches: plan.collector.matches,
+                })),
+                export: None,
+            },
+        )));
+        driver.commands(commands);
+    }
+    let panel = search_panel(&driver.app);
+    assert!(panel.coverage.complete);
+    assert_eq!(panel.matches.len(), 1);
+    assert!(panel.matches[0].preview.contains("exact saved needle"));
+    press(&mut driver, KeyCode::Esc);
+    press(&mut driver, KeyCode::Esc);
+    let dir = ExportDir::new("layout-budget");
+    let target = dir.target("full.md");
+    slash(&mut driver, &format!("/export {}", target.display()));
+    press(&mut driver, KeyCode::Enter);
+    let mut pages = VecDeque::from(vec![export_page(0, &item, None, 1)]);
+    finish_export(&mut driver, &mut pages);
+    let written = std::fs::read_to_string(target).unwrap();
+    assert_eq!(
+        written
+            .matches("exact saved needle survives display overflow")
+            .count(),
+        1
+    );
+    assert!(!written.contains("Conversation display limit reached"));
+    assert!(
+        Arc::ptr_eq(&placeholder, &driver.app.cached_durable(79).unwrap()),
+        "independent scans did not replace or copy the display notice"
+    );
+}

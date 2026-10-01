@@ -3315,55 +3315,75 @@ impl App {
     }
 
     pub(crate) fn enforce_layout_budget(&mut self) -> usize {
-        let mut total = self.layout_cache_bytes();
-        if total <= crate::limits::LAYOUT_CACHE_BYTES {
+        let before = self.layout_cache_bytes();
+        if before <= crate::limits::LAYOUT_CACHE_BYTES {
             return 0;
         }
-        let mut released = 0;
-        if let Some((_, layout)) = self.layout_partial.take() {
-            let bytes = layout.retained_bytes();
-            self.prepared_conversation = None;
-            total = total.saturating_sub(bytes);
-            released += bytes;
-            if total <= crate::limits::LAYOUT_CACHE_BYTES {
-                return released;
-            }
+        if self
+            .layout_partial
+            .as_ref()
+            .is_some_and(|(identity, _)| !self.layout_identity_is_current(identity))
+        {
+            self.clear_layout_pending();
         }
         let active = self.sessions.active.clone();
-        while total > crate::limits::LAYOUT_CACHE_BYTES {
+        // The active partial owns every batch received so far. Dropping it
+        // while retaining its generation would let the terminal (empty) batch
+        // install either an empty layout or just a later suffix as complete.
+        // Release inactive completed caches before touching that assembly.
+        while self.layout_cache_bytes() > crate::limits::LAYOUT_CACHE_BYTES {
             let victim = self
                 .sessions
                 .known
                 .iter()
-                .filter(|(_, view)| view.transcript.render_cache.is_some())
-                .max_by_key(|(id, view)| {
-                    let active_rank = usize::from(Some(id.as_str()) == active.as_deref());
-                    (
-                        usize::MAX - active_rank,
-                        view.transcript
-                            .render_cache
-                            .as_ref()
-                            .map_or(0, |cache| cache.retained_bytes()),
-                    )
+                .filter(|(id, view)| {
+                    Some(id.as_str()) != active.as_deref() && view.transcript.render_cache.is_some()
+                })
+                .max_by_key(|(_, view)| {
+                    view.transcript
+                        .render_cache
+                        .as_ref()
+                        .map_or(0, |cache| cache.retained_bytes())
                 })
                 .map(|(id, _)| id.clone());
-            let Some(id) = victim else {
-                break;
-            };
-            let bytes = self.sessions.known[&id]
+            let Some(id) = victim else { break };
+            self.sessions
+                .known
+                .get_mut(&id)
+                .unwrap()
                 .transcript
-                .render_cache
-                .as_ref()
-                .map_or(0, |cache| cache.retained_bytes());
-            if let Some(view) = self.sessions.known.get_mut(&id) {
+                .invalidate();
+        }
+        if self.layout_cache_bytes() <= crate::limits::LAYOUT_CACHE_BYTES {
+            return before.saturating_sub(self.layout_cache_bytes());
+        }
+        if self.layout_partial.is_some() {
+            // An old active cache can coexist with the replacement assembly.
+            // Release its owner without changing the source revision that the
+            // current worker is building. Its last drawn cells remain bounded.
+            self.capture_scroll_anchor();
+            if let Some(view) = self.active_session_mut() {
                 view.transcript.render_cache = None;
-                view.transcript.invalidate();
             }
             self.prepared_conversation = None;
-            total = total.saturating_sub(bytes);
-            released += bytes;
         }
-        released
+        if self.layout_cache_bytes() > crate::limits::LAYOUT_CACHE_BYTES {
+            let width = self
+                .layout_partial
+                .as_ref()
+                .map(|(id, _)| id.width)
+                .or_else(|| {
+                    self.active_view()?
+                        .transcript
+                        .render_cache
+                        .as_ref()
+                        .map(|c| c.key.width)
+                });
+            if let Some(width) = width {
+                self.install_layout_limit(width);
+            }
+        }
+        before.saturating_sub(self.layout_cache_bytes())
     }
 
     /// Enforces the global history body budget (spec §21). Background

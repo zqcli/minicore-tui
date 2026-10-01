@@ -1994,21 +1994,23 @@ impl App {
         self.layout_partial = None;
     }
 
+    fn layout_identity_is_current(&self, identity: &DurableLayoutIdentity) -> bool {
+        self.active_view().is_some_and(|view| {
+            view.info.session_id == identity.session_id
+                && view.session_epoch == identity.session_epoch
+                && view.transcript.render_revision == identity.transcript_revision
+                && self.theme == identity.theme
+                && self.reasoning_visible == identity.reasoning_visible
+                && crate::state::view::live_tool_keys(view).as_ref()
+                    == identity.live_tool_keys.as_ref()
+        })
+    }
+
     fn install_durable_layout(&mut self, result: DurableLayoutResult) {
         if self.layout_pending.as_ref() != Some(&result.identity) {
             return;
         }
-        let Some(view) = self.active_view() else {
-            return;
-        };
-        if view.info.session_id != result.identity.session_id
-            || view.session_epoch != result.identity.session_epoch
-            || view.transcript.render_revision != result.identity.transcript_revision
-            || self.theme != result.identity.theme
-            || self.reasoning_visible != result.identity.reasoning_visible
-            || crate::state::view::live_tool_keys(view).as_ref()
-                != result.identity.live_tool_keys.as_ref()
-        {
+        if !self.layout_identity_is_current(&result.identity) {
             return;
         }
         if !result.complete {
@@ -2064,6 +2066,37 @@ impl App {
             durable,
         );
         self.install_conversation(prepared);
+    }
+
+    /// Retire the entire over-budget assembly, not only its received prefix.
+    /// A matching bounded cache prevents an unchanged source/geometry from
+    /// rebuilding forever. Existing revision, width and theme changes (or an
+    /// explicit refresh) invalidate it normally; late batches are rejected by
+    /// the now-cleared pending identity.
+    fn install_layout_limit(&mut self, width: u16) {
+        self.capture_scroll_anchor();
+        let anchor = self
+            .active_view()
+            .and_then(|view| view.scroll.anchor.clone());
+        self.layout_pending = None;
+        self.layout_partial = None;
+        let Some(view) = self.active_view() else {
+            return;
+        };
+        let durable = crate::ui::transcript::layout_limit_placeholder(
+            view,
+            width,
+            self.theme,
+            self.reasoning_visible,
+        );
+        let prepared = crate::ui::transcript::prepare_conversation_from_cache(self, width, durable);
+        self.install_conversation(prepared);
+        // A display notice is not a nearest retained source location. Keep
+        // the original anchor so a later smaller layout can restore it.
+        if let Some(view) = self.active_session_mut() {
+            view.scroll.anchor = anchor;
+        }
+        self.dirty = true;
     }
 
     pub fn selection_copied(&self) -> bool {
@@ -12888,3 +12921,7 @@ mod steer_queue_ui_tests {
         assert_eq!(crate::ui::steer_queue::queue_entries(&app).len(), 6);
     }
 }
+
+#[cfg(test)]
+#[path = "app/layout_budget_tests.rs"]
+mod layout_budget_tests;
