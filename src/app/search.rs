@@ -1332,6 +1332,15 @@ impl App {
             page.pending_encoded.pop_front();
         }
         scan.scanned = scan.scanned.saturating_add(1);
+        let scanned = scan.scanned;
+        if let Some(panel) = self.search_panel_mut().filter(|panel| {
+            panel.session_id == *session_id
+                && panel.session_epoch == session_epoch
+                && panel.generation == generation
+                && panel.scope == SearchScope::FullSession
+        }) {
+            panel.coverage.scanned_items = scanned;
+        }
         if let Some(scan_outcome) = outcome.scan.as_deref() {
             self.install_search_matches(&scan_outcome.matches);
         } else if let Err(detail) = &outcome.result {
@@ -1500,5 +1509,231 @@ impl SearchScan {
         self.page
             .as_ref()
             .is_some_and(|page| !page.pending_encoded.is_empty())
+    }
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use super::*;
+    use crate::jobs::{DecodeOutcome, ScanItemOutcome};
+    use crate::protocol::read::{EncodedHistoryItem, ReadCursor};
+    use crate::state::search::ScanPlan;
+    use crate::ui::testapp;
+    use serde_json::json;
+
+    fn app() -> App {
+        let mut app = testapp::open_empty(ThemeKind::Dark, "ses_1", None, "high");
+        app.open_search("old".into(), SearchScope::FullSession);
+        let scan = app.search_scan.as_mut().unwrap();
+        scan.pin = None;
+        scan.total = Some(3);
+        scan.next = Some(ReadCursor { item: 1, offset: 0 });
+        app.search_panel_mut().unwrap().coverage.total_items = 3;
+        app
+    }
+
+    fn pending_item(app: &mut App, index: usize, terminal: bool) -> DecodeOutcome {
+        let raw = testapp::user_entry(index, "loop_1", "old matching literal").to_string();
+        let mut page = ReadPage::new(
+            ReadCursor {
+                item: index,
+                offset: 0,
+            },
+            None,
+            0,
+        );
+        page.pending_encoded.push_back(EncodedHistoryItem {
+            index,
+            data: raw.into(),
+        });
+        let scan = app.search_scan.as_mut().unwrap();
+        scan.page = Some(page);
+        scan.terminal = terminal;
+        app.queue_search_decode();
+        let request = app.pending_decode_request().unwrap();
+        app.mark_decode_scheduled();
+        let item = crate::protocol::read::decode_item(&request.item.data).unwrap();
+        let mut plan = ScanPlan::new(&request.scan.as_ref().unwrap().needle, false);
+        plan.scan_item(index, &item);
+        DecodeOutcome {
+            identity: request.identity,
+            fingerprint: request.fingerprint,
+            result: Ok(item),
+            cancelled: false,
+            scan: Some(Box::new(ScanItemOutcome {
+                index,
+                matches: plan.collector.matches,
+            })),
+            export: None,
+        }
+    }
+
+    fn finish(app: &mut App, outcome: DecodeOutcome) {
+        app.update(AppEvent::HistoryItemDecoded(Box::new(outcome)));
+    }
+
+    #[test]
+    fn full_search_progress_publishes_each_decode_before_the_next_page() {
+        let mut app = app();
+        let first = pending_item(&mut app, 0, false);
+        assert_eq!(app.search_panel().unwrap().coverage.scanned_items, 0);
+        finish(&mut app, first);
+        let panel = app.search_panel().unwrap();
+        assert_eq!(panel.coverage.scanned_items, 1);
+        assert_eq!(panel.coverage.total_items, 3);
+        assert_eq!(panel.status, SearchStatus::ScanningFull);
+        assert!(!panel.coverage.complete);
+        assert!(panel.status_label().contains("scanned 1/3"));
+        for index in 1..3 {
+            let outcome = pending_item(&mut app, index, index == 2);
+            finish(&mut app, outcome);
+            assert_eq!(
+                app.search_panel().unwrap().coverage.scanned_items,
+                index + 1
+            );
+        }
+        let panel = app.search_panel().unwrap();
+        assert_eq!(panel.status, SearchStatus::Ready);
+        assert!(panel.coverage.complete);
+        assert_eq!(panel.matches.len(), 3);
+        assert!(app.search_scan.is_none());
+    }
+
+    #[test]
+    fn full_search_progress_edit_keeps_previous_query_and_restart_rejects_old_decode() {
+        for restart in [false, true] {
+            let mut app = app();
+            let outcome = pending_item(&mut app, 0, false);
+            app.search_insert(" new");
+            if restart {
+                app.search_confirm();
+            }
+            finish(&mut app, outcome);
+            let panel = app.search_panel().unwrap();
+            assert_eq!(panel.query, "old new");
+            assert_eq!(panel.coverage.scanned_items, usize::from(!restart));
+            assert_eq!(panel.matches.len(), usize::from(!restart));
+            assert_eq!(panel.status, SearchStatus::ScanningFull);
+            assert!(!panel.coverage.complete);
+            if restart {
+                assert_eq!(panel.submitted_query.as_deref(), Some("old new"));
+                assert!(!panel.status_label().contains("previous query"));
+            } else {
+                assert_eq!(panel.submitted_query.as_deref(), Some("old"));
+                assert_eq!(panel.mode, SearchPanelMode::Input);
+                assert!(panel.status_label().contains("previous query \"old\""));
+                assert!(panel.status_label().contains("scanned 1/3"));
+            }
+        }
+    }
+
+    #[test]
+    fn full_search_progress_only_publishes_to_the_matching_panel_owner_and_scope() {
+        for mismatch in 0..4 {
+            let mut app = app();
+            let mut outcome = pending_item(&mut app, 0, false);
+            outcome.scan.as_mut().unwrap().matches.clear();
+            let panel = app.search_panel_mut().unwrap();
+            match mismatch {
+                0 => panel.session_id = "other_session".into(),
+                1 => panel.session_epoch += 1,
+                2 => panel.generation += 1,
+                _ => panel.scope = SearchScope::Loaded,
+            }
+            finish(&mut app, outcome);
+            assert_eq!(app.search_scan.as_ref().unwrap().scanned, 1);
+            assert_eq!(app.search_panel().unwrap().coverage.scanned_items, 0);
+        }
+    }
+
+    #[test]
+    fn full_search_progress_partial_chunks_wait_for_complete_item_decode() {
+        let mut app = app();
+        let generation = app.search_scan.as_ref().unwrap().generation;
+        app.search_scan.as_mut().unwrap().next = None;
+        let raw = testapp::user_entry(0, "loop_1", "old matching literal").to_string();
+        let split = raw.len() / 2;
+        for (offset, data, complete, next) in [
+            (0, &raw[..split], false, json!({"item": 0, "offset": split})),
+            (split, &raw[split..], true, json!({"item": 1, "offset": 0})),
+        ] {
+            let response = RpcResponse {
+                id: RequestId(99),
+                error: None,
+                result: Some(json!({
+                    "session": {"session_id": "ses_1", "profile": "coding", "workspace": "/project", "model": "deep", "reasoning": "high", "loaded": true, "created_at": "2026-01-02T03:04:05Z", "updated_at": "2026-01-02T03:04:05Z"},
+                    "items": [{"index": 0, "offset": offset, "data": data, "total_bytes": raw.len(), "encoding": "utf8_json", "complete": complete}],
+                    "total": 3, "records": [], "records_truncated": true,
+                    "history_revision": "1".repeat(64), "captured_end": 3,
+                    "trailing_incomplete": false, "next_cursor": next,
+                })),
+            };
+            app.on_search_read_response(&"ses_1".into(), generation, &response);
+            assert_eq!(app.search_panel().unwrap().coverage.scanned_items, 0);
+            assert_eq!(app.search_scan.as_ref().unwrap().scanned, 0);
+            assert_eq!(app.pending_decode_request().is_some(), complete);
+        }
+        let request = app.pending_decode_request().unwrap();
+        app.mark_decode_scheduled();
+        finish(
+            &mut app,
+            DecodeOutcome {
+                identity: request.identity,
+                fingerprint: request.fingerprint,
+                result: crate::protocol::read::decode_item(&request.item.data)
+                    .map_err(|e| e.to_string()),
+                cancelled: false,
+                scan: Some(Box::new(ScanItemOutcome {
+                    index: 0,
+                    matches: Vec::new(),
+                })),
+                export: None,
+            },
+        );
+        let panel = app.search_panel().unwrap();
+        assert_eq!(panel.coverage.scanned_items, 1);
+        assert_eq!(panel.coverage.total_items, 3);
+        assert!(panel.coverage.records_truncated);
+        assert!(panel.status_label().contains("turn records truncated"));
+        assert!(!panel.coverage.complete);
+        assert_eq!(panel.status, SearchStatus::ScanningFull);
+    }
+
+    #[test]
+    fn full_search_progress_stop_retains_exact_count_and_rejects_late_item() {
+        let mut app = app();
+        let first = pending_item(&mut app, 0, false);
+        finish(&mut app, first);
+        let late = pending_item(&mut app, 1, false);
+        app.search_stop();
+        finish(&mut app, late);
+        let panel = app.search_panel().unwrap();
+        assert_eq!(panel.coverage.scanned_items, 1);
+        assert_eq!(panel.coverage.total_items, 3);
+        assert_eq!(panel.matches.len(), 1);
+        assert!(panel.coverage.stopped);
+        assert!(!panel.coverage.complete);
+        assert_eq!(panel.status, SearchStatus::Stopped);
+    }
+
+    #[test]
+    fn full_search_progress_decode_error_preserves_existing_processed_count_semantics() {
+        let mut app = app();
+        let mut outcome = pending_item(&mut app, 0, false);
+        outcome.result = Err("invalid item fixture".into());
+        outcome.scan = None;
+        finish(&mut app, outcome);
+        let panel = app.search_panel().unwrap();
+        assert_eq!(panel.coverage.scanned_items, 1);
+        assert_eq!(panel.coverage.failed_items, 1);
+        assert!(!panel.coverage.complete);
+        assert_eq!(panel.status, SearchStatus::ScanningFull);
+        let last = pending_item(&mut app, 1, true);
+        finish(&mut app, last);
+        let panel = app.search_panel().unwrap();
+        assert_eq!(panel.coverage.scanned_items, 2);
+        assert_eq!(panel.coverage.failed_items, 1);
+        assert!(!panel.coverage.complete);
+        assert_eq!(panel.status, SearchStatus::Ready);
     }
 }
