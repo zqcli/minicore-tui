@@ -6213,6 +6213,7 @@ impl App {
                     std::mem::take(&mut self.composer),
                     self.editor_selection.take(),
                     self.slash_completion.take(),
+                    self.slash_dismissed_text.take(),
                 )
             });
         if !self.sessions.known.contains_key(&session_id) {
@@ -6221,11 +6222,15 @@ impl App {
                 .insert(session_id.clone(), self.new_session_view(session.clone()));
         }
         let commands = self.on_session_response(session_id.clone(), response);
-        if let Some((composer, selection, completion)) = scratch {
+        if let Some((composer, selection, mut completion, dismissed_text)) = scratch {
             if self.sessions.active.as_ref() == Some(&session_id) {
                 self.composer = composer;
                 self.editor_selection = selection;
+                if let Some(completion) = &mut completion {
+                    completion.session_owner = Some(session_id);
+                }
                 self.slash_completion = completion;
+                self.slash_dismissed_text = dismissed_text;
             } else {
                 // A refused/stale response must not discard the draft either.
                 self.composer = composer;

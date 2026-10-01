@@ -60,7 +60,9 @@ impl App {
         if self.startup_create_pending()
             && !matches!(
                 crate::command::parse_command(&text),
-                Ok(crate::command::LocalCommand::Help | crate::command::LocalCommand::Logs)
+                Ok(crate::command::LocalCommand::Help
+                    | crate::command::LocalCommand::Logs
+                    | crate::command::LocalCommand::Menu(_))
             )
         {
             self.notice(NoticeLevel::Info, STARTUP_PENDING_NOTICE);

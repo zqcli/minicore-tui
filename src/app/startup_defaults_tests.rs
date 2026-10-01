@@ -346,6 +346,58 @@ fn startup_adopts_an_open_scratch_palette_with_its_unchanged_editor() {
         .as_ref()
         .expect("palette follows adopted scratch editor");
     assert_eq!((after.start, after.end, after.selected), range);
+    assert_eq!(after.source_revision, revision);
+    assert_eq!(after.session_owner.as_deref(), Some("ses_default"));
+}
+
+#[test]
+fn startup_adoption_preserves_palette_dismissal_until_the_draft_changes() {
+    let (mut app, request) = create(prefs());
+    app.composer.type_text("/");
+    app.refresh_slash_completion();
+    assert!(key(&mut app, KeyCode::Esc).is_empty());
+    assert!(app.slash_completion.is_none());
+    assert_eq!(app.slash_dismissed_text.as_deref(), Some("/"));
+    reply(&mut app, &request, session());
+    for code in [KeyCode::Left, KeyCode::Right] {
+        assert!(key(&mut app, code).is_empty());
+        assert!(app.slash_completion.is_none());
+    }
+    app.refresh_slash_completion();
+    assert!(app.slash_completion.is_none());
+    assert_eq!(app.composer.content(), "/");
+    assert!(key(&mut app, KeyCode::Char('m')).is_empty());
+    assert!(app.slash_completion.is_some());
+}
+
+#[test]
+fn startup_pending_allows_group_navigation_but_keeps_mutations_blocked() {
+    let (mut app, request) = create(prefs());
+    app.composer.set_text("/session");
+    assert!(app.submit_composer().is_empty());
+    assert_eq!(app.composer.content(), "/session ");
+    let completion = app.slash_completion.as_ref().unwrap();
+    assert_eq!(
+        completion.group,
+        Some(crate::command::CommandGroup::Session)
+    );
+    assert!(completion.session_owner.is_none());
+    app.composer.set_text("/session new");
+    app.refresh_slash_completion();
+    assert!(key(&mut app, KeyCode::Enter).is_empty());
+    assert!(app.startup_create_pending());
+    assert_eq!(app.composer.content(), "/session new ");
+    assert_eq!(app.pending_requests.len(), 1);
+    app.composer.set_text("/session ");
+    app.refresh_slash_completion();
+    reply(&mut app, &request, session());
+    assert_eq!(app.composer.content(), "/session ");
+    assert_eq!(
+        app.slash_completion.as_ref().unwrap().group,
+        Some(crate::command::CommandGroup::Session)
+    );
+    assert!(key(&mut app, KeyCode::Esc).is_empty());
+    assert_eq!(app.composer.content(), "/");
 }
 
 #[test]
