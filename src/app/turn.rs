@@ -77,8 +77,17 @@ impl App {
             // editor result look stale even though no user draft changed.
             let keeps_editor_draft =
                 matches!(parsed.as_ref(), Ok(crate::command::LocalCommand::Editor));
+            // Files captures where a later candidate may insert a reference.
+            // Capture the post-command draft, not the slash text that normal
+            // cleanup would immediately invalidate. Do not clear it twice.
+            let clears_before_files =
+                matches!(parsed.as_ref(), Ok(crate::command::LocalCommand::Files(_)));
+            if clears_before_files {
+                self.composer.clear();
+            }
             let commands = self.run_command(&text);
-            if parsed.is_ok() && !keeps_browse_draft && !keeps_editor_draft {
+            if parsed.is_ok() && !keeps_browse_draft && !keeps_editor_draft && !clears_before_files
+            {
                 self.composer.clear();
             }
             return commands;

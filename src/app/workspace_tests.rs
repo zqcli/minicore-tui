@@ -750,3 +750,95 @@ fn excessive_paths_malformed_ranges_and_candidate_retention_stop_explicitly() {
     assert!(b.limited);
     assert!(a.workspace_more(false).is_empty());
 }
+
+#[test]
+fn files_slash_command_captures_the_cleared_composer_before_inserting() {
+    let path = "dir 中/target \"x\".txt";
+    for command in ["/files", "/files target"] {
+        let mut a = app();
+        a.composer.set_text(command);
+        assert!(press(&mut a, KeyCode::Enter, KeyModifiers::NONE).is_empty());
+        assert_eq!(a.composer.content(), "");
+        let browser = a.workspace_browser().unwrap();
+        assert_eq!(
+            browser.origin.unwrap().revision,
+            a.composer.editor_revision()
+        );
+        assert_eq!(browser.origin.unwrap().end, 0);
+        assert_eq!(
+            browser.query,
+            if command == "/files" { "" } else { "target" }
+        );
+        let request = take_requests(a.workspace_more(true)).remove(0);
+        respond(&mut a, &request, files(&[path], Value::Null));
+        assert!(press(&mut a, KeyCode::Enter, KeyModifiers::NONE).is_empty());
+        assert!(matches!(a.dock, Dock::Composer));
+        assert_eq!(a.composer.content(), reference_token(path));
+        assert_eq!(a.composer.file_reference_at_cursor(), Some(path));
+        a.composer.undo();
+        assert_eq!(
+            a.composer.content(),
+            "",
+            "one insertion is undoable without reviving the command"
+        );
+    }
+}
+
+#[test]
+fn files_command_completion_enter_uses_the_same_post_command_origin() {
+    let mut a = app();
+    for ch in "/fil".chars() {
+        assert!(press(&mut a, KeyCode::Char(ch), KeyModifiers::NONE).is_empty());
+    }
+    assert!(a.slash_completion.is_some());
+    assert!(press(&mut a, KeyCode::Enter, KeyModifiers::NONE).is_empty());
+    assert!(a.workspace_browser().is_some());
+    assert_eq!(a.composer.content(), "");
+    let request = take_requests(a.workspace_more(true)).remove(0);
+    respond(&mut a, &request, files(&["target.txt"], Value::Null));
+    assert!(press(&mut a, KeyCode::Enter, KeyModifiers::NONE).is_empty());
+    assert_eq!(a.composer.content(), reference_token("target.txt"));
+}
+
+#[test]
+fn files_command_preview_back_keeps_the_valid_insertion_origin() {
+    let mut a = app();
+    a.composer.set_text("/files target");
+    press(&mut a, KeyCode::Enter, KeyModifiers::NONE);
+    let request = take_requests(a.workspace_more(true)).remove(0);
+    respond(&mut a, &request, files(&["target 中.txt"], Value::Null));
+    let preview = take_requests(press(&mut a, KeyCode::F(4), KeyModifiers::NONE)).remove(0);
+    assert_eq!(preview.params["path"], "target 中.txt");
+    respond(
+        &mut a,
+        &preview,
+        page("target 中.txt", "PREVIEW ONLY", 1, Value::Null, "r"),
+    );
+    assert_eq!(
+        a.composer.content(),
+        "",
+        "preview never attaches file content"
+    );
+    assert!(a.file_preview().is_some());
+    press(&mut a, KeyCode::Esc, KeyModifiers::NONE);
+    assert_eq!(a.workspace_browser().unwrap().query, "target");
+    press(&mut a, KeyCode::Enter, KeyModifiers::NONE);
+    assert_eq!(a.composer.content(), reference_token("target 中.txt"));
+    assert!(!a.composer.content().contains("PREVIEW ONLY"));
+}
+
+#[test]
+fn files_command_still_refuses_a_genuinely_newer_draft() {
+    let mut a = app();
+    a.composer.set_text("/files");
+    press(&mut a, KeyCode::Enter, KeyModifiers::NONE);
+    let request = take_requests(a.workspace_more(true)).remove(0);
+    respond(&mut a, &request, files(&["safe.txt"], Value::Null));
+    a.composer.set_text("newer draft wins 中");
+    let revision = a.composer.editor_revision();
+    assert!(press(&mut a, KeyCode::Enter, KeyModifiers::NONE).is_empty());
+    assert_eq!(a.composer.content(), "newer draft wins 中");
+    assert_eq!(a.composer.editor_revision(), revision);
+    assert!(a.workspace_browser().is_some());
+    assert!(a.notices.back().unwrap().text.contains("草稿已改变"));
+}
