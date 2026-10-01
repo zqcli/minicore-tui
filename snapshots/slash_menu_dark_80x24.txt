@@ -10,15 +10,15 @@
 
 
 
-
  ▎
  ▎/
  ▎
  ▎
- ▎→ /diff       review workspace or session changes
- ▎  /files      find files and insert path references
- ▎  /grep       find text in workspace files
- ▎  /tool       inspect a tool call
- ▎  /new        start a new session
- ▎↑↓ / PgUp PgDn choose · Tab fill · Enter run · Esc close · 1/30
+ ▎Commands
+ ▎→ /model         choose a model
+ ▎  /reasoning     choose reasoning effort
+ ▎  /session       new, open and manage sessions
+ ▎  /workspace     files, text search and changes
+ ▎  /conversation  search, copy, export and context
+ ▎↑↓ / PgUp PgDn choose · Tab fill · Enter run · Esc close · 1/6
  starting

@@ -62,6 +62,8 @@ mod context_tests;
 pub mod copy;
 pub mod export;
 #[cfg(test)]
+mod grouped_slash_tests;
+#[cfg(test)]
 mod help_return_tests;
 pub mod history;
 #[cfg(test)]
@@ -505,6 +507,7 @@ pub struct App {
     pub composer: Composer,
     /// Local slash candidates derived from `command::COMMANDS`.
     pub slash_completion: Option<SlashCompletionState>,
+    slash_dismissed_text: Option<String>,
     /// Preferred visual column while moving vertically through wrapped editor
     /// rows, matching the native editor's temporary vertical-column state.
     composer_preferred_visual_col: Option<usize>,
@@ -800,6 +803,7 @@ impl App {
             frame_count: 0,
             composer: Composer::default(),
             slash_completion: None,
+            slash_dismissed_text: None,
             composer_preferred_visual_col: None,
             dock: Dock::Composer,
             main_view: Default::default(),
@@ -1107,6 +1111,7 @@ impl App {
     /// The single state-mutation entry point. Returns the side effects the
     /// main loop must execute; commands are never executed here.
     pub fn update(&mut self, event: AppEvent) -> Vec<AppCommand> {
+        self.discard_stale_slash_completion();
         self.sync_spinner_deadline();
         let reload_active_before = self.reload.is_some();
         let reload_event = self.is_reload_event(&event);
@@ -1574,6 +1579,7 @@ impl App {
         self.enforce_layout_budget();
         self.enforce_live_budget();
         self.enforce_tool_budget();
+        self.discard_stale_slash_completion();
         commands
     }
 
@@ -1622,6 +1628,8 @@ impl App {
         if self.sessions.active == next {
             return;
         }
+        self.slash_completion = None;
+        self.slash_dismissed_text = None;
         // A session-local selector cannot survive leaving its owner, even
         // if another event switches back before Help is dismissed.
         if self
@@ -3568,6 +3576,73 @@ impl App {
         )]
     }
 
+    fn inline_command_error(&self, command: &LocalCommand) -> Option<String> {
+        match command {
+            LocalCommand::ModelValue(value)
+                if !self.catalogs.models.iter().any(|m| m.id == *value) =>
+            {
+                Some(format!("Unknown model: {value}. Use /model to choose."))
+            }
+            LocalCommand::ReasoningValue(value) => {
+                let model = self
+                    .new_session()
+                    .map(|d| d.model.as_str())
+                    .or_else(|| self.active_view().map(|v| v.info.model.as_str()))
+                    .unwrap_or("");
+                let selected = serde_json::from_value::<Reasoning>(serde_json::Value::String(
+                    value.to_ascii_lowercase(),
+                ))
+                .ok();
+                (!selected.is_some_and(|level| {
+                    supported_reasoning(&self.catalogs.models, model).contains(&level)
+                }))
+                .then(|| format!("Unsupported reasoning: {value}. Use /reasoning to choose."))
+            }
+            _ => None,
+        }
+    }
+
+    fn select_model_value(&mut self, value: &str) -> Vec<AppCommand> {
+        let Some(model) = self.catalogs.models.iter().find(|m| m.id == value).cloned() else {
+            self.notice(
+                NoticeLevel::Error,
+                format!("Unknown model: {value}. Use /model to choose."),
+            );
+            return Vec::new();
+        };
+        let commands = self.open_selector(SelectorKind::Model);
+        if !matches!(&self.dock, Dock::ModelSelector(state) if !state.submitting) {
+            return commands;
+        }
+        self.apply_model_selection(model)
+    }
+
+    fn select_reasoning_value(&mut self, value: &str) -> Vec<AppCommand> {
+        let selected = serde_json::from_value::<Reasoning>(serde_json::Value::String(
+            value.to_ascii_lowercase(),
+        ))
+        .ok();
+        let model = self
+            .new_session()
+            .map(|d| d.model.as_str())
+            .or_else(|| self.active_view().map(|v| v.info.model.as_str()))
+            .unwrap_or("");
+        let Some(selected) = selected
+            .filter(|level| supported_reasoning(&self.catalogs.models, model).contains(level))
+        else {
+            self.notice(
+                NoticeLevel::Error,
+                format!("Unsupported reasoning: {value}. Use /reasoning to choose."),
+            );
+            return Vec::new();
+        };
+        let commands = self.open_selector(SelectorKind::Reasoning);
+        if !matches!(&self.dock, Dock::ReasoningSelector(state) if !state.submitting) {
+            return commands;
+        }
+        self.apply_reasoning_selection(selected, None)
+    }
+
     fn confirm_model_item(&mut self) -> Vec<AppCommand> {
         let selected = {
             let Some(state) = self.selector_state() else {
@@ -3588,6 +3663,18 @@ impl App {
             };
             model
         };
+        self.apply_model_selection(selected)
+    }
+
+    fn apply_model_selection(&mut self, selected: ModelInfo) -> Vec<AppCommand> {
+        if self.draft.is_none() && self.active_view().is_some_and(|view| view.browsing) {
+            self.notice(
+                NoticeLevel::Warning,
+                "Read-only session; /resume before changing configuration.",
+            );
+            return Vec::new();
+        }
+
         if self.draft.is_some() {
             let incompatible = {
                 let draft = self.draft.as_mut().expect("draft exists");
@@ -3751,6 +3838,22 @@ impl App {
             // No supported values (unknown model): nothing to confirm.
             return Vec::new();
         };
+        self.apply_reasoning_selection(selected, model_context)
+    }
+
+    fn apply_reasoning_selection(
+        &mut self,
+        selected: Reasoning,
+        model_context: Option<String>,
+    ) -> Vec<AppCommand> {
+        if self.draft.is_none() && self.active_view().is_some_and(|view| view.browsing) {
+            self.notice(
+                NoticeLevel::Warning,
+                "Read-only session; /resume before changing configuration.",
+            );
+            return Vec::new();
+        }
+
         if self.draft.is_some() {
             self.draft.as_mut().expect("draft exists").reasoning = selected;
             self.close_selector_to_form();
@@ -4141,7 +4244,7 @@ impl App {
                 }
             }
             CompletionCancel => {
-                self.slash_completion = std::option::Option::None;
+                self.cancel_slash_completion();
                 Vec::new()
             }
             Newline => {
@@ -4828,6 +4931,10 @@ impl App {
     }
 
     fn apply_command(&mut self, command: LocalCommand) -> Vec<AppCommand> {
+        if let Some(error) = self.inline_command_error(&command) {
+            self.notice(NoticeLevel::Error, error);
+            return Vec::new();
+        }
         match command {
             LocalCommand::New => self.create_session_quick(),
             LocalCommand::NewForm => self.open_new_session(),
@@ -4844,6 +4951,14 @@ impl App {
                 }
             }
             LocalCommand::Sessions => self.open_selector(SelectorKind::Session),
+            LocalCommand::Menu(group) => {
+                self.composer.set_text(&format!("/{} ", group.name()));
+                self.slash_dismissed_text = None;
+                self.refresh_slash_completion();
+                Vec::new()
+            }
+            LocalCommand::ModelValue(value) => self.select_model_value(&value),
+            LocalCommand::ReasoningValue(value) => self.select_reasoning_value(&value),
             LocalCommand::Model => self.open_selector(SelectorKind::Model),
             LocalCommand::Reasoning => self.open_selector(SelectorKind::Reasoning),
             LocalCommand::Tool(key) => self.tool_command(key),
@@ -11162,8 +11277,13 @@ mod tests {
         let completion = app.slash_completion.as_ref().expect("slash popup");
         assert_eq!(completion.start, 0);
         assert_eq!(completion.end, 3);
-        assert!(completion.items.iter().any(|item| item == "/resume"));
-        assert_eq!(completion.items[completion.selected], "/resume");
+        assert!(
+            completion
+                .items
+                .iter()
+                .any(|item| item.as_str() == "/resume")
+        );
+        assert_eq!(completion.items[completion.selected].as_str(), "/resume");
 
         ui_actions::accept_slash_completion(&mut app);
         assert_eq!(app.composer.content(), "/resume ");
@@ -11171,7 +11291,7 @@ mod tests {
 
         app.composer.set_text("/zzz");
         ui_actions::refresh_slash_completion(&mut app);
-        assert!(app.slash_completion.is_none());
+        assert!(app.slash_completion.as_ref().unwrap().items.is_empty());
     }
 
     #[test]
@@ -11179,9 +11299,13 @@ mod tests {
         let mut app = test_app();
         app.composer.set_text("/ski");
         app.slash_completion = Some(SlashCompletionState {
+            source_revision: app.composer.editor_revision(),
+            session_owner: app.sessions.active.clone(),
+            group: None,
+            filter: String::new(),
             start: 0,
             end: 4,
-            items: vec!["/skill:web-access".to_owned()],
+            items: vec!["/skill:web-access".into()],
             selected: 0,
         });
 

@@ -3,6 +3,9 @@
 //! Executing a command never touches the app; failures flow back as
 //! `AppEvent`s (e.g. `AppEvent::RpcSendFailed`).
 
+pub mod menu;
+pub use menu::{CommandGroup, MenuEntry, MenuKind};
+
 use std::fmt;
 
 use crate::protocol::OutgoingRequest;
@@ -142,6 +145,9 @@ impl fmt::Debug for ClipboardText {
 /// resulting requests (e.g. a transcript reload) hit the wire.
 #[derive(Clone, PartialEq, Eq)]
 pub enum LocalCommand {
+    Menu(CommandGroup),
+    ModelValue(String),
+    ReasoningValue(String),
     Diff(crate::protocol::changes::ChangeScope),
     Files(String),
     Grep(String),
@@ -250,6 +256,7 @@ impl CopyTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommandSpec {
     pub name: &'static str,
+    pub group: Option<CommandGroup>,
     /// Usage line shown by help and completion.
     pub usage: &'static str,
     /// Short, task-oriented description shown by command completion.
@@ -287,6 +294,7 @@ pub enum CommandArgs {
 pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "diff",
+        group: Some(CommandGroup::Workspace),
         menu_summary: "review workspace or session changes",
         usage: "/diff [workspace|session|turn <loop_id>]",
         summary: "read-only changes; session/turn cover native writes only",
@@ -294,6 +302,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "files",
+        group: Some(CommandGroup::Workspace),
         menu_summary: "find files and insert path references",
         usage: "/files [path filter]",
         summary: "reference paths only; Tab directory, F4 preview, Ctrl+N next page",
@@ -301,6 +310,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "grep",
+        group: Some(CommandGroup::Workspace),
         menu_summary: "find text in workspace files",
         usage: "/grep [literal]",
         summary: "literal workspace search; Tab paths, Ctrl+I case, Ctrl+N next page",
@@ -308,6 +318,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "tool",
+        group: Some(CommandGroup::Workspace),
         menu_summary: "inspect a tool call",
         usage: "/tool <session_id> <loop_id> <request_index> <tool_call_id>",
         summary: "inspect one exact tool invocation; closing never cancels it",
@@ -315,6 +326,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "new",
+        group: Some(CommandGroup::Session),
         menu_summary: "start a new session",
         usage: "/new [form]",
         summary: "create a session here with the recent explicit model/profile/reasoning",
@@ -322,6 +334,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "search",
+        group: Some(CommandGroup::Conversation),
         menu_summary: "find text in this conversation",
         usage: "/search [full] [literal]",
         summary: "find literal text in loaded content, or scan the full session",
@@ -329,6 +342,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "copy",
+        group: Some(CommandGroup::Conversation),
         menu_summary: "copy conversation text or code",
         usage: "/copy [last|message|code|selection]",
         summary: "copy the last reply, the current message, its code, or the selection",
@@ -336,6 +350,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "export",
+        group: Some(CommandGroup::Conversation),
         menu_summary: "save conversation as Markdown",
         usage: "/export [raw] [path]",
         summary: "write this conversation's saved history to a local Markdown file",
@@ -343,6 +358,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "prev",
+        group: Some(CommandGroup::Conversation),
         menu_summary: "jump to the previous prompt",
         usage: "/prev",
         summary: "jump to the previous user prompt",
@@ -350,6 +366,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "next",
+        group: Some(CommandGroup::Conversation),
         menu_summary: "jump to the next prompt",
         usage: "/next",
         summary: "jump to the next user prompt",
@@ -357,6 +374,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "latest",
+        group: Some(CommandGroup::Conversation),
         menu_summary: "jump to the newest prompt",
         usage: "/latest",
         summary: "jump to the newest user prompt and follow the tail",
@@ -364,6 +382,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "resume",
+        group: Some(CommandGroup::Session),
         menu_summary: "continue a saved session",
         usage: "/resume",
         summary: "continue the read-only session, or open the session selector",
@@ -371,6 +390,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "sessions",
+        group: Some(CommandGroup::Session),
         menu_summary: "browse saved sessions",
         usage: "/sessions",
         summary: "open the session selector",
@@ -378,20 +398,23 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "model",
+        group: None,
         menu_summary: "choose a model",
-        usage: "/model",
+        usage: "/model [id]",
         summary: "choose a model for this session or a new-session draft",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "reasoning",
+        group: None,
         menu_summary: "choose reasoning effort",
-        usage: "/reasoning",
+        usage: "/reasoning [level]",
         summary: "choose reasoning for this session or a new-session draft",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "settings",
+        group: Some(CommandGroup::App),
         menu_summary: "edit preferences and launch paths",
         usage: "/settings",
         summary: "edit local TUI preferences and launch paths",
@@ -399,6 +422,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "editor",
+        group: Some(CommandGroup::App),
         menu_summary: "start draft in external editor",
         usage: "/editor",
         summary: "start a blank draft in the configured external editor",
@@ -406,6 +430,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "theme",
+        group: Some(CommandGroup::App),
         menu_summary: "choose dark or light colors",
         usage: "/theme <dark|light>",
         summary: "switch the color palette",
@@ -413,6 +438,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "clear",
+        group: Some(CommandGroup::Conversation),
         menu_summary: "reload the transcript view",
         usage: "/clear",
         summary: "re-read the local transcript view (never writes to the Store)",
@@ -420,6 +446,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "refresh",
+        group: Some(CommandGroup::Conversation),
         menu_summary: "refresh detail or conversation",
         usage: "/refresh",
         summary: "refresh the active detail, or reload the conversation",
@@ -427,6 +454,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "rename",
+        group: Some(CommandGroup::Session),
         menu_summary: "rename a session",
         usage: "/rename [title]",
         summary: "rename a session; without a title the rename dialog opens",
@@ -434,6 +462,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "help",
+        group: Some(CommandGroup::App),
         menu_summary: "view commands and keyboard shortcuts",
         usage: "/help",
         summary: "open the help panel",
@@ -441,6 +470,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "logs",
+        group: Some(CommandGroup::App),
         menu_summary: "view Agent logs",
         usage: "/logs",
         summary: "open the agent log panel",
@@ -448,6 +478,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "cancel",
+        group: Some(CommandGroup::Conversation),
         menu_summary: "cancel current turn or compaction",
         usage: "/cancel",
         summary: "cancel the active loop",
@@ -455,6 +486,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "context",
+        group: Some(CommandGroup::Conversation),
         menu_summary: "inspect current context",
         usage: "/context",
         summary: "read the current context/preparation snapshot",
@@ -462,6 +494,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "compact",
+        group: Some(CommandGroup::Conversation),
         menu_summary: "compact conversation context",
         usage: "/compact",
         summary: "start one manual compaction",
@@ -469,6 +502,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "reload",
+        group: Some(CommandGroup::App),
         menu_summary: "reload configuration and catalogs",
         usage: "/reload",
         summary: "reload Agent configuration and the catalogs",
@@ -476,6 +510,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "quit",
+        group: Some(CommandGroup::App),
         menu_summary: "exit TUI and stop Agent",
         usage: "/quit",
         summary: "shut the agent down and leave",
@@ -483,6 +518,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "close",
+        group: Some(CommandGroup::Session),
         menu_summary: "close current session",
         usage: "/close [confirm]",
         summary: "close the active session (results are still received)",
@@ -490,6 +526,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "delete",
+        group: Some(CommandGroup::Session),
         menu_summary: "delete a closed session",
         usage: "/delete [confirm]",
         summary: "delete a closed session after confirmation",
@@ -502,28 +539,11 @@ pub fn command_spec(name: &str) -> Option<&'static CommandSpec> {
     COMMANDS.iter().find(|spec| spec.name == name)
 }
 
+/// Static menu projection for callers that do not supply a model catalog.
 pub fn slash_command_candidates(query: &str) -> Vec<String> {
-    let query = query.to_ascii_lowercase();
-    if let Some((name, value)) = query.split_once(char::is_whitespace) {
-        return if name == "theme" {
-            ["dark", "light"]
-                .into_iter()
-                .filter(|choice| choice.starts_with(value.trim_start()))
-                .map(|choice| format!("/theme {choice}"))
-                .collect()
-        } else {
-            Vec::new()
-        };
-    }
-    let mut matches = COMMANDS
-        .iter()
-        .filter_map(|spec| fuzzy_score(&query, spec.name).map(|score| (score, spec.name)))
-        .collect::<Vec<_>>();
-    matches.sort_by(|left, right| left.0.total_cmp(&right.0));
-    matches
-        .into_iter()
-        .map(|(_, name)| format!("/{name}"))
-        .collect()
+    menu::page(query, &[], &[]).map_or_else(Vec::new, |page| {
+        page.entries.into_iter().map(|entry| entry.text).collect()
+    })
 }
 
 /// Pi's command list uses fuzzy subsequence matching rather than a strict
@@ -610,6 +630,12 @@ pub fn parse_command(input: &str) -> Result<LocalCommand, CommandIssue> {
     };
     let name = name.to_ascii_lowercase();
 
+    if let Some(group) = CommandGroup::parse(&name) {
+        if args.is_empty() {
+            return Ok(LocalCommand::Menu(group));
+        }
+        return parse_command(&menu::qualified(group, args)?);
+    }
     if name.is_empty() {
         return Err(CommandIssue::Unknown("/".to_owned()));
     }
@@ -707,8 +733,16 @@ pub fn parse_command(input: &str) -> Result<LocalCommand, CommandIssue> {
         ("latest", _) => no_args(LocalCommand::Latest),
         ("resume", _) => no_args(LocalCommand::Resume),
         ("sessions", _) => no_args(LocalCommand::Sessions),
-        ("model", _) => no_args(LocalCommand::Model),
-        ("reasoning", _) => no_args(LocalCommand::Reasoning),
+        ("model", _) => Ok(if args.is_empty() {
+            LocalCommand::Model
+        } else {
+            LocalCommand::ModelValue(args.into())
+        }),
+        ("reasoning", _) => Ok(if args.is_empty() {
+            LocalCommand::Reasoning
+        } else {
+            LocalCommand::ReasoningValue(args.into())
+        }),
         ("settings", _) => no_args(LocalCommand::Settings),
         ("editor", _) => no_args(LocalCommand::Editor),
         ("clear", _) => no_args(LocalCommand::Clear),
@@ -789,15 +823,20 @@ mod tests {
                 );
             }
         }
-        let candidates = slash_command_candidates("");
-        let mut expected = COMMANDS
-            .iter()
-            .map(|spec| format!("/{}", spec.name))
-            .collect::<Vec<_>>();
-        expected.sort();
-        let mut candidates = candidates;
-        candidates.sort();
-        assert_eq!(candidates, expected);
+        assert_eq!(
+            slash_command_candidates(""),
+            vec![
+                "/model",
+                "/reasoning",
+                "/session",
+                "/workspace",
+                "/conversation",
+                "/app"
+            ]
+        );
+        for spec in COMMANDS {
+            assert!(slash_command_candidates(spec.name).contains(&format!("/{}", spec.name)));
+        }
         assert!(parse_command("/not-a-command").is_err());
         assert!(command_spec("not-a-command").is_none());
     }
@@ -911,8 +950,8 @@ mod tests {
         assert!(command_spec("context").is_some());
         assert!(command_spec("compact").is_some());
         // `/refresh` is implemented in D1, so completion offers it.
-        assert_eq!(slash_command_candidates("ref"), vec!["/refresh"]);
-        assert_eq!(slash_command_candidates("rel"), vec!["/reload"]);
+        assert_eq!(slash_command_candidates("ref")[0], "/refresh");
+        assert_eq!(slash_command_candidates("rel")[0], "/reload");
     }
 
     #[test]

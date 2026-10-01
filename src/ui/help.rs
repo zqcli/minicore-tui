@@ -117,6 +117,37 @@ fn content_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {
     }
     lines.push(Line::default());
     lines.push(section(theme, "Slash commands", width));
+    for (key, what) in [
+        (
+            "/",
+            "Model and Reasoning shortcuts; Session, Workspace, Conversation and App groups",
+        ),
+        (
+            "Enter / Tab",
+            "Enter opens a group or runs a command; Tab only fills text",
+        ),
+        (
+            "Esc in menu",
+            "clear group filter, back to root, then hide; never cancels a turn",
+        ),
+        (
+            "/session configure",
+            "open advanced new-session settings; /new uses configured defaults",
+        ),
+        (
+            "Type after /",
+            "search all commands; legacy direct commands remain available",
+        ),
+    ] {
+        lines.extend(described_lines(
+            key,
+            what,
+            width,
+            26,
+            Style::new().fg(theme.md_code),
+            Style::new().fg(theme.muted),
+        ));
+    }
     for spec in crate::command::COMMANDS {
         lines.extend(described_lines(
             spec.usage,

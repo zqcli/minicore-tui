@@ -72,6 +72,12 @@ impl App {
             // (spec §10.1). Invalid local commands also retain their exact
             // text so the user can correct an argument or spelling error.
             let parsed = crate::command::parse_command(&text);
+            if let Ok(command) = &parsed {
+                if let Some(error) = self.inline_command_error(command) {
+                    self.notice(NoticeLevel::Error, error);
+                    return Vec::new();
+                }
+            }
             let keeps_browse_draft =
                 matches!(parsed.as_ref(), Ok(crate::command::LocalCommand::Resume))
                     && self.sessions.active.as_ref().is_some_and(|active| {
@@ -84,6 +90,7 @@ impl App {
             // Composer revision first. Keep the command buffer stable until
             // that job returns; clearing it here would make every successful
             // editor result look stale even though no user draft changed.
+            let keeps_menu = matches!(parsed.as_ref(), Ok(crate::command::LocalCommand::Menu(_)));
             let keeps_editor_draft =
                 matches!(parsed.as_ref(), Ok(crate::command::LocalCommand::Editor));
             // Files captures where a later candidate may insert a reference.
@@ -95,7 +102,11 @@ impl App {
                 self.composer.clear();
             }
             let commands = self.run_command(&text);
-            if parsed.is_ok() && !keeps_browse_draft && !keeps_editor_draft && !clears_before_files
+            if parsed.is_ok()
+                && !keeps_menu
+                && !keeps_browse_draft
+                && !keeps_editor_draft
+                && !clears_before_files
             {
                 self.composer.clear();
             }

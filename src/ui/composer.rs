@@ -15,7 +15,8 @@ use crate::ui::editor_layout::EditorLayout;
 use crate::ui::rail;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
-    let completion_rows = crate::ui::layout::composer_completion_rows(app);
+    let completion_rows =
+        crate::ui::layout::composer_completion_rows(app).min(area.height.saturating_sub(1));
     let editor_height = area.height.saturating_sub(completion_rows);
     let editor_area = Rect {
         x: area.x,
@@ -113,7 +114,10 @@ fn render_completion(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         return;
     };
     let colors = rail::editor_colors(theme);
-    let max_visible = 5usize;
+    let show_header = area.height >= 3;
+    let max_visible = (area.height as usize)
+        .saturating_sub(1 + usize::from(show_header))
+        .clamp(1, 5);
     let start = completion
         .selected
         .saturating_sub(max_visible / 2)
@@ -126,27 +130,22 @@ fn render_completion(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         .map(|item| UnicodeWidthStr::width(item.as_str()))
         .max()
         .unwrap_or(0)
-        .clamp(10, 20);
+        .clamp(10, 26);
     let mut lines = completion.items[start..end]
         .iter()
         .enumerate()
         .map(|(visible_index, item)| {
             let selected = start + visible_index == completion.selected;
             let prefix = if selected { "→ " } else { "  " };
-            let name = item
-                .trim_start_matches('/')
-                .split_whitespace()
-                .next()
-                .unwrap_or("");
-            let summary = crate::command::command_spec(name).map_or("", |spec| spec.menu_summary);
+            let summary = item.summary;
             let text = if content_width >= 44 && !summary.is_empty() {
-                let label = rail::clip_cells(item, label_width);
+                let label = rail::clip_cells(item.as_str(), label_width);
                 format!(
                     "{prefix}{label}{}  {summary}",
                     " ".repeat(label_width.saturating_sub(UnicodeWidthStr::width(label.as_str())))
                 )
             } else {
-                format!("{prefix}{item}")
+                format!("{prefix}{}", item.text)
             };
             rail::surface_row(
                 area.width as usize,
@@ -163,18 +162,70 @@ fn render_completion(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             )
         })
         .collect::<Vec<_>>();
-    let selected = &completion.items[completion.selected];
-    let needs_input =
-        crate::command::command_spec(selected.trim_start_matches('/')).is_some_and(|spec| {
-            matches!(
-                spec.args,
-                crate::command::CommandArgs::Theme | crate::command::CommandArgs::ToolRef
-            )
+    if completion.items.is_empty() {
+        lines.push(rail::surface_row(
+            area.width as usize,
+            colors,
+            rail::RAIL_WIDTH,
+            Line::from(Span::styled(
+                "No matching commands",
+                Style::new().fg(theme.text),
+            )),
+        ));
+    }
+    if show_header {
+        let breadcrumb = completion.group.map(|group| group.name()).or_else(|| {
+            (!completion.filter.is_empty())
+                .then(|| {
+                    completion
+                        .items
+                        .get(completion.selected)
+                        .map(|item| item.breadcrumb)
+                })
+                .flatten()
         });
-    let enter = if needs_input { "fill" } else { "run" };
-    let position = format!("{}/{}", completion.selected + 1, completion.items.len());
+        let title = breadcrumb
+            .filter(|name| *name != "Commands")
+            .map_or("Commands".to_owned(), |name| format!("Commands › {name}"));
+        lines.insert(
+            0,
+            rail::surface_row(
+                area.width as usize,
+                colors,
+                rail::RAIL_WIDTH,
+                Line::from(Span::styled(
+                    rail::clip_cells(&title, content_width),
+                    Style::new().fg(theme.text),
+                )),
+            ),
+        );
+    }
+    let selected = completion.items.get(completion.selected);
+    let enter = match selected.map(|item| item.kind) {
+        Some(crate::command::MenuKind::Group(_)) => "open",
+        _ if selected.is_some_and(|item| item.needs_input()) => "fill",
+        _ => "run",
+    };
+    let position = format!(
+        "{}/{}",
+        if completion.items.is_empty() {
+            0
+        } else {
+            completion.selected + 1
+        },
+        completion.items.len()
+    );
+    let escape = if completion.group.is_some() {
+        if completion.filter.is_empty() {
+            "back"
+        } else {
+            "clear"
+        }
+    } else {
+        "close"
+    };
     let hint = if content_width >= 76 {
-        format!("↑↓ / PgUp PgDn choose · Tab fill · Enter {enter} · Esc close · {position}")
+        format!("↑↓ / PgUp PgDn choose · Tab fill · Enter {enter} · Esc {escape} · {position}")
     } else if content_width >= 52 {
         format!("↑↓ PgUp/Dn · Tab fill · Enter {enter} · Esc · {position}")
     } else {
@@ -452,7 +503,13 @@ mod tests {
         assert!(press_enter(&mut app).is_empty());
         assert_eq!(app.composer.content(), "/theme ");
         assert_eq!(
-            app.slash_completion.as_ref().unwrap().items,
+            app.slash_completion
+                .as_ref()
+                .unwrap()
+                .items
+                .iter()
+                .map(|e| e.as_str())
+                .collect::<Vec<_>>(),
             vec!["/theme dark", "/theme light"]
         );
         app.update(AppEvent::Terminal(crossterm::event::Event::Key(
@@ -498,13 +555,13 @@ mod tests {
                 .iter()
                 .map(|cell| cell.symbol())
                 .collect::<String>();
-            assert!(text.contains("/diff"));
+            assert!(text.contains("/model"));
             assert!(
                 text.contains("Tab"),
                 "completion controls missing at {width}"
             );
             assert!(text.contains("Esc"), "dismiss hint missing at {width}");
-            assert!(text.contains("1/30"), "position missing at {width}");
+            assert!(text.contains("1/6"), "position missing at {width}");
             let rows = terminal
                 .backend()
                 .buffer()
@@ -512,9 +569,9 @@ mod tests {
                 .chunks(width as usize)
                 .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
                 .collect::<Vec<_>>();
-            assert!(rows[0].contains("→ /diff"));
+            assert!(rows[1].contains("→ /model"));
             assert!(
-                rows[5].contains("Esc") && rows[5].contains("1/30"),
+                rows[6].contains("Esc") && rows[6].contains("1/6"),
                 "controls own the row after five candidates"
             );
             assert!(
@@ -522,7 +579,7 @@ mod tests {
                     .all(|row| UnicodeWidthStr::width(row.as_str()) <= width as usize)
             );
             if width >= 80 {
-                assert!(text.contains("review workspace or session changes"));
+                assert!(text.contains("choose a model"));
             }
         }
         app.slash_completion.as_mut().unwrap().selected = 5;
@@ -537,15 +594,14 @@ mod tests {
             .chunks(80)
             .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
             .collect::<Vec<_>>();
-        assert!(rows[2].contains("→ /search"));
-        assert!(rows[5].contains("6/30"));
+        assert!(rows[5].contains("→ /app"));
+        assert!(rows[6].contains("6/6"));
         assert!(rows.iter().filter(|row| row.contains("→ /")).count() == 1);
         app.composer_mut().clear();
         type_keys(&mut app, "/help");
-        assert_eq!(
-            crate::ui::layout::composer_completion_rows(&app),
-            2,
-            "even one match retains its control hint"
+        assert!(
+            crate::ui::layout::composer_completion_rows(&app) >= 3,
+            "a filtered menu retains its breadcrumb and control hint"
         );
     }
 
@@ -576,9 +632,9 @@ mod tests {
             for (width, height) in [(160, 48), (80, 24), (60, 16)] {
                 let mut app = app_with("");
                 app.update(AppEvent::SetTheme(kind));
-                type_keys(&mut app, "/");
-                for (selected, spec) in crate::command::COMMANDS.iter().enumerate() {
-                    app.slash_completion.as_mut().unwrap().selected = selected;
+                for spec in crate::command::COMMANDS {
+                    app.composer.clear();
+                    type_keys(&mut app, &format!("/{}", spec.name));
                     let area = Rect::new(0, 0, width, height);
                     let screen = crate::ui::layout::screen_layout(&app, area);
                     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -623,7 +679,10 @@ mod tests {
                     };
                     assert!(hint.contains(enter), "{hint}");
                     assert!(hint.contains("Esc"));
-                    assert!(hint.contains(&format!("{}/30", selected + 1)));
+                    assert!(hint.contains(&format!(
+                        "1/{}",
+                        app.slash_completion.as_ref().unwrap().items.len()
+                    )));
                     assert_eq!(screen.footer.y, hint_y + 1, "menu cannot cover the footer");
                     for x in screen.panel.x + rail::RAIL_WIDTH as u16..screen.panel.right() {
                         let cell = buffer.cell((x, hint_y)).unwrap();

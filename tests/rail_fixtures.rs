@@ -364,16 +364,20 @@ fn assert_composer_fixture_with_setup(
     }
     if name == "slash/popup-rows.json" {
         app.slash_completion = Some(minicore_tui::app::SlashCompletionState {
+            source_revision: app.composer.editor_revision(),
+            session_owner: app.sessions.active.clone(),
+            group: None,
+            filter: String::new(),
             start: 0,
-            end: 0,
+            end: app.composer.cursor().1,
             items: vec![
-                "/new".to_owned(),
-                "/resume".to_owned(),
-                "/sessions".to_owned(),
-                "/model".to_owned(),
-                "/reasoning".to_owned(),
-                "/theme".to_owned(),
-                "/clear".to_owned(),
+                "/new".to_owned().into(),
+                "/resume".to_owned().into(),
+                "/sessions".to_owned().into(),
+                "/model".to_owned().into(),
+                "/reasoning".to_owned().into(),
+                "/theme".to_owned().into(),
+                "/clear".to_owned().into(),
             ],
             selected: 0,
         });
@@ -618,9 +622,13 @@ fn rust_slash_enter_states_match_the_fixed_native_editor() {
     kept.update(AppEvent::SetTheme(ThemeKind::Dark));
     kept.composer.set_text("/ski");
     kept.slash_completion = Some(minicore_tui::app::SlashCompletionState {
+        source_revision: kept.composer.editor_revision(),
+        session_owner: kept.sessions.active.clone(),
+        group: None,
+        filter: String::new(),
         start: 0,
         end: 4,
-        items: vec!["/skill:web-access".to_owned()],
+        items: vec!["/skill:web-access".to_owned().into()],
         selected: 0,
     });
     let commands = kept.update(AppEvent::Terminal(crossterm::event::Event::Key(

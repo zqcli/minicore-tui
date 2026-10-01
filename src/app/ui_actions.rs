@@ -35,9 +35,13 @@ pub(super) struct EditorSelection {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlashCompletionState {
+    pub source_revision: u64,
+    pub session_owner: Option<String>,
     pub start: usize,
     pub end: usize,
-    pub items: Vec<String>,
+    pub items: Vec<crate::command::MenuEntry>,
+    pub group: Option<crate::command::CommandGroup>,
+    pub filter: String,
     pub selected: usize,
 }
 
@@ -252,6 +256,11 @@ impl App {
             self.slash_completion = None;
             return;
         };
+        if cursor != text.chars().count() || self.composer.lines().len() != 1 {
+            self.slash_completion = None;
+            return;
+        }
+        // Command completion applies only at the end of one command line.
         // The native command provider only returns command suggestions when
         // the text before the cursor starts at column zero. The parser still
         // accepts leading whitespace; completion intentionally follows the
@@ -261,28 +270,82 @@ impl App {
             self.slash_completion = None;
             return;
         };
-        let items = crate::command::slash_command_candidates(candidate);
-        if items.is_empty() {
+        let content = self.composer.content();
+        if self.slash_dismissed_text.as_ref() == Some(&content) {
             self.slash_completion = None;
             return;
         }
-        // `Editor.getBestAutocompleteMatchIndex` selects the first filtered
-        // command whose value starts with the typed prefix; fuzzy-only
-        // matches fall back to the first ranked result.
-        let selected = items
+        self.slash_dismissed_text = None;
+        let models = self
+            .catalogs
+            .models
             .iter()
-            .position(|item| {
-                item.strip_prefix('/')
-                    .is_some_and(|name| name.starts_with(candidate))
+            .map(|m| m.id.clone())
+            .collect::<Vec<_>>();
+        let model = self
+            .active_view()
+            .map(|v| v.info.model.as_str())
+            .unwrap_or("");
+        let reasoning = crate::state::selection::supported_reasoning(&self.catalogs.models, model)
+            .iter()
+            .filter_map(|level| {
+                serde_json::to_value(level)
+                    .ok()?
+                    .as_str()
+                    .map(str::to_owned)
             })
-            .unwrap_or(0)
-            .min(items.len().saturating_sub(1));
-        self.slash_completion = Some(SlashCompletionState {
-            start: 0,
-            end: cursor,
-            items,
-            selected,
-        });
+            .collect::<Vec<_>>();
+        self.slash_completion =
+            crate::command::menu::page(candidate, &models, &reasoning).map(|page| {
+                SlashCompletionState {
+                    source_revision: self.composer.editor_revision(),
+                    session_owner: self.sessions.active.clone(),
+                    start: 0,
+                    end: cursor,
+                    items: page.entries,
+                    selected: 0,
+                    group: page.group,
+                    filter: page.filter,
+                }
+            });
+    }
+
+    fn slash_completion_current(&self, completion: &SlashCompletionState) -> bool {
+        matches!(self.dock, Dock::Composer)
+            && completion.session_owner == self.sessions.active
+            && completion.source_revision == self.composer.editor_revision()
+            && self.composer.cursor() == (0, completion.end)
+    }
+
+    pub(super) fn discard_stale_slash_completion(&mut self) {
+        if self
+            .slash_completion
+            .as_ref()
+            .is_some_and(|completion| !self.slash_completion_current(completion))
+        {
+            self.slash_completion = None;
+        }
+    }
+
+    pub(super) fn cancel_slash_completion(&mut self) {
+        let Some(completion) = self.slash_completion.take() else {
+            return;
+        };
+        if !self.slash_completion_current(&completion) {
+            return;
+        }
+        if let Some(group) = completion.group {
+            let replacement = if completion.filter.is_empty() {
+                "/".to_owned()
+            } else {
+                format!("/{} ", group.name())
+            };
+            self.composer
+                .replace_range(0, completion.start, completion.end, &replacement);
+            self.refresh_slash_completion();
+        } else {
+            self.slash_dismissed_text = Some(self.composer.content());
+        }
     }
 
     pub(super) fn move_slash_completion(&mut self, delta: i32) {
@@ -302,28 +365,30 @@ impl App {
         let Some(completion) = self.slash_completion.take() else {
             return false;
         };
+        if !self.slash_completion_current(&completion) {
+            return true;
+        }
         let Some(item) = completion.items.get(completion.selected) else {
-            return false;
+            self.slash_completion = Some(completion);
+            return true;
         };
         let (line, _) = self.composer.cursor();
-        let command = item.strip_prefix('/').unwrap_or(item);
         self.composer.replace_range(
             line,
             completion.start,
             completion.end,
-            &format!("/{command} "),
+            &format!("{} ", item.text),
         );
-        let needs_args = crate::command::command_spec(command).filter(|spec| {
-            matches!(
-                spec.args,
-                crate::command::CommandArgs::Theme | crate::command::CommandArgs::ToolRef
-            )
-        });
-        if let Some(spec) = needs_args {
-            self.notice(super::NoticeLevel::Info, spec.usage);
+        let needs_input = item.needs_input();
+        if needs_input && !item.text.starts_with("/skill:") {
+            if let crate::command::MenuKind::Command(name) = item.kind {
+                if let Some(spec) = crate::command::command_spec(name) {
+                    self.notice(super::NoticeLevel::Info, spec.usage);
+                }
+            }
             self.refresh_slash_completion();
         }
-        needs_args.is_some() || command.starts_with("skill:")
+        needs_input
     }
 
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent) -> Vec<AppCommand> {
@@ -1517,10 +1582,10 @@ impl App {
         );
         let display = self.composer.display_content();
         let display_lines = display.split('\n').map(str::to_owned).collect::<Vec<_>>();
-        let editor_height = screen
-            .panel
-            .height
-            .saturating_sub(crate::ui::layout::composer_completion_rows(self));
+        let editor_height = screen.panel.height.saturating_sub(
+            crate::ui::layout::composer_completion_rows(self)
+                .min(screen.panel.height.saturating_sub(1)),
+        );
         let paste_markers = self.composer.display_paste_markers();
         let editor_layout = crate::ui::editor_layout::EditorLayout::new_with_atomic_ranges(
             &display_lines,

@@ -896,6 +896,10 @@ mod tests {
             scrollbar_grab: None,
         }));
         a.slash_completion = Some(crate::app::SlashCompletionState {
+            source_revision: a.composer.editor_revision(),
+            session_owner: a.sessions.active.clone(),
+            group: None,
+            filter: String::new(),
             start: 0,
             end: 1,
             items: vec!["/help".into()],
@@ -926,6 +930,10 @@ mod tests {
     fn slash_completion_page_keys_move_candidates_before_transcript() {
         let mut a = app();
         a.slash_completion = Some(crate::app::SlashCompletionState {
+            source_revision: a.composer.editor_revision(),
+            session_owner: a.sessions.active.clone(),
+            group: None,
+            filter: String::new(),
             start: 0,
             end: 1,
             items: vec!["/help".into()],
