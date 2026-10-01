@@ -181,18 +181,12 @@ impl Composer {
         {
             return;
         }
-        self.begin_edit();
-        let before = self.content();
-        self.textarea
-            .move_cursor(CursorMove::Jump(line as u16, start as u16));
-        for _ in start..end {
-            self.textarea.delete_next_char();
-        }
-        self.textarea.insert_str(replacement);
-        let after = self.content();
-        self.byte_len = after.len();
-        self.reconcile_pastes(&before, &after);
-        self.bump_revision();
+        self.move_to(line, start);
+        let offset = self.cursor_char_offset();
+        // Deletion and insertion are separate native undo records. Keep the
+        // projection snapshot aligned with each, including empty operations.
+        self.delete_raw_range(offset, offset + end - start);
+        self.type_text(replacement);
     }
 
     pub fn is_empty(&self) -> bool {
@@ -243,11 +237,14 @@ impl Composer {
                 .map_or(0, |(_, _, path)| path.capacity())
     }
 
-    /// Shrinks the retained undo capacity; the editor drops its oldest
-    /// records. Un-sent text is never touched.
+    /// Changes the retained undo capacity. The pinned editor resets its
+    /// history here, so projection history must be reset too. Un-sent text is
+    /// never touched.
     pub fn set_undo_capacity(&mut self, capacity: usize) {
         self.undo_capacity = capacity.clamp(1, MAX_COMPOSER_HISTORIES);
         self.textarea.set_max_histories(self.undo_capacity);
+        self.paste_undo.clear();
+        self.paste_redo.clear();
     }
 
     /// The current undo capacity (for budget reports and tests).
@@ -267,59 +264,48 @@ impl Composer {
         if !self.can_insert_bytes(bytes) {
             return false;
         }
-        self.begin_edit();
-        if self.insert_needs_no_diff() {
-            self.textarea.insert_char(c);
-            self.byte_len = self.byte_len.saturating_add(bytes);
-        } else {
-            let before = self.content();
-            self.textarea.insert_char(c);
-            let after = self.content();
-            self.byte_len = after.len();
-            self.reconcile_pastes(&before, &after);
-        }
+        let start = self.edit_offset();
+        self.textarea.insert_char(c);
+        self.record_edit();
+        self.byte_len += bytes;
+        self.reconcile_pastes(start, start, 1);
         self.bump_revision();
         true
     }
 
     pub fn type_text(&mut self, text: &str) -> bool {
-        if !self.can_insert_bytes(text.len()) {
-            return false;
-        }
-        self.begin_edit();
-        if self.insert_needs_no_diff() {
-            self.textarea.insert_str(text);
-            self.byte_len = self.byte_len.saturating_add(text.len());
-        } else {
-            let before = self.content();
-            self.textarea.insert_str(text);
-            let after = self.content();
-            self.byte_len = after.len();
-            self.reconcile_pastes(&before, &after);
-        }
-        self.bump_revision();
-        true
+        self.insert_text(text, false)
     }
 
     /// Inserts a paste as one edit. Large payloads receive a display-only
     /// marker while `content()` continues to return the complete original.
     pub fn insert_paste(&mut self, text: &str) -> bool {
+        self.insert_text(text, true)
+    }
+
+    fn insert_text(&mut self, text: &str, pasted: bool) -> bool {
         if !self.can_insert_bytes(text.len()) {
             return false;
         }
-        self.begin_edit();
-        let before = self.content();
-        let start = global_cursor(&self.textarea, &before);
-        self.textarea.insert_str(text);
-        let after = self.content();
-        self.byte_len = after.len();
-        self.reconcile_pastes(&before, &after);
+        let start = if pasted {
+            self.cursor_char_offset()
+        } else {
+            self.edit_offset()
+        };
+        if !self.textarea.insert_str(text) {
+            return true;
+        }
+        self.record_edit();
+        // TextArea strips one trailing CR from each inserted logical line.
+        // Measure the inserted text, not the full draft, to retain the fast path.
+        let stripped = text.split('\n').filter(|line| line.ends_with('\r')).count();
+        let char_count = text.chars().count() - stripped;
+        self.byte_len += text.len() - stripped;
+        self.reconcile_pastes(start, start, char_count);
         let line_count = text.split('\n').count();
-        let char_count = text.chars().count();
-        if line_count > 10 || char_count > 1_000 {
-            let id = self.pastes.iter().map(|paste| paste.id).max().unwrap_or(0) + 1;
+        if pasted && (line_count > 10 || char_count > 1_000) {
             self.pastes.push(PasteRange {
-                id,
+                id: 0,
                 start,
                 end: start + char_count,
                 line_count,
@@ -337,16 +323,14 @@ impl Composer {
         self.byte_len.saturating_add(additional) <= MAX_COMPOSER_BYTES
     }
 
-    /// True when the next insertion cannot intersect a paste range, so its
-    /// only effect is a byte-length delta. The cursor is at or after every
-    /// paste; any other position keeps the full before/after diff so paste
-    /// ranges stay exact.
-    fn insert_needs_no_diff(&self) -> bool {
+    /// An edit offset is only needed when a projection needs reconciliation.
+    /// Avoid scanning preceding lines in drafts without any hidden pastes.
+    fn edit_offset(&self) -> usize {
         if self.pastes.is_empty() {
-            return true;
+            0
+        } else {
+            self.cursor_char_offset()
         }
-        let at = self.cursor_char_offset();
-        self.pastes.iter().all(|paste| at >= paste.end)
     }
 
     /// Global char offset of the cursor, without joining the buffer. Sums the
@@ -361,66 +345,61 @@ impl Composer {
     }
 
     pub fn newline(&mut self) -> bool {
-        if !self.can_insert_bytes(1) {
-            return false;
-        }
-        self.begin_edit();
-        if self.insert_needs_no_diff() {
-            self.textarea.insert_newline();
-            self.byte_len = self.byte_len.saturating_add(1);
-        } else {
-            let before = self.content();
-            self.textarea.insert_newline();
-            let after = self.content();
-            self.byte_len = after.len();
-            self.reconcile_pastes(&before, &after);
-        }
-        self.bump_revision();
-        true
+        self.type_char('\n')
     }
 
     /// Backspace; joins lines at word edges exactly as tui-textarea does.
     pub fn backspace(&mut self) {
-        self.begin_edit();
         let cursor = self.cursor_char_offset();
         if let Some(paste) = self.pastes.iter().find(|paste| paste.end == cursor) {
-            let before = self.content();
-            let start = paste.start;
-            let count = paste.end.saturating_sub(paste.start);
-            for _ in 0..count {
-                self.textarea.delete_char();
-            }
-            debug_assert_eq!(start, global_cursor(&self.textarea, &before));
-            let after = self.content();
-            self.byte_len = after.len();
-            self.reconcile_pastes(&before, &after);
+            self.delete_raw_range(paste.start, paste.end);
         } else {
             let deleted = self.previous_char_bytes();
-            self.textarea.delete_char();
-            self.byte_len = self.byte_len.saturating_sub(deleted);
+            if self.textarea.delete_char() {
+                self.record_edit();
+                self.byte_len -= deleted;
+                self.reconcile_pastes(cursor - 1, cursor, 0);
+                self.bump_revision();
+            }
         }
-        self.bump_revision();
     }
 
     /// Delete (forward).
     pub fn delete(&mut self) {
-        self.begin_edit();
         let cursor = self.cursor_char_offset();
         if let Some(paste) = self.pastes.iter().find(|paste| paste.start == cursor) {
-            let before = self.content();
-            let count = paste.end.saturating_sub(paste.start);
-            for _ in 0..count {
-                self.textarea.delete_next_char();
-            }
-            let after = self.content();
-            self.byte_len = after.len();
-            self.reconcile_pastes(&before, &after);
+            self.delete_raw_range(paste.start, paste.end);
         } else {
             let deleted = self.next_char_bytes();
-            self.textarea.delete_next_char();
-            self.byte_len = self.byte_len.saturating_sub(deleted);
+            if self.textarea.delete_next_char() {
+                self.record_edit();
+                self.byte_len -= deleted;
+                self.reconcile_pastes(cursor, cursor + 1, 0);
+                self.bump_revision();
+            }
         }
-        self.bump_revision();
+    }
+
+    /// Delete a known raw range in one native undo record. All callers start
+    /// at or after its beginning. Backward cursor movement does not edit text
+    /// and avoids truncating large paste coordinates to TextArea's u16 Jump.
+    fn delete_raw_range(&mut self, start: usize, end: usize) {
+        if start == end {
+            return;
+        }
+        let cursor = self.cursor_char_offset();
+        debug_assert!(start <= cursor && start < end);
+        for _ in start..cursor {
+            self.textarea.move_cursor(CursorMove::Back);
+        }
+        if self.textarea.delete_str(end - start) {
+            self.record_edit();
+            self.byte_len = self.textarea.lines().iter().map(String::len).sum::<usize>()
+                + self.textarea.lines().len()
+                - 1;
+            self.reconcile_pastes(start, end, 0);
+            self.bump_revision();
+        }
     }
 
     fn previous_char_bytes(&self) -> usize {
@@ -478,9 +457,7 @@ impl Composer {
     }
 
     pub fn word_delete(&mut self) {
-        self.begin_edit();
-        let before = self.content();
-        let raw_cursor = global_cursor(&self.textarea, &before);
+        let raw_cursor = self.cursor_char_offset();
         let display = self.display_content();
         let display_cursor = projected_cursor(raw_cursor, &self.pastes);
         let markers = self.display_paste_markers();
@@ -488,40 +465,31 @@ impl Composer {
         if target != display_cursor {
             let raw_start = raw_cursor_for_display(target, &self.pastes);
             let raw_end = raw_cursor_for_display(display_cursor, &self.pastes);
-            let (line, column) = line_col_at(&before, raw_end);
-            self.move_to(line, column);
-            for _ in raw_start..raw_end {
-                self.textarea.delete_char();
-            }
+            self.delete_raw_range(raw_start, raw_end);
         }
-        let after = self.content();
-        self.byte_len = after.len();
-        self.reconcile_pastes(&before, &after);
-        self.bump_revision();
     }
 
     pub fn undo(&mut self) {
-        let current = self.pastes.clone();
-        self.textarea.undo();
-        // Undo/redo may replace arbitrary text; recomputing the length once is
-        // acceptable (spec §12.1).
-        self.byte_len = self.content().len();
-        if let Some(previous) = self.paste_undo.pop() {
-            self.paste_redo.push(current);
-            self.pastes = previous;
+        if self.textarea.undo() {
+            // Only advance projection history when the native edit succeeded.
+            if let Some(previous) = self.paste_undo.pop() {
+                self.paste_redo
+                    .push(std::mem::replace(&mut self.pastes, previous));
+            }
+            self.byte_len = self.content().len();
+            self.bump_revision();
         }
-        self.bump_revision();
     }
 
     pub fn redo(&mut self) {
-        let current = self.pastes.clone();
-        self.textarea.redo();
-        self.byte_len = self.content().len();
-        if let Some(next) = self.paste_redo.pop() {
-            self.paste_undo.push(current);
-            self.pastes = next;
+        if self.textarea.redo() {
+            if let Some(next) = self.paste_redo.pop() {
+                self.paste_undo
+                    .push(std::mem::replace(&mut self.pastes, next));
+            }
+            self.byte_len = self.content().len();
+            self.bump_revision();
         }
-        self.bump_revision();
     }
 
     /// Empties the buffer and drops any history navigation state.
@@ -549,7 +517,7 @@ impl Composer {
             .map(str::to_owned)
             .collect::<Vec<_>>();
         self.textarea = TextArea::new(lines);
-        self.textarea.set_max_histories(MAX_COMPOSER_HISTORIES);
+        self.textarea.set_max_histories(self.undo_capacity);
         self.textarea.move_cursor(CursorMove::Bottom);
         self.textarea.move_cursor(CursorMove::End);
         self.pastes.clear();
@@ -657,32 +625,28 @@ impl Composer {
         self.history_index.is_some()
     }
 
-    fn begin_edit(&mut self) {
+    /// Record the projection before reconciling a successful native edit.
+    /// Mirror the pinned TextArea history's bounded queue, including eviction
+    /// before a branch edit when undo + redo already fill its capacity.
+    fn record_edit(&mut self) {
+        if self.paste_undo.len() + self.paste_redo.len() == self.undo_capacity
+            && !self.paste_undo.is_empty()
+        {
+            self.paste_undo.remove(0);
+        }
         self.paste_undo.push(self.pastes.clone());
         self.paste_redo.clear();
     }
 
-    fn reconcile_pastes(&mut self, before: &str, after: &str) {
-        let before_chars = before.chars().collect::<Vec<_>>();
-        let after_chars = after.chars().collect::<Vec<_>>();
-        let prefix = before_chars
-            .iter()
-            .zip(&after_chars)
-            .take_while(|(left, right)| left == right)
-            .count();
-        let suffix = before_chars[prefix..]
-            .iter()
-            .rev()
-            .zip(after_chars[prefix..].iter().rev())
-            .take_while(|(left, right)| left == right)
-            .count();
-        let old_end = before_chars.len().saturating_sub(suffix);
-        let new_len = after_chars.len().saturating_sub(prefix + suffix);
-        let delta = new_len as isize - old_end.saturating_sub(prefix) as isize;
+    /// Apply a known scalar edit range. Diffing equal text is ambiguous (for
+    /// example deleting an x just before an all-x paste), so use the actual
+    /// edit coordinates even when the surrounding payload repeats.
+    fn reconcile_pastes(&mut self, start: usize, end: usize, inserted: usize) {
+        let delta = inserted as isize - (end - start) as isize;
         self.pastes.retain_mut(|paste| {
-            if paste.end <= prefix {
+            if paste.end <= start {
                 true
-            } else if paste.start >= old_end {
+            } else if paste.start >= end {
                 paste.start = shift(paste.start, delta);
                 paste.end = shift(paste.end, delta);
                 true
@@ -753,7 +717,9 @@ fn projected_cursor(raw_cursor: usize, pastes: &[PasteRange]) -> usize {
         }
         if paste.end <= raw_cursor {
             let marker_len = paste_marker(paste).chars().count();
-            cursor = cursor.saturating_sub(paste.end - paste.start - marker_len);
+            cursor = cursor
+                .saturating_sub(paste.end - paste.start)
+                .saturating_add(marker_len);
         }
     }
     cursor
@@ -1114,6 +1080,247 @@ mod tests {
         assert_eq!(composer.content(), "hello");
         composer.word_delete();
         assert_eq!(composer.content(), "");
+    }
+
+    #[test]
+    fn short_multiline_pastes_can_project_to_longer_markers() {
+        let mut composer = Composer::new();
+        composer.type_text("PRE");
+        composer.insert_paste(&"\n".repeat(10));
+        composer.type_text("TAIL");
+        assert_eq!(composer.display_content(), "PRE[paste #1 +11 lines]TAIL");
+        assert_eq!(composer.display_cursor(), (0, 27));
+        assert_eq!(composer.display_paste_markers(), vec![3..23]);
+        composer.move_to_display(0, 3);
+        composer.move_right();
+        assert_eq!(composer.cursor(), (10, 0));
+        assert_eq!(composer.display_cursor(), (0, 23));
+        composer.move_left();
+        assert_eq!(composer.cursor(), (0, 3));
+
+        composer.move_right();
+        composer.insert_paste(&"x".repeat(1_001));
+        assert_eq!(composer.display_cursor(), (0, 44));
+        assert_eq!(composer.display_paste_markers(), vec![3..23, 23..44]);
+        composer.move_to_display(0, 44);
+        assert_eq!(composer.cursor(), (10, 1_001));
+    }
+
+    #[test]
+    fn paste_deletion_is_one_undo_record_for_all_delete_keys() {
+        for payload in ["x".repeat(1_001), "\n".repeat(10), "你🙂\n".repeat(11)] {
+            for key in 0..3 {
+                let mut composer = Composer::new();
+                composer.type_text("PRE");
+                composer.insert_paste(&payload);
+                composer.type_text("TAIL");
+                composer.move_to_display(0, 3);
+                if key != 1 {
+                    composer.move_right();
+                }
+                let original = composer.content();
+                let ranges = composer.paste_ranges().to_vec();
+                match key {
+                    0 => composer.backspace(),
+                    1 => composer.delete(),
+                    _ => composer.word_delete(),
+                }
+                assert_eq!(composer.content(), "PRETAIL", "delete key {key}");
+                assert!(composer.paste_ranges().is_empty());
+                assert_eq!(composer.byte_len(), 7);
+                for _ in 0..2 {
+                    composer.undo();
+                    assert_eq!(composer.content(), original, "undo key {key}");
+                    assert_eq!(composer.paste_ranges(), ranges);
+                    assert_eq!(composer.byte_len(), original.len());
+                    composer.redo();
+                    assert_eq!(composer.content(), "PRETAIL");
+                    assert!(composer.paste_ranges().is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn deleting_a_paste_after_a_large_prefix_does_not_truncate_coordinates() {
+        let mut composer = Composer::new();
+        let prefix = "p".repeat(70_000);
+        let payload = "x".repeat(1_001);
+        composer.type_text(&prefix);
+        composer.insert_paste(&payload);
+        composer.backspace();
+        assert_eq!(composer.content(), prefix);
+        composer.undo();
+        assert_eq!(composer.content(), format!("{prefix}{payload}"));
+        assert_eq!(composer.paste_ranges()[0].start, 70_000);
+    }
+
+    #[test]
+    fn deleting_before_a_paste_preserves_the_suffix_and_undo_alignment() {
+        for backward in [false, true] {
+            let mut composer = Composer::new();
+            let payload = "x".repeat(1_001);
+            composer.type_text("PRE");
+            composer.insert_paste(&payload);
+            composer.type_text("TAIL");
+            composer.move_to(0, usize::from(backward));
+            if backward {
+                composer.backspace();
+            } else {
+                composer.delete();
+            }
+            assert_eq!(composer.display_content(), "RE[paste #1 1001 chars]TAIL");
+            assert_eq!(composer.paste_ranges()[0].start, 2);
+            composer.move_right();
+            composer.move_right();
+            composer.delete();
+            assert_eq!(composer.content(), "RETAIL");
+            composer.undo();
+            assert_eq!(composer.content(), format!("RE{payload}TAIL"));
+            assert_eq!(composer.display_content(), "RE[paste #1 1001 chars]TAIL");
+            composer.undo();
+            assert_eq!(composer.content(), format!("PRE{payload}TAIL"));
+            assert_eq!(composer.display_content(), "PRE[paste #1 1001 chars]TAIL");
+            composer.redo();
+            composer.redo();
+            assert_eq!(composer.content(), "RETAIL");
+        }
+    }
+
+    #[test]
+    fn repeated_text_edits_use_actual_coordinates_not_a_text_diff() {
+        for backward in [false, true] {
+            let mut composer = Composer::new();
+            composer.type_text("x");
+            composer.insert_paste(&"x".repeat(1_001));
+            composer.type_text("x");
+            composer.move_to(0, usize::from(backward));
+            if backward {
+                composer.backspace();
+            } else {
+                composer.delete();
+            }
+            assert_eq!(composer.display_content(), "[paste #1 1001 chars]x");
+            composer.type_char('x');
+            assert_eq!(composer.display_content(), "x[paste #1 1001 chars]x");
+            composer.move_to(0, 501);
+            if backward {
+                composer.backspace();
+            } else {
+                composer.delete();
+            }
+            assert!(composer.paste_ranges().is_empty());
+            assert_eq!(composer.content(), "x".repeat(1_002));
+            composer.undo();
+            assert_eq!(composer.display_content(), "x[paste #1 1001 chars]x");
+            composer.redo();
+            assert!(composer.paste_ranges().is_empty());
+        }
+    }
+
+    #[test]
+    fn newline_and_unicode_edits_shift_multiple_pastes_exactly() {
+        let mut composer = Composer::new();
+        let payload = "界".repeat(1_001);
+        composer.type_text("你\n");
+        composer.insert_paste(&payload);
+        composer.insert_paste(&"\n".repeat(10));
+        composer.type_text("尾");
+        composer.move_to(1, 0);
+        composer.backspace();
+        assert_eq!(composer.paste_ranges()[0].start, 1);
+        assert_eq!(composer.paste_ranges()[1].start, 1_002);
+        assert_eq!(
+            composer.display_content(),
+            "你[paste #1 1001 chars][paste #2 +11 lines]尾"
+        );
+        assert_eq!(composer.byte_len(), composer.content().len());
+        composer.move_to(0, 0);
+        composer.delete();
+        assert_eq!(composer.paste_ranges()[0].start, 0);
+        assert_eq!(composer.byte_len(), composer.content().len());
+        composer.delete();
+        assert_eq!(composer.display_content(), "[paste #1 +11 lines]尾");
+        composer.undo();
+        assert_eq!(
+            composer.display_content(),
+            "[paste #1 1001 chars][paste #2 +11 lines]尾"
+        );
+    }
+
+    #[test]
+    fn no_op_edits_and_exhausted_history_do_not_advance_paste_history() {
+        let mut composer = Composer::new();
+        let payload = "x".repeat(1_001);
+        composer.insert_paste(&payload);
+        let revision = composer.editor_revision();
+        composer.delete();
+        composer.type_text("");
+        composer.insert_paste("");
+        composer.redo();
+        assert_eq!(composer.editor_revision(), revision);
+        composer.undo();
+        assert_eq!(composer.content(), "");
+        assert!(composer.paste_ranges().is_empty());
+        let revision = composer.editor_revision();
+        composer.backspace();
+        composer.delete();
+        composer.word_delete();
+        composer.replace_range(0, 0, 0, "");
+        composer.type_text("\r");
+        composer.undo();
+        assert_eq!(composer.editor_revision(), revision);
+        composer.redo();
+        assert_eq!(composer.content(), payload);
+        assert_eq!(composer.display_content(), "[paste #1 1001 chars]");
+        composer.redo();
+        composer.undo();
+        assert!(composer.paste_ranges().is_empty());
+    }
+
+    #[test]
+    fn paste_history_matches_native_capacity_reset_and_branch_eviction() {
+        let mut composer = Composer::new();
+        composer.set_undo_capacity(2);
+        let payload = "x".repeat(1_001);
+        composer.insert_paste(&payload);
+        composer.type_char('a');
+        composer.undo();
+        composer.type_char('b');
+        composer.undo();
+        composer.undo(); // The original paste insertion was evicted.
+        assert_eq!(composer.content(), payload);
+        assert_eq!(composer.display_content(), "[paste #1 1001 chars]");
+        composer.redo();
+        assert_eq!(composer.display_content(), "[paste #1 1001 chars]b");
+        composer.set_undo_capacity(1);
+        composer.undo();
+        assert_eq!(composer.display_content(), "[paste #1 1001 chars]b");
+        assert!(composer.paste_undo.is_empty());
+        assert!(composer.paste_redo.is_empty());
+        composer.set_text("");
+        assert_eq!(composer.textarea.max_histories(), 1);
+        composer.insert_paste(&payload);
+        for _ in 0..(MAX_COMPOSER_HISTORIES + 5) {
+            composer.type_char('a');
+        }
+        assert_eq!(composer.paste_undo.len(), 1);
+    }
+
+    #[test]
+    fn range_replacement_keeps_a_snapshot_for_each_native_edit() {
+        let mut composer = Composer::new();
+        composer.type_text("PRE");
+        composer.insert_paste(&"x".repeat(1_001));
+        composer.replace_range(0, 0, 3, "NEW");
+        assert_eq!(composer.display_content(), "NEW[paste #1 1001 chars]");
+        composer.undo();
+        assert_eq!(composer.display_content(), "[paste #1 1001 chars]");
+        composer.undo();
+        assert_eq!(composer.display_content(), "PRE[paste #1 1001 chars]");
+        composer.redo();
+        composer.redo();
+        assert_eq!(composer.display_content(), "NEW[paste #1 1001 chars]");
     }
 
     #[test]

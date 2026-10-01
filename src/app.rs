@@ -2108,7 +2108,8 @@ impl App {
         if let Some(view) = self.active_session_mut() {
             view.scroll.follow_tail = false;
             view.scroll.offset = offset;
-            view.scroll.new_content = false;
+            // Reflow restores the viewport, not the user's read position.
+            // Keep unread output sticky until scrolling returns to the tail.
             if let Some(Some(fallback_anchor)) = fallback_anchor {
                 view.scroll.anchor = Some(fallback_anchor);
             }
@@ -7651,6 +7652,42 @@ mod tests {
         assert_eq!(
             app.active_view().unwrap().scroll.offset,
             row.saturating_sub(anchor.screen_row)
+        );
+    }
+
+    #[test]
+    fn unread_output_survives_layout_replacement_until_scrolling_to_tail() {
+        let mut app = anchor_fixture();
+        let target = anchor_target_row(&app, 3);
+        let view = app.active_session_mut().unwrap();
+        view.scroll.follow_tail = false;
+        view.scroll.offset = target;
+        view.scroll.new_content = true;
+
+        // Layout installation occurs for same-height stream updates, resizing,
+        // and live-to-durable Markdown reflow. None means the output was read.
+        for width in [79, 24, 120] {
+            let prepared = crate::ui::transcript::prepare_conversation(&app, width);
+            let total = prepared.total_rows();
+            app.install_conversation(prepared);
+            app.update(AppEvent::Viewport {
+                total_lines: total,
+                visible_rows: 6,
+            });
+            let scroll = &app.active_view().unwrap().scroll;
+            assert!(!scroll.follow_tail);
+            assert!(
+                scroll.new_content,
+                "layout width {width} cleared unread output"
+            );
+        }
+
+        app.transcript_scroll_bottom();
+        let scroll = &app.active_view().unwrap().scroll;
+        assert!(scroll.follow_tail);
+        assert!(
+            !scroll.new_content,
+            "returning to the tail acknowledges output"
         );
     }
 
