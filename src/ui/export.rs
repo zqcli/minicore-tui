@@ -135,7 +135,10 @@ fn render_progress(frame: &mut Frame, area: Rect, form: &ExportFormState, theme:
                 "saved history only; nothing has been written yet".to_owned()
             }
         }
-        ExportPhase::Running => format!("writing… {} item(s) forwarded", form.items),
+        ExportPhase::Running => format!(
+            "writing… {} item(s), {} bytes staged; not committed",
+            form.items, form.bytes
+        ),
         ExportPhase::Cancelling => {
             "cancelling: waiting for the writer to confirm whether it committed".to_owned()
         }
@@ -260,5 +263,17 @@ mod tests {
         assert!(text.contains("[x] Ctrl+Y overwrite"));
         assert!(text.contains("saved history + unsaved turn"));
         assert!(!text.contains("saved history only"));
+    }
+
+    #[test]
+    fn writing_progress_is_staged_and_does_not_claim_a_commit() {
+        let mut form = ExportFormState::new("conversation.md".into());
+        form.phase = ExportPhase::Running;
+        form.items = 123;
+        form.bytes = 45678;
+        let text = drawn(&form, 60, 12);
+        assert!(text.contains("123 item(s), 45678 bytes staged"));
+        assert!(text.contains("not committed"));
+        assert!(!text.contains("wrote 123"));
     }
 }

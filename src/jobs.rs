@@ -862,7 +862,14 @@ impl LocalJobs {
         self.next_id = self.next_id.wrapping_add(1);
         let events = self.events_tx.clone();
         let handle = tokio::task::spawn_blocking(move || {
-            let outcome = run_export_job(&target, overwrite, rx, cancel);
+            let outcome =
+                run_export_job_with_progress(&target, overwrite, rx, cancel, |items, bytes| {
+                    let _ = events.blocking_send(AppEvent::ExportProgress {
+                        capture: capture.clone(),
+                        items,
+                        bytes,
+                    });
+                });
             let _ = events.blocking_send(AppEvent::JobFinished(JobOutcome::Export {
                 capture,
                 outcome,
@@ -1204,8 +1211,21 @@ fn next_export_message(
 pub fn run_export_job(
     target: &std::path::Path,
     overwrite: bool,
+    rx: mpsc::Receiver<ExportInbound>,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+) -> ExportOutcome {
+    run_export_job_with_progress(target, overwrite, rx, cancel, |_, _| {})
+}
+
+/// Reports successful consumption through the existing bounded job channel.
+/// Even a header/raw chunk can free the input slot that the App is waiting
+/// for. Never depend on a timer or unrelated user input to retry that slot.
+fn run_export_job_with_progress(
+    target: &std::path::Path,
+    overwrite: bool,
     mut rx: mpsc::Receiver<ExportInbound>,
     cancel: Arc<std::sync::atomic::AtomicBool>,
+    mut progress: impl FnMut(usize, usize),
 ) -> ExportOutcome {
     use crate::state::export::{
         EXPORT_OVERSIZED_NOTE, ExportCommitError, ExportStartError, ExportWriter, RawItemStream,
@@ -1316,6 +1336,7 @@ pub fn run_export_job(
             }
             items += 1;
         }
+        progress(items, writer.bytes());
     }
     if let Some(error) = failure {
         let temp_removed = writer.abort().is_ok();
@@ -1740,5 +1761,141 @@ mod tests {
             started.elapsed() >= Duration::from_millis(50),
             "shutdown waits for the owned job, it does not detach it"
         );
+    }
+
+    #[tokio::test]
+    async fn export_writer_reports_capacity_and_staged_counts_before_completion() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("conversation.md");
+        let capture = ExportCapture {
+            export_id: 4,
+            session_id: "export-wake".into(),
+            session_epoch: 2,
+        };
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (tx, rx) = mpsc::channel(2);
+        tx.try_send(ExportInbound::Header(Box::new(ExportHeader {
+            notes: vec![],
+        })))
+        .unwrap();
+        tx.try_send(ExportInbound::Item(Box::new(ExportRecord {
+            markdown: "fixture body\n".into(),
+            oversized: None,
+        })))
+        .unwrap();
+        let mut jobs = LocalJobs::new();
+        jobs.start_export(capture.clone(), target.clone(), false, cancel, rx)
+            .unwrap();
+        let mut seen_items = 0;
+        for expected_items in [0, 1] {
+            let event = tokio::time::timeout(Duration::from_secs(3), jobs.events().recv())
+                .await
+                .unwrap()
+                .unwrap();
+            let AppEvent::ExportProgress {
+                capture: actual,
+                items,
+                bytes,
+            } = event
+            else {
+                panic!("writer must wake before completion")
+            };
+            assert_eq!(actual, capture);
+            assert_eq!(items, expected_items);
+            assert!(bytes > 0);
+            seen_items = items;
+            assert!(
+                !target.exists(),
+                "staged progress must not claim a committed target"
+            );
+            assert!(jobs.has_export_in_flight());
+        }
+        assert_eq!(seen_items, 1);
+        tx.try_send(ExportInbound::Finish(Box::default())).unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(3), jobs.events().recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let AppEvent::JobFinished(outcome @ JobOutcome::Export { .. }) = event else {
+            panic!("typed completion follows progress")
+        };
+        assert!(matches!(
+            &outcome,
+            JobOutcome::Export {
+                outcome: ExportOutcome::Finished { items: 1, .. },
+                ..
+            }
+        ));
+        jobs.reap_completion(&outcome).await;
+        assert!(!jobs.has_export_in_flight());
+        assert!(
+            std::fs::read_to_string(&target)
+                .unwrap()
+                .contains("fixture body")
+        );
+        jobs.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn export_shutdown_drains_full_progress_queue_and_joins_cancelled_writer() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("keep.md");
+        std::fs::write(&target, "original target\n").unwrap();
+        let capture = ExportCapture {
+            export_id: 8,
+            session_id: "export-shutdown".into(),
+            session_epoch: 3,
+        };
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let count = JOB_EVENTS_CAPACITY + 2;
+        let (tx, rx) = mpsc::channel(count);
+        tx.try_send(ExportInbound::Header(Box::new(ExportHeader {
+            notes: vec![],
+        })))
+        .unwrap();
+        for _ in 1..count {
+            tx.try_send(ExportInbound::Item(Box::new(ExportRecord {
+                markdown: "staged fixture\n".into(),
+                oversized: None,
+            })))
+            .unwrap();
+        }
+        let mut jobs = LocalJobs::new();
+        jobs.start_export(capture, target.clone(), true, Arc::clone(&cancel), rx)
+            .unwrap();
+        // Reserving five freed input slots proves the writer consumed one
+        // more message than the four-slot job queue can report. No job event
+        // is drained here: its fifth blocking_send must await shutdown.
+        let permits = tokio::time::timeout(
+            Duration::from_secs(3),
+            tx.reserve_many(JOB_EVENTS_CAPACITY + 1),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(jobs.events_rx.len(), JOB_EVENTS_CAPACITY);
+        assert!(!jobs.export_task.as_ref().unwrap().is_finished());
+        assert_eq!(
+            std::fs::read_dir(directory.path()).unwrap().count(),
+            2,
+            "target plus uncommitted temp"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "original target\n"
+        );
+        drop(permits);
+        cancel.store(true, Ordering::Relaxed);
+        // Only the existing owned shutdown path drains the full event queue.
+        // A blocked progress send must not strand the writer or its temp.
+        tokio::time::timeout(Duration::from_secs(3), jobs.shutdown())
+            .await
+            .unwrap();
+        assert!(!jobs.has_export_in_flight());
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "original target\n"
+        );
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 }

@@ -214,6 +214,14 @@ pub enum AppEvent {
     /// An owned local job finished. Jobs never mutate the app; this event is
     /// the only hand-off (spec §5.5).
     JobFinished(JobOutcome),
+    /// The owned export writer consumed input and staged these counts in its
+    /// temporary file. This also wakes a backpressured read/decode chain.
+    /// Progress is not a commit; the final typed outcome remains authoritative.
+    ExportProgress {
+        capture: crate::jobs::ExportCapture,
+        items: usize,
+        bytes: usize,
+    },
     /// A complete render preparation result. `App::update` installs it only
     /// when the active session and content width still match. Rows, section
     /// ranges, copy ranges, and total height are one immutable snapshot.

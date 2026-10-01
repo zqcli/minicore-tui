@@ -1181,7 +1181,10 @@ impl App {
             None
         };
         let reuse_layout = match &event {
-            AppEvent::ConversationPrepared(_) | AppEvent::Tick | AppEvent::Viewport { .. } => true,
+            AppEvent::ConversationPrepared(_)
+            | AppEvent::Tick
+            | AppEvent::Viewport { .. }
+            | AppEvent::ExportProgress { .. } => true,
             AppEvent::Terminal(
                 CrosstermEvent::Mouse(_)
                 | CrosstermEvent::FocusLost
@@ -1408,6 +1411,14 @@ impl App {
                 Vec::new()
             }
             AppEvent::JobFinished(outcome) => self.on_job_finished(outcome),
+            AppEvent::ExportProgress {
+                capture,
+                items,
+                bytes,
+            } => {
+                self.on_export_progress(&capture, items, bytes);
+                Vec::new()
+            }
             AppEvent::ConversationPrepared(prepared) => {
                 self.install_conversation(prepared);
                 Vec::new()

@@ -320,6 +320,8 @@ impl App {
         });
         if let Some(form) = self.export_form_mut() {
             form.phase = crate::state::export::ExportPhase::Running;
+            form.items = 0;
+            form.bytes = 0;
             form.notice = None;
             form.completion = None;
             form.limitations = ExportLimitations::default();
@@ -749,11 +751,17 @@ impl App {
 
     /// Queues the next pending export item on the single decode worker.
     pub(super) fn queue_export_decode(&mut self) {
-        if self.pending_decode.is_some() || self.decode_in_flight.is_some() {
+        if !self.export_outbox.is_empty()
+            || self.pending_decode.is_some()
+            || self.decode_in_flight.is_some()
+        {
             return;
         }
-        let Some((session_epoch, export_id, item, spec)) =
-            self.export_scan.as_ref().and_then(|scan| {
+        let Some((session_epoch, export_id, item, spec)) = self
+            .export_scan
+            .as_ref()
+            .filter(|scan| !scan.stop)
+            .and_then(|scan| {
                 scan.page
                     .as_ref()
                     .and_then(|page| page.pending_encoded.front().cloned())
@@ -982,6 +990,31 @@ impl App {
         );
     }
 
+    /// A writer-capacity notification has already retried the parked record
+    /// through `update`'s normal pump. Only the matching current form may show
+    /// these staged counts; they never release ownership or claim a commit.
+    pub(super) fn on_export_progress(
+        &mut self,
+        capture: &crate::jobs::ExportCapture,
+        items: usize,
+        bytes: usize,
+    ) {
+        if self.export_capture.as_ref() != Some(capture)
+            || self.sessions.active.as_deref() != Some(capture.session_id.as_str())
+            || !self
+                .sessions
+                .known
+                .get(&capture.session_id)
+                .is_some_and(|view| view.session_epoch == capture.session_epoch)
+        {
+            return;
+        }
+        if let Some(form) = self.export_form_mut().filter(|form| form.running()) {
+            form.items = items;
+            form.bytes = bytes;
+        }
+    }
+
     /// Applies the owned job's typed completion. `capture` is the identity the
     /// App recorded at start; a completion for another export is dropped so a
     /// stale result can never decorate a newer form (spec §17.4).
@@ -1113,5 +1146,138 @@ fn export_outcome_summary(outcome: &ExportOutcome, partial: bool) -> String {
                  confirmed removed"
             ),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pending_export() -> (App, crate::command::StartExportRequest) {
+        let mut app = crate::ui::testapp::open_empty(
+            crate::theme::ThemeKind::Dark,
+            "export-test",
+            None,
+            "high",
+        );
+        app.open_export_form("export-test.md".into(), false);
+        let request = app
+            .export_submit()
+            .into_iter()
+            .find_map(|command| match command {
+                AppCommand::StartExport(request) => Some(*request),
+                _ => None,
+            })
+            .expect("one owned writer request");
+        (app, request)
+    }
+
+    #[test]
+    fn export_backpressure_resumes_from_writer_progress_without_input_or_tick() {
+        let (mut app, mut request) = pending_export();
+        // Header occupies the first slot. Fill the second and park exactly
+        // one record while the writer is deliberately not consuming input.
+        for text in ["second slot", "parked record"] {
+            app.queue_export_message(ExportInbound::Item(Box::new(ExportRecord {
+                markdown: text.into(),
+                oversized: None,
+            })));
+        }
+        app.pump_export();
+        assert_eq!(app.export_outbox.len(), 1);
+        assert!(app.export_hold);
+        let mut page = ReadPage::new(crate::protocol::ReadCursor::start(), None, 0);
+        page.pending_encoded
+            .push_back(crate::protocol::read::EncodedHistoryItem {
+                index: 0,
+                data: Arc::from(r#"{"item":{"type":"summary","data":{"content":"next"}}}"#),
+            });
+        app.export_scan.as_mut().unwrap().page = Some(page);
+        app.queue_export_decode();
+        assert!(
+            app.pending_decode.is_none(),
+            "do not decode ahead of a parked record"
+        );
+        assert!(app.decode_in_flight.is_none());
+
+        // The writer freed one slot and reports it on the ordinary job
+        // channel. There is no synthetic Tick, key, resize, or RPC response.
+        assert!(matches!(
+            request.rx.try_recv(),
+            Ok(ExportInbound::Header(_))
+        ));
+        app.update(AppEvent::ExportProgress {
+            capture: request.capture.clone(),
+            items: 0,
+            bytes: 12,
+        });
+        assert!(app.export_outbox.is_empty());
+        assert!(!app.export_hold);
+        assert!(
+            app.pending_decode.is_some(),
+            "the next item is now admitted"
+        );
+        assert!(app.export_owner_busy(), "progress is not completion");
+        assert_eq!(app.export_form().unwrap().bytes, 12);
+    }
+
+    #[test]
+    fn export_progress_is_identity_checked_and_never_claims_commit() {
+        let (mut app, request) = pending_export();
+        let mut stale = request.capture.clone();
+        stale.export_id += 1;
+        app.on_export_progress(&stale, 99, 999);
+        assert_eq!(app.export_form().unwrap().items, 0);
+        app.on_export_progress(&request.capture, 7, 120);
+        let form = app.export_form().unwrap();
+        assert_eq!((form.items, form.bytes), (7, 120));
+        assert_eq!(form.phase, crate::state::export::ExportPhase::Running);
+        assert!(form.completion.is_none());
+        assert!(app.export_owner_busy());
+        app.sessions
+            .known
+            .get_mut("export-test")
+            .unwrap()
+            .session_epoch += 1;
+        app.on_export_progress(&request.capture, 99, 999);
+        assert_eq!(app.export_form().unwrap().items, 7);
+    }
+
+    #[test]
+    fn cancelled_export_admits_no_more_item_decodes() {
+        let (mut app, _request) = pending_export();
+        let mut page = ReadPage::new(crate::protocol::ReadCursor::start(), None, 0);
+        page.pending_encoded
+            .push_back(crate::protocol::read::EncodedHistoryItem {
+                index: 0,
+                data: Arc::from("fixture"),
+            });
+        app.export_scan.as_mut().unwrap().page = Some(page);
+        app.cancel_export();
+        app.queue_export_decode();
+        assert!(app.pending_decode.is_none());
+        assert!(
+            app.export_owner_busy(),
+            "cancel still awaits the writer outcome"
+        );
+    }
+
+    #[test]
+    fn repeated_export_resets_previous_staged_counts_before_writer_wakes() {
+        let (mut app, request) = pending_export();
+        app.on_export_job_finished(
+            request.capture,
+            ExportOutcome::Finished {
+                target: "export-test.md".into(),
+                items: 20,
+                bytes: 2000,
+            },
+        );
+        assert_eq!(app.export_form().unwrap().items, 20);
+        app.export_submit();
+        let form = app.export_form().unwrap();
+        assert_eq!(form.phase, crate::state::export::ExportPhase::Running);
+        assert_eq!((form.items, form.bytes), (0, 0));
+        assert!(form.completion.is_none());
     }
 }
