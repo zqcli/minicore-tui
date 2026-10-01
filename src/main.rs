@@ -234,7 +234,7 @@ async fn run_fullscreen(
         profile: opts.profile.clone(),
         model: opts.model.clone(),
         reasoning: opts.reasoning,
-        open_new_session_on_ready: opts.workspace_explicit && startup_session.is_none(),
+        auto_create_on_ready: startup_session.is_none(),
         startup_session,
     };
     let mut app = App::with_tui_config(workspace, config_path, tui_config);

@@ -91,7 +91,9 @@ pub fn lines(theme: &Theme, app: &App) -> Vec<Line<'static>> {
         }
         ConnectionState::Failed(_) => Span::styled("Disconnected", Style::new().fg(theme.error)),
         ConnectionState::Ready => Span::styled(
-            if app.new_session().is_some() {
+            if app.startup_create_pending() {
+                "Creating default session · your draft is kept"
+            } else if app.new_session().is_some() {
                 "Choose settings below to create a session"
             } else if app.sessions.active.is_some() {
                 "Type a message to begin · / commands · @ files · F1 help"

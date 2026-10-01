@@ -878,7 +878,7 @@ fn new_session_and_empty_created_session_keep_startup_header() {
     assert!(driver.app.new_session().is_none());
     let quick = driver.request("session.create");
     assert_eq!(quick.params["workspace"], "/workspace");
-    assert_eq!(quick.params["model"], "deep");
+    assert!(!quick.params.as_object().unwrap().contains_key("model"));
     driver.respond_error(quick, 1234, "quick create unavailable");
 
     submit_command(&mut driver, "/new form");
@@ -7748,7 +7748,8 @@ fn session_selector_defaults_to_current_workspace_recent_activity() {
 }
 
 /// D1c (spec §10.4): `/new` creates directly in the current workspace with
-/// the recent explicit configuration; the custom form stays on `/new form`.
+/// explicit CLI overrides only; omitted values use Agent defaults. The custom
+/// form stays on `/new form`.
 #[test]
 fn new_command_creates_quickly_and_new_form_opens_the_custom_form() {
     let mut driver = Driver::new();
@@ -7760,9 +7761,11 @@ fn new_command_creates_quickly_and_new_form_opens_the_custom_form() {
     );
     let create = driver.request("session.create");
     assert_eq!(create.params["workspace"], "/workspace");
-    assert_eq!(create.params["profile"], "coding");
-    assert_eq!(create.params["model"], "deep");
-    assert_eq!(create.params["reasoning"], "high");
+    assert_eq!(
+        create.params,
+        json!({"workspace":"/workspace"}),
+        "default creation must let Agent resolve its configured defaults"
+    );
 
     slash(&mut driver, "/new form");
     assert!(

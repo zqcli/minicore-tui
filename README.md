@@ -71,6 +71,13 @@ cargo run --locked -- \
   --theme dark
 ```
 
+Startup opens a prompt immediately and creates one local session using the Agent's
+configured default profile, model, and reasoning. It does not call a model until
+you submit a message. Explicit `--profile`, `--model`, and `--reasoning` override
+only those fields; `--session` and `--continue` take precedence over creation.
+You can type while creation finishes; your draft and editing history are kept.
+Use `/new form` or `Ctrl+N` when you want the advanced session setup form.
+
 ### CLI
 
 | Option | Meaning |

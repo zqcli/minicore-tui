@@ -42,8 +42,8 @@ pub struct Args {
     pub agent_bin_explicit: bool,
     pub agent_config_explicit: bool,
     pub theme_explicit: bool,
-    /// Whether `--workspace` was passed explicitly; a Ready app opens a
-    /// pre-filled new-session form only then (spec 6.1).
+    /// Whether `--workspace` was passed explicitly. Startup creates one local
+    /// session in this workspace (or cwd) using Agent defaults unless overridden.
     pub workspace_explicit: bool,
     pub profile: Option<String>,
     pub model: Option<String>,

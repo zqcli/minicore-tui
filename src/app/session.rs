@@ -925,52 +925,32 @@ impl App {
         ]
     }
 
-    /// `/new` (spec §10.4): create directly in the current workspace with the
-    /// most recent explicit configuration, keeping only seats the catalogs
-    /// still know. The custom form stays on `/new form` and Ctrl+N.
+    /// Quick creation sends only explicit preferences, never synthesized
+    /// catalog/form seats. Agent owns omitted profile/model/reasoning defaults.
     pub(super) fn create_session_quick(&mut self) -> Vec<AppCommand> {
-        if !self.guard_ready() {
-            return Vec::new();
-        }
-        if self.reload.is_some() {
-            self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
-            return Vec::new();
-        }
-        if self.has_pending_lifecycle_request() || self.session_panel_busy() {
+        if self.session_panel_busy() {
             self.notice(NoticeLevel::Info, "wait for the pending session action");
             return Vec::new();
         }
+        self.create_session_from_defaults(SessionCreateOrigin::Quick)
+    }
+
+    pub(super) fn create_session_from_defaults(
+        &mut self,
+        origin: SessionCreateOrigin,
+    ) -> Vec<AppCommand> {
+        let prefs = self.create_prefs.clone();
         let workspace = self
             .catalogs
             .default_workspace
             .to_string_lossy()
             .into_owned();
-        let profile = self.catalogs.next_profile.clone().filter(|id| {
-            self.catalogs
-                .profiles
-                .iter()
-                .any(|profile| &profile.id == id)
-        });
-        let model = self
-            .catalogs
-            .next_model
-            .clone()
-            .filter(|id| self.catalogs.models.iter().any(|model| &model.id == id))
-            .or_else(|| self.catalogs.models.first().map(|model| model.id.clone()));
-        let reasoning = self.catalogs.next_reasoning.filter(|level| {
-            self.catalogs
-                .models
-                .iter()
-                .find(|info| Some(&info.id) == model.as_ref())
-                .is_none_or(|info| {
-                    info.supported_reasoning.is_empty() || info.supported_reasoning.contains(level)
-                })
-        });
-        self.create_session(
+        self.create_session_owned(
+            origin,
             &workspace,
-            profile.as_deref(),
-            model.as_deref(),
-            reasoning,
+            prefs.profile.as_deref(),
+            prefs.model.as_deref(),
+            prefs.reasoning,
             None,
         )
     }
@@ -1053,6 +1033,25 @@ impl App {
         reasoning: Option<Reasoning>,
         title: Option<&str>,
     ) -> Vec<AppCommand> {
+        self.create_session_owned(
+            SessionCreateOrigin::Quick,
+            workspace,
+            profile,
+            model,
+            reasoning,
+            title,
+        )
+    }
+
+    fn create_session_owned(
+        &mut self,
+        origin: SessionCreateOrigin,
+        workspace: &str,
+        profile: Option<&str>,
+        model: Option<&str>,
+        reasoning: Option<Reasoning>,
+        title: Option<&str>,
+    ) -> Vec<AppCommand> {
         if !self.guard_ready() {
             return Vec::new();
         }
@@ -1063,11 +1062,9 @@ impl App {
         if self.has_pending_lifecycle_request() {
             return Vec::new();
         }
-        vec![
-            self.request(RequestKind::CreateSession { draft: u64::MAX }, |id| {
-                OutgoingRequest::session_create(id, workspace, profile, model, reasoning, title)
-            }),
-        ]
+        vec![self.request(RequestKind::CreateSession { origin }, |id| {
+            OutgoingRequest::session_create(id, workspace, profile, model, reasoning, title)
+        })]
     }
 
     pub(super) fn open_session(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
@@ -1694,6 +1691,12 @@ impl App {
         }
         ui_actions::clear_selection(self);
         self.set_active_session(Some(session_id.clone()));
+        // Startup-only guidance expires when an explicit successful create/open
+        // has recovered. Other errors and user-facing notices remain intact.
+        self.notices.retain(|notice| {
+            notice.text != STARTUP_PENDING_NOTICE
+                && !(notice.sticky && notice.text.starts_with(STARTUP_FAILURE_PREFIX))
+        });
 
         self.arm_workspace_status(&session_id, true);
         if self.reload.is_some() {

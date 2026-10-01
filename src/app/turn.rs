@@ -57,6 +57,15 @@ impl App {
             self.notice(NoticeLevel::Info, "wait for configuration reload to finish");
             return Vec::new();
         }
+        if self.startup_create_pending()
+            && !matches!(
+                crate::command::parse_command(&text),
+                Ok(crate::command::LocalCommand::Help | crate::command::LocalCommand::Logs)
+            )
+        {
+            self.notice(NoticeLevel::Info, STARTUP_PENDING_NOTICE);
+            return Vec::new();
+        }
         if is_slash_command(&text) {
             // Continuing a read-only browse must not consume the draft: the
             // text the user typed stays in the composer for the next Enter
@@ -2458,16 +2467,8 @@ impl App {
                     format!("session list refresh failed: {error}"),
                 );
             }
-            RequestKind::CreateSession { draft } => {
-                if let Some(draft_state) = self.draft_matching(draft) {
-                    draft_state.submitting = false;
-                    draft_state.error = Some(format!("failed to send session.create: {error}"));
-                } else {
-                    self.notice(
-                        NoticeLevel::Warning,
-                        format!("create session failed: {error}"),
-                    );
-                }
+            RequestKind::CreateSession { origin } => {
+                self.create_failed(origin, &format!("failed to send session.create: {error}"));
             }
             RequestKind::OpenSession {
                 session_id,

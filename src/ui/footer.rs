@@ -88,6 +88,7 @@ fn footer_parts(app: &App, theme: &Theme) -> FooterParts {
             ConnectionState::Starting => FooterStatus::Starting,
             ConnectionState::ShuttingDown => FooterStatus::ShuttingDown,
             ConnectionState::Failed(_) => FooterStatus::Disconnected,
+            ConnectionState::Ready if app.startup_create_pending() => FooterStatus::Starting,
             ConnectionState::Ready => FooterStatus::Ready,
         };
         return FooterParts {

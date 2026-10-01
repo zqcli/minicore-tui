@@ -5388,3 +5388,154 @@ fn e2e_external_editor_coexists_with_a_real_background_turn() {
         process.terminate().await;
     });
 }
+
+/// Prompt-first startup delegates omitted choices to the Agent's configured
+/// default profile, even when that profile/model are not first in the catalogs.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
+fn e2e_default_startup_respects_agent_defaults_and_explicit_overrides_without_inference() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    let config = std::fs::read_to_string(&env.config_path)
+        .unwrap()
+        .replace("default_profile = \"coding\"", "default_profile = \"fast\"");
+    std::fs::write(&env.config_path, config).unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let cases = [
+            (None, None, None, "fast", "fast", Reasoning::Low),
+            (
+                Some("coding"),
+                None,
+                None,
+                "coding",
+                "deep",
+                Reasoning::High,
+            ),
+            (None, Some("deep"), None, "fast", "deep", Reasoning::Low),
+            (
+                None,
+                None,
+                Some(Reasoning::Auto),
+                "fast",
+                "fast",
+                Reasoning::Auto,
+            ),
+            (
+                Some("coding"),
+                Some("fast"),
+                Some(Reasoning::High),
+                "coding",
+                "fast",
+                Reasoning::High,
+            ),
+        ];
+        for (
+            index,
+            (profile, model, reasoning, expected_profile, expected_model, expected_reasoning),
+        ) in cases.into_iter().enumerate()
+        {
+            let before = env._server.recorded_requests().len();
+            let mut process = env.spawn_agent(&agent_bin);
+            let mut app = App::with_cli_prefs(
+                env.workspace_path.clone(),
+                CliPrefs {
+                    profile: profile.map(str::to_owned),
+                    model: model.map(str::to_owned),
+                    reasoning,
+                    auto_create_on_ready: true,
+                    ..CliPrefs::default()
+                },
+            );
+            app.composer.type_text("preserved startup 中 draft");
+            dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+                .await
+                .unwrap();
+            let id = wait_for_active_session(&mut process, &mut app)
+                .await
+                .unwrap();
+            let info = &app.sessions.known[&id].info;
+            assert_eq!(info.profile, expected_profile);
+            assert_eq!(info.model, expected_model);
+            assert_eq!(info.reasoning, expected_reasoning);
+            assert_eq!(app.composer.content(), "preserved startup 中 draft");
+            assert!(app.new_session().is_none());
+            assert_eq!(
+                env._server.recorded_requests().len(),
+                before,
+                "startup never calls a provider"
+            );
+            if index == 0 {
+                env._server.enqueue_sse_with_model(
+                    sse_text_response("Default startup answer."),
+                    "fast-model",
+                );
+                let commands = app.submit_composer();
+                dispatch_commands(&mut process, &mut app, commands)
+                    .await
+                    .unwrap();
+                pump_until(&mut process, &mut app, |a| {
+                    a.sessions
+                        .known
+                        .get(&id)
+                        .is_some_and(|v| v.live.is_none() && v.transcript.complete)
+                })
+                .await
+                .unwrap();
+                let requests = env._server.recorded_requests();
+                assert_eq!(requests.len(), before + 1);
+                assert_eq!(
+                    requests.last().unwrap().model.as_deref(),
+                    Some("fast-model")
+                );
+                assert_eq!(requests.last().unwrap().json["reasoning"]["effort"], "low");
+                assert!(
+                    requests
+                        .last()
+                        .unwrap()
+                        .body
+                        .contains("preserved startup 中 draft")
+                );
+            }
+            let report = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+            assert!(report.shutdown_ok && report.seen_eof && report.seen_exit);
+            process.terminate().await;
+        }
+        for (profile, model) in [
+            (Some("missing-profile"), None),
+            (None, Some("missing-model")),
+        ] {
+            let before = env._server.recorded_requests().len();
+            let mut process = env.spawn_agent(&agent_bin);
+            let mut app = App::with_cli_prefs(
+                env.workspace_path.clone(),
+                CliPrefs {
+                    profile: profile.map(str::to_owned),
+                    model: model.map(str::to_owned),
+                    auto_create_on_ready: true,
+                    ..CliPrefs::default()
+                },
+            );
+            dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+                .await
+                .unwrap();
+            pump_until(&mut process, &mut app, |a| {
+                a.connection == ConnectionState::Ready
+                    && !a.startup_create_pending()
+                    && a.notices.iter().any(|n| n.text.contains("Startup failed"))
+            })
+            .await
+            .unwrap();
+            assert!(
+                app.sessions.active.is_none(),
+                "unknown explicit choice was not silently substituted"
+            );
+            assert!(app.notices.iter().any(|n| n.text.contains("/new form")));
+            assert!(app.update(AppEvent::Bootstrap).is_empty());
+            assert_eq!(env._server.recorded_requests().len(), before);
+            let report = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+            assert!(report.shutdown_ok && report.seen_eof && report.seen_exit);
+            process.terminate().await;
+        }
+    });
+}

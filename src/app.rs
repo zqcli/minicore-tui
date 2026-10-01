@@ -271,7 +271,7 @@ pub enum RequestKind {
         selected_session_id: Option<SessionId>,
     },
     CreateSession {
-        draft: u64,
+        origin: SessionCreateOrigin,
     },
     OpenSession {
         session_id: SessionId,
@@ -427,20 +427,39 @@ pub enum StartupSession {
     ContinueCurrentWorkspace,
 }
 
-/// CLI preferences injected at construction (spec 6.1). They only seed the
-/// catalog's next-session seats, so an existing session is never touched;
-/// a `None` seat lets the catalog default apply.
+/// The owner of one creation attempt. Startup has different draft-adoption
+/// semantics; a form retains its own identity across asynchronous responses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionCreateOrigin {
+    Startup,
+    Quick,
+    Form(u64),
+}
+
+/// Explicit creation choices are independent of catalog-derived form defaults.
+/// `Some(Auto)` is an explicit reasoning override; `None` lets Agent resolve it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct SessionCreatePrefs {
+    profile: Option<String>,
+    model: Option<String>,
+    reasoning: Option<Reasoning>,
+}
+
+/// CLI preferences seed the advanced form, but only explicitly supplied values
+/// are sent by default creation. Existing sessions are never reconfigured.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CliPrefs {
     pub profile: Option<String>,
     pub model: Option<String>,
     pub reasoning: Option<Reasoning>,
-    /// When set and no session is active, a Ready app opens a pre-filled
-    /// new-session form (explicit `--workspace`; never auto-creates).
-    pub open_new_session_on_ready: bool,
-    /// Consumed once, when the first current catalog arrives (spec §6.1).
+    /// Production enables one default creation after Ready. Explicit session
+    /// selection wins, even if that selection subsequently fails.
+    pub auto_create_on_ready: bool,
     pub startup_session: Option<StartupSession>,
 }
+
+const STARTUP_PENDING_NOTICE: &str = "Creating the default session; your draft is kept";
+const STARTUP_FAILURE_PREFIX: &str = "Startup failed. Retry /new or use /new form: ";
 
 struct TranscriptFrame {
     generation: u64,
@@ -559,9 +578,10 @@ pub struct App {
     shutdown_deadline: Option<Instant>,
     /// The agent child ended while `ShuttingDown` (a `RpcEvent::Exited`).
     shutdown_child_exited: bool,
-    /// When set, reaching `Ready` with no active session opens a pre-filled
-    /// new-session form (explicit `--workspace`).
-    open_new_session_on_ready: bool,
+    /// Consumed once at the initial Ready transition; never reset by reload.
+    /// Explicit existing-session intent always takes precedence.
+    auto_create_on_ready: bool,
+    create_prefs: SessionCreatePrefs,
     /// Clock for session-relative ages; injectable so render output is
     /// deterministic in tests. Read-only, never mutated by `update`.
     pub now: fn() -> SystemTime,
@@ -819,7 +839,8 @@ impl App {
             shutdown_sent: false,
             shutdown_deadline: None,
             shutdown_child_exited: false,
-            open_new_session_on_ready: false,
+            auto_create_on_ready: false,
+            create_prefs: SessionCreatePrefs::default(),
             startup_session: None,
             draft_budget_warned: false,
             now: SystemTime::now,
@@ -879,10 +900,15 @@ impl App {
     }
 
     pub fn set_cli_prefs(&mut self, prefs: CliPrefs) {
+        self.create_prefs = SessionCreatePrefs {
+            profile: prefs.profile.clone(),
+            model: prefs.model.clone(),
+            reasoning: prefs.reasoning,
+        };
         self.catalogs.next_profile = prefs.profile;
         self.catalogs.next_model = prefs.model;
         self.catalogs.next_reasoning = prefs.reasoning;
-        self.open_new_session_on_ready = prefs.open_new_session_on_ready;
+        self.auto_create_on_ready = prefs.auto_create_on_ready;
         self.startup_session = prefs.startup_session;
     }
 
@@ -3886,7 +3912,7 @@ impl App {
         let title = (!draft.title.is_empty()).then_some(draft.title.as_str());
         vec![self.request(
             RequestKind::CreateSession {
-                draft: draft.draft_id,
+                origin: SessionCreateOrigin::Form(draft.draft_id),
             },
             |id| {
                 OutgoingRequest::session_create(
@@ -5919,22 +5945,22 @@ impl App {
             self.connection = ConnectionState::Ready;
             self.blocked_notice = false;
             self.catalogs.seed_seats(&self.sessions.known);
-            // CLI startup intent wins over the pre-filled new-session form:
-            // opening or continuing an existing session is explicit.
+            // Exact/continue startup intent wins even when it fails. A miss
+            // never silently creates a different session.
             match self.startup_session.take() {
                 Some(StartupSession::Exact(session_id)) => {
-                    self.open_new_session_on_ready = false;
+                    self.auto_create_on_ready = false;
                     return self.open_session(&session_id);
                 }
                 Some(StartupSession::ContinueCurrentWorkspace) => {
-                    self.open_new_session_on_ready = false;
+                    self.auto_create_on_ready = false;
                     return self.continue_startup_session();
                 }
                 None => {}
             }
-            if self.open_new_session_on_ready && self.sessions.active.is_none() {
-                self.open_new_session_on_ready = false;
-                self.open_new_session();
+            if self.auto_create_on_ready && self.sessions.active.is_none() {
+                self.auto_create_on_ready = false;
+                return self.create_session_from_defaults(SessionCreateOrigin::Startup);
             }
         }
         Vec::new()
@@ -5965,7 +5991,23 @@ impl App {
         }
     }
 
+    /// Whether the one initial local-session creation still owns its ACK.
+    pub fn startup_create_pending(&self) -> bool {
+        self.pending_requests.values().any(|kind| {
+            matches!(
+                kind,
+                RequestKind::CreateSession {
+                    origin: SessionCreateOrigin::Startup
+                }
+            )
+        })
+    }
+
     fn guard_ready(&mut self) -> bool {
+        if self.startup_create_pending() {
+            self.notice(NoticeLevel::Info, STARTUP_PENDING_NOTICE);
+            return false;
+        }
         if self.connection == ConnectionState::Ready {
             true
         } else {
@@ -6002,39 +6044,79 @@ impl App {
         self.connection_terminated(&startup_error_message(method, &error))
     }
 
-    fn on_create_response(&mut self, draft_id: u64, response: &RpcResponse) -> Vec<AppCommand> {
+    fn create_failed(&mut self, origin: SessionCreateOrigin, detail: &str) {
+        if let SessionCreateOrigin::Form(id) = origin {
+            if let Some(draft) = self.draft_matching(id) {
+                draft.submitting = false;
+                draft.error = Some(detail.to_owned());
+                return;
+            }
+        }
+        if origin == SessionCreateOrigin::Startup {
+            self.sticky_notice(
+                NoticeLevel::Error,
+                format!("{STARTUP_FAILURE_PREFIX}{detail}"),
+            );
+        } else {
+            self.notice(
+                NoticeLevel::Error,
+                format!("failed to create session: {detail}"),
+            );
+        }
+    }
+
+    fn on_create_response(
+        &mut self,
+        origin: SessionCreateOrigin,
+        response: &RpcResponse,
+    ) -> Vec<AppCommand> {
         let session = match response.parse_session() {
             Ok(result) => result.session,
             Err(error) => {
-                if let Some(draft) = self.draft_matching(draft_id) {
-                    draft.submitting = false;
-                    draft.error = Some(format!("{error}"));
-                } else {
-                    self.notice(
-                        NoticeLevel::Error,
-                        format!("failed to create session: {error}"),
-                    );
-                }
+                self.create_failed(origin, &error.to_string());
                 return Vec::new();
             }
         };
         let session_id = session.session_id.clone();
-        if self
-            .draft
-            .as_ref()
-            .is_some_and(|draft| draft.draft_id == draft_id)
-        {
-            self.draft = None;
+        if let SessionCreateOrigin::Form(draft_id) = origin {
+            if self
+                .draft
+                .as_ref()
+                .is_some_and(|draft| draft.draft_id == draft_id)
+            {
+                self.draft = None;
+            }
+            if matches!(&self.dock, Dock::NewSession(draft) if draft.draft_id == draft_id) {
+                self.dock = Dock::Composer;
+            }
         }
-        if matches!(&self.dock, Dock::NewSession(draft) if draft.draft_id == draft_id) {
-            self.dock = Dock::Composer;
-        }
+        // Only the initially created session adopts the in-flight scratch
+        // editor. Moving the whole value preserves cursor/paste/undo history.
+        let scratch = (origin == SessionCreateOrigin::Startup && self.sessions.active.is_none())
+            .then(|| {
+                (
+                    std::mem::take(&mut self.composer),
+                    self.editor_selection.take(),
+                    self.slash_completion.take(),
+                )
+            });
         if !self.sessions.known.contains_key(&session_id) {
             self.sessions
                 .known
                 .insert(session_id.clone(), self.new_session_view(session.clone()));
         }
-        self.on_session_response(session_id, response)
+        let commands = self.on_session_response(session_id.clone(), response);
+        if let Some((composer, selection, completion)) = scratch {
+            if self.sessions.active.as_ref() == Some(&session_id) {
+                self.composer = composer;
+                self.editor_selection = selection;
+                self.slash_completion = completion;
+            } else {
+                // A refused/stale response must not discard the draft either.
+                self.composer = composer;
+            }
+        }
+        commands
     }
 
     fn on_rpc_event(&mut self, event: RpcEvent) -> Vec<AppCommand> {
@@ -6341,7 +6423,7 @@ impl App {
                 }
                 self.on_refresh_sessions_response(&response)
             }
-            RequestKind::CreateSession { draft } => self.on_create_response(draft, &response),
+            RequestKind::CreateSession { origin } => self.on_create_response(origin, &response),
             RequestKind::OpenSession {
                 session_id,
                 previous_retired_loop,
@@ -12925,3 +13007,7 @@ mod steer_queue_ui_tests {
 #[cfg(test)]
 #[path = "app/layout_budget_tests.rs"]
 mod layout_budget_tests;
+
+#[cfg(test)]
+#[path = "app/startup_defaults_tests.rs"]
+mod startup_defaults_tests;
