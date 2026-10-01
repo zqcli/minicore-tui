@@ -493,7 +493,7 @@ fn assert_composer_fixture_with_setup(
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(menu.contains("→ /new"));
-        assert!(menu.contains("create a session"));
+        assert!(menu.contains("start a new session"));
         assert!(menu.contains("Tab fill"));
         assert!(menu.contains("Enter run"));
         assert!(menu.contains("Esc close"));

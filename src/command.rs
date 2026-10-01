@@ -252,7 +252,9 @@ pub struct CommandSpec {
     pub name: &'static str,
     /// Usage line shown by help and completion.
     pub usage: &'static str,
-    /// One-line description shown by the help panel.
+    /// Short, task-oriented description shown by command completion.
+    pub menu_summary: &'static str,
+    /// Detailed description, including scope and limitations, shown by help.
     pub summary: &'static str,
     pub args: CommandArgs,
 }
@@ -285,180 +287,210 @@ pub enum CommandArgs {
 pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "diff",
+        menu_summary: "review workspace or session changes",
         usage: "/diff [workspace|session|turn <loop_id>]",
         summary: "read-only changes; session/turn cover native writes only",
         args: CommandArgs::OptionalPath,
     },
     CommandSpec {
         name: "files",
+        menu_summary: "find files and insert path references",
         usage: "/files [path filter]",
         summary: "reference paths only; Tab directory, F4 preview, Ctrl+N next page",
         args: CommandArgs::OptionalPath,
     },
     CommandSpec {
         name: "grep",
+        menu_summary: "find text in workspace files",
         usage: "/grep [literal]",
         summary: "literal workspace search; Tab paths, Ctrl+I case, Ctrl+N next page",
         args: CommandArgs::OptionalPath,
     },
     CommandSpec {
         name: "tool",
+        menu_summary: "inspect a tool call",
         usage: "/tool <session_id> <loop_id> <request_index> <tool_call_id>",
         summary: "inspect one exact tool invocation; closing never cancels it",
         args: CommandArgs::ToolRef,
     },
     CommandSpec {
         name: "new",
+        menu_summary: "start a new session",
         usage: "/new [form]",
         summary: "create a session here with the recent explicit model/profile/reasoning",
         args: CommandArgs::NewForm,
     },
     CommandSpec {
         name: "search",
+        menu_summary: "find text in this conversation",
         usage: "/search [full] [literal]",
         summary: "find literal text in loaded content, or scan the full session",
         args: CommandArgs::Search,
     },
     CommandSpec {
         name: "copy",
+        menu_summary: "copy conversation text or code",
         usage: "/copy [last|message|code|selection]",
         summary: "copy the last reply, the current message, its code, or the selection",
         args: CommandArgs::Copy,
     },
     CommandSpec {
         name: "export",
+        menu_summary: "save conversation as Markdown",
         usage: "/export [raw] [path]",
         summary: "write this conversation's saved history to a local Markdown file",
         args: CommandArgs::OptionalPath,
     },
     CommandSpec {
         name: "prev",
+        menu_summary: "jump to the previous prompt",
         usage: "/prev",
         summary: "jump to the previous user prompt",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "next",
+        menu_summary: "jump to the next prompt",
         usage: "/next",
         summary: "jump to the next user prompt",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "latest",
+        menu_summary: "jump to the newest prompt",
         usage: "/latest",
         summary: "jump to the newest user prompt and follow the tail",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "resume",
+        menu_summary: "continue a saved session",
         usage: "/resume",
         summary: "continue the read-only session, or open the session selector",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "sessions",
+        menu_summary: "browse saved sessions",
         usage: "/sessions",
         summary: "open the session selector",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "model",
+        menu_summary: "choose a model",
         usage: "/model",
         summary: "choose a model for this session or a new-session draft",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "reasoning",
+        menu_summary: "choose reasoning effort",
         usage: "/reasoning",
         summary: "choose reasoning for this session or a new-session draft",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "settings",
+        menu_summary: "edit preferences and launch paths",
         usage: "/settings",
         summary: "edit local TUI preferences and launch paths",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "editor",
+        menu_summary: "open draft in external editor",
         usage: "/editor",
         summary: "edit the current draft in the configured external editor",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "theme",
+        menu_summary: "choose dark or light colors",
         usage: "/theme <dark|light>",
         summary: "switch the color palette",
         args: CommandArgs::Theme,
     },
     CommandSpec {
         name: "clear",
+        menu_summary: "reload the transcript view",
         usage: "/clear",
         summary: "re-read the local transcript view (never writes to the Store)",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "refresh",
+        menu_summary: "refresh detail or conversation",
         usage: "/refresh",
         summary: "refresh the active detail, or reload the conversation",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "rename",
+        menu_summary: "rename a session",
         usage: "/rename [title]",
         summary: "rename a session; without a title the rename dialog opens",
         args: CommandArgs::OptionalTitle,
     },
     CommandSpec {
         name: "help",
+        menu_summary: "view commands and keyboard shortcuts",
         usage: "/help",
         summary: "open the help panel",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "logs",
+        menu_summary: "view Agent logs",
         usage: "/logs",
         summary: "open the agent log panel",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "cancel",
+        menu_summary: "cancel current turn or compaction",
         usage: "/cancel",
         summary: "cancel the active loop",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "context",
+        menu_summary: "inspect current context",
         usage: "/context",
         summary: "read the current context/preparation snapshot",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "compact",
+        menu_summary: "compact conversation context",
         usage: "/compact",
         summary: "start one manual compaction",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "reload",
+        menu_summary: "reload configuration and catalogs",
         usage: "/reload",
         summary: "reload Agent configuration and the catalogs",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "quit",
+        menu_summary: "exit TUI and stop Agent",
         usage: "/quit",
         summary: "shut the agent down and leave",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "close",
+        menu_summary: "close current session",
         usage: "/close [confirm]",
         summary: "close the active session (results are still received)",
         args: CommandArgs::OptionalConfirm,
     },
     CommandSpec {
         name: "delete",
+        menu_summary: "delete a closed session",
         usage: "/delete [confirm]",
         summary: "delete a closed session after confirmation",
         args: CommandArgs::OptionalConfirm,
@@ -768,6 +800,32 @@ mod tests {
         assert_eq!(candidates, expected);
         assert!(parse_command("/not-a-command").is_err());
         assert!(command_spec("not-a-command").is_none());
+    }
+
+    #[test]
+    fn concise_menu_copy_keeps_detailed_help_scope_and_limitations() {
+        for spec in COMMANDS {
+            assert!(!spec.menu_summary.is_empty());
+            assert!(!spec.menu_summary.contains('\n'));
+            assert!(
+                spec.menu_summary.len() <= 42,
+                "/{} must remain scannable",
+                spec.name
+            );
+            assert!(!spec.summary.is_empty());
+        }
+        for (name, detail) in [
+            ("diff", "session/turn cover native writes only"),
+            ("files", "reference paths only"),
+            ("grep", "literal workspace search"),
+            ("tool", "closing never cancels it"),
+            ("new", "recent explicit model/profile/reasoning"),
+            ("clear", "never writes to the Store"),
+            ("close", "results are still received"),
+            ("delete", "after confirmation"),
+        ] {
+            assert!(command_spec(name).unwrap().summary.contains(detail));
+        }
     }
 
     #[test]

@@ -15,10 +15,10 @@
  ▎/
  ▎
  ▎
- ▎→ /diff       read-only changes; session/turn cover native writes only
- ▎  /files      reference paths only; Tab directory, F4 preview, Ctrl+N next pag
- ▎  /grep       literal workspace search; Tab paths, Ctrl+I case, Ctrl+N next pa
- ▎  /tool       inspect one exact tool invocation; closing never cancels it
- ▎  /new        create a session here with the recent explicit model/profile/rea
+ ▎→ /diff       review workspace or session changes
+ ▎  /files      find files and insert path references
+ ▎  /grep       find text in workspace files
+ ▎  /tool       inspect a tool call
+ ▎  /new        start a new session
  ▎↑↓ / PgUp PgDn choose · Tab fill · Enter run · Esc close · 1/30
  starting

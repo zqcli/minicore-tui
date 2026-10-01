@@ -138,7 +138,7 @@ fn render_completion(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 .split_whitespace()
                 .next()
                 .unwrap_or("");
-            let summary = crate::command::command_spec(name).map_or("", |spec| spec.summary);
+            let summary = crate::command::command_spec(name).map_or("", |spec| spec.menu_summary);
             let text = if content_width >= 44 && !summary.is_empty() {
                 let label = rail::clip_cells(item, label_width);
                 format!(
@@ -186,7 +186,7 @@ fn render_completion(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         rail::RAIL_WIDTH,
         Line::from(Span::styled(
             rail::clip_cells(&hint, content_width),
-            Style::new().fg(theme.dim),
+            Style::new().fg(theme.text),
         )),
     ));
     lines.truncate(area.height as usize);
@@ -522,7 +522,7 @@ mod tests {
                     .all(|row| UnicodeWidthStr::width(row.as_str()) <= width as usize)
             );
             if width >= 80 {
-                assert!(text.contains("read-only changes"));
+                assert!(text.contains("review workspace or session changes"));
             }
         }
         app.slash_completion.as_mut().unwrap().selected = 5;
@@ -547,5 +547,147 @@ mod tests {
             2,
             "even one match retains its control hint"
         );
+    }
+
+    fn contrast_ratio(foreground: ratatui::style::Color, background: ratatui::style::Color) -> f64 {
+        let luminance = |color| {
+            let ratatui::style::Color::Rgb(red, green, blue) = color else {
+                panic!("completion surface colors must be explicit RGB values");
+            };
+            let linear = |channel: u8| {
+                let value = f64::from(channel) / 255.0;
+                if value <= 0.04045 {
+                    value / 12.92
+                } else {
+                    ((value + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+        };
+        let foreground = luminance(foreground);
+        let background = luminance(background);
+        (foreground.max(background) + 0.05) / (foreground.min(background) + 0.05)
+    }
+
+    #[test]
+    fn command_menu_summaries_and_readable_hints_fit_every_supported_size_and_theme() {
+        for kind in [ThemeKind::Dark, ThemeKind::Light] {
+            let theme = Theme::for_kind(kind);
+            for (width, height) in [(160, 48), (80, 24), (60, 16)] {
+                let mut app = app_with("");
+                app.update(AppEvent::SetTheme(kind));
+                type_keys(&mut app, "/");
+                for (selected, spec) in crate::command::COMMANDS.iter().enumerate() {
+                    app.slash_completion.as_mut().unwrap().selected = selected;
+                    let area = Rect::new(0, 0, width, height);
+                    let screen = crate::ui::layout::screen_layout(&app, area);
+                    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                    terminal
+                        .draw(|frame| crate::ui::render(frame, &app))
+                        .unwrap();
+                    let buffer = terminal.backend().buffer();
+                    let rows = buffer
+                        .content
+                        .chunks(width as usize)
+                        .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+                        .collect::<Vec<_>>();
+                    let selected_rows = rows
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, row)| row.contains("→ /"))
+                        .collect::<Vec<_>>();
+                    assert_eq!(selected_rows.len(), 1, "only one selected command");
+                    let (selected_y, selected_row) = selected_rows[0];
+                    assert!(selected_row.contains(&format!("→ /{}", spec.name)));
+                    assert!(
+                        selected_row.contains(spec.menu_summary),
+                        "/{} summary clipped at {width}×{height}: {selected_row}",
+                        spec.name
+                    );
+                    let selected_cell = buffer
+                        .cell((screen.panel.x + rail::RAIL_WIDTH as u16, selected_y as u16))
+                        .unwrap();
+                    assert_eq!(selected_cell.fg, theme.rail_editor);
+                    assert_eq!(selected_cell.bg, theme.user_message_bg);
+
+                    let hint_y = screen.panel.bottom() - 1;
+                    let hint = &rows[hint_y as usize];
+                    assert!(hint.contains("Tab fill"));
+                    let enter = if matches!(
+                        spec.args,
+                        crate::command::CommandArgs::Theme | crate::command::CommandArgs::ToolRef
+                    ) {
+                        "Enter fill"
+                    } else {
+                        "Enter run"
+                    };
+                    assert!(hint.contains(enter), "{hint}");
+                    assert!(hint.contains("Esc"));
+                    assert!(hint.contains(&format!("{}/30", selected + 1)));
+                    assert_eq!(screen.footer.y, hint_y + 1, "menu cannot cover the footer");
+                    for x in screen.panel.x + rail::RAIL_WIDTH as u16..screen.panel.right() {
+                        let cell = buffer.cell((x, hint_y)).unwrap();
+                        if cell.symbol().trim().is_empty() {
+                            continue;
+                        }
+                        assert_eq!(cell.fg, theme.text);
+                        assert_eq!(cell.bg, theme.user_message_bg);
+                        assert!(
+                            contrast_ratio(cell.fg, cell.bg) >= 4.5,
+                            "shortcut hint needs 4.5:1 contrast in {kind:?}"
+                        );
+                        assert!(!cell.modifier.contains(ratatui::style::Modifier::DIM));
+                    }
+                    assert!(
+                        rows.iter()
+                            .all(|row| UnicodeWidthStr::width(row.as_str()) <= width as usize)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn required_theme_choice_keeps_the_menu_hint_and_draft_in_both_themes() {
+        for kind in [ThemeKind::Dark, ThemeKind::Light] {
+            for (width, height) in [(160, 48), (80, 24), (60, 16)] {
+                let mut app = app_with("");
+                app.update(AppEvent::SetTheme(kind));
+                type_keys(&mut app, "/the");
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                let capture = |terminal: &mut Terminal<TestBackend>, app: &App| {
+                    terminal
+                        .draw(|frame| crate::ui::render(frame, app))
+                        .unwrap();
+                    terminal
+                        .backend()
+                        .buffer()
+                        .content
+                        .iter()
+                        .map(|cell| cell.symbol())
+                        .collect::<String>()
+                };
+                let before = capture(&mut terminal, &app);
+                assert!(before.contains("choose dark or light colors"));
+                assert!(before.contains("Enter fill"));
+                assert!(press_enter(&mut app).is_empty());
+                assert_eq!(app.composer.content(), "/theme ");
+                assert_eq!(app.theme, kind, "bare theme must not change the palette");
+                let choices = capture(&mut terminal, &app);
+                assert!(choices.contains("→ /theme dark"));
+                assert!(choices.contains("/theme light"));
+                assert!(choices.contains("Enter run"));
+                assert!(choices.contains("1/2"));
+                app.update(AppEvent::Terminal(crossterm::event::Event::Key(
+                    crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Down,
+                        crossterm::event::KeyModifiers::NONE,
+                    ),
+                )));
+                let moved = capture(&mut terminal, &app);
+                assert!(moved.contains("→ /theme light"));
+                assert!(moved.contains("2/2"));
+            }
+        }
     }
 }
