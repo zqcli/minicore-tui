@@ -1249,6 +1249,8 @@ impl App {
                     | Action::CursorMove(_)
                     | Action::LineStart
                     | Action::LineEnd
+                    | Action::DeleteToLineStart
+                    | Action::DeleteToLineEnd
                     | Action::WordDelete
                     | Action::Undo
                     | Action::Redo
@@ -4287,6 +4289,12 @@ impl App {
             }
             LineEnd => {
                 self.composer.line_end();
+                ui_actions::refresh_slash_completion(self);
+                Vec::new()
+            }
+            DeleteToLineStart | DeleteToLineEnd => {
+                self.composer
+                    .delete_to_line_boundary(action == DeleteToLineEnd);
                 ui_actions::refresh_slash_completion(self);
                 Vec::new()
             }
@@ -13149,3 +13157,76 @@ mod layout_budget_tests;
 #[cfg(test)]
 #[path = "app/startup_defaults_tests.rs"]
 mod startup_defaults_tests;
+
+#[cfg(test)]
+mod composer_line_edit_tests {
+    use super::*;
+    use crate::ui::testapp;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn ctrl(app: &mut App, character: char) -> Vec<AppCommand> {
+        app.update(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+            KeyCode::Char(character),
+            KeyModifiers::CONTROL,
+        ))))
+    }
+
+    #[test]
+    fn line_edits_are_local_while_idle_pending_or_running() {
+        for lifecycle in 0..3 {
+            let mut app = if lifecycle == 2 {
+                testapp::live_turn(crate::theme::ThemeKind::Dark)
+            } else {
+                testapp::open_empty(crate::theme::ThemeKind::Dark, "ses_1", None, "high")
+            };
+            if lifecycle == 1 {
+                let commands = app.update(AppEvent::SubmitTurn {
+                    session_id: "ses_1".into(),
+                    text: "already submitted".into(),
+                });
+                assert_eq!(testapp::take_requests(commands).len(), 1);
+            }
+            let pending = app.pending_requests.len();
+            app.composer.set_text("keep\n左e\u{301}右\nlast");
+            app.composer.move_to(1, 3);
+            for (key, expected) in [
+                ('u', "keep\n右\nlast"),
+                ('z', "keep\n左e\u{301}右\nlast"),
+                ('y', "keep\n右\nlast"),
+                ('k', "keep\n\nlast"),
+            ] {
+                assert!(
+                    ctrl(&mut app, key).is_empty(),
+                    "no send/cancel/clipboard command"
+                );
+                assert_eq!(app.composer.content(), expected);
+                assert_eq!(app.pending_requests.len(), pending);
+            }
+        }
+    }
+
+    #[test]
+    fn line_edits_clear_copy_selection_and_ignore_soft_wraps() {
+        let mut app = testapp::open_empty(crate::theme::ThemeKind::Dark, "ses_1", None, "high");
+        let line = "中e\u{301}abcdef ".repeat(20);
+        app.composer.set_text(&format!("{line}\nlast"));
+        app.composer.move_to(0, line.chars().count() - 2);
+        app.update(AppEvent::TerminalSize {
+            width: 40,
+            height: 20,
+        });
+        app.editor_selection = Some(EditorSelection {
+            anchor: 0,
+            focus: 2,
+            dragged: true,
+        });
+        assert!(ctrl(&mut app, 'u').is_empty());
+        assert_eq!(app.composer.content(), "f \nlast");
+        assert!(
+            app.editor_selection.is_none(),
+            "mouse selection stays copy-only like other edits"
+        );
+        assert!(ctrl(&mut app, 'k').is_empty());
+        assert_eq!(app.composer.content(), "\nlast");
+    }
+}

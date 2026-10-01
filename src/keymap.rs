@@ -54,6 +54,8 @@ pub enum Action {
     LineStart,
     LineEnd,
     WordDelete,
+    DeleteToLineStart,
+    DeleteToLineEnd,
     Undo,
     Redo,
     Submit,
@@ -531,6 +533,8 @@ fn composer_keys(key: KeyEvent, press: bool, repeat: bool, typing: bool) -> Acti
                     'a' => Action::LineStart,
                     'e' => Action::LineEnd,
                     'w' => Action::WordDelete,
+                    'u' => Action::DeleteToLineStart,
+                    'k' => Action::DeleteToLineEnd,
                     'j' => Action::Newline,
                     'z' => Action::Undo,
                     'y' => Action::Redo,
@@ -1023,6 +1027,58 @@ mod tests {
     }
 
     #[test]
+    fn line_delete_keys_preserve_panel_bindings_and_ignore_releases() {
+        let mut a = app();
+        for character in ['u', 'k'] {
+            assert_eq!(
+                map(
+                    &a,
+                    key(
+                        KeyCode::Char(character),
+                        KeyModifiers::CONTROL,
+                        KeyEventKind::Release
+                    )
+                ),
+                Action::None
+            );
+        }
+        assert_eq!(new_session_keys(ctrl('u'), true, true), Action::FieldClear);
+        assert_eq!(
+            session_rename_keys(ctrl('u'), true, true),
+            Action::SessionRenameClear
+        );
+        assert_eq!(
+            search_keys(
+                ctrl('u'),
+                true,
+                true,
+                crate::state::search::SearchPanelMode::Input
+            ),
+            Action::SearchClear
+        );
+        assert_eq!(
+            export_keys(ctrl('u'), true, true, false),
+            Action::ExportClear
+        );
+        assert_eq!(
+            settings_keys(ctrl('u'), true, true, false),
+            Action::SettingsClear
+        );
+        a.dock = Dock::Workspace(Box::new(crate::state::workspace::WorkspaceBrowser::new(
+            crate::state::workspace::BrowserKind::Files,
+            "ses_1".into(),
+            0,
+            0,
+            std::time::Instant::now(),
+        )));
+        assert_eq!(map(&a, ctrl('u')), Action::WorkspaceClear);
+        assert_eq!(map(&a, ctrl('k')), Action::None);
+        a.dock = Dock::Help;
+        assert_eq!(map(&a, ctrl('u')), Action::None);
+        assert_eq!(map(&a, ctrl('k')), Action::None);
+    }
+
+    #[test]
     fn composer_keys_submit_newline_history_undo_and_word_delete() {
         let a = app();
         assert_eq!(
@@ -1037,6 +1093,8 @@ mod tests {
         assert_eq!(map(&a, ctrl('a')), Action::LineStart);
         assert_eq!(map(&a, ctrl('e')), Action::LineEnd);
         assert_eq!(map(&a, ctrl('w')), Action::WordDelete);
+        assert_eq!(map(&a, ctrl('u')), Action::DeleteToLineStart);
+        assert_eq!(map(&a, ctrl('k')), Action::DeleteToLineEnd);
         assert_eq!(map(&a, ctrl('z')), Action::Undo);
         assert_eq!(map(&a, ctrl('y')), Action::Redo);
         assert_eq!(map(&a, char_press('中')), Action::TypeChar('中'));

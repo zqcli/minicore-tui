@@ -46,11 +46,20 @@ Help is requested; streaming and pending reads do not block Help.
 | `Ctrl+J` | Insert a newline; reliable fallback for terminals that do not report Shift+Enter. |
 | `Ctrl+A` / `Ctrl+E` | Move to the current line start/end. |
 | `Ctrl+W` | Delete the previous word. |
+| `Ctrl+U` / `Ctrl+K` | Delete to the logical line start/end; keep the newline. |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo. |
 | `Up` / `Down` | Move within multiline input; at the first/last row, navigate input history. |
 | `Alt+Up` / `Alt+Down` | Previous/next history entry. |
 | `Backspace` / `Delete` / arrows | Standard editing. |
 | Bracketed paste | Insert the complete paste as one edit, normalize CRLF/CR to LF, and never submit automatically. |
+
+`Ctrl+U` and `Ctrl+K` use logical editor lines: soft wraps do not stop deletion.
+Collapsed paste markers remain atomic, including multiline payloads. At the
+corresponding line boundary the action does nothing and never joins adjacent
+lines. Each deletion is one undoable edit; `Ctrl+Y` remains redo. Mouse-drag
+selection remains copy-only and is cleared by editing, as with other edit keys.
+These shortcuts only edit the local draft, including while a turn is pending or
+running; panel-specific `Ctrl+U` bindings keep their existing behavior.
 
 The process keeps the last 100 non-empty submitted messages in memory. The
 composer accepts at most 262144 UTF-8 bytes; near the limit it shows the byte

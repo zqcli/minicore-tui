@@ -103,6 +103,10 @@ fn content_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {
         ("Shift+Enter / Ctrl+J", "newline"),
         ("Ctrl+A / Ctrl+E", "line start / line end"),
         ("Ctrl+W", "delete previous word"),
+        (
+            "Ctrl+U / Ctrl+K",
+            "delete to line start / end (keep newline)",
+        ),
         ("Ctrl+Z / Ctrl+Y", "undo / redo"),
         ("Up / Down", "message history at the buffer edges"),
     ] {

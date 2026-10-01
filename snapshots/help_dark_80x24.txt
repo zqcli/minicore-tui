@@ -19,6 +19,6 @@
  │Shift+Tab  reasoning selector; updates active session at a request boundary  │
  │Ctrl+N  open the new-session form                                            │
  │F2  rename the selected session                                              │
- │↑↓/PgUp/PgDn scroll · Esc/F1 close · q quit · 1–10/94                        │
+ │↑↓/PgUp/PgDn scroll · Esc/F1 close · q quit · 1–10/95                        │
  └─────────────────────────────────────────────────────────────────────────────┘
  starting

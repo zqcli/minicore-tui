@@ -456,6 +456,26 @@ impl Composer {
         self.textarea.move_cursor(CursorMove::End);
     }
 
+    /// Delete to a logical editor line boundary, not a soft-wrapped screen
+    /// row. A collapsed paste is one atomic segment, as with word deletion.
+    /// At the boundary this is a no-op: never consume the adjacent newline.
+    pub fn delete_to_line_boundary(&mut self, forward: bool) {
+        let raw_cursor = self.cursor_char_offset();
+        let display = self.display_content();
+        let cursor = projected_cursor(raw_cursor, &self.pastes);
+        let (row, column) = line_col_at(&display, cursor);
+        let target = if forward {
+            cursor + display.split('\n').nth(row).unwrap_or("").chars().count() - column
+        } else {
+            cursor - column
+        };
+        if target != cursor {
+            let start = raw_cursor_for_display(cursor.min(target), &self.pastes);
+            let end = raw_cursor_for_display(cursor.max(target), &self.pastes);
+            self.delete_raw_range(start, end);
+        }
+    }
+
     pub fn word_delete(&mut self) {
         let raw_cursor = self.cursor_char_offset();
         let display = self.display_content();
@@ -1064,6 +1084,80 @@ mod tests {
         composer.move_to(0, 0);
         composer.delete();
         assert!(composer.content().is_empty());
+    }
+
+    #[test]
+    fn line_deletion_preserves_newlines_unicode_and_boundary_noops() {
+        for (forward, expected) in [
+            (false, "first\n尾巴\nlast"),
+            (true, "first\n中e\u{301}🙂\nlast"),
+        ] {
+            let mut composer = Composer::new();
+            composer.set_text("first\n中e\u{301}🙂尾巴\nlast");
+            composer.move_to(1, 4);
+            composer.delete_to_line_boundary(forward);
+            assert_eq!(composer.content(), expected);
+            assert_eq!(composer.byte_len(), expected.len());
+            let revision = composer.editor_revision();
+            composer.delete_to_line_boundary(forward);
+            assert_eq!(composer.content(), expected);
+            assert_eq!(
+                composer.editor_revision(),
+                revision,
+                "boundary must not add undo history"
+            );
+            composer.undo();
+            assert_eq!(composer.content(), "first\n中e\u{301}🙂尾巴\nlast");
+            composer.redo();
+            assert_eq!(composer.content(), expected);
+        }
+        for text in ["", "\n", "one\n\nthree\n"] {
+            let mut composer = Composer::new();
+            composer.set_text(text);
+            let revision = composer.editor_revision();
+            composer.delete_to_line_boundary(false);
+            composer.delete_to_line_boundary(true);
+            assert_eq!(composer.content(), text);
+            assert_eq!(composer.editor_revision(), revision);
+        }
+    }
+
+    #[test]
+    fn line_deletion_treats_collapsed_paste_atomically_and_restores_history() {
+        for payload in ["x".repeat(1_001), "\n".repeat(10), "你🙂\n".repeat(11)] {
+            for forward in [false, true] {
+                let mut composer = Composer::new();
+                composer.type_text("before\nPRE");
+                composer.insert_paste(&payload);
+                composer.type_text("TAIL\nafter");
+                let original = composer.content();
+                let ranges = composer.paste_ranges().to_vec();
+                if forward {
+                    composer.move_to_display(1, 0);
+                } else {
+                    let end = composer
+                        .display_content()
+                        .split('\n')
+                        .nth(1)
+                        .unwrap()
+                        .chars()
+                        .count();
+                    composer.move_to_display(1, end);
+                }
+                composer.delete_to_line_boundary(forward);
+                assert_eq!(composer.content(), "before\n\nafter");
+                assert!(composer.paste_ranges().is_empty());
+                for _ in 0..2 {
+                    composer.undo();
+                    assert_eq!(composer.content(), original);
+                    assert_eq!(composer.paste_ranges(), ranges);
+                    assert_eq!(composer.byte_len(), original.len());
+                    composer.redo();
+                    assert_eq!(composer.content(), "before\n\nafter");
+                    assert!(composer.paste_ranges().is_empty());
+                }
+            }
+        }
     }
 
     #[test]
