@@ -7420,6 +7420,7 @@ fn browsing_refuses_send_and_keeps_the_draft_until_an_explicit_continue() {
 
     // The explicit continue opens the session and keeps the draft.
     drive_ctrl(&mut driver, 'g');
+    assert!(!driver.app.editor_active());
     let open = driver.request("session.open");
     driver.respond(open, json!({"session": session("ses_closed")}));
     assert!(
@@ -7444,6 +7445,15 @@ fn browsing_refuses_send_and_keeps_the_draft_until_an_explicit_continue() {
 fn ctrl_g_continues_a_browsed_session_without_sending() {
     let mut driver = Driver::new();
     bootstrap(&mut driver);
+    driver
+        .app
+        .apply_tui_config(minicore_tui::config::TuiConfig {
+            editor: Some(minicore_tui::config::EditorConfig {
+                executable: "must-not-start".into(),
+                args: Vec::new(),
+            }),
+            ..Default::default()
+        });
     pending_browse(&mut driver, "ses_closed");
     drive_ctrl(&mut driver, 'g');
     let open = driver.request("session.open");
@@ -9279,6 +9289,232 @@ fn cancelling_export_keeps_input_responsive_while_writer_finishes() {
         driver.app.composer().content(),
         "draft while export cancels"
     );
+}
+
+fn editor_driver() -> Driver {
+    let mut driver = Driver::with_app(App::with_tui_config(
+        PathBuf::from("/workspace"),
+        PathBuf::from("/unused-editor-test-config.toml"),
+        minicore_tui::config::TuiConfig {
+            editor: Some(minicore_tui::config::EditorConfig {
+                executable: "synthetic-editor".into(),
+                args: vec![
+                    "--literal argument".into(),
+                    "$(no shell); `no shell`".into(),
+                ],
+            }),
+            ..Default::default()
+        },
+    ));
+    bootstrap(&mut driver);
+    open_chat_with(&mut driver, vec![user(0, "loop_1", "hello")]);
+    driver
+}
+
+fn editor_request(commands: Vec<AppCommand>) -> minicore_tui::command::StartEditorRequest {
+    assert_eq!(
+        commands.len(),
+        1,
+        "editor entry must not send a prompt or open a session"
+    );
+    let AppCommand::StartEditor(request) = commands.into_iter().next().unwrap() else {
+        panic!("expected editor command");
+    };
+    *request
+}
+
+fn editor_shortcut(app: &mut App) -> Vec<AppCommand> {
+    app.update(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+        KeyCode::Char('g'),
+        KeyModifiers::CONTROL,
+    ))))
+}
+
+fn editor_finish(
+    app: &mut App,
+    capture: minicore_tui::jobs::EditorCapture,
+    outcome: minicore_tui::jobs::EditorOutcome,
+) {
+    assert!(
+        app.update(AppEvent::JobFinished(
+            minicore_tui::event::JobOutcome::Editor { capture, outcome }
+        ))
+        .is_empty()
+    );
+}
+
+#[test]
+fn external_editor_shortcut_preserves_exact_draft_and_unchanged_edit_state() {
+    let mut driver = editor_driver();
+    let app = &mut driver.app;
+    app.composer_mut().type_text("前缀\n");
+    let payload = "你好😀".repeat(400);
+    app.composer_mut().insert_paste(&payload);
+    app.composer_mut().type_text(" tail");
+    app.composer_mut().move_to(0, 1);
+    let text = app.composer().content();
+    let cursor = app.composer().cursor();
+    let projection = app.composer().display_content();
+    let pastes = app.composer().paste_ranges().to_vec();
+    let revision = app.composer().editor_revision();
+    let request = editor_request(editor_shortcut(app));
+    assert_eq!(request.draft, text);
+    assert_eq!(request.capture.editor_revision, revision);
+    assert_eq!(
+        request.editor.args,
+        ["--literal argument", "$(no shell); `no shell`"]
+    );
+    assert!(app.editor_active());
+    assert!(editor_shortcut(app).is_empty(), "one editor at a time");
+    editor_finish(
+        app,
+        request.capture,
+        minicore_tui::jobs::EditorOutcome::Updated(text.clone()),
+    );
+    assert!(!app.editor_active());
+    assert_eq!(app.composer().content(), text);
+    assert_eq!(app.composer().cursor(), cursor);
+    assert_eq!(app.composer().editor_revision(), revision);
+    assert_eq!(app.composer().display_content(), projection);
+    assert_eq!(app.composer().paste_ranges(), pastes);
+    app.composer_mut().undo();
+    assert_eq!(app.composer().content(), format!("前缀\n{payload}"));
+    app.composer_mut().redo();
+    assert_eq!(app.composer().content(), text);
+    assert_eq!(app.composer().display_content(), projection);
+}
+
+#[test]
+fn external_editor_slash_uses_blank_seed_but_shortcut_edits_literal_command() {
+    let mut driver = editor_driver();
+    let app = &mut driver.app;
+    app.composer_mut().set_text("/editor");
+    let revision = app.composer().editor_revision();
+    let request = editor_request(app.submit_composer());
+    assert!(request.draft.is_empty());
+    assert_eq!(request.capture.editor_revision, revision);
+    assert_eq!(app.composer().editor_revision(), revision);
+    assert_eq!(
+        app.composer().content(),
+        "/editor",
+        "capture stays valid while editor runs"
+    );
+    editor_finish(
+        app,
+        request.capture,
+        minicore_tui::jobs::EditorOutcome::Updated(String::new()),
+    );
+    assert_eq!(app.composer().content(), "");
+
+    app.composer_mut().set_text("/editor");
+    let request = editor_request(editor_shortcut(app));
+    assert_eq!(
+        request.draft, "/editor",
+        "entry origin is explicit, never inferred from content"
+    );
+    editor_finish(
+        app,
+        request.capture,
+        minicore_tui::jobs::EditorOutcome::Updated("edited 你好\n😀 second".into()),
+    );
+    assert_eq!(app.composer().content(), "edited 你好\n😀 second");
+    assert!(!app.editor_active());
+}
+
+#[test]
+fn external_editor_missing_config_and_unsuccessful_returns_keep_draft() {
+    use minicore_tui::jobs::EditorOutcome;
+    let mut driver = editor_driver();
+    let app = &mut driver.app;
+    app.composer_mut().type_text("keep 你好\n😀 draft");
+    app.composer_mut().move_to(0, 2);
+    let text = app.composer().content();
+    let cursor = app.composer().cursor();
+    let revision = app.composer().editor_revision();
+    for outcome in [
+        EditorOutcome::Cancelled,
+        EditorOutcome::Failed("configured editor exited unsuccessfully".into()),
+        EditorOutcome::Failed("editor output is not valid UTF-8".into()),
+        EditorOutcome::Updated("x".repeat(minicore_tui::limits::EDITOR_READ_BYTES + 1)),
+    ] {
+        let request = editor_request(editor_shortcut(app));
+        editor_finish(app, request.capture, outcome);
+        assert_eq!(app.composer().content(), text);
+        assert_eq!(app.composer().cursor(), cursor);
+        assert_eq!(app.composer().editor_revision(), revision);
+        assert!(!app.editor_active());
+    }
+    app.apply_tui_config(Default::default());
+    assert!(editor_shortcut(app).is_empty());
+    assert!(!app.editor_active());
+    assert_eq!(app.composer().content(), text);
+    assert_eq!(app.composer().cursor(), cursor);
+    assert!(
+        app.notices
+            .iter()
+            .any(|notice| notice.text.contains("no external editor is configured"))
+    );
+    app.composer_mut().set_text("/editor");
+    assert!(app.submit_composer().is_empty());
+    assert_eq!(app.composer().content(), "/editor");
+}
+
+#[test]
+fn external_editor_rejects_stale_session_epoch_revision_and_operation() {
+    use minicore_tui::jobs::EditorOutcome;
+    for change in ["session", "epoch", "revision"] {
+        let mut driver = editor_driver();
+        let app = &mut driver.app;
+        app.composer_mut().set_text("original draft");
+        let request = editor_request(editor_shortcut(app));
+        match change {
+            "session" => app.sessions.active = Some("another-session".into()),
+            "epoch" => {
+                app.sessions
+                    .known
+                    .get_mut(&request.capture.session_id)
+                    .unwrap()
+                    .session_epoch += 1
+            }
+            "revision" => app.composer_mut().set_text("newer draft wins"),
+            _ => unreachable!(),
+        }
+        let expected = app.composer().content();
+        editor_finish(
+            app,
+            request.capture,
+            EditorOutcome::Updated("stale result".into()),
+        );
+        assert_eq!(app.composer().content(), expected, "stale {change}");
+        assert!(
+            app.notices
+                .iter()
+                .any(|notice| notice.text.contains("older draft"))
+        );
+        assert!(!app.editor_active());
+    }
+    let mut driver = editor_driver();
+    let app = &mut driver.app;
+    app.composer_mut().set_text("same draft");
+    let old = editor_request(editor_shortcut(app));
+    editor_finish(app, old.capture.clone(), EditorOutcome::Cancelled);
+    let current = editor_request(editor_shortcut(app));
+    editor_finish(
+        app,
+        old.capture,
+        EditorOutcome::Updated("old operation".into()),
+    );
+    assert!(
+        app.editor_active(),
+        "stale completion cannot release newer owner"
+    );
+    assert_eq!(app.composer().content(), "same draft");
+    editor_finish(
+        app,
+        current.capture,
+        EditorOutcome::Updated("current operation".into()),
+    );
+    assert_eq!(app.composer().content(), "current operation");
 }
 
 #[cfg(unix)]

@@ -15,7 +15,7 @@ Editor restores the existing editing and command behavior.
 | `Ctrl+D` | Request shutdown only when the composer is empty and the active session is idle. |
 | `F1` | Open Help; press `F1` or `Esc` to close it. |
 | `Ctrl+R` | Open the session selector. |
-| `Ctrl+G` | Continue a browsed closed session explicitly, without sending a prompt. |
+| `Ctrl+G` | In Composer with Editor focus, edit the current draft externally. A browsed closed session keeps explicit Continue without sending; the Session panel also retains Continue. |
 | `Ctrl+N` | Open the new-session form. |
 | `Ctrl+L` | Open the model selector; updates the active session at a request boundary, or edits a new-session draft. |
 | `Shift+Tab` | Open the reasoning selector from the composer; move to the previous form field in a new-session form; close the reasoning selector. |
@@ -63,8 +63,15 @@ Settings text fields support Left/Right, Home/End (also Ctrl+A/Ctrl+E),
 Backspace/Delete, Ctrl+U clear, and bracketed paste. In Editor args, Enter or
 Ctrl+J adds a separate argument; multiline paste preserves argument boundaries.
 Esc cancels unsaved edits. A failed write keeps the edited form for retry.
-`/editor` opens the current draft in the configured executable with its exact
-argument vector and an OS temporary file. The terminal is suspended only for
+`Ctrl+G` opens the exact current draft, including multiline and Unicode text,
+when the Composer's Editor has focus. A browsed closed session keeps `Ctrl+G`
+as Continue; return to an active session before using the shortcut for editing.
+`/editor` starts with a blank file, never its own command text. Both entries use
+the configured executable, its exact argument vector, and an OS temporary file.
+Configure the editor in `/settings` or with `MINICORE_TUI_EDITOR`; without one,
+the draft is kept and a configuration notice is shown. An unchanged successful
+return retains the cursor, undo/redo, and collapsed paste markers. An edited
+return replaces the draft without submitting it. The terminal is suspended only for
 input/drawing; RPC readers, App updates, background turns, waits, and saves
 continue. Invalid UTF-8, oversized output, nonzero exit, cancellation, and a
 stale draft preserve the existing Composer text.
@@ -262,7 +269,7 @@ choices, while `/tool` shows its exact argument usage.
 | `/export [raw] [path]` | Open the explicit bounded export form. |
 | `/rename [title]` | Rename, or open its title dialog. |
 | `/compact` / `/context` | Start manual compaction / open the concrete Context main view over the existing operation owner. |
-| `/settings` / `/editor` | Local preferences / external editing of the current draft only. |
+| `/settings` / `/editor` | Local preferences / start a blank draft in the external editor (`Ctrl+G` edits the current draft). |
 | `/quit` | Request normal Agent shutdown. |
 
 `/cancel` and `/reload` remain local command entries even when a session is

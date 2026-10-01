@@ -56,6 +56,8 @@ pub enum Action {
     HistoryPrev,
     HistoryNext,
     OpenHelp,
+    /// Edit the exact Composer draft with the configured external editor.
+    OpenExternalEditor,
     OpenLogs,
     OpenSessions,
     OpenModel,
@@ -256,6 +258,18 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
                 KeyCode::PageDown => return Action::CompletionMove(5),
                 _ => {}
             }
+        }
+        if press
+            && key.code == KeyCode::Char('g')
+            && ctrl(&key)
+            && app.focused_region() == crate::state::panels::Focus::Editor
+        {
+            // A cold read-only session keeps its explicit Continue binding.
+            return if app.active_view().is_some_and(|view| view.browsing) {
+                Action::SessionContinue
+            } else {
+                Action::OpenExternalEditor
+            };
         }
         if key.code == KeyCode::F(6) {
             return if press {
@@ -785,6 +799,37 @@ mod tests {
     }
 
     #[test]
+    fn external_editor_shortcut_is_composer_editor_only_and_one_shot() {
+        use crate::state::panels::Focus;
+        let mut a = app();
+        assert_eq!(map(&a, ctrl('g')), Action::OpenExternalEditor);
+        for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+            assert_eq!(
+                map(&a, key(KeyCode::Char('g'), KeyModifiers::CONTROL, kind)),
+                Action::None
+            );
+        }
+        a.focus = Focus::Main;
+        assert_eq!(map(&a, ctrl('g')), Action::None);
+        a.focus = Focus::Editor;
+        a.dock = Dock::SessionSelector(SessionSelectorState::new(None));
+        assert_eq!(map(&a, ctrl('g')), Action::SessionContinue);
+        for dock in [
+            Dock::Help,
+            Dock::Logs,
+            Dock::ModelSelector(crate::state::selection::SelectorState::new(
+                crate::state::selection::SelectorKind::Model,
+            )),
+            Dock::Settings(crate::state::settings::SettingsState::from_config(
+                &Default::default(),
+            )),
+        ] {
+            a.dock = dock;
+            assert_ne!(map(&a, ctrl('g')), Action::OpenExternalEditor);
+        }
+    }
+
+    #[test]
     fn settings_text_edit_keys_remain_local() {
         let mut a = app();
         a.dock = Dock::Settings(crate::state::settings::SettingsState::from_config(
@@ -825,6 +870,7 @@ mod tests {
             selected: 0,
         });
         a.focus = Focus::Editor;
+        assert_eq!(map(&a, ctrl('g')), Action::OpenExternalEditor);
         assert_eq!(
             map(&a, press(KeyCode::PageUp, KeyModifiers::NONE)),
             Action::CompletionMove(-5)
@@ -834,6 +880,7 @@ mod tests {
             Action::CompletionMove(5)
         );
         a.focus = Focus::Main;
+        assert_eq!(map(&a, ctrl('g')), Action::None);
         assert!(
             matches!(map(&a, press(KeyCode::PageDown, KeyModifiers::NONE)), Action::DetailScroll(delta) if delta > 0)
         );

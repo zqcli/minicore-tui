@@ -5349,9 +5349,14 @@ fn e2e_external_editor_coexists_with_a_real_background_turn() {
             .unwrap();
 
         app.composer_mut().set_text("draft before editor");
-        run_slash_command(&mut process, &mut app, "/editor")
-            .await
-            .unwrap();
+        let commands = app.update(AppEvent::Terminal(crossterm::event::Event::Key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('g'),
+                crossterm::event::KeyModifiers::CONTROL,
+            ),
+        )));
+        assert!(matches!(commands.as_slice(), [AppCommand::StartEditor(request)] if request.draft == "draft before editor"));
+        dispatch_commands(&mut process, &mut app, commands).await.unwrap();
         assert!(app.editor_active());
         pump_until(&mut process, &mut app, |a| {
             !a.editor_active()

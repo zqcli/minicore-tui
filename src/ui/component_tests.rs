@@ -3742,6 +3742,8 @@ fn help_panel_lists_keys_and_safety_notes() {
     // page is accumulated because the table grew with the D2 commands.
     let mut wide = testapp::help(ThemeKind::Dark);
     let wide_content = accumulated_help_text(&mut wide, 140, 50);
+    assert!(wide_content.contains("Ctrl+G (Sessions)"));
+    assert!(wide_content.contains("external editor; read-only session: Continue"));
     assert!(wide_content.contains("Slash commands"));
     assert!(wide_content.contains("/cancel"));
     assert!(wide_content.contains("/reload"));

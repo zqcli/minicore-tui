@@ -183,7 +183,7 @@ pub enum LocalCommand {
     Reasoning,
     /// Open the local TUI settings form.
     Settings,
-    /// Open the external editor for the current draft.
+    /// Open a blank draft in the configured external editor.
     Editor,
     /// Switch the color palette.
     Theme(ThemeKind),
@@ -399,9 +399,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "editor",
-        menu_summary: "open draft in external editor",
+        menu_summary: "start draft in external editor",
         usage: "/editor",
-        summary: "edit the current draft in the configured external editor",
+        summary: "start a blank draft in the configured external editor",
         args: CommandArgs::None,
     },
     CommandSpec {

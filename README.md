@@ -125,6 +125,7 @@ The complete current keymap and slash-command semantics are in
 - `F1` opens Help;
 - `Ctrl+R` opens Sessions, `Ctrl+N` opens New Session, `Ctrl+L` opens Model, and `Shift+Tab` opens Reasoning;
 - In Sessions, `F2` renames, `F5` refreshes, `Ctrl+W` closes, and `Delete`/`Ctrl+D` deletes after the required confirmations;
+- `Ctrl+G` in Composer edits the current draft with the configured external editor; a read-only session keeps its explicit Continue action; `/editor` starts a blank draft;
 - `Ctrl+T` toggles reasoning and `Ctrl+O` toggles tool previews;
 - `PageUp`/`PageDown` scroll with four rows of overlap; `Ctrl+Home`/`Ctrl+End` jump to the transcript ends;
 - mouse wheel moves one row, or five with Alt; the Pi-style scrollbar appears on scrolling/hover, supports live dragging, and hides after one second;

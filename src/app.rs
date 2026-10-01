@@ -4081,6 +4081,7 @@ impl App {
                 Vec::new()
             }
             OpenHelp => self.open_dock(Dock::Help),
+            OpenExternalEditor => self.open_external_editor(self.composer.content()),
             OpenLogs => self.open_dock(Dock::Logs),
             OpenSessions => self.open_selector(SelectorKind::Session),
             OpenNewSession => self.open_new_session(),
@@ -4594,7 +4595,7 @@ impl App {
             LocalCommand::Reasoning => self.open_selector(SelectorKind::Reasoning),
             LocalCommand::Tool(key) => self.tool_command(key),
             LocalCommand::Settings => self.open_settings(),
-            LocalCommand::Editor => self.open_external_editor(),
+            LocalCommand::Editor => self.open_external_editor(String::new()),
             LocalCommand::Theme(kind) => {
                 self.theme = kind;
                 self.notice(NoticeLevel::Info, format!("theme: {kind:?}"));
@@ -4760,7 +4761,7 @@ impl App {
         self.editor_capture.is_some()
     }
 
-    fn open_external_editor(&mut self) -> Vec<AppCommand> {
+    fn open_external_editor(&mut self, draft: String) -> Vec<AppCommand> {
         if self.editor_active() {
             self.notice(NoticeLevel::Info, "an external editor is already open");
             return Vec::new();
@@ -4772,7 +4773,7 @@ impl App {
             );
             return Vec::new();
         };
-        if self.composer.byte_len() > crate::limits::EDITOR_READ_BYTES {
+        if draft.len() > crate::limits::EDITOR_READ_BYTES {
             self.notice(
                 NoticeLevel::Warning,
                 "the current draft is too large for external editor admission",
@@ -4793,7 +4794,6 @@ impl App {
             session_epoch,
             editor_revision: self.composer.editor_revision(),
         };
-        let draft = self.composer.content();
         self.editor_capture = Some(capture.clone());
         vec![AppCommand::StartEditor(Box::new(
             crate::command::StartEditorRequest {
@@ -4835,6 +4835,10 @@ impl App {
                         NoticeLevel::Warning,
                         "external editor output exceeded the draft readback limit",
                     );
+                } else if text == self.composer.content() {
+                    // A successful no-op must retain cursor, undo/redo and
+                    // paste projection rather than rebuild the TextArea.
+                    self.notice(NoticeLevel::Info, "external editor closed; draft unchanged");
                 } else {
                     self.composer.set_text(&text);
                     ui_actions::refresh_slash_completion(self);

@@ -74,6 +74,7 @@ fn content_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {
         ("Ctrl+N", "open the new-session form"),
         ("F2", "rename the selected session"),
         ("F5", "refresh the session list"),
+        ("Ctrl+G (Sessions)", "continue a browsed closed session"),
         ("Ctrl+W", "close the selected session after confirmation"),
         (
             "Delete / Ctrl+D",
@@ -91,6 +92,7 @@ fn content_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {
     lines.push(section(theme, "Composer", width));
     for (key, what) in [
         ("Enter", "send"),
+        ("Ctrl+G", "external editor; read-only session: Continue"),
         ("Shift+Enter / Ctrl+J", "newline"),
         ("Ctrl+A / Ctrl+E", "line start / line end"),
         ("Ctrl+W", "delete previous word"),

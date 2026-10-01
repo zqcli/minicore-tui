@@ -26,6 +26,7 @@
  │Ctrl+N  open the new-session form                                                                                    │
  │F2  rename the selected session                                                                                      │
  │F5  refresh the session list                                                                                         │
+ │Ctrl+G (Sessions)  continue a browsed closed session                                                                 │
  │Ctrl+W  close the selected session after confirmation                                                                │
  │Delete / Ctrl+D  delete the selected session after close and confirmation                                            │
  │Ctrl+O  expand/collapse all tool cards                                                                               │
@@ -34,7 +35,6 @@
  │Ctrl+Home / Ctrl+End  transcript top / tail                                                                          │
  │Esc  close a panel; cancel the running turn                                                                          │
  │                                                                                                                     │
- │Composer:                                                                                                            │
- │↑↓/PgUp/PgDn scroll · Esc/F1 close · q quit · 1–20/65                                                                │
+ │↑↓/PgUp/PgDn scroll · Esc/F1 close · q quit · 1–20/67                                                                │
  └─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
  starting

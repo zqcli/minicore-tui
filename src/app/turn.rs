@@ -71,8 +71,8 @@ impl App {
                             .get(active)
                             .is_some_and(|view| view.browsing)
                     });
-            // `/editor` captures the exact Composer revision before the
-            // external process starts. Keep the command buffer stable until
+            // `/editor` starts with a blank file, but captures the exact
+            // Composer revision first. Keep the command buffer stable until
             // that job returns; clearing it here would make every successful
             // editor result look stale even though no user draft changed.
             let keeps_editor_draft =
