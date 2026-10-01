@@ -11,6 +11,7 @@ pub mod search;
 pub mod selection;
 pub mod session;
 pub mod settings;
+pub(crate) mod text_input;
 pub mod tool;
 pub mod transcript;
 pub mod turn;

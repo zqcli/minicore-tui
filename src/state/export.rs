@@ -168,6 +168,8 @@ pub enum ExportCompletion {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExportFormState {
     pub target: String,
+    /// UTF-8 byte insertion position in the local target field.
+    pub target_cursor: usize,
     pub spec: ExportSpec,
     pub include_unsaved: bool,
     pub overwrite: bool,
@@ -184,6 +186,7 @@ pub struct ExportFormState {
 impl ExportFormState {
     pub fn new(target: String) -> Self {
         Self {
+            target_cursor: target.len(),
             target,
             spec: ExportSpec::default(),
             include_unsaved: false,

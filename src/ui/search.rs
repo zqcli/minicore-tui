@@ -65,21 +65,37 @@ fn render_query(frame: &mut Frame, area: Rect, panel: &SearchPanelState, app: &A
                 Modifier::empty()
             }),
     );
-    let query_text = crate::safe_text::safe_display(&panel.query).into_owned();
-    let query = if query_text.is_empty() && active {
-        Span::styled(
-            "type a literal to search".to_owned(),
-            Style::new().fg(theme.muted),
+    let width = area.width.saturating_sub(9) as usize;
+    let (query, cursor) = if active {
+        crate::ui::layout::single_line_window(
+            &panel.query,
+            panel.query_cursor,
+            width,
+            Style::new().fg(theme.text),
         )
     } else {
-        Span::styled(query_text, Style::new().fg(theme.text))
+        (
+            vec![Span::styled(
+                truncate(
+                    &crate::safe_text::safe_display(&panel.query).replace('\t', "    "),
+                    width,
+                ),
+                Style::new().fg(theme.text),
+            )],
+            0,
+        )
     };
+    let mut spans = vec![prompt];
+    spans.extend(query);
     let line = fill_line(
-        Line::from(vec![prompt, query]),
+        Line::from(spans),
         area.width as usize,
         Style::new().bg(theme.page_bg),
     );
     frame.render_widget(Paragraph::new(line), area);
+    if active && area.width > 9 && area.height > 0 {
+        frame.set_cursor_position((area.x + 9 + cursor as u16, area.y));
+    }
     let _ = app;
 }
 
@@ -154,7 +170,11 @@ fn render_matches(
 
 fn render_hints(frame: &mut Frame, area: Rect, panel: &SearchPanelState, theme: &Theme) {
     let hints = if panel.mode == SearchPanelMode::Input {
-        "Enter search · Ctrl+A scope · Esc close · Ctrl+U clear"
+        if area.width >= 110 {
+            "Enter search · ←→ Home/End edit · Del delete · Ctrl+A scope · Esc close · Ctrl+U clear"
+        } else {
+            "Enter search · Ctrl+A scope · Esc close · Ctrl+U clear"
+        }
     } else if panel.scanning() {
         if area.width < 90 {
             "s stop · Enter jump · n/p · Ctrl+A scope · Esc close"

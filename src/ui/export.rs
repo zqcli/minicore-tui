@@ -55,25 +55,39 @@ fn panel_title(form: &ExportFormState) -> String {
 }
 
 fn render_target(frame: &mut Frame, area: Rect, form: &ExportFormState, theme: &Theme) {
-    let cursor = if form.running() { "" } else { "▏" };
-    let line = Line::from(vec![
-        Span::styled(" target> ", Style::new().fg(theme.accent)),
-        Span::styled(
-            truncate(
-                &format!("{}{cursor}", form.target),
-                area.width.saturating_sub(9) as usize,
-            ),
+    let width = area.width.saturating_sub(9) as usize;
+    let (target, cursor) = if form.running() {
+        (
+            vec![Span::styled(
+                truncate(
+                    &crate::safe_text::safe_display(&form.target).replace('\t', "    "),
+                    width,
+                ),
+                Style::new().fg(theme.text),
+            )],
+            0,
+        )
+    } else {
+        crate::ui::layout::single_line_window(
+            &form.target,
+            form.target_cursor,
+            width,
             Style::new().fg(theme.text),
-        ),
-    ]);
+        )
+    };
+    let mut spans = vec![Span::styled(" target> ", Style::new().fg(theme.accent))];
+    spans.extend(target);
     frame.render_widget(
         Paragraph::new(fill_line(
-            line,
+            Line::from(spans),
             area.width as usize,
             Style::new().bg(theme.page_bg),
         )),
         area,
     );
+    if !form.running() && area.width > 9 && area.height > 0 {
+        frame.set_cursor_position((area.x + 9 + cursor as u16, area.y));
+    }
 }
 
 fn render_toggles(frame: &mut Frame, area: Rect, form: &ExportFormState, theme: &Theme) {
@@ -198,7 +212,11 @@ fn render_hints(frame: &mut Frame, area: Rect, form: &ExportFormState, theme: &T
         ExportPhase::Running => "Esc cancel · the temporary file is removed",
         ExportPhase::Cancelling => "waiting for the writer's typed outcome…",
         ExportPhase::Editing | ExportPhase::Done | ExportPhase::Failed => {
-            "Enter export · Ctrl+T/P/N/Y/R options · Esc close"
+            if area.width >= 100 {
+                "Enter export · ←→ Home/End edit · Del delete · Ctrl+T/P/N/Y/R options · Esc close"
+            } else {
+                "Enter export · Ctrl+T/P/N/Y/R options · Esc close"
+            }
         }
     };
     frame.render_widget(

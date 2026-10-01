@@ -146,7 +146,8 @@ closed-history browsing offers an explicit Continue, never an automatic open.
 
 | Dock key | Behavior |
 |---|---|
-| Characters / paste / Backspace / Ctrl+U | Edit or clear the current single-line query/scope; debounce is 150 ms. |
+| Characters / paste / Backspace / Delete / Ctrl+U | Edit or clear the current single-line query/scope; content changes debounce once after 150 ms. |
+| Left/Right / Home/End (also Ctrl+A/Ctrl+E) | Move the active input cursor; query and scope keep independent positions. No scan is restarted. |
 | Tab / Shift+Tab | Switch query and directory/paths input. Files are recursive. |
 | Up/Down / PageUp/PageDown | Move through received candidates/matches. Files sort locally while preserving the highlighted path. |
 | Enter | Insert the selected file path, enter a selected directory, or preview the selected grep match. |
@@ -189,6 +190,34 @@ closing nor switching a detail cancels execution. Changed revisions stop
 paging and retain old content until an explicit refresh. Binary, too-large and
 unavailable files show their reason, not a blank successful preview. There is
 no local-root reconstruction, local file scanning, or content attachment.
+
+## Search And Export Input
+
+Search query, Export target, and Files/Grep query/scope support Left/Right,
+Home/End, Backspace/Delete, and single-line bracketed paste at the cursor.
+Long fields scroll horizontally to keep the insertion point visible. Unicode
+cursor positions use UTF-8 character boundaries. Ctrl+U clears the active field.
+
+Paste inserts once and never presses Enter, submits a turn, runs a slash command,
+or writes an export. Line breaks (LF, CRLF, or CR), NUL, and other control
+characters except Tab reject the whole insertion with a notice; the field is
+unchanged. Tabs remain literal, displayed as spaces (including JSON whitespace
+in Grep paths). Search retains its 262144-byte query bound; Files/Grep retain
+1024-byte query and 4096-byte scope bounds. Over-limit insertions are rejected
+whole rather than truncated.
+
+Search has two modes: Home/End move the query cursor in Input, but select the
+first/last match in Results. Left/Right or typing return to Input; Enter searches
+from Input and jumps from Results. Results retain Up/Down, Page keys, n/p and s.
+Ctrl+A always switches loaded/full scope; it is never a query-Home shortcut.
+A running scan keeps its original literal and cannot take focus from an edited
+query. Results for an older literal are explicitly labelled as the previous query. Enter starts a fresh generation for the edited query.
+
+Export keeps Ctrl+Y overwrite and Ctrl+R raw, along with its other existing
+option chords. Its field is frozen during writing/cancellation. A failed export
+keeps the path, options and outcome available while the path is corrected for
+an explicit Enter retry. In Export and Files/Grep, Ctrl+A/Ctrl+E also move the
+input cursor to the beginning/end.
 
 ## Session Panel
 

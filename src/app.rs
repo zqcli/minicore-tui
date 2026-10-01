@@ -64,6 +64,8 @@ pub mod export;
 pub mod history;
 #[cfg(test)]
 mod history_navigation_tests;
+#[cfg(test)]
+mod panel_input_tests;
 pub mod panels;
 #[cfg(test)]
 mod panels_tests;
@@ -3843,6 +3845,14 @@ impl App {
                 }
                 Vec::new()
             }
+            CrosstermEvent::Paste(text) if self.search_panel().is_some() => {
+                self.search_insert(&text);
+                Vec::new()
+            }
+            CrosstermEvent::Paste(text) if self.export_form().is_some() => {
+                self.export_insert(&text);
+                Vec::new()
+            }
             CrosstermEvent::Paste(_)
                 if self.focused_region() == crate::state::panels::Focus::Main =>
             {
@@ -3876,15 +3886,35 @@ impl App {
         match action {
             None => Vec::new(),
             WorkspaceType(c) => self.workspace_edit(Some(&c.to_string()), false, false, false),
-            WorkspaceClear => {
+            WorkspaceClear | WorkspaceDelete => {
+                let mut changed = false;
                 if let Dock::Workspace(browser) = &mut self.dock {
-                    if browser.scope_focused {
-                        browser.scope.clear();
+                    let (input, cursor) = browser.active_input_mut();
+                    if matches!(action, WorkspaceClear) {
+                        changed = !input.is_empty();
+                        input.clear();
+                        *cursor = 0;
                     } else {
-                        browser.query.clear();
+                        changed = crate::state::text_input::delete(input, cursor);
                     }
                 }
-                self.workspace_edit(std::option::Option::None, false, false, false)
+                if changed {
+                    self.workspace_input_changed();
+                }
+                Vec::new()
+            }
+            WorkspaceCursor(_) | WorkspaceHome | WorkspaceEnd => {
+                if let Dock::Workspace(browser) = &mut self.dock {
+                    let (input, cursor) = browser.active_input_mut();
+                    match action {
+                        WorkspaceCursor(delta) => {
+                            crate::state::text_input::move_cursor(input, cursor, delta)
+                        }
+                        WorkspaceHome => *cursor = 0,
+                        _ => *cursor = input.len(),
+                    }
+                }
+                Vec::new()
             }
             WorkspaceBackspace => {
                 self.workspace_edit(std::option::Option::None, true, false, false)
@@ -4091,7 +4121,28 @@ impl App {
             SessionRename => self.begin_session_rename(),
             SessionClose => self.begin_session_close(),
             SearchTypeChar(c) => {
-                self.search_type_char(c);
+                self.search_insert(&c.to_string());
+                Vec::new()
+            }
+            SearchCursor(_) | SearchHome | SearchEnd | SearchDelete => {
+                if let Some(state) = self.search_panel_mut() {
+                    state.mode = crate::state::search::SearchPanelMode::Input;
+                    match action {
+                        SearchCursor(delta) => crate::state::text_input::move_cursor(
+                            &state.query,
+                            &mut state.query_cursor,
+                            delta,
+                        ),
+                        SearchHome => state.query_cursor = 0,
+                        SearchEnd => state.query_cursor = state.query.len(),
+                        _ => {
+                            crate::state::text_input::delete(
+                                &mut state.query,
+                                &mut state.query_cursor,
+                            );
+                        }
+                    }
+                }
                 Vec::new()
             }
             SearchBackspace => {
@@ -4115,7 +4166,27 @@ impl App {
             }
             SearchEscape => self.search_escape(),
             ExportTypeChar(c) => {
-                self.export_type_char(c);
+                self.export_insert(&c.to_string());
+                Vec::new()
+            }
+            ExportCursor(_) | ExportHome | ExportEnd | ExportDelete => {
+                if let Some(state) = self.export_form_mut().filter(|form| !form.running()) {
+                    match action {
+                        ExportCursor(delta) => crate::state::text_input::move_cursor(
+                            &state.target,
+                            &mut state.target_cursor,
+                            delta,
+                        ),
+                        ExportHome => state.target_cursor = 0,
+                        ExportEnd => state.target_cursor = state.target.len(),
+                        _ => {
+                            crate::state::text_input::delete(
+                                &mut state.target,
+                                &mut state.target_cursor,
+                            );
+                        }
+                    }
+                }
                 Vec::new()
             }
             ExportBackspace => {

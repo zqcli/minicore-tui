@@ -36,5 +36,5 @@
 
  2 处 匹 配  · 扫 描 完 成
  本 页 跳 过  2 项
- Tab 查 询 /范 围  · Ctrl+U 清 空  · F5 刷 新
+ Tab 查 询 /范 围  · ←→ Home/End 编 辑  · Del 删 除  · Ctrl+U 清 空  · F5 刷 新
  ▸ project · deep · high · ● ready                                                                                 ctx ?

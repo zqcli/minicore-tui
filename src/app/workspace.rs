@@ -188,6 +188,7 @@ impl App {
             self.workspace_generation,
             self.instant_now() + Duration::from_millis(150),
         );
+        browser.query_cursor = query.len();
         browser.query = query;
         let (line, col) = self.composer.cursor();
         browser.origin = (kind == BrowserKind::Files).then_some(ReferenceInsertion {
@@ -217,38 +218,48 @@ impl App {
         scope_toggle: bool,
         case_toggle: bool,
     ) -> Vec<AppCommand> {
-        let due = self.instant_now() + Duration::from_millis(150);
-        if let Dock::Workspace(browser) = &mut self.dock {
-            if case_toggle && browser.kind != BrowserKind::Grep {
-                return vec![];
-            }
-            if scope_toggle {
-                browser.scope_focused = !browser.scope_focused;
-                return vec![];
-            }
-            let input = if browser.scope_focused {
-                &mut browser.scope
-            } else {
-                &mut browser.query
-            };
-            if backspace {
-                input.pop();
-            }
-            if let Some(text) = text {
-                let limit = if browser.scope_focused { 4096 } else { 1024 };
-                if input.len() + text.len() > limit || text.contains(['\n', '\r', '\0']) {
+        let Dock::Workspace(browser) = &mut self.dock else {
+            return vec![];
+        };
+        if case_toggle && browser.kind != BrowserKind::Grep {
+            return vec![];
+        }
+        if scope_toggle {
+            browser.scope_focused = !browser.scope_focused;
+            return vec![];
+        }
+        let limit = if browser.scope_focused { 4096 } else { 1024 };
+        let (input, cursor) = browser.active_input_mut();
+        let changed = if backspace {
+            crate::state::text_input::backspace(input, cursor)
+        } else if let Some(text) = text {
+            match crate::state::text_input::insert(input, cursor, text, limit) {
+                Ok(changed) => changed,
+                Err(message) => {
+                    self.notice(NoticeLevel::Warning, message);
                     return vec![];
                 }
-                input.push_str(text);
             }
-            if case_toggle && browser.kind == BrowserKind::Grep {
-                browser.case_sensitive = !browser.case_sensitive;
-            }
-            self.workspace_generation = self.workspace_generation.wrapping_add(1);
-            browser.reset(self.workspace_generation, due);
+        } else {
+            false
+        };
+        if case_toggle {
+            browser.case_sensitive = !browser.case_sensitive;
+        }
+        if changed || case_toggle {
+            self.workspace_input_changed();
         }
         vec![]
     }
+
+    pub(super) fn workspace_input_changed(&mut self) {
+        let due = self.instant_now() + Duration::from_millis(150);
+        if let Dock::Workspace(browser) = &mut self.dock {
+            self.workspace_generation = self.workspace_generation.wrapping_add(1);
+            browser.reset(self.workspace_generation, due);
+        }
+    }
+
     pub(super) fn workspace_move(&mut self, delta: i32) -> Vec<AppCommand> {
         if let Dock::Workspace(browser) = &mut self.dock {
             browser.selected = browser
@@ -283,6 +294,7 @@ impl App {
                 let now = self.instant_now();
                 self.workspace_generation = self.workspace_generation.wrapping_add(1);
                 if let Dock::Workspace(b) = &mut self.dock {
+                    b.scope_cursor = path.len();
                     b.scope = path;
                     b.reset(self.workspace_generation, now);
                 }

@@ -211,61 +211,62 @@ pub fn match_snippet(item: &FileMatch) -> Line<'static> {
     Line::from(spans)
 }
 pub fn render_browser(frame: &mut Frame, area: Rect, b: &WorkspaceBrowser, theme: &Theme) {
-    // Keep IME/caret positioning on the actual input field. The source remains
-    // raw; only the visible safe representation is measured in terminal cells.
-    if area.width > 0 && area.height > 2 {
-        let (prefix, input, row) = if b.scope_focused {
-            (
-                if b.kind == BrowserKind::Files {
-                    "▸ directory: "
-                } else {
-                    "▸ paths: "
-                },
-                b.scope.as_str(),
-                2,
-            )
-        } else {
-            ("▸ query: ", b.query.as_str(), 1)
-        };
-        let cells =
-            crate::markdown::column_width(prefix) + crate::markdown::column_width(&safe(input));
-        frame.set_cursor_position((
-            area.x + cells.min(area.width.saturating_sub(1) as usize) as u16,
-            area.y + row,
-        ));
-    }
     let title = if b.kind == BrowserKind::Files {
         "Files · 引用路径，模型需要时再读 · Enter 插入 / F4 预览"
     } else {
         "Grep · literal only · Enter 预览 · Ctrl+I 大小写"
     };
-    let inputs = vec![
-        Line::from(title),
-        Line::from(format!(
-            "{}query: {}",
-            if !b.scope_focused { "▸ " } else { "  " },
-            safe(&b.query)
-        )),
-        Line::from(format!(
-            "{}{}: {}{}",
-            if b.scope_focused { "▸ " } else { "  " },
+    let mut inputs = vec![Line::from(title)];
+    for (scope, text, cursor, label) in [
+        (false, b.query.as_str(), b.query_cursor, "query"),
+        (
+            true,
+            b.scope.as_str(),
+            b.scope_cursor,
             if b.kind == BrowserKind::Files {
                 "directory"
             } else {
                 "paths"
             },
-            safe(&b.scope),
-            if b.kind == BrowserKind::Grep {
-                if b.case_sensitive {
-                    " [case sensitive]"
-                } else {
-                    " [ignore case]"
-                }
-            } else {
-                ""
+        ),
+    ] {
+        let active = b.scope_focused == scope;
+        let prefix = format!("{}{label}: ", if active { "▸ " } else { "  " });
+        let prefix_width = crate::markdown::column_width(&prefix);
+        let width = (area.width as usize).saturating_sub(prefix_width);
+        let mut spans = vec![Span::raw(prefix)];
+        if active {
+            let (window, cell) = crate::ui::layout::single_line_window(
+                text,
+                cursor,
+                width,
+                Style::new().fg(theme.text),
+            );
+            spans.extend(window);
+            let row = if scope { 2 } else { 1 };
+            if width > 0 && area.height > row {
+                frame.set_cursor_position((
+                    area.x + prefix_width as u16 + cell as u16,
+                    area.y + row,
+                ));
             }
-        )),
-    ];
+        } else {
+            spans.push(Span::raw(crate::ui::layout::truncate(&safe(text), width)));
+        }
+        // Preserve the explicit case choice when it fits after the field.
+        if scope && b.kind == BrowserKind::Grep {
+            let used = spans.iter().map(Span::width).sum::<usize>();
+            let label = if b.case_sensitive {
+                " [case sensitive]"
+            } else {
+                " [ignore case]"
+            };
+            if used + label.len() <= area.width as usize {
+                spans.push(Span::raw(label));
+            }
+        }
+        inputs.push(Line::from(spans));
+    }
     frame.render_widget(
         Paragraph::new(inputs).style(Style::new().fg(theme.muted)),
         Rect::new(area.x, area.y, area.width, 3.min(area.height)),
@@ -311,6 +312,8 @@ pub fn render_browser(frame: &mut Frame, area: Rect, b: &WorkspaceBrowser, theme
                 "本地 500 项 / 1 MiB 上限：缩小范围，未全部列出".into()
             } else if b.stopped_by == Some(ScanStop::Deadline) {
                 "deadline：缩小范围或 F5 手动刷新，不会自动重扫".into()
+            } else if area.width >= 100 {
+                "Tab 查询/范围 · ←→ Home/End 编辑 · Del 删除 · Ctrl+U 清空 · F5 刷新".into()
             } else {
                 "Tab 查询/范围 · Ctrl+U 清空 · F5 刷新".into()
             }

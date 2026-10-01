@@ -465,3 +465,144 @@ mod tests {
         );
     }
 }
+
+/// Keep the insertion point visible without clipping a wide Unicode character.
+pub(crate) fn text_window(
+    text: &str,
+    cursor: usize,
+    width: usize,
+    style: Style,
+) -> Vec<Span<'static>> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let mut cursor = cursor.min(text.len());
+    while !text.is_char_boundary(cursor) {
+        cursor -= 1;
+    }
+    let display_char = |character: char| if character == '\n' { '↵' } else { character };
+    let mut characters = text[cursor..].chars();
+    let character = display_char(characters.next().unwrap_or(' '));
+    let mut cursor_text = character.to_string();
+    if crate::markdown::char_width(character) == 0 {
+        cursor_text.insert(0, ' ');
+    } else if crate::markdown::char_width(character) > width {
+        // One-cell viewports cannot display a CJK cursor glyph intact.
+        cursor_text = " ".to_owned();
+    }
+    let cursor_width = crate::markdown::column_width(&cursor_text);
+    let available = width.saturating_sub(cursor_width);
+    let start_for = |budget: usize| {
+        let mut start = cursor;
+        let mut used = 0;
+        for (index, character) in text[..cursor].char_indices().rev() {
+            let next = crate::markdown::char_width(display_char(character));
+            if used + next > budget {
+                break;
+            }
+            used += next;
+            start = index;
+        }
+        start
+    };
+    let mut start = start_for(available);
+    let prefix = if start > 0 && available > 0 {
+        start = start_for(available - 1);
+        "…"
+    } else {
+        ""
+    };
+    let before = text[start..cursor]
+        .chars()
+        .map(display_char)
+        .collect::<String>();
+    let used = crate::markdown::column_width(prefix)
+        + crate::markdown::column_width(&before)
+        + cursor_width;
+    let remaining = width.saturating_sub(used);
+    // Only materialize enough suffix characters for this visible window.
+    let after = characters
+        .take(remaining + 1)
+        .map(display_char)
+        .collect::<String>();
+    vec![
+        Span::styled(format!("{prefix}{before}"), style),
+        Span::styled(
+            cursor_text,
+            style.add_modifier(ratatui::style::Modifier::REVERSED),
+        ),
+        Span::styled(truncate(&after, remaining), style),
+    ]
+}
+
+/// Safe single-line projection plus the terminal cell of the insertion point.
+/// Byte cursors remain in the raw field; only display text is sanitized.
+pub(crate) fn single_line_window(
+    text: &str,
+    cursor: usize,
+    width: usize,
+    style: Style,
+) -> (Vec<Span<'static>>, usize) {
+    let cursor = crate::state::text_input::boundary(text, cursor);
+    let safe = |text: &str| {
+        crate::safe_text::safe_display(text)
+            .replace('\t', "    ")
+            .replace('\n', "↵")
+    };
+    let before = safe(&text[..cursor]);
+    let safe_cursor = before.len();
+    let display = before + &safe(&text[cursor..]);
+    let spans = text_window(&display, safe_cursor, width, style);
+    let cell = spans.first().map_or(0, Span::width);
+    (spans, cell)
+}
+
+#[cfg(test)]
+mod single_line_input_tests {
+    use super::*;
+    #[test]
+    fn safe_single_line_window_keeps_every_utf8_cursor_in_bounds() {
+        for text in [
+            "",
+            "ascii",
+            "中🙂e\u{301}",
+            "👨‍👩‍👧‍👦tail",
+            "\t中",
+            "unsafe\u{202e}text",
+            "a\u{301}\u{301}\u{301}",
+        ] {
+            for cursor in text.char_indices().map(|(i, _)| i).chain([text.len()]) {
+                for width in [1, 2, 3, 8, 47, 140] {
+                    let (spans, cell) = single_line_window(text, cursor, width, Style::default());
+                    assert!(
+                        spans.iter().map(Span::width).sum::<usize>() <= width,
+                        "{text:?} {cursor} {width}"
+                    );
+                    assert!(cell < width, "cursor must remain visible");
+                    for span in spans {
+                        assert!(
+                            !span
+                                .content
+                                .chars()
+                                .any(crate::safe_text::is_unsafe_display_control)
+                        );
+                        assert!(!span.content.contains(['\t', '\n']));
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn long_single_line_window_shows_the_edited_middle_and_tail() {
+        let text = format!("{}中🙂tail", "prefix/".repeat(100));
+        for width in [47, 140] {
+            let (spans, _) = single_line_window(&text, text.len(), width, Style::default());
+            let rendered = spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+            assert!(rendered.starts_with('…'));
+            assert!(rendered.ends_with("中🙂tail "));
+            let cursor = text.find('中').unwrap();
+            let (spans, _) = single_line_window(&text, cursor, width, Style::default());
+            assert_eq!(spans[1].content, "中");
+        }
+    }
+}

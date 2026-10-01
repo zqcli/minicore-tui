@@ -113,38 +113,42 @@ impl App {
         self.export_tx.is_some()
     }
 
-    fn export_form_mut(&mut self) -> Option<&mut crate::state::export::ExportFormState> {
+    pub(super) fn export_form_mut(&mut self) -> Option<&mut crate::state::export::ExportFormState> {
         match &mut self.dock {
             Dock::Export(form) => Some(form),
             _ => None,
         }
     }
 
-    pub(super) fn export_type_char(&mut self, ch: char) {
+    pub(super) fn export_insert(&mut self, text: &str) {
         let Some(form) = self.export_form_mut() else {
             return;
         };
-        if form.running() || ch.is_control() {
+        if form.running() {
             return;
         }
-        form.target.push(ch);
+        // Keep the existing target field's admission policy; only Search and
+        // Workspace impose a byte cap. Filesystem validation still happens on Enter.
+        if let Err(message) = crate::state::text_input::insert(
+            &mut form.target,
+            &mut form.target_cursor,
+            text,
+            usize::MAX,
+        ) {
+            self.notice(NoticeLevel::Warning, message);
+        }
     }
 
     pub(super) fn export_backspace(&mut self) {
-        let Some(form) = self.export_form_mut() else {
-            return;
-        };
-        if !form.running() {
-            form.target.pop();
+        if let Some(form) = self.export_form_mut().filter(|form| !form.running()) {
+            crate::state::text_input::backspace(&mut form.target, &mut form.target_cursor);
         }
     }
 
     pub(super) fn export_clear(&mut self) {
-        let Some(form) = self.export_form_mut() else {
-            return;
-        };
-        if !form.running() {
+        if let Some(form) = self.export_form_mut().filter(|form| !form.running()) {
             form.target.clear();
+            form.target_cursor = 0;
         }
     }
 

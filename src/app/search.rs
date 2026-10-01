@@ -135,34 +135,27 @@ impl App {
         }
     }
 
-    pub(super) fn search_type_char(&mut self, ch: char) {
+    pub(super) fn search_insert(&mut self, text: &str) {
         let Some(panel) = self.search_panel_mut() else {
             return;
         };
-        panel.mode = SearchPanelMode::Input;
-        if panel.query.len().saturating_add(ch.len_utf8())
-            > crate::state::search::MAX_SEARCH_QUERY_BYTES
-        {
-            return;
+        match crate::state::text_input::insert(
+            &mut panel.query,
+            &mut panel.query_cursor,
+            text,
+            crate::state::search::MAX_SEARCH_QUERY_BYTES,
+        ) {
+            Ok(true) => panel.mode = SearchPanelMode::Input,
+            Ok(false) => {}
+            Err(message) => self.notice(NoticeLevel::Warning, message),
         }
-        let cursor = panel.query_cursor.min(panel.query.len());
-        let cursor = floor_char_boundary(&panel.query, cursor);
-        panel.query.insert(cursor, ch);
-        panel.query_cursor = cursor + ch.len_utf8();
     }
 
     pub(super) fn search_backspace(&mut self) {
-        let Some(panel) = self.search_panel_mut() else {
-            return;
-        };
-        panel.mode = SearchPanelMode::Input;
-        let cursor = floor_char_boundary(&panel.query, panel.query_cursor.min(panel.query.len()));
-        let Some(previous) = panel.query[..cursor].chars().next_back() else {
-            return;
-        };
-        let start = cursor - previous.len_utf8();
-        panel.query.replace_range(start..cursor, "");
-        panel.query_cursor = start;
+        if let Some(panel) = self.search_panel_mut() {
+            panel.mode = SearchPanelMode::Input;
+            crate::state::text_input::backspace(&mut panel.query, &mut panel.query_cursor);
+        }
     }
 
     pub(super) fn search_clear(&mut self) {
@@ -291,6 +284,8 @@ impl App {
             return Vec::new();
         };
         panel.generation = generation;
+        panel.mode = SearchPanelMode::Results;
+        panel.submitted_query = Some(query.clone());
         panel.error = None;
         panel.matches.clear();
         panel.cursor = 0;
@@ -444,11 +439,10 @@ impl App {
         panel.coverage.truncated = outcome.truncated;
         panel.coverage.complete = !outcome.truncated;
         panel.status = SearchStatus::Ready;
-        panel.mode = if panel.matches.is_empty() {
-            SearchPanelMode::Input
-        } else {
-            SearchPanelMode::Results
-        };
+        // A completion must not steal focus from a query the user is editing.
+        if panel.matches.is_empty() {
+            panel.mode = SearchPanelMode::Input;
+        }
         Vec::new()
     }
 
@@ -943,19 +937,13 @@ impl App {
     }
 }
 
-fn floor_char_boundary(text: &str, mut index: usize) -> usize {
-    index = index.min(text.len());
-    while index > 0 && !text.is_char_boundary(index) {
-        index -= 1;
-    }
-    index
-}
-
 /// One explicit full-session search scan (spec §17.1). It owns a pinned
 /// `session.read` chain and its own assembler; decoded items are scanned by
 /// the owned decode worker and only summaries come back.
 #[derive(Debug)]
 pub(super) struct SearchScan {
+    /// This generation keeps its literal even while the panel query is edited.
+    pub needle: String,
     pub session_id: String,
     pub generation: u64,
     pub session_epoch: u64,
@@ -986,6 +974,7 @@ impl App {
         };
         let session_id = panel.session_id.clone();
         let generation = panel.generation;
+        let needle = panel.query.trim().to_owned();
         let Some(epoch) = self
             .sessions
             .known
@@ -1003,6 +992,7 @@ impl App {
             panel.coverage.total_items = pin.as_ref().map_or(0, |pin| pin.total);
         }
         self.search_scan = Some(SearchScan {
+            needle,
             session_id,
             generation,
             session_epoch: epoch,
@@ -1263,10 +1253,7 @@ impl App {
                     .as_ref()
                     .and_then(|page| page.pending_encoded.front().cloned())
                     .map(|item| {
-                        let needle = self
-                            .search_panel()
-                            .map(|panel| panel.query.trim().to_owned())
-                            .unwrap_or_default();
+                        let needle = scan.needle.clone();
                         (
                             scan.session_epoch,
                             scan.generation,
@@ -1439,9 +1426,6 @@ impl App {
                 break;
             }
             panel.matches.push(target.clone());
-        }
-        if !panel.matches.is_empty() && panel.mode == SearchPanelMode::Input {
-            panel.mode = SearchPanelMode::Results;
         }
     }
 

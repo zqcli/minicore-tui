@@ -6,10 +6,11 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::markdown::{char_width, column_width};
+#[cfg(test)]
+use crate::markdown::column_width;
 use crate::state::settings::{SettingsField, SettingsState};
 use crate::theme::Theme;
-use crate::ui::layout;
+use crate::ui::layout::{self, text_window};
 use crate::ui::panel::{self, PanelSpec};
 
 pub fn render(frame: &mut Frame, area: Rect, theme: &Theme, state: &SettingsState) {
@@ -106,65 +107,6 @@ fn next_start_value(value: &str) -> String {
     } else {
         format!("{value} (next start)")
     }
-}
-
-/// Keep the insertion point visible without clipping a wide Unicode character.
-fn text_window(text: &str, cursor: usize, width: usize, style: Style) -> Vec<Span<'static>> {
-    if width == 0 {
-        return Vec::new();
-    }
-    let mut cursor = cursor.min(text.len());
-    while !text.is_char_boundary(cursor) {
-        cursor -= 1;
-    }
-    let display_char = |character: char| if character == '\n' { '↵' } else { character };
-    let mut characters = text[cursor..].chars();
-    let character = display_char(characters.next().unwrap_or(' '));
-    let mut cursor_text = character.to_string();
-    if char_width(character) == 0 {
-        cursor_text.insert(0, ' ');
-    } else if char_width(character) > width {
-        // One-cell viewports cannot display a CJK cursor glyph intact.
-        cursor_text = " ".to_owned();
-    }
-    let cursor_width = column_width(&cursor_text);
-    let available = width.saturating_sub(cursor_width);
-    let start_for = |budget: usize| {
-        let mut start = cursor;
-        let mut used = 0;
-        for (index, character) in text[..cursor].char_indices().rev() {
-            let next = char_width(display_char(character));
-            if used + next > budget {
-                break;
-            }
-            used += next;
-            start = index;
-        }
-        start
-    };
-    let mut start = start_for(available);
-    let prefix = if start > 0 && available > 0 {
-        start = start_for(available - 1);
-        "…"
-    } else {
-        ""
-    };
-    let before = text[start..cursor]
-        .chars()
-        .map(display_char)
-        .collect::<String>();
-    let used = column_width(prefix) + column_width(&before) + cursor_width;
-    let remaining = width.saturating_sub(used);
-    // Only materialize enough suffix characters for this visible window.
-    let after = characters
-        .take(remaining + 1)
-        .map(display_char)
-        .collect::<String>();
-    vec![
-        Span::styled(format!("{prefix}{before}"), style),
-        Span::styled(cursor_text, style.add_modifier(Modifier::REVERSED)),
-        Span::styled(layout::truncate(&after, remaining), style),
-    ]
 }
 
 fn yes_no(value: bool) -> String {

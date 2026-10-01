@@ -21,8 +21,10 @@ pub struct WorkspaceBrowser {
     pub epoch: u64,
     pub generation: u64,
     pub query: String,
+    pub query_cursor: usize,
     /// Directory for files; one path or a JSON string array for grep.
     pub scope: String,
+    pub scope_cursor: usize,
     pub scope_focused: bool,
     pub case_sensitive: bool,
     pub due: Option<Instant>,
@@ -68,7 +70,9 @@ impl WorkspaceBrowser {
             epoch,
             generation,
             query: String::new(),
+            query_cursor: 0,
             scope: String::new(),
+            scope_cursor: 0,
             scope_focused: false,
             case_sensitive: false,
             due: Some(now),
@@ -83,6 +87,13 @@ impl WorkspaceBrowser {
             error: None,
             limited: false,
             origin: None,
+        }
+    }
+    pub(crate) fn active_input_mut(&mut self) -> (&mut String, &mut usize) {
+        if self.scope_focused {
+            (&mut self.scope, &mut self.scope_cursor)
+        } else {
+            (&mut self.query, &mut self.query_cursor)
         }
     }
     pub fn len(&self) -> usize {

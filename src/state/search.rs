@@ -188,7 +188,7 @@ pub enum SearchStatus {
 pub enum SearchPanelMode {
     /// The one-line query input at the bottom owns the keyboard.
     Input,
-    /// The result list owns the keyboard; the query is editable with `/`.
+    /// The result list owns navigation; typing/Left/Right returns to query input.
     Results,
 }
 
@@ -200,6 +200,8 @@ pub struct SearchPanelState {
     pub session_epoch: u64,
     pub query: String,
     pub query_cursor: usize,
+    /// Literal owned by the current scan/results, separate from the editable draft.
+    pub submitted_query: Option<String>,
     pub scope: SearchScope,
     pub mode: SearchPanelMode,
     pub matches: Vec<SearchMatch>,
@@ -219,6 +221,7 @@ impl Default for SearchPanelState {
             session_epoch: 0,
             query: String::new(),
             query_cursor: 0,
+            submitted_query: None,
             scope: SearchScope::Loaded,
             mode: SearchPanelMode::Input,
             matches: Vec::new(),
@@ -234,7 +237,7 @@ impl Default for SearchPanelState {
 impl SearchPanelState {
     pub fn new(session_id: String, session_epoch: u64, query: String, scope: SearchScope) -> Self {
         let query = truncate_query(query);
-        let cursor = query.chars().count();
+        let cursor = query.len();
         Self {
             session_id,
             session_epoch,
@@ -292,6 +295,24 @@ impl SearchPanelState {
 
     /// A one-line coverage/status statement for the panel.
     pub fn status_label(&self) -> String {
+        let status = self.scan_status_label();
+        if let Some(query) = self
+            .submitted_query
+            .as_deref()
+            .filter(|query| *query != self.query.trim())
+        {
+            let preview: String = query.chars().take(40).collect();
+            let suffix = if preview.len() < query.len() {
+                "…"
+            } else {
+                ""
+            };
+            return format!("previous query {preview:?}{suffix} · {status}");
+        }
+        status
+    }
+
+    fn scan_status_label(&self) -> String {
         if let Some(error) = &self.error {
             return error.clone();
         }
