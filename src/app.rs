@@ -61,6 +61,8 @@ pub mod context;
 mod context_tests;
 pub mod copy;
 pub mod export;
+#[cfg(test)]
+mod help_return_tests;
 pub mod history;
 #[cfg(test)]
 mod history_navigation_tests;
@@ -206,6 +208,17 @@ struct SelectorClick {
 struct ScrollbarDrag {
     session_id: String,
     grab_offset: usize,
+}
+
+/// One suspended input context for Help. Ownership is moved here, never copied
+/// or stacked; ordinary navigation drops it instead of reviving an old form.
+struct HelpReturn {
+    dock: Dock,
+    draft: Option<NewSessionState>,
+    panel_scroll: usize,
+    /// Only an active-session configuration selector belongs to this load.
+    /// A new-session draft and the session browser are independent inputs.
+    session_owner: Option<(SessionId, u64)>,
 }
 
 /// Why a request was issued; `pending_requests` routes each response to the
@@ -490,6 +503,7 @@ pub struct App {
     last_total: usize,
     /// Manual scroll offset inside the Help/Logs panels.
     pub panel_scroll: usize,
+    help_return: Option<HelpReturn>,
     /// Double Ctrl+C window anchor.
     ctrl_c_at: Option<Instant>,
     /// Latest terminal size for mapping a mouse release to prepared rows.
@@ -775,6 +789,7 @@ impl App {
             viewport: (0, 0),
             last_total: 0,
             panel_scroll: 0,
+            help_return: None,
             ctrl_c_at: None,
             terminal_size: (80, 24),
             mouse_down: None,
@@ -1444,6 +1459,7 @@ impl App {
             AppEvent::HistoryItemDecoded(outcome) => self.on_history_item_decoded(*outcome),
             AppEvent::LocalScanFinished(outcome) => self.on_local_scan_finished(*outcome),
         });
+        self.reconcile_help_return();
         if header_visible_before != crate::ui::header::visible(self) {
             self.prepared_conversation = None;
         }
@@ -1579,6 +1595,15 @@ impl App {
     pub(crate) fn set_active_session(&mut self, next: Option<SessionId>) {
         if self.sessions.active == next {
             return;
+        }
+        // A session-local selector cannot survive leaving its owner, even
+        // if another event switches back before Help is dismissed.
+        if self
+            .help_return
+            .as_ref()
+            .is_some_and(|saved| saved.session_owner.is_some())
+        {
+            self.help_return = None;
         }
         // A foreground 500ms deadline must not follow its Session into the
         // background. Start the slower observation interval at this boundary.
@@ -2507,6 +2532,7 @@ impl App {
             return Vec::new();
         }
         let draft = self.make_new_session_draft();
+        self.help_return = None;
         self.draft = None;
         self.dock = Dock::NewSession(draft);
         Vec::new()
@@ -2614,6 +2640,7 @@ impl App {
                 return Vec::new();
             }
         }
+        self.help_return = None;
         if kind == SelectorKind::Session {
             let selected = self
                 .sessions
@@ -2882,6 +2909,19 @@ impl App {
     }
 
     fn cancel_dock(&mut self) -> Vec<AppCommand> {
+        if matches!(self.dock, Dock::Help) {
+            self.reconcile_help_return();
+            if let Some(saved) = self.help_return.take() {
+                self.dock = saved.dock;
+                self.draft = saved.draft;
+                self.panel_scroll = saved.panel_scroll;
+                // A read-only list refresh may have removed the selected row.
+                self.reconcile_session_selection(true);
+            } else {
+                self.dock = Dock::Composer;
+            }
+            return Vec::new();
+        }
         if self.workspace_browser().is_some() {
             self.close_workspace_browser();
             return Vec::new();
@@ -3024,6 +3064,7 @@ impl App {
             );
             return Vec::new();
         };
+        self.help_return = None;
         self.continue_browsed_session(&selected)
     }
 
@@ -4621,12 +4662,91 @@ impl App {
         self.sessions.known.get_mut(&active)
     }
 
+    /// Only a mutation owned by the visible panel prevents suspension.
+    /// Streaming, reads, and requests for other sessions keep Help available.
+    fn help_owner_submitting(&self) -> bool {
+        if self.new_session().is_some_and(|draft| draft.submitting)
+            || self.selector_state().is_some_and(|state| state.submitting)
+        {
+            return true;
+        }
+        match &self.dock {
+            Dock::ModelSelector(_) | Dock::ReasoningSelector(_) if self.draft.is_none() => {
+                self.pending_requests.values().any(|kind| {
+                    matches!(kind, RequestKind::UpdateSession { session_id, .. }
+                        if self.sessions.active.as_ref() == Some(session_id))
+                })
+            }
+            Dock::SessionSelector(state) => self.pending_requests.values().any(|kind| {
+                matches!(kind,
+                    RequestKind::OpenSession { session_id, .. }
+                    | RequestKind::RenameSession { session_id }
+                    | RequestKind::CloseSession { session_id }
+                    | RequestKind::CloseVerifyState { session_id }
+                    | RequestKind::DeleteSession { session_id }
+                    if state.selected_session_id.as_ref() == Some(session_id))
+            }),
+            _ => false,
+        }
+    }
+
+    fn reconcile_help_return(&mut self) {
+        let invalid = self.help_return.as_ref().is_some_and(|saved| {
+            !matches!(self.dock, Dock::Help)
+                || matches!(
+                    self.connection,
+                    ConnectionState::Failed(_) | ConnectionState::ShuttingDown
+                )
+                || saved.session_owner.as_ref().is_some_and(|(id, epoch)| {
+                    self.sessions.active.as_ref() != Some(id)
+                        || self
+                            .active_view()
+                            .is_none_or(|view| view.session_epoch != *epoch)
+                })
+        });
+        if invalid {
+            self.help_return = None;
+        }
+    }
+
     fn open_dock(&mut self, dock: Dock) -> Vec<AppCommand> {
         if self.dock == dock {
             return self.cancel_dock();
         }
+        if matches!(dock, Dock::Help) {
+            if self.help_owner_submitting() {
+                self.notice(
+                    NoticeLevel::Info,
+                    "Help is available after this panel's pending session action completes",
+                );
+                return Vec::new();
+            }
+            let nested = matches!(
+                self.dock,
+                Dock::ModelSelector(_) | Dock::ReasoningSelector(_) | Dock::ProfileSelector(_)
+            );
+            let draft = self.draft.take().filter(|_| nested);
+            let session_owner = if draft.is_none()
+                && matches!(
+                    self.dock,
+                    Dock::ModelSelector(_) | Dock::ReasoningSelector(_)
+                ) {
+                self.active_view()
+                    .map(|view| (view.info.session_id.clone(), view.session_epoch))
+            } else {
+                None
+            };
+            self.help_return = Some(HelpReturn {
+                dock: std::mem::replace(&mut self.dock, Dock::Help),
+                draft,
+                panel_scroll: self.panel_scroll,
+                session_owner,
+            });
+        } else {
+            self.help_return = None;
+            self.dock = dock;
+        }
         self.panel_scroll = 0;
-        self.dock = dock;
         Vec::new()
     }
 

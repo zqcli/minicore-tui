@@ -13,7 +13,7 @@ Editor restores the existing editing and command behavior.
 |---|---|
 | `Ctrl+C` | If the composer has text, clear it. If empty, show a hint; press again within 1 second to request shutdown. |
 | `Ctrl+D` | Request shutdown only when the composer is empty and the active session is idle. |
-| `F1` | Open Help; press `F1` or `Esc` to close it. |
+| `F1` | Open Help; `F1` or `Esc` returns to the previous panel with its input intact. |
 | `Ctrl+R` | Open the session selector. |
 | `Ctrl+G` | In Composer with Editor focus, edit the current draft externally. A browsed closed session keeps explicit Continue without sending; the Session panel also retains Continue. |
 | `Ctrl+N` | Open the new-session form. |
@@ -31,6 +31,11 @@ Editor restores the existing editing and command behavior.
 
 A release event is ignored. Repeated text and cursor events are accepted;
 one-shot global shortcuts require a key press.
+
+Help retains the previous form, selector filter, or Logs scroll position once.
+Opening another panel from Help replaces that return context. A panel submitting
+a session change stays visible until its response arrives, with a notice when
+Help is requested; streaming and pending reads do not block Help.
 
 ## Composer
 
