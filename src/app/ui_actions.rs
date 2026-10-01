@@ -41,11 +41,17 @@ pub struct SlashCompletionState {
     pub end: usize,
     pub items: Vec<crate::command::MenuEntry>,
     pub group: Option<crate::command::CommandGroup>,
+    /// Canonical command whose finite argument suggestions are displayed.
+    pub argument_command: Option<&'static str>,
     pub filter: String,
     pub selected: usize,
 }
 
 impl SlashCompletionState {
+    pub fn submits_literal(&self) -> bool {
+        matches!(self.argument_command, Some("model" | "reasoning"))
+    }
+
     pub fn visible_limit(&self) -> usize {
         if self.group.is_none() && self.filter.is_empty() {
             6
@@ -315,6 +321,7 @@ impl App {
                     items: page.entries,
                     selected: 0,
                     group: page.group,
+                    argument_command: page.argument_command,
                     filter: page.filter,
                 }
             });
@@ -380,7 +387,8 @@ impl App {
         }
         let Some(item) = completion.items.get(completion.selected) else {
             self.slash_completion = Some(completion);
-            return true;
+            // Tab remains a no-op; Enter validates the current literal text.
+            return false;
         };
         let (line, _) = self.composer.cursor();
         self.composer.replace_range(

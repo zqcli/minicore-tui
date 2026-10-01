@@ -144,6 +144,8 @@ The `/` menu groups commands under Session, Workspace, Conversation and App,
 with Model and Reasoning directly accessible. Enter opens a group; Tab only
 fills text; Esc clears a filter, goes back, then hides the menu. Direct commands
 remain available, including `/model <id>` and `/reasoning <level>`.
+For Model/Reasoning arguments, Enter applies exactly what you typed; Tab
+explicitly fills the selected suggestion. An empty argument opens the picker.
 
 Implemented local commands include `/new`, `/resume`, `/sessions`, `/model`,
 `/reasoning`, `/theme`, `/clear`, `/help`, `/logs`, `/cancel`, `/reload`,

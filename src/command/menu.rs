@@ -105,6 +105,7 @@ impl From<&str> for MenuEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuPage {
     pub group: Option<CommandGroup>,
+    pub argument_command: Option<&'static str>,
     pub filter: String,
     pub entries: Vec<MenuEntry>,
 }
@@ -228,12 +229,14 @@ pub fn page(query: &str, models: &[String], reasoning: &[String]) -> Option<Menu
                 )?;
                 return Some(MenuPage {
                     group: Some(group),
+                    argument_command: Some(spec.name),
                     filter: tail.into(),
                     entries,
                 });
             }
             return Some(MenuPage {
                 group: Some(group),
+                argument_command: None,
                 filter: tail.into(),
                 entries: filtered(children(group), tail),
             });
@@ -248,6 +251,7 @@ pub fn page(query: &str, models: &[String], reasoning: &[String]) -> Option<Menu
         )?;
         return Some(MenuPage {
             group: None,
+            argument_command: Some(spec.name),
             filter: query.into(),
             entries,
         });
@@ -271,6 +275,7 @@ pub fn page(query: &str, models: &[String], reasoning: &[String]) -> Option<Menu
     };
     Some(MenuPage {
         group: None,
+        argument_command: None,
         filter: query.into(),
         entries,
     })

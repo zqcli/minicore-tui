@@ -180,25 +180,36 @@ fn render_completion(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             colors,
             rail::RAIL_WIDTH,
             Line::from(Span::styled(
-                "No matching commands",
+                if completion.argument_command.is_some() {
+                    "No matching values"
+                } else {
+                    "No matching commands"
+                },
                 Style::new().fg(theme.text),
             )),
         ));
     }
     if show_header {
-        let breadcrumb = completion.group.map(|group| group.name()).or_else(|| {
-            (!completion.filter.is_empty())
-                .then(|| {
-                    completion
-                        .items
-                        .get(completion.selected)
-                        .map(|item| item.breadcrumb)
-                })
-                .flatten()
-        });
-        let title = breadcrumb
-            .filter(|name| *name != "Commands")
-            .map_or("Commands".to_owned(), |name| format!("Commands › {name}"));
+        let breadcrumb = completion
+            .group
+            .map(|group| group.name())
+            .or(completion.argument_command)
+            .or_else(|| {
+                (!completion.filter.is_empty())
+                    .then(|| {
+                        completion
+                            .items
+                            .get(completion.selected)
+                            .map(|item| item.breadcrumb)
+                    })
+                    .flatten()
+            });
+        let title = match (completion.group, completion.argument_command) {
+            (Some(group), Some(argument)) => format!("Commands › {} › {argument}", group.name()),
+            _ => breadcrumb
+                .filter(|name| *name != "Commands")
+                .map_or("Commands".to_owned(), |name| format!("Commands › {name}")),
+        };
         lines.insert(
             0,
             rail::surface_row(
@@ -213,11 +224,15 @@ fn render_completion(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         );
     }
     let selected = completion.items.get(completion.selected);
-    let enter = match selected.map(|item| item.kind) {
-        None => "edit",
-        Some(crate::command::MenuKind::Group(_)) => "open",
-        _ if selected.is_some_and(|item| item.needs_input()) => "fill",
-        _ => "run",
+    let enter = if completion.submits_literal() {
+        "apply typed"
+    } else {
+        match selected.map(|item| item.kind) {
+            None => "check typed",
+            Some(crate::command::MenuKind::Group(_)) => "open",
+            _ if selected.is_some_and(|item| item.needs_input()) => "fill",
+            _ => "run",
+        }
     };
     let position = format!(
         "{}/{}",

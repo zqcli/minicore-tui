@@ -289,7 +289,10 @@ than replacing a partial token. Dismissed menus stay hidden until text changes.
 Required-argument commands stay editable: `/theme` offers dark/light choices,
 while `/tool` shows its exact argument usage. `/model [id]` and
 `/reasoning [level]` accept catalog-supported values or open their picker when
-no value is given. Model IDs are case-sensitive. A model incompatible with the
+no value is given, including a trailing space. While their argument suggestions
+are visible, Enter validates the literal input; it never substitutes a partial
+or differently cased value. Tab explicitly fills the selected suggestion without
+applying it; arrows choose what Tab will fill. Model IDs are case-sensitive. A model incompatible with the
 current reasoning opens the supported reasoning picker; both choices are sent
 atomically only after confirmation. Cancellation makes no configuration request.
 Updates take effect at the existing next-request boundary, never retroactively.

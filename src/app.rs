@@ -4237,7 +4237,15 @@ impl App {
                 Vec::new()
             }
             CompletionAcceptAndSubmit => {
-                if ui_actions::accept_slash_completion(self) {
+                // Optional settings arguments are literal on Enter. Only
+                // Tab may replace them with a displayed suggestion.
+                if self
+                    .slash_completion
+                    .as_ref()
+                    .is_some_and(SlashCompletionState::submits_literal)
+                {
+                    self.submit_composer()
+                } else if ui_actions::accept_slash_completion(self) {
                     Vec::new()
                 } else {
                     self.submit_composer()
@@ -11307,6 +11315,7 @@ mod tests {
             source_revision: app.composer.editor_revision(),
             session_owner: app.sessions.active.clone(),
             group: None,
+            argument_command: None,
             filter: String::new(),
             start: 0,
             end: 4,

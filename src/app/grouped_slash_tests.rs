@@ -237,3 +237,194 @@ fn completed_finite_values_accept_trailing_spaces() {
         assert_eq!(p.entries[0].text, format!("/{}", query.trim()));
     }
 }
+
+fn mixed_case_model_app() -> App {
+    let mut a = app();
+    let mut model = a.catalogs.models[0].clone();
+    model.id = "M-Exact-Model".into();
+    model.model_ref = "Provider/Exact".into();
+    a.catalogs.models.push(model);
+    a
+}
+
+fn type_command(a: &mut App, text: &str) {
+    for c in text.chars() {
+        assert!(key(a, KeyCode::Char(c)).is_empty());
+    }
+}
+
+#[test]
+fn optional_argument_enter_validates_literal_case_and_prefix_without_rewriting() {
+    for text in [
+        "/model m-exact-model",
+        "/model M-Exact",
+        "/model Missing/Model",
+        "/model Provider/Exact",
+        "/reasoning lo",
+        "/reasoning max",
+    ] {
+        let mut a = mixed_case_model_app();
+        type_command(&mut a, text);
+        let revision = a.composer.editor_revision();
+        let cursor = a.composer.cursor();
+        assert!(a.slash_completion.as_ref().unwrap().submits_literal());
+        assert!(key(&mut a, KeyCode::Enter).is_empty());
+        assert_eq!(a.composer.content(), text);
+        assert_eq!(a.composer.cursor(), cursor);
+        assert_eq!(a.composer.editor_revision(), revision);
+        assert!(a.pending_requests.is_empty());
+        assert!(a.notices().iter().any(|n| n.level == NoticeLevel::Error));
+        assert_eq!(a.dock, Dock::Composer);
+    }
+}
+
+#[test]
+fn optional_argument_tab_explicitly_fills_canonical_case_without_submitting() {
+    let mut a = mixed_case_model_app();
+    type_command(&mut a, "/model m-exact");
+    assert!(key(&mut a, KeyCode::Tab).is_empty());
+    assert_eq!(a.composer.content(), "/model M-Exact-Model ");
+    assert!(a.pending_requests.is_empty());
+    assert!(key(&mut a, KeyCode::Tab).is_empty());
+    assert!(a.pending_requests.is_empty());
+    let outgoing = testapp::take_requests(key(&mut a, KeyCode::Enter));
+    assert_eq!(outgoing.len(), 1);
+    assert_eq!(outgoing[0].method, "session.update");
+    assert_eq!(outgoing[0].params["model"], "M-Exact-Model");
+}
+
+#[test]
+fn optional_argument_arrow_selection_only_changes_what_tab_fills() {
+    let mut a = app();
+    type_command(&mut a, "/reasoning ");
+    assert!(key(&mut a, KeyCode::Down).is_empty());
+    let chosen = a.slash_completion.as_ref().unwrap().items[1].text.clone();
+    assert!(key(&mut a, KeyCode::Tab).is_empty());
+    assert_eq!(a.composer.content(), format!("{chosen} "));
+    assert!(a.pending_requests.is_empty());
+    let outgoing = testapp::take_requests(key(&mut a, KeyCode::Enter));
+    assert_eq!(outgoing.len(), 1);
+    assert_eq!(outgoing[0].params["reasoning"], "low");
+}
+
+#[test]
+fn optional_argument_empty_tail_enter_opens_existing_picker() {
+    for text in ["/model ", "/model   ", "/reasoning ", "/reasoning   "] {
+        let mut a = app();
+        type_command(&mut a, text);
+        assert!(key(&mut a, KeyCode::Down).is_empty());
+        assert!(key(&mut a, KeyCode::Enter).is_empty());
+        assert!(a.pending_requests.is_empty());
+        if text.starts_with("/model") {
+            assert!(matches!(a.dock, Dock::ModelSelector(_)));
+        } else {
+            assert!(matches!(a.dock, Dock::ReasoningSelector(_)));
+        }
+        assert!(key(&mut a, KeyCode::Esc).is_empty());
+        assert!(a.pending_requests.is_empty());
+    }
+}
+
+#[test]
+fn optional_argument_literal_enter_retains_configuration_fences() {
+    for text in ["/model deep", "/reasoning low"] {
+        for mode in 0..3 {
+            let mut a = app();
+            let view = a.sessions.known.get_mut("ses_1").unwrap();
+            match mode {
+                0 => view.browsing = true,
+                1 => view.closing = true,
+                _ => view.state.as_mut().unwrap().status = SessionStatusWire::Finishing,
+            }
+            type_command(&mut a, text);
+            assert!(key(&mut a, KeyCode::Enter).is_empty());
+            assert!(a.pending_requests.is_empty());
+            assert_eq!(a.active_view().unwrap().info.model, "deep");
+            assert_eq!(a.active_view().unwrap().info.reasoning, Reasoning::High);
+        }
+    }
+}
+
+#[test]
+fn no_match_enter_validates_current_literal_and_never_uses_stale_choice() {
+    let mut a = app();
+    type_command(&mut a, "/session zzz中文");
+    assert!(a.slash_completion.as_ref().unwrap().items.is_empty());
+    let cursor = a.composer.cursor();
+    assert!(key(&mut a, KeyCode::Tab).is_empty());
+    assert!(a.notices().is_empty());
+    assert!(key(&mut a, KeyCode::Enter).is_empty());
+    assert_eq!(a.composer.content(), "/session zzz中文");
+    assert_eq!(a.composer.cursor(), cursor);
+    assert!(
+        a.notices()
+            .iter()
+            .any(|n| n.text.contains("unknown /session action"))
+    );
+    assert!(a.pending_requests.is_empty());
+}
+
+#[test]
+fn optional_argument_hint_is_truthful_at_minimum_size() {
+    for text in ["/model m-exact", "/model missing", "/reasoning lo"] {
+        let mut a = mixed_case_model_app();
+        type_command(&mut a, text);
+        a.notice(
+            NoticeLevel::Warning,
+            "Visible notice while editing settings",
+        );
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 16)).unwrap();
+        terminal.draw(|frame| crate::ui::render(frame, &a)).unwrap();
+        let rows = terminal
+            .backend()
+            .buffer()
+            .content
+            .chunks(60)
+            .map(|r| r.iter().map(|c| c.symbol()).collect::<String>())
+            .collect::<Vec<_>>();
+        assert!(
+            rows.iter().any(|r| r.contains("Tab fill")
+                && r.contains("Enter apply typed")
+                && r.contains("Esc")),
+            "{rows:?}"
+        );
+    }
+}
+
+#[test]
+fn optional_argument_exact_values_still_use_existing_updates() {
+    for text in ["/model M-Exact-Model", "/reasoning LOW"] {
+        let mut a = mixed_case_model_app();
+        type_command(&mut a, text);
+        let outgoing = testapp::take_requests(key(&mut a, KeyCode::Enter));
+        assert_eq!(outgoing.len(), 1, "{text}");
+        assert_eq!(outgoing[0].method, "session.update");
+        assert_eq!(outgoing[0].params["session_id"], "ses_1");
+        if text.starts_with("/model") {
+            assert_eq!(outgoing[0].params["model"], "M-Exact-Model");
+        } else {
+            assert_eq!(outgoing[0].params["reasoning"], "low");
+        }
+    }
+}
+
+#[test]
+fn qualified_theme_keeps_full_breadcrumb_and_selected_choice_enter() {
+    let mut a = app();
+    type_command(&mut a, "/app theme ");
+    assert!(!a.slash_completion.as_ref().unwrap().submits_literal());
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 16)).unwrap();
+    terminal.draw(|frame| crate::ui::render(frame, &a)).unwrap();
+    let text = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect::<String>();
+    assert!(text.contains("Commands › app › theme"), "{text}");
+    assert!(key(&mut a, KeyCode::Down).is_empty());
+    assert!(testapp::take_requests(key(&mut a, KeyCode::Enter)).is_empty());
+    assert_eq!(a.theme, ThemeKind::Light);
+}
