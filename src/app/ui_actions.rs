@@ -336,6 +336,11 @@ impl App {
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
             && matches!(self.dock, Dock::Composer)
         {
+            if self.async_layout && !self.transcript_input_ready() {
+                if let Some(key) = self.displayed_tool_hit(mouse.column, mouse.row) {
+                    return self.open_tool_detail(key);
+                }
+            }
             let screen = crate::ui::layout::screen_layout(
                 self,
                 ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1),

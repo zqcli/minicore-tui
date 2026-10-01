@@ -468,3 +468,61 @@ fn title_detail_hit_does_not_replace_the_original_tool_fold() {
         key.tool_call_id
     );
 }
+
+#[test]
+fn default_bash_stdout_replaces_pending_initial_output_layout() {
+    let mut app = app();
+    let read_request = take_requests(app.open_tool_detail(key("a"))).remove(0);
+    let old_output = app.tool_layout_request(50).unwrap();
+    assert_eq!(old_output.identity.stream, Stream::Output);
+    app.mark_tool_layout_pending(old_output.identity.clone());
+
+    // The authoritative first read selects Stdout for bash while the initial
+    // Output layout is still pending. It must not block the new stream.
+    let output_request =
+        take_requests(respond(&mut app, &read_request, read(&key("a"), true))).remove(0);
+    assert_eq!(app.tool_detail().unwrap().tab, Stream::Stdout);
+    let stdout = app
+        .tool_layout_request(50)
+        .expect("new default stream needs its own layout");
+    assert_eq!(stdout.identity.stream, Stream::Stdout);
+    app.mark_tool_layout_pending(stdout.identity.clone());
+    respond(
+        &mut app,
+        &output_request,
+        page(&key("a"), Stream::Stdout, 0, "actual output\n", true),
+    );
+    assert!(
+        app.tool_layout_request(50).is_none(),
+        "new chunks do not cancel matching in-flight layout"
+    );
+
+    app.update(AppEvent::ToolLayoutPrepared(
+        ToolTextLayout::build(old_output).unwrap(),
+    ));
+    assert_eq!(
+        app.tool_detail().unwrap().layout_pending.as_ref(),
+        Some(&stdout.identity)
+    );
+    app.update(AppEvent::ToolLayoutPrepared(
+        ToolTextLayout::build(stdout).unwrap(),
+    ));
+    let latest = app
+        .tool_layout_request(50)
+        .expect("completed snapshot catches up with newest bytes");
+    app.mark_tool_layout_pending(latest.identity.clone());
+    app.update(AppEvent::ToolLayoutPrepared(
+        ToolTextLayout::build(latest).unwrap(),
+    ));
+    assert_eq!(
+        app.tool_detail()
+            .unwrap()
+            .layout
+            .as_ref()
+            .unwrap()
+            .text
+            .as_ref(),
+        "actual output\n"
+    );
+    assert!(app.tool_layout_request(50).is_none());
+}

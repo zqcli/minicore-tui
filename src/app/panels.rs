@@ -573,7 +573,9 @@ impl App {
         // Do not continually cancel a large in-flight layout on every chunk:
         // install that bounded snapshot, then catch up to the latest revision.
         if detail.layout_pending.as_ref().is_some_and(|pending| {
-            pending.generation == detail.generation && pending.width == width
+            pending.generation == detail.generation
+                && pending.stream == detail.tab
+                && pending.width == width
         }) {
             return None;
         }

@@ -433,6 +433,8 @@ struct TranscriptFrame {
     session_epoch: u64,
     theme: ThemeKind,
     terminal_size: (u16, u16),
+    scroll: (usize, bool, Option<usize>),
+    tool_hits: Vec<(ratatui::layout::Rect, ToolKey)>,
     cells: ratatui::buffer::Buffer,
 }
 
@@ -1112,7 +1114,17 @@ impl App {
                 if screen.transcript.contains((mouse.column, mouse.row).into()) || was_dragging {
                     self.mouse_down = None;
                     self.mouse_pressed_on_link = false;
-                    return Vec::new();
+                    // The retained frame can still identify its own explicit
+                    // tool button. Never resolve other stale cells against a
+                    // newer layout (selection, links, folds and scrolling).
+                    if mouse.kind
+                        != crossterm::event::MouseEventKind::Down(
+                            crossterm::event::MouseButton::Left,
+                        )
+                        || self.displayed_tool_hit(mouse.column, mouse.row).is_none()
+                    {
+                        return Vec::new();
+                    }
                 }
             }
         }
@@ -1484,6 +1496,22 @@ impl App {
         // user switches away and back before the next terminal draw.
         if !self.transcript_frame_matches() {
             self.transcript_frame = None;
+        } else if !matches!(self.dock, Dock::Composer)
+            || self.has_main_detail()
+            || self.transcript_frame.as_ref().is_some_and(|saved| {
+                self.active_view().is_none_or(|view| {
+                    saved.scroll
+                        != (
+                            view.scroll.offset,
+                            view.scroll.follow_tail,
+                            view.scroll.prompt_cursor,
+                        )
+                })
+            })
+        {
+            if let Some(saved) = self.transcript_frame.as_mut() {
+                saved.tool_hits.clear();
+            }
         }
         // Cache budgets are enforced once per event pass, off the draw path.
         self.enforce_history_budget();
@@ -1624,6 +1652,10 @@ impl App {
     fn transcript_frame_matches(&self) -> bool {
         self.transcript_frame.as_ref().is_some_and(|saved| {
             self.reload.is_none()
+                && !matches!(
+                    self.connection,
+                    ConnectionState::Failed(_) | ConnectionState::ShuttingDown
+                )
                 && saved.terminal_size == self.terminal_size
                 && saved.theme == self.theme
                 && self.active_view().is_some_and(|view| {
@@ -1631,6 +1663,71 @@ impl App {
                         && saved.session_epoch == view.session_epoch
                 })
         })
+    }
+
+    /// Only the bounded tool buttons of the frame actually on screen may
+    /// remain interactive while replacement layout is pending. Their stable
+    /// identities must still exist; no old row is interpreted as a new one.
+    fn displayed_tool_hit(&self, column: u16, row: u16) -> Option<ToolKey> {
+        if !matches!(self.dock, Dock::Composer)
+            || self.has_main_detail()
+            || !self.transcript_frame_matches()
+        {
+            return None;
+        }
+        let saved = self.transcript_frame.as_ref()?;
+        let screen = crate::ui::layout::screen_layout(
+            self,
+            ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1),
+        );
+        let view = self.active_view()?;
+        if saved.cells.area != screen.transcript
+            || saved.scroll
+                != (
+                    view.scroll.offset,
+                    view.scroll.follow_tail,
+                    view.scroll.prompt_cursor,
+                )
+        {
+            return None;
+        }
+        let (_, key) = saved
+            .tool_hits
+            .iter()
+            .find(|(hit, _)| hit.contains((column, row).into()))?;
+        let present = view.tool_presentations.contains_key(key)
+            || view.live.as_ref().is_some_and(|live| {
+                live.reference.as_ref().is_some_and(|reference| {
+                    reference.session_id == key.session_id && reference.loop_id == key.loop_id
+                }) && live.requests.iter().any(|request| {
+                    request.request_index == key.request_index
+                        && request
+                            .tools
+                            .iter()
+                            .any(|tool| tool.tool_call_id == key.tool_call_id)
+                })
+            })
+            || view
+                .transcript
+                .blocks
+                .iter()
+                .any(|block| match block.as_ref() {
+                    TranscriptBlock::Tool(tool) => {
+                        tool.loop_id == key.loop_id
+                            && tool.request_index == key.request_index
+                            && tool.tool_call_id == key.tool_call_id
+                    }
+                    TranscriptBlock::Assistant(assistant) => {
+                        assistant.loop_id == key.loop_id
+                            && assistant.request_index == key.request_index
+                            && assistant
+                                .tool_calls
+                                .iter()
+                                .any(|tool| tool.tool_call_id == key.tool_call_id)
+                    }
+                    _ => false,
+                });
+        present.then(|| key.clone())
     }
 
     /// Capture only the actually displayed viewport after a successful draw.
@@ -1646,12 +1743,27 @@ impl App {
             self.transcript_frame = None;
             return;
         }
-        if self.prepared_conversation(screen.content.width).is_none() {
+        let Some(prepared) = self.prepared_conversation(screen.content.width) else {
             return;
-        }
+        };
         let Some(view) = self.active_view() else {
             self.transcript_frame = None;
             return;
+        };
+        let position = crate::ui::transcript::scroll_position(
+            self,
+            prepared.total_rows(),
+            screen.transcript.height as usize,
+        );
+        let tool_hits = if matches!(self.dock, Dock::Composer) {
+            crate::ui::tool_detail::detail_hits(
+                prepared,
+                screen.transcript,
+                position.offset,
+                position.visible_rows,
+            )
+        } else {
+            Vec::new()
         };
         let mut cells = ratatui::buffer::Buffer::empty(screen.transcript);
         for y in screen.transcript.y..screen.transcript.bottom() {
@@ -1665,11 +1777,18 @@ impl App {
             session_epoch: view.session_epoch,
             theme: self.theme,
             terminal_size: self.terminal_size,
+            scroll: (
+                view.scroll.offset,
+                view.scroll.follow_tail,
+                view.scroll.prompt_cursor,
+            ),
+            tool_hits,
             cells,
         });
     }
 
-    /// Display-only fallback. Input must continue to require a current layout.
+    /// Retained cells; only their separately saved exact tool buttons may
+    /// accept input without a current layout.
     pub fn transition_transcript_frame(
         &self,
         area: ratatui::layout::Rect,

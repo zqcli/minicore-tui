@@ -589,3 +589,143 @@ async fn production_async_display_preserves_selection_and_scroll_anchor_until_co
     );
     jobs.shutdown().await;
 }
+
+fn displayed_tool_button(app: &App) -> (u16, u16) {
+    let screen = ui::layout::screen_layout(app, AREA);
+    let prepared = app.prepared_conversation(screen.content.width).unwrap();
+    let (hit, key) = ui::tool_detail::detail_hits(
+        prepared,
+        screen.transcript,
+        0,
+        screen.transcript.height as usize,
+    )
+    .into_iter()
+    .next()
+    .expect("visible fixture tool button");
+    assert_eq!(key.tool_call_id, "call");
+    (hit.x, hit.y)
+}
+
+fn press_tool_button(app: &mut App, point: (u16, u16)) -> Vec<AppCommand> {
+    app.update(AppEvent::Terminal(Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: point.0,
+        row: point.1,
+        modifiers: KeyModifiers::NONE,
+    })))
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn production_async_display_tool_button_uses_exact_displayed_identity_during_reprepare() {
+    let mut app = fixture();
+    let mut jobs = LocalJobs::new();
+    let mut terminal = Terminal::new(TestBackend::new(AREA.width, AREA.height)).unwrap();
+    finish(&mut app, &mut jobs, &mut terminal, AREA).await;
+    let point = displayed_tool_button(&app);
+    let screen = ui::layout::screen_layout(&app, AREA);
+    let before = cells(terminal.backend().buffer(), screen.transcript);
+    app.update(toggle_thinking());
+    draw(&mut app, &mut jobs, &mut terminal, AREA);
+    assert!(app.prepared_conversation(screen.content.width).is_none());
+    assert_eq!(
+        cells(terminal.backend().buffer(), screen.transcript),
+        before
+    );
+
+    let commands = press_tool_button(&mut app, point);
+    let detail = app
+        .tool_detail()
+        .expect("still-displayed tool button opens");
+    assert_eq!(detail.key.session_id, "display");
+    assert_eq!(detail.key.loop_id, "loop");
+    assert_eq!(detail.key.request_index, 0);
+    assert_eq!(detail.key.tool_call_id, "call");
+    assert!(commands.iter().any(|command| matches!(command,
+        AppCommand::Rpc(request) if request.method == "tool.read"
+            && request.params["tool_call_id"] == "call")));
+    jobs.shutdown().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn production_async_display_tool_button_rejects_navigation_geometry_and_missing_identity() {
+    for barrier in [
+        "resize", "theme", "epoch", "session", "help", "scroll", "removed", "composer", "fatal",
+        "shutdown",
+    ] {
+        let mut app = fixture();
+        let mut jobs = LocalJobs::new();
+        let mut terminal = Terminal::new(TestBackend::new(AREA.width, AREA.height)).unwrap();
+        finish(&mut app, &mut jobs, &mut terminal, AREA).await;
+        let point = displayed_tool_button(&app);
+        app.update(toggle_thinking());
+        draw(&mut app, &mut jobs, &mut terminal, AREA);
+        match barrier {
+            "resize" => {
+                app.update(AppEvent::TerminalSize {
+                    width: AREA.width,
+                    height: AREA.height + 1,
+                });
+                app.update(AppEvent::TerminalSize {
+                    width: AREA.width,
+                    height: AREA.height,
+                });
+            }
+            "theme" => {
+                app.update(AppEvent::SetTheme(minicore_tui::theme::ThemeKind::Light));
+            }
+            "epoch" => {
+                app.sessions.known.get_mut("display").unwrap().session_epoch += 1;
+            }
+            "session" => {
+                app.sessions.active = Some("other".into());
+            }
+            "help" => {
+                app.update(AppEvent::Terminal(Event::Key(KeyEvent::new(
+                    KeyCode::F(1),
+                    KeyModifiers::NONE,
+                ))));
+                app.update(AppEvent::Terminal(Event::Key(KeyEvent::new(
+                    KeyCode::Esc,
+                    KeyModifiers::NONE,
+                ))));
+            }
+            "scroll" => {
+                app.sessions.known.get_mut("display").unwrap().scroll.offset = 1;
+                app.update(AppEvent::Tick);
+                app.sessions.known.get_mut("display").unwrap().scroll.offset = 0;
+            }
+            "removed" => {
+                Arc::make_mut(
+                    &mut app
+                        .sessions
+                        .known
+                        .get_mut("display")
+                        .unwrap()
+                        .transcript
+                        .blocks,
+                )
+                .retain(|block| !matches!(block.as_ref(), TranscriptBlock::Tool(_)));
+            }
+            "fatal" | "shutdown" => {
+                app.connection = if barrier == "fatal" {
+                    minicore_tui::app::ConnectionState::Failed("synthetic".into())
+                } else {
+                    minicore_tui::app::ConnectionState::ShuttingDown
+                };
+                app.update(AppEvent::Tick);
+                app.connection = minicore_tui::app::ConnectionState::Ready;
+            }
+            "composer" => {
+                app.composer_mut()
+                    .set_text("one\ntwo\nthree\nfour\nfive\nsix");
+            }
+            _ => unreachable!(),
+        }
+        press_tool_button(&mut app, point);
+        assert!(
+            app.tool_detail().is_none(),
+            "stale tool hit crossed {barrier} barrier"
+        );
+        jobs.shutdown().await;
+    }
+}
