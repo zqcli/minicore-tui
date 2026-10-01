@@ -4368,7 +4368,10 @@ impl App {
 
     fn panel_scroll_line_count(&self) -> usize {
         match &self.dock {
-            Dock::Help => crate::ui::help::content_line_count(),
+            Dock::Help => crate::ui::help::content_line_count(
+                self.panel_scroll_layout()
+                    .map_or(0, |panel| panel.content.width as usize),
+            ),
             Dock::Logs => {
                 if self.agent_logs.is_empty() {
                     2

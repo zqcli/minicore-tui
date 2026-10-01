@@ -359,6 +359,11 @@ fn narrow_model_selector_dark_60x16() {
 }
 
 #[test]
+fn help_dark_60x16() {
+    snapshot(&testapp::help(ThemeKind::Dark), "help_dark_60x16", 60, 16);
+}
+
+#[test]
 fn help_dark_80x24() {
     snapshot(&testapp::help(ThemeKind::Dark), "help_dark_80x24", 80, 24);
 }
