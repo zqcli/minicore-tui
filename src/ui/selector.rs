@@ -174,7 +174,7 @@ pub fn render_model(
         ))]
     } else {
         vec![Line::from(Span::styled(
-            "Changing model creates a new session.",
+            "Choose a model for the new session.",
             Style::new().fg(theme.muted),
         ))]
     };
@@ -1057,6 +1057,50 @@ pub fn relative_age(updated_at: &str, now: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::ConnectionState;
+    use crate::event::AppEvent;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn model_header_distinguishes_draft_selection_from_active_session_update() {
+        for theme in [Theme::dark(), Theme::light()] {
+            for width in [57, 77, 157] {
+                for (active, draft) in [(false, false), (false, true), (true, false), (true, true)]
+                {
+                    let mut app = App::new("/project".into());
+                    app.connection = ConnectionState::Ready;
+                    if active {
+                        app.sessions.active = Some("existing-session".into());
+                    }
+                    if draft {
+                        assert!(app.update(AppEvent::OpenNewSession).is_empty());
+                    }
+                    assert!(app.update(AppEvent::OpenModelSelector).is_empty());
+                    let crate::state::selection::Dock::ModelSelector(state) = &app.dock else {
+                        panic!("model selector did not open");
+                    };
+                    let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+                    terminal
+                        .draw(|frame| render_model(frame, frame.area(), &app, &theme, state))
+                        .unwrap();
+                    let buffer = terminal.backend().buffer();
+                    let text = buffer
+                        .content()
+                        .chunks(width as usize)
+                        .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let expected = if active && !draft {
+                        "Model applies at the next model request."
+                    } else {
+                        "Choose a model for the new session."
+                    };
+                    assert!(text.contains(expected), "{text}");
+                    assert!(!text.contains("Changing model creates a new session."));
+                }
+            }
+        }
+    }
 
     fn secs(s: u64) -> SystemTime {
         std::time::UNIX_EPOCH + std::time::Duration::from_secs(s)

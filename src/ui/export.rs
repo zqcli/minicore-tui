@@ -135,7 +135,7 @@ fn toggle(label: &str, on: bool, theme: &Theme) -> Span<'static> {
     let style = if on {
         Style::new().fg(theme.accent).add_modifier(Modifier::BOLD)
     } else {
-        Style::new().fg(theme.dim)
+        Style::new().fg(theme.text)
     };
     Span::styled(format!("[{}] {label}", if on { "x" } else { " " }), style)
 }
@@ -219,9 +219,14 @@ fn render_hints(frame: &mut Frame, area: Rect, form: &ExportFormState, theme: &T
             }
         }
     };
+    let color = if form.phase == ExportPhase::Cancelling {
+        theme.dim
+    } else {
+        theme.text
+    };
     frame.render_widget(
         Paragraph::new(fill_line(
-            Line::from(Span::styled(hint, Style::new().fg(theme.dim))),
+            Line::from(Span::styled(hint, Style::new().fg(color))),
             area.width as usize,
             Style::new().bg(theme.page_bg),
         )),
@@ -232,14 +237,20 @@ fn render_hints(frame: &mut Frame, area: Rect, form: &ExportFormState, theme: &T
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::buffer::Buffer;
+    use ratatui::style::Color;
     use ratatui::{Terminal, backend::TestBackend};
 
-    fn drawn(form: &ExportFormState, width: u16, height: u16) -> String {
+    fn drawn_buffer(form: &ExportFormState, width: u16, height: u16, theme: &Theme) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
-            .draw(|frame| render(frame, frame.area(), &Theme::dark(), form))
+            .draw(|frame| render(frame, frame.area(), theme, form))
             .unwrap();
-        let buffer = terminal.backend().buffer();
+        terminal.backend().buffer().clone()
+    }
+
+    fn drawn(form: &ExportFormState, width: u16, height: u16) -> String {
+        let buffer = drawn_buffer(form, width, height, &Theme::dark());
         (0..height)
             .map(|y| {
                 (0..width)
@@ -248,6 +259,78 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn assert_text_style(buffer: &Buffer, text: &str, color: Color, bold: bool) {
+        for row in buffer.content().chunks(buffer.area.width as usize) {
+            let line: String = row.iter().map(|cell| cell.symbol()).collect();
+            if let Some(offset) = line.find(text) {
+                let start = line[..offset].chars().count();
+                for cell in &row[start..start + text.chars().count()] {
+                    assert_eq!(cell.fg, color, "{text}: {cell:?}");
+                    assert_eq!(cell.modifier.contains(Modifier::BOLD), bold, "{text}");
+                }
+                return;
+            }
+        }
+        panic!("rendered text missing: {text}");
+    }
+
+    #[test]
+    fn unchecked_export_options_are_readable_and_checked_options_keep_their_emphasis() {
+        for theme in [Theme::dark(), Theme::light()] {
+            for width in [57, 77, 157] {
+                let mut form = ExportFormState::new("conversation.md".into());
+                let buffer = drawn_buffer(&form, width, 12, &theme);
+                let labels = [
+                    "Ctrl+T thinking",
+                    "Ctrl+P tools",
+                    "Ctrl+N unsaved turn",
+                    "Ctrl+Y overwrite",
+                    "Ctrl+R raw oversized",
+                ];
+                for label in labels {
+                    assert_text_style(&buffer, &format!("[ ] {label}"), theme.text, false);
+                }
+                form.spec.include_thinking = true;
+                form.spec.include_tool = true;
+                form.include_unsaved = true;
+                form.overwrite = true;
+                form.spec.raw_oversized = true;
+                let buffer = drawn_buffer(&form, width, 12, &theme);
+                for label in labels {
+                    assert_text_style(&buffer, &format!("[x] {label}"), theme.accent, true);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn export_hints_emphasize_actions_without_promoting_informational_text() {
+        for theme in [Theme::dark(), Theme::light()] {
+            for width in [57, 77, 157] {
+                let mut form = ExportFormState::new("conversation.md".into());
+                let buffer = drawn_buffer(&form, width, 12, &theme);
+                assert_text_style(&buffer, "nothing has been written yet", theme.dim, false);
+                assert_text_style(
+                    &buffer,
+                    "the target file records its source",
+                    theme.dim,
+                    false,
+                );
+                for (phase, hint, color) in [
+                    (ExportPhase::Editing, "Enter export", theme.text),
+                    (ExportPhase::Running, "Esc cancel", theme.text),
+                    (ExportPhase::Cancelling, "waiting for the writer", theme.dim),
+                    (ExportPhase::Done, "Enter export", theme.text),
+                    (ExportPhase::Failed, "Enter export", theme.text),
+                ] {
+                    form.phase = phase;
+                    let buffer = drawn_buffer(&form, width, 12, &theme);
+                    assert_text_style(&buffer, hint, color, false);
+                }
+            }
+        }
     }
 
     #[test]
