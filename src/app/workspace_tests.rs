@@ -359,6 +359,174 @@ fn file_tool_layout_identities_and_close_routes_do_not_cross_variants() {
     assert!(a.file_preview().unwrap().layout.is_none());
     assert!(matches!(a.main_view, MainView::FilePreview(_)));
 }
+
+#[test]
+fn file_preview_width_reflow_preserves_selected_source_position() {
+    let mut a = app();
+    a.terminal_size = (160, 48);
+    let target = FileRange {
+        start_line: 75,
+        line_byte_offset: 0,
+    };
+    let r = take_requests(a.open_file_preview(
+        "numbered-cjk.txt".into(),
+        Some(target),
+        ReturnTarget::Conversation,
+    ))
+    .remove(0);
+    let text: String = (1..=80)
+        .map(|i| format!("ROW-{i:03} {}\n", "甲".repeat(95)))
+        .collect();
+    respond(
+        &mut a,
+        &r,
+        page("numbered-cjk.txt", &text, 1, Value::Null, "r"),
+    );
+    layout(&mut a);
+    assert!(a.file_preview().unwrap().target.is_none());
+    for size in [(60, 16), (160, 48)] {
+        a.update(AppEvent::TerminalSize {
+            width: size.0,
+            height: size.1,
+        });
+        layout(&mut a);
+        let preview = a.file_preview().unwrap();
+        let source = preview.layout.as_ref().unwrap().rows[preview.offset].source;
+        assert_eq!(
+            source, target,
+            "width reflow must preserve the selected source"
+        );
+        assert!(!preview.follow);
+    }
+}
+
+#[test]
+fn file_preview_width_reflow_preserves_same_line_byte_anchor() {
+    let mut a = app();
+    a.terminal_size = (160, 48);
+    let r = take_requests(a.open_file_preview(
+        "long-cjk.txt".into(),
+        Some(FileRange {
+            start_line: 1,
+            line_byte_offset: 300,
+        }),
+        ReturnTarget::Conversation,
+    ))
+    .remove(0);
+    respond(
+        &mut a,
+        &r,
+        page("long-cjk.txt", &"甲".repeat(1000), 1, Value::Null, "r"),
+    );
+    layout(&mut a);
+    let preview = a.file_preview().unwrap();
+    let anchor = preview.layout.as_ref().unwrap().rows[preview.offset].source;
+    assert!(anchor.line_byte_offset > 0);
+    a.update(AppEvent::TerminalSize {
+        width: 60,
+        height: 16,
+    });
+    layout(&mut a);
+    let preview = a.file_preview().unwrap();
+    let rows = &preview.layout.as_ref().unwrap().rows;
+    assert_eq!(rows[preview.offset].source.start_line, anchor.start_line);
+    assert!(rows[preview.offset].source.line_byte_offset <= anchor.line_byte_offset);
+    assert!(rows[preview.offset + 1].source.line_byte_offset > anchor.line_byte_offset);
+}
+
+#[test]
+fn file_preview_width_reflow_keeps_following_loaded_tail() {
+    let mut a = app();
+    a.terminal_size = (160, 48);
+    let r = take_requests(file(&mut a, "long-cjk.txt")).remove(0);
+    respond(
+        &mut a,
+        &r,
+        page("long-cjk.txt", &"甲".repeat(1000), 1, Value::Null, "r"),
+    );
+    layout(&mut a);
+    press(&mut a, KeyCode::End, KeyModifiers::NONE);
+    a.update(AppEvent::TerminalSize {
+        width: 60,
+        height: 16,
+    });
+    layout(&mut a);
+    let preview = a.file_preview().unwrap();
+    assert!(preview.follow);
+    let height = a.main_body_area().height as usize;
+    assert_eq!(
+        preview.scroll_offset(height),
+        preview
+            .layout
+            .as_ref()
+            .unwrap()
+            .rows
+            .len()
+            .saturating_sub(height)
+    );
+}
+
+#[test]
+fn delayed_file_layout_cannot_consume_unreached_grep_target() {
+    let mut a = app();
+    let target = FileRange {
+        start_line: 1,
+        line_byte_offset: 600,
+    };
+    let first = take_requests(a.open_file_preview(
+        "long-line.txt".into(),
+        Some(target),
+        ReturnTarget::Conversation,
+    ))
+    .remove(0);
+    let second = take_requests(respond(
+        &mut a,
+        &first,
+        page(
+            "long-line.txt",
+            &"甲".repeat(20),
+            1,
+            json!({"start_line":1,"line_byte_offset":60}),
+            "r",
+        ),
+    ))
+    .remove(0);
+    let request = a.file_layout_request(10).unwrap();
+    a.mark_file_layout_pending(request.identity.clone());
+    let delayed = FileLayout::build(request).unwrap();
+    assert_eq!(delayed.identity.revision, 1);
+    assert_eq!(delayed.copy_text.len(), 60);
+    respond(
+        &mut a,
+        &second,
+        page(
+            "long-line.txt",
+            &format!("{}TARGET", "甲".repeat(180)),
+            1,
+            Value::Null,
+            "r",
+        ),
+    );
+    assert_eq!(a.file_preview().unwrap().content_revision, 2);
+    assert!(a.file_preview().unwrap().next.is_none());
+    a.update(AppEvent::FileLayoutPrepared(delayed));
+    assert_eq!(
+        a.file_preview().unwrap().target,
+        Some(target),
+        "an earlier content revision cannot prove the match was reached"
+    );
+    let request = a.file_layout_request(10).unwrap();
+    a.mark_file_layout_pending(request.identity.clone());
+    a.update(AppEvent::FileLayoutPrepared(
+        FileLayout::build(request).unwrap(),
+    ));
+    let preview = a.file_preview().unwrap();
+    assert_eq!(
+        preview.layout.as_ref().unwrap().rows[preview.offset].source,
+        target
+    );
+    assert!(preview.target.is_none());
+}
 #[test]
 fn file_and_browser_render_safely_at_all_supported_geometries() {
     use ratatui::{Terminal, backend::TestBackend};

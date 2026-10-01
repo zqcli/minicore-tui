@@ -785,11 +785,37 @@ impl App {
                 }) {
                     file.offset = index;
                     file.follow = false;
-                    if file.next.is_none_or(|next| {
-                        (next.start_line, next.line_byte_offset)
-                            > (target.start_line, target.line_byte_offset)
-                    }) {
+                    // Reads can advance while an older layout is pending.
+                    // Only the matching content revision can prove that this
+                    // source target has reached the displayed snapshot.
+                    if layout.identity.revision == file.content_revision
+                        && file.next.is_none_or(|next| {
+                            (next.start_line, next.line_byte_offset)
+                                > (target.start_line, target.line_byte_offset)
+                        })
+                    {
                         file.target = None;
+                    }
+                }
+            } else if !file.follow {
+                // Wrapped row indexes change with width. Retain the same raw
+                // source position rather than jumping to that index in the
+                // newly wrapped body. A loaded-tail view keeps following it.
+                let anchor = file
+                    .layout
+                    .as_ref()
+                    .filter(|old| old.identity.width != layout.identity.width)
+                    .and_then(|old| {
+                        old.rows
+                            .get(file.offset.min(old.rows.len().saturating_sub(1)))
+                    })
+                    .map(|row| row.source);
+                if let Some(anchor) = anchor {
+                    if let Some(index) = layout.rows.iter().rposition(|row| {
+                        (row.source.start_line, row.source.line_byte_offset)
+                            <= (anchor.start_line, anchor.line_byte_offset)
+                    }) {
+                        file.offset = index;
                     }
                 }
             }
