@@ -140,6 +140,11 @@ The complete current keymap and slash-command semantics are in
 - `Esc` closes a dock or cancels the exact running turn;
 - `Ctrl+C` clears non-empty input, then double-presses to quit; `/cancel` cancels the exact active loop, `/reload` reloads Agent configuration and safe read-only state, and `/quit` performs normal shutdown.
 
+The `/` menu groups commands under Session, Workspace, Conversation and App,
+with Model and Reasoning directly accessible. Enter opens a group; Tab only
+fills text; Esc clears a filter, goes back, then hides the menu. Direct commands
+remain available, including `/model <id>` and `/reasoning <level>`.
+
 Implemented local commands include `/new`, `/resume`, `/sessions`, `/model`,
 `/reasoning`, `/theme`, `/clear`, `/help`, `/logs`, `/cancel`, `/reload`,
 `/quit`, `/close`, `/delete`, `/rename`, `/tool`, `/files`, `/grep`, `/diff`,

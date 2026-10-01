@@ -253,7 +253,7 @@ pub fn composer_height_phase5(app: &App, width: u16, screen_height: u16, short: 
 
 pub fn composer_completion_rows(app: &App) -> u16 {
     app.slash_completion.as_ref().map_or(0, |completion| {
-        let visible = completion.items.len().clamp(1, 5);
+        let visible = completion.items.len().clamp(1, completion.visible_limit());
         (visible + 2) as u16
     })
 }

@@ -45,6 +45,16 @@ pub struct SlashCompletionState {
     pub selected: usize,
 }
 
+impl SlashCompletionState {
+    pub fn visible_limit(&self) -> usize {
+        if self.group.is_none() && self.filter.is_empty() {
+            6
+        } else {
+            5
+        }
+    }
+}
+
 impl App {
     pub(super) fn composer_move(&mut self, direction: EditorCursor) -> Vec<AppCommand> {
         match direction {

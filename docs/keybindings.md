@@ -273,18 +273,33 @@ Only input whose first non-whitespace character is `/` is parsed locally.
 Unknown commands and invalid arguments produce a local notice and no RPC.
 Their draft text is kept so it can be corrected without retyping.
 
-Typing `/` opens command suggestions with short descriptions. Up/Down and
-PageUp/PageDown move through the list; Tab fills the selected command, Enter
-runs a complete command, and Esc dismisses suggestions without clearing the
-draft. Required-argument commands stay editable: `/theme` offers dark/light
-choices, while `/tool` shows its exact argument usage.
+Typing `/` shows six top-level entries: Model, Reasoning, Session,
+Workspace, Conversation and App. Groups are marked `›`; Enter opens a group.
+Type after `/` to search every command, or after a group to filter its children.
+For example, `/workspace files src` and `/files src` use the same executor.
+`/session list` opens Sessions; `/session configure` opens the advanced form.
+
+Up/Down and PageUp/PageDown move selection. Tab only fills text; Enter runs a
+complete command. Esc clears a group filter, then goes back to the root, then
+hides the menu while keeping the draft. Esc in a visible menu never cancels a
+turn. A no-match menu cannot execute a stale selection. Moving within an
+existing command or editing multiple lines uses ordinary editor keys rather
+than replacing a partial token. Dismissed menus stay hidden until text changes.
+
+Required-argument commands stay editable: `/theme` offers dark/light choices,
+while `/tool` shows its exact argument usage. `/model [id]` and
+`/reasoning [level]` accept catalog-supported values or open their picker when
+no value is given. Model IDs are case-sensitive. A model incompatible with the
+current reasoning opens the supported reasoning picker; both choices are sent
+atomically only after confirmation. Cancellation makes no configuration request.
+Updates take effect at the existing next-request boundary, never retroactively.
 
 | Command | Behavior |
 |---|---|
 | `/new [form]` | Quickly create here using recent explicit settings; `form` opens the full form. |
 | `/resume` / `/sessions` | Continue a browsed session / open the session selector. |
-| `/model` | Open the model selector for a draft or active-session update. |
-| `/reasoning` | Open the reasoning selector for a draft or active-session update. |
+| `/model [id]` | Open the model selector, or choose an exact catalog ID. |
+| `/reasoning [level]` | Open the reasoning selector, or choose a supported effort level. |
 | `/theme dark` / `/theme light` | Change the local palette; no Agent request. |
 | `/clear` | Clear only the local active transcript view and reload it from the Agent; refused while a turn runs. |
 | `/help` | Open Help. |

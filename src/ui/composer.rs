@@ -117,7 +117,7 @@ fn render_completion(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let show_header = area.height >= 3;
     let max_visible = (area.height as usize)
         .saturating_sub(1 + usize::from(show_header))
-        .clamp(1, 5);
+        .clamp(1, completion.visible_limit());
     let start = completion
         .selected
         .saturating_sub(max_visible / 2)
@@ -127,7 +127,14 @@ fn render_completion(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let label_width = completion
         .items
         .iter()
-        .map(|item| UnicodeWidthStr::width(item.as_str()))
+        .map(|item| {
+            UnicodeWidthStr::width(item.as_str())
+                + if matches!(item.kind, crate::command::MenuKind::Group(_)) {
+                    2
+                } else {
+                    0
+                }
+        })
         .max()
         .unwrap_or(0)
         .clamp(10, 26);
@@ -138,14 +145,19 @@ fn render_completion(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             let selected = start + visible_index == completion.selected;
             let prefix = if selected { "→ " } else { "  " };
             let summary = item.summary;
+            let label = if matches!(item.kind, crate::command::MenuKind::Group(_)) {
+                format!("{} ›", item.text)
+            } else {
+                item.text.clone()
+            };
             let text = if content_width >= 44 && !summary.is_empty() {
-                let label = rail::clip_cells(item.as_str(), label_width);
+                let label = rail::clip_cells(&label, label_width);
                 format!(
                     "{prefix}{label}{}  {summary}",
                     " ".repeat(label_width.saturating_sub(UnicodeWidthStr::width(label.as_str())))
                 )
             } else {
-                format!("{prefix}{}", item.text)
+                format!("{prefix}{label}")
             };
             rail::surface_row(
                 area.width as usize,
@@ -202,6 +214,7 @@ fn render_completion(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     }
     let selected = completion.items.get(completion.selected);
     let enter = match selected.map(|item| item.kind) {
+        None => "edit",
         Some(crate::command::MenuKind::Group(_)) => "open",
         _ if selected.is_some_and(|item| item.needs_input()) => "fill",
         _ => "run",
@@ -571,8 +584,8 @@ mod tests {
                 .collect::<Vec<_>>();
             assert!(rows[1].contains("→ /model"));
             assert!(
-                rows[6].contains("Esc") && rows[6].contains("1/6"),
-                "controls own the row after five candidates"
+                rows[7].contains("Esc") && rows[7].contains("1/6"),
+                "controls own the row after all six root entries"
             );
             assert!(
                 rows.iter()
@@ -594,8 +607,8 @@ mod tests {
             .chunks(80)
             .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
             .collect::<Vec<_>>();
-        assert!(rows[5].contains("→ /app"));
-        assert!(rows[6].contains("6/6"));
+        assert!(rows[6].contains("→ /app"));
+        assert!(rows[7].contains("6/6"));
         assert!(rows.iter().filter(|row| row.contains("→ /")).count() == 1);
         app.composer_mut().clear();
         type_keys(&mut app, "/help");
