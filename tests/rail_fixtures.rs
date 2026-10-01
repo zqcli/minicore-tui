@@ -408,6 +408,17 @@ fn assert_composer_fixture_with_setup(
     let source_width = width as usize;
     let comparable_width = source_width.saturating_sub(local_x);
 
+    // The upgraded completion menu intentionally adds command purposes and
+    // controls. Keep the native editor/cursor and every Rail/background cell
+    // exact; menu text now has its own explicit product assertions below.
+    let editor_rows = if name == "slash/popup-rows.json" {
+        source_rows
+            .iter()
+            .position(|row| source_row_text(row).contains("→ "))
+            .unwrap()
+    } else {
+        source_rows.len()
+    };
     for (row_index, source_row) in source_rows.iter().enumerate() {
         let mut column = 0usize;
         for token in source_row.as_array().unwrap() {
@@ -421,6 +432,17 @@ fn assert_composer_fixture_with_setup(
                             row_offset as u16 + row_index as u16,
                         ))
                         .unwrap();
+                    if row_index >= editor_rows && column > 0 {
+                        if token.get("bg").is_some() {
+                            assert_eq!(
+                                cell.bg,
+                                token_rgb(token, "bg"),
+                                "{name} completion background"
+                            );
+                        }
+                        column += cell_width;
+                        continue;
+                    }
                     assert_eq!(
                         cell.symbol(),
                         character.to_string(),
@@ -464,6 +486,19 @@ fn assert_composer_fixture_with_setup(
         }
     }
 
+    if name == "slash/popup-rows.json" {
+        let menu = buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(menu.contains("→ /new"));
+        assert!(menu.contains("create a session"));
+        assert!(menu.contains("Tab fill"));
+        assert!(menu.contains("Enter run"));
+        assert!(menu.contains("Esc close"));
+        assert!(menu.contains("1/7"));
+    }
     let expected_cursor = source["cursor"].as_array().map(|cursor| {
         (
             cursor[1].as_u64().unwrap() as u16 + local_x as u16,

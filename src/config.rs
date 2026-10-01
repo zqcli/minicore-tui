@@ -345,6 +345,11 @@ pub fn persist(path: &Path, config: &TuiConfig) -> Result<(), ConfigError> {
     };
     let text =
         toml::to_string_pretty(&persisted).map_err(|_| ConfigError::Write(path.to_owned()))?;
+    // Never replace a readable configuration with one that the next startup
+    // must reject. Measure the serialized bytes, including TOML escaping.
+    if text.len() > MAX_CONFIG_BYTES {
+        return Err(ConfigError::TooLarge(path.to_owned()));
+    }
     let mut temp = tempfile::Builder::new()
         .prefix(".minicore-tui-config-")
         .tempfile_in(path.parent().unwrap_or_else(|| Path::new(".")))
@@ -360,6 +365,28 @@ pub fn persist(path: &Path, config: &TuiConfig) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_persist_keeps_existing_file_and_reduced_retry_is_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        let mut config = TuiConfig::default();
+        persist(&path, &config).unwrap();
+        let previous = fs::read(&path).unwrap();
+        config.editor = Some(EditorConfig {
+            executable: "/synthetic/editor".to_owned(),
+            args: vec!["X".repeat(MAX_CONFIG_BYTES)],
+        });
+        assert!(matches!(
+            persist(&path, &config),
+            Err(ConfigError::TooLarge(_))
+        ));
+        assert_eq!(fs::read(&path).unwrap(), previous);
+        assert_eq!(load(&path, true).unwrap(), TuiConfig::default());
+        config.editor.as_mut().unwrap().args = vec!["--reduced".to_owned()];
+        persist(&path, &config).unwrap();
+        assert_eq!(load(&path, true).unwrap(), config);
+    }
 
     #[test]
     fn default_path_prefers_xdg_then_home_without_searching_fallbacks() {

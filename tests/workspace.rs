@@ -170,3 +170,217 @@ fn pathological_grapheme_is_explicitly_bounded_in_display_not_silently_lost() {
     assert_eq!(view.copy_text.as_ref(), text);
     assert_eq!(view.rows[0].source_bytes, 0..text.len());
 }
+
+fn workspace_app(kind: BrowserKind) -> minicore_tui::app::App {
+    use minicore_tui::{app::App, event::AppEvent, state::selection::Dock};
+    let mut app = App::new("/synthetic-workspace".into());
+    app.update(AppEvent::Terminal(crossterm::event::Event::Resize(80, 24)));
+    let mut browser = WorkspaceBrowser::new(
+        kind,
+        "fixture-session".into(),
+        0,
+        1,
+        std::time::Instant::now(),
+    );
+    browser.due = None;
+    browser.files = (0..3)
+        .map(|i| FileEntry {
+            path: format!("file-{i}.txt"),
+            kind: FileKind::File,
+            size: None,
+        })
+        .collect();
+    browser.matches = (0..3)
+        .map(|i| FileMatch {
+            path: format!("file-{i}.txt"),
+            line_number: 1,
+            line_text_byte_offset: 0,
+            match_byte_ranges: vec![MatchRange { start: 0, end: 1 }],
+            line_text: "x".into(),
+            line_truncated: false,
+        })
+        .collect();
+    let mut info: minicore_tui::protocol::SessionInfo =
+        serde_json::from_value(fixture("session-create")["session"].clone()).unwrap();
+    info.session_id = "fixture-session".into();
+    let view = minicore_tui::state::session::SessionView::new(info);
+    browser.epoch = view.session_epoch;
+    app.sessions.active = Some("fixture-session".into());
+    app.sessions.known.insert("fixture-session".into(), view);
+    app.dock = Dock::Workspace(Box::new(browser));
+    app
+}
+
+#[test]
+fn workspace_dock_wheel_moves_files_and_grep_and_clamps_at_bounds() {
+    use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+    use minicore_tui::event::AppEvent;
+    for kind in [BrowserKind::Files, BrowserKind::Grep] {
+        let mut app = workspace_app(kind);
+        let area =
+            minicore_tui::ui::layout::screen_layout(&app, ratatui::layout::Rect::new(0, 0, 80, 24))
+                .panel;
+        let scroll = |kind, row| {
+            AppEvent::Terminal(Event::Mouse(MouseEvent {
+                kind,
+                column: area.x + 2,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }))
+        };
+        app.update(scroll(MouseEventKind::ScrollDown, area.y + 3));
+        assert_eq!(app.workspace_browser().unwrap().selected, 1);
+        for _ in 0..5 {
+            app.update(scroll(MouseEventKind::ScrollDown, area.y + 3));
+        }
+        assert_eq!(app.workspace_browser().unwrap().selected, 2);
+        app.update(scroll(MouseEventKind::ScrollUp, area.y.saturating_sub(1)));
+        assert_eq!(
+            app.workspace_browser().unwrap().selected,
+            2,
+            "wheel outside the Dock does not change its candidate"
+        );
+        for _ in 0..5 {
+            app.update(scroll(MouseEventKind::ScrollUp, area.y + 3));
+        }
+        assert_eq!(app.workspace_browser().unwrap().selected, 0);
+    }
+}
+
+fn rendered_workspace_browser(browser: &WorkspaceBrowser) -> String {
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 18)).unwrap();
+    terminal
+        .draw(|frame| {
+            minicore_tui::ui::workspace::render_browser(
+                frame,
+                frame.area(),
+                browser,
+                &minicore_tui::theme::ThemeKind::Dark.theme(),
+            )
+        })
+        .unwrap();
+    workspace_buffer_text(terminal.backend().buffer())
+}
+
+#[test]
+fn workspace_status_is_readable_and_preserves_partial_stop_and_skipped_facts() {
+    let app = workspace_app(BrowserKind::Files);
+    let mut browser = app.workspace_browser().unwrap().clone();
+    browser.scan_complete = true;
+    browser.stopped_by = Some(ScanStop::End);
+    let text = rendered_workspace_browser(&browser);
+    assert!(text.contains("已列出 3 项 · 扫描完成"));
+    assert!(!text.contains("false"));
+    assert!(!text.contains("true"));
+    assert!(!text.contains("下一页"));
+    browser.scan_complete = false;
+    browser.truncated = true;
+    browser.skipped = 7;
+    browser.stopped_by = Some(ScanStop::Page);
+    browser.cursor = Some(serde_json::json!({"opaque":"cursor"}));
+    let text = rendered_workspace_browser(&browser);
+    assert!(text.contains("还有结果 · Ctrl+N 下一页"));
+    assert!(text.contains("本页为部分结果 · 本页跳过 7 项"));
+    browser.cursor = None;
+    browser.stopped_by = Some(ScanStop::Deadline);
+    let text = rendered_workspace_browser(&browser);
+    assert!(text.contains("扫描未完成"));
+    assert!(text.contains("扫描超时"));
+    assert!(text.contains("不会自动重扫"));
+    assert!(!text.contains("下一页"));
+    browser.limited = true;
+    let text = rendered_workspace_browser(&browser);
+    assert!(text.contains("已达本地保留上限"));
+    assert!(text.contains("500 项 / 1 MiB"));
+    for (stop, reason) in [
+        (ScanStop::Entries, "条目上限"),
+        (ScanStop::Bytes, "字节上限"),
+        (ScanStop::Depth, "深度上限"),
+        (ScanStop::Rules, "规则限制"),
+    ] {
+        browser.stopped_by = Some(stop);
+        assert!(rendered_workspace_browser(&browser).contains(reason));
+    }
+}
+
+#[test]
+fn empty_grep_prompts_for_query_instead_of_claiming_to_scan() {
+    let app = workspace_app(BrowserKind::Grep);
+    let text = rendered_workspace_browser(app.workspace_browser().unwrap());
+    assert!(text.contains("输入要查找的文字"));
+    assert!(!text.contains("查询中"));
+    assert!(!text.contains("扫描完成"));
+}
+
+fn rendered_file(app: &minicore_tui::app::App) -> String {
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 18)).unwrap();
+    terminal
+        .draw(|frame| {
+            minicore_tui::ui::workspace::render_file(
+                frame,
+                frame.area(),
+                app,
+                &minicore_tui::theme::ThemeKind::Dark.theme(),
+            )
+        })
+        .unwrap();
+    workspace_buffer_text(terminal.backend().buffer())
+}
+
+#[test]
+fn file_preview_more_is_shown_only_when_reading_can_continue() {
+    use minicore_tui::state::panels::MainView;
+    let mut app = workspace_app(BrowserKind::Files);
+    app.open_file_preview("fixture.txt".into(), None, ReturnTarget::Conversation);
+    assert!(!rendered_file(&app).contains("[更多]"));
+    let MainView::FilePreview(file) = &mut app.main_view else {
+        panic!("missing file preview")
+    };
+    file.status = Some(FileStatus::Ok);
+    file.content.append("fixture\n".into()).unwrap();
+    file.next = None;
+    let text = rendered_file(&app);
+    assert!(text.contains("已读 8 bytes · 已全部读取"));
+    assert!(!text.contains("[更多]"));
+    assert!(!text.contains("false"));
+    let MainView::FilePreview(file) = &mut app.main_view else {
+        unreachable!()
+    };
+    file.next = Some(FileRange {
+        start_line: 2,
+        line_byte_offset: 0,
+    });
+    file.truncated = true;
+    file.line_truncated = true;
+    let text = rendered_file(&app);
+    assert!(text.contains("[更多]"));
+    assert!(text.contains("部分内容 · 本行未完 · Ctrl+N 继续读取"));
+    let MainView::FilePreview(file) = &mut app.main_view else {
+        unreachable!()
+    };
+    file.status = Some(FileStatus::Changed);
+    let text = rendered_file(&app);
+    assert!(!text.contains("[更多]"));
+    assert!(text.contains("保留旧快照"));
+    let MainView::FilePreview(file) = &mut app.main_view else {
+        unreachable!()
+    };
+    file.status = Some(FileStatus::Ok);
+    file.error = Some("read unavailable".into());
+    assert!(!rendered_file(&app).contains("[更多]"));
+}
+
+fn workspace_buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+    use unicode_width::UnicodeWidthStr;
+    let mut text = String::new();
+    for y in buffer.area.y..buffer.area.bottom() {
+        let mut x = buffer.area.x;
+        while x < buffer.area.right() {
+            let symbol = buffer[(x, y)].symbol();
+            text.push_str(symbol);
+            x += symbol.width().max(1) as u16;
+        }
+        text.push('\n');
+    }
+    text
+}

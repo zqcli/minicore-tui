@@ -1,0 +1,16 @@
+ Coding agent TUI
+ Ctrl+C: clear / quit · F1 help
+
+ Starting agent…
+
+ ▎
+ ▎/
+ ▎
+ ▎
+ ▎  /tool       inspect one exact tool invocation; closing n
+ ▎  /new        create a session here with the recent explic
+ ▎→ /search     find literal text in loaded content, or scan
+ ▎  /copy       copy the last reply, the current message, it
+ ▎  /export     write this conversation's saved history to a
+ ▎↑↓ PgUp/Dn · Tab fill · Enter run · Esc · 6/30
+ starting

@@ -1,9 +1,9 @@
  MINICORE  v0.3.0
 
  Coding agent TUI
- q / Ctrl+C to quit
+ Ctrl+C: clear / quit · F1 help
 
- Open a session — /new, Ctrl+R, or F1 for help
+ Choose settings below to create a session
 
 
 
@@ -19,6 +19,6 @@
  │                                                                             │
  │                                                                             │
  │                                                                             │
- │(1/2)                                                                        │
+ │(1/2) ↑↓/PgUp/PgDn · Enter select · Esc back · type to filter                │
  └─────────────────────────────────────────────────────────────────────────────┘
  ● ready

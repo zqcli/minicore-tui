@@ -45,10 +45,10 @@ fn panel_title(panel: &SearchPanelState) -> String {
     format!(
         " Search — {} · {} ",
         panel.scope.label(),
-        if panel.has_query() {
-            "results"
-        } else {
-            "type a literal"
+        match panel.mode {
+            SearchPanelMode::Input if panel.has_query() => "edit literal",
+            SearchPanelMode::Input => "type a literal",
+            SearchPanelMode::Results => "results",
         }
     )
 }
@@ -154,11 +154,17 @@ fn render_matches(
 
 fn render_hints(frame: &mut Frame, area: Rect, panel: &SearchPanelState, theme: &Theme) {
     let hints = if panel.mode == SearchPanelMode::Input {
-        "Enter search · Esc close · Ctrl+U clear"
+        "Enter search · Ctrl+A scope · Esc close · Ctrl+U clear"
     } else if panel.scanning() {
-        "Enter jump · n/p next/prev · s stop · Ctrl+A scope · type to edit · Esc close"
+        if area.width < 90 {
+            "s stop · Enter jump · n/p · Ctrl+A scope · Esc close"
+        } else {
+            "Enter jump · n/p next/prev · s stop · Ctrl+A scope · type to edit · Esc edit/close"
+        }
+    } else if area.width < 90 {
+        "Enter jump · n/p move · Ctrl+A scope · Esc edit/close"
     } else {
-        "Enter jump · n/p next/prev · Ctrl+A scope · type to edit · Ctrl+U clear"
+        "Enter jump · n/p next/prev · Ctrl+A scope · type to edit · Ctrl+U clear · Esc edit/close"
     };
     let hints = truncate(hints, area.width as usize);
     frame.render_widget(
@@ -168,4 +174,72 @@ fn render_hints(frame: &mut Frame, area: Rect, panel: &SearchPanelState, theme: 
         ))),
         area,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::search::{SearchScope, SearchStatus};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn no_match_input_discloses_scope_switch_without_discarding_query() {
+        let mut panel = SearchPanelState::new(
+            "session".into(),
+            1,
+            "missing literal".into(),
+            SearchScope::Loaded,
+        );
+        panel.mode = SearchPanelMode::Input;
+        panel.status = SearchStatus::Ready;
+        let mut terminal = Terminal::new(TestBackend::new(60, 1)).unwrap();
+        terminal
+            .draw(|frame| render_hints(frame, frame.area(), &panel, &Theme::dark()))
+            .unwrap();
+        let text: String = (0..60)
+            .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
+            .collect();
+        assert!(text.contains("Ctrl+A scope"));
+        assert!(text.contains("Enter search"));
+        assert!(text.contains("Esc close"));
+        assert_eq!(panel.query, "missing literal");
+        assert_eq!(panel.scope, SearchScope::Loaded);
+    }
+
+    #[test]
+    fn narrow_search_hints_keep_navigation_scope_and_escape_visible() {
+        for status in [SearchStatus::Ready, SearchStatus::ScanningFull] {
+            let mut panel = SearchPanelState::new(
+                "session".into(),
+                1,
+                "literal".into(),
+                SearchScope::FullSession,
+            );
+            panel.mode = SearchPanelMode::Results;
+            panel.status = status;
+            let mut terminal = Terminal::new(TestBackend::new(57, 1)).unwrap();
+            terminal
+                .draw(|frame| render_hints(frame, frame.area(), &panel, &Theme::dark()))
+                .unwrap();
+            let text: String = (0..57)
+                .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
+                .collect();
+            assert!(text.contains("Enter jump"));
+            assert!(text.contains("Ctrl+A scope"));
+            assert!(text.contains("Esc"));
+            if panel.scanning() {
+                assert!(text.contains("s stop"));
+            }
+        }
+    }
+
+    #[test]
+    fn search_title_distinguishes_editing_from_results() {
+        let mut panel =
+            SearchPanelState::new("session".into(), 1, "missing".into(), SearchScope::Loaded);
+        panel.mode = SearchPanelMode::Input;
+        assert!(panel_title(&panel).contains("edit literal"));
+        panel.mode = SearchPanelMode::Results;
+        assert!(panel_title(&panel).contains("results"));
+    }
 }

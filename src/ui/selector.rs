@@ -18,8 +18,8 @@ use crate::markdown::{column_width, line_width};
 use crate::protocol::{ModelInfo, ProfileInfo, Reasoning, SessionInfo};
 use crate::state::selection::{
     SelectorKind, SelectorState, SessionConfirmChoice, SessionPanelAction, SessionPanelMode,
-    SessionSelectorState, filtered_models, filtered_profiles, parse_rfc3339, reasoning_description,
-    reasoning_label, supported_reasoning,
+    SessionSelectorState, filtered_models, filtered_profiles, filtered_reasoning, parse_rfc3339,
+    reasoning_description, reasoning_label, supported_reasoning,
 };
 use crate::theme::Theme;
 use crate::ui::layout;
@@ -48,7 +48,7 @@ pub(crate) fn catalog_panel_layout(
         SelectorKind::Reasoning => 1 + u16::from(app.new_session().is_some()),
         SelectorKind::Profile | SelectorKind::Session => 0,
     };
-    let query = !matches!(state.kind, SelectorKind::Reasoning | SelectorKind::Session);
+    let query = !matches!(state.kind, SelectorKind::Session);
     panel::layout(
         area,
         PanelSpec::new(header_rows + u16::from(state.error.is_some()), query, 1),
@@ -68,7 +68,7 @@ pub(crate) fn catalog_visible_window(app: &App, area: Rect, state: &SelectorStat
                 .or_else(|| state.model_context.clone())
                 .or_else(|| app.active_view().map(|view| view.info.model.clone()))
                 .unwrap_or_default();
-            vec![1; supported_reasoning(&app.catalogs.models, &model).len()]
+            vec![1; filtered_reasoning(&app.catalogs.models, &model, &state.query).len()]
         }
         SelectorKind::Session => Vec::new(),
     };
@@ -113,7 +113,7 @@ pub(crate) fn selector_item_at(
                 .or_else(|| state.model_context.clone())
                 .or_else(|| app.active_view().map(|view| view.info.model.clone()))
                 .unwrap_or_default();
-            let items = supported_reasoning(&app.catalogs.models, &model);
+            let items = filtered_reasoning(&app.catalogs.models, &model, &state.query);
             (
                 items
                     .iter()
@@ -223,7 +223,7 @@ pub fn render_reasoning(
         .or_else(|| state.model_context.clone())
         .or_else(|| app.active_view().map(|view| view.info.model.clone()))
         .unwrap_or_default();
-    let levels = supported_reasoning(&app.catalogs.models, &model);
+    let levels = filtered_reasoning(&app.catalogs.models, &model, &state.query);
     // Never let the user believe the current session changed (spec 27.3).
     let current = app.active_view().map(|view| view.info.reasoning);
     let mut header = vec![Line::from(vec![
@@ -257,12 +257,16 @@ pub fn render_reasoning(
         theme,
         "Select reasoning",
         header,
-        None,
+        Some(&state.query),
         vec![1; levels.len()],
         lines,
         Some(state.cursor),
         levels.len(),
-        "No supported reasoning for this model",
+        if supported_reasoning(&app.catalogs.models, &model).is_empty() {
+            "No supported reasoning for this model"
+        } else {
+            "No matching items"
+        },
         state.error.as_deref(),
         None,
     );
@@ -936,7 +940,12 @@ fn shell(
     });
     let footer = footer.unwrap_or_else(|| {
         vec![Line::from(Span::styled(
-            format!("({shown}/{count})"),
+            layout::truncate(
+                &format!(
+                    "({shown}/{count}) ↑↓/PgUp/PgDn · Enter select · Esc back · type to filter"
+                ),
+                geometry.footer.width as usize,
+            ),
             Style::new().fg(theme.dim),
         ))]
     });

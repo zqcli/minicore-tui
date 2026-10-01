@@ -1,7 +1,7 @@
  MINICORE  v0.3.0
 
  Coding agent TUI
- q / Ctrl+C to quit
+ Ctrl+C: clear / quit · F1 help
 
  Starting agent…
 
@@ -13,12 +13,12 @@
  │Global:                                                                      │
  │Ctrl+C  clear the composer; empty: press again to quit                       │
  │Ctrl+D  quit when the composer is empty and idle                             │
- │F1  help; q closes it (q also quits on fatal errors)                         │
+ │F1  open/close help; q quits the application                                 │
  │Ctrl+R  session selector                                                     │
  │Ctrl+L  model selector; updates active session at a request boundary         │
  │Shift+Tab  reasoning selector; updates active session at a request boundary  │
  │Ctrl+N  open the new-session form                                            │
  │F2  rename the selected session                                              │
- │Esc or F1 closes this panel                                                  │
+ │↑↓/PgUp/PgDn scroll · Esc/F1 close · q quit · 1–10/65                        │
  └─────────────────────────────────────────────────────────────────────────────┘
  starting

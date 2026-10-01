@@ -1,9 +1,9 @@
  MINICORE  v0.3.0
 
  Coding agent TUI
- q / Ctrl+C to quit
+ Ctrl+C: clear / quit · F1 help
 
- Open a session — /new, Ctrl+R, or F1 for help
+ Type a message to begin · / commands · @ files · F1 help
 
 
 
@@ -18,7 +18,7 @@
    src/main.rs [File]
 
 
- 本 页  partial:false scan_complete:true stopped_by:End
- 本 页  skipped:0 · received:6 · cursor:false · local_limit:false
- Tab 查 询 /范 围  · Ctrl+U 清 空  · Ctrl+N 下 一 页  · F5 刷 新
+ 已 列 出  6 项  · 扫 描 完 成
+
+ Tab 查 询 /范 围  · Ctrl+U 清 空  · F5 刷 新
  ▸ project · deep · high · ● ready                                         ctx ?

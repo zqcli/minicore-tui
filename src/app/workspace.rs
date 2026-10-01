@@ -37,6 +37,15 @@ impl App {
             ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1),
         );
         if let Dock::Workspace(b) = &mut self.dock {
+            if screen.panel.contains((mouse.column, mouse.row).into()) {
+                match mouse.kind {
+                    Kind::ScrollUp => b.selected = b.selected.saturating_sub(1),
+                    Kind::ScrollDown => {
+                        b.selected = b.selected.saturating_add(1).min(b.len().saturating_sub(1));
+                    }
+                    _ => {}
+                }
+            }
             if let Kind::Down(button) = mouse.kind {
                 if screen.panel.contains((mouse.column, mouse.row).into()) {
                     let row = mouse.row.saturating_sub(screen.panel.y);

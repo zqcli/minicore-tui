@@ -1,0 +1,24 @@
+ MINICORE  v0.3.0
+
+ Coding agent TUI
+ Ctrl+C: clear / quit · F1 help
+
+ Starting agent…
+
+
+
+
+
+
+
+ ▎
+ ▎/
+ ▎
+ ▎
+ ▎→ /diff       read-only changes; session/turn cover native writes only
+ ▎  /files      reference paths only; Tab directory, F4 preview, Ctrl+N next pag
+ ▎  /grep       literal workspace search; Tab paths, Ctrl+I case, Ctrl+N next pa
+ ▎  /tool       inspect one exact tool invocation; closing never cancels it
+ ▎  /new        create a session here with the recent explicit model/profile/rea
+ ▎↑↓ / PgUp PgDn choose · Tab fill · Enter run · Esc close · 1/30
+ starting

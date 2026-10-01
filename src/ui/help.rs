@@ -32,18 +32,25 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     );
     let width = panel.content.width as usize;
     let lines = content_lines(theme, width);
-    frame.render_widget(
-        Paragraph::new(vec![Line::from(Span::styled(
-            "Esc or F1 closes this panel",
-            Style::new().fg(theme.dim),
-        ))]),
-        panel.footer,
-    );
-
     let scroll = app
         .panel_scroll
         .min(lines.len().saturating_sub(panel.content.height as usize));
     panel::render_window(frame, panel.content, &lines, scroll);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            layout::truncate(
+                &format!(
+                    "↑↓/PgUp/PgDn scroll · Esc/F1 close · q quit · {}–{}/{}",
+                    scroll + 1,
+                    (scroll + panel.content.height as usize).min(lines.len()),
+                    lines.len()
+                ),
+                panel.footer.width as usize,
+            ),
+            Style::new().fg(theme.dim),
+        ))),
+        panel.footer,
+    );
 }
 
 /// Builds the Help panel body. Shared by the renderer and the scroll bound so
@@ -54,7 +61,7 @@ fn content_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {
     for (key, what) in [
         ("Ctrl+C", "clear the composer; empty: press again to quit"),
         ("Ctrl+D", "quit when the composer is empty and idle"),
-        ("F1", "help; q closes it (q also quits on fatal errors)"),
+        ("F1", "open/close help; q quits the application"),
         ("Ctrl+R", "session selector"),
         (
             "Ctrl+L",
@@ -75,7 +82,7 @@ fn content_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {
         ("Ctrl+O", "expand/collapse all tool cards"),
         ("Ctrl+T", "show/hide reasoning"),
         ("PageUp/PageDown", "scroll; page selectors when focused"),
-        ("Home / End", "transcript top / tail"),
+        ("Ctrl+Home / Ctrl+End", "transcript top / tail"),
         ("Esc", "close a panel; cancel the running turn"),
     ] {
         lines.push(key_value(theme, key, what, width));
@@ -106,7 +113,7 @@ fn content_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {
     for note in [
         "Tools run automatically.",
         "Bash is not sandboxed.",
-        "No approval UI; no compaction, plugin, MCP, or subagent UI.",
+        "No approval UI; no plugin, MCP, or subagent management UI.",
         "Steering and session.update apply at request boundaries.",
         "persisted means appended by this Agent process, not fsync-safe.",
     ] {

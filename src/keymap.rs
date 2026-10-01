@@ -134,6 +134,11 @@ pub enum Action {
     /// Settings form actions.
     SettingsTypeChar(char),
     SettingsBackspace,
+    SettingsDelete,
+    SettingsCursor(i32),
+    SettingsHome,
+    SettingsEnd,
+    SettingsNewline,
     SettingsClear,
     SettingsFieldStep(i32),
     SettingsToggle,
@@ -239,6 +244,19 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
     }
 
     if typing && matches!(app.dock, Dock::Composer) {
+        if press && key.code == KeyCode::F(1) {
+            return Action::OpenHelp;
+        }
+        if press
+            && app.focused_region() == crate::state::panels::Focus::Editor
+            && app.slash_completion.is_some()
+        {
+            match key.code {
+                KeyCode::PageUp => return Action::CompletionMove(-5),
+                KeyCode::PageDown => return Action::CompletionMove(5),
+                _ => {}
+            }
+        }
         if key.code == KeyCode::F(6) {
             return if press {
                 Action::DetailFocus
@@ -370,6 +388,9 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
                 };
             }
             KeyCode::PageUp => {
+                if matches!(app.dock, Dock::Composer) && app.slash_completion.is_some() {
+                    return Action::CompletionMove(-5);
+                }
                 return if matches!(
                     app.dock,
                     Dock::SessionSelector(_)
@@ -383,6 +404,9 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
                 };
             }
             KeyCode::PageDown => {
+                if matches!(app.dock, Dock::Composer) && app.slash_completion.is_some() {
+                    return Action::CompletionMove(5);
+                }
                 return if matches!(
                     app.dock,
                     Dock::SessionSelector(_)
@@ -598,7 +622,7 @@ fn search_keys(
         KeyCode::Home => Action::SearchMove(-1000),
         KeyCode::End => Action::SearchMove(1000),
         KeyCode::Char('u') if ctrl(&key) => Action::SearchClear,
-        KeyCode::Char('a') if ctrl(&key) && results => Action::SearchScopeToggle,
+        KeyCode::Char('a') if ctrl(&key) => Action::SearchScopeToggle,
         KeyCode::Char('n') if results => Action::SearchStep(1),
         KeyCode::Char('p') if results => Action::SearchStep(-1),
         KeyCode::Char('s') if results => Action::SearchStop,
@@ -648,6 +672,14 @@ fn settings_keys(key: KeyEvent, press: bool, typing: bool, submitting: bool) -> 
         KeyCode::Up if press => Action::SettingsFieldStep(-1),
         KeyCode::Down if press => Action::SettingsFieldStep(1),
         KeyCode::Backspace => Action::SettingsBackspace,
+        KeyCode::Delete => Action::SettingsDelete,
+        KeyCode::Left => Action::SettingsCursor(-1),
+        KeyCode::Right => Action::SettingsCursor(1),
+        KeyCode::Home => Action::SettingsHome,
+        KeyCode::End => Action::SettingsEnd,
+        KeyCode::Char('a') if ctrl(&key) => Action::SettingsHome,
+        KeyCode::Char('e') if ctrl(&key) => Action::SettingsEnd,
+        KeyCode::Char('j') if ctrl(&key) => Action::SettingsNewline,
         KeyCode::Char('u') if ctrl(&key) => Action::SettingsClear,
         KeyCode::Char('s') if ctrl(&key) && press => Action::SettingsSubmit,
         KeyCode::Char(c) if !ctrl(&key) && !alt(&key) => Action::SettingsTypeChar(c),
@@ -750,6 +782,116 @@ mod tests {
         assert_eq!(map(&a, char_press('q')), Action::TypeChar('q'));
         a.dock = Dock::Help;
         assert_eq!(map(&a, char_press('q')), Action::Quit);
+    }
+
+    #[test]
+    fn settings_text_edit_keys_remain_local() {
+        let mut a = app();
+        a.dock = Dock::Settings(crate::state::settings::SettingsState::from_config(
+            &crate::config::TuiConfig::default(),
+        ));
+        for (code, action) in [
+            (KeyCode::Left, Action::SettingsCursor(-1)),
+            (KeyCode::Right, Action::SettingsCursor(1)),
+            (KeyCode::Home, Action::SettingsHome),
+            (KeyCode::End, Action::SettingsEnd),
+            (KeyCode::Delete, Action::SettingsDelete),
+        ] {
+            assert_eq!(map(&a, press(code, KeyModifiers::empty())), action);
+        }
+        assert_eq!(map(&a, ctrl('a')), Action::SettingsHome);
+        assert_eq!(map(&a, ctrl('e')), Action::SettingsEnd);
+        assert_eq!(map(&a, ctrl('j')), Action::SettingsNewline);
+        assert_eq!(map(&a, ctrl('s')), Action::SettingsSubmit);
+    }
+
+    #[test]
+    fn detail_editor_pages_completion_while_main_scrolls_and_f1_opens_help() {
+        use crate::state::panels::{ContextState, Focus, MainView};
+        let mut a = app();
+        a.main_view = MainView::Context(Box::new(ContextState {
+            session: "synthetic".into(),
+            epoch: 1,
+            generation: 1,
+            conversation_scroll: None,
+            offset: 0,
+            action: 0,
+            scrollbar_grab: None,
+        }));
+        a.slash_completion = Some(crate::app::SlashCompletionState {
+            start: 0,
+            end: 1,
+            items: vec!["/help".into()],
+            selected: 0,
+        });
+        a.focus = Focus::Editor;
+        assert_eq!(
+            map(&a, press(KeyCode::PageUp, KeyModifiers::NONE)),
+            Action::CompletionMove(-5)
+        );
+        assert_eq!(
+            map(&a, press(KeyCode::PageDown, KeyModifiers::NONE)),
+            Action::CompletionMove(5)
+        );
+        a.focus = Focus::Main;
+        assert!(
+            matches!(map(&a, press(KeyCode::PageDown, KeyModifiers::NONE)), Action::DetailScroll(delta) if delta > 0)
+        );
+        assert_eq!(
+            map(&a, press(KeyCode::F(1), KeyModifiers::NONE)),
+            Action::OpenHelp
+        );
+    }
+
+    #[test]
+    fn slash_completion_page_keys_move_candidates_before_transcript() {
+        let mut a = app();
+        a.slash_completion = Some(crate::app::SlashCompletionState {
+            start: 0,
+            end: 1,
+            items: vec!["/help".into()],
+            selected: 0,
+        });
+        assert_eq!(
+            map(&a, press(KeyCode::PageUp, KeyModifiers::empty())),
+            Action::CompletionMove(-5)
+        );
+        assert_eq!(
+            map(&a, press(KeyCode::PageDown, KeyModifiers::empty())),
+            Action::CompletionMove(5)
+        );
+        assert_eq!(
+            map(&a, press(KeyCode::Up, KeyModifiers::empty())),
+            Action::CompletionMove(-1)
+        );
+        assert_eq!(
+            map(&a, press(KeyCode::Tab, KeyModifiers::empty())),
+            Action::CompletionAccept
+        );
+        assert_eq!(
+            map(&a, press(KeyCode::Enter, KeyModifiers::empty())),
+            Action::CompletionAcceptAndSubmit
+        );
+        assert_eq!(
+            map(&a, press(KeyCode::Esc, KeyModifiers::empty())),
+            Action::CompletionCancel
+        );
+    }
+
+    #[test]
+    fn search_scope_toggle_is_available_for_no_hit_input_and_results() {
+        for mode in [
+            crate::state::search::SearchPanelMode::Input,
+            crate::state::search::SearchPanelMode::Results,
+        ] {
+            let mut a = app();
+            a.dock = Dock::Search(crate::state::search::SearchPanelState {
+                mode,
+                ..Default::default()
+            });
+            assert_eq!(map(&a, ctrl('a')), Action::SearchScopeToggle);
+            assert_eq!(map(&a, char_press('a')), Action::SearchTypeChar('a'));
+        }
     }
 
     #[test]

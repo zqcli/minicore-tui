@@ -364,13 +364,13 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "model",
         usage: "/model",
-        summary: "choose the model for a new session",
+        summary: "choose a model for this session or a new-session draft",
         args: CommandArgs::None,
     },
     CommandSpec {
         name: "reasoning",
         usage: "/reasoning",
-        summary: "choose the reasoning level for a new session",
+        summary: "choose reasoning for this session or a new-session draft",
         args: CommandArgs::None,
     },
     CommandSpec {
@@ -400,7 +400,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "refresh",
         usage: "/refresh",
-        summary: "re-read this session's history and presentation data",
+        summary: "refresh the active detail, or reload the conversation",
         args: CommandArgs::None,
     },
     CommandSpec {
@@ -472,6 +472,17 @@ pub fn command_spec(name: &str) -> Option<&'static CommandSpec> {
 
 pub fn slash_command_candidates(query: &str) -> Vec<String> {
     let query = query.to_ascii_lowercase();
+    if let Some((name, value)) = query.split_once(char::is_whitespace) {
+        return if name == "theme" {
+            ["dark", "light"]
+                .into_iter()
+                .filter(|choice| choice.starts_with(value.trim_start()))
+                .map(|choice| format!("/theme {choice}"))
+                .collect()
+        } else {
+            Vec::new()
+        };
+    }
     let mut matches = COMMANDS
         .iter()
         .filter_map(|spec| fuzzy_score(&query, spec.name).map(|score| (score, spec.name)))
@@ -863,5 +874,16 @@ mod tests {
         );
         assert!(!is_slash_command("plain text"));
         assert!(is_slash_command("  /new"));
+    }
+    #[test]
+    fn theme_arguments_are_discoverable_without_completing_free_text() {
+        assert_eq!(
+            slash_command_candidates("theme "),
+            vec!["/theme dark", "/theme light"]
+        );
+        assert_eq!(slash_command_candidates("THEME L"), vec!["/theme light"]);
+        assert!(slash_command_candidates("theme unknown").is_empty());
+        assert!(slash_command_candidates("search user text").is_empty());
+        assert!(slash_command_candidates("tool ").is_empty());
     }
 }

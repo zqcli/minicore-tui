@@ -277,6 +277,20 @@ pub fn supported_reasoning(models: &[ModelInfo], model_id: &str) -> Vec<Reasonin
         .unwrap_or_default()
 }
 
+/// Case-insensitive reasoning filtering shared by rendering and selection.
+pub fn filtered_reasoning(models: &[ModelInfo], model_id: &str, query: &str) -> Vec<Reasoning> {
+    let needle = query.to_lowercase();
+    supported_reasoning(models, model_id)
+        .into_iter()
+        .filter(|level| {
+            reasoning_label(*level).contains(&needle)
+                || reasoning_description(*level)
+                    .to_lowercase()
+                    .contains(&needle)
+        })
+        .collect()
+}
+
 pub fn reasoning_label(reasoning: Reasoning) -> &'static str {
     match reasoning {
         Reasoning::Disabled => "disabled",

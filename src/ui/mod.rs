@@ -141,18 +141,16 @@ fn render_small_terminal_hint(frame: &mut Frame, area: Rect, theme: &Theme) {
     ])
     .areas(area);
     let hint = Paragraph::new(vec![
-        Line::from(vec![
-            Span::styled(
-                "Terminal too small — minimum size ",
-                Style::new().fg(theme.warning),
-            ),
-            Span::styled(
-                format!("{}x{}", layout::MIN_WIDTH, layout::MIN_HEIGHT),
-                Style::new().fg(theme.warning).add_modifier(Modifier::BOLD),
-            ),
-        ]),
+        Line::from(vec![Span::styled(
+            "Terminal too small",
+            Style::new().fg(theme.warning),
+        )]),
         Line::from(Span::styled(
-            "Enlarge the window, or press q / Ctrl+C to quit",
+            format!("Minimum: {}x{}", layout::MIN_WIDTH, layout::MIN_HEIGHT),
+            Style::new().fg(theme.warning).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "Resize · Ctrl+C: clear / quit",
             Style::new().fg(theme.muted),
         )),
     ])
@@ -187,7 +185,24 @@ mod tests {
             .collect();
         assert!(text.contains("Terminal too small"));
         assert!(text.contains("60x16"));
-        assert!(text.contains("q / Ctrl+C"));
+        assert!(text.contains("Ctrl+C: clear / quit"));
+        assert!(!text.contains("press q"));
+    }
+
+    #[test]
+    fn tiny_hint_keeps_required_dimensions_visible_at_thirty_columns() {
+        let mut terminal = Terminal::new(TestBackend::new(30, 10)).unwrap();
+        let app = tiny_app();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("Minimum: 60x16"));
+        assert!(text.contains("Ctrl+C: clear / quit"));
     }
 
     #[test]

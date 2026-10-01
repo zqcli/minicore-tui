@@ -261,10 +261,6 @@ impl App {
             self.slash_completion = None;
             return;
         };
-        if candidate.chars().any(char::is_whitespace) {
-            self.slash_completion = None;
-            return;
-        }
         let items = crate::command::slash_command_candidates(candidate);
         if items.is_empty() {
             self.slash_completion = None;
@@ -300,8 +296,8 @@ impl App {
         completion.selected = (completion.selected as i32 + delta).rem_euclid(len as i32) as usize;
     }
 
-    /// Returns `true` when the selected skill command was accepted without
-    /// submission, matching RailEditor's native Enter behavior.
+    /// Returns `true` when completion still needs input rather than immediate
+    /// submission (a required argument, or the existing skill-command path).
     pub(super) fn accept_slash_completion(&mut self) -> bool {
         let Some(completion) = self.slash_completion.take() else {
             return false;
@@ -317,7 +313,17 @@ impl App {
             completion.end,
             &format!("/{command} "),
         );
-        command.starts_with("skill:")
+        let needs_args = crate::command::command_spec(command).filter(|spec| {
+            matches!(
+                spec.args,
+                crate::command::CommandArgs::Theme | crate::command::CommandArgs::ToolRef
+            )
+        });
+        if let Some(spec) = needs_args {
+            self.notice(super::NoticeLevel::Info, spec.usage);
+            self.refresh_slash_completion();
+        }
+        needs_args.is_some() || command.starts_with("skill:")
     }
 
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent) -> Vec<AppCommand> {

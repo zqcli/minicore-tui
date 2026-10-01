@@ -60,7 +60,8 @@ impl App {
         if is_slash_command(&text) {
             // Continuing a read-only browse must not consume the draft: the
             // text the user typed stays in the composer for the next Enter
-            // (spec §10.1). Every other slash command owns the line it ran.
+            // (spec §10.1). Invalid local commands also retain their exact
+            // text so the user can correct an argument or spelling error.
             let parsed = crate::command::parse_command(&text);
             let keeps_browse_draft =
                 matches!(parsed.as_ref(), Ok(crate::command::LocalCommand::Resume))
@@ -77,7 +78,7 @@ impl App {
             let keeps_editor_draft =
                 matches!(parsed.as_ref(), Ok(crate::command::LocalCommand::Editor));
             let commands = self.run_command(&text);
-            if !keeps_browse_draft && !keeps_editor_draft {
+            if parsed.is_ok() && !keeps_browse_draft && !keeps_editor_draft {
                 self.composer.clear();
             }
             return commands;

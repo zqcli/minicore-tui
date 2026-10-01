@@ -46,18 +46,25 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             Style::new().fg(theme.dim),
         )));
     }
-    frame.render_widget(
-        Paragraph::new(vec![Line::from(Span::styled(
-            "Esc closes this panel",
-            Style::new().fg(theme.dim),
-        ))]),
-        panel.footer,
-    );
-
     // panel_scroll counts from the top of `lines`; flipping for newest-first
     // is unnecessary since the list is short and the offset just slices.
     let scroll = app
         .panel_scroll
         .min(lines.len().saturating_sub(panel.content.height as usize));
     panel::render_window(frame, panel.content, &lines, scroll);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            layout::truncate(
+                &format!(
+                    "↑↓/PgUp/PgDn scroll · Esc close · {}–{}/{}",
+                    scroll + 1,
+                    (scroll + panel.content.height as usize).min(lines.len()),
+                    lines.len()
+                ),
+                panel.footer.width as usize,
+            ),
+            Style::new().fg(theme.dim),
+        ))),
+        panel.footer,
+    );
 }

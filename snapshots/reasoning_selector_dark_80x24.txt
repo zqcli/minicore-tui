@@ -1,9 +1,9 @@
  MINICORE  v0.3.0
 
  Coding agent TUI
- q / Ctrl+C to quit
+ Ctrl+C: clear / quit · F1 help
 
- Open a session — /new, Ctrl+R, or F1 for help
+ Choose settings below to create a session
 
 
 
@@ -11,6 +11,7 @@
  │Select reasoning                                                             │
  │Current session: —                                                           │
  │New session setting: high                                                    │
+ │>                                                                            │
  │  auto  Provider default                                                     │
  │  low  Light reasoning                                                       │
  │  medium  Moderate reasoning                                                 │
@@ -18,7 +19,6 @@
  │                                                                             │
  │                                                                             │
  │                                                                             │
- │                                                                             │
- │(4/4)                                                                        │
+ │(4/4) ↑↓/PgUp/PgDn · Enter select · Esc back · type to filter                │
  └─────────────────────────────────────────────────────────────────────────────┘
  ● ready

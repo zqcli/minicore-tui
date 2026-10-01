@@ -1,9 +1,9 @@
 
 
 
-      Terminal too small — minimum size 60x16
-  Enlarge the window, or press q / Ctrl+C to quit
-
+                Terminal too small
+                  Minimum: 60x16
+           Resize · Ctrl+C: clear / quit
 
 
 

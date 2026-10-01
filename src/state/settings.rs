@@ -53,6 +53,7 @@ impl SettingsField {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SettingsState {
+    original: TuiConfig,
     pub draft: TuiConfig,
     pub field: SettingsField,
     pub editor_executable: String,
@@ -71,6 +72,7 @@ impl SettingsState {
             args: Vec::new(),
         });
         Self {
+            original: config.clone(),
             draft: config.clone(),
             field: SettingsField::Theme,
             editor_executable: editor.executable,
@@ -95,7 +97,12 @@ impl SettingsState {
         let index = (self.field.index() as i32 + delta).rem_euclid(SettingsField::ALL.len() as i32)
             as usize;
         self.field = SettingsField::ALL[index];
-        self.cursor = 0;
+        self.cursor = self.active_text().map_or(0, str::len);
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.build_config()
+            .map_or(true, |config| config != self.original)
     }
 
     pub fn toggle(&mut self) {
@@ -108,9 +115,9 @@ impl SettingsState {
             }
             SettingsField::Thinking => self.draft.thinking_visible = !self.draft.thinking_visible,
             SettingsField::Tools => self.draft.tools_expanded = !self.draft.tools_expanded,
+            SettingsField::EditorArgs => self.type_char('\n'),
             SettingsField::Apply
             | SettingsField::EditorExecutable
-            | SettingsField::EditorArgs
             | SettingsField::AgentExecutable
             | SettingsField::AgentConfig => {}
         }
@@ -123,6 +130,60 @@ impl SettingsState {
             SettingsField::AgentExecutable => Some(&mut self.agent_executable),
             SettingsField::AgentConfig => Some(&mut self.agent_config),
             _ => None,
+        }
+    }
+
+    pub fn active_text(&self) -> Option<&str> {
+        match self.field {
+            SettingsField::EditorExecutable => Some(&self.editor_executable),
+            SettingsField::EditorArgs => Some(&self.editor_args),
+            SettingsField::AgentExecutable => Some(&self.agent_executable),
+            SettingsField::AgentConfig => Some(&self.agent_config),
+            _ => None,
+        }
+    }
+
+    pub fn move_cursor(&mut self, delta: i32) {
+        if let Some(text) = self.active_text() {
+            let cursor = floor_boundary(text, self.cursor.min(text.len()));
+            self.cursor = if delta < 0 {
+                text[..cursor]
+                    .char_indices()
+                    .next_back()
+                    .map_or(0, |(index, _)| index)
+            } else {
+                text[cursor..]
+                    .chars()
+                    .next()
+                    .map_or(cursor, |c| cursor + c.len_utf8())
+            };
+        }
+    }
+
+    pub fn home(&mut self) {
+        self.cursor = 0;
+    }
+
+    pub fn end(&mut self) {
+        self.cursor = self.active_text().map_or(0, str::len);
+    }
+
+    pub fn delete(&mut self) {
+        let cursor = self.cursor;
+        if let Some(text) = self.active_text_mut() {
+            let cursor = floor_boundary(text, cursor.min(text.len()));
+            if let Some(character) = text[cursor..].chars().next() {
+                text.replace_range(cursor..cursor + character.len_utf8(), "");
+            }
+        }
+    }
+
+    pub fn insert_text(&mut self, text: &str) {
+        let multiline = self.field == SettingsField::EditorArgs;
+        for character in text.replace("\r\n", "\n").replace('\r', "\n").chars() {
+            if !character.is_control() || multiline && character == '\n' {
+                self.type_char(character);
+            }
         }
     }
 
@@ -205,6 +266,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn default_settings_with_empty_args_are_not_dirty() {
+        let state = SettingsState::from_config(&TuiConfig::default());
+        assert!(state.editor_args.is_empty());
+        assert!(!state.is_dirty());
+    }
+
+    #[test]
     fn settings_roundtrip_preserves_utf8_and_direct_argument_rows() {
         let mut state = SettingsState::from_config(&TuiConfig::default());
         state.field = SettingsField::EditorExecutable;
@@ -230,5 +298,41 @@ mod tests {
         assert_eq!(state.field, SettingsField::Apply);
         state.step(1);
         assert_eq!(state.field, SettingsField::Theme);
+    }
+
+    #[test]
+    fn settings_existing_unicode_text_supports_navigation_delete_and_append() {
+        let mut state = SettingsState::from_config(&TuiConfig::default());
+        state.editor_executable = "/中/edit".to_owned();
+        state.step(3);
+        assert_eq!(state.cursor, state.editor_executable.len());
+        state.move_cursor(-1);
+        state.type_char('X');
+        assert_eq!(state.editor_executable, "/中/ediXt");
+        state.home();
+        state.move_cursor(1);
+        state.delete();
+        assert_eq!(state.editor_executable, "//ediXt");
+        state.end();
+        state.backspace();
+        assert_eq!(state.editor_executable, "//ediX");
+    }
+
+    #[test]
+    fn settings_args_accept_newlines_and_normalized_paste_without_submission() {
+        let mut state = SettingsState::from_config(&TuiConfig::default());
+        state.field = SettingsField::EditorExecutable;
+        state.insert_text("/synthetic/editor\r\n");
+        state.step(1);
+        state.insert_text("--first");
+        state.toggle();
+        state.insert_text("--second\r\n中文\0");
+        let config = state.build_config().unwrap();
+        assert_eq!(
+            config.editor.unwrap().args,
+            vec!["--first", "--second", "中文"]
+        );
+        assert!(!state.submitting);
+        assert!(state.is_dirty());
     }
 }

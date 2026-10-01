@@ -25,9 +25,10 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &Theme, form: &ExportFormSta
     if inner.height == 0 || inner.width == 0 {
         return;
     }
+    let option_rows = toggle_lines(form, theme, inner.width as usize).len() as u16;
     let rows = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(1),
+        Constraint::Length(option_rows),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(0),
@@ -76,23 +77,44 @@ fn render_target(frame: &mut Frame, area: Rect, form: &ExportFormState, theme: &
 }
 
 fn render_toggles(frame: &mut Frame, area: Rect, form: &ExportFormState, theme: &Theme) {
-    let line = Line::from(vec![
-        toggle("Ctrl+T thinking", form.spec.include_thinking, theme),
-        Span::raw("   "),
-        toggle("Ctrl+P tools", form.spec.include_tool, theme),
-        Span::raw("   "),
-        toggle("Ctrl+N unsaved turn", form.include_unsaved, theme),
-        Span::raw("   "),
-        toggle("Ctrl+Y overwrite", form.overwrite, theme),
-    ]);
     frame.render_widget(
-        Paragraph::new(fill_line(
-            line,
-            area.width as usize,
-            Style::new().bg(theme.page_bg),
-        )),
+        Paragraph::new(toggle_lines(form, theme, area.width as usize)),
         area,
     );
+}
+
+/// Keep every option and its checked state together, including at the
+/// supported 60-column minimum. The form already reserves space for these
+/// rows, so narrow layouts need not hide the overwrite decision.
+fn toggle_lines(form: &ExportFormState, theme: &Theme, width: usize) -> Vec<Line<'static>> {
+    let options = [
+        ("Ctrl+T thinking", form.spec.include_thinking),
+        ("Ctrl+P tools", form.spec.include_tool),
+        ("Ctrl+N unsaved turn", form.include_unsaved),
+        ("Ctrl+Y overwrite", form.overwrite),
+        ("Ctrl+R raw oversized", form.spec.raw_oversized),
+    ];
+    let mut lines = Vec::new();
+    let mut spans = Vec::new();
+    let mut used = 0;
+    for (label, enabled) in options {
+        let option = toggle(label, enabled, theme);
+        let length = option.content.len();
+        if !spans.is_empty() && used + 3 + length > width {
+            lines.push(Line::from(std::mem::take(&mut spans)));
+            used = 0;
+        }
+        if !spans.is_empty() {
+            spans.push(Span::raw("   "));
+            used += 3;
+        }
+        used += length;
+        spans.push(option);
+    }
+    if !spans.is_empty() {
+        lines.push(Line::from(spans));
+    }
+    lines
 }
 
 fn toggle(label: &str, on: bool, theme: &Theme) -> Span<'static> {
@@ -106,7 +128,13 @@ fn toggle(label: &str, on: bool, theme: &Theme) -> Span<'static> {
 
 fn render_progress(frame: &mut Frame, area: Rect, form: &ExportFormState, theme: &Theme) {
     let text = match form.phase {
-        ExportPhase::Editing => "saved history only; nothing has been written yet".to_owned(),
+        ExportPhase::Editing => {
+            if form.include_unsaved {
+                "saved history + unsaved turn; nothing written yet".to_owned()
+            } else {
+                "saved history only; nothing has been written yet".to_owned()
+            }
+        }
         ExportPhase::Running => format!("writing… {} item(s) forwarded", form.items),
         ExportPhase::Cancelling => {
             "cancelling: waiting for the writer to confirm whether it committed".to_owned()
@@ -167,7 +195,7 @@ fn render_hints(frame: &mut Frame, area: Rect, form: &ExportFormState, theme: &T
         ExportPhase::Running => "Esc cancel · the temporary file is removed",
         ExportPhase::Cancelling => "waiting for the writer's typed outcome…",
         ExportPhase::Editing | ExportPhase::Done | ExportPhase::Failed => {
-            "Enter export · Ctrl+T/P/N/Y options · Esc close"
+            "Enter export · Ctrl+T/P/N/Y/R options · Esc close"
         }
     };
     frame.render_widget(
@@ -178,4 +206,59 @@ fn render_hints(frame: &mut Frame, area: Rect, form: &ExportFormState, theme: &T
         )),
         area,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn drawn(form: &ExportFormState, width: u16, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| render(frame, frame.area(), &Theme::dark(), form))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn export_options_remain_visible_at_supported_widths() {
+        for width in [57, 60, 77, 80, 157] {
+            let form = ExportFormState::new("conversation.md".into());
+            let text = drawn(&form, width, 12);
+            for label in [
+                "[ ] Ctrl+T thinking",
+                "[ ] Ctrl+P tools",
+                "[ ] Ctrl+N unsaved turn",
+                "[ ] Ctrl+Y overwrite",
+                "[ ] Ctrl+R raw oversized",
+            ] {
+                assert!(text.contains(label), "width {width} lost {label}: {text}");
+            }
+            assert!(text.contains("Enter export"));
+            assert!(text.contains("Esc close"));
+        }
+    }
+
+    #[test]
+    fn raw_and_unsaved_choices_have_explicit_current_state() {
+        let mut form = ExportFormState::new("conversation.md".into());
+        form.spec.raw_oversized = true;
+        form.include_unsaved = true;
+        form.overwrite = true;
+        let text = drawn(&form, 60, 12);
+        assert!(text.contains("[x] Ctrl+R raw oversized"));
+        assert!(text.contains("[x] Ctrl+N unsaved turn"));
+        assert!(text.contains("[x] Ctrl+Y overwrite"));
+        assert!(text.contains("saved history + unsaved turn"));
+        assert!(!text.contains("saved history only"));
+    }
 }

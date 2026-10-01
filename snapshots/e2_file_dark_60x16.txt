@@ -1,7 +1,7 @@
- ← 返 回   src/main.rs             [复 制 ]   [更 多 ]   [刷 新 ]
+ ← 返 回   src/main.rs             [复 制 ]            [刷 新 ]
  ok · 只 读 路 径 预 览 ， 模 型 需 要 时 再 读 （ 未 附 加 内 容 ）
- 已 读  39 bytes · partial:false line_partial:false next:false
- 正 文 焦 点  · F6 编 辑  · Ctrl+N 更 多  · F5 刷 新  · Esc 返 回
+ 已 读  39 bytes · 已 全 部 读 取
+ 正 文 焦 点  · F6 编 辑  · F5 刷 新  · Esc 返 回
       1 │fn main() {
       2 │    println!("changed");
       3 │}

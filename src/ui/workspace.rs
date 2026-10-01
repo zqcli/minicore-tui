@@ -3,7 +3,7 @@ use crate::{
     app::App,
     protocol::workspace::{FileMatch, FileStatus, ScanStop},
     safe_text::safe_display,
-    state::workspace::{BrowserKind, WorkspaceBrowser},
+    state::workspace::{BrowserKind, FilePreviewState, WorkspaceBrowser},
     theme::Theme,
 };
 use ratatui::{
@@ -35,6 +35,30 @@ pub fn file_actions(area: Rect) -> (Rect, Rect, Rect) {
         Rect::new(start + 18, area.y, 9, 1),
     )
 }
+fn file_has_more(file: &FilePreviewState) -> bool {
+    file.status == Some(FileStatus::Ok) && file.error.is_none() && file.next.is_some()
+}
+fn file_progress(file: &FilePreviewState) -> String {
+    let mut parts = vec![format!("已读 {} bytes", file.content.bytes)];
+    if file.status == Some(FileStatus::Changed) || file.error.is_some() {
+        if file.content.bytes > 0 {
+            parts.push("保留旧快照".into());
+        }
+    } else if file.status == Some(FileStatus::Ok) {
+        if file.truncated || file.line_truncated || file.next.is_some() {
+            parts.push("部分内容".into());
+        } else {
+            parts.push("已全部读取".into());
+        }
+        if file.line_truncated {
+            parts.push("本行未完".into());
+        }
+        if file_has_more(file) {
+            parts.push("Ctrl+N 继续读取".into());
+        }
+    }
+    parts.join(" · ")
+}
 pub fn render_file(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let Some(file) = app.file_preview() else {
         return;
@@ -46,6 +70,9 @@ pub fn render_file(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     );
     let (copy, more, refresh) = file_actions(area);
     for (rect, label) in [(copy, "[复制]"), (more, "[更多]"), (refresh, "[刷新]")] {
+        if rect == more && !file_has_more(file) {
+            continue;
+        }
         frame.render_widget(
             Paragraph::new(label).style(Style::new().fg(theme.accent)),
             rect,
@@ -66,13 +93,7 @@ pub fn render_file(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         });
     let lines = vec![
         Line::from(status),
-        Line::from(format!(
-            "已读 {} bytes · partial:{} line_partial:{} next:{}",
-            file.content.bytes,
-            file.truncated,
-            file.line_truncated,
-            file.next.is_some()
-        )),
+        Line::from(file_progress(file)),
         Line::from(
             if file.status == Some(FileStatus::Ok)
                 && file
@@ -86,7 +107,7 @@ pub fn render_file(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             } else if app.focused_region() == crate::state::panels::Focus::Editor {
                 "Editor 焦点 · F6 返回正文 · 保持原输入键 · Esc 返回"
             } else if app.focused_region() == crate::state::panels::Focus::Main {
-                "正文焦点 · F6 编辑 · Ctrl+N 更多 · F5 刷新 · Esc 返回"
+                "正文焦点 · F6 编辑 · F5 刷新 · Esc 返回"
             } else {
                 "Dock 焦点 · Esc 先关闭 Dock，不会取消执行"
             },
@@ -281,36 +302,17 @@ pub fn render_browser(frame: &mut Frame, area: Rect, b: &WorkspaceBrowser, theme
         Paragraph::new(rows).style(Style::new().fg(theme.text)),
         Rect::new(area.x, area.y + 3, area.width, count as u16),
     );
-    let stop = b.stopped_by.map_or_else(
-        || {
-            if b.due.is_some() {
-                "debounce"
-            } else {
-                "reading/idle"
-            }
-            .to_owned()
-        },
-        |s| format!("{s:?}"),
-    );
+    let (progress, facts) = browser_progress(b);
     let summary = vec![
-        Line::from(format!(
-            "本页 partial:{} scan_complete:{} stopped_by:{}",
-            b.truncated, b.scan_complete, stop
-        )),
-        Line::from(format!(
-            "本页 skipped:{} · received:{} · cursor:{} · local_limit:{}",
-            b.skipped,
-            b.len(),
-            b.cursor.is_some(),
-            b.limited
-        )),
+        Line::from(progress),
+        Line::from(facts),
         Line::from(b.error.as_deref().map(safe).unwrap_or_else(|| {
             if b.limited {
                 "本地 500 项 / 1 MiB 上限：缩小范围，未全部列出".into()
             } else if b.stopped_by == Some(ScanStop::Deadline) {
                 "deadline：缩小范围或 F5 手动刷新，不会自动重扫".into()
             } else {
-                "Tab 查询/范围 · Ctrl+U 清空 · Ctrl+N 下一页 · F5 刷新".into()
+                "Tab 查询/范围 · Ctrl+U 清空 · F5 刷新".into()
             }
         })),
     ];
@@ -323,4 +325,47 @@ pub fn render_browser(frame: &mut Frame, area: Rect, b: &WorkspaceBrowser, theme
             3.min(area.height),
         ),
     );
+}
+
+fn browser_progress(b: &WorkspaceBrowser) -> (String, String) {
+    let count = if b.kind == BrowserKind::Files {
+        format!("已列出 {} 项", b.len())
+    } else {
+        format!("{} 处匹配", b.len())
+    };
+    let status = if b.kind == BrowserKind::Grep && b.query.is_empty() {
+        "输入要查找的文字"
+    } else if b.stopped_by.is_none() && b.error.is_none() {
+        if b.due.is_some() {
+            "等待查询…"
+        } else {
+            "查询中…"
+        }
+    } else if b.limited {
+        "已达本地保留上限"
+    } else if b.cursor.is_some() && b.error.is_none() {
+        "还有结果 · Ctrl+N 下一页"
+    } else if b.scan_complete && !b.truncated {
+        "扫描完成"
+    } else {
+        "扫描未完成"
+    };
+    let mut facts = Vec::new();
+    if b.truncated {
+        facts.push("本页为部分结果".to_owned());
+    }
+    if b.skipped > 0 {
+        facts.push(format!("本页跳过 {} 项", b.skipped));
+    }
+    if let Some(reason) = match b.stopped_by {
+        Some(ScanStop::Entries) => Some("达到扫描条目上限"),
+        Some(ScanStop::Bytes) => Some("达到扫描字节上限"),
+        Some(ScanStop::Depth) => Some("达到目录深度上限"),
+        Some(ScanStop::Rules) => Some("扫描规则限制"),
+        Some(ScanStop::Deadline) => Some("扫描超时"),
+        _ => None,
+    } {
+        facts.push(reason.into());
+    }
+    (format!("{count} · {status}"), facts.join(" · "))
 }

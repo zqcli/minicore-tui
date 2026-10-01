@@ -59,6 +59,10 @@ the cancellation action only after higher-priority views/selections are closed.
 external-editor executable/arguments, and the next-start Agent paths. `Ctrl+S`
 applies a valid settings form atomically; an Agent path change is reported as a
 next-startup requirement and never reloads or kills the current child.
+Settings text fields support Left/Right, Home/End (also Ctrl+A/Ctrl+E),
+Backspace/Delete, Ctrl+U clear, and bracketed paste. In Editor args, Enter or
+Ctrl+J adds a separate argument; multiline paste preserves argument boundaries.
+Esc cancels unsaved edits. A failed write keeps the edited form for retry.
 `/editor` opens the current draft in the configured executable with its exact
 argument vector and an OS temporary file. The terminal is suspended only for
 input/drawing; RPC readers, App updates, background turns, waits, and saves
@@ -226,6 +230,13 @@ configuration.
 
 Only input whose first non-whitespace character is `/` is parsed locally.
 Unknown commands and invalid arguments produce a local notice and no RPC.
+Their draft text is kept so it can be corrected without retyping.
+
+Typing `/` opens command suggestions with short descriptions. Up/Down and
+PageUp/PageDown move through the list; Tab fills the selected command, Enter
+runs a complete command, and Esc dismisses suggestions without clearing the
+draft. Required-argument commands stay editable: `/theme` offers dark/light
+choices, while `/tool` shows its exact argument usage.
 
 | Command | Behavior |
 |---|---|

@@ -79,42 +79,24 @@ pub fn rows(app: &App) -> Vec<String> {
     };
     let b = &x.budget;
     let mut r = vec![
-        "覆盖（计数，不展示 summary 正文）".into(),
+        "上下文估算（≈，不是 Provider 实际用量）".into(),
         format!(
-            "  loops:{} items:{} retained:{}",
-            x.coverage.covered_loop_count,
-            x.coverage.covered_item_count,
-            x.coverage.retained_item_count
+            "  ≈request context:{} / input budget:{} tokens",
+            number(b.estimated_request_context_tokens),
+            number(b.input_budget_tokens)
         ),
-        "预算估算（≈非完整 Provider 输入统计）".into(),
         format!(
             "  ≈history tokens:{} bytes:{} items:{}",
             number(b.estimated_history_tokens),
             number(b.estimated_history_bytes),
             number(b.estimated_history_items)
         ),
+        String::new(),
         format!(
-            "  ≈request context:{} input budget:{}",
-            number(b.estimated_request_context_tokens),
-            number(b.input_budget_tokens)
-        ),
-        format!(
-            "  trigger:{} target:{}",
-            number(b.trigger_tokens),
-            number(b.target_tokens)
-        ),
-        format!(
-            "  runtime items:{} bytes:{} within:{}",
-            number(b.max_history_items),
-            number(b.max_history_bytes),
-            b.within_runtime_limits
-                .map_or("unknown".into(), |v| v.to_string())
-        ),
-        format!(
-            "当前 preparation: {}",
+            "当前压缩观察: {}",
             x.current_operation
                 .as_ref()
-                .map_or("none observed".into(), |o| format!(
+                .map_or("未观察到活跃操作".into(), |o| format!(
                     "{} {:?} covered:{} retained:{}",
                     safe(&o.operation_id),
                     o.phase,
@@ -123,29 +105,12 @@ pub fn rows(app: &App) -> Vec<String> {
                 ))
         ),
     ];
-    automatic(
-        &mut r,
-        "自动 preparation current",
-        x.automatic.current.as_ref(),
-    );
-    automatic(&mut r, "自动 preparation last", x.automatic.last.as_ref());
-    if let Some(m) = &v.manual_compact {
-        r.push(format!(
-            "本地手动操作: {} cancel_requested:{}",
-            safe(&m.operation_id),
-            m.cancel_requested
-        ));
-        r.push(format!(
-            "  state-confirmed:{} context-confirmed:{}",
-            m.state_refresh_confirmed, m.context_refresh_confirmed
-        ));
-    }
     let result = v
         .manual_compact
         .as_ref()
         .and_then(|m| m.result.as_ref())
         .or(x.last_result.as_ref());
-    r.push("手动 compact 最近结果".into());
+    r.push("最近手动压缩结果".into());
     if let Some(o) = result {
         r.push(format!(
             "  {} {:?} failure:{}",
@@ -161,6 +126,53 @@ pub fn rows(app: &App) -> Vec<String> {
         usage(&mut r, o.utility_usage.as_ref());
     } else {
         r.push("  unknown / 尚无结果；不是零 usage".into());
+    }
+    r.push(String::new());
+    r.push("压缩覆盖（计数；不展示 summary 正文）".into());
+    r.push(format!(
+        "  loops:{} items:{} retained:{}",
+        x.coverage.covered_loop_count,
+        x.coverage.covered_item_count,
+        x.coverage.retained_item_count
+    ));
+    r.push(String::new());
+    r.push("详细诊断".into());
+    r.push(format!(
+        "  trigger:{} target:{} tokens",
+        number(b.trigger_tokens),
+        number(b.target_tokens)
+    ));
+    r.push(format!(
+        "  runtime items:{} bytes:{} within:{}",
+        number(b.max_history_items),
+        number(b.max_history_bytes),
+        b.within_runtime_limits
+            .map_or("unknown".into(), |v| v.to_string())
+    ));
+    if let Some(m) = &v.manual_compact {
+        r.push(format!(
+            "本地手动操作: {} cancel_requested:{}",
+            safe(&m.operation_id),
+            m.cancel_requested
+        ));
+        r.push(format!(
+            "  state-confirmed:{} context-confirmed:{}",
+            m.state_refresh_confirmed, m.context_refresh_confirmed
+        ));
+    }
+    if x.automatic.current.is_none() && x.automatic.last.is_none() {
+        r.push("自动压缩: 暂无观察记录".into());
+    } else {
+        if x.automatic.current.is_some() {
+            automatic(
+                &mut r,
+                "自动 preparation current",
+                x.automatic.current.as_ref(),
+            );
+        }
+        if x.automatic.last.is_some() {
+            automatic(&mut r, "自动 preparation last", x.automatic.last.as_ref());
+        }
     }
     r.push(format!(
         "最近 preparation failure:{}",
@@ -181,6 +193,7 @@ pub fn rows(app: &App) -> Vec<String> {
         ));
         usage(&mut r, o.utility_usage.as_ref());
     }
+    r.push("观察频率：idle 不轮询；活跃操作前台 500ms / 后台 2s".into());
     r
 }
 pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
@@ -214,10 +227,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         Paragraph::new(vec![
             Line::from("← 返回 · Context（快照/操作分开；关闭不取消）"),
             Line::from(actions),
-            Line::from(if app.context_supported {
-                "idle 不轮询；操作活跃时 500ms 前台 / 2s 后台"
-            } else {
+            Line::from(if !app.context_supported {
                 "Agent context 不兼容；compact 已禁用"
+            } else if enabled[2] {
+                "压缩进行中；关闭本页不会取消，cancel 可停止该操作"
+            } else if enabled[1] {
+                "手动压缩可用；Esc 返回对话"
+            } else {
+                "手动压缩暂不可用：会话需已加载、空闲且历史已同步"
             }),
             Line::from(format!("{focus} · Tab 选择 Enter 执行 · F6 编辑 · F5 刷新")),
         ])
@@ -246,4 +263,40 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         theme,
         app.focused_region() == crate::state::panels::Focus::Main,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::ThemeKind;
+    use serde_json::json;
+
+    #[test]
+    fn context_leads_with_estimates_and_preserves_unknown_and_limits() {
+        let mut app = crate::ui::testapp::open_empty(ThemeKind::Dark, "context-test", None, "high");
+        app.sessions.known.get_mut("context-test").unwrap().context = Some(
+            serde_json::from_value(json!({
+                "session_id": "context-test",
+                "coverage": {"covered_loop_count": 0, "covered_item_count": 0, "retained_item_count": 0},
+                "budget": {"estimated_history_tokens": 0, "input_budget_tokens": 32000,
+                    "trigger_tokens": 24000, "target_tokens": 16000,
+                    "max_history_items": 4096, "max_history_bytes": 2097152},
+                "automatic": {}
+            })).unwrap()
+        );
+        app.open_context();
+        let lines = rows(&app);
+        assert!(lines[0].contains("不是 Provider 实际用量"));
+        assert!(lines[1].contains("≈request context:unknown / input budget:32000"));
+        assert!(lines[2].contains("≈history tokens:0"));
+        let text = lines.join("\n");
+        assert!(text.contains("unknown / 尚无结果；不是零 usage"));
+        assert!(text.contains("loops:0 items:0 retained:0"));
+        assert!(text.contains("trigger:24000 target:16000"));
+        assert!(text.contains("runtime items:4096 bytes:2097152 within:unknown"));
+        assert!(text.find("最近手动压缩结果") < text.find("详细诊断"));
+        assert!(text.contains("自动压缩: 暂无观察记录"));
+        assert!(!text.contains("自动 preparation current: none observed"));
+        assert!(lines.last().unwrap().contains("idle 不轮询"));
+    }
 }

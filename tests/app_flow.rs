@@ -886,7 +886,7 @@ fn new_session_and_empty_created_session_keep_startup_header() {
     for expected in [
         "MINICORE  v0.3.0",
         "Coding agent TUI",
-        "Open a session — /new, Ctrl+R, or F1 for help",
+        "Choose settings below to create a session",
         "New session",
         "previous answer",
     ] {
@@ -950,7 +950,7 @@ fn new_session_and_empty_created_session_keep_startup_header() {
     for expected in [
         "MINICORE  v0.3.0",
         "Coding agent TUI",
-        "Open a session — /new, Ctrl+R, or F1 for help",
+        "Type a message to begin · / commands · @ files · F1 help",
     ] {
         assert!(
             empty_screen.contains(expected),

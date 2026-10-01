@@ -590,3 +590,20 @@ fn store_error_dark_60x16() {
     assert!(cap.contains("Unable to open") || cap.contains("unsupported"));
     snapshot(&app, "store_error_dark_60x16", 60, 16);
 }
+
+#[test]
+fn extended_slash_menu_has_purpose_selection_and_controls_at_supported_sizes() {
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    for (width, height, selected, name) in [
+        (80, 24, 0, "slash_menu_dark_80x24"),
+        (60, 16, 5, "slash_menu_dark_60x16"),
+    ] {
+        let mut app = testapp::fresh(ThemeKind::Dark);
+        app.update(AppEvent::Terminal(Event::Key(KeyEvent::new(
+            KeyCode::Char('/'),
+            KeyModifiers::NONE,
+        ))));
+        app.slash_completion.as_mut().unwrap().selected = selected;
+        snapshot(&app, name, width, height);
+    }
+}

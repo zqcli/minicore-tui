@@ -30,7 +30,7 @@ use crate::state::export::ExportSpec;
 use crate::state::selection::{
     Dock, NewSessionField, NewSessionState, SelectorKind, SelectorState, SessionConfirmChoice,
     SessionPanelAction, SessionPanelMode, SessionSelectorState, filtered_models, filtered_profiles,
-    filtered_sessions, supported_reasoning,
+    filtered_reasoning, filtered_sessions, supported_reasoning,
 };
 use crate::state::session::{
     HistoryTrigger, ManualCompactState, ResultConfirmation, SessionId, SessionView, SessionsState,
@@ -2823,7 +2823,7 @@ impl App {
                     .or_else(|| model_context.map(str::to_owned))
                     .or_else(|| self.active_view().map(|view| view.info.model.clone()))
                     .unwrap_or_default();
-                supported_reasoning(&self.catalogs.models, &model).len()
+                filtered_reasoning(&self.catalogs.models, &model, query).len()
             }
             SelectorKind::Session => filtered_sessions(&self.sessions.list, query).len(),
         }
@@ -3610,7 +3610,7 @@ impl App {
     }
 
     fn confirm_reasoning_item(&mut self) -> Vec<AppCommand> {
-        let (cursor, kind, submitting, model_context) = {
+        let (cursor, kind, submitting, model_context, query) = {
             let Some(state) = self.selector_state() else {
                 return Vec::new();
             };
@@ -3619,6 +3619,7 @@ impl App {
                 state.kind,
                 state.submitting,
                 state.model_context.clone(),
+                state.query.clone(),
             )
         };
         if kind != SelectorKind::Reasoning || submitting {
@@ -3630,7 +3631,7 @@ impl App {
             .or_else(|| model_context.clone())
             .or_else(|| self.active_view().map(|view| view.info.model.clone()))
             .unwrap_or_default();
-        let Some(selected) = supported_reasoning(&self.catalogs.models, &model)
+        let Some(selected) = filtered_reasoning(&self.catalogs.models, &model, &query)
             .get(cursor)
             .copied()
         else {
@@ -3822,6 +3823,14 @@ impl App {
             CrosstermEvent::Key(key) => {
                 let action = keymap::map(self, key);
                 self.apply_action(action)
+            }
+            CrosstermEvent::Paste(text) if self.settings_state().is_some() => {
+                if let Some(state) = self.settings_state_mut() {
+                    if !state.submitting {
+                        state.insert_text(&text);
+                    }
+                }
+                Vec::new()
             }
             CrosstermEvent::Paste(_)
                 if self.focused_region() == crate::state::panels::Focus::Main =>
@@ -4136,6 +4145,38 @@ impl App {
             SettingsBackspace => {
                 if let Some(state) = self.settings_state_mut() {
                     state.backspace();
+                }
+                Vec::new()
+            }
+            SettingsDelete => {
+                if let Some(state) = self.settings_state_mut() {
+                    state.delete();
+                }
+                Vec::new()
+            }
+            SettingsCursor(delta) => {
+                if let Some(state) = self.settings_state_mut() {
+                    state.move_cursor(delta);
+                }
+                Vec::new()
+            }
+            SettingsHome => {
+                if let Some(state) = self.settings_state_mut() {
+                    state.home();
+                }
+                Vec::new()
+            }
+            SettingsEnd => {
+                if let Some(state) = self.settings_state_mut() {
+                    state.end();
+                }
+                Vec::new()
+            }
+            SettingsNewline => {
+                if let Some(state) = self.settings_state_mut() {
+                    if state.field == crate::state::settings::SettingsField::EditorArgs {
+                        state.type_char('\n');
+                    }
                 }
                 Vec::new()
             }
@@ -4827,12 +4868,16 @@ impl App {
             }
             Err(error) => {
                 let previous = self.settings_previous.take().unwrap_or_default();
+                let draft = self.settings_state().cloned();
                 self.agent_restart_required = self
                     .settings_previous_restart_required
                     .take()
                     .unwrap_or(false);
                 self.apply_tui_config(previous.clone());
-                let mut state = crate::state::settings::SettingsState::from_config(&previous);
+                let mut state = draft.unwrap_or_else(|| {
+                    crate::state::settings::SettingsState::from_config(&previous)
+                });
+                state.submitting = false;
                 state.error = Some(format!("settings were not saved: {error}"));
                 self.dock = Dock::Settings(state);
             }
@@ -7442,6 +7487,134 @@ mod tests {
 
     fn test_app() -> App {
         App::new(PathBuf::from("/project"))
+    }
+
+    #[test]
+    fn invalid_local_commands_preserve_exact_draft_for_correction() {
+        let mut app = test_app();
+        for text in ["  /not-a-command  ", "/theme rainbow", "/tool incomplete"] {
+            app.composer.set_text(text);
+            assert!(app.submit_composer().is_empty());
+            assert_eq!(app.composer.content(), text);
+        }
+        app.composer.set_text("/theme light");
+        assert!(app.submit_composer().is_empty());
+        assert!(app.composer.is_empty());
+        assert_eq!(app.theme, crate::theme::ThemeKind::Light);
+    }
+
+    #[test]
+    fn help_from_detail_main_returns_to_same_detail_focus_and_draft() {
+        use crate::state::panels::{ContextState, Focus, MainView};
+        let mut app = test_app();
+        app.main_view = MainView::Context(Box::new(ContextState {
+            session: "synthetic".into(),
+            epoch: 1,
+            generation: 1,
+            conversation_scroll: None,
+            offset: 4,
+            action: 0,
+            scrollbar_grab: None,
+        }));
+        app.focus = Focus::Main;
+        app.composer.set_text("preserved detail draft");
+        for close in [
+            crossterm::event::KeyCode::F(1),
+            crossterm::event::KeyCode::Esc,
+        ] {
+            let key = |code| {
+                CrosstermEvent::Key(crossterm::event::KeyEvent::new(
+                    code,
+                    crossterm::event::KeyModifiers::NONE,
+                ))
+            };
+            assert!(
+                app.on_terminal(key(crossterm::event::KeyCode::F(1)))
+                    .is_empty()
+            );
+            assert!(matches!(app.dock, Dock::Help));
+            assert!(app.on_terminal(key(close)).is_empty());
+            assert!(matches!(app.dock, Dock::Composer));
+            assert!(matches!(&app.main_view, MainView::Context(state) if state.offset == 4));
+            assert_eq!(app.focus, Focus::Main);
+            assert_eq!(app.composer.content(), "preserved detail draft");
+        }
+    }
+
+    #[test]
+    fn settings_failed_save_preserves_edit_cursor_and_retries_without_agent_rpc() {
+        let mut app = test_app();
+        let original = app.tui_config.clone();
+        let mut state = crate::state::settings::SettingsState::from_config(&original);
+        state.toggle();
+        state.step(3);
+        state.insert_text("/synthetic/editor");
+        state.move_cursor(-1);
+        let expected = state.clone();
+        app.dock = Dock::Settings(state);
+        let commands = app.settings_submit();
+        assert!(matches!(
+            commands.as_slice(),
+            [AppCommand::PersistConfig(_)]
+        ));
+        let attempted = app.tui_config.clone();
+        app.on_config_finished(
+            app.config_path.clone(),
+            attempted.clone(),
+            Err("synthetic failure".into()),
+        );
+        assert_eq!(app.tui_config, original);
+        let retry = app.settings_form().unwrap();
+        assert_eq!(retry.editor_executable, expected.editor_executable);
+        assert_eq!(retry.field, expected.field);
+        assert_eq!(retry.cursor, expected.cursor);
+        assert_eq!(retry.draft.theme, expected.draft.theme);
+        assert!(!retry.submitting);
+        assert!(
+            retry
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("synthetic failure")
+        );
+        assert!(matches!(
+            app.settings_submit().as_slice(),
+            [AppCommand::PersistConfig(_)]
+        ));
+        assert_eq!(app.tui_config, attempted);
+    }
+
+    #[test]
+    fn settings_paste_is_modal_and_keeps_argument_lines() {
+        let mut app = test_app();
+        app.composer.set_text("original draft");
+        let mut state = crate::state::settings::SettingsState::from_config(&app.tui_config);
+        state.field = crate::state::settings::SettingsField::EditorArgs;
+        app.dock = Dock::Settings(state);
+        assert!(
+            app.on_terminal(CrosstermEvent::Paste("--one\r\n--two".into()))
+                .is_empty()
+        );
+        assert_eq!(app.settings_form().unwrap().editor_args, "--one\n--two");
+        assert_eq!(app.composer.content(), "original draft");
+    }
+
+    #[test]
+    fn reasoning_query_filters_confirmation_and_empty_enter_keeps_draft() {
+        let mut app = new_session_selector_fixture(false, NewSessionField::Reasoning);
+        assert!(app.confirm_dock().is_empty());
+        app.apply_action(Action::SelectorChar('z'));
+        assert_eq!(app.selector_count(SelectorKind::Reasoning, "z", None), 0);
+        assert!(app.confirm_dock().is_empty());
+        assert!(matches!(app.dock, Dock::ReasoningSelector(_)));
+        app.apply_action(Action::SelectorClear);
+        for c in "HIGH".chars() {
+            app.apply_action(Action::SelectorChar(c));
+        }
+        assert_eq!(app.selector_count(SelectorKind::Reasoning, "HIGH", None), 1);
+        assert!(app.confirm_dock().is_empty());
+        assert_eq!(app.new_session().unwrap().reasoning, Reasoning::High);
+        assert_eq!(app.new_session().unwrap().title, "unsaved title");
     }
 
     fn new_session_selector_fixture(active: bool, field: NewSessionField) -> App {

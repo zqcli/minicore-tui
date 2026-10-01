@@ -1,7 +1,7 @@
  MINICORE  v0.3.0
 
  Coding agent TUI
- q / Ctrl+C to quit
+ Ctrl+C: clear / quit · F1 help
 
  Starting agent…
 
@@ -19,6 +19,6 @@
  │                                                                             │
  │                                                                             │
  │                                                                             │
- │Esc closes this panel                                                        │
+ │↑↓/PgUp/PgDn scroll · Esc close · 1–4/4                                      │
  └─────────────────────────────────────────────────────────────────────────────┘
  starting

@@ -1,9 +1,9 @@
  MINICORE  v0.3.0
 
  Coding agent TUI
- q / Ctrl+C to quit
+ Ctrl+C: clear / quit · F1 help
 
- Open a session — /new, Ctrl+R, or F1 for help
+ Type a message to begin · / commands · @ files · F1 help
 
 
 
@@ -19,6 +19,6 @@
  │                                                                             │
  │                                                                             │
  │                                                                             │
- │(1/1)                                                                        │
+ │(1/1) ↑↓/PgUp/PgDn · Enter select · Esc back · type to filter                │
  └─────────────────────────────────────────────────────────────────────────────┘
  ▸ project@git? · deep · high · ● ready                                    ctx ?

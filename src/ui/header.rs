@@ -81,7 +81,7 @@ pub fn lines(theme: &Theme, app: &App) -> Vec<Line<'static>> {
         ]),
         Line::default(),
         Line::styled("Coding agent TUI", Style::new().fg(theme.muted)),
-        Line::styled("q / Ctrl+C to quit", Style::new().fg(theme.dim)),
+        Line::styled("Ctrl+C: clear / quit · F1 help", Style::new().fg(theme.dim)),
         Line::default(),
     ];
     let status = match app.connection {
@@ -91,7 +91,13 @@ pub fn lines(theme: &Theme, app: &App) -> Vec<Line<'static>> {
         }
         ConnectionState::Failed(_) => Span::styled("Disconnected", Style::new().fg(theme.error)),
         ConnectionState::Ready => Span::styled(
-            "Open a session — /new, Ctrl+R, or F1 for help",
+            if app.new_session().is_some() {
+                "Choose settings below to create a session"
+            } else if app.sessions.active.is_some() {
+                "Type a message to begin · / commands · @ files · F1 help"
+            } else {
+                "Open a session — /new, Ctrl+R, or F1 for help"
+            },
             Style::new().fg(theme.muted),
         ),
     };
