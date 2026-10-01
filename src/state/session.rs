@@ -695,6 +695,9 @@ pub struct ScrollState {
     pub follow_tail: bool,
     pub new_content: bool,
     pub anchor: Option<crate::state::view::ScrollAnchor>,
+    /// Exact prompt chosen by navigation, independent of the first visible
+    /// reflow anchor. Direct scrolling clears this cursor.
+    pub prompt_cursor: Option<usize>,
 }
 
 impl Default for ScrollState {
@@ -704,6 +707,7 @@ impl Default for ScrollState {
             follow_tail: true,
             new_content: false,
             anchor: None,
+            prompt_cursor: None,
         }
     }
 }

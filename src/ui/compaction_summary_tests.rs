@@ -27,6 +27,7 @@ fn summary_layout(source: &str, folded: bool) -> Arc<SectionLayout> {
         0,
         Some(source),
         Some(&breaks),
+        None,
     )
     .unwrap()
 }

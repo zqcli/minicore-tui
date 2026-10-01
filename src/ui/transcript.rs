@@ -819,6 +819,7 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                         ordinal.saturating_mul(1_000_000) + section_offset,
                         Some(source_hint.as_str()),
                         None,
+                        None,
                     ) {
                         if !push_layout_section(
                             layout,
@@ -872,6 +873,7 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                     ordinal.saturating_mul(1_000_000) + section_offset,
                     Some(input.source.as_ref()),
                     rendered.hard_breaks.as_deref(),
+                    rendered.copy_cells.as_deref(),
                 ) {
                     if !push_layout_section(
                         layout,
@@ -929,15 +931,29 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
             }
             continue;
         }
-        let (lines, links, breaks) = if let TranscriptBlock::Summary(summary) = block.as_ref() {
-            compaction_summary_lines(theme, width as usize, &summary.content, folded)
-        } else {
-            (
-                durable_block_lines(theme, view, block, width as usize, reasoning_visible),
-                Vec::new(),
-                Vec::new(),
-            )
-        };
+        let (lines, links, breaks, copies) =
+            if let TranscriptBlock::Summary(summary) = block.as_ref() {
+                let (lines, links, breaks) =
+                    compaction_summary_lines(theme, width as usize, &summary.content, folded);
+                (lines, links, breaks, Vec::new())
+            } else if let TranscriptBlock::User(user) = block.as_ref()
+                && user.text.len() <= crate::limits::LAYOUT_SECTION_BYTES
+            {
+                let rendered = durable_user_rows(theme, view, user, width as usize);
+                (
+                    rendered.lines,
+                    rendered.link_cells,
+                    rendered.hard_breaks,
+                    rendered.copy_cells,
+                )
+            } else {
+                (
+                    durable_block_lines(theme, view, block, width as usize, reasoning_visible),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+            };
         let collapsible = matches!(
             block.as_ref(),
             TranscriptBlock::Tool(_) | TranscriptBlock::Summary(_)
@@ -951,6 +967,7 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
             ordinal.saturating_mul(1_000_000),
             block_source(block),
             (!breaks.is_empty()).then_some(breaks.as_slice()),
+            (!copies.is_empty()).then_some(copies.as_slice()),
         ) {
             if !push_layout_section(layout, &mut sections, &mut pending_batch, &mut batch_sink) {
                 return None;
@@ -1042,6 +1059,7 @@ fn make_section_layout(
     order: usize,
     source_hint: Option<&str>,
     rendered_breaks: Option<&[bool]>,
+    rendered_copy_cells: Option<&[Option<crate::markdown::CopyCells>]>,
 ) -> Option<Arc<SectionLayout>> {
     if lines.is_empty() {
         return None;
@@ -1060,11 +1078,27 @@ fn make_section_layout(
     };
     let row_texts = (0..lines.len())
         .map(|row| {
-            let text = section_copy_text(&range, row, &lines, range.content_columns.start);
-            (
-                text.clone(),
-                !copyable || section_copy_is_decorative(&range, row, &text),
-            )
+            let copy = rendered_copy_cells
+                .and_then(|rows| rows.get(row))
+                .and_then(Option::as_ref);
+            let text = match copy {
+                Some(copy) if copy.decorative => String::new(),
+                Some(copy) => slice_cell_range(
+                    &line_copy_text(&lines[row], 0),
+                    copy.columns.start,
+                    copy.columns.end,
+                ),
+                None if rendered_copy_cells.is_some() => {
+                    line_copy_text(&lines[row], range.content_columns.start)
+                }
+                None => section_copy_text(&range, row, &lines, range.content_columns.start),
+            };
+            let decorative = !copyable
+                || copy.is_some_and(|copy| copy.decorative)
+                || (text.is_empty() && (row == 0 || row + 1 == lines.len()))
+                || (rendered_copy_cells.is_none()
+                    && section_copy_is_decorative(&range, row, &text));
+            (text, decorative)
         })
         .collect::<Vec<_>>();
     let source: Arc<str> = source_hint.map(Arc::<str>::from).unwrap_or_else(|| {
@@ -1122,7 +1156,13 @@ fn make_section_layout(
         .enumerate()
         .map(|(row, (_text, decorative))| CopyRange {
             row,
-            columns: range.content_columns.clone(),
+            columns: rendered_copy_cells
+                .and_then(|rows| rows.get(row))
+                .and_then(Option::as_ref)
+                .map_or_else(
+                    || range.content_columns.clone(),
+                    |copy| copy.columns.clone(),
+                ),
             source: Arc::clone(&copy_source),
             source_offset: logical_ranges.get(row).map_or(0, |range| range.start),
             source_range: copy_ranges_in_source.get(row).cloned().unwrap_or(0..0),
@@ -1485,6 +1525,31 @@ fn content_columns_for_kind(kind: &SectionKind, width: usize) -> std::ops::Range
     start..width
 }
 
+fn durable_user_rows<V: DurableLayoutSource>(
+    theme: &Theme,
+    view: &V,
+    user_block: &crate::state::transcript::UserBlock,
+    width: usize,
+) -> crate::markdown::RenderedMarkdown {
+    user::lines_with_timestamp_metadata(
+        theme,
+        user_block,
+        width,
+        user_block
+            .index
+            .and_then(|index| view.user_timestamps().get(&index).map(String::as_str))
+            .or_else(|| {
+                user_block.loop_id.as_ref().and_then(|loop_id| {
+                    view.live_user_timestamp()
+                        .filter(|_| view.live_user_loop_id() == Some(loop_id.as_str()))
+                })
+            }),
+        user_block.pending
+            && !view.live_user_time_accepted()
+            && view.live_user_timestamp().is_none(),
+    )
+}
+
 fn durable_block_lines<V: DurableLayoutSource>(
     theme: &Theme,
     view: &V,
@@ -1518,23 +1583,9 @@ fn durable_block_lines<V: DurableLayoutSource>(
         );
     }
     match block {
-        TranscriptBlock::User(user_block) => user::lines_with_timestamp(
-            theme,
-            user_block,
-            width,
-            user_block
-                .index
-                .and_then(|index| view.user_timestamps().get(&index).map(String::as_str))
-                .or_else(|| {
-                    user_block.loop_id.as_ref().and_then(|loop_id| {
-                        view.live_user_timestamp()
-                            .filter(|_| view.live_user_loop_id() == Some(loop_id.as_str()))
-                    })
-                }),
-            user_block.pending
-                && !view.live_user_time_accepted()
-                && view.live_user_timestamp().is_none(),
-        ),
+        TranscriptBlock::User(user_block) => {
+            durable_user_rows(theme, view, user_block, width).lines
+        }
         TranscriptBlock::Assistant(assistant_block) => assistant::lines_with_folds(
             theme,
             assistant_block,
@@ -1824,6 +1875,7 @@ fn build_live_tail(
                 durable_tool_keys,
                 &mut lines,
                 live_sections,
+                &mut link_rows,
             );
             while link_rows.len() < lines.len() {
                 link_rows.push(Vec::new());
@@ -1913,6 +1965,7 @@ impl LiveRenderContext<'_> {
         &self,
         out: &mut Vec<Line<'static>>,
         ranges: &mut Option<&mut Vec<SectionRange>>,
+        link_rows: &mut Vec<LinkRow>,
         text: &str,
         ordinal: u32,
         in_hidden_run: bool,
@@ -1924,6 +1977,17 @@ impl LiveRenderContext<'_> {
             .get(&key)
             .map(FoldOverride::expanded);
         let raw_lines = text.trim().split('\n').count();
+        let rendered = reasoning::reasoning_with_metadata(
+            self.theme,
+            text,
+            self.width,
+            self.reasoning_visible,
+            in_hidden_run,
+            expanded,
+        );
+        let before = out.len();
+        let rendered_len = rendered.lines.len();
+        link_rows.resize(before, Vec::new());
         append_live_section(
             out,
             ranges,
@@ -1937,18 +2001,13 @@ impl LiveRenderContext<'_> {
                 tool_call_id: None,
                 history_index: None,
             },
-            reasoning::reasoning_lines_with_fold(
-                self.theme,
-                text,
-                self.width,
-                self.reasoning_visible,
-                in_hidden_run,
-                expanded,
-            ),
+            rendered.lines,
             self.width,
             self.reasoning_visible && raw_lines > 3,
             self.reasoning_visible && raw_lines > 3 && !expanded.unwrap_or(false),
         );
+        let shared_blank = rendered_len.saturating_sub(out.len().saturating_sub(before));
+        link_rows.extend(rendered.link_cells.into_iter().skip(shared_blank));
     }
 
     fn append_text(
@@ -2063,6 +2122,7 @@ fn live_section(
     durable_tool_keys: Option<&HashSet<ToolKey>>,
     out: &mut Vec<Line<'static>>,
     ranges: Option<&mut Vec<SectionRange>>,
+    link_rows: &mut Vec<LinkRow>,
 ) {
     let mut ranges = ranges;
     let session_id = view.info.session_id.clone();
@@ -2094,6 +2154,7 @@ fn live_section(
                     context.append_reasoning(
                         out,
                         &mut ranges,
+                        link_rows,
                         text,
                         reasoning_ordinal,
                         in_hidden_run,
@@ -2455,6 +2516,221 @@ mod source_map_tests {
     }
 
     #[test]
+    fn copied_fenced_code_excludes_frame_and_padding() {
+        let theme = crate::theme::Theme::dark();
+        let input = assistant::AssistantSectionInput {
+            source: Arc::from("Before\n\n```python\n  print(\"中文\")\n```\nAfter"),
+            kind: SectionKind::AssistantText,
+            ordinal: 0,
+            collapsible: false,
+            folded: false,
+            tool_call: None,
+            in_hidden_run: false,
+        };
+        let rendered = assistant::render_section(&theme, &input, 24, true);
+        let layout = make_section_layout(
+            key(SectionKind::AssistantText),
+            rendered.lines,
+            rendered.link_cells,
+            false,
+            false,
+            0,
+            Some(input.source.as_ref()),
+            rendered.hard_breaks.as_deref(),
+            rendered.copy_cells.as_deref(),
+        )
+        .unwrap();
+        assert_eq!(copied_text(&layout), "Before\n\n  print(\"中文\")\n\nAfter");
+    }
+
+    #[test]
+    fn copied_code_keeps_literal_frames_spaces_and_wide_soft_wrapped_source() {
+        let theme = crate::theme::Theme::dark();
+        let code = format!("  │literal╭─╮  \n{}\n\n  end  ", "中文🙂abc".repeat(12));
+        let input = assistant::AssistantSectionInput {
+            source: Arc::from(format!("```\n{code}\n```")),
+            kind: SectionKind::AssistantText,
+            ordinal: 0,
+            collapsible: false,
+            folded: false,
+            tool_call: None,
+            in_hidden_run: false,
+        };
+        let rendered = assistant::render_section(&theme, &input, 24, true);
+        let layout = make_section_layout(
+            key(SectionKind::AssistantText),
+            rendered.lines,
+            rendered.link_cells,
+            false,
+            false,
+            0,
+            Some(input.source.as_ref()),
+            rendered.hard_breaks.as_deref(),
+            rendered.copy_cells.as_deref(),
+        )
+        .unwrap();
+        assert_eq!(copied_text(&layout), code);
+        let first = layout
+            .copy_ranges
+            .iter()
+            .find(|copy| !copy.decorative)
+            .unwrap();
+        assert_eq!(
+            first.columns.start, 2,
+            "selection begins inside rail and code frame"
+        );
+    }
+
+    #[test]
+    fn copied_nested_code_keeps_only_renderer_owned_content_cells() {
+        let theme = crate::theme::Theme::dark();
+        let input = assistant::AssistantSectionInput {
+            source: Arc::from("- item\n\n  ```\n  code│  \n  ```"),
+            kind: SectionKind::AssistantText,
+            ordinal: 0,
+            collapsible: false,
+            folded: false,
+            tool_call: None,
+            in_hidden_run: false,
+        };
+        let rendered = assistant::render_section(&theme, &input, 24, true);
+        let layout = make_section_layout(
+            key(SectionKind::AssistantText),
+            rendered.lines,
+            rendered.link_cells,
+            false,
+            false,
+            0,
+            Some(input.source.as_ref()),
+            rendered.hard_breaks.as_deref(),
+            rendered.copy_cells.as_deref(),
+        )
+        .unwrap();
+        assert_eq!(copied_text(&layout), "• item\n\ncode│  ");
+    }
+
+    #[test]
+    fn user_copy_source_retains_selectable_timestamp() {
+        let theme = crate::theme::Theme::dark();
+        let block = crate::state::transcript::UserBlock {
+            index: Some(0),
+            loop_id: Some("loop".into()),
+            kind: crate::protocol::UserMessageKindWire::Prompt,
+            text: "Synthetic user prompt 中文.".into(),
+            pending: false,
+        };
+        let lines =
+            user::lines_with_timestamp(&theme, &block, 80, Some("2026-10-01T14:00:00Z"), false);
+        let layout = make_section_layout(
+            key(SectionKind::User),
+            lines,
+            Vec::new(),
+            false,
+            false,
+            0,
+            Some(&block.text),
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(copied_text(&layout).starts_with(&block.text));
+        assert!(copied_text(&layout).contains("10/1/2026"));
+    }
+
+    #[test]
+    fn pending_user_copy_uses_card_owned_timestamp_and_code_geometry() {
+        let theme = crate::theme::Theme::dark();
+        let block = crate::state::transcript::UserBlock {
+            index: None,
+            loop_id: Some("loop".into()),
+            kind: crate::protocol::UserMessageKindWire::Prompt,
+            text: "Pending prompt\n\n```\n  │literal  \n```".into(),
+            pending: true,
+        };
+        let rendered = user::lines_with_timestamp_metadata(&theme, &block, 80, None, true);
+        let mut pending_key = key(SectionKind::User);
+        pending_key.section.history_index = None;
+        let layout = make_section_layout(
+            pending_key,
+            rendered.lines,
+            rendered.link_cells,
+            false,
+            false,
+            0,
+            Some(&block.text),
+            Some(&rendered.hard_breaks),
+            Some(&rendered.copy_cells),
+        )
+        .unwrap();
+        assert_eq!(
+            copied_text(&layout),
+            "Pending prompt\n\n  │literal  \ntime pending"
+        );
+    }
+
+    #[test]
+    fn collapsed_reasoning_keeps_visible_link_hit_cells() {
+        let theme = crate::theme::Theme::dark();
+        let input = assistant::AssistantSectionInput {
+            source: Arc::from("[Local fixture](https://example.test)\none\ntwo\nthree\nfour"),
+            kind: SectionKind::Thinking,
+            ordinal: 0,
+            collapsible: true,
+            folded: true,
+            tool_call: None,
+            in_hidden_run: false,
+        };
+        let rendered = assistant::render_section(&theme, &input, 80, true);
+        assert!(
+            !rendered.link_cells[1].is_empty(),
+            "visible reasoning link must retain hit geometry"
+        );
+        assert!(
+            rendered.link_cells[1]
+                .iter()
+                .any(|range| range.contains(&2))
+        );
+        assert!(
+            rendered.link_cells[4].is_empty(),
+            "fold hint has no link target"
+        );
+    }
+
+    #[test]
+    fn live_reasoning_link_cells_follow_shared_blank_and_one_parse() {
+        let app =
+            crate::ui::testapp::open_empty(crate::theme::ThemeKind::Dark, "ses_1", None, "high");
+        let theme = crate::theme::Theme::dark();
+        let context = LiveRenderContext {
+            theme: &theme,
+            view: app.active_view().unwrap(),
+            session_id: "ses_1",
+            loop_id: "loop",
+            request_index: 0,
+            width: 80,
+            reasoning_visible: true,
+            durable_tool_keys: None,
+        };
+        let mut lines = vec![Line::from("previous"), Line::default()];
+        let mut links = vec![Vec::new(), Vec::new()];
+        let mut ranges = Vec::new();
+        crate::markdown::reset_parse_count();
+        context.append_reasoning(
+            &mut lines,
+            &mut Some(&mut ranges),
+            &mut links,
+            "[Local fixture](https://example.test)\none\ntwo\nthree\nfour",
+            0,
+            false,
+        );
+        assert_eq!(crate::markdown::parse_count(), 1);
+        assert_eq!(lines.len(), links.len());
+        assert!(lines[2].to_string().contains("Local fixture"));
+        assert!(links[2].iter().any(|range| range.contains(&2)));
+        assert!(links[5].is_empty(), "fold hint is not linked");
+    }
+
+    #[test]
     fn soft_wraps_share_source_without_inventing_a_hard_break() {
         let lines = crate::markdown::wrap_plain("alpha beta gamma", 6, Style::default());
         let layout = make_section_layout(
@@ -2465,6 +2741,7 @@ mod source_map_tests {
             false,
             0,
             Some("alpha beta gamma"),
+            None,
             None,
         )
         .expect("wrapped section");
@@ -2507,6 +2784,7 @@ mod source_map_tests {
             0,
             Some(source),
             None,
+            None,
         )
         .expect("markdown section");
         assert_eq!(layout.source_map.source.as_ref(), source);
@@ -2548,6 +2826,7 @@ mod source_map_tests {
             0,
             Some(source.as_str()),
             Some(&breaks),
+            None,
         )
         .expect("markdown section");
         assert_eq!(copied_text(&layout), source);
@@ -2565,6 +2844,7 @@ mod source_map_tests {
             false,
             0,
             Some(source),
+            None,
             None,
         )
         .expect("grapheme section");
@@ -2595,6 +2875,7 @@ mod source_map_tests {
             0,
             Some(source),
             None,
+            None,
         )
         .expect("wide/code section");
         let copied = copied_text(&layout);
@@ -2623,6 +2904,7 @@ mod source_map_tests {
             0,
             Some(source),
             None,
+            None,
         )
         .expect("link section");
         let copied = copied_text(&layout);
@@ -2647,6 +2929,7 @@ mod source_map_tests {
             false,
             false,
             0,
+            None,
             None,
             None,
         )

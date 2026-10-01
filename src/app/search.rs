@@ -638,6 +638,21 @@ impl App {
     /// The item index the viewport currently sits on, used as the relative
     /// origin for `/prev` and `/next`.
     fn current_prompt_position(&self, session_id: &SessionId) -> Option<usize> {
+        // A prompt jump intentionally leaves a few context rows above it.
+        // Reflow captures those rows as the scroll anchor; they must not make
+        // the next navigation command select the same prompt again.
+        if let Some(view) = self.sessions.known.get(session_id) {
+            if let Some(index) = view
+                .scroll
+                .prompt_cursor
+                .filter(|_| !view.scroll.follow_tail)
+            {
+                if matches!(view.transcript.window.item(index).map(Arc::as_ref), Some(TranscriptBlock::User(user)) if user.kind == UserMessageKindWire::Prompt)
+                {
+                    return Some(index);
+                }
+            }
+        }
         // The scroll anchor is the durable position; the visible window is
         // only a refinement of it.
         let anchor = self
@@ -677,6 +692,9 @@ impl App {
         };
         view.scroll.follow_tail = false;
         view.scroll.new_content = false;
+        view.scroll.prompt_cursor = (target.source == SearchSource::Prompt)
+            .then_some(target.index)
+            .flatten();
         view.scroll.anchor = Some(ScrollAnchor {
             section_id,
             source_offset: target.source_offset,
@@ -1438,7 +1456,10 @@ impl App {
         let Some(view) = self.sessions.known.get(session_id) else {
             return Vec::new();
         };
-        if view.read_page.is_some() || self.history_decode_pending(session_id) {
+        if view.read_page.is_some()
+            || self.history_decode_pending(session_id)
+            || self.pending_history(session_id)
+        {
             // The running chain will call back through
             // `on_search_history_progress`; the pending jump is kept.
             return Vec::new();
@@ -1451,7 +1472,11 @@ impl App {
             self.pending_search_jump = None;
             return Vec::new();
         }
-        let attempts = self.search_jump_attempts.saturating_add(1);
+        let attempts = if self.pending_search_jump.is_some() {
+            self.search_jump_attempts.saturating_add(1)
+        } else {
+            0
+        };
         self.search_jump_attempts = attempts;
         if attempts > 4 {
             self.pending_search_jump = None;

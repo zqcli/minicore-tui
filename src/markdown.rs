@@ -26,6 +26,39 @@ thread_local! {
     static MARKDOWN_PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
 }
 
+/// Renderer-owned copy geometry for a decorated row. Bounds are display cells,
+/// not bytes; `decorative` rows have no source content (for example a code frame).
+#[derive(Clone, Debug)]
+pub struct CopyCells {
+    pub columns: std::ops::Range<usize>,
+    pub decorative: bool,
+}
+
+impl CopyCells {
+    pub fn shifted(mut self, offset: usize) -> Self {
+        self.columns = self.columns.start + offset..self.columns.end + offset;
+        self
+    }
+
+    pub fn decoration() -> Self {
+        Self {
+            columns: 0..0,
+            decorative: true,
+        }
+    }
+}
+
+/// Text and interaction facts from one Markdown rendering pass.
+#[derive(Default)]
+pub struct RenderedMarkdown {
+    pub lines: Vec<Line<'static>>,
+    pub link_cells: Vec<Vec<std::ops::Range<usize>>>,
+    pub hard_breaks: Vec<bool>,
+    /// `None` means the whole ordinary content row; explicit bounds remove
+    /// renderer-owned framing without guessing from text or colors.
+    pub copy_cells: Vec<Option<CopyCells>>,
+}
+
 /// One styled inline run.
 #[derive(Clone)]
 struct Seg {
@@ -446,10 +479,16 @@ impl<'a> MarkdownRenderer<'a> {
         Vec<Vec<std::ops::Range<usize>>>,
         Vec<bool>,
     ) {
+        let rendered = self.render_with_metadata(text, width, style);
+        (rendered.lines, rendered.link_cells, rendered.hard_breaks)
+    }
+
+    pub fn render_with_metadata(&self, text: &str, width: usize, style: Style) -> RenderedMarkdown {
         let blocks = self.parse(text, width);
         let mut lines = Vec::new();
         let mut link_cells = Vec::new();
         let mut hard_breaks = Vec::new();
+        let mut copy_cells = Vec::new();
         let mut first = true;
         for block in &blocks {
             if !first {
@@ -458,6 +497,7 @@ impl<'a> MarkdownRenderer<'a> {
                 lines.push(Line::default());
                 link_cells.push(Vec::new());
                 hard_breaks.push(true);
+                copy_cells.push(None);
             }
             first = false;
             let start = lines.len();
@@ -468,6 +508,7 @@ impl<'a> MarkdownRenderer<'a> {
                 &mut lines,
                 &mut link_cells,
                 &mut hard_breaks,
+                &mut copy_cells,
             );
             hard_breaks.resize(lines.len(), false);
             if lines.len() > start {
@@ -476,12 +517,17 @@ impl<'a> MarkdownRenderer<'a> {
                 hard_breaks[lines.len() - 1] = true;
             }
         }
-        (lines, link_cells, hard_breaks)
+        RenderedMarkdown {
+            lines,
+            link_cells,
+            hard_breaks,
+            copy_cells,
+        }
     }
 
     fn block_lines(&self, block: &Block, width: usize, base: Style, out: &mut Vec<Line<'static>>) {
         let mut breaks = Vec::new();
-        self.block_lines_breaks(block, width, base, out, &mut breaks);
+        self.block_lines_breaks(block, width, base, out, &mut breaks, &mut Vec::new());
     }
 
     fn block_lines_breaks(
@@ -491,7 +537,9 @@ impl<'a> MarkdownRenderer<'a> {
         base: Style,
         out: &mut Vec<Line<'static>>,
         hard_breaks: &mut Vec<bool>,
+        copy_cells: &mut Vec<Option<CopyCells>>,
     ) {
+        copy_cells.resize(out.len(), None);
         match block {
             Block::Plain(text) => {
                 // Unlike Markdown soft breaks, every source newline (including
@@ -539,7 +587,7 @@ impl<'a> MarkdownRenderer<'a> {
                     hard_breaks.push(hard);
                 }
             }
-            Block::Code { text } => self.code_lines(text, width, out, hard_breaks),
+            Block::Code { text } => self.code_lines(text, width, out, hard_breaks, copy_cells),
             Block::List {
                 ordered,
                 start,
@@ -562,7 +610,7 @@ impl<'a> MarkdownRenderer<'a> {
                             out.push(Line::default());
                             hard_breaks.push(true);
                         }
-                        self.block_lines_breaks(block, inner, base, out, hard_breaks);
+                        self.block_lines_breaks(block, inner, base, out, hard_breaks, copy_cells);
                         if let Some(hard) = hard_breaks.last_mut() {
                             *hard = true;
                         }
@@ -574,6 +622,10 @@ impl<'a> MarkdownRenderer<'a> {
                     let bullet = Span::styled(marker, bullet_color);
                     let indent = Span::styled(" ".repeat(marker_w), Style::new());
                     for (line_index, line) in out[item_start..].iter_mut().enumerate() {
+                        if let Some(Some(copy)) = copy_cells.get_mut(item_start + line_index) {
+                            copy.columns =
+                                copy.columns.start + marker_w..copy.columns.end + marker_w;
+                        }
                         if line_index == 0 {
                             line.spans.insert(0, bullet.clone());
                         } else if !line.spans.is_empty() {
@@ -590,8 +642,10 @@ impl<'a> MarkdownRenderer<'a> {
                 hard_breaks.push(false);
             }
         }
+        copy_cells.resize(out.len(), None);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn block_lines_with_links(
         &self,
         block: &Block,
@@ -600,18 +654,21 @@ impl<'a> MarkdownRenderer<'a> {
         out: &mut Vec<Line<'static>>,
         link_cells: &mut Vec<Vec<std::ops::Range<usize>>>,
         hard_breaks: &mut Vec<bool>,
+        copy_cells: &mut Vec<Option<CopyCells>>,
     ) {
+        copy_cells.resize(out.len(), None);
         match block {
             Block::Paragraph(segs) => {
                 wrap_segments_links(segs, width, base, out, link_cells, hard_breaks);
             }
             _ => {
-                self.block_lines_breaks(block, width, base, out, hard_breaks);
+                self.block_lines_breaks(block, width, base, out, hard_breaks, copy_cells);
                 while link_cells.len() < out.len() {
                     link_cells.push(Vec::new());
                 }
             }
         }
+        copy_cells.resize(out.len(), None);
     }
 
     /// A single-color framed code block: border in `md_code_border`, content
@@ -623,6 +680,7 @@ impl<'a> MarkdownRenderer<'a> {
         width: usize,
         out: &mut Vec<Line<'static>>,
         hard_breaks: &mut Vec<bool>,
+        copy_cells: &mut Vec<Option<CopyCells>>,
     ) {
         let border = Style::new().fg(self.theme.md_code_border);
         let content = Style::new().fg(self.theme.md_code_block);
@@ -649,6 +707,7 @@ impl<'a> MarkdownRenderer<'a> {
             Span::styled("╮", border),
         ]));
         hard_breaks.push(false);
+        copy_cells.push(Some(CopyCells::decoration()));
         for raw in text.lines() {
             let chunks = chunk_line(raw, inner);
             let chunks = if chunks.is_empty() {
@@ -658,7 +717,12 @@ impl<'a> MarkdownRenderer<'a> {
             };
             let last = chunks.len() - 1;
             for (index, chunk) in chunks.into_iter().enumerate() {
-                let pad = " ".repeat(inner.saturating_sub(UnicodeWidthStr::width(chunk.as_str())));
+                let source_width = UnicodeWidthStr::width(chunk.as_str());
+                copy_cells.push(Some(CopyCells {
+                    columns: 1..1 + source_width,
+                    decorative: false,
+                }));
+                let pad = " ".repeat(inner.saturating_sub(source_width));
                 out.push(Line::from(vec![
                     Span::styled("│", border),
                     Span::styled(format!("{chunk}{pad}"), content),
@@ -673,6 +737,7 @@ impl<'a> MarkdownRenderer<'a> {
             Span::styled("╯", border),
         ]));
         hard_breaks.push(false);
+        copy_cells.push(Some(CopyCells::decoration()));
     }
 }
 

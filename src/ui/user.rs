@@ -6,7 +6,7 @@ use time::OffsetDateTime;
 use time::UtcOffset;
 use time::format_description::well_known::Rfc3339;
 
-use crate::markdown::MarkdownRenderer;
+use crate::markdown::{CopyCells, MarkdownRenderer, RenderedMarkdown};
 use crate::protocol::UserMessageKindWire;
 use crate::state::transcript::UserBlock;
 use crate::theme::Theme;
@@ -23,45 +23,72 @@ pub fn lines_with_timestamp(
     timestamp: Option<&str>,
     timestamp_pending: bool,
 ) -> Vec<Line<'static>> {
+    lines_with_timestamp_metadata(theme, block, width, timestamp, timestamp_pending).lines
+}
+
+pub fn lines_with_timestamp_metadata(
+    theme: &Theme,
+    block: &UserBlock,
+    width: usize,
+    timestamp: Option<&str>,
+    timestamp_pending: bool,
+) -> RenderedMarkdown {
     if block.text.trim().is_empty() {
-        return Vec::new();
+        return RenderedMarkdown::default();
     }
-
     if block.kind == UserMessageKindWire::Steering {
-        return steering_lines(theme, &block.text, width, timestamp, timestamp_pending);
+        let lines = steering_lines(theme, &block.text, width, timestamp, timestamp_pending);
+        let len = lines.len();
+        let copy_cells = vec![None; len];
+        return RenderedMarkdown {
+            lines,
+            copy_cells,
+            ..RenderedMarkdown::default()
+        };
     }
-
-    let mut out = vec![rail::surface_row(
-        width,
-        rail::user_colors(theme),
-        rail::SURFACE_CONTENT_START,
-        Line::default(),
-    )];
-    let base = Style::new().fg(theme.text);
-    let inner = rail::content_width(width, rail::SURFACE_CONTENT_START);
-    let renderer = MarkdownRenderer::new(theme);
-    for line in renderer.render(&block.text, inner, base) {
-        out.push(rail::surface_row(
-            width,
-            rail::user_colors(theme),
-            rail::SURFACE_CONTENT_START,
-            line,
-        ));
+    let inset = rail::SURFACE_CONTENT_START;
+    let mut rendered = MarkdownRenderer::new(theme).render_with_metadata(
+        &block.text,
+        rail::content_width(width, inset),
+        Style::new().fg(theme.text),
+    );
+    rendered.lines = rendered
+        .lines
+        .into_iter()
+        .map(|line| rail::surface_row(width, rail::user_colors(theme), inset, line))
+        .collect();
+    for row in &mut rendered.link_cells {
+        for range in row {
+            *range = range.start + inset..range.end + inset;
+        }
     }
-    let timestamp = display_timestamp(timestamp, timestamp_pending);
-    out.push(rail::surface_row(
+    for copy in rendered.copy_cells.iter_mut().flatten() {
+        copy.columns = copy.columns.start + inset..copy.columns.end + inset;
+    }
+    let blank = || rail::surface_row(width, rail::user_colors(theme), inset, Line::default());
+    rendered.lines.insert(0, blank());
+    rendered.link_cells.insert(0, Vec::new());
+    rendered.hard_breaks.insert(0, false);
+    rendered.copy_cells.insert(0, Some(CopyCells::decoration()));
+    rendered.lines.push(rail::surface_row(
         width,
         rail::user_colors(theme),
-        rail::SURFACE_CONTENT_START,
-        Line::from(Span::styled(timestamp, Style::new().fg(theme.tool_muted))),
+        inset,
+        Line::from(Span::styled(
+            display_timestamp(timestamp, timestamp_pending),
+            Style::new().fg(theme.tool_muted),
+        )),
     ));
-    out.push(rail::surface_row(
-        width,
-        rail::user_colors(theme),
-        rail::SURFACE_CONTENT_START,
-        Line::default(),
-    ));
-    out
+    rendered.lines.push(blank());
+    // A timestamp is selectable visible text (Rail selection contract),
+    // but whole-message source-copy omits this owned penultimate row.
+    rendered.link_cells.push(Vec::new());
+    rendered.hard_breaks.push(true);
+    rendered.copy_cells.push(None);
+    rendered.link_cells.push(Vec::new());
+    rendered.hard_breaks.push(false);
+    rendered.copy_cells.push(Some(CopyCells::decoration()));
+    rendered
 }
 
 pub fn steering_lines(

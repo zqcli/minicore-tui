@@ -140,6 +140,28 @@ impl TranscriptState {
         Arc::make_mut(&mut self.blocks)
     }
 
+    /// Installs an authoritative item in session-global order. Earlier window
+    /// reads can arrive after the tail; their arrival order is not chronology.
+    /// Pending local cards stay after indexed history, and a reread replaces
+    /// the indexed owner rather than adding a duplicate.
+    pub(crate) fn insert_history_owner(&mut self, owner: Arc<TranscriptBlock>) {
+        let index = owner.index().expect("durable history item index");
+        let blocks = self.blocks_mut();
+        if blocks
+            .last()
+            .is_none_or(|block| block.index().is_some_and(|last| last < index))
+        {
+            blocks.push(owner);
+            return;
+        }
+        blocks.retain(|block| block.index() != Some(index));
+        let position = blocks
+            .iter()
+            .position(|block| block.index().is_none_or(|other| other > index))
+            .unwrap_or(blocks.len());
+        blocks.insert(position, owner);
+    }
+
     /// Appends one block without copying any existing block text.
     pub fn push_block(&mut self, block: TranscriptBlock) {
         Arc::make_mut(&mut self.blocks).push(Arc::new(block));

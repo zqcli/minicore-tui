@@ -43,7 +43,28 @@ pub fn visible(app: &App) -> bool {
     })
 }
 
+/// A tail-opened history keeps its unloaded prefix explicit. This is one
+/// real row, not an estimate of how many screen rows that prefix would use.
+pub(crate) fn earlier_history_start(app: &App) -> Option<usize> {
+    app.active_view()?
+        .transcript
+        .window
+        .loaded_ranges()
+        .first()
+        .map(|range| range.start)
+        .filter(|start| *start > 0)
+}
+
 pub fn lines(theme: &Theme, app: &App) -> Vec<Line<'static>> {
+    if earlier_history_start(app).is_some() {
+        return vec![
+            Line::styled(
+                "Earlier messages not loaded · Load earlier (scroll up or click)",
+                Style::new().fg(theme.accent),
+            ),
+            Line::default(),
+        ];
+    }
     if !visible(app) {
         return Vec::new();
     }

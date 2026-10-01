@@ -6,7 +6,7 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 
-use crate::markdown::MarkdownRenderer;
+use crate::markdown::{CopyCells, MarkdownRenderer, RenderedMarkdown};
 use crate::theme::Theme;
 
 /// One part of a durable assistant. `already_hidden_run` is true when the
@@ -30,53 +30,69 @@ pub fn reasoning_lines_with_fold(
     already_hidden_run: bool,
     expanded: Option<bool>,
 ) -> Vec<Line<'static>> {
-    if text.is_empty() {
-        return Vec::new();
-    }
-    let rows = if visible {
-        let raw_lines = text.trim().split('\n').count();
-        let folded = expanded.map_or(raw_lines > 3, |expanded| !expanded);
-        if folded && raw_lines > 3 {
-            collapsed_lines(theme, text, width, raw_lines - 3)
-        } else {
-            visible_lines(theme, text, width)
-        }
-    } else if already_hidden_run {
-        Vec::new()
-    } else {
-        hidden_line(theme, width)
-    };
-    if rows.is_empty() {
-        return Vec::new();
-    }
-    // A thinking run is a vertically padded section like assistant text: one
-    // transparent blank above and below, shared with neighbors by the
-    // transcript boundary logic (0.2.2 user-card/thinking spacing).
-    let mut padded = Vec::with_capacity(rows.len() + 2);
-    padded.push(Line::default());
-    padded.extend(rows);
-    padded.push(Line::default());
-    padded
+    reasoning_with_metadata(theme, text, width, visible, already_hidden_run, expanded).lines
 }
 
-fn collapsed_lines(theme: &Theme, text: &str, width: usize, hidden: usize) -> Vec<Line<'static>> {
-    let preview = visible_lines(theme, text, width);
-    let mut rows = preview.into_iter().take(3).collect::<Vec<_>>();
-    let hint = Line::from(vec![
-        ratatui::text::Span::styled(
-            format!("... ({hidden} earlier lines, "),
-            Style::new().fg(theme.muted),
-        ),
-        ratatui::text::Span::styled("ctrl+o", Style::new().fg(theme.dim)),
-        ratatui::text::Span::styled(" to expand)", Style::new().fg(theme.muted)),
-    ]);
-    rows.push(crate::ui::rail::surface_row(
-        width,
-        crate::ui::rail::thinking_colors(theme),
-        crate::ui::rail::RAIL_WIDTH,
-        hint,
-    ));
-    rows
+/// Preserve link/copy geometry through the same fold and rail layout as the rows.
+pub fn reasoning_with_metadata(
+    theme: &Theme,
+    text: &str,
+    width: usize,
+    visible: bool,
+    already_hidden_run: bool,
+    expanded: Option<bool>,
+) -> RenderedMarkdown {
+    if text.is_empty() || (!visible && already_hidden_run) {
+        return RenderedMarkdown::default();
+    }
+    let mut rendered = if visible {
+        markdown_with_metadata(theme, text, width)
+    } else {
+        let lines = hidden_line(theme, width);
+        let len = lines.len();
+        RenderedMarkdown {
+            lines,
+            link_cells: vec![Vec::new(); len],
+            hard_breaks: vec![false; len],
+            copy_cells: vec![Some(CopyCells::decoration()); len],
+        }
+    };
+    let raw_lines = text.trim().split('\n').count();
+    let folded = expanded.map_or(raw_lines > 3, |expanded| !expanded);
+    if visible && folded && raw_lines > 3 {
+        rendered.lines.truncate(3);
+        rendered.link_cells.truncate(3);
+        rendered.hard_breaks.truncate(3);
+        rendered.copy_cells.truncate(3);
+        let hint = Line::from(vec![
+            ratatui::text::Span::styled(
+                format!("... ({} earlier lines, ", raw_lines - 3),
+                Style::new().fg(theme.muted),
+            ),
+            ratatui::text::Span::styled("ctrl+o", Style::new().fg(theme.dim)),
+            ratatui::text::Span::styled(" to expand)", Style::new().fg(theme.muted)),
+        ]);
+        rendered.lines.push(crate::ui::rail::surface_row(
+            width,
+            crate::ui::rail::thinking_colors(theme),
+            crate::ui::rail::RAIL_WIDTH,
+            hint,
+        ));
+        rendered.link_cells.push(Vec::new());
+        rendered.hard_breaks.push(false);
+        rendered.copy_cells.push(Some(CopyCells::decoration()));
+    }
+    if !rendered.lines.is_empty() {
+        rendered.lines.insert(0, Line::default());
+        rendered.lines.push(Line::default());
+        rendered.link_cells.insert(0, Vec::new());
+        rendered.link_cells.push(Vec::new());
+        rendered.hard_breaks.insert(0, false);
+        rendered.hard_breaks.push(false);
+        rendered.copy_cells.insert(0, Some(CopyCells::decoration()));
+        rendered.copy_cells.push(Some(CopyCells::decoration()));
+    }
+    rendered
 }
 
 /// A visible reasoning run: gray, italic, Markdown-rendered, and padded.
@@ -124,13 +140,17 @@ pub fn live_lines(theme: &Theme, text: &str, width: usize, visible: bool) -> Vec
 }
 
 fn markdown_section(theme: &Theme, text: &str, width: usize) -> Vec<Line<'static>> {
+    markdown_with_metadata(theme, text, width).lines
+}
+
+fn markdown_with_metadata(theme: &Theme, text: &str, width: usize) -> RenderedMarkdown {
     if text.is_empty() {
-        return Vec::new();
+        return RenderedMarkdown::default();
     }
     // Thinking preserves raw single newlines as visual row breaks; all other
     // markdown fidelity (bold/code/lists/CJK/links/blank paragraphs) is
     // unchanged (0.2.2 reasoning line contract).
-    let mut lines = MarkdownRenderer::preserving_breaks(theme).render(
+    let mut rendered = MarkdownRenderer::preserving_breaks(theme).render_with_metadata(
         text,
         width.saturating_sub(1).max(1),
         Style::new().add_modifier(Modifier::ITALIC),
@@ -138,14 +158,15 @@ fn markdown_section(theme: &Theme, text: &str, width: usize) -> Vec<Line<'static
     // `Style::patch` lets the base foreground override a Markdown span's
     // explicit color. Fill only uncolored spans here so code, list, heading,
     // and fenced-code colors from MarkdownRenderer remain visible.
-    for line in &mut lines {
+    for line in &mut rendered.lines {
         for span in &mut line.spans {
             if span.style.fg.is_none() {
                 span.style = span.style.fg(theme.muted);
             }
         }
     }
-    lines
+    rendered.lines = rendered
+        .lines
         .into_iter()
         .map(|line| {
             crate::ui::rail::surface_row(
@@ -155,5 +176,15 @@ fn markdown_section(theme: &Theme, text: &str, width: usize) -> Vec<Line<'static
                 line,
             )
         })
-        .collect()
+        .collect();
+    let inset = crate::ui::rail::RAIL_WIDTH;
+    for row in &mut rendered.link_cells {
+        for range in row {
+            *range = range.start + inset..range.end + inset;
+        }
+    }
+    for copy in rendered.copy_cells.iter_mut().flatten() {
+        copy.columns = copy.columns.start + inset..copy.columns.end + inset;
+    }
+    rendered
 }

@@ -62,6 +62,8 @@ mod context_tests;
 pub mod copy;
 pub mod export;
 pub mod history;
+#[cfg(test)]
+mod history_navigation_tests;
 pub mod panels;
 #[cfg(test)]
 mod panels_tests;
@@ -4161,7 +4163,17 @@ impl App {
             Dock::Help | Dock::Logs => {
                 self.panel_scroll_by(delta);
             }
-            _ => self.transcript_scroll(delta),
+            _ => {
+                self.transcript_scroll(delta);
+                let (total, visible) = self.transcript_scroll_extent();
+                if delta < 0
+                    && self.active_view().is_some_and(|view| {
+                        view.scroll.offset == 0 && (!view.scroll.follow_tail || total <= visible)
+                    })
+                {
+                    return self.load_earlier_history();
+                }
+            }
         }
         Vec::new()
     }
@@ -4265,6 +4277,7 @@ impl App {
         let Some(view) = self.active_session_mut() else {
             return;
         };
+        view.scroll.prompt_cursor = None;
         let current = if view.scroll.follow_tail {
             maximum
         } else {
@@ -4284,7 +4297,35 @@ impl App {
     fn transcript_scroll_top(&mut self) -> Vec<AppCommand> {
         let (total, visible) = self.transcript_scroll_extent();
         self.set_transcript_offset(0, total, visible);
-        Vec::new()
+        self.load_earlier_history()
+    }
+
+    /// A user reaching the leading gap requests one preceding item page.
+    /// Layout/timer updates never call this, so a long history cannot turn
+    /// into an unsolicited full-session read.
+    fn load_earlier_history(&mut self) -> Vec<AppCommand> {
+        let Some(start) = crate::ui::header::earlier_history_start(self) else {
+            return Vec::new();
+        };
+        let Some(session_id) = self.sessions.active.clone() else {
+            return Vec::new();
+        };
+        if !self.can_send_requests()
+            || self.pending_search_jump.is_some()
+            || self.pending_history(&session_id)
+            || self
+                .active_view()
+                .is_some_and(|view| view.history_read.is_loading())
+        {
+            return Vec::new();
+        }
+        // Keep the first visible content row anchored while the page is
+        // inserted ahead of it, including when the gap row itself is at top.
+        if let Some(view) = self.active_session_mut() {
+            view.scroll.follow_tail = false;
+        }
+        self.capture_scroll_anchor();
+        self.request_history_window_at(&session_id, start.saturating_sub(READ_PAGE_LIMIT))
     }
 
     fn transcript_scroll_bottom(&mut self) -> Vec<AppCommand> {
@@ -6936,9 +6977,9 @@ fn install_history_placeholder(view: &mut SessionView, index: usize, total_bytes
         return;
     }
     view.transcript
-        .push_block(TranscriptBlock::HistoryPlaceholder(
+        .insert_history_owner(Arc::new(TranscriptBlock::HistoryPlaceholder(
             HistoryPlaceholderBlock { index, total_bytes },
-        ));
+        )));
     view.transcript.invalidate();
 }
 
@@ -6965,22 +7006,24 @@ fn install_history_item(
                 .blocks_mut()
                 .iter_mut()
                 .rev()
-                .find_map(|block| match std::sync::Arc::make_mut(block) {
-                    TranscriptBlock::User(card)
-                        if card.pending
-                            && (card.loop_id.as_deref() == Some(&user.loop_id)
-                                || card.text == user.input.text) =>
-                    {
-                        card.index = Some(index);
-                        card.loop_id = Some(user.loop_id.clone());
-                        card.kind = kind;
-                        card.text = user.input.text.clone();
-                        card.pending = false;
-                        Some(std::sync::Arc::clone(block))
-                    }
-                    _ => None,
+                .find(|block| {
+                    matches!(block.as_ref(), TranscriptBlock::User(card)
+                    if card.pending && (card.loop_id.as_deref() == Some(&user.loop_id)
+                        || card.text == user.input.text))
+                })
+                .and_then(|block| {
+                    let TranscriptBlock::User(card) = std::sync::Arc::make_mut(block) else {
+                        return None;
+                    };
+                    card.index = Some(index);
+                    card.loop_id = Some(user.loop_id.clone());
+                    card.kind = kind;
+                    card.text = user.input.text.clone();
+                    card.pending = false;
+                    Some(std::sync::Arc::clone(block))
                 });
             let owner = if let Some(owner) = replaced {
+                view.transcript.insert_history_owner(Arc::clone(&owner));
                 owner
             } else if let Some(owner) = view
                 .transcript
@@ -6999,8 +7042,7 @@ fn install_history_item(
                     pending: false,
                 }));
                 view.transcript
-                    .blocks_mut()
-                    .push(std::sync::Arc::clone(&owner));
+                    .insert_history_owner(std::sync::Arc::clone(&owner));
                 owner
             };
             if let Some(timestamp) = &item.timestamp {
@@ -7070,8 +7112,7 @@ fn install_history_item(
                 terminal_error: None,
             }));
             view.transcript
-                .blocks_mut()
-                .push(std::sync::Arc::clone(&owner));
+                .insert_history_owner(std::sync::Arc::clone(&owner));
             view.transcript.invalidate();
             Some(owner)
         }
@@ -7195,6 +7236,7 @@ fn install_history_item(
                 }) {
                     blocks[position] = std::sync::Arc::clone(&owner);
                 }
+                view.transcript.insert_history_owner(Arc::clone(&owner));
                 owner
             } else if let Some(owner) = view
                 .transcript
@@ -7226,8 +7268,7 @@ fn install_history_item(
                         .is_some_and(FoldOverride::expanded),
                 }));
                 view.transcript
-                    .blocks_mut()
-                    .push(std::sync::Arc::clone(&owner));
+                    .insert_history_owner(std::sync::Arc::clone(&owner));
                 owner
             };
             view.transcript.invalidate();
@@ -7256,8 +7297,7 @@ fn install_history_item(
                 content: summary.content.clone(),
             }));
             view.transcript
-                .blocks_mut()
-                .push(std::sync::Arc::clone(&owner));
+                .insert_history_owner(std::sync::Arc::clone(&owner));
             view.transcript.invalidate();
             Some(owner)
         }
@@ -7266,6 +7306,9 @@ fn install_history_item(
 
 #[cfg(test)]
 mod scrollbar_tests;
+
+#[cfg(test)]
+mod earlier_history_tests;
 
 #[cfg(test)]
 mod tests {

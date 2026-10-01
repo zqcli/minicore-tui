@@ -93,6 +93,22 @@ impl HistoryWindow {
         &self.loaded_ranges
     }
 
+    /// An earlier-window read is done when the backend cursor rejoins a
+    /// fully resident suffix of this same pin. Never skip a partial item or
+    /// an interior unloaded gap, and never manufacture a continuation cursor.
+    fn contains_suffix_from(&self, cursor: ReadCursor) -> bool {
+        cursor.offset == 0
+            && self
+                .pending_large_items
+                .range(cursor.item..)
+                .next()
+                .is_none()
+            && self
+                .loaded_ranges
+                .iter()
+                .any(|range| range.contains(&cursor.item) && range.end >= self.total())
+    }
+
     pub fn bytes(&self) -> usize {
         self.bytes
     }
@@ -2172,9 +2188,15 @@ impl App {
             return Vec::new();
         }
 
+        let next_cursor = applied.next.filter(|cursor| {
+            applied.explicit_large_item
+                || read.replacement
+                || read.reconcile
+                || !view.transcript.window.contains_suffix_from(*cursor)
+        });
         // Persist the assembler for the next page (it may hold a partial item).
         view.read_page = Some(page_state);
-        view.transcript.next_cursor = applied.next;
+        view.transcript.next_cursor = next_cursor;
 
         if applied.explicit_large_item {
             view.transcript.sync_from_window();
@@ -2182,7 +2204,7 @@ impl App {
             return Vec::new();
         }
 
-        let next = match applied.next {
+        let next = match next_cursor {
             Some(_) => {
                 view.transcript.sync_from_window();
                 view.history_read.continue_loading();
@@ -2381,7 +2403,13 @@ impl App {
             );
             return Vec::new();
         }
-        view.transcript.next_cursor = pending.next;
+        let next_cursor = pending.next.filter(|cursor| {
+            pending.explicit_large_item
+                || page_state.replacement
+                || page_state.reconcile
+                || !view.transcript.window.contains_suffix_from(*cursor)
+        });
+        view.transcript.next_cursor = next_cursor;
         if pending.explicit_large_item {
             view.transcript.sync_from_window();
             view.history_read.finish();
@@ -2390,7 +2418,7 @@ impl App {
             }
             return Vec::new();
         }
-        let next = match pending.next {
+        let next = match next_cursor {
             Some(_) => {
                 view.read_page = Some(page_state);
                 view.transcript.sync_from_window();
@@ -2413,7 +2441,7 @@ impl App {
             }
         };
         view.recompute_usage_projection();
-        match next {
+        let mut commands = match next {
             NextChain::Page | NextChain::Reconcile => {
                 self.request_history(session_id).into_iter().collect()
             }
@@ -2427,7 +2455,12 @@ impl App {
                 Vec::new()
             }
             NextChain::Done => Vec::new(),
-        }
+        };
+        // A byte-bounded page can contain just the requested jump item.
+        // Its final decode must resume the jump even if the next cursor
+        // rejoins an already loaded suffix and no further page is needed.
+        commands.extend(self.on_search_history_progress(session_id));
+        commands
     }
 
     fn finish_turn_result_item_decode(
@@ -3925,5 +3958,44 @@ mod decode_tests {
         );
         assert!(app.decode_in_flight.is_none());
         jobs.shutdown().await;
+    }
+}
+
+#[cfg(test)]
+mod earlier_rejoin_tests {
+    use super::*;
+
+    fn window() -> HistoryWindow {
+        let mut window = HistoryWindow::default();
+        window.install_pin(SnapshotPin {
+            captured_end: 90_000,
+            history_revision: "a".repeat(64),
+            total: 8,
+        });
+        for index in 3..8 {
+            window.insert_placeholder(index, 9 * 1024 * 1024);
+        }
+        window
+    }
+
+    #[test]
+    fn earlier_history_rejoin_does_not_skip_a_partial_large_item_in_the_suffix() {
+        let mut window = window();
+        let cursor = ReadCursor { item: 3, offset: 0 };
+        assert!(window.contains_suffix_from(cursor));
+        window.insert_large_placeholder(6, 9 * 1024 * 1024, false);
+        assert!(!window.contains_suffix_from(cursor));
+        window.insert_large_placeholder(6, 9 * 1024 * 1024, true);
+        assert!(window.contains_suffix_from(cursor));
+    }
+
+    #[test]
+    fn earlier_history_rejoin_needs_an_item_boundary_and_a_gapless_suffix() {
+        let mut window = window();
+        assert!(!window.contains_suffix_from(ReadCursor { item: 3, offset: 1 }));
+        assert!(!window.contains_suffix_from(ReadCursor { item: 2, offset: 0 }));
+        window.forget_loaded(6);
+        assert!(!window.contains_suffix_from(ReadCursor { item: 3, offset: 0 }));
+        assert!(window.contains_suffix_from(ReadCursor { item: 7, offset: 0 }));
     }
 }

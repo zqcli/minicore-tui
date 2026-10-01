@@ -2130,12 +2130,17 @@ fn e2e_fifo_steers_are_paced_until_receipt() {
     std::fs::write(&test_file, "contents").unwrap();
 
     let req0_gate = Arc::new(AtomicBool::new(false));
+    let req1_gate = Arc::new(AtomicBool::new(false));
     env._server.enqueue_gated(
         sse_tool_call_response("call_1", "read", "{\"path\": \"data.txt\"}"),
         req0_gate.clone(),
         Some("deep-model"),
     );
-    env._server.enqueue_sse(sse_text_response("handled A"));
+    env._server.enqueue_gated(
+        sse_text_response("handled A"),
+        req1_gate.clone(),
+        Some("deep-model"),
+    );
     env._server.enqueue_sse(sse_text_response("handled B"));
 
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -2238,6 +2243,22 @@ fn e2e_fifo_steers_are_paced_until_receipt() {
         // Release gate: request 1 (with A, without B) flows, B is sent only
         // after A's receipt, then request 2 carries both A's turn and B.
         req0_gate.store(true, Ordering::Relaxed);
+        // Keep Request 1 in flight until B has its own acceptance ACK.
+        // The instant mock response must not race B against loop sealing.
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.known.get(&session_id).is_some_and(|view| {
+                view.live.as_ref().is_some_and(|live| {
+                    live.pending_steers.iter().any(|steer| {
+                        steer.steer_index == Some(2)
+                            && steer.text == "taskB"
+                            && steer.state == PendingSteerState::Queued
+                    })
+                })
+            })
+        })
+        .await
+        .unwrap();
+        req1_gate.store(true, Ordering::Relaxed);
         pump_until(&mut process, &mut app, |a| {
             a.sessions
                 .known
@@ -2293,6 +2314,10 @@ fn e2e_fifo_steers_are_paced_until_receipt() {
         );
 
         let view = &app.sessions.known[&session_id];
+        assert!(
+            view.steer_queue.is_empty(),
+            "both admitted steers leave the queue"
+        );
         let steering_in_history = view
             .transcript
             .window
@@ -2329,12 +2354,17 @@ fn e2e_fifo_duplicate_texts_are_paced_and_both_persist() {
     std::fs::write(&test_file, "contents").unwrap();
 
     let req0_gate = Arc::new(AtomicBool::new(false));
+    let req1_gate = Arc::new(AtomicBool::new(false));
     env._server.enqueue_gated(
         sse_tool_call_response("call_1", "read", "{\"path\": \"data.txt\"}"),
         req0_gate.clone(),
         Some("deep-model"),
     );
-    env._server.enqueue_sse(sse_text_response("handled A"));
+    env._server.enqueue_gated(
+        sse_text_response("handled A"),
+        req1_gate.clone(),
+        Some("deep-model"),
+    );
     env._server.enqueue_sse(sse_text_response("handled B"));
 
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -2405,6 +2435,21 @@ fn e2e_fifo_duplicate_texts_are_paced_and_both_persist() {
         .unwrap();
 
         req0_gate.store(true, Ordering::Relaxed);
+        // Request 1 proves the first receipt, but must not finish before the
+        // second steer is ACKed. Otherwise this positive persistence test
+        // races the valid turn_not_found/retained-unsent terminal path.
+        pump_until(&mut process, &mut app, |a| {
+            a.sessions.known.get(&session_id).is_some_and(|view| {
+                view.live.as_ref().is_some_and(|live| {
+                    live.pending_steers.iter().any(|steer| {
+                        steer.steer_index == Some(2) && steer.state == PendingSteerState::Queued
+                    })
+                })
+            })
+        })
+        .await
+        .unwrap();
+        req1_gate.store(true, Ordering::Relaxed);
         pump_until(&mut process, &mut app, |a| {
             a.sessions
                 .known
@@ -2414,7 +2459,16 @@ fn e2e_fifo_duplicate_texts_are_paced_and_both_persist() {
         .await
         .unwrap();
 
+        assert_eq!(
+            env._server.recorded_requests().len(),
+            3,
+            "initial tool request plus one request for each duplicate steer"
+        );
         let view = &app.sessions.known[&session_id];
+        assert!(
+            view.steer_queue.is_empty(),
+            "both admitted steers leave the queue"
+        );
         let steering_in_history = view
             .transcript
             .window
@@ -4070,8 +4124,21 @@ fn e2e_manual_compact_without_history_is_a_noop() {
         submit_slash_command(&mut process, &mut app, "/compact")
             .await
             .unwrap();
+        // The compact result triggers a fresh context read. Its response may
+        // follow the result, so wait for that authoritative idle observation
+        // rather than asserting against the retained preparing context.
         pump_until(&mut process, &mut app, |a| {
-            compact_status(a, &session_id).is_some()
+            compact_status(a, &session_id) == Some(CompactStatusWire::Noop)
+                && a.sessions.known.get(&session_id).is_some_and(|view| {
+                    !view.is_preparing()
+                        && view.state.as_ref().is_some_and(|state| {
+                            state.status == minicore_tui::protocol::SessionStatusWire::Idle
+                        })
+                        && view.context.as_ref().is_some_and(|context| {
+                            context.current_operation.is_none()
+                                && context.automatic.current.is_none()
+                        })
+                })
         })
         .await
         .unwrap();

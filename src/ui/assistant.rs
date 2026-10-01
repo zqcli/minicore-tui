@@ -68,6 +68,7 @@ pub struct AssistantSection {
     /// logical source line rather than a soft wrap. `None` when the rows came
     /// from a plain wrapper that already preserves source lines.
     pub hard_breaks: Option<Vec<bool>>,
+    pub copy_cells: Option<Vec<Option<crate::markdown::CopyCells>>>,
 }
 
 /// Cheap section metadata collected before Markdown/layout work. The source
@@ -181,7 +182,7 @@ pub fn render_section(
 ) -> AssistantSection {
     match input.kind {
         SectionKind::Thinking => {
-            let lines = reasoning::reasoning_lines_with_fold(
+            let rendered = reasoning::reasoning_with_metadata(
                 theme,
                 &input.source,
                 width,
@@ -190,22 +191,27 @@ pub fn render_section(
                 Some(!input.folded),
             );
             AssistantSection {
-                link_cells: vec![Vec::new(); lines.len()],
-                lines,
+                link_cells: rendered.link_cells,
+                lines: rendered.lines,
                 kind: input.kind,
                 ordinal: input.ordinal,
                 collapsible: input.collapsible,
                 folded: input.folded,
                 tool_call: None,
-                hard_breaks: None,
+                hard_breaks: Some(rendered.hard_breaks),
+                copy_cells: Some(rendered.copy_cells),
             }
         }
         SectionKind::AssistantText => {
             let renderer = MarkdownRenderer::new(theme);
             let base = Style::new().fg(theme.text);
             let inner = width.saturating_sub(1).max(1);
-            let (rendered, links, breaks) = renderer.render_with_breaks(&input.source, inner, base);
+            let rendered = renderer.render_with_metadata(&input.source, inner, base);
+            let links = rendered.link_cells;
+            let breaks = rendered.hard_breaks;
+            let copies = rendered.copy_cells;
             let lines: Vec<_> = rendered
+                .lines
                 .into_iter()
                 .map(|line| crate::ui::rail::inset_row(width, 1, line))
                 .collect();
@@ -220,6 +226,7 @@ pub fn render_section(
             let vertical = layout::vertical_section(lines);
             let mut vertical_links = Vec::with_capacity(vertical.len());
             let mut vertical_breaks = Vec::with_capacity(vertical.len());
+            let mut vertical_copies = Vec::with_capacity(vertical.len());
             if !vertical.is_empty() {
                 vertical_links.push(Vec::new());
                 vertical_links.extend(link_cells);
@@ -227,6 +234,13 @@ pub fn render_section(
                 vertical_breaks.push(false);
                 vertical_breaks.extend(breaks);
                 vertical_breaks.push(false);
+                vertical_copies.push(Some(crate::markdown::CopyCells::decoration()));
+                vertical_copies.extend(
+                    copies
+                        .into_iter()
+                        .map(|copy| copy.map(|copy| copy.shifted(1))),
+                );
+                vertical_copies.push(Some(crate::markdown::CopyCells::decoration()));
             }
             AssistantSection {
                 lines: vertical,
@@ -237,6 +251,7 @@ pub fn render_section(
                 folded: false,
                 tool_call: None,
                 hard_breaks: Some(vertical_breaks),
+                copy_cells: Some(vertical_copies),
             }
         }
         SectionKind::Tool | SectionKind::User | SectionKind::Summary | SectionKind::Notice => {
@@ -249,6 +264,7 @@ pub fn render_section(
                 folded: input.folded,
                 tool_call: input.tool_call.clone(),
                 hard_breaks: None,
+                copy_cells: None,
             }
         }
     }
@@ -279,7 +295,7 @@ pub fn sections_with_folds(
             let key = ReasoningKey::new(&block.loop_id, block.request_index, reasoning_ordinal);
             reasoning_ordinal += 1;
             let expanded = folds.get(&key).map(FoldOverride::expanded);
-            let section = reasoning::reasoning_lines_with_fold(
+            let rendered = reasoning::reasoning_with_metadata(
                 theme,
                 &joined,
                 width,
@@ -287,22 +303,21 @@ pub fn sections_with_folds(
                 in_hidden_run,
                 expanded,
             );
-            let has_section = !section.is_empty();
+            let has_section = !rendered.lines.is_empty();
             if has_section {
                 let folded = reasoning_visible
                     && joined.trim().split('\n').count() > 3
                     && !expanded.unwrap_or(false);
-                let thought_rows = section.len();
                 out.push(AssistantSection {
-                    lines: section,
-                    // Thoughts carry no markdown links.
-                    link_cells: vec![Vec::new(); thought_rows],
+                    lines: rendered.lines,
+                    link_cells: rendered.link_cells,
                     kind: SectionKind::Thinking,
                     ordinal: reasoning_ordinal - 1,
                     collapsible: reasoning_visible && joined.trim().split('\n').count() > 3,
                     folded,
                     tool_call: None,
-                    hard_breaks: None,
+                    hard_breaks: Some(rendered.hard_breaks),
+                    copy_cells: Some(rendered.copy_cells),
                 });
                 in_hidden_run = !reasoning_visible;
             }
@@ -347,6 +362,7 @@ pub fn sections_with_folds(
                     folded: false,
                     tool_call: None,
                     hard_breaks: None,
+                    copy_cells: None,
                 });
                 text_ordinal += 1;
                 in_hidden_run = false;
@@ -365,6 +381,7 @@ pub fn sections_with_folds(
                     folded: false,
                     tool_call: Some(call.clone()),
                     hard_breaks: None,
+                    copy_cells: None,
                 });
                 in_hidden_run = false;
             }

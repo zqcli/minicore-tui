@@ -51,11 +51,12 @@ impl App {
         let width = self.terminal_content_width();
         let prepared = self.conversation_for_input(width);
         let sections = prepared.sections.iter().collect::<Vec<_>>();
-        let Some(section) = sections
-            .iter()
-            .rev()
-            .find(|section| section.id.kind == SectionKind::AssistantText)
-        else {
+        let Some(section) = sections.iter().rev().find(|section| {
+            // Live sections are provisional deltas, even when they are
+            // visually below the last saved reply. Only stored history
+            // qualifies for the default completed-reply target.
+            section.id.kind == SectionKind::AssistantText && section.id.history_index.is_some()
+        }) else {
             return CopyPlan::Limitation(
                 "no completed reply is loaded; scroll or /export to read more".to_owned(),
             );
@@ -241,9 +242,23 @@ pub(super) enum SectionPick {
 /// rows join directly, so a wrapped line never gains a fake newline
 /// (spec §17.3).
 fn section_copy_text(prepared: &PreparedConversation, section: &SectionView) -> String {
+    // User cards own a timestamp immediately before their closing blank.
+    // A live applied-steer card has one additional receipt marker. Explicit
+    // selection may copy the timestamp, but message-source copying must not.
+    let timestamp_row = (section.id.kind == SectionKind::User).then(|| {
+        let live_card = prepared
+            .sections
+            .live
+            .iter()
+            .any(|live| live.id == section.id);
+        section
+            .rows
+            .end
+            .saturating_sub(if live_card { 3 } else { 2 })
+    });
     let mut text = String::new();
     for copy in prepared.copy_ranges.iter() {
-        if !section.rows.contains(&copy.row) || copy.decorative {
+        if !section.rows.contains(&copy.row) || copy.decorative || timestamp_row == Some(copy.row) {
             continue;
         }
         text.push_str(copy.text);
@@ -309,7 +324,114 @@ fn extract_code_block(source: &str, near: Option<usize>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_code_block;
+    use super::{CopyPlan, extract_code_block, section_copy_text};
+
+    #[test]
+    fn message_copy_omits_timestamp_but_explicit_selection_keeps_it() {
+        use crate::state::view::{
+            ConversationSelection, SectionKind, SelectionGranularity, SelectionPoint,
+        };
+        let app = crate::ui::testapp::chat(crate::theme::ThemeKind::Dark);
+        let prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+        let user = prepared
+            .sections
+            .iter()
+            .find(|section| section.id.kind == SectionKind::User)
+            .unwrap();
+        assert_eq!(
+            section_copy_text(&prepared, &user),
+            "Hello world with code."
+        );
+        let timestamp = prepared
+            .copy_ranges
+            .iter()
+            .find(|copy| copy.text == "time unavailable")
+            .unwrap();
+        let point = |column| SelectionPoint {
+            row: timestamp.row,
+            column,
+            section_id: Some(user.id.clone()),
+            section_row: timestamp.row - user.rows.start,
+        };
+        let selection = ConversationSelection {
+            session_id: "ses_1".into(),
+            anchor: point(timestamp.columns.start),
+            focus: point(timestamp.columns.start + "time unavailable".len() - 1),
+            granularity: SelectionGranularity::Character,
+            dragged: true,
+        };
+        assert_eq!(
+            crate::ui::transcript::selection_text(&prepared, &selection),
+            "time unavailable"
+        );
+    }
+
+    #[test]
+    fn applied_steer_message_copy_keeps_body_but_not_timestamp_or_receipt() {
+        let mut app = crate::ui::testapp::live_turn(crate::theme::ThemeKind::Dark);
+        app.active_session_mut()
+            .unwrap()
+            .applied_steers
+            .push(crate::state::turn::AppliedSteer {
+                local_id: 77,
+                text: "change direction now".into(),
+                accepted_at: Some("2026-01-02T03:04:05.000Z".into()),
+                request_index: 0,
+            });
+        let prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+        let steer = prepared
+            .sections
+            .iter()
+            .find(|section| {
+                section.id.kind == crate::state::view::SectionKind::User && section.id.ordinal == 77
+            })
+            .unwrap();
+        assert!(
+            prepared
+                .copy_ranges
+                .iter()
+                .any(|copy| steer.rows.contains(&copy.row) && copy.text.contains("1/2/2026")),
+            "timestamp remains visible/selectable"
+        );
+        let text = section_copy_text(&prepared, &steer);
+        assert!(text.contains("change direction now"));
+        assert!(!text.contains("1/2/2026"));
+        assert!(!text.contains("applied"));
+    }
+
+    #[test]
+    fn copy_last_excludes_active_live_reply() {
+        use crate::event::{AppEvent, RpcEvent};
+        use crate::protocol::{IncomingFrame, RpcNotification};
+        use serde_json::json;
+        let mut app = crate::ui::testapp::chat_with_reasoning(crate::theme::ThemeKind::Dark);
+        app.update(AppEvent::SubmitTurn {
+            session_id: "ses_1".into(),
+            text: "next turn".into(),
+        });
+        for event in [
+            json!({"type":"turn_started","data":{"turn":{"session_id":"ses_1","loop_id":"live_copy"},"meta":{"session_id":"ses_1","dropped_before":0}}}),
+            json!({"type":"request_started","data":{"turn":{"session_id":"ses_1","loop_id":"live_copy"},"request_index":0,"config_revision":0,"model":"deep","reasoning":"high","meta":{"session_id":"ses_1","dropped_before":0}}}),
+            json!({"type":"output_delta","data":{"turn":{"session_id":"ses_1","loop_id":"live_copy"},"request_index":0,"channel":"text","delta":"unfinished live output","meta":{"session_id":"ses_1","dropped_before":0}}}),
+        ] {
+            app.update(AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Notification(
+                RpcNotification::AgentEvent(serde_json::from_value(event).unwrap()),
+            ))));
+        }
+        let CopyPlan::Text(text) = app.plan_last_reply_copy() else {
+            panic!("stored reply must remain copyable")
+        };
+        assert_eq!(text, "answer text");
+    }
+
+    #[test]
+    fn copy_last_without_stored_reply_reports_limitation() {
+        let app = crate::ui::testapp::live_turn(crate::theme::ThemeKind::Dark);
+        let CopyPlan::Limitation(detail) = app.plan_last_reply_copy() else {
+            panic!("live deltas are not a completed reply")
+        };
+        assert!(detail.contains("no completed reply"));
+    }
 
     #[test]
     fn fenced_blocks_are_extracted_without_their_fences() {

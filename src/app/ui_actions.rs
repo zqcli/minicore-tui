@@ -554,6 +554,10 @@ impl App {
                     });
                     return Vec::new();
                 }
+                if self.earlier_history_hit(mouse.column, mouse.row) {
+                    self.clear_selection();
+                    return self.load_earlier_history();
+                }
                 if self.move_composer_cursor(mouse.column, mouse.row) {
                     self.focus = crate::state::panels::Focus::Editor;
                     self.clear_selection();
@@ -1129,6 +1133,29 @@ impl App {
         self.terminal_size
             .0
             .saturating_sub(crate::ui::rail::APP_GUTTER_WIDTH)
+    }
+
+    fn earlier_history_hit(&self, column: u16, row: u16) -> bool {
+        if crate::ui::header::earlier_history_start(self).is_none() {
+            return false;
+        }
+        let screen = crate::ui::layout::screen_layout(
+            self,
+            ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1),
+        );
+        if !screen.transcript.contains((column, row).into()) {
+            return false;
+        }
+        let prepared = self.conversation_for_input(screen.content.width);
+        let position = crate::ui::transcript::scroll_position(
+            self,
+            prepared.total_rows(),
+            screen.transcript.height as usize,
+        );
+        position.offset == 0
+            && row == screen.transcript.y
+            && position.visible_rows > 0
+            && !self.transcript_overlay_at(screen.transcript, prepared.total_rows(), column, row)
     }
 
     fn conversation_point(&self, column: u16, row: u16) -> Option<SelectionPoint> {
