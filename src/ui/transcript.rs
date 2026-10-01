@@ -931,13 +931,14 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
             }
             continue;
         }
-        let (lines, links, breaks, copies) =
-            if let TranscriptBlock::Summary(summary) = block.as_ref() {
+        let (lines, links, breaks, copies) = match block.as_ref() {
+            TranscriptBlock::Summary(summary) => {
                 let (lines, links, breaks) =
                     compaction_summary_lines(theme, width as usize, &summary.content, folded);
                 (lines, links, breaks, Vec::new())
-            } else if let TranscriptBlock::User(user) = block.as_ref()
-                && user.text.len() <= crate::limits::LAYOUT_SECTION_BYTES
+            }
+            TranscriptBlock::User(user)
+                if user.text.len() <= crate::limits::LAYOUT_SECTION_BYTES =>
             {
                 let rendered = durable_user_rows(theme, view, user, width as usize);
                 (
@@ -946,14 +947,14 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                     rendered.hard_breaks,
                     rendered.copy_cells,
                 )
-            } else {
-                (
-                    durable_block_lines(theme, view, block, width as usize, reasoning_visible),
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                )
-            };
+            }
+            _ => (
+                durable_block_lines(theme, view, block, width as usize, reasoning_visible),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ),
+        };
         let collapsible = matches!(
             block.as_ref(),
             TranscriptBlock::Tool(_) | TranscriptBlock::Summary(_)
