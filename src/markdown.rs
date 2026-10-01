@@ -38,6 +38,8 @@ struct Seg {
 
 /// A block-level markdown element.
 enum Block {
+    /// Lossless, width-wrapped source when list layout exceeds safe bounds.
+    Plain(String),
     Paragraph(Vec<Seg>),
     Heading {
         level: u8,
@@ -50,7 +52,7 @@ enum Block {
     List {
         ordered: bool,
         start: u64,
-        items: Vec<Vec<Seg>>,
+        items: Vec<Vec<Block>>,
     },
     Rule,
 }
@@ -62,10 +64,20 @@ enum InlineAttr {
     Link,
 }
 
+const MAX_LIST_DEPTH: usize = 64;
+
+/// Each open list owns its items; an item can contain paragraphs, code, or
+/// another list. Closing a nested list must not close or renumber its parent.
+struct ListBuilder {
+    ordered: bool,
+    start: u64,
+    items: Vec<Vec<Block>>,
+}
+
 struct Builder<'a> {
     theme: &'a Theme,
     blocks: Vec<Block>,
-    list: Option<(bool, u64, Vec<Vec<Seg>>)>,
+    lists: Vec<ListBuilder>,
     quote_paras: Vec<Vec<Seg>>,
     quote: bool,
     heading: Option<HeadingLevel>,
@@ -133,25 +145,69 @@ impl Builder<'_> {
             return;
         }
         let segs = std::mem::take(&mut self.inline);
-        if let Some((_, _, items)) = self.list.as_mut() {
-            items.push(segs);
-        } else if self.quote {
+        if self.lists.is_empty() && self.quote {
             self.quote_paras.push(segs);
         } else {
-            self.blocks.push(Block::Paragraph(segs));
+            self.push_block(Block::Paragraph(segs));
+        }
+    }
+
+    fn push_block(&mut self, block: Block) {
+        if let Some(item) = self.lists.last_mut().and_then(|list| list.items.last_mut()) {
+            item.push(block);
+        } else {
+            self.blocks.push(block);
         }
     }
 
     fn list_begin(&mut self, ordered: bool, start: u64) {
-        if self.list.is_none() {
-            self.list = Some((ordered, start, Vec::new()));
+        // Tight lists omit paragraph events, so flush the parent item's text
+        // before entering a nested list rather than merging it with the child.
+        self.flush();
+        self.lists.push(ListBuilder {
+            ordered,
+            start,
+            items: Vec::new(),
+        });
+    }
+
+    fn item_begin(&mut self) {
+        if let Some(list) = self.lists.last_mut() {
+            list.items.push(Vec::new());
         }
+    }
+
+    fn list_layout_fits(&self, width: usize, content_width: usize) -> bool {
+        if self.lists.len() > MAX_LIST_DEPTH {
+            return false;
+        }
+        let prefix_width: usize = self
+            .lists
+            .iter()
+            .map(|list| {
+                if list.ordered {
+                    let number = list.start + list.items.len().saturating_sub(1) as u64;
+                    number.to_string().len() + 2
+                } else {
+                    2
+                }
+            })
+            .sum();
+        // Keep room for a wide character (plus borders for framed code).
+        // Marker widths include the current item number, so a sibling
+        // transition from 9 to 10 is checked too.
+        prefix_width <= width.saturating_sub(content_width)
     }
 
     fn list_end(&mut self) {
         self.flush();
-        if let Some((ordered, start, items)) = self.list.take() {
-            self.blocks.push(Block::List {
+        if let Some(ListBuilder {
+            ordered,
+            start,
+            items,
+        }) = self.lists.pop()
+        {
+            self.push_block(Block::List {
                 ordered,
                 start,
                 items,
@@ -176,7 +232,7 @@ impl Builder<'_> {
             }
             segs.extend(para);
         }
-        self.blocks.push(Block::Quote(segs));
+        self.push_block(Block::Quote(segs));
     }
 
     fn heading_end(&mut self) {
@@ -187,7 +243,7 @@ impl Builder<'_> {
             None => 6,
         };
         if !segs.is_empty() {
-            self.blocks.push(Block::Heading { level, segs });
+            self.push_block(Block::Heading { level, segs });
         }
     }
 
@@ -219,7 +275,9 @@ impl Builder<'_> {
         if self.heading.is_some() {
             self.heading_end();
         }
-        self.list_end();
+        while !self.lists.is_empty() {
+            self.list_end();
+        }
     }
 }
 
@@ -250,7 +308,7 @@ impl<'a> MarkdownRenderer<'a> {
     }
 
     /// Parses `text` into blocks.
-    fn parse(&self, text: &str) -> Vec<Block> {
+    fn parse(&self, text: &str, width: usize) -> Vec<Block> {
         let text = crate::safe_text::safe_display(text);
         #[cfg(test)]
         MARKDOWN_PARSE_COUNT.with(|count| count.set(count.get() + 1));
@@ -259,7 +317,7 @@ impl<'a> MarkdownRenderer<'a> {
         let mut b = Builder {
             theme: self.theme,
             blocks: Vec::new(),
-            list: None,
+            lists: Vec::new(),
             quote_paras: Vec::new(),
             quote: false,
             heading: None,
@@ -269,14 +327,20 @@ impl<'a> MarkdownRenderer<'a> {
             code: None,
         };
         for event in parser {
+            let list_content_width = match &event {
+                Event::Start(Tag::List(_) | Tag::Item) => Some(2),
+                Event::Start(Tag::CodeBlock(_)) if !b.lists.is_empty() => Some(4),
+                _ => None,
+            };
             match event {
                 Event::Start(tag) => match tag {
                     Tag::Heading { level, .. } => b.heading = Some(level),
                     Tag::BlockQuote(..) => b.quote = true,
                     Tag::List(Some(start)) => b.list_begin(true, start),
                     Tag::List(None) => b.list_begin(false, 1),
-                    Tag::Item => {}
+                    Tag::Item => b.item_begin(),
                     Tag::CodeBlock(CodeBlockKind::Indented | CodeBlockKind::Fenced(_)) => {
+                        b.flush();
                         b.code = Some(String::new())
                     }
                     Tag::Emphasis => b.attrs.push(InlineAttr::Italic),
@@ -295,7 +359,7 @@ impl<'a> MarkdownRenderer<'a> {
                     TagEnd::Item => b.flush(),
                     TagEnd::CodeBlock => {
                         let text = b.code.take().unwrap_or_default();
-                        b.blocks.push(Block::Code { text });
+                        b.push_block(Block::Code { text });
                     }
                     TagEnd::Emphasis | TagEnd::Strong => {
                         b.attrs.pop();
@@ -319,8 +383,17 @@ impl<'a> MarkdownRenderer<'a> {
                     style: Style::new(),
                     link: matches!(b.attrs.last(), Some(InlineAttr::Link)),
                 }),
-                Event::Rule => b.blocks.push(Block::Rule),
+                Event::Rule => {
+                    b.flush();
+                    b.push_block(Block::Rule);
+                }
                 _ => {}
+            }
+            if list_content_width.is_some_and(|content| !b.list_layout_fits(width, content)) {
+                // pulldown-cmark does not bound list nesting. Avoid recursive
+                // render/drop overflow and indentation wider than the view by
+                // retaining the entire sanitized source as plain wrapped text.
+                return vec![Block::Plain(text.to_string())];
             }
         }
         b.finish();
@@ -330,7 +403,7 @@ impl<'a> MarkdownRenderer<'a> {
     /// Renders `text` into lines no wider than `width`. `style` is the base
     /// every span starts from (e.g. the user card adds its background here).
     pub fn render(&self, text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
-        let blocks = self.parse(text);
+        let blocks = self.parse(text, width);
         let mut lines = Vec::new();
         let mut first = true;
         for block in &blocks {
@@ -373,7 +446,7 @@ impl<'a> MarkdownRenderer<'a> {
         Vec<Vec<std::ops::Range<usize>>>,
         Vec<bool>,
     ) {
-        let blocks = self.parse(text);
+        let blocks = self.parse(text, width);
         let mut lines = Vec::new();
         let mut link_cells = Vec::new();
         let mut hard_breaks = Vec::new();
@@ -420,6 +493,18 @@ impl<'a> MarkdownRenderer<'a> {
         hard_breaks: &mut Vec<bool>,
     ) {
         match block {
+            Block::Plain(text) => {
+                // Unlike Markdown soft breaks, every source newline (including
+                // consecutive and trailing ones) survives the safe fallback.
+                for raw in text.split('\n') {
+                    let chunks = chunk_line(raw, width);
+                    let last = chunks.len() - 1;
+                    for (index, chunk) in chunks.into_iter().enumerate() {
+                        out.push(Line::from(Span::styled(chunk, base)));
+                        hard_breaks.push(index == last);
+                    }
+                }
+            }
             Block::Paragraph(segs) => {
                 let lines = wrap_segments_breaks(segs, width, base);
                 for (line, hard) in lines {
@@ -469,18 +554,31 @@ impl<'a> MarkdownRenderer<'a> {
                     };
                     let marker_w = UnicodeWidthStr::width(marker.as_str());
                     let inner = width.saturating_sub(marker_w).max(1);
-                    let wrapped = wrap_segments_breaks(item, inner, base);
-                    let bullet = Span::styled(marker.clone(), bullet_color);
+                    let item_start = out.len();
+                    for (block_index, block) in item.iter().enumerate() {
+                        // Child lists follow their parent paragraph directly;
+                        // distinct paragraphs/code blocks keep a visible gap.
+                        if block_index > 0 && !matches!(block, Block::List { .. }) {
+                            out.push(Line::default());
+                            hard_breaks.push(true);
+                        }
+                        self.block_lines_breaks(block, inner, base, out, hard_breaks);
+                        if let Some(hard) = hard_breaks.last_mut() {
+                            *hard = true;
+                        }
+                    }
+                    if out.len() == item_start {
+                        out.push(Line::default());
+                        hard_breaks.push(true);
+                    }
+                    let bullet = Span::styled(marker, bullet_color);
                     let indent = Span::styled(" ".repeat(marker_w), Style::new());
-                    for (line_index, (line, hard)) in wrapped.into_iter().enumerate() {
-                        let mut spans = vec![if line_index == 0 {
-                            bullet.clone()
-                        } else {
-                            indent.clone()
-                        }];
-                        spans.extend(line.spans);
-                        out.push(Line::from(spans));
-                        hard_breaks.push(hard);
+                    for (line_index, line) in out[item_start..].iter_mut().enumerate() {
+                        if line_index == 0 {
+                            line.spans.insert(0, bullet.clone());
+                        } else if !line.spans.is_empty() {
+                            line.spans.insert(0, indent.clone());
+                        }
                     }
                 }
             }
@@ -853,6 +951,236 @@ mod tests {
         assert!(heading);
         let bullet = lines.iter().find(|l| text_of(l).starts_with('•'));
         assert!(bullet.is_some());
+    }
+
+    #[test]
+    fn nested_lists_keep_parent_items_and_markers_in_source_order() {
+        let theme = dark_theme();
+        let renderer = MarkdownRenderer::new(&theme);
+        let text =
+            "1. Parent one\n   - Child alpha\n   - Child beta\n2. Parent two\n\nNESTED-END\n";
+        let lines = renderer.render(text, 60, Style::new());
+        assert_eq!(
+            lines.iter().map(text_of).collect::<Vec<_>>(),
+            [
+                "1. Parent one",
+                "   • Child alpha",
+                "   • Child beta",
+                "2. Parent two",
+                "",
+                "NESTED-END",
+            ]
+        );
+    }
+
+    #[test]
+    fn mixed_nested_lists_keep_each_lists_start_and_following_siblings() {
+        let theme = dark_theme();
+        let renderer = MarkdownRenderer::new(&theme);
+        // A non-1 ordered start needs a blank line after paragraph text.
+        let text = "- Parent\n\n  9. Nine\n     - Child\n  10. Ten\n- Next\n";
+        let lines = renderer.render(text, 60, Style::new());
+        assert_eq!(
+            lines.iter().map(text_of).collect::<Vec<_>>(),
+            [
+                "• Parent",
+                "  9. Nine",
+                "     • Child",
+                "  10. Ten",
+                "• Next"
+            ]
+        );
+    }
+
+    #[test]
+    fn nested_list_cjk_wraps_under_content_and_keeps_logical_breaks() {
+        let theme = dark_theme();
+        let renderer = MarkdownRenderer::new(&theme);
+        let text = "1. 你好世界\n   - 甲乙丙丁戊己\n2. 后续\n";
+        let (lines, links, breaks) = renderer.render_with_breaks(text, 9, Style::new());
+        let rendered = lines.iter().map(text_of).collect::<Vec<_>>();
+        assert_eq!(
+            rendered,
+            [
+                "1. 你好世",
+                "   界",
+                "   • 甲乙",
+                "     丙丁",
+                "     戊己",
+                "2. 后续"
+            ]
+        );
+        assert!(lines.iter().all(|line| line_width(line) <= 9));
+        assert_eq!(breaks, [false, true, false, false, true, true]);
+        assert_eq!(links.len(), lines.len());
+        assert_eq!(
+            renderer
+                .render(text, 9, Style::new())
+                .iter()
+                .map(text_of)
+                .collect::<Vec<_>>(),
+            rendered
+        );
+    }
+
+    #[test]
+    fn loose_list_paragraphs_and_code_stay_in_the_same_numbered_item() {
+        let theme = dark_theme();
+        let renderer = MarkdownRenderer::new(&theme);
+        let text = "3. First\n\n   Second\n\n   ```text\n   code\n   ```\n\n   After code\n4. Next\n\nOutside\n";
+        let (lines, _, breaks) = renderer.render_with_breaks(text, 12, Style::new());
+        assert_eq!(
+            lines.iter().map(text_of).collect::<Vec<_>>(),
+            [
+                "3. First",
+                "",
+                "   Second",
+                "",
+                "   ╭───────╮",
+                "   │code   │",
+                "   ╰───────╯",
+                "",
+                "   After cod",
+                "   e",
+                "4. Next",
+                "",
+                "Outside",
+            ]
+        );
+        assert!(lines.iter().all(|line| line_width(line) <= 12));
+        assert_eq!(breaks.len(), lines.len());
+        assert!(breaks[6], "code block closes before the next paragraph");
+        assert!(!breaks[8], "soft wrapping does not add a source newline");
+        assert!(
+            breaks[9],
+            "the final item paragraph closes its logical line"
+        );
+    }
+
+    #[test]
+    fn empty_list_items_keep_their_marker_and_number() {
+        let theme = dark_theme();
+        let renderer = MarkdownRenderer::new(&theme);
+        let lines = renderer.render("1.\n2. Next\n", 20, Style::new());
+        assert_eq!(
+            lines.iter().map(text_of).collect::<Vec<_>>(),
+            ["1. ", "2. Next"]
+        );
+    }
+
+    fn copy_text(lines: &[Line<'_>], breaks: &[bool]) -> String {
+        let mut text = String::new();
+        for (index, (line, hard)) in lines.iter().zip(breaks).enumerate() {
+            text.push_str(&text_of(line));
+            if *hard && index + 1 < lines.len() {
+                text.push('\n');
+            }
+        }
+        text
+    }
+
+    #[test]
+    fn narrow_deep_lists_fall_back_without_losing_source_or_newlines() {
+        let theme = dark_theme();
+        let renderer = MarkdownRenderer::new(&theme);
+        let mut text = String::from("\n");
+        for depth in 0..10 {
+            text.push_str(&format!("{}- 层{depth}\n", "  ".repeat(depth)));
+        }
+        text.push_str("\nNESTED-END\n");
+        let (lines, links, breaks) = renderer.render_with_breaks(&text, 12, Style::new());
+        assert!(matches!(
+            renderer.parse(&text, 12).as_slice(),
+            [Block::Plain(_)]
+        ));
+        assert!(lines.iter().all(|line| line_width(line) <= 12));
+        assert_eq!(copy_text(&lines, &breaks), text);
+        assert_eq!(links.len(), lines.len());
+        assert_eq!(breaks.len(), lines.len());
+        assert_eq!(
+            renderer
+                .render(&text, 12, Style::new())
+                .iter()
+                .map(text_of)
+                .collect::<Vec<_>>(),
+            lines.iter().map(text_of).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn excessive_list_depth_falls_back_even_with_ample_width() {
+        let theme = dark_theme();
+        let renderer = MarkdownRenderer::new(&theme);
+        let text = format!("\n\n{}leaf\u{1b}\n\nTAIL\n", "- ".repeat(4096));
+        let safe = crate::safe_text::safe_display(&text);
+        let blocks = renderer.parse(&text, 10000);
+        assert!(matches!(blocks.as_slice(), [Block::Plain(source)] if source == safe.as_ref()));
+        let (lines, _, breaks) = renderer.render_with_breaks(&text, 10000, Style::new());
+        assert_eq!(copy_text(&lines, &breaks), safe);
+        assert!(lines.iter().all(|line| line_width(line) <= 10000));
+        // The boundary itself is accepted, but no recursively owned list tree
+        // beyond it is constructed, rendered, or dropped.
+        let at_limit = format!("{}leaf", "- ".repeat(MAX_LIST_DEPTH));
+        assert!(matches!(
+            renderer.parse(&at_limit, 10000).as_slice(),
+            [Block::List { .. }]
+        ));
+        assert_eq!(
+            renderer
+                .render(&at_limit, 10000, Style::new())
+                .iter()
+                .map(text_of)
+                .collect::<String>(),
+            format!("{}leaf", "• ".repeat(MAX_LIST_DEPTH))
+        );
+    }
+
+    #[test]
+    fn ordered_sibling_digit_growth_rechecks_the_list_width_budget() {
+        let theme = dark_theme();
+        let renderer = MarkdownRenderer::new(&theme);
+        let text = "9. 甲\n10. 乙\n";
+        // Three marker cells + two content cells fit, but four + two do not.
+        assert!(matches!(
+            renderer.parse("9. 甲", 5).as_slice(),
+            [Block::List { .. }]
+        ));
+        let (lines, _, breaks) = renderer.render_with_breaks(text, 5, Style::new());
+        assert!(matches!(
+            renderer.parse(text, 5).as_slice(),
+            [Block::Plain(_)]
+        ));
+        assert!(lines.iter().all(|line| line_width(line) <= 5));
+        assert_eq!(copy_text(&lines, &breaks), text);
+    }
+
+    #[test]
+    fn list_code_frame_reserves_room_for_a_wide_character() {
+        let theme = dark_theme();
+        let renderer = MarkdownRenderer::new(&theme);
+        let text = "- ```\n  界\n  ```\n";
+        let (lines, _, breaks) = renderer.render_with_breaks(text, 5, Style::new());
+        assert!(
+            lines.iter().all(|line| line_width(line) <= 5),
+            "rows must stay within five cells: {:?}",
+            lines.iter().map(text_of).collect::<Vec<_>>()
+        );
+        assert!(matches!(
+            renderer.parse(text, 5).as_slice(),
+            [Block::Plain(_)]
+        ));
+        assert_eq!(copy_text(&lines, &breaks), text);
+        // At six cells the bullet, code border, and CJK character all fit.
+        assert!(matches!(
+            renderer.parse(text, 6).as_slice(),
+            [Block::List { .. }]
+        ));
+        assert!(
+            renderer
+                .render(text, 6, Style::new())
+                .iter()
+                .all(|line| line_width(line) <= 6)
+        );
     }
 
     #[test]

@@ -195,13 +195,16 @@ impl TickDeadline {
     }
 }
 
-fn dispatch_due_tick(app: &mut App, deadline: &mut TickDeadline, now: Instant) -> bool {
+fn dispatch_due_tick(
+    app: &mut App,
+    deadline: &mut TickDeadline,
+    now: Instant,
+) -> Option<Vec<AppCommand>> {
     if !deadline.is_due(now) {
-        return false;
+        return None;
     }
     deadline.fired();
-    app.update(AppEvent::Tick);
-    true
+    Some(app.update(AppEvent::Tick))
 }
 
 /// Drives the app until `AppCommand::Exit` (the agent is gone) or a fatal
@@ -270,10 +273,13 @@ async fn run_fullscreen(
         if !app.editor_active() {
             let size = guard.terminal_mut().size()?;
             if (size.width as usize, size.height as usize) != last_size {
-                app.update(AppEvent::TerminalSize {
+                let commands = app.update(AppEvent::TerminalSize {
                     width: size.width,
                     height: size.height,
                 });
+                if run_commands(guard, process, &mut app, jobs, commands, &debug_log).await? {
+                    return Ok(());
+                }
                 last_size = (size.width as usize, size.height as usize);
             }
         }
@@ -387,14 +393,26 @@ async fn run_fullscreen(
                 }
             }
             Selected::Tick => {
-                dispatch_due_tick(&mut app, &mut tick_deadline, Instant::now());
+                if let Some(commands) =
+                    dispatch_due_tick(&mut app, &mut tick_deadline, Instant::now())
+                {
+                    exit =
+                        run_commands(guard, process, &mut app, jobs, commands, &debug_log).await?;
+                }
             }
             Selected::Render => {
                 if app.editor_active() {
                     continue;
                 }
                 let size = guard.terminal_mut().size()?;
-                prepare_frame_with_jobs(&mut app, jobs, Rect::new(0, 0, size.width, size.height));
+                let commands = prepare_frame_with_jobs(
+                    &mut app,
+                    jobs,
+                    Rect::new(0, 0, size.width, size.height),
+                );
+                if run_commands(guard, process, &mut app, jobs, commands, &debug_log).await? {
+                    return Ok(());
+                }
                 draw_frame(guard.terminal_mut(), &mut app)?;
                 minicore_tui::perf::count(minicore_tui::perf::Counter::DrawCalls);
                 last_render = Instant::now();
@@ -408,13 +426,21 @@ async fn run_fullscreen(
         // A ready RPC or terminal arm may win the select after the tick timer
         // has elapsed. Consume that overdue deadline before arming another
         // wait, so continuous non-Tick traffic cannot postpone animation.
-        dispatch_due_tick(&mut app, &mut tick_deadline, Instant::now());
+        if let Some(commands) = dispatch_due_tick(&mut app, &mut tick_deadline, Instant::now()) {
+            if run_commands(guard, process, &mut app, jobs, commands, &debug_log).await? {
+                return Ok(());
+            }
+        }
 
         // Render when state changed and the 30 FPS budget allows it; the
         // Rendered event clears the dirty flag so idle frames never draw.
         if !app.editor_active() && app.dirty && last_render.elapsed() >= RENDER_INTERVAL {
             let size = guard.terminal_mut().size()?;
-            prepare_frame_with_jobs(&mut app, jobs, Rect::new(0, 0, size.width, size.height));
+            let commands =
+                prepare_frame_with_jobs(&mut app, jobs, Rect::new(0, 0, size.width, size.height));
+            if run_commands(guard, process, &mut app, jobs, commands, &debug_log).await? {
+                return Ok(());
+            }
             draw_frame(guard.terminal_mut(), &mut app)?;
             minicore_tui::perf::count(minicore_tui::perf::Counter::DrawCalls);
             last_render = Instant::now();
@@ -433,19 +459,19 @@ fn draw_frame<B: ratatui::backend::Backend>(
 }
 
 /// Layout is coalesced with drawing, not repeated for every queued input/delta.
-fn prepare_frame_with_jobs(app: &mut App, jobs: &mut LocalJobs, area: Rect) {
+fn prepare_frame_with_jobs(app: &mut App, jobs: &mut LocalJobs, area: Rect) -> Vec<AppCommand> {
     // Resize can arrive after the loop's size observation but before its draw.
     // Fence old cells using the size of this actual frame, including height.
-    app.update(AppEvent::TerminalSize {
+    let mut commands = app.update(AppEvent::TerminalSize {
         width: area.width,
         height: area.height,
     });
     if ui::layout::is_too_small(area) {
-        return;
+        return commands;
     }
     let screen = ui::layout::screen_layout(app, area);
     if app.context_panel().is_some() {
-        return;
+        return commands;
     }
     if app.changes().is_some() {
         let body = ui::workspace::file_body(screen.transcript);
@@ -455,7 +481,7 @@ fn prepare_frame_with_jobs(app: &mut App, jobs: &mut LocalJobs, area: Rect) {
                 app.mark_diff_layout_pending(identity);
             }
         }
-        return;
+        return commands;
     }
     if app.file_preview().is_some() {
         let body = ui::workspace::file_body(screen.transcript);
@@ -465,7 +491,7 @@ fn prepare_frame_with_jobs(app: &mut App, jobs: &mut LocalJobs, area: Rect) {
                 app.mark_file_layout_pending(identity);
             }
         }
-        return;
+        return commands;
     }
     if app.tool_detail().is_some() {
         let body = ui::tool_detail::body_area(screen.transcript);
@@ -475,17 +501,17 @@ fn prepare_frame_with_jobs(app: &mut App, jobs: &mut LocalJobs, area: Rect) {
                 app.mark_tool_layout_pending(identity);
             }
         }
-        return;
+        return commands;
     }
     let width = screen.content.width;
     if app.prepared_conversation(width).is_none() {
         if !app.async_layout_enabled() {
-            return;
+            return commands;
         }
         if app.active_view().is_some() {
             if let Some(durable) = app.cached_durable(width) {
                 let prepared = ui::transcript::prepare_conversation_from_cache(app, width, durable);
-                app.update(AppEvent::ConversationPrepared(prepared));
+                commands.extend(app.update(AppEvent::ConversationPrepared(prepared)));
             } else if let Some(request) = app.layout_request(width) {
                 let identity = request.identity.clone();
                 if jobs.try_schedule_layout(request) {
@@ -494,23 +520,24 @@ fn prepare_frame_with_jobs(app: &mut App, jobs: &mut LocalJobs, area: Rect) {
             }
         } else {
             let prepared = ui::transcript::prepare_startup_conversation(app, width);
-            app.update(AppEvent::ConversationPrepared(prepared));
+            commands.extend(app.update(AppEvent::ConversationPrepared(prepared)));
         }
     }
     let Some(prepared) = app.prepared_conversation(width) else {
         // Pending geometry is unknown, not a zero-row conversation. Keep the
         // last measurement until commit, including across resize, so an async
         // wait cannot clamp away the user's scroll position/follow state.
-        return;
+        return commands;
     };
     let total = prepared.total_rows();
     let visible = ui::transcript::visible_rows(app, total, screen.transcript.height);
     if app.viewport != (total, visible) {
-        app.update(AppEvent::Viewport {
+        commands.extend(app.update(AppEvent::Viewport {
             total_lines: total,
             visible_rows: visible,
-        });
+        }));
     }
+    commands
 }
 
 /// A timer arm is authoritative only when the App-owned deadline has really
@@ -863,12 +890,10 @@ impl DebugLog {
                 .write(true)
                 .open(path)
                 .ok();
+            #[cfg(unix)]
             if let Some(file) = file.as_ref() {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
-                }
+                use std::os::unix::fs::PermissionsExt;
+                let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
             }
             let mut written = 0;
             for line in receiver {
@@ -1066,6 +1091,92 @@ mod tests {
         );
     }
 
+    fn debounced_workspace_fixture() -> (App, std::sync::Arc<std::sync::atomic::AtomicU64>, Instant)
+    {
+        use minicore_tui::state::session::SessionView;
+        use minicore_tui::state::workspace::BrowserKind;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let elapsed = Arc::new(AtomicU64::new(0));
+        let clock = Arc::clone(&elapsed);
+        let base = Instant::now();
+        let mut app = App::with_monotonic_clock(PathBuf::from("/synthetic"), move || {
+            base + Duration::from_millis(clock.load(Ordering::Relaxed))
+        });
+        app.connection = minicore_tui::app::ConnectionState::Ready;
+        let info = serde_json::from_value(serde_json::json!({
+            "session_id": "ses_files", "title": null, "profile": "coding",
+            "workspace": "/synthetic", "model": "deep", "reasoning": "high",
+            "loaded": true, "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap();
+        app.sessions
+            .known
+            .insert("ses_files".into(), SessionView::new(info));
+        app.sessions.active = Some("ses_files".into());
+        assert!(
+            app.open_workspace_browser(BrowserKind::Files, String::new(), false)
+                .is_empty()
+        );
+        (app, elapsed, base)
+    }
+
+    fn assert_workspace_query_is_returned(app: &App, commands: &[AppCommand]) {
+        let request = commands
+            .iter()
+            .find_map(|command| match command {
+                AppCommand::Rpc(request) if request.method == "workspace.files" => Some(request),
+                _ => None,
+            })
+            .expect("registered workspace query must be returned for execution");
+        assert!(app.request_is_pending(request.id));
+    }
+
+    #[test]
+    fn due_tick_returns_debounced_workspace_commands_exactly_once() {
+        use std::sync::atomic::Ordering;
+        let (mut app, elapsed, base) = debounced_workspace_fixture();
+        let mut deadline = TickDeadline::default();
+        deadline.arm(app.next_tick(), base);
+        elapsed.store(200, Ordering::Relaxed);
+        let now = base + Duration::from_millis(200);
+        let commands = dispatch_due_tick(&mut app, &mut deadline, now).expect("due tick");
+        assert_workspace_query_is_returned(&app, &commands);
+        assert!(dispatch_due_tick(&mut app, &mut deadline, now).is_none());
+    }
+
+    #[tokio::test]
+    async fn frame_preparation_returns_commands_from_geometry_updates() {
+        use std::sync::atomic::Ordering;
+        let mut jobs = LocalJobs::new();
+        for measured_first in [false, true] {
+            let (mut app, elapsed, _) = debounced_workspace_fixture();
+            let area = Rect::new(0, 0, 81, 25);
+            if measured_first {
+                // Let the later Viewport update, rather than TerminalSize,
+                // be the reducer event that admits the due query.
+                app.enable_async_layout();
+                app.update(AppEvent::TerminalSize {
+                    width: area.width,
+                    height: area.height,
+                });
+                let screen = ui::layout::screen_layout(&app, area);
+                let prepared = ui::transcript::prepare_conversation(&app, screen.content.width);
+                app.update(AppEvent::ConversationPrepared(prepared));
+                app.update(AppEvent::Viewport {
+                    total_lines: 1,
+                    visible_rows: 1,
+                });
+            }
+            elapsed.store(200, Ordering::Relaxed);
+            let commands = prepare_frame_with_jobs(&mut app, &mut jobs, area);
+            assert_workspace_query_is_returned(&app, &commands);
+        }
+        jobs.shutdown().await;
+    }
+
     #[test]
     fn active_tick_deadline_survives_continuous_non_tick_events() {
         use std::sync::Arc;
@@ -1109,7 +1220,7 @@ mod tests {
                 bytes: 8,
                 dropped: 0,
             }));
-            if dispatch_due_tick(&mut app, &mut scheduler, now) {
+            if dispatch_due_tick(&mut app, &mut scheduler, now).is_some() {
                 tick_at = Some(millis);
                 break;
             }

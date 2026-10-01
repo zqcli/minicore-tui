@@ -107,6 +107,7 @@ impl Driver {
         self.exports.push((capture, rx));
     }
 
+    #[cfg(unix)]
     fn drain_editors(&mut self) -> bool {
         let mut finished = Vec::new();
         for (index, (_, rx)) in self.editors.iter().enumerate() {

@@ -2442,9 +2442,9 @@ impl App {
         }
     }
 
-    /// Opens `kind` and pre-selects the draft's current value. Opening
-    /// model/reasoning/profile guarantees a new-session draft exists so
-    /// the selection can never leak into the current session (spec 26.4).
+    /// Opens `kind` and pre-selects the form draft or active session value.
+    /// A selector opened from a new-session form retains that exact draft;
+    /// its selection must never leak into the active session (spec 26.4).
     fn open_selector(&mut self, kind: SelectorKind) -> Vec<AppCommand> {
         if !self.guard_ready() {
             return Vec::new();
@@ -2498,7 +2498,10 @@ impl App {
         if kind != SelectorKind::Session {
             // A model/reasoning selector edits a draft when the form is open;
             // otherwise it updates the active Session through session.update.
-            if self.sessions.active.is_none() || kind == SelectorKind::Profile {
+            if matches!(self.dock, Dock::NewSession(_))
+                || self.sessions.active.is_none()
+                || kind == SelectorKind::Profile
+            {
                 self.ensure_new_session_draft();
             }
             let model = self
@@ -7277,6 +7280,107 @@ mod tests {
 
     fn test_app() -> App {
         App::new(PathBuf::from("/project"))
+    }
+
+    fn new_session_selector_fixture(active: bool, field: NewSessionField) -> App {
+        let mut app = test_app();
+        ready(&mut app);
+        if active {
+            open_session(&mut app, "ses_1");
+        }
+        app.catalogs.models = ["deep", "fast"]
+            .into_iter()
+            .map(|id| ModelInfo {
+                id: id.to_owned(),
+                model_ref: id.to_owned(),
+                context_window: 32_000,
+                supports_tools: true,
+                supported_reasoning: vec![Reasoning::Low, Reasoning::High],
+            })
+            .collect();
+        app.catalogs.next_model = Some("deep".to_owned());
+        app.catalogs.next_reasoning = Some(Reasoning::High);
+        app.composer.set_text("unsent existing-session draft");
+        assert!(app.update(AppEvent::OpenNewSession).is_empty());
+        let draft = app.draft_mut().unwrap();
+        draft.workspace = "/new workspace".to_owned();
+        draft.title = "unsaved title".to_owned();
+        draft.field = field;
+        app
+    }
+
+    #[test]
+    fn new_session_selectors_cancel_back_to_the_exact_form_with_or_without_active_session() {
+        for active in [false, true] {
+            for field in [NewSessionField::Model, NewSessionField::Reasoning] {
+                let mut app = new_session_selector_fixture(active, field);
+                let original = app.new_session().unwrap().clone();
+                // Repeating the open/cancel flow must retain the same draft identity.
+                for _ in 0..2 {
+                    assert!(app.update(AppEvent::ConfirmDock).is_empty());
+                    assert!(app.selector_state().is_some());
+                    assert_eq!(app.new_session(), Some(&original));
+                    assert!(app.update(AppEvent::CancelDock).is_empty());
+                    assert!(matches!(app.dock, Dock::NewSession(_)));
+                    assert_eq!(app.new_session(), Some(&original));
+                    assert_eq!(app.composer.content(), "unsent existing-session draft");
+                }
+                if active {
+                    assert_eq!(app.active_view().unwrap().info.model, "deep");
+                    assert_eq!(app.active_view().unwrap().info.reasoning, Reasoning::High);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn new_session_reasoning_confirmation_edits_only_the_form() {
+        for active in [false, true] {
+            let mut app = new_session_selector_fixture(active, NewSessionField::Reasoning);
+            let mut expected = app.new_session().unwrap().clone();
+            expected.reasoning = Reasoning::Low;
+            assert!(app.update(AppEvent::ConfirmDock).is_empty());
+            assert!(app.update(AppEvent::MoveSelector { delta: -1 }).is_empty());
+            assert!(app.update(AppEvent::ConfirmDock).is_empty());
+            assert!(matches!(app.dock, Dock::NewSession(_)));
+            assert_eq!(app.new_session(), Some(&expected));
+            assert_eq!(app.composer.content(), "unsent existing-session draft");
+            if active {
+                assert_eq!(app.active_view().unwrap().info.model, "deep");
+                assert_eq!(app.active_view().unwrap().info.reasoning, Reasoning::High);
+            }
+        }
+    }
+
+    #[test]
+    fn new_session_model_and_reasoning_confirmations_reach_create_without_updating_active_session()
+    {
+        for active in [false, true] {
+            let mut app = new_session_selector_fixture(active, NewSessionField::Model);
+            let mut expected = app.new_session().unwrap().clone();
+            expected.model = "fast".to_owned();
+            expected.reasoning = Reasoning::Low;
+            assert!(app.update(AppEvent::ConfirmDock).is_empty());
+            assert!(app.update(AppEvent::MoveSelector { delta: 1 }).is_empty());
+            assert!(app.update(AppEvent::ConfirmDock).is_empty());
+            assert!(matches!(app.dock, Dock::ReasoningSelector(_)));
+            assert!(app.update(AppEvent::MoveSelector { delta: -1 }).is_empty());
+            assert!(app.update(AppEvent::ConfirmDock).is_empty());
+            assert!(matches!(app.dock, Dock::NewSession(_)));
+            assert_eq!(app.new_session(), Some(&expected));
+            assert_eq!(app.composer.content(), "unsent existing-session draft");
+            if active {
+                assert_eq!(app.active_view().unwrap().info.model, "deep");
+                assert_eq!(app.active_view().unwrap().info.reasoning, Reasoning::High);
+            }
+            let requests = take_requests(app.update(AppEvent::SubmitNewSession));
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].method, "session.create");
+            assert_eq!(requests[0].params["workspace"], "/new workspace");
+            assert_eq!(requests[0].params["title"], "unsaved title");
+            assert_eq!(requests[0].params["model"], "fast");
+            assert_eq!(requests[0].params["reasoning"], "low");
+        }
     }
 
     #[test]
