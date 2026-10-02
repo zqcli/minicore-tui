@@ -30,6 +30,12 @@ fn request(id: u64, method: &'static str, body: &str) -> OutgoingRequest {
 /// A child that never reads stdin: the writer task blocks in the OS pipe, so
 /// only the bounded in-process queue can absorb requests.
 fn stalled_process() -> (RpcProcess, TempScript, TempConfig) {
+    // A concurrent spawn can inherit another thread's writable script handle
+    // until exec closes it. Even unique paths and drop(file) cannot prevent
+    // that temporary ETXTBSY. Serialize only fixture setup through spawn;
+    // the queue assertions and child lifetimes still run concurrently.
+    static SETUP: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _setup = SETUP.lock().expect("stalling child setup lock");
     let script = TempScript::new();
     let config = TempConfig::new(script.path.parent().expect("script dir"), "unused");
     let process = RpcProcess::spawn(&script.path, &config.path).expect("spawn stalling child");
@@ -38,7 +44,7 @@ fn stalled_process() -> (RpcProcess, TempScript, TempConfig) {
 
 #[tokio::test]
 async fn normal_admission_is_synchronous_and_bounded_at_28() {
-    let (process, _script, _config) = stalled_process();
+    let (mut process, _script, _config) = stalled_process();
     let body = "x".repeat(512 * 1024);
     let started = Instant::now();
     for id in 0..OUTBOUND_NORMAL_CAPACITY as u64 {
@@ -55,12 +61,12 @@ async fn normal_admission_is_synchronous_and_bounded_at_28() {
         Err(SendError::QueueFull(SendClass::Normal)) => {}
         other => panic!("expected a full normal class, got {other:?}"),
     }
-    process.kill_child();
+    process.terminate().await;
 }
 
 #[tokio::test]
 async fn four_control_slots_stay_reserved_after_the_normal_class_is_full() {
-    let (process, _script, _config) = stalled_process();
+    let (mut process, _script, _config) = stalled_process();
     let body = "x".repeat(512 * 1024);
     for id in 0..OUTBOUND_NORMAL_CAPACITY as u64 {
         process
@@ -78,12 +84,12 @@ async fn four_control_slots_stay_reserved_after_the_normal_class_is_full() {
         Err(SendError::QueueFull(SendClass::Control)) => {}
         other => panic!("expected a full control class, got {other:?}"),
     }
-    process.kill_child();
+    process.terminate().await;
 }
 
 #[tokio::test]
 async fn an_oversized_line_is_rejected_before_any_write() {
-    let (process, _script, _config) = stalled_process();
+    let (mut process, _script, _config) = stalled_process();
     let body = "x".repeat(1024 * 1024 + 1);
     match process.try_send(request(1, "turn.send", &body), SendClass::Normal) {
         Err(SendError::RequestTooLarge {
@@ -95,7 +101,23 @@ async fn an_oversized_line_is_rejected_before_any_write() {
         }
         other => panic!("expected a local size rejection, got {other:?}"),
     }
-    process.kill_child();
+    process.terminate().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_stalling_child_setup_and_teardown_is_repeatable() {
+    let mut workers = tokio::task::JoinSet::new();
+    for _ in 0..4 {
+        workers.spawn(async {
+            for _ in 0..16 {
+                let (mut process, _script, _config) = stalled_process();
+                process.terminate().await;
+            }
+        });
+    }
+    while let Some(result) = workers.join_next().await {
+        result.expect("concurrent stalling child setup and teardown");
+    }
 }
 
 /// The UI command path must never await the writer or the clipboard.
@@ -138,7 +160,9 @@ impl TempScript {
         let dir = unique_temp_dir();
         let path = dir.join("stall-agent.sh");
         let mut file = std::fs::File::create(&path).expect("create script");
-        writeln!(file, "#!/bin/sh\nsleep 60").expect("write script");
+        // Keep the sleeper as the owned child, rather than leaving a shell's
+        // descendant alive when the test terminates its RpcProcess.
+        writeln!(file, "#!/bin/sh\nexec sleep 60").expect("write script");
         drop(file);
         let mut perms = std::fs::metadata(&path).unwrap().permissions();
         use std::os::unix::fs::PermissionsExt;
