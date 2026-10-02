@@ -2073,6 +2073,11 @@ impl App {
         }
         let live_only = section.id.history_index.is_none();
         let id = section.id.clone();
+        let anchor = crate::state::view::ScrollAnchor {
+            section_id: id.clone(),
+            source_offset: 0,
+            screen_row: section.rows.start.saturating_sub(position.offset),
+        };
         match id.kind {
             crate::state::view::SectionKind::Tool => {
                 if let (Some(loop_id), Some(request_index), Some(tool_call_id)) = (
@@ -2150,6 +2155,11 @@ impl App {
             crate::state::view::SectionKind::AssistantText
             | crate::state::view::SectionKind::User
             | crate::state::view::SectionKind::Notice => {}
+        }
+        if let Some(view) = self.active_session_mut() {
+            view.scroll.anchor = Some(anchor);
+            view.scroll.fold_pinned = true;
+            view.scroll.prompt_cursor = None;
         }
         if live_only {
             self.prepared_conversation = None;

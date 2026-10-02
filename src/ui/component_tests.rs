@@ -1353,11 +1353,11 @@ fn tool_cards_use_state_backgrounds_and_expanded_preview_bounds() {
         ),
         (
             Some(crate::protocol::ToolOutcomeWire::Denied),
-            theme.tool_error_bg,
+            theme.page_bg,
         ),
         (
             Some(crate::protocol::ToolOutcomeWire::Failed),
-            theme.tool_error_bg,
+            theme.page_bg,
         ),
         (None, theme.tool_pending_bg),
     ] {
@@ -1366,11 +1366,19 @@ fn tool_cards_use_state_backgrounds_and_expanded_preview_bounds() {
         let has_bg = header
             .spans
             .iter()
-            .any(|span| span.style.bg == Some(expected));
+            .any(|span| span.style.bg.unwrap_or(ratatui::style::Color::Reset) == expected);
         assert!(
             has_bg,
             "outcome {outcome:?} should use the {expected:?} card background"
         );
+        if matches!(
+            outcome,
+            Some(
+                crate::protocol::ToolOutcomeWire::Denied | crate::protocol::ToolOutcomeWire::Failed
+            )
+        ) {
+            assert_eq!(header.spans[0].style.fg, Some(theme.error));
+        }
     }
 
     // Viewport level: global expansion exposes the complete bounded result;

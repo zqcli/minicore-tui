@@ -862,17 +862,29 @@ fn rust_tool_state_colors_and_hidden_count_boundaries_match_source_facts() {
         };
         let rust = tool::durable_with_display(&Theme::dark(), &block, 80, false, Some(&display));
         let source_row = &source["rows"][0];
-        assert_eq!(
-            rust[1].spans[0].style.fg,
-            Some(Color::Rgb(rail_rgb[0], rail_rgb[1], rail_rgb[2]))
+        // Error surfaces intentionally diverge from the fixed Rail fixture:
+        // errors use an explicit error foreground on the chat background.
+        // Keep the fixture assertions below as independent source facts.
+        let theme = Theme::dark();
+        let failed = matches!(
+            outcome,
+            Some(minicore_tui::protocol::ToolOutcomeWire::Failed)
         );
         assert_eq!(
-            rust[1].spans[2].style.bg,
-            Some(Color::Rgb(
-                background_rgb[0],
-                background_rgb[1],
-                background_rgb[2]
-            ))
+            rust[1].spans[0].style.fg,
+            Some(if failed {
+                theme.error
+            } else {
+                Color::Rgb(rail_rgb[0], rail_rgb[1], rail_rgb[2])
+            })
+        );
+        assert_eq!(
+            rust[1].spans[2].style.bg.unwrap_or(Color::Reset),
+            if failed {
+                theme.page_bg
+            } else {
+                Color::Rgb(background_rgb[0], background_rgb[1], background_rgb[2])
+            }
         );
         assert_eq!(
             source_token(source_row, 0)["fg"],

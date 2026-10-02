@@ -66,6 +66,8 @@ mod context_tests;
 pub mod copy;
 pub mod export;
 #[cfg(test)]
+mod fold_resume_tests;
+#[cfg(test)]
 mod grouped_slash_tests;
 #[cfg(test)]
 mod help_return_tests;
@@ -1622,6 +1624,17 @@ impl App {
                 saved.tool_hits.clear();
             }
         }
+        // A settled tail window may retain a leading history gap, so
+        // transcript.complete (the full prefix) is not required here.
+        for view in self.sessions.known.values_mut() {
+            if !view.history_read.is_loading()
+                && (view.transcript.window.pin().is_some()
+                    || view.transcript.complete
+                    || view.event_gap)
+            {
+                view.initial_history_pending = false;
+            }
+        }
         // Cache budgets are enforced once per event pass, off the draw path.
         self.enforce_history_budget();
         self.enforce_draft_budget();
@@ -1735,9 +1748,24 @@ impl App {
             .and_then(|session_id| self.sessions.known.get(session_id))
     }
 
+    /// Paged history and serialized item decoding arrive oldest-to-newest.
+    /// Do not publish those temporary prefixes as if they were the latest tail.
+    /// An explicit earlier-history/search viewport remains independently usable.
+    pub(crate) fn history_tail_loading(&self) -> bool {
+        self.active_view().is_some_and(|view| {
+            view.initial_history_pending
+                && view.scroll.follow_tail
+                && view.history_read.is_loading()
+                && !view.transcript.complete
+        })
+    }
+
     /// The prepared conversation for the requested content width, when it
     /// still belongs to the active session and durable transcript revision.
     pub fn prepared_conversation(&self, width: u16) -> Option<&PreparedConversation> {
+        if self.history_tail_loading() {
+            return None;
+        }
         let active = self.sessions.active.as_ref();
         let revision = active
             .and_then(|session_id| self.sessions.known.get(session_id))
@@ -2010,6 +2038,9 @@ impl App {
     }
 
     pub fn layout_request(&mut self, width: u16) -> Option<DurableLayoutRequest> {
+        if self.history_tail_loading() {
+            return None;
+        }
         let (session_id, transcript_revision, snapshot, previous, live_tool_keys) = {
             let view = self.active_view()?;
             let live_tool_keys = crate::state::view::live_tool_keys(view);
@@ -2319,7 +2350,11 @@ impl App {
         if view.scroll.follow_tail {
             if let Some(view) = self.active_session_mut() {
                 view.scroll.anchor = None;
+                view.scroll.fold_pinned = false;
             }
+            return;
+        }
+        if view.scroll.fold_pinned {
             return;
         }
         let height = self.viewport.1.max(1);
@@ -2361,8 +2396,25 @@ impl App {
             return;
         };
         let retained = prepared.has_scroll_anchor_section(&anchor);
+        let pinned = retained
+            && self
+                .active_view()
+                .is_some_and(|view| view.scroll.fold_pinned);
+        let row = if pinned {
+            prepared
+                .sections
+                .iter()
+                .find(|section| section.rows.contains(&row))
+                .map_or(row, |section| section.rows.start)
+        } else {
+            row
+        };
         let visible = self.viewport.1.max(1);
-        let max_offset = prepared.total_rows().saturating_sub(visible);
+        let max_offset = if pinned {
+            prepared.total_rows().saturating_sub(1)
+        } else {
+            prepared.total_rows().saturating_sub(visible)
+        };
         let offset = row.saturating_sub(anchor.screen_row).min(max_offset);
         let fallback_anchor = (!retained).then(|| {
             prepared
@@ -2384,6 +2436,7 @@ impl App {
         if let Some(view) = self.active_session_mut() {
             view.scroll.follow_tail = false;
             view.scroll.offset = offset;
+            view.scroll.fold_pinned = pinned;
             // Reflow restores the viewport, not the user's read position.
             // Keep unread output sticky until scrolling returns to the tail.
             if let Some(Some(fallback_anchor)) = fallback_anchor {
@@ -4847,7 +4900,7 @@ impl App {
         let current = if view.scroll.follow_tail {
             max_offset
         } else {
-            view.scroll.offset.min(max_offset)
+            view.scroll.offset
         };
         let next = if delta < 0 {
             current.saturating_sub(delta.unsigned_abs() as usize)
@@ -4864,6 +4917,8 @@ impl App {
             return;
         };
         view.scroll.prompt_cursor = None;
+        view.scroll.fold_pinned = false;
+        view.scroll.anchor = None;
         let current = if view.scroll.follow_tail {
             maximum
         } else {
@@ -4972,6 +5027,12 @@ impl App {
         let (total, visible) = self.viewport;
         let suppress_follow = self.selection.is_some();
         if let Some(view) = self.active_session_mut() {
+            if view.scroll.fold_pinned {
+                // Reflow is not a user request to return to the tail. Keeping
+                // the header stationary may intentionally leave bottom padding.
+                view.scroll.offset = view.scroll.offset.min(total.saturating_sub(1));
+                return;
+            }
             let max_offset = total.saturating_sub(visible);
             if !view.scroll.follow_tail {
                 view.scroll.offset = view.scroll.offset.min(max_offset);

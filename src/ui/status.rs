@@ -73,10 +73,26 @@ fn busy_label(app: &App) -> String {
     let Some(view) = app.active_view() else {
         return "Working".to_owned();
     };
+    if view
+        .live
+        .as_ref()
+        .is_some_and(|live| live.cancel_requested && !live.waiting)
+    {
+        return "Cancelling".to_owned();
+    }
     if view.is_preparing() {
         return "Preparing".to_owned();
     }
     if let Some(state) = view.state.as_ref() {
+        if let Some(active) = state.active_loop.as_ref().filter(|active| {
+            active.status == crate::protocol::LoopStatusWire::Starting
+                && state.status == crate::protocol::SessionStatusWire::Running
+        }) {
+            return format!(
+                "Preparing · request {}",
+                active.request_index.saturating_add(1)
+            );
+        }
         match state.status {
             crate::protocol::SessionStatusWire::WaitingForInput => {
                 return "Waiting for input".to_owned();
@@ -142,5 +158,70 @@ fn busy_label(app: &App) -> String {
     {
         return format!("Running {}…", tool.name);
     }
+    if let Some(request) = live
+        .requests
+        .last()
+        .filter(|request| request.parts.is_empty() && request.tools.is_empty())
+    {
+        return format!(
+            "Waiting for model · request {}",
+            request.request_index.saturating_add(1)
+        );
+    }
     "Working".to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::{LoopStatusWire, SessionStatusWire};
+    use crate::theme::ThemeKind;
+
+    #[test]
+    fn request_preparation_and_model_wait_are_distinct_and_cancellable() {
+        let mut app = crate::ui::testapp::live_turn(ThemeKind::Dark);
+        crate::ui::testapp::set_session_running(&mut app, "ses_1", "loop_live");
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        let state = view.state.as_mut().unwrap();
+        state.status = SessionStatusWire::Running;
+        state.compaction = None;
+        let active = state.active_loop.as_mut().unwrap();
+        active.status = LoopStatusWire::Starting;
+        active.request_index = 7;
+        view.context = None;
+        assert_eq!(busy_label(&app), "Preparing · request 8");
+
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        view.live.as_mut().unwrap().cancel_requested = true;
+        assert_eq!(busy_label(&app), "Cancelling");
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        view.live.as_mut().unwrap().cancel_requested = false;
+        view.state
+            .as_mut()
+            .unwrap()
+            .active_loop
+            .as_mut()
+            .unwrap()
+            .status = LoopStatusWire::RunningModel;
+        let live = view.live.as_mut().unwrap();
+        live.requests.clear();
+        live.requests.push(crate::state::turn::LiveRequest::new(
+            7,
+            0,
+            "model".into(),
+            crate::protocol::Reasoning::High,
+        ));
+        assert_eq!(busy_label(&app), "Waiting for model · request 8");
+        let live = app
+            .sessions
+            .known
+            .get_mut("ses_1")
+            .unwrap()
+            .live
+            .as_mut()
+            .unwrap();
+        live.cancel_requested = true;
+        live.waiting = true;
+        assert_eq!(busy_label(&app), "Result unconfirmed");
+    }
 }

@@ -7,6 +7,7 @@
 
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::markdown::{column_width, line_width};
 use crate::theme::Theme;
@@ -164,12 +165,12 @@ pub fn collapsed_simple_line(text: &str) -> String {
 pub fn clip_cells(text: &str, width: usize) -> String {
     let mut result = String::new();
     let mut used = 0;
-    for ch in text.chars() {
-        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+    for grapheme in text.graphemes(true) {
+        let cw = column_width(grapheme);
         if used + cw > width {
             break;
         }
-        result.push(ch);
+        result.push_str(grapheme);
         used += cw;
     }
     result
@@ -180,12 +181,12 @@ fn fit_spans(spans: Vec<Span<'_>>, width: usize) -> Vec<Span<'static>> {
     let mut fitted = Vec::new();
     for span in spans {
         let mut text = String::new();
-        for ch in span.content.chars() {
-            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        for grapheme in span.content.graphemes(true) {
+            let cw = column_width(grapheme);
             if used + cw > width {
                 break;
             }
-            text.push(ch);
+            text.push_str(grapheme);
             used += cw;
         }
         if !text.is_empty() {
@@ -261,6 +262,8 @@ mod tests {
         assert_eq!(collapsed_simple_line("a\n\t b  c"), "a b c");
         assert_eq!(clip_cells("你a", 2), "你");
         assert_eq!(clip_cells("你a", 1), "");
+        assert_eq!(clip_cells("👨‍👩‍👧a", 2), "👨‍👩‍👧");
+        assert_eq!(clip_cells("e\u{301}a", 1), "e\u{301}");
     }
 
     #[test]

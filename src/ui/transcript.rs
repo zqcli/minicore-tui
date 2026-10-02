@@ -616,7 +616,11 @@ pub(crate) fn scroll_position(app: &App, total: usize, height: usize) -> ScrollP
     };
     let marker = !view.scroll.follow_tail && total > height;
     let visible_rows = height;
-    let max_offset = total.saturating_sub(visible_rows.max(1));
+    let max_offset = if view.scroll.fold_pinned {
+        total.saturating_sub(1)
+    } else {
+        total.saturating_sub(visible_rows.max(1))
+    };
     let offset = if view.scroll.follow_tail {
         max_offset
     } else {
@@ -1891,9 +1895,7 @@ fn build_live_tail(
 
         // Warning for unsaved loop if persistence failed (spec 30.5)
         if let Some(unsaved) = &view.unsaved_loop {
-            let error_style = Style::new()
-                .fg(ratatui::style::Color::White)
-                .bg(theme.error);
+            let error_style = Style::new().fg(theme.error).bg(theme.page_bg);
             let mut banner_lines = vec![
                 Line::default(),
                 layout::filled(
@@ -2011,26 +2013,14 @@ fn last_result_lines(
         return Vec::new();
     }
 
-    let (badge, outcome_style) = match &result.outcome {
-        LoopOutcomeWire::Completed => (
-            "✓",
-            Style::new()
-                .fg(result_color(result, theme))
-                .bg(theme.card_bg),
-        ),
-        LoopOutcomeWire::Cancelled { .. } => (
-            "⊘",
-            Style::new()
-                .fg(result_color(result, theme))
-                .bg(theme.card_bg),
-        ),
-        LoopOutcomeWire::Failed { .. } => (
-            "✗",
-            Style::new()
-                .fg(result_color(result, theme))
-                .bg(theme.card_bg),
-        ),
+    let badge = match &result.outcome {
+        LoopOutcomeWire::Completed => "✓",
+        LoopOutcomeWire::Cancelled { .. } => "⊘",
+        LoopOutcomeWire::Failed { .. } => "✗",
     };
+    let outcome_style = Style::new()
+        .fg(result_color(result, theme))
+        .bg(theme.page_bg);
 
     let content = format!(
         " {} Turn {} · requests: {} · tool rounds: {}",
@@ -2541,7 +2531,9 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
     if width == 0 || height == 0 {
         return;
     }
-    if app.async_layout_enabled() && app.prepared_conversation(area.width).is_none() {
+    if app.history_tail_loading()
+        || (app.async_layout_enabled() && app.prepared_conversation(area.width).is_none())
+    {
         if let Some(previous) = app.transition_transcript_frame(area) {
             // Only transcript cells are replayed; composer/footer keep drawing
             // from current App state. A growing composer simply crops the view.
@@ -2653,6 +2645,31 @@ pub(crate) fn marker_area(area: Rect, label: &str, scrollbar: bool) -> Rect {
 #[cfg(test)]
 mod source_map_tests {
     use super::*;
+
+    #[test]
+    fn terminal_failure_uses_error_text_and_conversation_background() {
+        let result: crate::protocol::TurnResultViewWire =
+            serde_json::from_value(serde_json::json!({
+                "turn": { "session_id": "s", "loop_id": "l" },
+                "outcome": { "type": "failed", "kind": "model_error" },
+                "persistence": "persisted",
+                "requests": 1,
+                "tool_rounds": 0
+            }))
+            .unwrap();
+        for theme in [Theme::dark(), Theme::light()] {
+            let rows = last_result_lines(&theme, &result, 100);
+            assert!(
+                rows.iter()
+                    .flat_map(|row| &row.spans)
+                    .any(|span| span.content.contains("failed"))
+            );
+            for span in rows.iter().flat_map(|row| &row.spans) {
+                assert_eq!(span.style.fg, Some(theme.error));
+                assert_eq!(span.style.bg, Some(theme.page_bg));
+            }
+        }
+    }
 
     fn copied_text(layout: &SectionLayout) -> String {
         let mut out = String::new();

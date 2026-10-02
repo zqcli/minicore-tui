@@ -184,8 +184,10 @@ fn render_card(
         }
     }
     let (process, warning) = command_summary(name, result, facts);
-    if warning {
-        colors.rail = theme.warning;
+    let failed = warning || state == ToolSurfaceState::Error;
+    if failed {
+        colors.rail = theme.error;
+        colors.background = theme.page_bg;
     }
     let status = process.map_or(status.clone(), |process| format!("{status} · {process}"));
     let title = format!("{} · {status}", clip_summary(name, 18));
@@ -194,8 +196,8 @@ fn render_card(
     for (text, color) in [
         (
             &title,
-            if warning {
-                theme.warning
+            if failed {
+                theme.error
             } else {
                 theme.tool_title
             },
@@ -220,16 +222,26 @@ fn render_card(
             )),
         ));
     }
+    let partial = display.is_some_and(|d| d.truncated) || facts.is_some_and(|f| f.result_truncated);
     let mut footer_row = None;
     if expanded {
-        append_body(theme, width, colors, display, result, &mut out);
+        append_body(
+            theme, width, colors, name, display, result, failed, &mut out,
+        );
         footer_row = Some(out.len());
         out.push(rail::surface_row(
             width,
             colors,
             rail::SURFACE_CONTENT_START,
             Line::from(Span::styled(
-                clip_summary("ctrl+o collapse", available),
+                clip_summary(
+                    if partial {
+                        "partial · ctrl+o collapse"
+                    } else {
+                        "ctrl+o collapse"
+                    },
+                    available,
+                ),
                 Style::new().fg(theme.tool_muted),
             )),
         ));
@@ -241,7 +253,11 @@ fn render_card(
                 rail::SURFACE_CONTENT_START,
                 Line::from(Span::styled(
                     clip_summary(&summary, available),
-                    Style::new().fg(theme.tool_output),
+                    Style::new().fg(if failed {
+                        theme.error
+                    } else {
+                        theme.tool_output
+                    }),
                 )),
             ));
         }
@@ -250,8 +266,6 @@ fn render_card(
             .and_then(|d| d.expanded_input.as_deref())
             .map_or(0, |text| wrapped_result_row_count(text, content_width))
             + result.map_or(0, |text| wrapped_result_row_count(text, content_width));
-        let partial =
-            display.is_some_and(|d| d.truncated) || facts.is_some_and(|f| f.result_truncated);
         if hidden > 0 || partial {
             footer_row = Some(out.len());
             let hint = format!(
@@ -447,23 +461,76 @@ fn output_summary(
     result_summary(result)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_body(
     theme: &Theme,
     width: usize,
     colors: rail::SurfaceColors,
+    name: &str,
     display: Option<&ToolDisplayWire>,
     result: Option<&str>,
+    failed: bool,
     out: &mut Vec<Line<'static>>,
 ) {
-    for text in [display.and_then(|d| d.expanded_input.as_deref()), result]
-        .into_iter()
-        .flatten()
-        .filter(|text| !text.is_empty())
+    if let Some(input) = display
+        .and_then(|d| d.expanded_input.as_deref())
+        .filter(|s| !s.is_empty())
     {
-        for line in text.split('\n') {
-            push_wrapped_row(theme, width, colors, line, "  ", out);
+        // Only explicit patch formats carry diff semantics. Legacy edit displays
+        // concatenate old/new text and must not be guessed from a leading +/-.
+        let diff = matches!(name, "apply_patch" | "patch" | "apply_batch")
+            || (name == "edit" && input.starts_with("--- before\n+++ after\n@@"));
+        let mut in_hunk = false;
+        for line in input.split('\n') {
+            let fg = if diff {
+                diff_line_color(theme, line, &mut in_hunk)
+            } else if name == "write" {
+                theme.success
+            } else {
+                theme.tool_output
+            };
+            push_wrapped_row(fg, width, colors, line, "  ", out);
         }
     }
+    if let Some(result) = result.filter(|s| !s.is_empty()) {
+        for line in result.split('\n') {
+            push_wrapped_row(
+                if failed {
+                    theme.error
+                } else {
+                    theme.tool_output
+                },
+                width,
+                colors,
+                line,
+                "  ",
+                out,
+            );
+        }
+    }
+}
+
+fn diff_line_color(theme: &Theme, line: &str, in_hunk: &mut bool) -> ratatui::style::Color {
+    if line.starts_with("@@") {
+        *in_hunk = true;
+        return theme.tool_muted;
+    }
+    if line.starts_with("*** ") || line.starts_with("diff --git ") {
+        *in_hunk = line.starts_with("*** Add File: ");
+        return theme.tool_muted;
+    }
+    if !*in_hunk && (line.starts_with("--- ") || line.starts_with("+++ ")) {
+        return theme.tool_muted;
+    }
+    if *in_hunk {
+        if line.starts_with('+') {
+            return theme.success;
+        }
+        if line.starts_with('-') {
+            return theme.error;
+        }
+    }
+    theme.tool_output
 }
 
 /// Returns the Rail default for a tool when no manual fold override exists.
@@ -557,7 +624,7 @@ pub fn wrapped_result_row_count(text: &str, content_width: usize) -> usize {
     let content_width = content_width.max(1);
     let mut rows = 0usize;
     for line in text.split('\n') {
-        let line = crate::safe_text::safe_display(line);
+        let line = visible_tool_line(line);
         if line.is_empty() {
             rows += 1;
             continue;
@@ -576,15 +643,21 @@ pub fn wrapped_result_row_count(text: &str, content_width: usize) -> usize {
     rows
 }
 
+// Terminals discard raw tabs in styled cells. Use a visible escape before both
+// measurement and wrapping so argument separators never silently disappear.
+fn visible_tool_line(line: &str) -> String {
+    crate::safe_text::safe_display(line).replace('\t', "\\t")
+}
+
 fn push_wrapped_row(
-    theme: &Theme,
+    foreground: ratatui::style::Color,
     width: usize,
     colors: rail::SurfaceColors,
     line: &str,
     indent: &str,
     out: &mut Vec<Line<'static>>,
 ) {
-    let line = crate::safe_text::safe_display(line);
+    let line = visible_tool_line(line);
     let content_width = width
         .saturating_sub(rail::SURFACE_CONTENT_START)
         .saturating_sub(UnicodeWidthStr::width(indent));
@@ -610,7 +683,7 @@ fn push_wrapped_row(
             rail::SURFACE_CONTENT_START,
             Line::from(Span::styled(
                 format!("{indent}{current}"),
-                Style::new().fg(theme.tool_output),
+                Style::new().fg(foreground),
             )),
         ));
         current.clear();
@@ -838,7 +911,7 @@ mod tests {
             let rendered = text(&rows);
             assert!(rendered.contains("completed · exit 7 (nonzero)"));
             assert!(rendered.contains("stderr: SIMULATED-ERROR"));
-            assert_eq!(rows[1].spans[0].style.fg, Some(theme.warning));
+            assert_eq!(rows[1].spans[0].style.fg, Some(theme.error));
             assert_eq!(block.outcome, Some(ToolOutcomeWire::Success));
         }
     }
@@ -963,5 +1036,217 @@ mod tests {
             rendered.copy_cells[2].is_none(),
             "empty card target must remain copyable"
         );
+    }
+
+    #[test]
+    fn expanded_bash_command_wraps_losslessly_in_both_themes() {
+        let command = format!(
+            "find . -type f -print0 | xargs -0 grep '{}'\nprintf done",
+            "中文👨‍👩‍👧pattern".repeat(30)
+        );
+        let display = display("$ find …", Some(&command));
+        for theme in [Theme::dark(), Theme::light()] {
+            for width in [12, 24, 59, 119] {
+                let rows = super::durable_with_display(
+                    &theme,
+                    &card("bash", ""),
+                    width,
+                    true,
+                    Some(&display),
+                );
+                let body = &rows[3..rows.len() - 2];
+                let rendered = body
+                    .iter()
+                    .flat_map(|line| &line.spans)
+                    .filter(|span| span.style.fg == Some(theme.tool_output))
+                    .map(|span| span.content.strip_prefix("  ").unwrap_or(&span.content))
+                    .collect::<String>();
+                assert_eq!(rendered, command.replace('\n', ""));
+                assert!(
+                    rows.iter()
+                        .all(|line| crate::markdown::line_width(line) <= width)
+                );
+                let collapsed = super::durable_with_display(
+                    &theme,
+                    &card("bash", ""),
+                    59,
+                    false,
+                    Some(&display),
+                );
+                assert!(text(&collapsed).contains("hidden rows"));
+            }
+        }
+    }
+
+    #[test]
+    fn bash_tabs_remain_visible_in_real_terminal_cells() {
+        use ratatui::{
+            buffer::Buffer,
+            layout::Rect,
+            widgets::{Paragraph, Widget},
+        };
+
+        let command = "printf\tfoo\n\t中文👨‍👩‍👧end";
+        for theme in [Theme::dark(), Theme::light()] {
+            for width in [12usize, 24, 59] {
+                let rows = super::durable_with_display(
+                    &theme,
+                    &card("bash", ""),
+                    width,
+                    true,
+                    Some(&display("$ printf …", Some(command))),
+                );
+                let area = Rect::new(0, 0, width as u16, rows.len() as u16);
+                let mut buffer = Buffer::empty(area);
+                Paragraph::new(rows.clone()).render(area, &mut buffer);
+                let start = (super::rail::SURFACE_CONTENT_START + 2) as u16;
+                let mut visible = String::new();
+                for y in 3..rows.len() - 2 {
+                    let line = (start..width as u16)
+                        .map(|x| buffer[(x, y as u16)].symbol())
+                        .collect::<String>();
+                    // Wide graphemes occupy continuation cells containing spaces.
+                    visible.push_str(&line.replace(' ', ""));
+                }
+                assert_eq!(visible, command.replace('\t', "\\t").replace('\n', ""));
+                assert_eq!(
+                    super::wrapped_result_row_count(command, width - start as usize),
+                    rows.len() - 5,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn patch_semantics_color_changes_but_not_context_metadata_or_results() {
+        for theme in [Theme::dark(), Theme::light()] {
+            for (name, input) in [
+                (
+                    "apply_patch",
+                    "--- a/file\n+++ b/file\n@@ -1,2 +1,2 @@\n unchanged\n-old\n+new",
+                ),
+                (
+                    "patch",
+                    "*** Begin Patch\n*** Update File: file\n@@\n unchanged\n-old\n+new\n*** End Patch",
+                ),
+                (
+                    "apply_batch",
+                    "*** Begin Patch\n*** Add File: file\n+new\n*** End Patch",
+                ),
+                (
+                    "edit",
+                    "--- before\n+++ after\n@@ -1,2 +1,2 @@\n unchanged\n-old\n+new",
+                ),
+            ] {
+                let rows = super::durable_with_display(
+                    &theme,
+                    &card(name, "+result is not a diff"),
+                    59,
+                    true,
+                    Some(&display("file", Some(input))),
+                );
+                for span in rows.iter().flat_map(|line| &line.spans) {
+                    let content = span.content.trim_start();
+                    let expected = match content {
+                        "+new" => Some(theme.success),
+                        "-old" => Some(theme.error),
+                        "unchanged" | "+result is not a diff" => Some(theme.tool_output),
+                        _ if content.starts_with("@@")
+                            || content.starts_with("*** ")
+                            || content.starts_with("--- ")
+                            || content.starts_with("+++ ") =>
+                        {
+                            Some(theme.tool_muted)
+                        }
+                        _ => None,
+                    };
+                    if let Some(expected) = expected {
+                        assert_eq!(span.style.fg, Some(expected), "{name}: {content}");
+                    }
+                }
+                assert!(
+                    rows.iter()
+                        .flat_map(|line| &line.spans)
+                        .any(|span| span.content.trim() == "+new"
+                            && span.style.fg == Some(theme.success))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_edit_and_read_are_not_misidentified_as_diffs() {
+        let theme = Theme::dark();
+        for name in ["read", "edit", "custom"] {
+            let rows = super::durable_with_display(
+                &theme,
+                &card(name, "-result"),
+                59,
+                true,
+                Some(&display("file", Some("+literal\n-literal"))),
+            );
+            for span in rows
+                .iter()
+                .flat_map(|line| &line.spans)
+                .filter(|span| span.content.contains("literal") || span.content.contains("-result"))
+            {
+                assert_eq!(span.style.fg, Some(theme.tool_output));
+            }
+        }
+        let rows = super::durable_with_display(
+            &theme,
+            &card("write", "written"),
+            59,
+            true,
+            Some(&display("file", Some("new content"))),
+        );
+        assert!(rows.iter().flat_map(|line| &line.spans).any(|span| {
+            span.content.contains("new content") && span.style.fg == Some(theme.success)
+        }));
+    }
+
+    #[test]
+    fn truncated_inputs_remain_explicitly_partial_when_expanded() {
+        let mut display = display("file", Some("--- before\n+++ after\n@@\n same"));
+        display.truncated = true;
+        let rows = super::durable_with_display(
+            &Theme::dark(),
+            &card("edit", ""),
+            59,
+            true,
+            Some(&display),
+        );
+        assert!(text(&rows).contains("partial · ctrl+o collapse"));
+    }
+
+    #[test]
+    fn errors_use_error_foreground_on_chat_background_not_warning_surfaces() {
+        for theme in [Theme::dark(), Theme::light()] {
+            for expanded in [false, true] {
+                let mut failed = card("read", "cannot read file");
+                failed.outcome = Some(ToolOutcomeWire::Failed);
+                for block in [
+                    failed,
+                    card("bash", "exit_code: 7\nstdout:\n\nstderr:\nerror"),
+                ] {
+                    let rows = super::durable(&theme, &block, 59, expanded);
+                    assert_eq!(rows[1].spans[0].style.fg, Some(theme.error));
+                    assert!(
+                        rows.iter().flat_map(|line| &line.spans).all(|span| span
+                            .style
+                            .bg
+                            .unwrap_or(ratatui::style::Color::Reset)
+                            == theme.page_bg)
+                    );
+                    assert!(rows.iter().flat_map(|line| &line.spans).any(|span| {
+                        span.content.contains(if block.name == "bash" {
+                            "error"
+                        } else {
+                            "cannot read"
+                        }) && span.style.fg == Some(theme.error)
+                    }));
+                }
+            }
+        }
     }
 }

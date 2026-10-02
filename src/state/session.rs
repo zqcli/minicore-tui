@@ -247,6 +247,9 @@ pub struct SessionView {
     /// (spec §3.4). Replaces the former `loading`/`reconcile_inflight`/
     /// `needs_post_wait_history` triplet.
     pub history_read: HistoryRead,
+    /// Until the first history chain settles, do not display its intermediate
+    /// oldest-to-newest prefixes as the resumed conversation's latest tail.
+    pub initial_history_pending: bool,
     /// Whether an explicit session.close is currently pending.
     pub closing: bool,
     /// The last close attempt ended without an authoritative unload proof or
@@ -328,6 +331,7 @@ impl SessionView {
             read_page: None,
             event_gap: false,
             history_read: HistoryRead::default(),
+            initial_history_pending: true,
             closing: false,
             close_verification_unknown: false,
             steer_state_unconfirmed: false,
@@ -699,6 +703,9 @@ pub struct ScrollState {
     pub follow_tail: bool,
     pub new_content: bool,
     pub anchor: Option<crate::state::view::ScrollAnchor>,
+    /// A clicked fold header stays fixed, even when collapsing leaves blank
+    /// rows below the tail. Explicit scrolling releases this viewport pin.
+    pub fold_pinned: bool,
     /// Exact prompt chosen by navigation, independent of the first visible
     /// reflow anchor. Direct scrolling clears this cursor.
     pub prompt_cursor: Option<usize>,
@@ -711,6 +718,7 @@ impl Default for ScrollState {
             follow_tail: true,
             new_content: false,
             anchor: None,
+            fold_pinned: false,
             prompt_cursor: None,
         }
     }

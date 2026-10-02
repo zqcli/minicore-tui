@@ -675,12 +675,13 @@ fn partial_durable_tool_prefers_live_state_over_an_incomplete_history_marker() {
         text.contains("live-result-unique"),
         "the live result must not be hidden by the incomplete durable marker: {text}"
     );
-    let error_background = app.theme.theme().tool_error_bg;
+    let theme = app.theme.theme();
     assert!(
         prepared.lines().iter().any(|line| {
             line.spans.iter().any(|span| {
                 span.content.contains("live-result-unique")
-                    && span.style.bg == Some(error_background)
+                    && span.style.bg.unwrap_or(ratatui::style::Color::Reset) == theme.page_bg
+                    && span.style.fg == Some(theme.error)
             })
         }),
         "the live terminal error state must survive the durable/live transition: {text}"
@@ -795,12 +796,13 @@ fn history_tool_marker_falls_back_to_tool_facts_without_a_live_owner() {
         text.contains("facts-fallback-result"),
         "ToolFacts result must populate the fallback card: {text}"
     );
-    let error_background = app.theme.theme().tool_error_bg;
+    let theme = app.theme.theme();
     assert!(
         prepared.lines().iter().any(|line| {
             line.spans.iter().any(|span| {
                 span.content.contains("facts-fallback-result")
-                    && span.style.bg == Some(error_background)
+                    && span.style.bg.unwrap_or(ratatui::style::Color::Reset) == theme.page_bg
+                    && span.style.fg == Some(theme.error)
             })
         }),
         "ToolFacts status must populate the fallback card state: {text}"

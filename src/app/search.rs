@@ -601,6 +601,8 @@ impl App {
         }
         if let Some(view) = self.active_session_mut() {
             view.scroll.follow_tail = true;
+            view.scroll.fold_pinned = false;
+            view.scroll.anchor = None;
             view.scroll.offset = 0;
             view.scroll.new_content = false;
         }
@@ -685,6 +687,7 @@ impl App {
             return;
         };
         view.scroll.follow_tail = false;
+        view.scroll.fold_pinned = false;
         view.scroll.new_content = false;
         view.scroll.prompt_cursor = (target.source == SearchSource::Prompt)
             .then_some(target.index)
