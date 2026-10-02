@@ -11,6 +11,6 @@
  │Ctrl+C  clear the composer; empty: press again to quit   │
  │Ctrl+D  quit when the composer is empty and idle         │
  │F1  open/close help; q quits the application             │
- │↑↓/PgUp/PgDn scroll · Esc/F1 close · q quit · 1–5/128    │
+ │↑↓/PgUp/PgDn scroll · Esc/F1 close · q quit · 1–5/129    │
  └─────────────────────────────────────────────────────────┘
  starting

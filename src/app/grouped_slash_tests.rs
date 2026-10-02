@@ -23,36 +23,31 @@ fn edit(app: &mut App, text: &str) {
 }
 
 #[test]
-fn group_enter_drills_tab_never_executes_and_escape_walks_back() {
+fn group_enter_opens_choices_tab_never_executes_and_escape_dismisses() {
     let mut a = app();
     edit(&mut a, "/session");
     assert!(key(&mut a, KeyCode::Enter).is_empty());
-    assert_eq!(a.composer.content(), "/session ");
-    assert_eq!(
-        a.slash_completion.as_ref().unwrap().group,
-        Some(crate::command::CommandGroup::Session)
-    );
-    edit(&mut a, "/session ren");
+    assert_eq!(a.composer.content(), "/session");
+    assert!(a.slash_completion.as_ref().unwrap().popup.is_some());
+    type_command(&mut a, "ren");
+    assert_eq!(a.composer.content(), "/session");
     assert!(key(&mut a, KeyCode::Tab).is_empty());
     assert_eq!(a.composer.content(), "/session rename ");
-    assert!(key(&mut a, KeyCode::Tab).is_empty());
-    assert!(
-        a.pending_requests
-            .values()
-            .all(|r| !matches!(r, RequestKind::UpdateSession { .. }))
-    );
+    assert!(a.pending_requests.is_empty());
     edit(&mut a, "/session re");
+    assert!(key(&mut a, KeyCode::Enter).is_empty());
+    assert!(a.slash_completion.as_ref().unwrap().popup.is_some());
+    type_command(&mut a, "rename");
     assert!(key(&mut a, KeyCode::Esc).is_empty());
-    assert_eq!(a.composer.content(), "/session ");
+    assert_eq!(a.slash_completion.as_ref().unwrap().filter, "");
     assert!(key(&mut a, KeyCode::Esc).is_empty());
-    assert_eq!(a.composer.content(), "/");
-    assert!(key(&mut a, KeyCode::Esc).is_empty());
+    assert_eq!(a.composer.content(), "/session re");
     assert!(a.slash_completion.is_none());
     for code in [KeyCode::Left, KeyCode::Right] {
         assert!(key(&mut a, code).is_empty());
         assert!(a.slash_completion.is_none());
     }
-    assert!(key(&mut a, KeyCode::Char('m')).is_empty());
+    assert!(key(&mut a, KeyCode::Char('n')).is_empty());
     assert!(a.slash_completion.is_some());
 }
 
@@ -66,7 +61,7 @@ fn no_match_cannot_dispatch_previous_selection_or_cancel() {
         assert_eq!(a.composer.content(), "/session zzz");
     }
     assert!(key(&mut a, KeyCode::Esc).is_empty());
-    assert_eq!(a.composer.content(), "/session ");
+    assert_eq!(a.composer.content(), "/session zzz");
 }
 
 #[test]
@@ -129,7 +124,7 @@ fn slash_small_screen_keeps_editable_line_selection_and_controls() {
             .map(|r| r.iter().map(|c| c.symbol()).collect::<String>())
             .collect::<Vec<_>>();
         assert!(rows.iter().any(|r| r.contains("/conversation ")));
-        assert!(rows.iter().any(|r| r.contains("→ /")));
+        assert!(rows.iter().any(|r| r.contains("→ Conversation")));
         assert!(rows.iter().any(|r| r.contains("Tab") && r.contains("Esc")));
     }
 }
@@ -294,32 +289,35 @@ fn optional_argument_tab_explicitly_fills_canonical_case_without_submitting() {
 }
 
 #[test]
-fn optional_argument_arrow_selection_only_changes_what_tab_fills() {
+fn optional_argument_arrow_selection_only_changes_what_popup_fills() {
     let mut a = app();
     type_command(&mut a, "/reasoning ");
+    assert!(key(&mut a, KeyCode::Enter).is_empty());
+    assert!(a.slash_completion.as_ref().unwrap().popup.is_some());
     assert!(key(&mut a, KeyCode::Down).is_empty());
-    let chosen = a.slash_completion.as_ref().unwrap().items[1].text.clone();
+    let completion = a.slash_completion.as_ref().unwrap();
+    let chosen = completion.items[completion.selected].text.clone();
     assert!(key(&mut a, KeyCode::Tab).is_empty());
     assert_eq!(a.composer.content(), format!("{chosen} "));
     assert!(a.pending_requests.is_empty());
     let outgoing = testapp::take_requests(key(&mut a, KeyCode::Enter));
     assert_eq!(outgoing.len(), 1);
-    assert_eq!(outgoing[0].params["reasoning"], "low");
+    assert_eq!(
+        outgoing[0].params["reasoning"],
+        chosen.split_whitespace().nth(1).unwrap()
+    );
 }
 
 #[test]
-fn optional_argument_empty_tail_enter_opens_existing_picker() {
+fn optional_argument_empty_tail_enter_opens_compact_picker() {
     for text in ["/model ", "/model   ", "/reasoning ", "/reasoning   "] {
         let mut a = app();
         type_command(&mut a, text);
         assert!(key(&mut a, KeyCode::Down).is_empty());
         assert!(key(&mut a, KeyCode::Enter).is_empty());
         assert!(a.pending_requests.is_empty());
-        if text.starts_with("/model") {
-            assert!(matches!(a.dock, Dock::ModelSelector(_)));
-        } else {
-            assert!(matches!(a.dock, Dock::ReasoningSelector(_)));
-        }
+        assert_eq!(a.dock, Dock::Composer);
+        assert!(a.slash_completion.as_ref().unwrap().popup.is_some());
         assert!(key(&mut a, KeyCode::Esc).is_empty());
         assert!(a.pending_requests.is_empty());
     }
@@ -384,9 +382,8 @@ fn optional_argument_hint_is_truthful_at_minimum_size() {
             .map(|r| r.iter().map(|c| c.symbol()).collect::<String>())
             .collect::<Vec<_>>();
         assert!(
-            rows.iter().any(|r| r.contains("Tab fill")
-                && r.contains("Enter apply typed")
-                && r.contains("Esc")),
+            rows.iter()
+                .any(|r| r.contains("Tab") && r.contains("Enter run typed") && r.contains("Esc")),
             "{rows:?}"
         );
     }
@@ -410,21 +407,16 @@ fn optional_argument_exact_values_still_use_existing_updates() {
 }
 
 #[test]
-fn qualified_theme_keeps_full_breadcrumb_and_selected_choice_enter() {
+fn qualified_theme_choice_fills_before_literal_enter_applies() {
     let mut a = app();
     type_command(&mut a, "/app theme ");
-    assert!(!a.slash_completion.as_ref().unwrap().submits_literal());
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 16)).unwrap();
-    terminal.draw(|frame| crate::ui::render(frame, &a)).unwrap();
-    let text = terminal
-        .backend()
-        .buffer()
-        .content
-        .iter()
-        .map(|c| c.symbol())
-        .collect::<String>();
-    assert!(text.contains("Commands › app › theme"), "{text}");
+    assert!(a.slash_completion.as_ref().unwrap().submits_literal());
+    assert!(a.apply_action(Action::CompletionOpen).is_empty());
+    assert!(a.slash_completion.as_ref().unwrap().popup.is_some());
     assert!(key(&mut a, KeyCode::Down).is_empty());
+    assert!(key(&mut a, KeyCode::Enter).is_empty());
+    assert_eq!(a.theme, ThemeKind::Dark);
+    assert_eq!(a.composer.content(), "/app theme light ");
     assert!(testapp::take_requests(key(&mut a, KeyCode::Enter)).is_empty());
     assert_eq!(a.theme, ThemeKind::Light);
 }

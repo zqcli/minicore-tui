@@ -34,7 +34,15 @@ pub(super) struct EditorSelection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlashChoicePopup {
+    /// Stable target and untouched Composer draft at explicit activation.
+    pub target: crate::command::MenuEntry,
+    pub entry_draft: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlashCompletionState {
+    pub popup: Option<SlashChoicePopup>,
     pub source_revision: u64,
     pub session_owner: Option<String>,
     pub start: usize,
@@ -49,14 +57,51 @@ pub struct SlashCompletionState {
 
 impl SlashCompletionState {
     pub fn submits_literal(&self) -> bool {
-        matches!(self.argument_command, Some("model" | "reasoning"))
+        self.popup.is_none()
+    }
+
+    pub fn opens_choices_on_enter(&self, content: &str) -> bool {
+        if self.popup.is_some() {
+            return false;
+        }
+        let query = content.trim().trim_start_matches('/');
+        let bare_object = query.is_empty()
+            || crate::command::CommandGroup::parse(query).is_some()
+            || query.eq_ignore_ascii_case("model")
+            || query.eq_ignore_ascii_case("reasoning");
+        let matched_prefix = !self.items.is_empty()
+            && self.argument_command.is_none()
+            && match query.split_once(char::is_whitespace) {
+                None => crate::command::command_spec(&query.to_ascii_lowercase()).is_none(),
+                Some((head, tail)) => {
+                    crate::command::CommandGroup::parse(head).is_some_and(|group| {
+                        let tail = tail.trim();
+                        !tail.contains(char::is_whitespace)
+                            && crate::command::menu::qualified(group, tail).is_err()
+                    })
+                }
+            };
+        bare_object || matched_prefix
+    }
+
+    /// Long parameter syntax gets one separate line rather than being clipped
+    /// between the object label and its action control.
+    pub fn parameter_hint(&self) -> Option<&'static str> {
+        (self.popup.is_none() && self.items.len() == 1)
+            .then(|| self.items[0].argument_hint())
+            .flatten()
+            .filter(|hint| hint.len() > 28)
     }
 
     pub fn visible_limit(&self) -> usize {
-        if self.group.is_none() && self.filter.is_empty() {
-            6
+        5
+    }
+
+    pub fn visible_limit_for_height(&self, height: u16) -> usize {
+        if height <= 16 {
+            3
         } else {
-            5
+            self.visible_limit()
         }
     }
 }
@@ -206,6 +251,14 @@ impl App {
                 normalized.insert(0, ' ');
             }
         }
+        if self
+            .slash_completion
+            .as_ref()
+            .is_some_and(|c| c.popup.is_some())
+        {
+            self.filter_slash_choices(Some(&normalized), false, false);
+            return Vec::new();
+        }
         match &self.dock {
             Dock::Composer => {
                 self.slash_completion = None;
@@ -218,6 +271,7 @@ impl App {
                         format!("composer limit is {MAX_COMPOSER_BYTES} UTF-8 bytes"),
                     );
                 }
+                self.refresh_slash_completion();
             }
             Dock::NewSession(_) => {
                 if !self.new_session().is_some_and(|draft| draft.submitting) {
@@ -259,6 +313,22 @@ impl App {
     }
 
     pub(super) fn refresh_slash_completion(&mut self) {
+        // The popup owns its filter, never the Composer text. Preserve it only
+        // while its original editor/session/cursor fence is still current.
+        if self
+            .slash_completion
+            .as_ref()
+            .is_some_and(|c| c.popup.is_some())
+        {
+            if self
+                .slash_completion
+                .as_ref()
+                .is_some_and(|c| self.slash_completion_current(c))
+            {
+                return;
+            }
+            self.slash_completion = None;
+        }
         if !matches!(self.dock, Dock::Composer) {
             self.slash_completion = None;
             return;
@@ -298,10 +368,7 @@ impl App {
             .iter()
             .map(|m| m.id.clone())
             .collect::<Vec<_>>();
-        let model = self
-            .active_view()
-            .map(|v| v.info.model.as_str())
-            .unwrap_or("");
+        let model = self.effective_settings_model();
         let reasoning = crate::state::selection::supported_reasoning(&self.catalogs.models, model)
             .iter()
             .filter_map(|level| {
@@ -314,6 +381,7 @@ impl App {
         self.slash_completion =
             crate::command::menu::page(candidate, &models, &reasoning).map(|page| {
                 SlashCompletionState {
+                    popup: None,
                     source_revision: self.composer.editor_revision(),
                     session_owner: self.sessions.active.clone(),
                     start: 0,
@@ -329,6 +397,10 @@ impl App {
 
     fn slash_completion_current(&self, completion: &SlashCompletionState) -> bool {
         matches!(self.dock, Dock::Composer)
+            && !matches!(
+                self.connection,
+                super::ConnectionState::Failed(_) | super::ConnectionState::ShuttingDown
+            )
             && completion.session_owner == self.sessions.active
             && completion.source_revision == self.composer.editor_revision()
             && self.composer.cursor() == (0, completion.end)
@@ -344,6 +416,173 @@ impl App {
         }
     }
 
+    /// Explicit activation changes presentation only: no editor or RPC writes.
+    pub(super) fn open_slash_choices(&mut self) {
+        let Some(mut completion) = self.slash_completion.take() else {
+            return;
+        };
+        if !self.slash_completion_current(&completion) {
+            return;
+        }
+        if completion.popup.is_some() {
+            self.slash_completion = Some(completion);
+            return;
+        }
+        let target = completion
+            .items
+            .get(completion.selected)
+            .cloned()
+            .or_else(|| {
+                completion
+                    .argument_command
+                    .map(|name| crate::command::MenuEntry::command(name, format!("/{name}")))
+            })
+            .or_else(|| completion.group.map(crate::command::MenuEntry::group));
+        let Some(target) = target else {
+            self.slash_completion = Some(completion);
+            return;
+        };
+        let Some(page) = self.slash_choice_page(&target, "") else {
+            self.slash_completion = Some(completion);
+            return;
+        };
+        let current = if self.composer.content().split_whitespace().count() == 1 {
+            match target.kind {
+                crate::command::MenuKind::Command("model")
+                | crate::command::MenuKind::ArgumentChoice("model") => {
+                    Some(format!("/model {}", self.effective_settings_model()))
+                }
+                crate::command::MenuKind::Command("reasoning")
+                | crate::command::MenuKind::ArgumentChoice("reasoning") => {
+                    let reasoning = self
+                        .new_session()
+                        .map(|draft| draft.reasoning)
+                        .or_else(|| self.active_view().map(|view| view.info.reasoning))
+                        .or(self.catalogs.next_reasoning)
+                        .unwrap_or(crate::protocol::Reasoning::Auto);
+                    Some(format!(
+                        "/reasoning {}",
+                        crate::state::selection::reasoning_label(reasoning)
+                    ))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        completion.selected = page
+            .entries
+            .iter()
+            .position(|item| {
+                item.text.trim() == current.as_deref().unwrap_or(target.text.trim())
+                    || (page.argument_command.is_none()
+                        && item.object_group() == target.object_group()
+                        && item.action_name() == target.action_name())
+            })
+            .unwrap_or(0);
+        completion.items = page.entries;
+        completion.group = page.group;
+        completion.argument_command = page.argument_command;
+        completion.filter.clear();
+        completion.popup = Some(SlashChoicePopup {
+            target,
+            entry_draft: self.composer.content(),
+        });
+        self.slash_completion = Some(completion);
+    }
+
+    fn slash_choice_page(
+        &self,
+        target: &crate::command::MenuEntry,
+        filter: &str,
+    ) -> Option<crate::command::menu::MenuPage> {
+        let models = self
+            .catalogs
+            .models
+            .iter()
+            .map(|model| model.id.clone())
+            .collect::<Vec<_>>();
+        let model = self.effective_settings_model();
+        let reasoning = crate::state::selection::supported_reasoning(&self.catalogs.models, model)
+            .iter()
+            .filter_map(|level| {
+                serde_json::to_value(level)
+                    .ok()?
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .collect::<Vec<_>>();
+        crate::command::menu::choice_page(target, filter, &models, &reasoning)
+    }
+
+    pub(super) fn refresh_slash_choice_catalog(&mut self) {
+        let Some(completion) = self.slash_completion.as_ref() else {
+            return;
+        };
+        let Some(popup) = completion.popup.as_ref() else {
+            return;
+        };
+        let Some(page) = self.slash_choice_page(&popup.target, &completion.filter) else {
+            return;
+        };
+        if completion.items == page.entries {
+            return;
+        }
+        let selected = completion
+            .items
+            .get(completion.selected)
+            .map(|item| item.text.as_str());
+        let next = page
+            .entries
+            .iter()
+            .position(|item| Some(item.text.as_str()) == selected)
+            .unwrap_or(0);
+        if let Some(completion) = self.slash_completion.as_mut() {
+            completion.items = page.entries;
+            completion.selected = next;
+            self.dirty = true;
+        }
+    }
+
+    pub(super) fn filter_slash_choices(
+        &mut self,
+        text: Option<&str>,
+        backspace: bool,
+        clear: bool,
+    ) {
+        let Some(mut completion) = self.slash_completion.take() else {
+            return;
+        };
+        if !self.slash_completion_current(&completion) {
+            return;
+        }
+        let Some(popup) = &completion.popup else {
+            self.slash_completion = Some(completion);
+            return;
+        };
+        if clear {
+            completion.filter.clear();
+        }
+        if backspace {
+            completion.filter.pop();
+        }
+        if let Some(text) = text {
+            // Filtering has the same bounded text budget as the editor; pasted
+            // newlines/control characters cannot become executable commands.
+            for c in text.chars().filter(|c| !c.is_control()) {
+                if completion.filter.len() + c.len_utf8() > MAX_COMPOSER_BYTES {
+                    break;
+                }
+                completion.filter.push(c);
+            }
+        }
+        if let Some(page) = self.slash_choice_page(&popup.target, &completion.filter) {
+            completion.items = page.entries;
+            completion.selected = 0;
+        }
+        self.slash_completion = Some(completion);
+    }
+
     pub(super) fn cancel_slash_completion(&mut self) {
         let Some(completion) = self.slash_completion.take() else {
             return;
@@ -351,21 +590,18 @@ impl App {
         if !self.slash_completion_current(&completion) {
             return;
         }
-        if let Some(group) = completion.group {
-            let replacement = if completion.filter.is_empty() {
-                "/".to_owned()
-            } else {
-                format!("/{} ", group.name())
-            };
-            self.composer
-                .replace_range(0, completion.start, completion.end, &replacement);
-            self.refresh_slash_completion();
-        } else {
-            self.slash_dismissed_text = Some(self.composer.content());
+        if completion.popup.is_some() && !completion.filter.is_empty() {
+            self.slash_completion = Some(completion);
+            self.filter_slash_choices(None, false, true);
+            return;
         }
+        // Popup filtering never changed the entry draft, preserving its undo
+        // history and cursor on Escape. Dismiss until the user edits again.
+        self.slash_dismissed_text = Some(self.composer.content());
     }
 
     pub(super) fn move_slash_completion(&mut self, delta: i32) {
+        self.discard_stale_slash_completion();
         let Some(completion) = self.slash_completion.as_mut() else {
             return;
         };
@@ -376,40 +612,120 @@ impl App {
         completion.selected = (completion.selected as i32 + delta).rem_euclid(len as i32) as usize;
     }
 
-    /// Returns `true` when completion still needs input rather than immediate
-    /// submission (a required argument, or the existing skill-command path).
+    /// Fill is always local, both for ordinary Tab and popup Enter/Tab.
+    /// The next Enter submits the resulting literal through the normal parser.
     pub(super) fn accept_slash_completion(&mut self) -> bool {
         let Some(completion) = self.slash_completion.take() else {
-            return false;
+            return true;
         };
         if !self.slash_completion_current(&completion) {
             return true;
         }
         let Some(item) = completion.items.get(completion.selected) else {
             self.slash_completion = Some(completion);
-            // Tab remains a no-op; Enter validates the current literal text.
+            return true;
+        };
+        if completion.popup.is_none()
+            && matches!(item.kind, crate::command::MenuKind::Command(_))
+            && item.text == self.composer.content()
+            && item.text.contains(char::is_whitespace)
+        {
+            // Opaque tails (and invalid literal finite values) are not
+            // completions. Tab must not normalize or append to user data.
+            self.slash_completion = Some(completion);
+            return true;
+        }
+        let replacement = format!("{} ", item.text.trim_end());
+        self.composer
+            .replace_range(0, completion.start, completion.end, &replacement);
+        self.slash_dismissed_text = None;
+        self.refresh_slash_completion();
+        true
+    }
+
+    pub(super) fn enter_slash_completion(&mut self) -> Vec<AppCommand> {
+        let Some(completion) = self.slash_completion.as_ref() else {
+            return Vec::new();
+        };
+        if !self.slash_completion_current(completion) {
+            self.slash_completion = None;
+            return Vec::new();
+        }
+        if completion.popup.is_some() {
+            self.accept_slash_completion();
+            return Vec::new();
+        }
+        if completion.opens_choices_on_enter(&self.composer.content()) {
+            self.open_slash_choices();
+            Vec::new()
+        } else {
+            self.submit_composer()
+        }
+    }
+
+    /// Return true only for the shared visible completion rectangle. Selecting
+    /// an option fills the draft, never dispatches a command.
+    fn slash_completion_mouse(&mut self, mouse: MouseEvent) -> bool {
+        if crate::ui::layout::is_too_small(ratatui::layout::Rect::new(
+            0,
+            0,
+            self.terminal_size.0,
+            self.terminal_size.1,
+        )) {
+            return false;
+        }
+        self.discard_stale_slash_completion();
+        let Some(completion) = self.slash_completion.as_ref() else {
             return false;
         };
-        let (line, _) = self.composer.cursor();
-        self.composer.replace_range(
-            line,
-            completion.start,
-            completion.end,
-            &format!("{} ", item.text),
+        let screen = crate::ui::layout::screen_layout(
+            self,
+            ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1),
         );
-        let needs_input = item.needs_input();
-        if needs_input && !item.text.starts_with("/skill:") {
-            if let crate::command::MenuKind::Command(name) = item.kind {
-                if let Some(spec) = crate::command::command_spec(name) {
-                    self.notice(super::NoticeLevel::Info, spec.usage);
+        let height = crate::ui::layout::composer_completion_rows(self)
+            .min(screen.panel.height.saturating_sub(1));
+        let area = ratatui::layout::Rect::new(
+            screen.panel.x,
+            screen.panel.bottom().saturating_sub(height),
+            screen.panel.width,
+            height,
+        );
+        if !area.contains((mouse.column, mouse.row).into()) {
+            return false;
+        }
+        let geometry =
+            crate::ui::layout::slash_completion_geometry(completion, height, self.terminal_size.1);
+        let index = (mouse.row - area.y) as usize;
+        let body_index = index.checked_sub(usize::from(geometry.show_header));
+        let selected = body_index
+            .map(|index| geometry.start + index)
+            .filter(|index| *index < geometry.end);
+        let popup = completion.popup.is_some();
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(index) = selected {
+                    self.focus = crate::state::panels::Focus::Editor;
+                    if let Some(completion) = self.slash_completion.as_mut() {
+                        completion.selected = index;
+                    }
+                    if popup {
+                        self.accept_slash_completion();
+                    } else {
+                        self.open_slash_choices();
+                    }
                 }
             }
-            self.refresh_slash_completion();
+            MouseEventKind::ScrollUp => self.move_slash_completion(-1),
+            MouseEventKind::ScrollDown => self.move_slash_completion(1),
+            _ => {}
         }
-        needs_input
+        true
     }
 
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent) -> Vec<AppCommand> {
+        if self.slash_completion_mouse(mouse) {
+            return Vec::new();
+        }
         if let Some(commands) = self.context_mouse(mouse) {
             return commands;
         }

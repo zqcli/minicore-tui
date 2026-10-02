@@ -124,15 +124,19 @@ fn content_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {
     for (key, what) in [
         (
             "/",
-            "Model and Reasoning shortcuts; Session, Workspace, Conversation and App groups",
+            "Compact Model, Reasoning, Session, Workspace, Conversation and App controls",
+        ),
+        (
+            "Ctrl+Space",
+            "open choices for the selected object; type to filter",
         ),
         (
             "Enter / Tab",
-            "Enter opens a group or runs a command; Tab only fills text",
+            "choices fill text; Enter in the editor runs the completed command",
         ),
         (
             "Esc in menu",
-            "clear group filter, back to root, then hide; never cancels a turn",
+            "clear choice filter, then dismiss; never cancels a turn",
         ),
         (
             "/session configure",

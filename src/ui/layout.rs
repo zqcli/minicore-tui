@@ -126,7 +126,7 @@ pub fn screen_layout(app: &App, area: Rect) -> ScreenLayout {
     let short = content.height < 24;
     let panel = match &app.dock {
         Dock::Composer => composer_height_phase5(app, content.width, content.height, short)
-            .saturating_add(composer_completion_rows(app)),
+            .saturating_add(composer_completion_rows_for_height(app, content.height)),
         Dock::Help | Dock::Logs => help_panel_height(content.height),
         // The search panel is taller while results are listed so the
         // transcript above it stays visible (spec §17.1).
@@ -251,11 +251,64 @@ pub fn composer_height_phase5(app: &App, width: u16, screen_height: u16, short: 
     crate::ui::rail::editor_target_rows(rows, screen_height)
 }
 
-pub fn composer_completion_rows(app: &App) -> u16 {
+/// The compact menu reserves a shortcut row and a header for multi-row lists
+/// or explicit dropdowns. Singleton objects need no repeated heading. Its body is
+/// capped using the actual terminal height, including on the first render
+/// before the app receives a resize event.
+pub fn composer_completion_rows_for_height(app: &App, screen_height: u16) -> u16 {
     app.slash_completion.as_ref().map_or(0, |completion| {
-        let visible = completion.items.len().clamp(1, completion.visible_limit());
-        (visible + 2) as u16
+        let visible = completion
+            .items
+            .len()
+            .clamp(1, completion.visible_limit_for_height(screen_height));
+        (visible
+            + 1
+            + usize::from(completion.popup.is_some() || completion.items.len() != 1)
+            + usize::from(completion.parameter_hint().is_some())) as u16
     })
+}
+
+/// Event handlers use the last observed terminal size; renderers should pass
+/// their frame height to `composer_completion_rows_for_height` instead.
+pub fn composer_completion_rows(app: &App) -> u16 {
+    composer_completion_rows_for_height(app, app.terminal_size().1)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SlashCompletionGeometry {
+    pub show_header: bool,
+    pub show_hint: bool,
+    pub show_parameter: bool,
+    pub start: usize,
+    pub end: usize,
+}
+
+/// Shared scroll window and row allocation for drawing and mouse hit tests.
+/// The dropdown replaces the compact menu body, so both use this geometry.
+pub fn slash_completion_geometry(
+    completion: &crate::app::SlashCompletionState,
+    area_height: u16,
+    screen_height: u16,
+) -> SlashCompletionGeometry {
+    let show_header =
+        area_height >= 3 && (completion.popup.is_some() || completion.items.len() != 1);
+    let show_hint = area_height >= 2;
+    let show_parameter = completion.parameter_hint().is_some() && area_height >= 3;
+    let available = (area_height as usize).saturating_sub(
+        usize::from(show_header) + usize::from(show_hint) + usize::from(show_parameter),
+    );
+    let visible = available.min(completion.visible_limit_for_height(screen_height));
+    let start = completion
+        .selected
+        .saturating_sub(visible / 2)
+        .min(completion.items.len().saturating_sub(visible));
+    SlashCompletionGeometry {
+        show_header,
+        show_hint,
+        show_parameter,
+        start,
+        end: (start + visible).min(completion.items.len()),
+    }
 }
 
 /// Help/Logs panels take at most 60% of the screen (spec 24.2).
@@ -404,6 +457,61 @@ mod tests {
 
     fn typed(app: &mut App, text: &str) {
         app.composer.type_text(text);
+    }
+
+    fn type_command(app: &mut App, text: &str) {
+        for character in text.chars() {
+            app.update(AppEvent::Terminal(crossterm::event::Event::Key(
+                crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::Char(character),
+                    crossterm::event::KeyModifiers::NONE,
+                ),
+            )));
+        }
+    }
+
+    #[test]
+    fn compact_menu_geometry_shares_selection_window_at_every_height() {
+        let mut app = app();
+        type_command(&mut app, "/");
+        for (height, limit) in [(16, 3), (24, 5), (48, 5)] {
+            let rows = composer_completion_rows_for_height(&app, height);
+            assert_eq!(rows, limit + 2);
+            let completion = app.slash_completion.as_mut().unwrap();
+            for selected in 0..completion.items.len() {
+                completion.selected = selected;
+                let geometry = slash_completion_geometry(completion, rows, height);
+                assert!(geometry.show_header && geometry.show_hint);
+                assert_eq!(geometry.end - geometry.start, limit as usize);
+                assert!((geometry.start..geometry.end).contains(&selected));
+            }
+        }
+    }
+
+    #[test]
+    fn zero_height_completion_has_no_hit_test_rows() {
+        let mut app = app();
+        type_command(&mut app, "/");
+        let completion = app.slash_completion.as_ref().unwrap();
+        let geometry = slash_completion_geometry(completion, 0, 16);
+        assert!(!geometry.show_header && !geometry.show_hint && !geometry.show_parameter);
+        assert_eq!(geometry.start, geometry.end);
+    }
+
+    #[test]
+    fn singleton_object_uses_one_body_row_without_repeated_heading() {
+        let mut app = app();
+        type_command(&mut app, "/session");
+        let completion = app.slash_completion.as_ref().unwrap();
+        assert_eq!(completion.items.len(), 1);
+        for height in [16, 24, 48] {
+            let rows = composer_completion_rows_for_height(&app, height);
+            assert_eq!(rows, 2);
+            let geometry = slash_completion_geometry(completion, rows, height);
+            assert!(!geometry.show_header);
+            assert!(geometry.show_hint);
+            assert_eq!((geometry.start, geometry.end), (0, 1));
+        }
     }
 
     #[test]

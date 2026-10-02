@@ -16,7 +16,8 @@ use crate::ui::rail;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let completion_rows =
-        crate::ui::layout::composer_completion_rows(app).min(area.height.saturating_sub(1));
+        crate::ui::layout::composer_completion_rows_for_height(app, frame.area().height)
+            .min(area.height.saturating_sub(1));
     let editor_height = area.height.saturating_sub(completion_rows);
     let editor_area = Rect {
         x: area.x,
@@ -113,163 +114,217 @@ fn render_completion(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let Some(completion) = app.slash_completion.as_ref() else {
         return;
     };
-    let colors = rail::editor_colors(theme);
-    let show_header = area.height >= 3;
-    let max_visible = (area.height as usize)
-        .saturating_sub(1 + usize::from(show_header))
-        .clamp(1, completion.visible_limit());
-    let start = completion
-        .selected
-        .saturating_sub(max_visible / 2)
-        .min(completion.items.len().saturating_sub(max_visible));
-    let end = (start + max_visible).min(completion.items.len());
+    let geometry =
+        crate::ui::layout::slash_completion_geometry(completion, area.height, frame.area().height);
     let content_width = area.width.saturating_sub(rail::RAIL_WIDTH as u16) as usize;
-    let label_width = completion
-        .items
-        .iter()
-        .map(|item| {
-            UnicodeWidthStr::width(item.as_str())
-                + if matches!(item.kind, crate::command::MenuKind::Group(_)) {
-                    2
-                } else {
-                    0
-                }
-        })
-        .max()
-        .unwrap_or(0)
-        .clamp(10, 26);
-    let mut lines = completion.items[start..end]
-        .iter()
-        .enumerate()
-        .map(|(visible_index, item)| {
-            let selected = start + visible_index == completion.selected;
-            let prefix = if selected { "→ " } else { "  " };
-            let summary = item.summary;
-            let label = if matches!(item.kind, crate::command::MenuKind::Group(_)) {
-                format!("{} ›", item.text)
-            } else {
-                item.text.clone()
-            };
-            let text = if content_width >= 44 && !summary.is_empty() {
-                let label = rail::clip_cells(&label, label_width);
-                format!(
-                    "{prefix}{label}{}  {summary}",
-                    " ".repeat(label_width.saturating_sub(UnicodeWidthStr::width(label.as_str())))
-                )
-            } else {
-                format!("{prefix}{label}")
-            };
-            rail::surface_row(
-                area.width as usize,
-                colors,
-                rail::RAIL_WIDTH,
-                Line::from(Span::styled(
-                    rail::clip_cells(&text, content_width),
-                    Style::new().fg(if selected {
-                        theme.rail_editor
-                    } else {
-                        theme.text
-                    }),
-                )),
-            )
-        })
-        .collect::<Vec<_>>();
-    if completion.items.is_empty() {
-        lines.push(rail::surface_row(
+    let colors = rail::editor_colors(theme);
+    let row = |text: String, selected: bool| {
+        rail::surface_row(
             area.width as usize,
             colors,
             rail::RAIL_WIDTH,
             Line::from(Span::styled(
-                if completion.argument_command.is_some() {
-                    "No matching values"
+                rail::clip_cells(&text, content_width),
+                Style::new().fg(if selected {
+                    theme.rail_editor
                 } else {
-                    "No matching commands"
-                },
-                Style::new().fg(theme.text),
+                    theme.text
+                }),
             )),
+        )
+    };
+    let mut lines = Vec::new();
+    if geometry.show_header {
+        lines.push(row(completion_title(app, completion), false));
+    }
+    let choices = completion.popup.is_some();
+    for index in geometry.start..geometry.end {
+        let item = &completion.items[index];
+        let selected = index == completion.selected;
+        let text = if choices {
+            choice_row(app, item, selected, content_width)
+        } else {
+            object_row(app, item, selected, content_width)
+        };
+        lines.push(row(text, selected));
+    }
+    if geometry.show_parameter {
+        if let Some(hint) = completion.parameter_hint() {
+            lines.push(row(format!("  {hint}"), false));
+        }
+    }
+    if completion.items.is_empty() {
+        lines.push(row(
+            if choices {
+                "No matching choices"
+            } else {
+                "No matching commands"
+            }
+            .to_owned(),
+            false,
         ));
     }
-    if show_header {
-        let breadcrumb = completion
-            .group
-            .map(|group| group.name())
-            .or(completion.argument_command)
-            .or_else(|| {
-                (!completion.filter.is_empty())
-                    .then(|| {
-                        completion
-                            .items
-                            .get(completion.selected)
-                            .map(|item| item.breadcrumb)
-                    })
-                    .flatten()
-            });
-        let title = match (completion.group, completion.argument_command) {
-            (Some(group), Some(argument)) => format!("Commands › {} › {argument}", group.name()),
-            _ => breadcrumb
-                .filter(|name| *name != "Commands")
-                .map_or("Commands".to_owned(), |name| format!("Commands › {name}")),
+    if geometry.show_hint {
+        let enter = if completion.popup.is_some() {
+            "fill"
+        } else if completion.opens_choices_on_enter(&app.composer.content()) {
+            "choose"
+        } else {
+            "run typed"
         };
-        lines.insert(
-            0,
-            rail::surface_row(
-                area.width as usize,
-                colors,
-                rail::RAIL_WIDTH,
-                Line::from(Span::styled(
-                    rail::clip_cells(&title, content_width),
-                    Style::new().fg(theme.text),
-                )),
-            ),
+        let position = format!(
+            "{}/{}",
+            if completion.items.is_empty() {
+                0
+            } else {
+                completion.selected + 1
+            },
+            completion.items.len()
         );
-    }
-    let selected = completion.items.get(completion.selected);
-    let enter = if completion.submits_literal() {
-        "apply typed"
-    } else {
-        match selected.map(|item| item.kind) {
-            None => "check typed",
-            Some(crate::command::MenuKind::Group(_)) => "open",
-            _ if selected.is_some_and(|item| item.needs_input()) => "fill",
-            _ => "run",
-        }
-    };
-    let position = format!(
-        "{}/{}",
-        if completion.items.is_empty() {
-            0
-        } else {
-            completion.selected + 1
-        },
-        completion.items.len()
-    );
-    let escape = if completion.group.is_some() {
-        if completion.filter.is_empty() {
-            "back"
-        } else {
+        let escape = if completion.popup.is_some() && !completion.filter.is_empty() {
             "clear"
-        }
-    } else {
-        "close"
-    };
-    let hint = if content_width >= 76 {
-        format!("↑↓ / PgUp PgDn choose · Tab fill · Enter {enter} · Esc {escape} · {position}")
-    } else if content_width >= 52 {
-        format!("↑↓ PgUp/Dn · Tab fill · Enter {enter} · Esc · {position}")
-    } else {
-        format!("↑↓ · Tab · Enter · Esc · {position}")
-    };
-    lines.push(rail::surface_row(
-        area.width as usize,
-        colors,
-        rail::RAIL_WIDTH,
-        Line::from(Span::styled(
-            rail::clip_cells(&hint, content_width),
-            Style::new().fg(theme.text),
-        )),
-    ));
+        } else {
+            "close"
+        };
+        let hint = if completion.popup.is_some() {
+            if content_width >= 76 {
+                format!(
+                    "↑↓ / PgUp PgDn choose · type to filter · Enter/Tab fill · Esc {escape} · {position}"
+                )
+            } else if content_width >= 52 {
+                format!("↑↓ · type filter · Enter/Tab fill · Esc {escape} · {position}")
+            } else {
+                format!("↑↓ · Enter/Tab fill · Esc {escape} · {position}")
+            }
+        } else if content_width >= 76 {
+            format!("↑↓ choose · Ctrl+Space choices · Tab fill · Enter {enter} · Esc · {position}")
+        } else if content_width >= 52 {
+            format!("↑↓ · ^Space · Tab · Enter {enter} · Esc · {position}")
+        } else {
+            format!("↑↓ · ^Space · Tab · Enter · Esc · {position}")
+        };
+        lines.push(row(hint, false));
+    }
     lines.truncate(area.height as usize);
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Current values come only from acknowledged settings or new-session defaults,
+/// never from the highlighted menu candidate.
+fn current_value(app: &App, name: &str) -> Option<String> {
+    match name {
+        "model" => Some(
+            app.new_session()
+                .map(|draft| draft.model.as_str())
+                .or_else(|| app.active_view().map(|view| view.info.model.as_str()))
+                .or(app.catalogs.next_model.as_deref())
+                .unwrap_or("default")
+                .to_owned(),
+        ),
+        "reasoning" => Some(
+            crate::state::selection::reasoning_label(
+                app.new_session()
+                    .map(|draft| draft.reasoning)
+                    .or_else(|| app.active_view().map(|view| view.info.reasoning))
+                    .or(app.catalogs.next_reasoning)
+                    .unwrap_or(crate::protocol::Reasoning::Auto),
+            )
+            .to_owned(),
+        ),
+        _ => None,
+    }
+}
+
+fn entry_value(app: &App, item: &crate::command::MenuEntry) -> String {
+    match item.kind {
+        crate::command::MenuKind::Command(name)
+        | crate::command::MenuKind::ArgumentChoice(name) => {
+            current_value(app, name).unwrap_or_else(|| item.action_name().to_owned())
+        }
+        crate::command::MenuKind::Group(_) => item.action_name().to_owned(),
+    }
+}
+
+fn completion_title(app: &App, completion: &crate::app::SlashCompletionState) -> String {
+    let title = if let Some(popup) = completion.popup.as_ref() {
+        if let Some(name) = completion.argument_command {
+            current_value(app, name).map_or_else(
+                || format!("{} · {name} choices", popup.target.object_name()),
+                |value| format!("{} [{value}]", popup.target.object_name()),
+            )
+        } else {
+            format!("{} actions", popup.target.object_name())
+        }
+    } else {
+        "Commands".to_owned()
+    };
+    if completion.popup.is_some() || !completion.filter.is_empty() {
+        format!("{title} · filter: {}", completion.filter)
+    } else {
+        title
+    }
+}
+
+/// Keep the object identity and its actionable value visible before spending
+/// room on supplementary usage text. The right-aligned bracket is the control.
+fn object_row(app: &App, item: &crate::command::MenuEntry, selected: bool, width: usize) -> String {
+    let prefix = if selected { "→ " } else { "  " };
+    let name = item.object_name();
+    let left = format!("{prefix}{name}");
+    let left_width = UnicodeWidthStr::width(left.as_str());
+    let value_width = width.saturating_sub(left_width + 5);
+    let value = rail::clip_cells(&entry_value(app, item), value_width);
+    let control = format!("[{value} ▾]");
+    let control_width = UnicodeWidthStr::width(control.as_str());
+    let middle_width = width.saturating_sub(left_width + control_width);
+    let hint = item
+        .argument_hint()
+        .filter(|hint| hint.len() <= 28)
+        .unwrap_or("");
+    let detail = if !hint.is_empty() {
+        hint
+    } else if width >= 76 {
+        item.summary
+    } else {
+        ""
+    };
+    let detail = rail::clip_cells(detail, middle_width.saturating_sub(4));
+    let detail = if detail.is_empty() {
+        String::new()
+    } else {
+        format!("  {detail}")
+    };
+    let padding = middle_width.saturating_sub(UnicodeWidthStr::width(detail.as_str()));
+    format!("{left}{detail}{}{control}", " ".repeat(padding))
+}
+
+fn choice_row(app: &App, item: &crate::command::MenuEntry, selected: bool, width: usize) -> String {
+    let prefix = if selected { "→ " } else { "  " };
+    let label = item.choice_label();
+    let current = match item.kind {
+        crate::command::MenuKind::ArgumentChoice(name) => {
+            current_value(app, name).is_some_and(|value| value == label)
+        }
+        _ => false,
+    };
+    let suffix = if current { "  current" } else { "" };
+    let hint = if matches!(item.kind, crate::command::MenuKind::ArgumentChoice(_)) {
+        ""
+    } else {
+        item.argument_hint().unwrap_or("")
+    };
+    let mut text = format!("{prefix}{label}{suffix}");
+    if !hint.is_empty() {
+        text.push_str("  ");
+        text.push_str(hint);
+    } else if width >= 76
+        && !matches!(item.kind, crate::command::MenuKind::ArgumentChoice(_))
+        && !item.summary.is_empty()
+    {
+        text.push_str("  ");
+        text.push_str(item.summary);
+    }
+    text
 }
 
 /// The wrapped composer rows, styled as plain text. Empty input deliberately
@@ -524,113 +579,118 @@ mod tests {
         )))
     }
 
-    #[test]
-    fn theme_completion_keeps_prefix_then_executes_an_explicit_choice() {
-        let mut app = app_with("");
-        type_keys(&mut app, "/the");
-        assert!(press_enter(&mut app).is_empty());
-        assert_eq!(app.composer.content(), "/theme ");
-        assert_eq!(
-            app.slash_completion
-                .as_ref()
-                .unwrap()
-                .items
-                .iter()
-                .map(|e| e.as_str())
-                .collect::<Vec<_>>(),
-            vec!["/theme dark", "/theme light"]
-        );
+    fn press_key(
+        app: &mut App,
+        code: crossterm::event::KeyCode,
+        modifiers: crossterm::event::KeyModifiers,
+    ) -> Vec<crate::command::AppCommand> {
         app.update(AppEvent::Terminal(crossterm::event::Event::Key(
-            crossterm::event::KeyEvent::new(
-                crossterm::event::KeyCode::Down,
-                crossterm::event::KeyModifiers::NONE,
-            ),
-        )));
+            crossterm::event::KeyEvent::new(code, modifiers),
+        )))
+    }
+
+    fn open_choices(app: &mut App) {
+        assert!(
+            press_key(
+                app,
+                crossterm::event::KeyCode::Char(' '),
+                crossterm::event::KeyModifiers::CONTROL
+            )
+            .is_empty()
+        );
+        assert!(app.slash_completion.as_ref().unwrap().popup.is_some());
+    }
+
+    fn capture(app: &App, width: u16, height: u16) -> (ratatui::buffer::Buffer, Vec<String>) {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::render(frame, app))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rows = buffer
+            .content
+            .chunks(width as usize)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>();
+        (buffer, rows)
+    }
+
+    #[test]
+    fn theme_choice_fills_locally_before_a_separate_enter_applies_it() {
+        let mut app = app_with("");
+        type_keys(&mut app, "/theme");
+        open_choices(&mut app);
+        assert_eq!(app.composer.content(), "/theme");
+        press_key(
+            &mut app,
+            crossterm::event::KeyCode::Down,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        assert!(press_enter(&mut app).is_empty());
+        assert_eq!(app.composer.content(), "/theme light ");
+        assert_eq!(app.theme, ThemeKind::Dark, "filling is not execution");
         assert!(press_enter(&mut app).is_empty());
         assert_eq!(app.theme, ThemeKind::Light);
         assert!(app.composer.content().is_empty());
     }
 
     #[test]
-    fn tool_completion_keeps_required_arguments_editable_without_requests() {
+    fn required_arguments_remain_visible_in_the_compact_object_row() {
         let mut app = app_with("");
-        type_keys(&mut app, "/too");
-        assert!(press_enter(&mut app).is_empty());
-        assert_eq!(app.composer.content(), "/tool ");
-        assert!(app.slash_completion.is_none());
+        type_keys(&mut app, "/tool");
         assert!(
-            app.notices()
-                .iter()
-                .any(|notice| notice.text.contains("<tool_call_id>"))
+            press_key(
+                &mut app,
+                crossterm::event::KeyCode::Tab,
+                crossterm::event::KeyModifiers::NONE
+            )
+            .is_empty()
         );
+        assert_eq!(app.composer.content(), "/tool ");
+        let completion = app.slash_completion.as_ref().unwrap();
+        assert!(completion.popup.is_none());
+        assert_eq!(completion.items.len(), 1);
+        let (_, rows) = capture(&app, 60, 16);
+        assert!(rows.iter().any(|row| row.contains("<tool_call_id>")));
+        assert!(rows.iter().any(|row| row.contains("[tool ▾]")));
     }
 
     #[test]
-    fn completion_purpose_and_controls_fit_wide_and_narrow_menus() {
+    fn root_objects_scroll_in_five_rows_or_three_on_a_tiny_terminal() {
         let mut app = app_with("");
         type_keys(&mut app, "/");
-        for width in [160, 80, 60, 40] {
-            let mut terminal = Terminal::new(TestBackend::new(width, 8)).unwrap();
-            terminal
-                .draw(|frame| {
-                    render_completion(frame, Rect::new(0, 0, width, 8), &app, &Theme::dark())
-                })
-                .unwrap();
-            let text = terminal
-                .backend()
-                .buffer()
-                .content
-                .iter()
-                .map(|cell| cell.symbol())
-                .collect::<String>();
-            assert!(text.contains("/model"));
-            assert!(
-                text.contains("Tab"),
-                "completion controls missing at {width}"
+        for (width, height, count) in [(160, 48, 5), (80, 24, 5), (60, 16, 3)] {
+            let area = Rect::new(0, 0, width, height);
+            let screen = crate::ui::layout::screen_layout(&app, area);
+            let (_, rows) = capture(&app, width, height);
+            assert_eq!(
+                crate::ui::layout::composer_completion_rows_for_height(&app, height),
+                count + 2
             );
-            assert!(text.contains("Esc"), "dismiss hint missing at {width}");
-            assert!(text.contains("1/6"), "position missing at {width}");
-            let rows = terminal
-                .backend()
-                .buffer()
-                .content
-                .chunks(width as usize)
-                .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
-                .collect::<Vec<_>>();
-            assert!(rows[1].contains("→ /model"));
-            assert!(
-                rows[7].contains("Esc") && rows[7].contains("1/6"),
-                "controls own the row after all six root entries"
+            assert_eq!(
+                rows.iter().filter(|row| row.contains("▾]")).count(),
+                count as usize
             );
+            assert!(rows.iter().any(|row| row.contains("→ Model")));
+            assert!(rows.iter().any(|row| row.contains("[default ▾]")));
+            let hint = &rows[screen.panel.bottom() as usize - 1];
+            assert!(hint.contains("Tab") && hint.contains("Esc") && hint.contains("1/6"));
             assert!(
-                rows.iter()
-                    .all(|row| UnicodeWidthStr::width(row.as_str()) <= width as usize)
+                screen.transcript.height >= 6,
+                "menu leaves conversation visible at {width}×{height}"
             );
-            if width >= 80 {
-                assert!(text.contains("choose a model"));
-            }
+            assert_eq!(screen.footer.y, screen.panel.bottom());
         }
         app.slash_completion.as_mut().unwrap().selected = 5;
-        let mut terminal = Terminal::new(TestBackend::new(80, 8)).unwrap();
-        terminal
-            .draw(|frame| render_completion(frame, Rect::new(0, 0, 80, 8), &app, &Theme::dark()))
-            .unwrap();
-        let rows = terminal
-            .backend()
-            .buffer()
-            .content
-            .chunks(80)
-            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
-            .collect::<Vec<_>>();
-        assert!(rows[6].contains("→ /app"));
-        assert!(rows[7].contains("6/6"));
-        assert!(rows.iter().filter(|row| row.contains("→ /")).count() == 1);
-        app.composer_mut().clear();
-        type_keys(&mut app, "/help");
-        assert!(
-            crate::ui::layout::composer_completion_rows(&app) >= 3,
-            "a filtered menu retains its breadcrumb and control hint"
-        );
+        for (width, height) in [(80, 24), (60, 16)] {
+            let (_, rows) = capture(&app, width, height);
+            assert!(
+                rows.iter()
+                    .any(|row| row.contains("→ App") && row.contains("[settings ▾]"))
+            );
+            assert!(rows.iter().any(|row| row.contains("6/6")));
+            assert_eq!(rows.iter().filter(|row| row.contains("→ ")).count(), 1);
+        }
     }
 
     fn contrast_ratio(foreground: ratatui::style::Color, background: ratatui::style::Color) -> f64 {
@@ -654,64 +714,47 @@ mod tests {
     }
 
     #[test]
-    fn command_menu_summaries_and_readable_hints_fit_every_supported_size_and_theme() {
+    fn compact_commands_and_readable_controls_fit_every_supported_size_and_theme() {
         for kind in [ThemeKind::Dark, ThemeKind::Light] {
             let theme = Theme::for_kind(kind);
             for (width, height) in [(160, 48), (80, 24), (60, 16)] {
-                let mut app = app_with("");
-                app.update(AppEvent::SetTheme(kind));
                 for spec in crate::command::COMMANDS {
-                    app.composer.clear();
+                    let mut app = app_with("");
+                    app.update(AppEvent::SetTheme(kind));
                     type_keys(&mut app, &format!("/{}", spec.name));
-                    let area = Rect::new(0, 0, width, height);
-                    let screen = crate::ui::layout::screen_layout(&app, area);
-                    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-                    terminal
-                        .draw(|frame| crate::ui::render(frame, &app))
-                        .unwrap();
-                    let buffer = terminal.backend().buffer();
-                    let rows = buffer
-                        .content
-                        .chunks(width as usize)
-                        .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
-                        .collect::<Vec<_>>();
+                    let completion = app.slash_completion.as_ref().unwrap();
+                    let entry = &completion.items[completion.selected];
+                    let screen =
+                        crate::ui::layout::screen_layout(&app, Rect::new(0, 0, width, height));
+                    let (buffer, rows) = capture(&app, width, height);
                     let selected_rows = rows
                         .iter()
                         .enumerate()
-                        .filter(|(_, row)| row.contains("→ /"))
+                        .filter(|(_, row)| row.contains("→ "))
                         .collect::<Vec<_>>();
-                    assert_eq!(selected_rows.len(), 1, "only one selected command");
+                    assert_eq!(selected_rows.len(), 1, "only one selected object");
                     let (selected_y, selected_row) = selected_rows[0];
-                    assert!(selected_row.contains(&format!("→ /{}", spec.name)));
                     assert!(
-                        selected_row.contains(spec.menu_summary),
-                        "/{} summary clipped at {width}×{height}: {selected_row}",
-                        spec.name
+                        selected_row.contains(&format!("→ {}", entry.object_name())),
+                        "{selected_row}"
+                    );
+                    assert!(
+                        selected_row.contains("[") && selected_row.contains("▾]"),
+                        "{selected_row}"
                     );
                     let selected_cell = buffer
                         .cell((screen.panel.x + rail::RAIL_WIDTH as u16, selected_y as u16))
                         .unwrap();
                     assert_eq!(selected_cell.fg, theme.rail_editor);
                     assert_eq!(selected_cell.bg, theme.user_message_bg);
-
                     let hint_y = screen.panel.bottom() - 1;
                     let hint = &rows[hint_y as usize];
-                    assert!(hint.contains("Tab fill"));
-                    let enter = if matches!(
-                        spec.args,
-                        crate::command::CommandArgs::Theme | crate::command::CommandArgs::ToolRef
-                    ) {
-                        "Enter fill"
-                    } else {
-                        "Enter run"
-                    };
-                    assert!(hint.contains(enter), "{hint}");
-                    assert!(hint.contains("Esc"));
-                    assert!(hint.contains(&format!(
-                        "1/{}",
-                        app.slash_completion.as_ref().unwrap().items.len()
-                    )));
-                    assert_eq!(screen.footer.y, hint_y + 1, "menu cannot cover the footer");
+                    assert!(
+                        hint.contains("Tab") && hint.contains("Enter") && hint.contains("Esc"),
+                        "{hint}"
+                    );
+                    assert!(hint.contains(&format!("1/{}", completion.items.len())));
+                    assert_eq!(screen.footer.y, hint_y + 1);
                     for x in screen.panel.x + rail::RAIL_WIDTH as u16..screen.panel.right() {
                         let cell = buffer.cell((x, hint_y)).unwrap();
                         if cell.symbol().trim().is_empty() {
@@ -719,10 +762,7 @@ mod tests {
                         }
                         assert_eq!(cell.fg, theme.text);
                         assert_eq!(cell.bg, theme.user_message_bg);
-                        assert!(
-                            contrast_ratio(cell.fg, cell.bg) >= 4.5,
-                            "shortcut hint needs 4.5:1 contrast in {kind:?}"
-                        );
+                        assert!(contrast_ratio(cell.fg, cell.bg) >= 4.5);
                         assert!(!cell.modifier.contains(ratatui::style::Modifier::DIM));
                     }
                     assert!(
@@ -735,46 +775,116 @@ mod tests {
     }
 
     #[test]
-    fn required_theme_choice_keeps_the_menu_hint_and_draft_in_both_themes() {
+    fn one_session_row_is_replaced_by_a_scoped_bounded_dropdown() {
         for kind in [ThemeKind::Dark, ThemeKind::Light] {
-            for (width, height) in [(160, 48), (80, 24), (60, 16)] {
+            for (width, height, limit) in [(160, 48, 5), (80, 24, 5), (60, 16, 3)] {
                 let mut app = app_with("");
                 app.update(AppEvent::SetTheme(kind));
-                type_keys(&mut app, "/the");
-                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-                let capture = |terminal: &mut Terminal<TestBackend>, app: &App| {
-                    terminal
-                        .draw(|frame| crate::ui::render(frame, app))
-                        .unwrap();
-                    terminal
-                        .backend()
-                        .buffer()
-                        .content
-                        .iter()
-                        .map(|cell| cell.symbol())
-                        .collect::<String>()
-                };
-                let before = capture(&mut terminal, &app);
-                assert!(before.contains("choose dark or light colors"));
-                assert!(before.contains("Enter fill"));
-                assert!(press_enter(&mut app).is_empty());
-                assert_eq!(app.composer.content(), "/theme ");
-                assert_eq!(app.theme, kind, "bare theme must not change the palette");
-                let choices = capture(&mut terminal, &app);
-                assert!(choices.contains("→ /theme dark"));
-                assert!(choices.contains("/theme light"));
-                assert!(choices.contains("Enter run"));
-                assert!(choices.contains("1/2"));
-                app.update(AppEvent::Terminal(crossterm::event::Event::Key(
-                    crossterm::event::KeyEvent::new(
-                        crossterm::event::KeyCode::Down,
-                        crossterm::event::KeyModifiers::NONE,
-                    ),
-                )));
-                let moved = capture(&mut terminal, &app);
-                assert!(moved.contains("→ /theme light"));
-                assert!(moved.contains("2/2"));
+                type_keys(&mut app, "/session");
+                assert_eq!(
+                    crate::ui::layout::composer_completion_rows_for_height(&app, height),
+                    2
+                );
+                let (_, rows) = capture(&app, width, height);
+                assert_eq!(rows.iter().filter(|row| row.contains("▾]")).count(), 1);
+                assert!(
+                    rows.iter()
+                        .any(|row| row.contains("Session") && row.contains("[list ▾]"))
+                );
+                open_choices(&mut app);
+                assert_eq!(app.composer.content(), "/session");
+                let completion = app.slash_completion.as_ref().unwrap();
+                assert!(completion.items.len() > limit);
+                assert_eq!(
+                    crate::ui::layout::composer_completion_rows_for_height(&app, height),
+                    limit as u16 + 2
+                );
+                let (_, rows) = capture(&app, width, height);
+                assert!(
+                    rows.iter()
+                        .any(|row| row.contains("Session actions · filter:"))
+                );
+                assert!(
+                    !rows.iter().any(|row| row.contains("▾]")),
+                    "dropdown replaces root controls"
+                );
+                assert!(rows.iter().any(|row| row.contains("Enter/Tab fill")));
+                type_keys(&mut app, "rename");
+                assert_eq!(app.composer.content(), "/session");
+                let (_, rows) = capture(&app, width, height);
+                assert!(rows.iter().any(|row| row.contains("filter: rename")));
+                assert!(rows.iter().any(|row| row.contains("→ rename")));
+                assert!(rows.iter().any(|row| row.contains("Esc clear")));
             }
+        }
+    }
+
+    #[test]
+    fn candidate_highlight_never_masquerades_as_current_model_or_reasoning() {
+        let mut app = crate::ui::testapp::chat(ThemeKind::Dark);
+        app.catalogs.next_model = Some("next-session-model".into());
+        app.catalogs.next_reasoning = Some(crate::protocol::Reasoning::Low);
+        let active_model = app.active_view().unwrap().info.model.clone();
+        let active_reasoning =
+            crate::state::selection::reasoning_label(app.active_view().unwrap().info.reasoning);
+        let model = crate::command::MenuEntry::command("model", "/model Other/Model".into());
+        let reasoning = crate::command::MenuEntry::command("reasoning", "/reasoning ultra".into());
+        for selected in [false, true] {
+            let model_row = object_row(&app, &model, selected, 78);
+            assert!(model_row.contains(&format!("[{active_model} ▾]")));
+            assert!(
+                !model_row.contains("Other/Model") && !model_row.contains("next-session-model")
+            );
+            let reasoning_row = object_row(&app, &reasoning, selected, 78);
+            assert!(reasoning_row.contains(&format!("[{active_reasoning} ▾]")));
+        }
+    }
+
+    #[test]
+    fn compact_dropdown_preserves_notice_help_and_multiline_drafts() {
+        use crossterm::event::{Event, KeyCode, KeyModifiers};
+        for kind in [ThemeKind::Dark, ThemeKind::Light] {
+            for (width, height) in [(60, 16), (80, 24), (160, 48)] {
+                let mut app = app_with("");
+                app.update(AppEvent::SetTheme(kind));
+                app.notice(crate::app::NoticeLevel::Info, "Preserved notice");
+                type_keys(&mut app, "/session");
+                open_choices(&mut app);
+                let screen = crate::ui::layout::screen_layout(&app, Rect::new(0, 0, width, height));
+                let (_, rows) = capture(&app, width, height);
+                assert!(rows.iter().any(|row| row.contains("Preserved notice")));
+                assert!(screen.notice.unwrap().bottom() <= screen.panel.y);
+                assert_eq!(screen.panel.bottom(), screen.footer.y);
+                assert!(screen.transcript.height > 0);
+                press_key(&mut app, KeyCode::F(1), KeyModifiers::NONE);
+                assert!(matches!(app.dock, crate::state::selection::Dock::Help));
+                assert_eq!(app.composer.content(), "/session");
+                assert!(app.slash_completion.is_none());
+                let (_, rows) = capture(&app, width, height);
+                assert!(!rows.iter().any(|row| row.contains("Session actions")));
+                press_key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+                app.composer.clear();
+                let draft = "first draft line\nsecond draft line\nlast draft line";
+                app.update(AppEvent::Terminal(Event::Paste(draft.into())));
+                assert_eq!(app.composer.content(), draft);
+                assert!(app.slash_completion.is_none());
+                let (_, rows) = capture(&app, width, height);
+                assert!(rows.iter().any(|row| row.contains("last draft line")));
+                assert!(!rows.iter().any(|row| row.contains("▾]")));
+            }
+        }
+    }
+
+    #[test]
+    fn long_unicode_values_keep_the_object_and_control_visible() {
+        let mut app = app_with("");
+        app.catalogs.next_model = Some("模型/😀".repeat(30));
+        let item = crate::command::MenuEntry::command("model", "/model".into());
+        for width in [20, 38, 58, 78, 158] {
+            let row = object_row(&app, &item, true, width);
+            assert!(row.starts_with("→ Model"));
+            assert!(row.ends_with("▾]"));
+            assert!(UnicodeWidthStr::width(row.as_str()) <= width);
         }
     }
 }

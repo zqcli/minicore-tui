@@ -282,29 +282,42 @@ Only input whose first non-whitespace character is `/` is parsed locally.
 Unknown commands and invalid arguments produce a local notice and no RPC.
 Their draft text is kept so it can be corrected without retyping.
 
-Typing `/` shows six top-level entries: Model, Reasoning, Session,
-Workspace, Conversation and App. Groups are marked `›`; Enter opens a group.
-Type after `/` to search every command, or after a group to filter its children.
-For example, `/workspace files src` and `/files src` use the same executor.
-`/session list` opens Sessions; `/session configure` opens the advanced form.
+Typing `/` shows one compact row per object: Model, Reasoning, Session,
+Workspace, Conversation and App. Each row has an action or value dropdown.
+Type after `/` to search commands, or after an object name to narrow its
+actions. Matches stay on a single object row: `/ren` shows Session with
+`rename` selected. `/workspace files src` and `/files src` use the same executor;
+`/session list` opens Sessions and `/session configure` opens the advanced form.
 
-Up/Down and PageUp/PageDown move selection. Tab only fills text; Enter runs a
-complete command. Esc clears a group filter, then goes back to the root, then
-hides the menu while keeping the draft. Esc in a visible menu never cancels a
-turn. A no-match menu cannot execute a stale selection. Moving within an
-existing command or editing multiple lines uses ordinary editor keys rather
-than replacing a partial token. Dismissed menus stay hidden until text changes.
+Up/Down and PageUp/PageDown move selection. Enter on an object or incomplete
+command match opens its chooser; Ctrl+Space explicitly opens the chooser for
+an existing command or value. Click a compact row to open its chooser. Inside
+the chooser, typing (or pasting) filters choices without editing the draft;
+Backspace removes a filter character and Ctrl+U/Ctrl+K clear the filter.
+Enter, Tab or clicking a choice only fills the draft. The next editor Enter
+executes the filled command. Outside the chooser, Tab only fills the selected
+suggestion; Enter executes a complete direct or qualified command normally.
+
+Esc first clears a non-empty chooser filter, then hides the menu, keeping the
+original draft. Esc in a visible menu never cancels a turn. Dismissed menus
+stay hidden until text changes, and a no-match chooser cannot accept a stale
+selection. Moving within an existing command or editing multiple lines uses
+ordinary editor keys rather than replacing a partial token. Shift+Enter/Ctrl+J
+still insert a newline and Alt+Up/Alt+Down navigate input history. Outside the
+chooser, Ctrl+U/Ctrl+K retain their normal editor deletion behavior.
 
 Required-argument commands stay editable: `/theme` offers dark/light choices,
 while `/tool` shows its exact argument usage. `/model [id]` and
-`/reasoning [level]` accept catalog-supported values or open their picker when
-no value is given, including a trailing space. While their argument suggestions
-are visible, Enter validates the literal input; it never substitutes a partial
-or differently cased value. Tab explicitly fills the selected suggestion without
-applying it; arrows choose what Tab will fill. Model IDs are case-sensitive. A model incompatible with the
-current reasoning opens the supported reasoning picker; both choices are sent
-atomically only after confirmation. Cancellation makes no configuration request.
-Updates take effect at the existing next-request boundary, never retroactively.
+`/reasoning [level]` accept catalog-supported values or open their chooser when
+no value is given, including a trailing space. With a value present, editor
+Enter validates the literal input without substituting a suggestion. Tab
+explicitly fills the selected suggestion without applying it; Ctrl+Space opens
+the value choices. Model IDs must match the catalog exactly, including case;
+supported reasoning names are case-insensitive (`HIGH` means `high`). Partial
+or unsupported values are rejected. A model incompatible with the current reasoning
+opens the supported reasoning picker; both choices are sent atomically only
+after confirmation. Cancellation makes no configuration request. Updates take
+effect at the existing next-request boundary, never retroactively.
 
 | Command | Behavior |
 |---|---|

@@ -45,7 +45,11 @@ pub enum Action {
     TypeChar(char),
     CompletionMove(i32),
     CompletionAccept,
-    CompletionAcceptAndSubmit,
+    CompletionEnter,
+    CompletionOpen,
+    CompletionFilter(char),
+    CompletionFilterBackspace,
+    CompletionFilterClear,
     CompletionCancel,
     Newline,
     Backspace,
@@ -264,6 +268,40 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
     }
     if let Dock::Settings(state) = &app.dock {
         return settings_keys(key, press, typing, state.submitting);
+    }
+
+    // Completion controls must not shadow explicit editor chords, even when
+    // an opaque slash-command argument still has a compact object row.
+    if typing
+        && matches!(app.dock, Dock::Composer)
+        && app.focused_region() == crate::state::panels::Focus::Editor
+    {
+        match key.code {
+            KeyCode::Enter if shift(&key) => return Action::Newline,
+            KeyCode::Up if alt(&key) => return Action::HistoryPrev,
+            KeyCode::Down if alt(&key) => return Action::HistoryNext,
+            _ => {}
+        }
+    }
+
+    if typing
+        && !matches!(app.connection, ConnectionState::Failed(_))
+        && matches!(app.dock, Dock::Composer)
+        && app.focused_region() == crate::state::panels::Focus::Editor
+        && app
+            .slash_completion
+            .as_ref()
+            .is_some_and(|completion| completion.popup.is_some())
+    {
+        match key.code {
+            KeyCode::Char(c) if !ctrl(&key) && !alt(&key) => return Action::CompletionFilter(c),
+            KeyCode::Backspace => return Action::CompletionFilterBackspace,
+            KeyCode::Char('u' | 'k') if ctrl(&key) => return Action::CompletionFilterClear,
+            KeyCode::Enter if press => return Action::CompletionAccept,
+            KeyCode::Tab if press => return Action::CompletionAccept,
+            KeyCode::Esc => return Action::CompletionCancel,
+            _ => {}
+        }
     }
 
     if typing && matches!(app.dock, Dock::Composer) {
@@ -485,11 +523,14 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
         if typing && key.code == KeyCode::Down {
             return Action::CompletionMove(1);
         }
+        if press && key.code == KeyCode::Char(' ') && ctrl(&key) {
+            return Action::CompletionOpen;
+        }
         if press && key.code == KeyCode::Tab {
             return Action::CompletionAccept;
         }
         if press && key.code == KeyCode::Enter {
-            return Action::CompletionAcceptAndSubmit;
+            return Action::CompletionEnter;
         }
     }
 
@@ -900,6 +941,7 @@ mod tests {
             scrollbar_grab: None,
         }));
         a.slash_completion = Some(crate::app::SlashCompletionState {
+            popup: None,
             source_revision: a.composer.editor_revision(),
             session_owner: a.sessions.active.clone(),
             group: None,
@@ -935,6 +977,7 @@ mod tests {
     fn slash_completion_page_keys_move_candidates_before_transcript() {
         let mut a = app();
         a.slash_completion = Some(crate::app::SlashCompletionState {
+            popup: None,
             source_revision: a.composer.editor_revision(),
             session_owner: a.sessions.active.clone(),
             group: None,
@@ -963,7 +1006,7 @@ mod tests {
         );
         assert_eq!(
             map(&a, press(KeyCode::Enter, KeyModifiers::empty())),
-            Action::CompletionAcceptAndSubmit
+            Action::CompletionEnter
         );
         assert_eq!(
             map(&a, press(KeyCode::Esc, KeyModifiers::empty())),

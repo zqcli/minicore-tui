@@ -1,0 +1,16 @@
+ MINICORE  v0.3.0
+
+ Coding agent TUI
+ Ctrl+C: clear / quit · F1 help
+
+ Starting agent…
+
+
+
+ ▎
+ ▎/session
+ ▎
+ ▎
+ ▎→ Session                                         [list ▾]
+ ▎↑↓ · ^Space · Tab · Enter choose · Esc · 1/1
+ starting

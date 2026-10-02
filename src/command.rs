@@ -923,6 +923,52 @@ mod tests {
     }
 
     #[test]
+    fn qualified_actions_retain_direct_aliases_and_literal_arguments() {
+        for spec in COMMANDS {
+            let Some(group) = spec.group else {
+                continue;
+            };
+            let action = if spec.name == "sessions" {
+                "list"
+            } else {
+                spec.name
+            };
+            // Compare both success and validation errors: qualification must
+            // not change the command's existing argument contract.
+            for tail in ["", " Mixed Case  中文 "] {
+                assert_eq!(
+                    parse_command(&format!("/{} {action}{tail}", group.name())),
+                    parse_command(&format!("/{}{tail}", spec.name)),
+                    "{} {action}{tail}",
+                    group.name()
+                );
+            }
+        }
+        assert_eq!(parse_command("/session list"), Ok(LocalCommand::Sessions));
+        assert_eq!(
+            parse_command("/SESSION CONFIGURE"),
+            Ok(LocalCommand::NewForm)
+        );
+        assert!(parse_command("/session configure extra").is_err());
+        assert!(parse_command("/session list extra").is_err());
+        assert!(parse_command("/session missing").is_err());
+    }
+
+    #[test]
+    fn finite_value_parser_preserves_literals_for_catalog_validation() {
+        for value in ["Mixed/Model", "mixed/model", "mi", "not-in-catalog", "a b"] {
+            assert_eq!(
+                parse_command(&format!("/MODEL {value}")),
+                Ok(LocalCommand::ModelValue(value.into()))
+            );
+            assert_eq!(
+                parse_command(&format!("/REASONING {value}")),
+                Ok(LocalCommand::ReasoningValue(value.into()))
+            );
+        }
+    }
+
+    #[test]
     fn leading_whitespace_and_case_are_flexible_but_trailing_args_are_not() {
         assert_eq!(parse_command("   /new  "), Ok(LocalCommand::New));
         assert_eq!(parse_command("/NEW"), Ok(LocalCommand::New));
@@ -974,13 +1020,16 @@ mod tests {
     }
     #[test]
     fn theme_arguments_are_discoverable_without_completing_free_text() {
-        assert_eq!(
-            slash_command_candidates("theme "),
-            vec!["/theme dark", "/theme light"]
-        );
+        assert_eq!(slash_command_candidates("theme "), vec!["/theme dark"]);
         assert_eq!(slash_command_candidates("THEME L"), vec!["/theme light"]);
-        assert!(slash_command_candidates("theme unknown").is_empty());
-        assert!(slash_command_candidates("search user text").is_empty());
-        assert!(slash_command_candidates("tool ").is_empty());
+        assert_eq!(
+            slash_command_candidates("theme unknown"),
+            vec!["/theme unknown"]
+        );
+        assert_eq!(
+            slash_command_candidates("search user text"),
+            vec!["/search user text"]
+        );
+        assert_eq!(slash_command_candidates("tool "), vec!["/tool "]);
     }
 }

@@ -785,12 +785,14 @@ fn files_slash_command_captures_the_cleared_composer_before_inserting() {
 }
 
 #[test]
-fn files_command_completion_enter_uses_the_same_post_command_origin() {
+fn files_command_completion_tab_then_enter_uses_the_same_post_command_origin() {
     let mut a = app();
     for ch in "/fil".chars() {
         assert!(press(&mut a, KeyCode::Char(ch), KeyModifiers::NONE).is_empty());
     }
     assert!(a.slash_completion.is_some());
+    assert!(press(&mut a, KeyCode::Tab, KeyModifiers::NONE).is_empty());
+    assert!(a.workspace_browser().is_none());
     assert!(press(&mut a, KeyCode::Enter, KeyModifiers::NONE).is_empty());
     assert!(a.workspace_browser().is_some());
     assert_eq!(a.composer.content(), "");

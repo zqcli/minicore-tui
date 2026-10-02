@@ -56,6 +56,8 @@ use crate::ui::transcript::{
 pub mod changes;
 #[cfg(test)]
 mod changes_tests;
+#[cfg(test)]
+mod compact_slash_tests;
 pub mod context;
 #[cfg(test)]
 mod context_tests;
@@ -1104,6 +1106,10 @@ impl App {
         self.pending_requests.get(&id)
     }
 
+    pub(crate) fn terminal_size(&self) -> (u16, u16) {
+        self.terminal_size
+    }
+
     pub fn notices(&self) -> &VecDeque<Notice> {
         &self.notices
     }
@@ -1222,6 +1228,9 @@ impl App {
             && self.selection.is_none()
             && self.editor_selection.is_none()
             && self.selection_drag.is_none()
+            // Wheel events can move the completion highlight without moving
+            // the transcript. Keep those events out of the scroll-only fence.
+            && self.slash_completion.is_none()
             && !self.selection_copied()
         {
             Some((self.dirty, self.scroll_visual_state()))
@@ -1258,6 +1267,10 @@ impl App {
                     | Action::HistoryNext
                     | Action::CompletionMove(_)
                     | Action::CompletionAccept
+                    | Action::CompletionOpen
+                    | Action::CompletionFilter(_)
+                    | Action::CompletionFilterBackspace
+                    | Action::CompletionFilterClear
                     | Action::CompletionCancel
                     | Action::ScrollRows(_)
                     | Action::ScrollWindow(_)
@@ -1582,6 +1595,7 @@ impl App {
         self.enforce_live_budget();
         self.enforce_tool_budget();
         self.discard_stale_slash_completion();
+        self.refresh_slash_choice_catalog();
         commands
     }
 
@@ -3578,6 +3592,17 @@ impl App {
         )]
     }
 
+    /// Same model as the existing new-session form would use, without creating
+    /// that form merely to show or validate a local choice.
+    pub(crate) fn effective_settings_model(&self) -> &str {
+        self.new_session()
+            .map(|draft| draft.model.as_str())
+            .or_else(|| self.active_view().map(|view| view.info.model.as_str()))
+            .or(self.catalogs.next_model.as_deref())
+            .or_else(|| self.catalogs.models.first().map(|model| model.id.as_str()))
+            .unwrap_or("")
+    }
+
     fn inline_command_error(&self, command: &LocalCommand) -> Option<String> {
         match command {
             LocalCommand::ModelValue(value)
@@ -3586,11 +3611,7 @@ impl App {
                 Some(format!("Unknown model: {value}. Use /model to choose."))
             }
             LocalCommand::ReasoningValue(value) => {
-                let model = self
-                    .new_session()
-                    .map(|d| d.model.as_str())
-                    .or_else(|| self.active_view().map(|v| v.info.model.as_str()))
-                    .unwrap_or("");
+                let model = self.effective_settings_model();
                 let selected = serde_json::from_value::<Reasoning>(serde_json::Value::String(
                     value.to_ascii_lowercase(),
                 ))
@@ -3624,11 +3645,7 @@ impl App {
             value.to_ascii_lowercase(),
         ))
         .ok();
-        let model = self
-            .new_session()
-            .map(|d| d.model.as_str())
-            .or_else(|| self.active_view().map(|v| v.info.model.as_str()))
-            .unwrap_or("");
+        let model = self.effective_settings_model();
         let Some(selected) = selected
             .filter(|level| supported_reasoning(&self.catalogs.models, model).contains(level))
         else {
@@ -4079,6 +4096,25 @@ impl App {
 
     fn apply_action(&mut self, action: Action) -> Vec<AppCommand> {
         use Action::*;
+        if matches!(
+            &action,
+            CursorMove(_)
+                | LineStart
+                | LineEnd
+                | Undo
+                | Redo
+                | Newline
+                | Delete
+                | WordDelete
+                | HistoryPrev
+                | HistoryNext
+        ) && self
+            .slash_completion
+            .as_ref()
+            .is_some_and(|c| c.popup.is_some())
+        {
+            self.slash_completion = std::option::Option::None;
+        }
         if !matches!(&action, None | CompletionMove(_)) {
             self.editor_selection = std::option::Option::None;
         }
@@ -4238,20 +4274,22 @@ impl App {
                 ui_actions::accept_slash_completion(self);
                 Vec::new()
             }
-            CompletionAcceptAndSubmit => {
-                // Optional settings arguments are literal on Enter. Only
-                // Tab may replace them with a displayed suggestion.
-                if self
-                    .slash_completion
-                    .as_ref()
-                    .is_some_and(SlashCompletionState::submits_literal)
-                {
-                    self.submit_composer()
-                } else if ui_actions::accept_slash_completion(self) {
-                    Vec::new()
-                } else {
-                    self.submit_composer()
-                }
+            CompletionEnter => self.enter_slash_completion(),
+            CompletionOpen => {
+                self.open_slash_choices();
+                Vec::new()
+            }
+            CompletionFilter(c) => {
+                self.filter_slash_choices(Some(&c.to_string()), false, false);
+                Vec::new()
+            }
+            CompletionFilterBackspace => {
+                self.filter_slash_choices(std::option::Option::None, true, false);
+                Vec::new()
+            }
+            CompletionFilterClear => {
+                self.filter_slash_choices(std::option::Option::None, false, true);
+                Vec::new()
             }
             CompletionCancel => {
                 self.cancel_slash_completion();
@@ -4971,6 +5009,7 @@ impl App {
                 self.composer.set_text(&format!("/{} ", group.name()));
                 self.slash_dismissed_text = None;
                 self.refresh_slash_completion();
+                self.open_slash_choices();
                 Vec::new()
             }
             LocalCommand::ModelValue(value) => self.select_model_value(&value),
@@ -11308,7 +11347,7 @@ mod tests {
 
         ui_actions::accept_slash_completion(&mut app);
         assert_eq!(app.composer.content(), "/resume ");
-        assert!(app.slash_completion.is_none());
+        assert!(app.slash_completion.as_ref().unwrap().popup.is_none());
 
         app.composer.set_text("/zzz");
         ui_actions::refresh_slash_completion(&mut app);
@@ -11316,10 +11355,11 @@ mod tests {
     }
 
     #[test]
-    fn enter_accepts_a_skill_completion_without_submitting() {
+    fn tab_accepts_a_skill_completion_without_submitting() {
         let mut app = test_app();
         app.composer.set_text("/ski");
         app.slash_completion = Some(SlashCompletionState {
+            popup: None,
             source_revision: app.composer.editor_revision(),
             session_owner: app.sessions.active.clone(),
             group: None,
@@ -11331,7 +11371,7 @@ mod tests {
             selected: 0,
         });
 
-        let commands = app.apply_action(crate::keymap::Action::CompletionAcceptAndSubmit);
+        let commands = app.apply_action(crate::keymap::Action::CompletionAccept);
 
         assert!(commands.is_empty());
         assert_eq!(app.composer.content(), "/skill:web-access ");

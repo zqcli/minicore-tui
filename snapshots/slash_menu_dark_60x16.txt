@@ -1,4 +1,7 @@
 
+ Coding agent TUI
+ Ctrl+C: clear / quit · F1 help
+
  Starting agent…
 
  ▎
@@ -6,11 +9,8 @@
  ▎
  ▎
  ▎Commands
- ▎  /model           choose a model
- ▎  /reasoning       choose reasoning effort
- ▎  /session ›       new, open and manage sessions
- ▎  /workspace ›     files, text search and changes
- ▎  /conversation ›  search, copy, export and context
- ▎→ /app ›           preferences, help and application
- ▎↑↓ PgUp/Dn · Tab fill · Enter open · Esc · 6/6
+ ▎  Workspace                                      [files ▾]
+ ▎  Conversation                                  [search ▾]
+ ▎→ App                                         [settings ▾]
+ ▎↑↓ · ^Space · Tab · Enter choose · Esc · 6/6
  starting

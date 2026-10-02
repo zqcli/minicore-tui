@@ -364,6 +364,7 @@ fn assert_composer_fixture_with_setup(
     }
     if name == "slash/popup-rows.json" {
         app.slash_completion = Some(minicore_tui::app::SlashCompletionState {
+            popup: None,
             source_revision: app.composer.editor_revision(),
             session_owner: app.sessions.active.clone(),
             group: None,
@@ -371,15 +372,9 @@ fn assert_composer_fixture_with_setup(
             filter: String::new(),
             start: 0,
             end: app.composer.cursor().1,
-            items: vec![
-                "/new".to_owned().into(),
-                "/resume".to_owned().into(),
-                "/sessions".to_owned().into(),
-                "/model".to_owned().into(),
-                "/reasoning".to_owned().into(),
-                "/theme".to_owned().into(),
-                "/clear".to_owned().into(),
-            ],
+            items: minicore_tui::command::menu::page("", &[], &[])
+                .unwrap()
+                .entries,
             selected: 0,
         });
     }
@@ -497,12 +492,12 @@ fn assert_composer_fixture_with_setup(
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(menu.contains("→ /new"));
-        assert!(menu.contains("start a new session"));
+        assert!(menu.contains("→ Model"));
+        assert!(menu.contains("[default ▾]"));
         assert!(menu.contains("Tab fill"));
-        assert!(menu.contains("Enter run"));
-        assert!(menu.contains("Esc close"));
-        assert!(menu.contains("1/7"));
+        assert!(menu.contains("Enter choose"));
+        assert!(menu.contains("Esc"));
+        assert!(menu.contains("1/6"));
     }
     let expected_cursor = source["cursor"].as_array().map(|cursor| {
         (
@@ -618,11 +613,12 @@ fn rust_editor_and_paste_rows_match_the_fixed_native_editor() {
 }
 
 #[test]
-fn rust_slash_enter_states_match_the_fixed_native_editor() {
+fn rust_slash_fill_and_submit_states_match_the_fixed_native_editor() {
     let mut kept = App::new(std::path::PathBuf::from("/project"));
     kept.update(AppEvent::SetTheme(ThemeKind::Dark));
     kept.composer.set_text("/ski");
     kept.slash_completion = Some(minicore_tui::app::SlashCompletionState {
+        popup: None,
         source_revision: kept.composer.editor_revision(),
         session_owner: kept.sessions.active.clone(),
         group: None,
@@ -635,7 +631,7 @@ fn rust_slash_enter_states_match_the_fixed_native_editor() {
     });
     let commands = kept.update(AppEvent::Terminal(crossterm::event::Event::Key(
         crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyCode::Tab,
             crossterm::event::KeyModifiers::empty(),
         ),
     )));

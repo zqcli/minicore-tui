@@ -140,12 +140,18 @@ The complete current keymap and slash-command semantics are in
 - `Esc` closes a dock or cancels the exact running turn;
 - `Ctrl+C` clears non-empty input, then double-presses to quit; `/cancel` cancels the exact active loop, `/reload` reloads Agent configuration and safe read-only state, and `/quit` performs normal shutdown.
 
-The `/` menu groups commands under Session, Workspace, Conversation and App,
-with Model and Reasoning directly accessible. Enter opens a group; Tab only
-fills text; Esc clears a filter, goes back, then hides the menu. Direct commands
-remain available, including `/model <id>` and `/reasoning <level>`.
-For Model/Reasoning arguments, Enter applies exactly what you typed; Tab
-explicitly fills the selected suggestion. An empty argument opens the picker.
+The `/` menu shows one compact row per object: Model, Reasoning, Session,
+Workspace, Conversation and App, with an action or value dropdown. Search
+narrows these rows; `/ren` shows Session with `rename` selected. Enter opens a
+selected object's choices; choosing with Enter or Tab fills the draft, then
+editor Enter executes it. Tab only fills text. Ctrl+Space explicitly opens the
+chooser for an existing command or value. Esc clears a chooser filter, then
+hides the menu without changing the draft or cancelling a turn.
+Direct aliases such as `/new` and `/files`, and qualified commands such as
+`/session list`, still execute normally. For `/model <id>` and
+`/reasoning <level>`, editor Enter validates what you typed without substituting
+a suggestion; Tab explicitly fills one. Model IDs are case-sensitive; supported
+reasoning names are case-insensitive. An empty argument opens the chooser.
 
 Implemented local commands include `/new`, `/resume`, `/sessions`, `/model`,
 `/reasoning`, `/theme`, `/clear`, `/help`, `/logs`, `/cancel`, `/reload`,

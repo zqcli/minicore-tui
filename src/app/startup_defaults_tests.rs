@@ -386,7 +386,7 @@ fn startup_pending_allows_group_navigation_but_keeps_mutations_blocked() {
     app.refresh_slash_completion();
     assert!(key(&mut app, KeyCode::Enter).is_empty());
     assert!(app.startup_create_pending());
-    assert_eq!(app.composer.content(), "/session new ");
+    assert_eq!(app.composer.content(), "/session new");
     assert_eq!(app.pending_requests.len(), 1);
     app.composer.set_text("/session ");
     app.refresh_slash_completion();
@@ -397,7 +397,7 @@ fn startup_pending_allows_group_navigation_but_keeps_mutations_blocked() {
         Some(crate::command::CommandGroup::Session)
     );
     assert!(key(&mut app, KeyCode::Esc).is_empty());
-    assert_eq!(app.composer.content(), "/");
+    assert_eq!(app.composer.content(), "/session ");
 }
 
 #[test]
@@ -425,5 +425,33 @@ fn startup_success_and_explicit_recovery_clear_only_owned_startup_notices() {
         app.notices
             .iter()
             .any(|n| n.text == "unrelated warning must remain")
+    );
+}
+
+#[test]
+fn startup_ack_adopts_explicit_popup_filter_without_executing_its_candidate() {
+    let (mut app, request) = create(prefs());
+    app.composer.set_text("/session");
+    app.refresh_slash_completion();
+    assert!(key(&mut app, KeyCode::Enter).is_empty());
+    for c in "new".chars() {
+        assert!(key(&mut app, KeyCode::Char(c)).is_empty());
+    }
+    let before = app.slash_completion.clone().unwrap();
+    assert!(before.popup.is_some());
+    let revision = app.composer.editor_revision();
+    reply(&mut app, &request, session());
+    let after = app.slash_completion.as_ref().unwrap();
+    assert_eq!(after.popup, before.popup);
+    assert_eq!(after.filter, "new");
+    assert_eq!(after.source_revision, revision);
+    assert_eq!(after.session_owner.as_deref(), Some("ses_default"));
+    assert_eq!(app.composer.content(), "/session");
+    assert!(key(&mut app, KeyCode::Enter).is_empty());
+    assert_eq!(app.composer.content(), "/session new ");
+    assert!(
+        !app.pending_requests
+            .values()
+            .any(|kind| matches!(kind, RequestKind::CreateSession { .. }))
     );
 }

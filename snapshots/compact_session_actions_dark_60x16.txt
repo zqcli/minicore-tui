@@ -1,0 +1,16 @@
+
+ Coding agent TUI
+ Ctrl+C: clear / quit · F1 help
+
+ Starting agent…
+
+ ▎
+ ▎/session
+ ▎
+ ▎
+ ▎Session actions · filter:
+ ▎  resume
+ ▎→ list
+ ▎  rename  [title]
+ ▎↑↓ · type filter · Enter/Tab fill · Esc close · 4/7
+ starting

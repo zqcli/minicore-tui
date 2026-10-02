@@ -1,0 +1,24 @@
+ MINICORE  v0.3.0
+
+ Coding agent TUI
+ Ctrl+C: clear / quit · F1 help
+
+ Starting agent…
+
+
+
+
+
+
+ ▎
+ ▎/session
+ ▎
+ ▎
+ ▎Session actions · filter:
+ ▎  configure  configure a new session
+ ▎  resume  continue a saved session
+ ▎→ list  browse saved sessions
+ ▎  rename  [title]
+ ▎  close  [confirm]
+ ▎↑↓ / PgUp PgDn choose · type to filter · Enter/Tab fill · Esc close · 4/7
+ starting

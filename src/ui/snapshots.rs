@@ -612,3 +612,32 @@ fn extended_slash_menu_has_purpose_selection_and_controls_at_supported_sizes() {
         snapshot(&app, name, width, height);
     }
 }
+
+#[test]
+fn compact_slash_object_and_replacing_dropdown_at_supported_sizes() {
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    for (theme, width, height, suffix) in [
+        (ThemeKind::Dark, 60, 16, "dark_60x16"),
+        (ThemeKind::Light, 80, 24, "light_80x24"),
+    ] {
+        let mut app = testapp::fresh(theme);
+        app.update(AppEvent::TerminalSize { width, height });
+        for character in "/session".chars() {
+            app.update(AppEvent::Terminal(Event::Key(KeyEvent::new(
+                KeyCode::Char(character),
+                KeyModifiers::NONE,
+            ))));
+        }
+        snapshot(&app, &format!("compact_session_{suffix}"), width, height);
+        app.update(AppEvent::Terminal(Event::Key(KeyEvent::new(
+            KeyCode::Char(' '),
+            KeyModifiers::CONTROL,
+        ))));
+        snapshot(
+            &app,
+            &format!("compact_session_actions_{suffix}"),
+            width,
+            height,
+        );
+    }
+}

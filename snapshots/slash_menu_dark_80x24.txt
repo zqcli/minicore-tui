@@ -9,16 +9,16 @@
 
 
 
+
  ▎
  ▎/
  ▎
  ▎
  ▎Commands
- ▎→ /model           choose a model
- ▎  /reasoning       choose reasoning effort
- ▎  /session ›       new, open and manage sessions
- ▎  /workspace ›     files, text search and changes
- ▎  /conversation ›  search, copy, export and context
- ▎  /app ›           preferences, help and application
- ▎↑↓ / PgUp PgDn choose · Tab fill · Enter run · Esc close · 1/6
+ ▎→ Model  [id]                                                      [default ▾]
+ ▎  Reasoning  [level]                                                  [auto ▾]
+ ▎  Session  new, open and manage sessions                              [list ▾]
+ ▎  Workspace  files, text search and changes                          [files ▾]
+ ▎  Conversation  search, copy, export and context                    [search ▾]
+ ▎↑↓ choose · Ctrl+Space choices · Tab fill · Enter choose · Esc · 1/6
  starting
