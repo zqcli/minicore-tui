@@ -20,5 +20,5 @@
  ▎  Session  new, open and manage sessions                              [list ▾]
  ▎  Workspace  files, text search and changes                          [files ▾]
  ▎  Conversation  search, copy, export and context                    [search ▾]
- ▎↑↓ choose · Ctrl+Space choices · Tab fill · Enter choose · Esc · 1/6
+ ▎Enter choose · Esc close · Tab fill · ↑↓ · Ctrl+Space choices · 1/6
  starting

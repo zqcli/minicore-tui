@@ -297,7 +297,7 @@ pub fn map(app: &App, key: KeyEvent) -> Action {
             KeyCode::Char(c) if !ctrl(&key) && !alt(&key) => return Action::CompletionFilter(c),
             KeyCode::Backspace => return Action::CompletionFilterBackspace,
             KeyCode::Char('u' | 'k') if ctrl(&key) => return Action::CompletionFilterClear,
-            KeyCode::Enter if press => return Action::CompletionAccept,
+            KeyCode::Enter if press => return Action::CompletionEnter,
             KeyCode::Tab if press => return Action::CompletionAccept,
             KeyCode::Esc => return Action::CompletionCancel,
             _ => {}

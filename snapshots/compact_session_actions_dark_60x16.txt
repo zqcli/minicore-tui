@@ -12,5 +12,5 @@
  ▎  resume
  ▎→ list
  ▎  rename  [title]
- ▎↑↓ · type filter · Enter/Tab fill · Esc close · 4/7
+ ▎Enter confirm · Esc back · Tab fill · type filter · 4/7
  starting

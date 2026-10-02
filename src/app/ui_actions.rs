@@ -38,6 +38,8 @@ pub struct SlashChoicePopup {
     /// Stable target and untouched Composer draft at explicit activation.
     pub target: crate::command::MenuEntry,
     pub entry_draft: String,
+    /// Exact previous menu, restored by Escape without touching the editor.
+    pub parent: Box<SlashCompletionState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,7 +70,18 @@ impl SlashCompletionState {
         let bare_object = query.is_empty()
             || crate::command::CommandGroup::parse(query).is_some()
             || query.eq_ignore_ascii_case("model")
-            || query.eq_ignore_ascii_case("reasoning");
+            || query.eq_ignore_ascii_case("reasoning")
+            || query.eq_ignore_ascii_case("theme")
+            || {
+                let mut parts = query.split_whitespace();
+                parts
+                    .next()
+                    .is_some_and(|part| part.eq_ignore_ascii_case("app"))
+                    && parts
+                        .next()
+                        .is_some_and(|part| part.eq_ignore_ascii_case("theme"))
+                    && parts.next().is_none()
+            };
         let matched_prefix = !self.items.is_empty()
             && self.argument_command.is_none()
             && match query.split_once(char::is_whitespace) {
@@ -470,6 +483,7 @@ impl App {
         } else {
             None
         };
+        let parent = Box::new(completion.clone());
         completion.selected = page
             .entries
             .iter()
@@ -487,6 +501,7 @@ impl App {
         completion.popup = Some(SlashChoicePopup {
             target,
             entry_draft: self.composer.content(),
+            parent,
         });
         self.slash_completion = Some(completion);
     }
@@ -595,6 +610,15 @@ impl App {
             self.filter_slash_choices(None, false, true);
             return;
         }
+        if let Some(popup) = completion.popup {
+            let mut parent = *popup.parent;
+            // Startup may adopt this unchanged scratch editor into a session
+            // while the chooser is open. Carry its current ownership fence back.
+            parent.session_owner = completion.session_owner;
+            self.slash_completion = Some(parent);
+            self.refresh_slash_choice_catalog();
+            return;
+        }
         // Popup filtering never changed the entry draft, preserving its undo
         // history and cursor on Escape. Dismiss until the user edits again.
         self.slash_dismissed_text = Some(self.composer.content());
@@ -612,7 +636,7 @@ impl App {
         completion.selected = (completion.selected as i32 + delta).rem_euclid(len as i32) as usize;
     }
 
-    /// Fill is always local, both for ordinary Tab and popup Enter/Tab.
+    /// Tab filling is always local.
     /// The next Enter submits the resulting literal through the normal parser.
     pub(super) fn accept_slash_completion(&mut self) -> bool {
         let Some(completion) = self.slash_completion.take() else {
@@ -652,8 +676,39 @@ impl App {
             return Vec::new();
         }
         if completion.popup.is_some() {
+            let Some(item) = completion.items.get(completion.selected).cloned() else {
+                return Vec::new();
+            };
+            if matches!(item.kind, crate::command::MenuKind::Command("theme")) {
+                // An action with finite required values advances in-place. Its
+                // parent retains the filter and highlighted action for Escape.
+                let Some(page) = self.slash_choice_page(&item, "") else {
+                    return Vec::new();
+                };
+                let mut next = completion.clone();
+                next.popup = Some(SlashChoicePopup {
+                    target: item,
+                    entry_draft: self.composer.content(),
+                    parent: Box::new(completion.clone()),
+                });
+                next.items = page.entries;
+                next.group = page.group;
+                next.argument_command = page.argument_command;
+                next.filter.clear();
+                next.selected = 0;
+                self.slash_completion = Some(next);
+                return Vec::new();
+            }
             self.accept_slash_completion();
-            return Vec::new();
+            // Tool references require user-supplied identity fields. Leave an
+            // editable draft rather than immediately producing a usage error.
+            if matches!(item.kind, crate::command::MenuKind::Command("tool")) {
+                self.slash_completion = None;
+                self.slash_dismissed_text = Some(self.composer.content());
+                return Vec::new();
+            }
+            self.slash_completion = None;
+            return self.submit_composer();
         }
         if completion.opens_choices_on_enter(&self.composer.content()) {
             self.open_slash_choices();
@@ -664,7 +719,7 @@ impl App {
     }
 
     /// Return true only for the shared visible completion rectangle. Selecting
-    /// an option fills the draft, never dispatches a command.
+    /// an option only highlights it; Enter activates and Tab fills.
     fn slash_completion_mouse(&mut self, mouse: MouseEvent) -> bool {
         if crate::ui::layout::is_too_small(ratatui::layout::Rect::new(
             0,
@@ -708,9 +763,7 @@ impl App {
                     if let Some(completion) = self.slash_completion.as_mut() {
                         completion.selected = index;
                     }
-                    if popup {
-                        self.accept_slash_completion();
-                    } else {
+                    if !popup {
                         self.open_slash_choices();
                     }
                 }

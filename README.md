@@ -77,6 +77,8 @@ you submit a message. Explicit `--profile`, `--model`, and `--reasoning` overrid
 only those fields; `--session` and `--continue` take precedence over creation.
 You can type while creation finishes; your draft and editing history are kept.
 Use `/new form` or `Ctrl+N` when you want the advanced session setup form.
+A new session's welcome/version block remains at the start of its conversation
+and scrolls naturally above later messages.
 
 ### CLI
 
@@ -104,9 +106,9 @@ not provide a cross-process lock.
 
 ## Sessions And Turns
 
-Startup discovers the Agent, models, profiles, and sessions. `/new` opens a
-new-session form; `/resume` and `/sessions` open the existing-session
-selector. Workspace, profile, model, and reasoning are sent to
+Startup discovers the Agent, models, profiles, and sessions. `/new` quickly
+creates a session using the current defaults; `/new form` opens the advanced
+new-session form. `/resume` and `/sessions` open the existing-session selector. Workspace, profile, model, and reasoning are sent to
 `session.create` as appropriate.
 
 A session title is edited from the Session panel through `session.rename`; the
@@ -143,10 +145,11 @@ The complete current keymap and slash-command semantics are in
 The `/` menu shows one compact row per object: Model, Reasoning, Session,
 Workspace, Conversation and App, with an action or value dropdown. Search
 narrows these rows; `/ren` shows Session with `rename` selected. Enter opens a
-selected object's choices; choosing with Enter or Tab fills the draft, then
-editor Enter executes it. Tab only fills text. Ctrl+Space explicitly opens the
-chooser for an existing command or value. Esc clears a chooser filter, then
-hides the menu without changing the draft or cancelling a turn.
+selected object's choices; Enter activates a selected action or value. Actions
+that need more input open their form or leave an editable argument draft. Tab
+only fills text. Ctrl+Space explicitly opens the chooser for an existing command
+or value. Esc clears a chooser filter, then returns to its parent; Esc at the
+root hides the menu without changing the draft or cancelling a turn.
 Direct aliases such as `/new` and `/files`, and qualified commands such as
 `/session list`, still execute normally. For `/model <id>` and
 `/reasoning <level>`, editor Enter validates what you typed without substituting

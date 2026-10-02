@@ -226,6 +226,9 @@ pub struct SessionView {
     /// boolean so a failed save is no longer conflated with an unknown
     /// outcome.
     pub result_confirmation: ResultConfirmation,
+    /// Retain the local welcome block after this view first confirms an empty
+    /// beginning. Kept per session so switching views cannot leak the header.
+    pub welcome_retained: bool,
     pub transcript: TranscriptState,
     pub live: Option<LiveLoop>,
     pub unsaved_loop: Option<UnsavedLoop>,
@@ -317,6 +320,7 @@ impl SessionView {
             history_query_generation: 0,
             retired_loop: None,
             result_confirmation: ResultConfirmation::default(),
+            welcome_retained: false,
             transcript: TranscriptState::default(),
             live: None,
             unsaved_loop: None,

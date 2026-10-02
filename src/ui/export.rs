@@ -13,6 +13,34 @@ use crate::state::export::{ExportFormState, ExportPhase};
 use crate::theme::Theme;
 use crate::ui::layout::{fill_line, truncate};
 
+const OPTION_LABELS: [&str; 5] = [
+    "Ctrl+T thinking",
+    "Ctrl+P tools",
+    "Ctrl+N unsaved turn",
+    "Ctrl+Y overwrite",
+    "Ctrl+R raw oversized",
+];
+
+/// Fit the actual single-line fields and width-wrapped options, retaining a
+/// notice slot and every limitation row up to the screen's existing budget.
+pub(crate) fn desired_height(form: &ExportFormState, width: u16) -> u16 {
+    let width = width.saturating_sub(2) as usize;
+    let mut option_rows = 1;
+    let mut used = 0;
+    for label in OPTION_LABELS {
+        let length = label.len() + 4; // "[x] " or "[ ] "
+        if used > 0 && used + 3 + length > width {
+            option_rows += 1;
+            used = 0;
+        }
+        if used > 0 {
+            used += 3;
+        }
+        used += length;
+    }
+    6 + option_rows + form.limitations.notes().len().max(1) as u16
+}
+
 pub fn render(frame: &mut Frame, area: Rect, theme: &Theme, form: &ExportFormState) {
     frame.render_widget(Clear, area);
     let border = Style::new().fg(theme.border);
@@ -102,11 +130,11 @@ fn render_toggles(frame: &mut Frame, area: Rect, form: &ExportFormState, theme: 
 /// rows, so narrow layouts need not hide the overwrite decision.
 fn toggle_lines(form: &ExportFormState, theme: &Theme, width: usize) -> Vec<Line<'static>> {
     let options = [
-        ("Ctrl+T thinking", form.spec.include_thinking),
-        ("Ctrl+P tools", form.spec.include_tool),
-        ("Ctrl+N unsaved turn", form.include_unsaved),
-        ("Ctrl+Y overwrite", form.overwrite),
-        ("Ctrl+R raw oversized", form.spec.raw_oversized),
+        (OPTION_LABELS[0], form.spec.include_thinking),
+        (OPTION_LABELS[1], form.spec.include_tool),
+        (OPTION_LABELS[2], form.include_unsaved),
+        (OPTION_LABELS[3], form.overwrite),
+        (OPTION_LABELS[4], form.spec.raw_oversized),
     ];
     let mut lines = Vec::new();
     let mut spans = Vec::new();
@@ -240,6 +268,47 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::style::Color;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn content_fit_export_keeps_options_progress_notice_notes_and_hints() {
+        for width in [59, 79, 119, 159] {
+            let mut form = ExportFormState::new("long/path/".repeat(30));
+            form.notice = Some("retry export".into());
+            form.limitations.read_failed = 1;
+            form.limitations.oversized_items = 1;
+            for phase in [
+                ExportPhase::Editing,
+                ExportPhase::Running,
+                ExportPhase::Cancelling,
+                ExportPhase::Done,
+                ExportPhase::Failed,
+            ] {
+                form.phase = phase;
+                let height = desired_height(&form, width);
+                assert_eq!(
+                    height as usize,
+                    6 + toggle_lines(&form, &Theme::dark(), (width - 2) as usize).len()
+                        + form.limitations.notes().len()
+                );
+                let text = drawn(&form, width, height);
+                for label in OPTION_LABELS {
+                    assert!(text.contains(label), "{text}");
+                }
+                assert!(text.contains("retry export"));
+                for note in form.limitations.notes() {
+                    assert!(
+                        text.contains(&note.chars().take(24).collect::<String>()),
+                        "{text}"
+                    );
+                }
+                assert!(text.contains(if phase == ExportPhase::Cancelling {
+                    "waiting for the writer"
+                } else {
+                    "Esc"
+                }));
+            }
+        }
+    }
 
     fn drawn_buffer(form: &ExportFormState, width: u16, height: u16, theme: &Theme) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();

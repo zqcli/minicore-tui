@@ -20,5 +20,5 @@
  ▎→ list  browse saved sessions
  ▎  rename  [title]
  ▎  close  [confirm]
- ▎↑↓ / PgUp PgDn choose · type to filter · Enter/Tab fill · Esc close · 4/7
+ ▎Enter confirm · Esc back · Tab fill · ↑↓ / PgUp PgDn · type filter · 4/7
  starting

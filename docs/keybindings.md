@@ -294,12 +294,17 @@ command match opens its chooser; Ctrl+Space explicitly opens the chooser for
 an existing command or value. Click a compact row to open its chooser. Inside
 the chooser, typing (or pasting) filters choices without editing the draft;
 Backspace removes a filter character and Ctrl+U/Ctrl+K clear the filter.
-Enter, Tab or clicking a choice only fills the draft. The next editor Enter
-executes the filled command. Outside the chooser, Tab only fills the selected
-suggestion; Enter executes a complete direct or qualified command normally.
+Enter activates the selected action or value through normal command validation.
+An action requiring a finite value advances to its choices; actions with input
+forms open those forms. `/tool` leaves its required identity arguments editable.
+Clicking a choice highlights it without closing the chooser; Enter activates it.
+Tab only fills the draft for further editing. Outside the chooser, Tab only fills
+the selected suggestion; Enter executes a complete direct or qualified command
+normally.
 
-Esc first clears a non-empty chooser filter, then hides the menu, keeping the
-original draft. Esc in a visible menu never cancels a turn. Dismissed menus
+Esc first clears a non-empty chooser filter, then returns to the parent menu
+with its previous selection and filter. Esc at the root hides the menu, keeping
+the original draft. Esc in a visible menu never cancels a turn. Dismissed menus
 stay hidden until text changes, and a no-match chooser cannot accept a stale
 selection. Moving within an existing command or editing multiple lines uses
 ordinary editor keys rather than replacing a partial token. Shift+Enter/Ctrl+J

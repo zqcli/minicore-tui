@@ -1,9 +1,9 @@
+ MINICORE  v0.3.0
+
+ Coding agent TUI
+ Ctrl+C: clear / quit · F1 help
 
   ⊘ Turn cancelled (sandbox_evicted) · persisted · requests: 1 · tool rounds: 0
-
-
-
-
 
 
 

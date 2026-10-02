@@ -42,6 +42,8 @@ fn group_enter_opens_choices_tab_never_executes_and_escape_dismisses() {
     assert_eq!(a.slash_completion.as_ref().unwrap().filter, "");
     assert!(key(&mut a, KeyCode::Esc).is_empty());
     assert_eq!(a.composer.content(), "/session re");
+    assert!(a.slash_completion.as_ref().unwrap().popup.is_none());
+    assert!(key(&mut a, KeyCode::Esc).is_empty());
     assert!(a.slash_completion.is_none());
     for code in [KeyCode::Left, KeyCode::Right] {
         assert!(key(&mut a, code).is_empty());
@@ -414,7 +416,7 @@ fn qualified_theme_choice_fills_before_literal_enter_applies() {
     assert!(a.apply_action(Action::CompletionOpen).is_empty());
     assert!(a.slash_completion.as_ref().unwrap().popup.is_some());
     assert!(key(&mut a, KeyCode::Down).is_empty());
-    assert!(key(&mut a, KeyCode::Enter).is_empty());
+    assert!(key(&mut a, KeyCode::Tab).is_empty());
     assert_eq!(a.theme, ThemeKind::Dark);
     assert_eq!(a.composer.content(), "/app theme light ");
     assert!(testapp::take_requests(key(&mut a, KeyCode::Enter)).is_empty());

@@ -8,12 +8,18 @@ use crate::app::{App, ConnectionState};
 use crate::protocol::SessionStatusWire;
 use crate::theme::Theme;
 
-/// Whether the startup guidance belongs in the current transcript.
+/// The welcome block belongs to a session once its empty beginning has been
+/// confirmed. It is presentation-only transcript content, never model history.
+pub fn visible(app: &App) -> bool {
+    guidance_visible(app) || app.active_view().is_some_and(|view| view.welcome_retained)
+}
+
+/// Whether the transient startup guidance belongs in the current transcript.
 ///
 /// An active session may show it only for a genuinely confirmed empty idle
 /// view. History being empty by itself is not sufficient: state, event-gap,
 /// reconciliation, and persistence uncertainty remain authoritative fences.
-pub fn visible(app: &App) -> bool {
+pub fn guidance_visible(app: &App) -> bool {
     if app.sessions.active.is_none() || app.new_session().is_some() {
         return true;
     }
@@ -84,6 +90,9 @@ pub fn lines(theme: &Theme, app: &App) -> Vec<Line<'static>> {
         Line::styled("Ctrl+C: clear / quit · F1 help", Style::new().fg(theme.dim)),
         Line::default(),
     ];
+    if !guidance_visible(app) {
+        return out;
+    }
     let status = match app.connection {
         ConnectionState::Starting => Span::styled("Starting agent…", Style::new().fg(theme.muted)),
         ConnectionState::ShuttingDown => {

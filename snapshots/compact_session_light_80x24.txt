@@ -20,5 +20,5 @@
  ▎
  ▎
  ▎→ Session  new, open and manage sessions                              [list ▾]
- ▎↑↓ choose · Ctrl+Space choices · Tab fill · Enter choose · Esc · 1/1
+ ▎Enter choose · Esc close · Tab fill · ↑↓ · Ctrl+Space choices · 1/1
  starting

@@ -4091,3 +4091,116 @@ fn empty_user_sections_do_not_add_spacer_rows() {
     let normal = user::lines(&theme, &make("pending message"), 40);
     assert_section_is_vertically_padded(&normal, "non-empty pending user");
 }
+
+#[test]
+fn session_forms_fit_content_keep_errors_cursor_and_delete_hitboxes() {
+    use crate::state::selection::{
+        Dock, SessionConfirmChoice, SessionPanelAction, SessionPanelMode,
+    };
+    for (width, height) in [(60, 16), (80, 24), (120, 40)] {
+        for (mode, rows, content_rows) in [
+            (
+                SessionPanelMode::Rename {
+                    draft: "中a".into(),
+                    cursor: 1,
+                    submitting: false,
+                },
+                6,
+                2,
+            ),
+            (SessionPanelMode::ConfirmClose, 7, 3),
+            (SessionPanelMode::ConfirmCloseForDelete, 7, 3),
+            (
+                SessionPanelMode::ConfirmDelete {
+                    choice: SessionConfirmChoice::Cancel,
+                    submitting: false,
+                },
+                8,
+                4,
+            ),
+        ] {
+            for error in [None, Some("retry this action".to_owned())] {
+                let mut app = testapp::session_selector_all(ThemeKind::Dark);
+                let Dock::SessionSelector(state) = &mut app.dock else {
+                    panic!()
+                };
+                state.mode = mode.clone();
+                state.error = error.clone();
+                let screen = layout::screen_layout(&app, Rect::new(0, 0, width, height));
+                assert_eq!(screen.panel.height, rows + u16::from(error.is_some()));
+                let Dock::SessionSelector(state) = &app.dock else {
+                    panic!()
+                };
+                let geometry = selector::session_panel_layout(screen.panel, state);
+                assert_eq!(geometry.content.height, content_rows);
+                assert_eq!(geometry.footer.height, 1);
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal.draw(|frame| render(frame, &app)).unwrap();
+                let buffer = terminal.backend().buffer();
+                let text = buffer
+                    .content
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>();
+                if error.is_some() {
+                    assert!(text.contains("retry this action"));
+                }
+                if matches!(mode, SessionPanelMode::Rename { .. }) {
+                    assert_eq!(text.matches("Enter Save · Esc Cancel").count(), 1);
+                    assert!(!text.contains("Enter saves"));
+                    let cursor = (geometry.content.x + 7 + 2, geometry.content.y + 1);
+                    assert_eq!(buffer[cursor].bg, Theme::dark().text);
+                }
+                if matches!(mode, SessionPanelMode::ConfirmDelete { .. }) {
+                    let row = geometry.content.y + 3;
+                    assert_eq!(
+                        selector::session_action_at(
+                            &app,
+                            screen.panel,
+                            state,
+                            geometry.content.x,
+                            row
+                        ),
+                        Some(SessionPanelAction::Cancel)
+                    );
+                    assert_eq!(
+                        selector::session_action_at(
+                            &app,
+                            screen.panel,
+                            state,
+                            geometry.content.x + 12,
+                            row
+                        ),
+                        Some(SessionPanelAction::ConfirmDelete)
+                    );
+                    assert!(row < geometry.footer.y);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn new_session_form_fits_fields_without_changing_short_screen_window() {
+    use crate::state::selection::{Dock, NewSessionField};
+    for (width, height, expected) in [(60, 16, 8), (80, 24, 10), (120, 40, 10)] {
+        let mut app = testapp::new_session(ThemeKind::Dark);
+        let Dock::NewSession(draft) = &mut app.dock else {
+            panic!()
+        };
+        draft.field = NewSessionField::Create;
+        let screen = layout::screen_layout(&app, Rect::new(0, 0, width, height));
+        assert_eq!(screen.panel.height, expected);
+        let draft = app.new_session().unwrap();
+        let geometry = panel::layout(screen.panel, panel::PanelSpec::new(0, false, 1));
+        assert_eq!(
+            crate::ui::new_session::field_at(
+                screen.panel,
+                draft,
+                geometry.content.x,
+                geometry.content.bottom() - 1
+            ),
+            Some((NewSessionField::Create, None))
+        );
+    }
+}

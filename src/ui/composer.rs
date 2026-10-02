@@ -155,58 +155,107 @@ fn render_completion(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     }
     if completion.items.is_empty() {
         lines.push(row(
-            if choices {
-                "No matching choices"
-            } else {
-                "No matching commands"
-            }
-            .to_owned(),
+            completion_empty_message(app, completion).to_owned(),
             false,
         ));
     }
     if geometry.show_hint {
-        let enter = if completion.popup.is_some() {
-            "fill"
-        } else if completion.opens_choices_on_enter(&app.composer.content()) {
-            "choose"
-        } else {
-            "run typed"
-        };
-        let position = format!(
-            "{}/{}",
-            if completion.items.is_empty() {
-                0
-            } else {
-                completion.selected + 1
-            },
-            completion.items.len()
-        );
-        let escape = if completion.popup.is_some() && !completion.filter.is_empty() {
-            "clear"
-        } else {
-            "close"
-        };
-        let hint = if completion.popup.is_some() {
-            if content_width >= 76 {
-                format!(
-                    "↑↓ / PgUp PgDn choose · type to filter · Enter/Tab fill · Esc {escape} · {position}"
-                )
-            } else if content_width >= 52 {
-                format!("↑↓ · type filter · Enter/Tab fill · Esc {escape} · {position}")
-            } else {
-                format!("↑↓ · Enter/Tab fill · Esc {escape} · {position}")
-            }
-        } else if content_width >= 76 {
-            format!("↑↓ choose · Ctrl+Space choices · Tab fill · Enter {enter} · Esc · {position}")
-        } else if content_width >= 52 {
-            format!("↑↓ · ^Space · Tab · Enter {enter} · Esc · {position}")
-        } else {
-            format!("↑↓ · ^Space · Tab · Enter · Esc · {position}")
-        };
+        let hint = completion_hint(app, completion, content_width);
         lines.push(row(hint, false));
     }
     lines.truncate(area.height as usize);
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Explain why a chooser is empty rather than suggesting a different filter
+/// when there is no catalog to filter in the first place.
+fn completion_empty_message(
+    app: &App,
+    completion: &crate::app::SlashCompletionState,
+) -> &'static str {
+    if completion.popup.is_none() {
+        return "No matching commands";
+    }
+    if matches!(completion.argument_command, Some("model" | "reasoning")) {
+        if matches!(app.connection, crate::app::ConnectionState::Starting) {
+            return "Loading model catalog…";
+        }
+        if app.catalogs.models.is_empty() {
+            return "No models available; check /logs or /reload";
+        }
+        if completion.argument_command == Some("reasoning")
+            && crate::state::selection::supported_reasoning(
+                &app.catalogs.models,
+                app.effective_settings_model(),
+            )
+            .is_empty()
+        {
+            return "No supported reasoning for this model";
+        }
+    }
+    "No matching choices"
+}
+
+/// Select a complete hint that fits. Essential confirm/back keys come first;
+/// optional navigation and counters never push Escape off a narrow terminal.
+fn completion_hint(
+    app: &App,
+    completion: &crate::app::SlashCompletionState,
+    width: usize,
+) -> String {
+    let popup = completion.popup.is_some();
+    let enter = if popup {
+        match completion
+            .items
+            .get(completion.selected)
+            .map(|item| item.kind)
+        {
+            Some(crate::command::MenuKind::Command("theme")) => "choose",
+            Some(crate::command::MenuKind::Command("tool")) => "edit",
+            _ => "confirm",
+        }
+    } else if completion.opens_choices_on_enter(&app.composer.content()) {
+        "choose"
+    } else {
+        "run typed"
+    };
+    let escape = if popup && !completion.filter.is_empty() {
+        "clear"
+    } else if popup {
+        "back"
+    } else {
+        "close"
+    };
+    let position = format!(
+        "{}/{}",
+        if completion.items.is_empty() {
+            0
+        } else {
+            completion.selected + 1
+        },
+        completion.items.len()
+    );
+    let core = format!("Enter {enter} · Esc {escape}");
+    let extra = if popup {
+        "↑↓ / PgUp PgDn · type filter"
+    } else {
+        "↑↓ · Ctrl+Space choices"
+    };
+    [
+        format!("{core} · Tab fill · {extra} · {position}"),
+        format!(
+            "{core} · Tab fill · {} · {position}",
+            if popup { "type filter" } else { "↑↓" }
+        ),
+        format!("{core} · Tab fill · ↑↓ · {position}"),
+        format!("{core} · Tab · {position}"),
+        format!("Enter · Esc · Tab · {position}"),
+        "Enter · Esc · Tab".to_owned(),
+        "Enter · Esc".to_owned(),
+    ]
+    .into_iter()
+    .find(|hint| UnicodeWidthStr::width(hint.as_str()) <= width)
+    .unwrap_or_else(|| rail::clip_cells("Enter Esc", width))
 }
 
 /// Current values come only from acknowledged settings or new-session defaults,
@@ -616,7 +665,76 @@ mod tests {
     }
 
     #[test]
-    fn theme_choice_fills_locally_before_a_separate_enter_applies_it() {
+    fn narrow_completion_hints_keep_confirm_and_back_visible() {
+        let mut app = app_with("");
+        type_keys(&mut app, "/session");
+        open_choices(&mut app);
+        for width in [20, 24, 32, 40, 60, 80, 120] {
+            let completion = app.slash_completion.as_ref().unwrap();
+            let hint = completion_hint(&app, completion, width);
+            assert!(
+                hint.contains("Enter") && hint.contains("Esc"),
+                "{width}: {hint}"
+            );
+            assert!(UnicodeWidthStr::width(hint.as_str()) <= width);
+            // Below 60 terminal columns the full UI intentionally shows its
+            // minimum-size notice; the helper is still checked defensively.
+            if width + rail::RAIL_WIDTH >= 60 {
+                let (_, rows) = capture(&app, width as u16 + rail::RAIL_WIDTH as u16, 16);
+                assert!(
+                    rows.iter()
+                        .any(|row| row.contains("Enter") && row.contains("Esc")),
+                    "{rows:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn empty_catalog_and_filtered_choices_have_distinct_messages() {
+        let mut app = app_with("");
+        type_keys(&mut app, "/model");
+        open_choices(&mut app);
+        app.catalogs.models.clear();
+        app.connection = crate::app::ConnectionState::Starting;
+        let completion = app.slash_completion.as_ref().unwrap();
+        assert_eq!(
+            completion_empty_message(&app, completion),
+            "Loading model catalog…"
+        );
+        app.connection = crate::app::ConnectionState::Ready;
+        let completion = app.slash_completion.as_ref().unwrap();
+        assert_eq!(
+            completion_empty_message(&app, completion),
+            "No models available; check /logs or /reload"
+        );
+        let (models, profiles, sessions) = crate::ui::testapp::standard_catalog();
+        let mut app =
+            crate::ui::testapp::ready_catalog(ThemeKind::Dark, models, profiles, sessions);
+        type_keys(&mut app, "/reasoning");
+        open_choices(&mut app);
+        for model in &mut app.catalogs.models {
+            model.supported_reasoning.clear();
+        }
+        let completion = app.slash_completion.as_ref().unwrap();
+        assert_eq!(
+            completion_empty_message(&app, completion),
+            "No supported reasoning for this model"
+        );
+        let mut app = app_with("");
+        type_keys(&mut app, "/session");
+        open_choices(&mut app);
+        type_keys(&mut app, "zzzzzzzz");
+        let completion = app.slash_completion.as_ref().unwrap();
+        assert!(completion.items.is_empty());
+        assert_eq!(
+            completion_empty_message(&app, completion),
+            "No matching choices"
+        );
+    }
+
+    #[test]
+    fn theme_choice_enter_applies_without_an_extra_submit() {
         let mut app = app_with("");
         type_keys(&mut app, "/theme");
         open_choices(&mut app);
@@ -626,9 +744,6 @@ mod tests {
             crossterm::event::KeyCode::Down,
             crossterm::event::KeyModifiers::NONE,
         );
-        assert!(press_enter(&mut app).is_empty());
-        assert_eq!(app.composer.content(), "/theme light ");
-        assert_eq!(app.theme, ThemeKind::Dark, "filling is not execution");
         assert!(press_enter(&mut app).is_empty());
         assert_eq!(app.theme, ThemeKind::Light);
         assert!(app.composer.content().is_empty());
@@ -808,7 +923,10 @@ mod tests {
                     !rows.iter().any(|row| row.contains("▾]")),
                     "dropdown replaces root controls"
                 );
-                assert!(rows.iter().any(|row| row.contains("Enter/Tab fill")));
+                assert!(
+                    rows.iter()
+                        .any(|row| row.contains("Enter confirm") && row.contains("Tab"))
+                );
                 type_keys(&mut app, "rename");
                 assert_eq!(app.composer.content(), "/session");
                 let (_, rows) = capture(&app, width, height);

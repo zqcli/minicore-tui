@@ -12,5 +12,5 @@
  ▎  Workspace                                      [files ▾]
  ▎  Conversation                                  [search ▾]
  ▎→ App                                         [settings ▾]
- ▎↑↓ · ^Space · Tab · Enter choose · Esc · 6/6
+ ▎Enter choose · Esc close · Tab fill · ↑↓ · 6/6
  starting

@@ -163,21 +163,33 @@ fn earlier_history_user_pages_are_not_limited_by_search_jump_retry_budget() {
 
 #[test]
 fn earlier_history_affordance_disappears_after_prefix_is_loaded() {
-    let mut app = fixture(20, 220, ThemeKind::Dark);
-    let req = request(home(&mut app), 0);
-    let result = page(&app, 0, 20);
-    assert!(testapp::respond(&mut app, &req, result).is_empty());
-    prepare(&mut app);
-    assert!(crate::ui::header::earlier_history_start(&app).is_none());
-    assert!(
-        app.prepared_conversation
-            .as_ref()
-            .unwrap()
-            .header
-            .is_empty()
-    );
-    assert!(app.active_view().unwrap().transcript.complete);
-    assert!(home(&mut app).is_empty());
+    for retained_welcome in [false, true] {
+        let mut app = fixture(20, 220, ThemeKind::Dark);
+        // Cover a cold restored session and a session whose empty beginning
+        // was seen here before its history grew and the prefix was evicted.
+        app.active_session_mut().unwrap().welcome_retained = retained_welcome;
+        let req = request(home(&mut app), 0);
+        let result = page(&app, 0, 20);
+        assert!(testapp::respond(&mut app, &req, result).is_empty());
+        prepare(&mut app);
+        assert!(crate::ui::header::earlier_history_start(&app).is_none());
+        let header = &app.prepared_conversation.as_ref().unwrap().header;
+        assert!(
+            header
+                .iter()
+                .all(|line| !line.to_string().contains("Earlier messages"))
+        );
+        assert_eq!(
+            header
+                .iter()
+                .filter(|line| line.to_string().contains("MINICORE"))
+                .count(),
+            usize::from(retained_welcome)
+        );
+        assert_eq!(header.len(), if retained_welcome { 5 } else { 0 });
+        assert!(app.active_view().unwrap().transcript.complete);
+        assert!(home(&mut app).is_empty());
+    }
 }
 
 #[tokio::test]

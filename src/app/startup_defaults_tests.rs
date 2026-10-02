@@ -447,7 +447,7 @@ fn startup_ack_adopts_explicit_popup_filter_without_executing_its_candidate() {
     assert_eq!(after.source_revision, revision);
     assert_eq!(after.session_owner.as_deref(), Some("ses_default"));
     assert_eq!(app.composer.content(), "/session");
-    assert!(key(&mut app, KeyCode::Enter).is_empty());
+    assert!(key(&mut app, KeyCode::Tab).is_empty());
     assert_eq!(app.composer.content(), "/session new ");
     assert!(
         !app.pending_requests

@@ -977,20 +977,160 @@ fn new_session_and_empty_created_session_keep_startup_header() {
         text: "pending prompt".to_owned(),
     });
     assert!(
-        !rendered_text(&driver.app, 80, 24).contains("MINICORE  v0.3.0"),
-        "a live prompt without output must not make the header flicker back"
+        rendered_text(&driver.app, 80, 24).contains("MINICORE  v0.3.0"),
+        "the welcome block remains above the first live prompt"
     );
 }
 
 #[test]
-fn confirmed_empty_header_requires_known_idle_and_clean_lifecycle() {
+fn welcome_prefix_survives_first_message_scroll_resize_and_session_switch() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    open_idle(&mut driver, "ses_1");
+    assert_startup_header(&driver.app, true);
+    driver.step(AppEvent::SubmitTurn {
+        session_id: "ses_1".to_owned(),
+        text: "first prompt".to_owned(),
+    });
+    let prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 79);
+    assert_eq!(
+        prepared.header_rows(),
+        5,
+        "only the transient idle guidance retires"
+    );
+    assert!(prepared.total_rows() > prepared.header_rows());
+    let screen = rendered_text(&driver.app, 80, 24);
+    assert!(screen.find("MINICORE").unwrap() < screen.find("first prompt").unwrap());
+    assert!(!screen.contains("Type a message to begin"));
+
+    // Completion replaces the live tail with durable conversation content.
+    // Its presentation prefix remains local and is never copied into history.
+    // Blank lines make distinct Markdown paragraphs; soft newlines alone
+    // collapse into a short wrapped paragraph that fits a large viewport.
+    let long_prompt = (0..60)
+        .map(|n| format!("prompt line {n}\n\n"))
+        .collect::<String>();
+    driver.respond_method(
+        "turn.send",
+        json!({"turn": {"session_id": "ses_1", "loop_id": "loop_1"}}),
+    );
+    driver.respond_method("turn.wait", wait_result("ses_1", "loop_1", "persisted"));
+    driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
+    driver.respond_method(
+        "session.read",
+        history(
+            vec![
+                user(0, "loop_1", "first prompt"),
+                assistant(1, "loop_1", 0, "deep", &long_prompt),
+            ],
+            None,
+            2,
+        ),
+    );
+    for (width, height) in [(80, 24), (60, 16), (120, 40)] {
+        driver.step(AppEvent::TerminalSize { width, height });
+        let prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, width - 1);
+        assert_eq!(
+            prepared
+                .lines()
+                .iter()
+                .filter(|line| line_text(line).contains("MINICORE"))
+                .count(),
+            1
+        );
+        assert!(
+            prepared
+                .copy_ranges
+                .iter()
+                .all(|range| !range.text.contains("MINICORE"))
+        );
+        let visible_rows =
+            layout::screen_layout(&driver.app, ratatui::layout::Rect::new(0, 0, width, height))
+                .transcript
+                .height as usize;
+        assert!(prepared.total_rows() > visible_rows + prepared.header_rows());
+        driver.step(AppEvent::Viewport {
+            total_lines: prepared.total_rows(),
+            visible_rows,
+        });
+        driver.step(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+            KeyCode::End,
+            KeyModifiers::CONTROL,
+        ))));
+        assert!(
+            !rendered_text(&driver.app, width, height).contains("MINICORE"),
+            "welcome must scroll offscreen"
+        );
+        driver.step(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+            KeyCode::Home,
+            KeyModifiers::CONTROL,
+        ))));
+        assert!(
+            rendered_text(&driver.app, width, height).contains("MINICORE"),
+            "welcome remains reachable at the top after resize"
+        );
+    }
+
+    // A reader in the middle remains anchored on content when resizing the
+    // same transcript with its retained prefix.
+    let prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 119);
+    let target = prepared
+        .lines()
+        .iter()
+        .position(|line| line_text(line).contains("prompt line 20"))
+        .unwrap();
+    driver.step(AppEvent::ConversationPrepared(prepared));
+    let scroll = &mut driver.app.sessions.known.get_mut("ses_1").unwrap().scroll;
+    scroll.offset = target;
+    scroll.follow_tail = false;
+    driver.step(AppEvent::TerminalSize {
+        width: 60,
+        height: 16,
+    });
+    let anchor = driver.app.sessions.known["ses_1"]
+        .scroll
+        .anchor
+        .clone()
+        .expect("content anchor captured");
+    let resized = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 59);
+    let expected = resized
+        .row_for_scroll_anchor(&anchor)
+        .unwrap()
+        .saturating_sub(anchor.screen_row);
+    driver.step(AppEvent::ConversationPrepared(resized));
+    assert_eq!(driver.app.sessions.known["ses_1"].scroll.offset, expected);
+
+    open_idle_with_history(
+        &mut driver,
+        "ses_old",
+        vec![user(0, "old_loop", "restored history")],
+    );
+    assert_startup_header(&driver.app, false);
+    assert!(!driver.app.sessions.known["ses_old"].welcome_retained);
+    driver.step(AppEvent::OpenSession {
+        session_id: "ses_1".into(),
+    });
+    driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
+    driver.step(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+        KeyCode::Home,
+        KeyModifiers::CONTROL,
+    ))));
+    assert_startup_header(&driver.app, true);
+    open_idle(&mut driver, "ses_empty");
+    assert_startup_header(&driver.app, true);
+    assert!(driver.app.sessions.known["ses_empty"].welcome_retained);
+}
+
+#[test]
+fn confirmed_empty_guidance_requires_known_idle_and_clean_lifecycle() {
     let mut driver = Driver::new();
     bootstrap(&mut driver);
     open_idle(&mut driver, "ses_1");
     assert_startup_header(&driver.app, true);
 
     driver.app.sessions.known.get_mut("ses_1").unwrap().state = None;
-    assert_startup_header(&driver.app, false);
+    assert_startup_header(&driver.app, true);
+    assert!(!minicore_tui::ui::header::guidance_visible(&driver.app));
     driver.app.sessions.known.get_mut("ses_1").unwrap().state = Some(
         serde_json::from_value::<SessionStateWire>(state("ses_1", "idle", Value::Null)).unwrap(),
     );
@@ -1024,7 +1164,8 @@ fn confirmed_empty_header_requires_known_idle_and_clean_lifecycle() {
             }
             _ => unreachable!(),
         }
-        assert_startup_header(&driver.app, false);
+        assert_startup_header(&driver.app, true);
+        assert!(!minicore_tui::ui::header::guidance_visible(&driver.app));
         let view = driver.app.sessions.known.get_mut("ses_1").unwrap();
         view.event_gap = false;
         view.history_read.reset();

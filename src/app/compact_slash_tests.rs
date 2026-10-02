@@ -54,7 +54,7 @@ fn object_completion_and_explicit_choice_have_separate_commit_boundaries() {
     assert_eq!(popup(&app).items.len(), 7);
     type_text(&mut app, "list");
     assert_eq!(app.composer.content(), "/rename ");
-    assert!(key(&mut app, KeyCode::Enter).is_empty());
+    assert!(key(&mut app, KeyCode::Tab).is_empty());
     assert_eq!(app.composer.content(), "/session list ");
     assert!(app.slash_completion.as_ref().unwrap().popup.is_none());
     assert!(app.pending_requests.is_empty());
@@ -80,6 +80,8 @@ fn popup_filter_escape_and_paste_preserve_entry_draft_revision_and_undo() {
     assert_eq!(app.composer.editor_revision(), revision);
     assert!(key(&mut app, KeyCode::Esc).is_empty());
     assert_eq!(popup(&app).filter, "");
+    assert!(key(&mut app, KeyCode::Esc).is_empty());
+    assert!(app.slash_completion.as_ref().unwrap().popup.is_none());
     assert!(key(&mut app, KeyCode::Esc).is_empty());
     assert!(app.slash_completion.is_none());
     assert_eq!(app.composer.cursor(), cursor);
@@ -118,7 +120,7 @@ fn model_popup_highlight_fill_and_literal_commit_are_distinct() {
     assert_eq!(app.active_view().unwrap().info.model, "deep");
     assert_eq!(app.active_view().unwrap().info.reasoning, Reasoning::High);
     assert_eq!(app.composer.editor_revision(), revision);
-    assert!(key(&mut app, KeyCode::Enter).is_empty());
+    assert!(key(&mut app, KeyCode::Tab).is_empty());
     assert_eq!(app.composer.content(), "/model fast ");
     assert!(app.pending_requests.is_empty());
     assert!(key(&mut app, KeyCode::Enter).is_empty());
@@ -242,6 +244,10 @@ fn mouse_uses_the_visible_compact_and_popup_rows_at_minimum_size() {
     let expected = popup(&app).items[geometry.start].text.clone();
     let row = screen.panel.bottom() - height + u16::from(geometry.show_header);
     assert!(app.update(mouse(row)).is_empty());
+    assert_eq!(app.composer.content(), "/session");
+    assert_eq!(popup(&app).items[popup(&app).selected].text, expected);
+    assert!(app.pending_requests.is_empty());
+    assert!(key(&mut app, KeyCode::Tab).is_empty());
     assert_eq!(app.composer.content(), format!("{expected} "));
     assert!(app.slash_completion.as_ref().unwrap().popup.is_none());
     assert!(app.pending_requests.is_empty());
@@ -258,7 +264,7 @@ fn scratch_reasoning_uses_existing_default_form_model_without_early_form_creatio
     assert_eq!(popup(&app).items[0].value(), Some("low"));
     assert_eq!(popup(&app).items[1].value(), Some("medium"));
     assert!(app.new_session().is_none());
-    assert!(key(&mut app, KeyCode::Enter).is_empty());
+    assert!(key(&mut app, KeyCode::Tab).is_empty());
     assert_eq!(app.composer.content(), "/reasoning low ");
     assert!(app.new_session().is_none());
     assert!(app.pending_requests.is_empty());
@@ -312,7 +318,7 @@ fn chooser_selection_does_not_bypass_destructive_confirmation() {
     edit(&mut app, "/session");
     key(&mut app, KeyCode::Enter);
     type_text(&mut app, "delete");
-    assert!(key(&mut app, KeyCode::Enter).is_empty());
+    assert!(key(&mut app, KeyCode::Tab).is_empty());
     assert_eq!(app.composer.content(), "/session delete ");
     assert!(app.notices().is_empty());
     assert!(app.pending_requests.is_empty());
@@ -442,7 +448,7 @@ fn activating_direct_alias_keeps_its_selected_action_identity() {
             format!("{} ", completion.items[completion.selected].text),
             expected
         );
-        assert!(key(&mut app, KeyCode::Enter).is_empty());
+        assert!(key(&mut app, KeyCode::Tab).is_empty());
         assert_eq!(app.composer.content(), expected);
         assert!(app.pending_requests.is_empty());
     }
@@ -503,7 +509,148 @@ fn popup_wheel_selection_requests_redraw_before_accepting() {
     assert_ne!(popup(&app).selected, selected);
     assert!(app.dirty);
     let expected = popup(&app).items[popup(&app).selected].text.clone();
-    assert!(key(&mut app, KeyCode::Enter).is_empty());
+    assert!(key(&mut app, KeyCode::Tab).is_empty());
     assert_eq!(app.composer.content(), format!("{expected} "));
     assert!(app.pending_requests.is_empty());
+}
+
+#[test]
+fn enter_activates_action_without_returning_to_compact_parent() {
+    let mut app = app();
+    edit(&mut app, "/session");
+    key(&mut app, KeyCode::Enter);
+    type_text(&mut app, "list");
+    assert!(!key(&mut app, KeyCode::Enter).is_empty());
+    assert!(matches!(app.dock, Dock::SessionSelector(_)));
+    assert!(app.slash_completion.is_none());
+    assert!(app.composer.is_empty());
+}
+
+#[test]
+fn enter_applies_reasoning_and_advances_model_to_its_reasoning_form() {
+    let mut reasoning = app();
+    edit(&mut reasoning, "/reasoning");
+    key(&mut reasoning, KeyCode::Enter);
+    type_text(&mut reasoning, "low");
+    let requests = testapp::take_requests(key(&mut reasoning, KeyCode::Enter));
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "session.update");
+    assert_eq!(requests[0].params["reasoning"], "low");
+    assert!(reasoning.slash_completion.is_none());
+
+    let mut model = app();
+    edit(&mut model, "/model");
+    key(&mut model, KeyCode::Enter);
+    type_text(&mut model, "fast");
+    assert!(key(&mut model, KeyCode::Enter).is_empty());
+    assert!(matches!(&model.dock, Dock::ReasoningSelector(state)
+        if state.model_context.as_deref() == Some("fast")));
+    assert!(model.pending_requests.is_empty());
+}
+
+#[test]
+fn theme_enter_advances_and_escape_restores_exact_parent_without_editor_changes() {
+    let mut app = app();
+    edit(&mut app, "/app");
+    let revision = app.composer.editor_revision();
+    key(&mut app, KeyCode::Enter);
+    type_text(&mut app, "theme");
+    let parent = popup(&app).clone();
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(popup(&app).argument_command, Some("theme"));
+    assert_eq!(popup(&app).items.len(), 2);
+    assert_eq!(app.composer.content(), "/app");
+    assert_eq!(app.composer.editor_revision(), revision);
+    key(&mut app, KeyCode::Esc);
+    assert_eq!(popup(&app), &parent);
+    key(&mut app, KeyCode::Enter);
+    type_text(&mut app, "light");
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.theme, ThemeKind::Light);
+    assert!(app.slash_completion.is_none());
+    assert!(app.composer.is_empty());
+}
+
+#[test]
+fn enter_opens_free_input_forms_and_leaves_required_tool_fields_editable() {
+    for (group, action) in [("/session", "rename"), ("/conversation", "export")] {
+        let mut app = app();
+        edit(&mut app, group);
+        key(&mut app, KeyCode::Enter);
+        type_text(&mut app, action);
+        key(&mut app, KeyCode::Enter);
+        assert!(match action {
+            "rename" => matches!(&app.dock, Dock::SessionSelector(state)
+                if matches!(state.mode, crate::state::selection::SessionPanelMode::Rename { .. })),
+            _ => matches!(app.dock, Dock::Export(_)),
+        });
+        assert!(app.slash_completion.is_none());
+    }
+    let mut app = app();
+    edit(&mut app, "/workspace");
+    key(&mut app, KeyCode::Enter);
+    type_text(&mut app, "tool");
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.composer.content(), "/workspace tool ");
+    assert!(app.slash_completion.is_none());
+    assert!(app.pending_requests.is_empty());
+    assert!(app.notices().is_empty());
+}
+
+#[test]
+fn enter_delete_still_requires_explicit_destructive_confirmation() {
+    let mut app = app();
+    edit(&mut app, "/session");
+    key(&mut app, KeyCode::Enter);
+    type_text(&mut app, "delete");
+    assert!(key(&mut app, KeyCode::Enter).is_empty());
+    assert!(app.pending_requests.is_empty());
+    assert!(
+        app.notices()
+            .iter()
+            .any(|notice| notice.text.contains("/delete confirm"))
+    );
+}
+
+#[test]
+fn escape_returns_to_highlighted_root_before_dismissing() {
+    let mut app = app();
+    edit(&mut app, "/");
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    let parent = app.slash_completion.clone().unwrap();
+    let revision = app.composer.editor_revision();
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Esc);
+    assert_eq!(app.slash_completion.as_ref().unwrap(), &parent);
+    assert_eq!(app.composer.editor_revision(), revision);
+    assert_eq!(app.composer.content(), "/");
+    key(&mut app, KeyCode::Esc);
+    assert!(app.slash_completion.is_none());
+    assert_eq!(app.slash_dismissed_text.as_deref(), Some("/"));
+}
+
+#[test]
+fn bare_theme_commands_open_choices_but_invalid_literal_values_are_not_replaced() {
+    for draft in ["/theme", "/app theme", "/app   theme "] {
+        let mut app = app();
+        edit(&mut app, draft);
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(popup(&app).argument_command, Some("theme"));
+        assert_eq!(popup(&app).items.len(), 2);
+        assert_eq!(app.composer.content(), draft);
+        assert!(app.pending_requests.is_empty());
+    }
+    for draft in ["/theme purple", "/app theme purple"] {
+        let mut app = app();
+        edit(&mut app, draft);
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(app.composer.content(), draft);
+        assert!(
+            app.slash_completion
+                .as_ref()
+                .is_none_or(|state| state.popup.is_none())
+        );
+        assert!(app.pending_requests.is_empty());
+    }
 }

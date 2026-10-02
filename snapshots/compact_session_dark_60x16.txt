@@ -12,5 +12,5 @@
  ▎
  ▎
  ▎→ Session                                         [list ▾]
- ▎↑↓ · ^Space · Tab · Enter choose · Esc · 1/1
+ ▎Enter choose · Esc close · Tab fill · ↑↓ · 1/1
  starting

@@ -382,10 +382,6 @@ pub fn render_session(
                 format!("Title: {draft}")
             };
             lines.push(Line::from(Span::styled(value, Style::new().fg(theme.text))));
-            lines.push(Line::from(Span::styled(
-                "Enter saves · Esc cancels",
-                Style::new().fg(theme.dim),
-            )));
             render_form_lines(frame, geometry.content, lines);
             frame.render_widget(
                 Paragraph::new(vec![Line::from(Span::styled(

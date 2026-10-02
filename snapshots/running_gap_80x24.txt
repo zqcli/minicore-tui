@@ -1,3 +1,7 @@
+
+ Coding agent TUI
+ Ctrl+C: clear / quit · F1 help
+
  ▎
  ▎ stream me
  ▎ time pending
@@ -11,10 +15,6 @@
  ▎ read
 
   more
-
-
-
-
 
  ⠋ Running read…
  ▎

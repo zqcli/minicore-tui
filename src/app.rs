@@ -57,6 +57,8 @@ pub mod changes;
 #[cfg(test)]
 mod changes_tests;
 #[cfg(test)]
+mod command_admission_tests;
+#[cfg(test)]
 mod compact_slash_tests;
 pub mod context;
 #[cfg(test)]
@@ -1303,7 +1305,10 @@ impl App {
                 self.install_conversation(prepared);
             }
         }
-        let header_visible_before = crate::ui::header::visible(self);
+        let header_before = (
+            crate::ui::header::visible(self),
+            crate::ui::header::guidance_visible(self),
+        );
         self.dirty = true;
         // A slow export writer only pauses its own chain: every update retries
         // the one parked record before reducing anything else.
@@ -1506,7 +1511,26 @@ impl App {
             AppEvent::LocalScanFinished(outcome) => self.on_local_scan_finished(*outcome),
         });
         self.reconcile_help_return();
-        if header_visible_before != crate::ui::header::visible(self) {
+        // Remember a confirmed empty beginning in the reducer, not render.
+        // Opening the creation form above another session must not mark that
+        // old session as having shown its own welcome block.
+        let retain_welcome =
+            self.new_session().is_none() && crate::ui::header::guidance_visible(self);
+        if let Some(view) = self
+            .sessions
+            .active
+            .as_ref()
+            .filter(|_| retain_welcome)
+            .and_then(|id| self.sessions.known.get_mut(id))
+        {
+            view.welcome_retained = true;
+        }
+        if header_before
+            != (
+                crate::ui::header::visible(self),
+                crate::ui::header::guidance_visible(self),
+            )
+        {
             self.prepared_conversation = None;
         }
         if !self.scrollbar_allowed() {
@@ -3604,6 +3628,55 @@ impl App {
     }
 
     fn inline_command_error(&self, command: &LocalCommand) -> Option<String> {
+        // Admission failures must be detected before consuming a typed command,
+        // especially Files, whose insertion anchor is captured after clearing.
+        match command {
+            LocalCommand::Files(_) | LocalCommand::Grep(_)
+                if !self.active_view().is_some_and(|view| view.info.loaded) =>
+            {
+                return Some("Open or Continue a session before browsing workspace files; your command is kept.".into());
+            }
+            LocalCommand::Search { .. } | LocalCommand::Export { .. } | LocalCommand::Rename { .. }
+                if self.active_view().is_none() =>
+            {
+                return Some("Open a session first; your command is kept.".into());
+            }
+            LocalCommand::Export { .. } if self.export_running() => {
+                return Some("An export is already running; your command is kept.".into());
+            }
+            LocalCommand::Rename { .. }
+                if self.has_pending_lifecycle_request() || self.session_panel_busy() =>
+            {
+                return Some("Wait for the pending session action; your command is kept.".into());
+            }
+            LocalCommand::Model | LocalCommand::Reasoning
+            | LocalCommand::ModelValue(_) | LocalCommand::ReasoningValue(_)
+                if self.sessions.active.as_ref().is_some_and(|active| {
+                    self.pending_requests.values().any(|request| {
+                        matches!(request, RequestKind::UpdateSession { session_id, .. } if session_id == active)
+                    })
+                }) =>
+            {
+                return Some("Wait for the pending configuration update; your command is kept.".into());
+            }
+            LocalCommand::ModelValue(_) | LocalCommand::ReasoningValue(_)
+                if self.draft.is_none() && self.active_view().is_some_and(|view| view.browsing) =>
+            {
+                return Some("Read-only session; /resume before changing configuration. Your command is kept.".into());
+            }
+            LocalCommand::ModelValue(_) | LocalCommand::ReasoningValue(_)
+                if self.draft.is_none() && self.active_view().is_some_and(|view| {
+                    view.is_blocked() || view.is_preparing() || view.closing
+                        || view.event_gap || view.latest_state_query.is_some() || view.state.is_none()
+                        || view.live.as_ref().is_some_and(|live| live.waiting)
+                        || view.state.as_ref().is_some_and(|state| matches!(state.status,
+                            SessionStatusWire::WaitingForInput | SessionStatusWire::Finishing))
+                }) =>
+            {
+                return Some("Session is not ready for configuration changes; wait for its operation or state refresh. Your command is kept.".into());
+            }
+            _ => {}
+        }
         match command {
             LocalCommand::ModelValue(value)
                 if !self.catalogs.models.iter().any(|m| m.id == *value) =>
@@ -8793,13 +8866,26 @@ mod tests {
             .iter()
             .find(|section| section.id.tool_call_id.as_deref() == Some("call_tool"))
             .unwrap();
+        assert_eq!(anchor.section_id.tool_call_id.as_deref(), Some("call_tool"));
         assert_eq!(
             saved_section.id.tool_call_id,
             anchor.section_id.tool_call_id
         );
+        assert!(saved.has_scroll_anchor_section(&anchor));
+        assert_eq!(
+            saved.row_for_scroll_anchor(&anchor),
+            Some(saved_section.rows.start)
+        );
+        // The retained welcome prefix makes the saved frame taller. Rebase
+        // still resolves the exact tool, but may not scroll beyond the tail.
+        let max_offset = saved.total_rows().saturating_sub(app.viewport.1.max(1));
         assert_eq!(
             app.active_view().unwrap().scroll.offset,
-            saved_section.rows.start.saturating_sub(anchor.screen_row)
+            saved_section
+                .rows
+                .start
+                .saturating_sub(anchor.screen_row)
+                .min(max_offset)
         );
     }
 

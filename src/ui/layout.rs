@@ -133,13 +133,23 @@ pub fn screen_layout(app: &App, area: Rect) -> ScreenLayout {
         Dock::Search(_) => search_panel_height(content.height),
         Dock::Workspace(_) => search_panel_height(content.height).max(8),
         // The export form is a compact fixed-height form.
-        Dock::Export(_) => panel_height(short).saturating_add(4),
+        Dock::Export(form) => crate::ui::export::desired_height(form, content.width)
+            .min(panel_height(short).saturating_add(4)),
         // Settings needs one row per fixed field plus the footer.
         Dock::Settings(_) => panel_height(short).saturating_add(7),
-        Dock::SessionSelector(state) => panel_height(short).saturating_add(u16::from(!matches!(
-            &state.mode,
-            crate::state::selection::SessionPanelMode::Browse
-        ))),
+        Dock::SessionSelector(state) => {
+            use crate::state::selection::SessionPanelMode;
+            let rows = match &state.mode {
+                SessionPanelMode::Browse => panel_height(short),
+                SessionPanelMode::Rename { .. } => 6,
+                SessionPanelMode::ConfirmClose | SessionPanelMode::ConfirmCloseForDelete => 7,
+                SessionPanelMode::ConfirmDelete { .. } => 8,
+            };
+            rows + u16::from(
+                state.error.is_some() && !matches!(state.mode, SessionPanelMode::Browse),
+            )
+        }
+        Dock::NewSession(_) => panel_height(short).min(10),
         _ => panel_height(short),
     };
     let footer_height = footer_height(content.width, content.height);
