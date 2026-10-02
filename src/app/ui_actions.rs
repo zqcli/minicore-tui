@@ -2097,7 +2097,6 @@ impl App {
                         );
                         view.scroll.follow_tail = false;
                         view.scroll.offset = position.offset;
-                        view.scroll.new_content = false;
                         if !live_only {
                             view.transcript.invalidate();
                         }
@@ -2125,7 +2124,6 @@ impl App {
                         );
                         view.scroll.follow_tail = false;
                         view.scroll.offset = position.offset;
-                        view.scroll.new_content = false;
                         view.transcript.invalidate();
                     }
                 }
@@ -2146,7 +2144,6 @@ impl App {
                     );
                     view.scroll.follow_tail = false;
                     view.scroll.offset = position.offset;
-                    view.scroll.new_content = false;
                     view.transcript.invalidate();
                 }
             }
@@ -2160,9 +2157,8 @@ impl App {
     }
 }
 
-pub(super) fn set_all_tools_expanded(view: &mut SessionView, expanded: bool) {
-    view.tools_expanded = expanded;
-    let keys = view
+fn all_tool_keys(view: &SessionView) -> Vec<ToolKey> {
+    let mut keys: Vec<_> = view
         .transcript
         .blocks
         .iter()
@@ -2175,7 +2171,27 @@ pub(super) fn set_all_tools_expanded(view: &mut SessionView, expanded: bool) {
             )),
             _ => None,
         })
-        .collect::<Vec<_>>();
+        .collect();
+    if let Some(live) = &view.live {
+        if let Some(reference) = &live.reference {
+            for request in &live.requests {
+                for tool in &request.tools {
+                    keys.push(ToolKey::new(
+                        &view.info.session_id,
+                        &reference.loop_id,
+                        request.request_index,
+                        &tool.tool_call_id,
+                    ));
+                }
+            }
+        }
+    }
+    keys
+}
+
+pub(super) fn set_all_tools_expanded(view: &mut SessionView, expanded: bool) {
+    view.tools_expanded = expanded;
+    let keys = all_tool_keys(view);
     for block in view.transcript.blocks_mut() {
         let block = std::sync::Arc::make_mut(block);
         if let TranscriptBlock::Tool(tool) = &mut *block {
@@ -2413,12 +2429,48 @@ pub(super) fn cancel_scrollbar_drag(app: &mut App) {
     app.cancel_scrollbar_drag();
 }
 
-/// Handles the global Tool expansion action at the UI seam. RPC reducers do
-/// not know about local fold policy or prepared geometry.
+/// Ctrl+O toggles all visible foldable details, including reasoning.
 pub(super) fn toggle_tools(app: &mut App, session_id: &str) {
+    let reasoning = if app.sessions.active.as_deref() == Some(session_id) {
+        let width = app.terminal_content_width();
+        let prepared = app.conversation_for_input(width);
+        prepared
+            .sections
+            .iter()
+            .filter(|section| {
+                section.collapsible && section.id.kind == crate::state::view::SectionKind::Thinking
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     if let Some(view) = app.sessions.known.get_mut(session_id) {
-        let expanded = !view.tools_expanded;
+        let keys = all_tool_keys(view);
+        let all_open = (!keys.is_empty() || !reasoning.is_empty())
+            && keys
+                .iter()
+                .all(|key| current_tool_expanded(view, key) == Some(true))
+            && reasoning.iter().all(|section| !section.folded);
+        let expanded = !all_open;
         set_all_tools_expanded(view, expanded);
+        for section in reasoning {
+            if let (Some(loop_id), Some(request_index)) =
+                (section.id.loop_id.as_deref(), section.id.request_index)
+            {
+                Arc::make_mut(&mut view.reasoning_folds).insert(
+                    crate::state::view::ReasoningKey::new(
+                        loop_id,
+                        request_index,
+                        section.id.ordinal,
+                    ),
+                    if expanded {
+                        FoldOverride::Expanded
+                    } else {
+                        FoldOverride::Collapsed
+                    },
+                );
+            }
+        }
     }
 }
 

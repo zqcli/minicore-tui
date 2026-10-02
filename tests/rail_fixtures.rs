@@ -760,7 +760,7 @@ fn rust_surface_primitives_match_source_rail_and_content_geometry() {
     assert!(rust_thinking.iter().any(|line| {
         line.spans
             .iter()
-            .any(|span| span.content.contains("1 earlier lines"))
+            .any(|span| span.content.contains("1 more rows"))
     }));
 
     let tool_source = fixture("tool/model-tool-simple-bash.json");
@@ -802,9 +802,9 @@ fn rust_surface_primitives_match_source_rail_and_content_geometry() {
         rust_tool[1].spans[1].content,
         token_text(source_token(source_row, 1))
     );
-    assert!(
-        token_text(source_token(source_row, 2)).starts_with(rust_tool[1].spans[2].content.as_ref())
-    );
+    let source_title = token_text(source_token(source_row, 2));
+    assert!(source_title.starts_with("bash"));
+    assert_eq!(rust_tool[1].spans[2].content.as_ref(), "bash · completed");
     assert_eq!(
         rust_tool[1].spans[2].style.fg,
         Some(token_rgb(source_token(source_row, 2), "fg"))
@@ -954,15 +954,22 @@ fn rust_tool_state_colors_and_hidden_count_boundaries_match_source_facts() {
             truncated: false,
         };
         let lines = tool::durable_with_display(&Theme::dark(), &block, 80, false, Some(&display));
-        assert!(lines[3].spans.iter().any(|span| {
-            span.content
-                .contains(format!("{hidden} more lines").as_str())
-        }));
+        // The legacy fixture counts a non-rendered input row. The current
+        // hint counts only the actual expandable body at this width.
+        let text = lines
+            .iter()
+            .map(rust_row_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("bash · completed"));
+        assert!(text.contains("line 0"));
+        assert!(text.contains(&format!("{result_lines} hidden rows")));
+        assert!(text.contains("ctrl+o expand"));
     }
 }
 
 #[test]
-fn rust_reasoning_fold_rows_match_source_threshold_fixtures() {
+fn rust_reasoning_fold_rows_preserve_source_previews_with_truthful_hints() {
     let cases = [
         ("lines-2-full.json", "thought 1\nthought 2", true),
         ("lines-3-full.json", "thought 1\nthought 2\nthought 3", true),
@@ -1013,7 +1020,7 @@ fn rust_reasoning_fold_rows_match_source_threshold_fixtures() {
             assert!(
                 rust_text
                     .iter()
-                    .any(|row| row.contains(format!("{hidden} earlier lines").as_str())),
+                    .any(|row| row.contains(format!("{hidden} more rows").as_str())),
                 "{fixture_name} hidden count differs"
             );
         }

@@ -525,8 +525,6 @@ pub struct App {
     /// visible rows); written only via `AppEvent::Viewport` from the main
     /// loop, never by the renderer.
     pub viewport: (usize, usize),
-    /// Last measured total, to detect content that grew while scrolled up.
-    last_total: usize,
     /// Manual scroll offset inside the Help/Logs panels.
     pub panel_scroll: usize,
     help_return: Option<HelpReturn>,
@@ -815,7 +813,6 @@ impl App {
             tool_generation: 0,
             workspace_generation: 0,
             viewport: (0, 0),
-            last_total: 0,
             panel_scroll: 0,
             help_return: None,
             ctrl_c_at: None,
@@ -1342,7 +1339,20 @@ impl App {
             AppEvent::CancelTurn { session_id } => self.cancel_turn(&session_id),
             AppEvent::RefreshTurn { session_id } => self.refresh_turn(&session_id),
             AppEvent::Reload => self.reload(),
-            AppEvent::Rpc(event) => self.on_rpc_event(event),
+            AppEvent::Rpc(event) => {
+                let session_before = self.sessions.active.clone();
+                let before = self.incoming_content_stamp();
+                let commands = self.on_rpc_event(event);
+                if session_before == self.sessions.active && before != self.incoming_content_stamp()
+                {
+                    if let Some(view) = self.active_session_mut() {
+                        if !view.scroll.follow_tail {
+                            view.scroll.new_content = true;
+                        }
+                    }
+                }
+                commands
+            }
             AppEvent::RpcChannelEnded => self.on_rpc_channel_ended(),
             AppEvent::RpcSendFailed { id, error } => self.on_send_failed(id, error),
             AppEvent::RpcQueueFull { request, class } => self.on_queue_full(request, class),
@@ -4922,18 +4932,46 @@ impl App {
             .unwrap_or(self.viewport)
     }
 
-    /// Clamps the stored offset after a geometry/content change and marks
-    /// `new_content` when the transcript grew while the user scrolled up
-    /// (marker cleared by End/bottom scrolling).
+    /// Observe semantic content at the RPC seam, independently of rendered height.
+    /// Source lengths make appended deltas cheap to compare without hashing the
+    /// accumulated text on every token. Historical page hydration and tool-detail
+    /// refreshes are excluded; only the total durable extent and live output count.
+    fn incoming_content_stamp(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut stamp = std::collections::hash_map::DefaultHasher::new();
+        if let Some(view) = self.active_view() {
+            view.info.session_id.hash(&mut stamp);
+            view.transcript.total.hash(&mut stamp);
+            if let Some(live) = &view.live {
+                live.requests.len().hash(&mut stamp);
+                for request in &live.requests {
+                    request.request_index.hash(&mut stamp);
+                    for part in &request.parts {
+                        std::mem::discriminant(part).hash(&mut stamp);
+                        match part {
+                            LivePart::Text(text) | LivePart::Reasoning(text) => {
+                                text.len().hash(&mut stamp)
+                            }
+                            LivePart::Tool { tool_call_id } => tool_call_id.hash(&mut stamp),
+                        }
+                    }
+                    for tool in &request.tools {
+                        tool.tool_call_id.hash(&mut stamp);
+                        std::mem::discriminant(&tool.status).hash(&mut stamp);
+                        tool.progress.hash(&mut stamp);
+                        tool.result.as_ref().map(|text| text.len()).hash(&mut stamp);
+                    }
+                }
+            }
+        }
+        stamp.finish()
+    }
+
+    /// Geometry changes clamp position but never manufacture unread arrivals.
     fn clamp_transcript_scroll(&mut self) {
         let (total, visible) = self.viewport;
-        let grew = total > self.last_total;
-        self.last_total = total;
         let suppress_follow = self.selection.is_some();
         if let Some(view) = self.active_session_mut() {
-            if grew && !view.scroll.follow_tail {
-                view.scroll.new_content = true;
-            }
             let max_offset = total.saturating_sub(visible);
             if !view.scroll.follow_tail {
                 view.scroll.offset = view.scroll.offset.min(max_offset);
@@ -7663,7 +7701,7 @@ fn live_loop_from_turn_result(
                                     name: call.name.clone(),
                                     status: ToolStatus::Pending,
                                     progress: None,
-                                    display: None,
+                                    display: call.display.clone().map(Arc::new),
                                     result: None,
                                     result_truncated: false,
                                     expanded: false,
@@ -7788,6 +7826,40 @@ fn install_history_item(
             Some(owner)
         }
         RuntimeItem::Assistant(assistant) => {
+            // Canonical reads contain arguments, unlike the old display DTO.
+            // Retain only the bounded whitelist before discarding those args.
+            for part in &assistant.content {
+                if let RuntimeAssistantPart::ToolCall {
+                    tool_call_id,
+                    name,
+                    arguments,
+                    ..
+                } = part
+                {
+                    if let Some(display) = crate::state::tool::history_display(name, arguments) {
+                        let key = ToolKey::new(
+                            &view.info.session_id,
+                            &assistant.loop_id,
+                            assistant.request_index,
+                            tool_call_id,
+                        );
+                        let facts = Arc::make_mut(&mut view.tool_presentations)
+                            .entry(key)
+                            .or_insert_with(|| Arc::new(crate::state::tool::ToolFacts::new(name)));
+                        let facts = Arc::make_mut(facts);
+                        // Preserve richer live/event metadata when reconciling.
+                        if facts.display.detail == *name
+                            || facts.display.detail == format!("tool {name}")
+                        {
+                            let retained = Arc::make_mut(&mut facts.display);
+                            retained.detail = display.detail;
+                            // Either the retained body or recovered target may
+                            // be partial; recovering a target never clears it.
+                            retained.truncated |= display.truncated;
+                        }
+                    }
+                }
+            }
             if has_item_index(&view.transcript.blocks, index) {
                 return view
                     .transcript
@@ -7814,13 +7886,13 @@ fn install_history_item(
                         tool_call_id,
                         name,
                         call_index,
-                        ..
+                        arguments,
                     } => {
                         let call = crate::protocol::ToolCallViewWire {
                             tool_call_id: tool_call_id.clone(),
                             name: name.clone(),
                             call_index: *call_index,
-                            display: None,
+                            display: crate::state::tool::history_display(name, arguments),
                         };
                         parts.push(AssistantPart::ToolCall(call.clone()));
                         tool_calls.push(call);
@@ -11252,6 +11324,101 @@ mod tests {
     }
 
     #[test]
+    fn reopened_canonical_history_restores_tool_targets_and_recovery_displays() {
+        use crate::protocol::read::{RawHistoryItem, RuntimeItem};
+        let mut app = test_app();
+        ready(&mut app);
+        open_session(&mut app, "ses_1");
+        let calls = [
+            ("bash", "command", "printf 'RESTORED' >&2; exit 7"),
+            ("read", "path", "missing-file.txt"),
+            ("write", "path", "generated.txt"),
+            ("apply_patch", "path", "patch-target.txt"),
+        ];
+        for (index, (name, field, target)) in calls.into_iter().enumerate() {
+            let call_id = format!("call_{index}");
+            let item = RawHistoryItem { timestamp: None, item: serde_json::from_value::<RuntimeItem>(json!({
+                "type": "assistant", "data": { "loop_id": "restored", "request_index": index, "model": "test", "finish_reason": "tool_calls",
+                    "content": [{"type": "tool_call", "data": {"tool_call_id": call_id, "name": name, "call_index": 0, "arguments": {(field): target, "private": "NOT DISPLAYED"}}}] }
+            })).unwrap() };
+            let view = app.sessions.known.get_mut("ses_1").unwrap();
+            install_history_item(view, index * 2, &item).unwrap();
+            let key = ToolKey::new("ses_1", "restored", index as u32, &call_id);
+            assert_eq!(view.tool_presentations[&key].display.detail, target);
+            let owner = history::raw_item_owner(index * 2, &item);
+            let TranscriptBlock::Assistant(assistant) = owner.as_ref() else {
+                panic!("assistant");
+            };
+            assert_eq!(
+                assistant.tool_calls[0].display.as_ref().unwrap().detail,
+                target
+            );
+            let turn = make_turn("ses_1", "restored");
+            let mut recovery = history::TurnResultWindow::new(turn.clone());
+            recovery.items.insert(index * 2, owner.clone());
+            let recovered =
+                live_loop_from_turn_result(&turn, &recovery, LocalSubmissionId(1), String::new());
+            assert_eq!(
+                recovered.requests[0].tools[0]
+                    .display
+                    .as_ref()
+                    .unwrap()
+                    .detail,
+                target
+            );
+            // A result arriving later must merge outcome without losing target.
+            let result = RawHistoryItem { timestamp: None, item: serde_json::from_value::<RuntimeItem>(json!({
+                "type": "tool_result", "data": {"loop_id": "restored", "request_index": index, "call_id": call_id,
+                    "tool_name": name, "outcome": "failed", "output": {"content": "tool failed"} }
+            })).unwrap() };
+            install_history_item(view, index * 2 + 1, &result).unwrap();
+            assert_eq!(view.tool_presentations[&key].display.detail, target);
+            assert_eq!(view.tool_presentations[&key].status, ToolStatus::Failed);
+            // A generic title may already own a rich live input body.
+            Arc::make_mut(
+                Arc::make_mut(&mut view.tool_presentations)
+                    .get_mut(&key)
+                    .unwrap(),
+            )
+            .display = Arc::new(ToolDisplayWire {
+                detail: format!("tool {name}"),
+                expanded_input: Some("retained patch/body".into()),
+                input_line_count: Some(3),
+                hidden_line_count: Some(7),
+                truncated: true,
+            });
+            install_history_item(view, index * 2, &item);
+            let retained = &view.tool_presentations[&key].display;
+            assert_eq!(retained.detail, target);
+            assert_eq!(
+                retained.expanded_input.as_deref(),
+                Some("retained patch/body")
+            );
+            assert_eq!(retained.input_line_count, Some(3));
+            assert_eq!(retained.hidden_line_count, Some(7));
+            assert!(retained.truncated);
+            // Reconciliation keeps richer already-known display metadata.
+            Arc::make_mut(
+                Arc::make_mut(&mut view.tool_presentations)
+                    .get_mut(&key)
+                    .unwrap(),
+            )
+            .display = Arc::new(ToolDisplayWire {
+                detail: "richer live metadata".into(),
+                expanded_input: None,
+                input_line_count: None,
+                hidden_line_count: None,
+                truncated: false,
+            });
+            install_history_item(view, index * 2, &item);
+            assert_eq!(
+                view.tool_presentations[&key].display.detail,
+                "richer live metadata"
+            );
+        }
+    }
+
+    #[test]
     fn tool_result_body_is_one_arc_across_live_history_and_presentation() {
         let mut app = test_app();
         ready(&mut app);
@@ -13354,5 +13521,105 @@ mod composer_line_edit_tests {
         );
         assert!(ctrl(&mut app, 'k').is_empty());
         assert_eq!(app.composer.content(), "\nlast");
+    }
+}
+
+#[cfg(test)]
+mod conversation_ux_tests {
+    use super::*;
+
+    fn delta(app: &mut App, text: &str, channel: &str) {
+        let event = serde_json::from_value(serde_json::json!({
+            "type": "output_delta",
+            "data": {
+                "turn": {"session_id": "ses_1", "loop_id": "loop_live"},
+                "request_index": 0, "channel": channel, "delta": text,
+                "meta": {"session_id": "ses_1", "dropped_before": 0}
+            }
+        }))
+        .unwrap();
+        app.update(AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Notification(
+            RpcNotification::AgentEvent(event),
+        ))));
+    }
+
+    #[test]
+    fn layout_growth_is_not_new_output_but_same_row_delta_is() {
+        let mut app = crate::ui::testapp::live_turn(ThemeKind::Dark);
+        app.active_session_mut().unwrap().scroll.follow_tail = false;
+        app.update(AppEvent::Viewport {
+            total_lines: 200,
+            visible_rows: 20,
+        });
+        assert!(!app.active_view().unwrap().scroll.new_content);
+        app.update(AppEvent::Viewport {
+            total_lines: 300,
+            visible_rows: 20,
+        });
+        assert!(!app.active_view().unwrap().scroll.new_content);
+        delta(&mut app, "x", "text");
+        assert!(app.active_view().unwrap().scroll.new_content);
+        app.update(AppEvent::Viewport {
+            total_lines: 301,
+            visible_rows: 20,
+        });
+        assert!(app.active_view().unwrap().scroll.new_content);
+    }
+
+    #[test]
+    fn historical_layout_hydration_does_not_change_arrival_stamp() {
+        let mut app = crate::ui::testapp::tools(ThemeKind::Dark);
+        let before = app.incoming_content_stamp();
+        let view = app.active_session_mut().unwrap();
+        view.transcript.invalidate();
+        view.transcript.loaded_count = view.transcript.loaded_count.saturating_add(1);
+        // Tool-detail snapshot replacement can reflow historical cards but is
+        // not a new conversation arrival, even when the Arc identity changes.
+        for facts in Arc::make_mut(&mut view.tool_presentations).values_mut() {
+            *facts = Arc::new(facts.as_ref().clone());
+        }
+        assert_eq!(before, app.incoming_content_stamp());
+    }
+
+    #[test]
+    fn ctrl_o_expands_and_collapses_wrapped_live_reasoning() {
+        let mut app = crate::ui::testapp::live_turn(ThemeKind::Dark);
+        delta(&mut app, &" reasoning".repeat(80), "reasoning");
+        let folded = |app: &App| {
+            crate::ui::transcript::prepare_conversation(app, app.terminal_content_width())
+                .sections
+                .iter()
+                .find(|section| {
+                    section.id.kind == crate::state::view::SectionKind::Thinking
+                        && section.collapsible
+                })
+                .unwrap()
+                .folded
+        };
+        assert!(folded(&app));
+        app.update(AppEvent::Terminal(CrosstermEvent::Key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('o'),
+                crossterm::event::KeyModifiers::CONTROL,
+            ),
+        )));
+        assert!(!folded(&app));
+        app.update(AppEvent::ToggleTools {
+            session_id: "ses_1".into(),
+        });
+        assert!(folded(&app));
+    }
+
+    #[test]
+    fn first_global_toggle_closes_effectively_expanded_tools() {
+        let mut app = crate::ui::testapp::tools(ThemeKind::Dark);
+        let view = app.active_session_mut().unwrap();
+        ui_actions::set_all_tools_expanded(view, true);
+        view.tools_expanded = false;
+        app.update(AppEvent::ToggleTools {
+            session_id: "ses_1".into(),
+        });
+        let view = app.active_view().unwrap();
+        assert!(view.tool_folds.values().all(|fold| !fold.expanded()));
     }
 }

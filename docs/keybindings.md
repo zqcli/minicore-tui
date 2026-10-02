@@ -19,8 +19,8 @@ Editor restores the existing editing and command behavior.
 | `Ctrl+N` | Open the new-session form. |
 | `Ctrl+L` | Open the model selector; updates the active session at a request boundary, or edits a new-session draft. |
 | `Shift+Tab` | Open the reasoning selector from the composer; move to the previous form field in a new-session form; close the reasoning selector. |
-| `Ctrl+O` | Toggle all durable tool result previews for the active session. |
-| `Ctrl+T` | Show or hide durable reasoning runs. |
+| `Ctrl+O` | Expand all loaded tool previews and visible foldable reasoning if any are folded; otherwise collapse them all. |
+| `Ctrl+T` | Show or hide reasoning runs, including the live request. Completed hidden reasoning is labeled separately from active thinking. |
 | `PageUp` / `PageDown` | Scroll the transcript, or page the focused selector/Help/Logs panel. |
 | `Ctrl+Home` / `Ctrl+End` | Jump the transcript to the top or tail. |
 | `Home` / `End` | Move to the composer line start/end; outside the composer, jump the transcript to the top/tail. |

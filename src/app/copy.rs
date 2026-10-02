@@ -115,7 +115,7 @@ impl App {
                 "that message's source is not loaded; /export it explicitly to read it".to_owned(),
             );
         };
-        match extract_code_block(&source, self.selection_code_offset(&section)) {
+        match extract_code_block(&source, self.selection_code_offset(&prepared, &section)) {
             Some(code) if !code.is_empty() => CopyPlan::Text(code),
             Some(_) => CopyPlan::Limitation("that code block is empty".to_owned()),
             None => CopyPlan::Limitation("no fenced code block in this message".to_owned()),
@@ -128,7 +128,34 @@ impl App {
     fn section_source_text(&self, section: &SectionView) -> Option<String> {
         use crate::state::transcript::{AssistantPart, TranscriptBlock};
         let view = self.active_view()?;
-        let index = section.id.history_index?;
+        let Some(index) = section.id.history_index else {
+            let live = view.live.as_ref()?;
+            if live.reference.as_ref()?.loop_id.as_str() != section.id.loop_id.as_deref()? {
+                return None;
+            }
+            let request = live
+                .requests
+                .iter()
+                .find(|request| Some(request.request_index) == section.id.request_index)?;
+            return request
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    crate::state::turn::LivePart::Text(text)
+                        if section.id.kind == SectionKind::AssistantText =>
+                    {
+                        Some(text.as_str())
+                    }
+                    crate::state::turn::LivePart::Reasoning(text)
+                        if section.id.kind == SectionKind::Thinking =>
+                    {
+                        Some(text.as_str())
+                    }
+                    _ => None,
+                })
+                .nth(section.id.ordinal as usize)
+                .map(str::to_owned);
+        };
         let block = view
             .transcript
             .blocks
@@ -163,13 +190,20 @@ impl App {
     }
 
     /// The byte offset of the selection inside the picked section's source.
-    fn selection_code_offset(&self, section: &SectionView) -> Option<usize> {
+    fn selection_code_offset(
+        &self,
+        prepared: &PreparedConversation,
+        section: &SectionView,
+    ) -> Option<usize> {
         let selection = self.selection.as_ref()?;
         let (start, _) = selection.ordered_points();
         if start.section_id.as_ref() != Some(&section.id) {
             return None;
         }
-        Some(start.section_row)
+        // Renderer metadata is in source bytes; section_row is only a visual
+        // row and changes with width, Markdown framing and multibyte text.
+        let copy = prepared.copy_row(start.row)?;
+        (!copy.decorative).then_some(copy.source_offset)
     }
 
     fn pick_section(
@@ -469,5 +503,321 @@ mod tests {
             extract_code_block(source, Some(middle_offset)).as_deref(),
             Some("second")
         );
+    }
+    fn copy_app(source: &str, thinking: bool, live: bool, width: u16) -> crate::app::App {
+        use crate::event::{AppEvent, RpcEvent};
+        use crate::protocol::{IncomingFrame, RpcNotification};
+        use serde_json::json;
+        let mut app = if live {
+            let mut app = crate::ui::testapp::open_empty(
+                crate::theme::ThemeKind::Dark,
+                "ses_1",
+                None,
+                "high",
+            );
+            app.update(AppEvent::SubmitTurn {
+                session_id: "ses_1".into(),
+                text: "prompt".into(),
+            });
+            for event in [
+                json!({"type":"turn_started","data":{"turn":{"session_id":"ses_1","loop_id":"copy_loop"},"meta":{"session_id":"ses_1","dropped_before":0}}}),
+                json!({"type":"request_started","data":{"turn":{"session_id":"ses_1","loop_id":"copy_loop"},"request_index":0,"config_revision":0,"model":"deep","reasoning":"high","meta":{"session_id":"ses_1","dropped_before":0}}}),
+                json!({"type":"output_delta","data":{"turn":{"session_id":"ses_1","loop_id":"copy_loop"},"request_index":0,"channel":if thinking {"reasoning"} else {"text"},"delta":source,"meta":{"session_id":"ses_1","dropped_before":0}}}),
+            ] {
+                app.update(AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Notification(
+                    RpcNotification::AgentEvent(serde_json::from_value(event).unwrap()),
+                ))));
+            }
+            app
+        } else {
+            let part = if thinking {
+                json!({"type":"reasoning","data":{"text":source}})
+            } else {
+                json!({"type":"text","data":source})
+            };
+            crate::ui::testapp::open_with(
+                crate::theme::ThemeKind::Dark,
+                "ses_1",
+                None,
+                "high",
+                vec![json!({
+                    "index":0,"item":{"type":"assistant","data":{"loop_id":"copy_loop","request_index":0,"model":"deep","reasoning":"high","content":[part],"usage":{},"finish_reason":"stop"}}
+                })],
+            )
+        };
+        app.update(AppEvent::TerminalSize {
+            width: width + 1,
+            height: 24,
+        });
+        if thinking {
+            app.update(AppEvent::ToggleReasoningSection {
+                session_id: "ses_1".into(),
+                loop_id: "copy_loop".into(),
+                request_index: 0,
+                ordinal: 0,
+            });
+        }
+        app
+    }
+
+    fn select_copy_row(app: &mut crate::app::App, width: u16, needle: &str) {
+        use crate::state::view::{ConversationSelection, SelectionGranularity, SelectionPoint};
+        let prepared = crate::ui::transcript::prepare_conversation(app, width);
+        let copy = prepared
+            .copy_ranges
+            .iter()
+            .find(|copy| copy.text.contains(needle))
+            .unwrap();
+        let section = prepared
+            .sections
+            .iter()
+            .find(|section| section.rows.contains(&copy.row))
+            .unwrap();
+        let point = SelectionPoint {
+            row: copy.row,
+            column: copy.columns.start,
+            section_id: Some(section.id.clone()),
+            section_row: copy.row - section.rows.start,
+        };
+        app.selection = Some(ConversationSelection {
+            session_id: "ses_1".into(),
+            anchor: point.clone(),
+            focus: point,
+            granularity: SelectionGranularity::Character,
+            dragged: false,
+        });
+    }
+
+    #[test]
+    fn selected_fence_uses_source_bytes_across_widths_and_live_paths() {
+        // Formatting, CJK and an invisible ANSI sequence deliberately make
+        // visual rows/cells differ from the original Markdown byte offsets.
+        let first = format!("{}END_FIRST", "变量🙂".repeat(70));
+        let source = format!(
+            "**前言** {}\u{1b}[31mintro\u{1b}[0m\n\n```rust\n{first}\n```\n\nBetween\n\n~~~sh\nSECOND\n~~~\n\n```\nTHIRD\n```\n",
+            "长段落".repeat(35)
+        );
+        for width in [59, 79, 119] {
+            for live in [false, true] {
+                for thinking in [false, true] {
+                    let mut app = copy_app(&source, thinking, live, width);
+                    select_copy_row(&mut app, width, "END_FIRST");
+                    let CopyPlan::Text(text) = app.plan_code_copy() else {
+                        panic!("selected fence must be copyable")
+                    };
+                    assert_eq!(text, first, "width={width} live={live} thinking={thinking}");
+                    select_copy_row(&mut app, width, "SECOND");
+                    let CopyPlan::Text(text) = app.plan_code_copy() else {
+                        panic!("second fence must be copyable")
+                    };
+                    assert_eq!(text, "SECOND");
+                    select_copy_row(&mut app, width, "THIRD");
+                    let CopyPlan::Text(text) = app.plan_code_copy() else {
+                        panic!("third fence must be copyable")
+                    };
+                    assert_eq!(text, "THIRD");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn live_and_durable_message_and_selection_copy_preserve_hard_breaks() {
+        use crate::state::view::{
+            ConversationSelection, SectionKind, SelectionGranularity, SelectionPoint,
+        };
+        for width in [59, 79, 119] {
+            for thinking in [false, true] {
+                let body = format!("{}\n\n{}", "变量🙂X".repeat(70), "NEXT".repeat(45));
+                let source = if thinking {
+                    format!("```text\n{body}\n```")
+                } else {
+                    body.clone()
+                };
+                for live in [false, true] {
+                    let app = copy_app(&source, thinking, live, width);
+                    let prepared = crate::ui::transcript::prepare_conversation(&app, width);
+                    let kind = if thinking {
+                        SectionKind::Thinking
+                    } else {
+                        SectionKind::AssistantText
+                    };
+                    let section = prepared
+                        .sections
+                        .iter()
+                        .find(|section| section.id.kind == kind)
+                        .unwrap();
+                    assert_eq!(
+                        section_copy_text(&prepared, &section),
+                        body,
+                        "width={width} live={live} thinking={thinking}"
+                    );
+                    let copies = prepared
+                        .copy_ranges
+                        .iter()
+                        .filter(|copy| section.rows.contains(&copy.row) && !copy.decorative)
+                        .collect::<Vec<_>>();
+                    let point = |copy: &crate::state::view::CopyView<'_>, column| SelectionPoint {
+                        row: copy.row,
+                        column,
+                        section_id: Some(section.id.clone()),
+                        section_row: copy.row - section.rows.start,
+                    };
+                    let selection = ConversationSelection {
+                        session_id: "ses_1".into(),
+                        anchor: point(
+                            copies.first().unwrap(),
+                            copies.first().unwrap().columns.start,
+                        ),
+                        focus: point(
+                            copies.last().unwrap(),
+                            copies.last().unwrap().columns.end.saturating_sub(1),
+                        ),
+                        granularity: SelectionGranularity::Character,
+                        dragged: true,
+                    };
+                    assert_eq!(
+                        crate::ui::transcript::selection_text(&prepared, &selection),
+                        body
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn xml_message_copy_keeps_literal_source() {
+        let source = "<instructions>\nReview release notes.\n</instructions>";
+        let mut user = crate::ui::testapp::open_with(
+            crate::theme::ThemeKind::Dark,
+            "ses_1",
+            None,
+            "high",
+            vec![crate::ui::testapp::user_entry(0, "copy_loop", source)],
+        );
+        user.update(crate::event::AppEvent::TerminalSize {
+            width: 60,
+            height: 24,
+        });
+        select_copy_row(&mut user, 59, "Review release notes.");
+        let CopyPlan::Text(text) = user.plan_section_copy(super::SectionPick::ViewportOrSelection)
+        else {
+            panic!("XML user source must be copyable")
+        };
+        assert_eq!(text, source);
+        for live in [false, true] {
+            let mut app = copy_app(source, false, live, 59);
+            select_copy_row(&mut app, 59, "Review release notes.");
+            let CopyPlan::Text(text) =
+                app.plan_section_copy(super::SectionPick::ViewportOrSelection)
+            else {
+                panic!("XML source must be copyable")
+            };
+            assert_eq!(text, source);
+        }
+    }
+
+    #[test]
+    fn copying_soft_wrapped_words_keeps_separator_spaces() {
+        let source = "alpha beta gamma delta epsilon ".repeat(30);
+        for width in [59, 79, 119] {
+            for live in [false, true] {
+                let app = copy_app(source.trim_end(), false, live, width);
+                let prepared = crate::ui::transcript::prepare_conversation(&app, width);
+                let section = prepared
+                    .sections
+                    .iter()
+                    .find(|section| {
+                        section.id.kind == crate::state::view::SectionKind::AssistantText
+                    })
+                    .unwrap();
+                assert_eq!(
+                    section_copy_text(&prepared, &section),
+                    source.trim_end(),
+                    "width={width} live={live}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn tool_copy_excludes_affordance_but_keeps_identical_result_text() {
+        use crate::state::view::{
+            ConversationSelection, SectionKind, SelectionGranularity, SelectionPoint,
+        };
+        use serde_json::json;
+        for result in ["ctrl+o collapse\nretained result", ""] {
+            for expanded in [false, true] {
+                let mut app = crate::ui::testapp::open_with(
+                    crate::theme::ThemeKind::Dark,
+                    "ses_1",
+                    None,
+                    "high",
+                    vec![json!({"index":0,"item":{"type":"tool_result","data":{
+                        "loop_id":"copy_tool","request_index":0,"call_id":"call_copy",
+                        "tool_name":"read","outcome":"success","output":{"content":result}
+                    }}})],
+                );
+                app.update(crate::event::AppEvent::TerminalSize {
+                    width: 80,
+                    height: 24,
+                });
+                let prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+                let section = prepared
+                    .sections
+                    .iter()
+                    .find(|section| section.id.kind == SectionKind::Tool)
+                    .unwrap();
+                if section.folded == expanded {
+                    app.update(crate::event::AppEvent::ToggleTool {
+                        session_id: "ses_1".into(),
+                        loop_id: "copy_tool".into(),
+                        request_index: 0,
+                        tool_call_id: "call_copy".into(),
+                    });
+                }
+                let prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+                let section = prepared
+                    .sections
+                    .iter()
+                    .find(|section| section.id.kind == SectionKind::Tool)
+                    .unwrap();
+                assert_eq!(section.folded, !expanded);
+                let footer = prepared.copy_row(section.rows.end - 2).unwrap();
+                assert_eq!(
+                    footer.decorative,
+                    expanded || !result.is_empty(),
+                    "only an actual tool footer is decoration"
+                );
+                let text = section_copy_text(&prepared, &section);
+                assert_eq!(
+                    text.matches("ctrl+o collapse").count(),
+                    usize::from(!result.is_empty())
+                );
+                assert!(!text.contains("ctrl+o expand"));
+                assert!(!text.contains("hidden rows"));
+                let point = |row, column| SelectionPoint {
+                    row,
+                    column,
+                    section_id: Some(section.id.clone()),
+                    section_row: row - section.rows.start,
+                };
+                let selection = ConversationSelection {
+                    session_id: "ses_1".into(),
+                    anchor: point(section.rows.start, 0),
+                    focus: point(section.rows.end - 1, 78),
+                    granularity: SelectionGranularity::Character,
+                    dragged: true,
+                };
+                assert_eq!(
+                    crate::ui::transcript::selection_text(&prepared, &selection).trim_matches('\n'),
+                    text
+                );
+                // Empty cards still retain their target row; it must not be
+                // mistaken for the absent expand affordance.
+                if result.is_empty() && !expanded {
+                    assert!(!footer.decorative);
+                    assert!(!footer.text.is_empty());
+                }
+            }
+        }
     }
 }

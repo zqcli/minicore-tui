@@ -2504,10 +2504,10 @@ fn reasoning_rendering_keeps_hidden_cache_fallback_themes_and_cjk_width() {
     assert_eq!(
         hidden
             .iter()
-            .filter(|line| line_text(line).contains("Thinking..."))
+            .filter(|line| line_text(line).contains("Reasoning"))
             .count(),
         1,
-        "one hidden reasoning run should render one Thinking label"
+        "one completed hidden reasoning run should render one Reasoning label"
     );
     assert!(
         hidden
@@ -5839,8 +5839,10 @@ fn failed_tool_survives_live_finished_wait_and_history_with_folded_geometry() {
         .map(line_text)
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(collapsed_text.contains("failed: tool execution failed"));
-    assert!(collapsed_text.contains("ctrl+o to expand"));
+    assert!(collapsed_text.contains("bash · failed"));
+    assert!(collapsed_text.contains("$ failing command"));
+    assert!(collapsed_text.contains("tool execution failed"));
+    assert!(collapsed_text.contains("ctrl+o expand"));
 
     let prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 100);
     let tool_section = prepared
@@ -5884,7 +5886,7 @@ fn failed_tool_survives_live_finished_wait_and_history_with_folded_geometry() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(expanded_text.contains("tool execution failed"));
-    assert!(!expanded_text.contains("ctrl+o to expand"));
+    assert!(!expanded_text.contains("ctrl+o expand"));
     assert_eq!(
         driver.app.sessions.known["ses_1"].tool_folds[&minicore_tui::state::tool::ToolKey::new(
             "ses_1",
@@ -5964,7 +5966,7 @@ fn failed_tool_survives_live_finished_wait_and_history_with_folded_geometry() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(section_copy.contains("tool failed"));
-    assert!(!section_copy.contains("ctrl+o to expand"));
+    assert!(!section_copy.contains("ctrl+o expand"));
 
     let hit_section = final_prepared
         .section_at(durable_tool.rows.start, durable_tool.content_columns.start)
@@ -6037,8 +6039,9 @@ fn failed_tool_survives_live_finished_wait_and_history_with_folded_geometry() {
         .map(line_text)
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(final_collapsed_text.contains("failed: tool failed"));
-    assert!(final_collapsed_text.contains("ctrl+o to expand"));
+    assert!(final_collapsed_text.contains("bash · failed"));
+    assert!(final_collapsed_text.contains("tool failed"));
+    assert!(final_collapsed_text.contains("ctrl+o expand"));
 }
 
 #[test]

@@ -32,6 +32,8 @@ thread_local! {
 pub struct CopyCells {
     pub columns: std::ops::Range<usize>,
     pub decorative: bool,
+    /// Raw Markdown byte position, independent of visual wrapping and escaping.
+    pub source_offset: Option<usize>,
 }
 
 impl CopyCells {
@@ -44,6 +46,7 @@ impl CopyCells {
         Self {
             columns: 0..0,
             decorative: true,
+            source_offset: None,
         }
     }
 }
@@ -72,7 +75,10 @@ struct Seg {
 /// A block-level markdown element.
 enum Block {
     /// Lossless, width-wrapped source when list layout exceeds safe bounds.
-    Plain(String),
+    Plain {
+        text: String,
+        line_offsets: Vec<usize>,
+    },
     Paragraph(Vec<Seg>),
     Heading {
         level: u8,
@@ -81,7 +87,9 @@ enum Block {
     Quote(Vec<Seg>),
     Code {
         text: String,
+        source_offset: usize,
     },
+    Table(Vec<Vec<Vec<Seg>>>),
     List {
         ordered: bool,
         start: u64,
@@ -94,6 +102,7 @@ enum Block {
 enum InlineAttr {
     Italic,
     Bold,
+    Strike,
     Link,
 }
 
@@ -118,6 +127,8 @@ struct Builder<'a> {
     attrs: Vec<InlineAttr>,
     link: Option<(String, usize)>,
     code: Option<String>,
+    code_offset: usize,
+    table: Option<Vec<Vec<Vec<Seg>>>>,
 }
 
 impl Builder<'_> {
@@ -140,6 +151,13 @@ impl Builder<'_> {
             .any(|attr| matches!(attr, InlineAttr::Bold))
         {
             style = style.add_modifier(Modifier::BOLD);
+        }
+        if self
+            .attrs
+            .iter()
+            .any(|attr| matches!(attr, InlineAttr::Strike))
+        {
+            style = style.add_modifier(Modifier::CROSSED_OUT);
         }
         if let Some(InlineAttr::Link) = self.attrs.last() {
             style = style.fg(self.theme.md_link);
@@ -314,6 +332,24 @@ impl Builder<'_> {
     }
 }
 
+/// Sanitizing never removes newlines, so literal rows can retain their raw
+/// source-line offsets without a second parser or per-character source map.
+fn literal_source(display: &str, source: &str) -> Block {
+    let mut offset = 0;
+    let line_offsets = source
+        .split('\n')
+        .map(|line| {
+            let start = offset;
+            offset += line.len() + 1;
+            start
+        })
+        .collect();
+    Block::Plain {
+        text: display.to_owned(),
+        line_offsets,
+    }
+}
+
 /// Renders durable Markdown messages and request-local live reasoning.
 pub struct MarkdownRenderer<'a> {
     theme: &'a Theme,
@@ -342,10 +378,28 @@ impl<'a> MarkdownRenderer<'a> {
 
     /// Parses `text` into blocks.
     fn parse(&self, text: &str, width: usize) -> Vec<Block> {
-        let text = crate::safe_text::safe_display(text);
+        let source = text;
+        let text = crate::safe_text::safe_display(source);
+        // Parsing sanitized text preserves the existing safe-display semantics.
+        // Map parser offsets back to raw bytes only when escaping changed them.
+        let source_offsets = if matches!(text, std::borrow::Cow::Owned(_)) {
+            let mut offsets = vec![(0, 0)];
+            let mut expansion = 0;
+            for (raw, ch) in source.char_indices() {
+                if crate::safe_text::is_unsafe_display_control(ch) {
+                    expansion +=
+                        crate::safe_text::safe_display(&ch.to_string()).len() - ch.len_utf8();
+                    let raw_end = raw + ch.len_utf8();
+                    offsets.push((raw_end + expansion, raw_end));
+                }
+            }
+            Some(offsets)
+        } else {
+            None
+        };
         #[cfg(test)]
         MARKDOWN_PARSE_COUNT.with(|count| count.set(count.get() + 1));
-        let options = Options::empty();
+        let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
         let parser = Parser::new_ext(&text, options);
         let mut b = Builder {
             theme: self.theme,
@@ -358,8 +412,10 @@ impl<'a> MarkdownRenderer<'a> {
             attrs: Vec::new(),
             link: None,
             code: None,
+            code_offset: 0,
+            table: None,
         };
-        for event in parser {
+        for (event, range) in parser.into_offset_iter() {
             let list_content_width = match &event {
                 Event::Start(Tag::List(_) | Tag::Item) => Some(2),
                 Event::Start(Tag::CodeBlock(_)) if !b.lists.is_empty() => Some(4),
@@ -367,6 +423,21 @@ impl<'a> MarkdownRenderer<'a> {
             };
             match event {
                 Event::Start(tag) => match tag {
+                    Tag::Table(_) => {
+                        // Quotes currently collect paragraph runs separately.
+                        // Keep compound quoted tables literal rather than
+                        // emitting the table before its surrounding prose.
+                        if b.quote {
+                            return vec![literal_source(&text, source)];
+                        }
+                        b.flush();
+                        b.table = Some(Vec::new());
+                    }
+                    Tag::TableHead | Tag::TableRow => {
+                        if let Some(rows) = b.table.as_mut() {
+                            rows.push(Vec::new());
+                        }
+                    }
                     Tag::Heading { level, .. } => b.heading = Some(level),
                     Tag::BlockQuote(..) => b.quote = true,
                     Tag::List(Some(start)) => b.list_begin(true, start),
@@ -374,10 +445,17 @@ impl<'a> MarkdownRenderer<'a> {
                     Tag::Item => b.item_begin(),
                     Tag::CodeBlock(CodeBlockKind::Indented | CodeBlockKind::Fenced(_)) => {
                         b.flush();
+                        b.code_offset = source_offsets.as_ref().map_or(range.start, |offsets| {
+                            let index =
+                                offsets.partition_point(|(display, _)| *display <= range.start);
+                            let (display, raw) = offsets[index.saturating_sub(1)];
+                            raw + range.start - display
+                        });
                         b.code = Some(String::new())
                     }
                     Tag::Emphasis => b.attrs.push(InlineAttr::Italic),
                     Tag::Strong => b.attrs.push(InlineAttr::Bold),
+                    Tag::Strikethrough => b.attrs.push(InlineAttr::Strike),
                     Tag::Link { dest_url, .. } => {
                         b.attrs.push(InlineAttr::Link);
                         b.link = Some((dest_url.to_string(), b.inline.len()));
@@ -385,6 +463,17 @@ impl<'a> MarkdownRenderer<'a> {
                     _ => {}
                 },
                 Event::End(tag) => match tag {
+                    TagEnd::TableCell => {
+                        let cell = std::mem::take(&mut b.inline);
+                        if let Some(row) = b.table.as_mut().and_then(|rows| rows.last_mut()) {
+                            row.push(cell);
+                        }
+                    }
+                    TagEnd::Table => {
+                        if let Some(rows) = b.table.take() {
+                            b.push_block(Block::Table(rows));
+                        }
+                    }
                     TagEnd::Paragraph => b.flush(),
                     TagEnd::Heading(_) => b.heading_end(),
                     TagEnd::BlockQuote(..) => b.quote_end(),
@@ -392,14 +481,23 @@ impl<'a> MarkdownRenderer<'a> {
                     TagEnd::Item => b.flush(),
                     TagEnd::CodeBlock => {
                         let text = b.code.take().unwrap_or_default();
-                        b.push_block(Block::Code { text });
+                        b.push_block(Block::Code {
+                            text,
+                            source_offset: b.code_offset,
+                        });
                     }
-                    TagEnd::Emphasis | TagEnd::Strong => {
+                    TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => {
                         b.attrs.pop();
                     }
                     TagEnd::Link => b.link_end(),
                     _ => {}
                 },
+                // Mixed HTML/XML can cross Markdown block boundaries. Keep
+                // the complete source literal so parser-inserted paragraph
+                // gaps or ignored wrappers cannot alter the submitted text.
+                Event::Html(_) | Event::InlineHtml(_) => {
+                    return vec![literal_source(&text, source)];
+                }
                 Event::Text(text) => b.text(&text),
                 Event::Code(text) => b.text_code(&text),
                 Event::SoftBreak => b.push_seg(Seg {
@@ -426,7 +524,7 @@ impl<'a> MarkdownRenderer<'a> {
                 // pulldown-cmark does not bound list nesting. Avoid recursive
                 // render/drop overflow and indentation wider than the view by
                 // retaining the entire sanitized source as plain wrapped text.
-                return vec![Block::Plain(text.to_string())];
+                return vec![literal_source(&text, source)];
             }
         }
         b.finish();
@@ -517,6 +615,17 @@ impl<'a> MarkdownRenderer<'a> {
                 hard_breaks[lines.len() - 1] = true;
             }
         }
+        // Record content bounds before cards add background padding. Soft-wrap
+        // trailing spaces belong to the source and must not be trimmed by copy.
+        for (line, copy) in lines.iter().zip(copy_cells.iter_mut()) {
+            if copy.is_none() {
+                *copy = Some(CopyCells {
+                    columns: 0..line_width(line),
+                    decorative: false,
+                    source_offset: None,
+                });
+            }
+        }
         RenderedMarkdown {
             lines,
             link_cells,
@@ -541,13 +650,18 @@ impl<'a> MarkdownRenderer<'a> {
     ) {
         copy_cells.resize(out.len(), None);
         match block {
-            Block::Plain(text) => {
+            Block::Plain { text, line_offsets } => {
                 // Unlike Markdown soft breaks, every source newline (including
                 // consecutive and trailing ones) survives the safe fallback.
-                for raw in text.split('\n') {
+                for (source_line, raw) in text.split('\n').enumerate() {
                     let chunks = chunk_line(raw, width);
                     let last = chunks.len() - 1;
                     for (index, chunk) in chunks.into_iter().enumerate() {
+                        copy_cells.push(Some(CopyCells {
+                            columns: 0..UnicodeWidthStr::width(chunk.as_str()),
+                            decorative: false,
+                            source_offset: line_offsets.get(source_line).copied(),
+                        }));
                         out.push(Line::from(Span::styled(chunk, base)));
                         hard_breaks.push(index == last);
                     }
@@ -587,7 +701,19 @@ impl<'a> MarkdownRenderer<'a> {
                     hard_breaks.push(hard);
                 }
             }
-            Block::Code { text } => self.code_lines(text, width, out, hard_breaks, copy_cells),
+            Block::Code {
+                text,
+                source_offset,
+            } => {
+                let start = out.len();
+                self.code_lines(text, width, out, hard_breaks, copy_cells);
+                for copy in copy_cells[start..].iter_mut().flatten() {
+                    if !copy.decorative {
+                        copy.source_offset = Some(*source_offset);
+                    }
+                }
+            }
+            Block::Table(rows) => self.table_lines(rows, width, base, out, hard_breaks, copy_cells),
             Block::List {
                 ordered,
                 start,
@@ -671,6 +797,118 @@ impl<'a> MarkdownRenderer<'a> {
         copy_cells.resize(out.len(), None);
     }
 
+    /// Tables use bounded columns when they fit, and one labeled cell at a
+    /// time when the viewport is too narrow. No cell is clipped or discarded.
+    #[allow(clippy::too_many_arguments)]
+    fn table_lines(
+        &self,
+        rows: &[Vec<Vec<Seg>>],
+        width: usize,
+        base: Style,
+        out: &mut Vec<Line<'static>>,
+        hard_breaks: &mut Vec<bool>,
+        copy_cells: &mut Vec<Option<CopyCells>>,
+    ) {
+        let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+        if columns == 0 {
+            return;
+        }
+        let separators = columns.saturating_sub(1).saturating_mul(3);
+        let available = width.saturating_sub(separators);
+        if available < columns.saturating_mul(4) {
+            for (row_index, row) in rows.iter().enumerate() {
+                if row_index > 0 {
+                    out.push(Line::default());
+                    hard_breaks.push(true);
+                }
+                for (column, cell) in row.iter().enumerate() {
+                    let mut segs = Vec::new();
+                    if row_index > 0 {
+                        if let Some(header) = rows[0].get(column) {
+                            segs.extend(header.iter().cloned());
+                            segs.push(Seg {
+                                text: ": ".into(),
+                                style: Style::new(),
+                                link: false,
+                            });
+                        }
+                    }
+                    segs.extend(cell.iter().cloned());
+                    for (line, hard) in wrap_segments_breaks(&segs, width, base) {
+                        out.push(line);
+                        hard_breaks.push(hard);
+                    }
+                }
+            }
+        } else {
+            let mut widths = vec![4; columns];
+            for row in rows {
+                for (column, cell) in row.iter().enumerate() {
+                    let text: String = cell.iter().map(|seg| seg.text.as_str()).collect();
+                    widths[column] = widths[column].max(UnicodeWidthStr::width(text.as_str()));
+                }
+            }
+            // Allocate without iterating over unbounded source widths.
+            let mut remaining = available;
+            for (column, cell_width) in widths.iter_mut().enumerate() {
+                *cell_width = (*cell_width).min(remaining / (columns - column));
+                remaining -= *cell_width;
+            }
+            for (row_index, row) in rows.iter().enumerate() {
+                let cells: Vec<_> = widths
+                    .iter()
+                    .enumerate()
+                    .map(|(column, width)| {
+                        let segs = row.get(column).map(Vec::as_slice).unwrap_or(&[]);
+                        wrap_segments_breaks(
+                            segs,
+                            *width,
+                            if row_index == 0 {
+                                base.add_modifier(Modifier::BOLD)
+                            } else {
+                                base
+                            },
+                        )
+                    })
+                    .collect();
+                let height = cells.iter().map(Vec::len).max().unwrap_or(1);
+                for line_index in 0..height {
+                    let mut spans = Vec::new();
+                    for (column, cell) in cells.iter().enumerate() {
+                        if column > 0 {
+                            spans.push(Span::styled(" │ ", base.fg(self.theme.border)));
+                        }
+                        let line = cell
+                            .get(line_index)
+                            .map(|(line, _)| line.clone())
+                            .unwrap_or_default();
+                        let padding = widths[column].saturating_sub(line_width(&line));
+                        spans.extend(line.spans);
+                        if column + 1 < columns {
+                            spans.push(Span::raw(" ".repeat(padding)));
+                        }
+                    }
+                    out.push(Line::from(spans));
+                    // Column wraps are separate visible table rows, not prose
+                    // wraps: preserve readable row boundaries when copying.
+                    hard_breaks.push(true);
+                }
+                if row_index == 0 {
+                    let border = widths
+                        .iter()
+                        .map(|width| "─".repeat(*width))
+                        .collect::<Vec<_>>()
+                        .join("─┼─");
+                    copy_cells.resize(out.len(), None);
+                    out.push(Line::from(Span::styled(border, base.fg(self.theme.border))));
+                    hard_breaks.push(false);
+                    copy_cells.push(Some(CopyCells::decoration()));
+                }
+            }
+        }
+        copy_cells.resize(out.len(), None);
+    }
+
     /// A single-color framed code block: border in `md_code_border`, content
     /// in `md_code_block`, indentation preserved, long lines soft-wrapped
     /// (spec 20.3). No syntax highlighting.
@@ -695,6 +933,11 @@ impl<'a> MarkdownRenderer<'a> {
                 };
                 let last = chunks.len() - 1;
                 for (index, chunk) in chunks.into_iter().enumerate() {
+                    copy_cells.push(Some(CopyCells {
+                        columns: 0..UnicodeWidthStr::width(chunk.as_str()),
+                        decorative: false,
+                        source_offset: None,
+                    }));
                     out.push(Line::from(Span::styled(chunk, content)));
                     hard_breaks.push(index == last);
                 }
@@ -721,6 +964,7 @@ impl<'a> MarkdownRenderer<'a> {
                 copy_cells.push(Some(CopyCells {
                     columns: 1..1 + source_width,
                     decorative: false,
+                    source_offset: None,
                 }));
                 let pad = " ".repeat(inner.saturating_sub(source_width));
                 out.push(Line::from(vec![
@@ -970,6 +1214,211 @@ mod tests {
     }
 
     #[test]
+    fn html_and_xml_remain_visible_literal_source() {
+        let theme = dark_theme();
+        let renderer = MarkdownRenderer::new(&theme);
+        for source in [
+            "<instructions>\nReview the release notes.\n</instructions>",
+            "<div>\nhello\n\nworld\n</div>",
+            "before <em>literal</em> after",
+            "<script>alert('safe literal');</script>",
+        ] {
+            let rendered = renderer.render_with_metadata(source, 80, Style::new());
+            assert_eq!(
+                rendered
+                    .lines
+                    .iter()
+                    .map(text_of)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                source
+            );
+            assert_eq!(rendered.copy_cells.len(), rendered.lines.len());
+            assert_eq!(rendered.hard_breaks.len(), rendered.lines.len());
+        }
+        let safe = renderer.render("<x>\u{1b}]52;evil\u{7}</x>", 80, Style::new());
+        assert_eq!(text_of(&safe[0]), "<x>␛]52;evil␇</x>");
+    }
+
+    #[test]
+    fn fenced_rows_keep_raw_offsets_after_escaping_and_wrapping() {
+        let theme = dark_theme();
+        let renderer = MarkdownRenderer::new(&theme);
+        let source = "控制\u{1b}prefix\n\n```rust\nFIRST_LONG_LINE\n```\n\n~~~text\nSECOND\n~~~";
+        for width in [2, 10, 80] {
+            let rendered = renderer.render_with_metadata(source, width, Style::new());
+            let offsets: Vec<_> = rendered
+                .copy_cells
+                .iter()
+                .flatten()
+                .filter_map(|copy| copy.source_offset)
+                .collect();
+            assert!(offsets.contains(&source.find("```rust").unwrap()));
+            assert!(offsets.contains(&source.find("~~~text").unwrap()));
+            assert!(
+                offsets
+                    .iter()
+                    .all(|offset| source[*offset..].starts_with("```rust")
+                        || source[*offset..].starts_with("~~~text"))
+            );
+            assert_eq!(rendered.copy_cells.len(), rendered.lines.len());
+        }
+    }
+
+    #[test]
+    fn literal_html_fallback_retains_fence_source_positions() {
+        let theme = dark_theme();
+        let source = "before <br> after\n\n```text\nFIRST_LONG_LINE\n```\n\n~~~text\nSECOND\n~~~";
+        let rendered = MarkdownRenderer::new(&theme).render_with_metadata(source, 8, Style::new());
+        for (line, copy) in rendered.lines.iter().zip(&rendered.copy_cells) {
+            let text = text_of(line);
+            let offset = copy.as_ref().unwrap().source_offset.unwrap();
+            if text.starts_with("FIRST") || text.starts_with("NG_LINE") {
+                assert_eq!(offset, source.find("FIRST").unwrap());
+            }
+            if text.starts_with("SECOND") {
+                assert_eq!(offset, source.find("SECOND").unwrap());
+            }
+        }
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .map(text_of)
+                .collect::<String>()
+                .contains("before <br> after")
+        );
+    }
+
+    #[test]
+    fn tables_are_bounded_and_retain_cells_at_narrow_and_wide_widths() {
+        let theme = dark_theme();
+        let renderer = MarkdownRenderer::new(&theme);
+        let source = "| Name | Status |\n| --- | --- |\n| alpha | ready |\n| beta | done |";
+        for width in [8, 12, 24, 80] {
+            let rendered = renderer.render_with_metadata(source, width, Style::new());
+            let text = rendered
+                .lines
+                .iter()
+                .map(text_of)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                rendered.lines.iter().all(|line| line_width(line) <= width),
+                "{text}"
+            );
+            if width < 11 {
+                for value in ["alpha", "beta", "ready", "done"] {
+                    assert!(text.replace('\n', "").contains(value), "{width}: {text}");
+                }
+            } else {
+                // Grid wraps interleave columns; every source cell character
+                // must remain, even when a word spans multiple display rows.
+                let mut visible: Vec<_> = text.chars().filter(|ch| ch.is_alphanumeric()).collect();
+                let mut expected: Vec<_> = "NameStatusalphareadybetadone".chars().collect();
+                visible.sort_unstable();
+                expected.sort_unstable();
+                assert_eq!(visible, expected, "{width}: {text}");
+            }
+            assert_eq!(rendered.copy_cells.len(), rendered.lines.len());
+            assert_eq!(rendered.hard_breaks.len(), rendered.lines.len());
+            assert_eq!(rendered.link_cells.len(), rendered.lines.len());
+        }
+    }
+
+    #[test]
+    fn quoted_table_preserves_source_order_and_quote_markers() {
+        let theme = dark_theme();
+        let source = "> Before\n>\n> | A | B |\n> | --- | --- |\n> | x | y |\n>\n> After";
+        let rendered = MarkdownRenderer::new(&theme).render_with_metadata(source, 40, Style::new());
+        assert_eq!(
+            rendered
+                .lines
+                .iter()
+                .map(text_of)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            source
+        );
+        assert!(
+            rendered
+                .copy_cells
+                .iter()
+                .flatten()
+                .all(|copy| copy.source_offset.is_some())
+        );
+    }
+
+    #[test]
+    fn nested_list_table_stays_between_its_item_paragraphs() {
+        let theme = dark_theme();
+        let source = "- Outer\n  - Before\n\n    | A | B |\n    | --- | --- |\n    | x | y |\n\n    After\n- Last";
+        let renderer = MarkdownRenderer::new(&theme);
+        for width in [12, 40] {
+            let rendered = renderer.render_with_metadata(source, width, Style::new());
+            let text = rendered
+                .lines
+                .iter()
+                .map(text_of)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(rendered.lines.iter().all(|line| line_width(line) <= width));
+            let before = text.find("Before").unwrap();
+            let table = text.find('x').unwrap();
+            let after = text.find("After").unwrap();
+            let last = text.find("Last").unwrap();
+            assert!(before < table && table < after && after < last, "{text}");
+            assert_eq!(rendered.copy_cells.len(), rendered.lines.len());
+        }
+    }
+
+    #[test]
+    fn table_cjk_cells_wrap_without_losing_characters() {
+        let theme = dark_theme();
+        let renderer = MarkdownRenderer::new(&theme);
+        let source = "| 字段 | 内容 |\n| --- | --- |\n| 甲乙丙丁戊己 | 天地玄黄宇宙洪荒 |";
+        for width in [8, 12, 20, 60] {
+            let rendered = renderer.render_with_metadata(source, width, Style::new());
+            assert!(rendered.lines.iter().all(|line| line_width(line) <= width));
+            let text: String = rendered.lines.iter().map(text_of).collect();
+            for ch in "甲乙丙丁戊己天地玄黄宇宙洪荒".chars() {
+                assert_eq!(text.matches(ch).count(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn prose_copy_bounds_preserve_spaces_at_soft_wraps() {
+        let theme = dark_theme();
+        let rendered = MarkdownRenderer::new(&theme).render_with_metadata(
+            "first second third",
+            6,
+            Style::new(),
+        );
+        assert_eq!(text_of(&rendered.lines[0]), "first ");
+        assert!(!rendered.hard_breaks[0]);
+        assert_eq!(rendered.copy_cells[0].as_ref().unwrap().columns, 0..6);
+        assert_eq!(
+            rendered.lines.iter().map(text_of).collect::<String>(),
+            "first second third"
+        );
+    }
+
+    #[test]
+    fn strikethrough_is_styled_without_literal_delimiters() {
+        let theme = dark_theme();
+        let lines = MarkdownRenderer::new(&theme).render("keep ~~removed~~", 40, Style::new());
+        assert_eq!(text_of(&lines[0]), "keep removed");
+        assert!(
+            lines[0]
+                .spans
+                .iter()
+                .any(|span| span.content.contains("removed")
+                    && span.style.add_modifier.contains(Modifier::CROSSED_OUT))
+        );
+    }
+
+    #[test]
     fn paragraphs_bold_italic_and_inline_code_are_styled() {
         let theme = dark_theme();
         let renderer = MarkdownRenderer::new(&theme);
@@ -1156,7 +1605,7 @@ mod tests {
         let (lines, links, breaks) = renderer.render_with_breaks(&text, 12, Style::new());
         assert!(matches!(
             renderer.parse(&text, 12).as_slice(),
-            [Block::Plain(_)]
+            [Block::Plain { .. }]
         ));
         assert!(lines.iter().all(|line| line_width(line) <= 12));
         assert_eq!(copy_text(&lines, &breaks), text);
@@ -1179,7 +1628,7 @@ mod tests {
         let text = format!("\n\n{}leaf\u{1b}\n\nTAIL\n", "- ".repeat(4096));
         let safe = crate::safe_text::safe_display(&text);
         let blocks = renderer.parse(&text, 10000);
-        assert!(matches!(blocks.as_slice(), [Block::Plain(source)] if source == safe.as_ref()));
+        assert!(matches!(blocks.as_slice(), [Block::Plain { text, .. }] if text == safe.as_ref()));
         let (lines, _, breaks) = renderer.render_with_breaks(&text, 10000, Style::new());
         assert_eq!(copy_text(&lines, &breaks), safe);
         assert!(lines.iter().all(|line| line_width(line) <= 10000));
@@ -1213,7 +1662,7 @@ mod tests {
         let (lines, _, breaks) = renderer.render_with_breaks(text, 5, Style::new());
         assert!(matches!(
             renderer.parse(text, 5).as_slice(),
-            [Block::Plain(_)]
+            [Block::Plain { .. }]
         ));
         assert!(lines.iter().all(|line| line_width(line) <= 5));
         assert_eq!(copy_text(&lines, &breaks), text);
@@ -1232,7 +1681,7 @@ mod tests {
         );
         assert!(matches!(
             renderer.parse(text, 5).as_slice(),
-            [Block::Plain(_)]
+            [Block::Plain { .. }]
         ));
         assert_eq!(copy_text(&lines, &breaks), text);
         // At six cells the bullet, code border, and CJK character all fit.

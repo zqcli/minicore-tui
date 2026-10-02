@@ -8,6 +8,55 @@ use crate::protocol::{
     ToolDataAvailabilityWire as Availability, ToolDataStreamWire as Stream, ToolRefWire,
 };
 
+/// Recover only the existing safe presentation whitelist from canonical history.
+/// Raw arguments are discarded at the history boundary, never retained or
+/// displayed as a generic JSON object. This is presentation, not execution.
+pub(crate) fn history_display(
+    name: &str,
+    arguments: &serde_json::Value,
+) -> Option<ToolDisplayWire> {
+    const LIMIT: usize = 512;
+    let field = match name {
+        "bash" => "command",
+        "read" | "write" | "edit" | "apply_patch" | "patch" => "path",
+        _ => return None,
+    };
+    let source = arguments.get(field)?.as_str()?;
+    if source.is_empty() {
+        return None;
+    }
+    // Bound before sanitation as well as after it: hostile control bytes can
+    // expand, and the canonical source can be much larger than the preview.
+    let prefix_end = source
+        .char_indices()
+        .map(|(i, _)| i)
+        .find(|i| *i > LIMIT)
+        .unwrap_or(source.len())
+        .min(source.len());
+    let prefix = &source[..prefix_end];
+    let safe = crate::safe_text::safe_display(prefix);
+    let mut detail = safe.split_whitespace().collect::<Vec<_>>().join(" ");
+    if detail.is_empty() {
+        return None;
+    }
+    let truncated = prefix_end < source.len() || detail.len() > LIMIT;
+    if truncated {
+        let mut end = (LIMIT - '…'.len_utf8()).min(detail.len());
+        while !detail.is_char_boundary(end) {
+            end -= 1;
+        }
+        detail.truncate(end);
+        detail.push('…');
+    }
+    Some(ToolDisplayWire {
+        detail,
+        expanded_input: None,
+        input_line_count: None,
+        hidden_line_count: None,
+        truncated,
+    })
+}
+
 impl From<&ToolRefWire> for ToolKey {
     fn from(key: &ToolRefWire) -> Self {
         Self::new(
@@ -764,5 +813,50 @@ mod tests {
         assert!(facts.invocation.is_none());
         assert!(facts.execution.is_none());
         assert!(facts.retained_bytes() <= 1);
+    }
+    #[test]
+    fn historical_projection_only_exposes_whitelisted_bounded_targets() {
+        use serde_json::json;
+        for name in ["read", "write", "edit", "apply_patch", "patch"] {
+            let display = history_display(name, &json!({"path": "notes.txt", "content": "PRIVATE BODY", "patch": "PRIVATE PATCH", "other": "PRIVATE"})).unwrap();
+            assert_eq!(display.detail, "notes.txt");
+            assert!(display.expanded_input.is_none());
+            assert!(!display.truncated);
+        }
+        let command = "printf 'visible' >&2; exit 7";
+        assert_eq!(
+            history_display(
+                "bash",
+                &json!({"command": command, "env": {"SECRET": "PRIVATE"}})
+            )
+            .unwrap()
+            .detail,
+            command
+        );
+        for args in [
+            json!(null),
+            json!([]),
+            json!({}),
+            json!({"command": 4}),
+            json!({"command": ""}),
+            json!({"command": " \n "}),
+        ] {
+            assert!(history_display("bash", &args).is_none());
+        }
+        assert!(
+            history_display("unknown", &json!({"path": "PRIVATE", "command": "PRIVATE"})).is_none()
+        );
+        let display = history_display(
+            "bash",
+            &json!({"command": format!("{}{}", "\u{1b}\u{202e}中文".repeat(300), "DO_NOT_RETAIN")}),
+        )
+        .unwrap();
+        assert!(display.truncated);
+        assert!(display.detail.ends_with('…'));
+        assert!(display.detail.len() <= 512);
+        assert!(!display.detail.contains('\u{1b}'));
+        assert!(!display.detail.contains('\u{202e}'));
+        assert!(!display.detail.contains("DO_NOT_RETAIN"));
+        assert!(display.expanded_input.is_none());
     }
 }

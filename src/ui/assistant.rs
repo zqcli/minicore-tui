@@ -115,8 +115,8 @@ pub fn section_inputs(
             let key = ReasoningKey::new(&block.loop_id, block.request_index, reasoning_ordinal);
             reasoning_ordinal += 1;
             let expanded = folds.get(&key).map(FoldOverride::expanded);
-            let raw_lines = joined.trim().split('\n').count();
-            let collapsible = reasoning_visible && raw_lines > 3;
+            // Actual fold eligibility is determined during width-aware rendering.
+            let collapsible = reasoning_visible;
             out.push(AssistantSectionInput {
                 source: joined,
                 kind: SectionKind::Thinking,
@@ -182,21 +182,22 @@ pub fn render_section(
 ) -> AssistantSection {
     match input.kind {
         SectionKind::Thinking => {
-            let rendered = reasoning::reasoning_with_metadata(
+            let (rendered, collapsible) = reasoning::render_with_state(
                 theme,
                 &input.source,
                 width,
                 reasoning_visible,
                 input.in_hidden_run,
                 Some(!input.folded),
+                false,
             );
             AssistantSection {
                 link_cells: rendered.link_cells,
                 lines: rendered.lines,
                 kind: input.kind,
                 ordinal: input.ordinal,
-                collapsible: input.collapsible,
-                folded: input.folded,
+                collapsible,
+                folded: collapsible && input.folded,
                 tool_call: None,
                 hard_breaks: Some(rendered.hard_breaks),
                 copy_cells: Some(rendered.copy_cells),
@@ -295,25 +296,24 @@ pub fn sections_with_folds(
             let key = ReasoningKey::new(&block.loop_id, block.request_index, reasoning_ordinal);
             reasoning_ordinal += 1;
             let expanded = folds.get(&key).map(FoldOverride::expanded);
-            let rendered = reasoning::reasoning_with_metadata(
+            let (rendered, collapsible) = reasoning::render_with_state(
                 theme,
                 &joined,
                 width,
                 reasoning_visible,
                 in_hidden_run,
                 expanded,
+                false,
             );
             let has_section = !rendered.lines.is_empty();
             if has_section {
-                let folded = reasoning_visible
-                    && joined.trim().split('\n').count() > 3
-                    && !expanded.unwrap_or(false);
+                let folded = collapsible && !expanded.unwrap_or(false);
                 out.push(AssistantSection {
                     lines: rendered.lines,
                     link_cells: rendered.link_cells,
                     kind: SectionKind::Thinking,
                     ordinal: reasoning_ordinal - 1,
-                    collapsible: reasoning_visible && joined.trim().split('\n').count() > 3,
+                    collapsible,
                     folded,
                     tool_call: None,
                     hard_breaks: Some(rendered.hard_breaks),

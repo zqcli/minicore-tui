@@ -29,7 +29,7 @@
  │Ctrl+G (Sessions)  continue a browsed closed session                                                                 │
  │Ctrl+W  close the selected session after confirmation                                                                │
  │Delete / Ctrl+D  delete the selected session after close and confirmation                                            │
- │Ctrl+O  expand/collapse all tool cards                                                                               │
+ │Ctrl+O  expand/collapse tools and reasoning                                                                          │
  │Ctrl+T  show/hide reasoning                                                                                          │
  │PageUp/PageDown  scroll; page selectors when focused                                                                 │
  │Ctrl+Home / Ctrl+End  transcript top / tail                                                                          │

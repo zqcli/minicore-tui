@@ -12,8 +12,9 @@
 
  ▎thinking hard
 
- ▎ read                                                                                                                                                [详 情 ]
+ ▎ read · running                                                                                                                                      [详 情 ]
  ▎ read
+ ▎ ctrl+o collapse
 
   more
 
@@ -22,7 +23,6 @@
  ▎ time pending
  ▎
   ⠸ applied
-
 
 
 

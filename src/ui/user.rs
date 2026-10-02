@@ -184,6 +184,33 @@ mod tests {
     use time::{OffsetDateTime, UtcOffset};
 
     #[test]
+    fn xml_prompt_card_retains_the_submitted_instructions() {
+        let block = crate::state::transcript::UserBlock {
+            index: None,
+            loop_id: None,
+            kind: crate::protocol::UserMessageKindWire::Prompt,
+            text: "<instructions>\nReview the release notes.\n</instructions>".into(),
+            pending: true,
+        };
+        for theme in [crate::theme::Theme::dark(), crate::theme::Theme::light()] {
+            for width in [20, 60, 80] {
+                let rendered =
+                    super::lines_with_timestamp_metadata(&theme, &block, width, None, true);
+                let text: String = rendered
+                    .lines
+                    .iter()
+                    .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+                    .collect();
+                assert!(text.contains("<instructions>"));
+                assert!(text.contains("</instructions>"));
+                assert!(text.contains("Review the"));
+                assert!(rendered.copy_cells.iter().any(Option::is_none));
+                assert_eq!(rendered.hard_breaks.len(), rendered.lines.len());
+            }
+        }
+    }
+
+    #[test]
     fn timestamp_matches_rail_display_format() {
         assert_eq!(
             format_user_timestamp_at_offset(

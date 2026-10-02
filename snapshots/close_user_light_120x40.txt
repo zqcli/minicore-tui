@@ -12,13 +12,13 @@
 
  ▎thinking hard
 
- ▎ read                                                                                                        [详 情 ]
+ ▎ read · running                                                                                              [详 情 ]
  ▎ read
+ ▎ ctrl+o collapse
 
   more
 
   ⊘ Turn cancelled (user) · persisted · requests: 1 · tool rounds: 1
-
 
 
 

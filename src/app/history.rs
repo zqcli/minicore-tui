@@ -391,8 +391,26 @@ pub(crate) fn owner_bytes(owner: &TranscriptBlock) -> usize {
                             text.capacity()
                         }
                         AssistantPart::ToolCall(call) => {
-                            call.tool_call_id.capacity() + call.name.capacity()
+                            call.tool_call_id.capacity()
+                                + call.name.capacity()
+                                + call.display.as_ref().map_or(0, |display| {
+                                    display.detail.capacity()
+                                        + display
+                                            .expanded_input
+                                            .as_ref()
+                                            .map_or(0, String::capacity)
+                                })
                         }
+                    })
+                    .sum::<usize>()
+                + assistant
+                    .tool_calls
+                    .iter()
+                    .map(|call| {
+                        call.display.as_ref().map_or(0, |display| {
+                            display.detail.capacity()
+                                + display.expanded_input.as_ref().map_or(0, String::capacity)
+                        })
                     })
                     .sum::<usize>()
         }
@@ -494,13 +512,13 @@ pub(super) fn raw_item_owner(index: usize, item: &RawHistoryItem) -> Arc<Transcr
                         tool_call_id,
                         name,
                         call_index,
-                        ..
+                        arguments,
                     } => {
                         let call = crate::protocol::ToolCallViewWire {
                             tool_call_id: tool_call_id.clone(),
                             name: name.clone(),
                             call_index: *call_index,
-                            display: None,
+                            display: crate::state::tool::history_display(name, arguments),
                         };
                         parts.push(AssistantPart::ToolCall(call.clone()));
                         tool_calls.push(call);

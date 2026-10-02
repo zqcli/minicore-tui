@@ -387,7 +387,7 @@ fn prepare_conversation_inner(
     let durable_tool_keys = durable
         .as_ref()
         .map(|durable| durable.layout.tool_keys.as_ref());
-    let (mut live, mut live_links) = build_live_tail(
+    let (mut live, mut live_links, mut live_copy) = build_live_tail(
         &theme,
         app,
         width as usize,
@@ -400,10 +400,6 @@ fn prepare_conversation_inner(
     // so the frame shifts live rows by one less when it is dropped.
     let live_skip =
         usize::from(durable_last_row_blank && live.first().is_some_and(layout::line_is_blank));
-    if live_skip == 1 {
-        live.remove(0);
-        live_links.remove(0);
-    }
     // While the busy status row is visible, exactly one clear transparent
     // blank must separate the last *frame* row (which may be the last durable
     // row when the live tail is empty) from it. Sections that already end with
@@ -427,6 +423,9 @@ fn prepare_conversation_inner(
     let mut live_source = String::new();
     let mut live_copy_meta = Vec::new();
     for (rows, copy_start) in &copy_start_for_live {
+        if live_copy.iter().any(|copy| rows.contains(&copy.row)) {
+            continue;
+        }
         let section_source_start = live_source.len();
         for row in rows.clone() {
             let section = live_sections
@@ -448,20 +447,23 @@ fn prepare_conversation_inner(
         }
     }
     let live_source: Arc<str> = live_source.into();
-    let live_copy: Vec<CopyRange> = live_copy_meta
-        .into_iter()
-        .map(
-            |(row, copy_start, source_range, source_offset, decorative)| CopyRange {
-                row,
-                columns: copy_start..width as usize,
-                source: Arc::clone(&live_source),
-                source_offset,
-                source_range,
-                hard_break_after: true,
-                decorative,
-            },
-        )
-        .collect();
+    live_copy.extend(live_copy_meta.into_iter().map(
+        |(row, copy_start, source_range, source_offset, decorative)| CopyRange {
+            row,
+            columns: copy_start..width as usize,
+            source: Arc::clone(&live_source),
+            source_offset,
+            source_range,
+            hard_break_after: true,
+            decorative,
+        },
+    ));
+    live_copy.sort_by_key(|copy| copy.row);
+    if live_skip == 1 {
+        live.remove(0);
+        live_links.remove(0);
+        live_copy.retain(|copy| copy.row >= live_skip);
+    }
     let live_sections: Vec<SectionRange> = live_sections
         .into_iter()
         .map(|mut section| {
@@ -510,6 +512,7 @@ fn section_revision<V: DurableLayoutSource>(view: &V, id: &SectionId, block_revi
             id.request_index.unwrap_or_default(),
             tool_call_id,
         )) {
+            tool::facts_revision(presentation).hash(&mut hasher);
             presentation.display.detail.hash(&mut hasher);
             presentation.display.expanded_input.hash(&mut hasher);
             presentation.display.hidden_line_count.hash(&mut hasher);
@@ -845,23 +848,17 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                         .as_deref()
                         .unwrap_or(tool.name.as_str())
                         .to_owned();
-                    let lines = durable_block_lines(
-                        theme,
-                        view,
-                        &TranscriptBlock::Tool(tool),
-                        width as usize,
-                        reasoning_visible,
-                    );
+                    let rendered = durable_tool_rows(theme, view, &tool, width as usize);
                     if let Some(layout) = make_section_layout(
                         key,
-                        lines,
+                        rendered.lines,
                         Vec::new(),
                         true,
                         folded,
                         ordinal.saturating_mul(1_000_000) + section_offset,
                         Some(source_hint.as_str()),
                         None,
-                        None,
+                        Some(&rendered.copy_cells),
                     ) {
                         if !push_layout_section(
                             layout,
@@ -974,6 +971,10 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
             continue;
         }
         let (lines, links, breaks, copies) = match block.as_ref() {
+            TranscriptBlock::Tool(tool) => {
+                let rendered = durable_tool_rows(theme, view, tool, width as usize);
+                (rendered.lines, Vec::new(), Vec::new(), rendered.copy_cells)
+            }
             TranscriptBlock::Summary(summary) => {
                 let (lines, links, breaks) =
                     compaction_summary_lines(theme, width as usize, &summary.content, folded);
@@ -1056,17 +1057,12 @@ fn fallback_tool_block<V: DurableLayoutSource>(
         &call.tool_call_id,
     );
     let facts = view.tool_presentations().get(&key);
-    let name = facts
-        .map(|facts| facts.display.detail.as_str())
-        .filter(|name| !name.is_empty())
-        .unwrap_or(call.name.as_str())
-        .to_owned();
     ToolBlock {
         index: None,
         loop_id: assistant.loop_id.clone(),
         request_index: assistant.request_index,
         tool_call_id: call.tool_call_id.clone(),
-        name,
+        name: call.name.clone(),
         result: facts.and_then(|facts| facts.result.clone()),
         outcome: facts.and_then(|facts| facts.outcome),
         live_status: facts.map(|facts| facts.status),
@@ -1119,6 +1115,38 @@ fn make_section_layout(
         collapsible,
         folded,
     };
+    let (source, source_map, copy_ranges) = section_copy_metadata(
+        &lines,
+        &range,
+        copyable,
+        source_hint,
+        rendered_breaks,
+        rendered_copy_cells,
+    );
+    Some(Arc::new(SectionLayout {
+        key,
+        order,
+        rows: Arc::new(lines),
+        source,
+        source_map,
+        copy_ranges: Arc::new(copy_ranges),
+        link_cells: Arc::new(link_cells),
+        content_columns: range.content_columns,
+        collapsible,
+        folded,
+    }))
+}
+
+/// Shared copy preparation for durable and live sections. Display framing and
+/// wrapping never become logical content merely because a turn is still live.
+fn section_copy_metadata(
+    lines: &[Line<'static>],
+    range: &SectionRange,
+    copyable: bool,
+    source_hint: Option<&str>,
+    rendered_breaks: Option<&[bool]>,
+    rendered_copy_cells: Option<&[Option<crate::markdown::CopyCells>]>,
+) -> (Arc<str>, Arc<SourceMap>, Vec<CopyRange>) {
     let row_texts = (0..lines.len())
         .map(|row| {
             let copy = rendered_copy_cells
@@ -1127,20 +1155,19 @@ fn make_section_layout(
             let text = match copy {
                 Some(copy) if copy.decorative => String::new(),
                 Some(copy) => slice_cell_range(
-                    &line_copy_text(&lines[row], 0),
+                    &lines[row].to_string(),
                     copy.columns.start,
                     copy.columns.end,
                 ),
                 None if rendered_copy_cells.is_some() => {
                     line_copy_text(&lines[row], range.content_columns.start)
                 }
-                None => section_copy_text(&range, row, &lines, range.content_columns.start),
+                None => section_copy_text(range, row, lines, range.content_columns.start),
             };
             let decorative = !copyable
                 || copy.is_some_and(|copy| copy.decorative)
                 || (text.is_empty() && (row == 0 || row + 1 == lines.len()))
-                || (rendered_copy_cells.is_none()
-                    && section_copy_is_decorative(&range, row, &text));
+                || (rendered_copy_cells.is_none() && section_copy_is_decorative(range, row, &text));
             (text, decorative)
         })
         .collect::<Vec<_>>();
@@ -1207,7 +1234,11 @@ fn make_section_layout(
                     |copy| copy.columns.clone(),
                 ),
             source: Arc::clone(&copy_source),
-            source_offset: logical_ranges.get(row).map_or(0, |range| range.start),
+            source_offset: rendered_copy_cells
+                .and_then(|rows| rows.get(row))
+                .and_then(Option::as_ref)
+                .and_then(|copy| copy.source_offset)
+                .unwrap_or_else(|| logical_ranges.get(row).map_or(0, |range| range.start)),
             source_range: copy_ranges_in_source.get(row).cloned().unwrap_or(0..0),
             hard_break_after: hard_break_rows.get(row).copied().unwrap_or(false),
             decorative,
@@ -1227,18 +1258,7 @@ fn make_section_layout(
                 .collect(),
         ),
     });
-    Some(Arc::new(SectionLayout {
-        key,
-        order,
-        rows: Arc::new(lines),
-        source,
-        source_map,
-        copy_ranges: Arc::new(copy_ranges),
-        link_cells: Arc::new(link_cells),
-        content_columns: range.content_columns,
-        collapsible,
-        folded,
-    }))
+    (source, source_map, copy_ranges)
 }
 
 fn source_ranges(
@@ -1353,17 +1373,12 @@ fn needs_user_gap(previous: Option<SectionKind>, current: SectionKind) -> bool {
     previous == Some(SectionKind::User) && current == SectionKind::User
 }
 
-/// The single decorative row inside a section whose content never enters a
-/// copied selection: the fold hint of a collapsed Tool/Thinking section sits
-/// at the row before the closing blank (end-2), and the accepted-steer
-/// awaiting-history marker is the last row of a provisional user card
-/// (kind User with no durable history index). Blank boundary rows are
-/// handled separately by the callers.
+/// Legacy positional decoration for thinking hints and provisional user
+/// receipts. Tool affordances use explicit renderer metadata instead: an empty
+/// card has no footer, and genuine result text may match an affordance label.
 fn decorative_row(section: &SectionRange) -> usize {
     match section.id.kind {
-        SectionKind::Tool | SectionKind::Thinking if section.folded => {
-            section.rows.end.saturating_sub(2)
-        }
+        SectionKind::Thinking if section.folded => section.rows.end.saturating_sub(2),
         SectionKind::User if section.id.history_index.is_none() => {
             section.rows.end.saturating_sub(1)
         }
@@ -1638,8 +1653,16 @@ fn durable_block_lines<V: DurableLayoutSource>(
         ),
         TranscriptBlock::Tool(tool_block) => {
             let render_tool = effective_tool_block_for(view, tool_block);
-            let display = tool_display(view, tool_block);
-            tool::durable_with_display(theme, &render_tool, width, false, display)
+            let facts = view
+                .tool_presentations()
+                .get(&ToolKey::new(
+                    view.session_id(),
+                    &tool_block.loop_id,
+                    tool_block.request_index,
+                    &tool_block.tool_call_id,
+                ))
+                .map(AsRef::as_ref);
+            tool::durable_with_facts(theme, &render_tool, width, false, facts)
         }
         TranscriptBlock::Summary(summary) => {
             compaction_summary_lines(
@@ -1662,6 +1685,40 @@ fn durable_block_lines<V: DurableLayoutSource>(
             ),
         ),
     }
+}
+
+fn durable_tool_rows<V: DurableLayoutSource>(
+    theme: &Theme,
+    view: &V,
+    block: &ToolBlock,
+    width: usize,
+) -> tool::RenderedTool {
+    let body_bytes = block
+        .result
+        .as_ref()
+        .map_or(block.name.len(), |text| text.len());
+    if body_bytes > crate::limits::LAYOUT_SECTION_BYTES {
+        let lines = summary_lines(
+            theme,
+            width,
+            &format!("[large history section: {body_bytes} bytes; read explicitly to render]"),
+        );
+        return tool::RenderedTool {
+            copy_cells: vec![Some(crate::markdown::CopyCells::decoration()); lines.len()],
+            lines,
+        };
+    }
+    let render_tool = effective_tool_block_for(view, block);
+    let facts = view
+        .tool_presentations()
+        .get(&ToolKey::new(
+            view.session_id(),
+            &block.loop_id,
+            block.request_index,
+            &block.tool_call_id,
+        ))
+        .map(AsRef::as_ref);
+    tool::durable_with_metadata(theme, &render_tool, width, false, facts)
 }
 
 fn section_id(session_id: &str, block: &TranscriptBlock, _ordinal: u32) -> SectionId {
@@ -1825,9 +1882,10 @@ fn build_live_tail(
     durable_last_kind: Option<SectionKind>,
     durable_tool_keys: Option<&HashSet<ToolKey>>,
     live_sections: Option<&mut Vec<SectionRange>>,
-) -> (Vec<Line<'static>>, Vec<LinkRow>) {
+) -> (Vec<Line<'static>>, Vec<LinkRow>, Vec<CopyRange>) {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut link_rows: Vec<LinkRow> = Vec::new();
+    let mut copy_rows = Vec::new();
     if let Some(view) = app.active_view() {
         let mut live_previous_kind = durable_last_kind;
 
@@ -1919,6 +1977,7 @@ fn build_live_tail(
                 &mut lines,
                 live_sections,
                 &mut link_rows,
+                &mut copy_rows,
             );
             while link_rows.len() < lines.len() {
                 link_rows.push(Vec::new());
@@ -1937,7 +1996,7 @@ fn build_live_tail(
     while link_rows.len() < lines.len() {
         link_rows.push(Vec::new());
     }
-    (lines, link_rows)
+    (lines, link_rows, copy_rows)
 }
 
 fn last_result_lines(
@@ -2004,11 +2063,13 @@ struct LiveRenderContext<'a> {
 }
 
 impl LiveRenderContext<'_> {
+    #[allow(clippy::too_many_arguments)]
     fn append_reasoning(
         &self,
         out: &mut Vec<Line<'static>>,
         ranges: &mut Option<&mut Vec<SectionRange>>,
         link_rows: &mut Vec<LinkRow>,
+        copy_rows: &mut Vec<CopyRange>,
         text: &str,
         ordinal: u32,
         in_hidden_run: bool,
@@ -2019,22 +2080,22 @@ impl LiveRenderContext<'_> {
             .reasoning_folds
             .get(&key)
             .map(FoldOverride::expanded);
-        let raw_lines = text.trim().split('\n').count();
-        let rendered = reasoning::reasoning_with_metadata(
+        let (rendered, collapsible) = reasoning::render_with_state(
             self.theme,
             text,
             self.width,
             self.reasoning_visible,
             in_hidden_run,
             expanded,
+            self.view.live.as_ref().is_some_and(|live| !live.waiting),
         );
         let before = out.len();
         let rendered_len = rendered.lines.len();
         link_rows.resize(before, Vec::new());
-        append_live_section(
+        append_live_section_with_copy(
             out,
             ranges,
-            None,
+            copy_rows,
             SectionId {
                 session_id: self.session_id.into(),
                 loop_id: Some(self.loop_id.into()),
@@ -2046,8 +2107,11 @@ impl LiveRenderContext<'_> {
             },
             rendered.lines,
             self.width,
-            self.reasoning_visible && raw_lines > 3,
-            self.reasoning_visible && raw_lines > 3 && !expanded.unwrap_or(false),
+            collapsible,
+            collapsible && !expanded.unwrap_or(false),
+            text,
+            Some(&rendered.hard_breaks),
+            Some(&rendered.copy_cells),
         );
         let shared_blank = rendered_len.saturating_sub(out.len().saturating_sub(before));
         link_rows.extend(rendered.link_cells.into_iter().skip(shared_blank));
@@ -2057,18 +2121,29 @@ impl LiveRenderContext<'_> {
         &self,
         out: &mut Vec<Line<'static>>,
         ranges: &mut Option<&mut Vec<SectionRange>>,
+        copy_rows: &mut Vec<CopyRange>,
         text: &str,
         ordinal: u32,
     ) {
         let base = Style::new().fg(self.theme.text);
-        let lines = wrap_plain(text, self.width.saturating_sub(1).max(1), base)
+        let wrapped = wrap_plain(text, self.width.saturating_sub(1).max(1), base);
+        let mut cells = vec![Some(crate::markdown::CopyCells::decoration())];
+        cells.extend(wrapped.iter().map(|line| {
+            Some(crate::markdown::CopyCells {
+                columns: 1..1 + UnicodeWidthStr::width(line.to_string().as_str()),
+                decorative: false,
+                source_offset: None,
+            })
+        }));
+        cells.push(Some(crate::markdown::CopyCells::decoration()));
+        let lines = wrapped
             .into_iter()
             .map(|line| crate::ui::rail::inset_row(self.width, 1, line))
             .collect();
-        append_live_section(
+        append_live_section_with_copy(
             out,
             ranges,
-            None,
+            copy_rows,
             SectionId {
                 session_id: self.session_id.into(),
                 loop_id: Some(self.loop_id.into()),
@@ -2082,6 +2157,9 @@ impl LiveRenderContext<'_> {
             self.width,
             false,
             false,
+            text,
+            None,
+            Some(&cells),
         );
     }
 
@@ -2089,6 +2167,7 @@ impl LiveRenderContext<'_> {
         &self,
         out: &mut Vec<Line<'static>>,
         ranges: &mut Option<&mut Vec<SectionRange>>,
+        copy_rows: &mut Vec<CopyRange>,
         tool: &crate::state::tool::LiveTool,
     ) {
         let key = ToolKey::new(
@@ -2103,7 +2182,7 @@ impl LiveRenderContext<'_> {
         {
             return;
         }
-        let (id, lines, folded) = live_tool_render(
+        let (id, rendered, folded) = live_tool_render(
             self.theme,
             self.view,
             self.loop_id,
@@ -2111,7 +2190,22 @@ impl LiveRenderContext<'_> {
             tool,
             self.width,
         );
-        append_live_section(out, ranges, None, id, lines, self.width, true, folded);
+        // Tool rows are independent lines, not prose soft wraps. Preserve
+        // their rendered line boundaries while excluding explicit affordances.
+        let breaks = vec![true; rendered.lines.len()];
+        append_live_section_with_copy(
+            out,
+            ranges,
+            copy_rows,
+            id,
+            rendered.lines,
+            self.width,
+            true,
+            folded,
+            tool.result.as_deref().unwrap_or(&tool.name),
+            Some(&breaks),
+            Some(&rendered.copy_cells),
+        );
     }
 }
 
@@ -2122,17 +2216,14 @@ fn live_tool_render(
     request_index: u32,
     tool: &crate::state::tool::LiveTool,
     width: usize,
-) -> (SectionId, Vec<Line<'static>>, bool) {
+) -> (SectionId, tool::RenderedTool, bool) {
     let tool_key = crate::state::tool::ToolKey::new(
         &view.info.session_id,
         loop_id,
         request_index,
         &tool.tool_call_id,
     );
-    let display = view
-        .tool_presentations
-        .get(&tool_key)
-        .map(|presentation| presentation.display.as_ref());
+    let facts = view.tool_presentations.get(&tool_key).map(AsRef::as_ref);
     let mut render_tool = tool.clone();
     render_tool.expanded = effective_live_tool_expanded(view, &tool_key, &render_tool);
     (
@@ -2145,7 +2236,7 @@ fn live_tool_render(
             tool_call_id: Some(tool.tool_call_id.clone().into()),
             history_index: None,
         },
-        tool::live_with_display(theme, &render_tool, width, display),
+        tool::live_with_metadata(theme, &render_tool, width, facts),
         matches!(
             view.tool_folds.get(&tool_key),
             Some(FoldOverride::Collapsed)
@@ -2166,6 +2257,7 @@ fn live_section(
     out: &mut Vec<Line<'static>>,
     ranges: Option<&mut Vec<SectionRange>>,
     link_rows: &mut Vec<LinkRow>,
+    copy_rows: &mut Vec<CopyRange>,
 ) {
     let mut ranges = ranges;
     let session_id = view.info.session_id.clone();
@@ -2198,6 +2290,7 @@ fn live_section(
                         out,
                         &mut ranges,
                         link_rows,
+                        copy_rows,
                         text,
                         reasoning_ordinal,
                         in_hidden_run,
@@ -2206,7 +2299,7 @@ fn live_section(
                     in_hidden_run = !reasoning_visible;
                 }
                 crate::state::turn::LivePart::Text(text) => {
-                    context.append_text(out, &mut ranges, text, text_ordinal);
+                    context.append_text(out, &mut ranges, copy_rows, text, text_ordinal);
                     text_ordinal += 1;
                     in_hidden_run = false;
                 }
@@ -2217,7 +2310,7 @@ fn live_section(
                         .find(|tool| tool.tool_call_id == *tool_call_id)
                     {
                         rendered_tool_ids.insert(live_tool.tool_call_id.clone());
-                        context.append_tool(out, &mut ranges, live_tool);
+                        context.append_tool(out, &mut ranges, copy_rows, live_tool);
                     }
                     in_hidden_run = false;
                 }
@@ -2227,7 +2320,7 @@ fn live_section(
         // disappear from the live tail.
         for live_tool in &req.tools {
             if !rendered_tool_ids.contains(&live_tool.tool_call_id) {
-                context.append_tool(out, &mut ranges, live_tool);
+                context.append_tool(out, &mut ranges, copy_rows, live_tool);
             }
         }
     }
@@ -2304,6 +2397,41 @@ fn live_section(
             false,
         );
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_live_section_with_copy(
+    out: &mut Vec<Line<'static>>,
+    ranges: &mut Option<&mut Vec<SectionRange>>,
+    copy_rows: &mut Vec<CopyRange>,
+    id: SectionId,
+    lines: Vec<Line<'static>>,
+    width: usize,
+    collapsible: bool,
+    folded: bool,
+    source: &str,
+    breaks: Option<&[bool]>,
+    cells: Option<&[Option<crate::markdown::CopyCells>]>,
+) {
+    let range = SectionRange {
+        id: id.clone(),
+        rows: 0..lines.len(),
+        content_columns: content_columns_for_kind(&id.kind, width),
+        collapsible,
+        folded,
+    };
+    let (_, _, copies) = section_copy_metadata(&lines, &range, true, Some(source), breaks, cells);
+    let before = out.len();
+    let line_count = lines.len();
+    append_live_section(out, ranges, None, id, lines, width, collapsible, folded);
+    let shared = line_count.saturating_sub(out.len().saturating_sub(before));
+    copy_rows.extend(copies.into_iter().filter_map(|mut copy| {
+        if copy.row < shared {
+            return None;
+        }
+        copy.row += out.len().saturating_sub(line_count);
+        Some(copy)
+    }));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2762,6 +2890,7 @@ mod source_map_tests {
             &mut lines,
             &mut Some(&mut ranges),
             &mut links,
+            &mut Vec::new(),
             "[Local fixture](https://example.test)\none\ntwo\nthree\nfour",
             0,
             false,
@@ -2981,5 +3110,52 @@ mod source_map_tests {
         assert!(layout.copy_ranges.iter().all(|copy| copy.decorative));
         assert!(layout.source_map.rows.iter().all(|row| row.decorative));
         assert!(copied_text(&layout).is_empty());
+    }
+    #[test]
+    fn pending_fallback_keeps_tool_name_separate_from_restored_target() {
+        let mut app =
+            crate::ui::testapp::open_empty(crate::theme::ThemeKind::Dark, "s", None, "medium");
+        let view = app.sessions.known.get_mut("s").unwrap();
+        let call = crate::protocol::ToolCallViewWire {
+            tool_call_id: "c".into(),
+            name: "read".into(),
+            call_index: 0,
+            display: crate::state::tool::history_display(
+                "read",
+                &serde_json::json!({"path": "missing-file.txt"}),
+            ),
+        };
+        let mut facts = crate::state::tool::ToolFacts::new("read");
+        facts.display = Arc::new(call.display.clone().unwrap());
+        Arc::make_mut(&mut view.tool_presentations)
+            .insert(ToolKey::new("s", "l", 0, "c"), Arc::new(facts));
+        let assistant = crate::state::transcript::AssistantBlock {
+            index: 0,
+            loop_id: "l".into(),
+            request_index: 0,
+            model: "test".into(),
+            reasoning_level: Default::default(),
+            parts: vec![],
+            tool_calls: vec![call.clone()],
+            usage: Default::default(),
+            finish_reason: "tool_calls".into(),
+            terminal_error: None,
+        };
+        let block = fallback_tool_block(view, &assistant, &call);
+        assert_eq!(block.name, "read");
+        let key = ToolKey::new("s", "l", 0, "c");
+        let rows = tool::durable_with_facts(
+            &Theme::dark(),
+            &block,
+            59,
+            false,
+            view.tool_presentations.get(&key).map(Arc::as_ref),
+        );
+        let text = rows
+            .iter()
+            .flat_map(|row| row.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+        assert!(text.contains("read · pending"));
+        assert!(text.contains("missing-file.txt"));
     }
 }

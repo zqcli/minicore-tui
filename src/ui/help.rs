@@ -80,7 +80,7 @@ fn content_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {
             "Delete / Ctrl+D",
             "delete the selected session after close and confirmation",
         ),
-        ("Ctrl+O", "expand/collapse all tool cards"),
+        ("Ctrl+O", "expand/collapse tools and reasoning"),
         ("Ctrl+T", "show/hide reasoning"),
         ("PageUp/PageDown", "scroll; page selectors when focused"),
         ("Ctrl+Home / Ctrl+End", "transcript top / tail"),

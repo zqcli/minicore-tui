@@ -816,7 +816,10 @@ fn empty_reasoning_renders_nothing_and_does_not_hide_the_next_run() {
         false,
     );
     let text: Vec<String> = lines.iter().map(line_text).collect();
-    assert_eq!(text, vec!["", " answer", "", "▎ Thinking...", ""]);
+    assert_eq!(
+        text,
+        vec!["", " answer", "", "▎ Reasoning hidden (ctrl+t to show)", ""]
+    );
     assert_no_adjacent_blank_rows(&lines, "empty reasoning followed by hidden reasoning");
 }
 
@@ -895,8 +898,8 @@ fn user_assistant_and_tool_boundaries_share_one_blank_row() {
     assert_no_adjacent_blank_rows(&lines, "user/assistant/tool");
     assert_eq!(
         lines.iter().filter(|line| !is_blank(line)).count(),
-        6,
-        "surface sections expose their content, timestamp, and three-line tool preview"
+        5,
+        "surface sections expose content, timestamp, and tool status/target without an empty-body fold hint"
     );
 }
 
@@ -1034,7 +1037,7 @@ fn reasoning_is_gray_and_italic_and_can_be_hidden() {
     app.update(AppEvent::ToggleReasoning);
     let terminal = draw(&app, 80, 24);
     let content = text(&terminal);
-    assert!(content.contains("Thinking..."));
+    assert!(content.contains("Reasoning hidden"));
     assert!(
         !content.contains("carefully"),
         "hidden reasoning text is gone"
@@ -1138,8 +1141,11 @@ fn failed_tool_cards_keep_status_summary_hint_and_error_body() {
         .map(line_text)
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(collapsed_text.contains("failed: permission denied"));
-    assert!(collapsed_text.contains("ctrl+o to expand"));
+    assert!(collapsed_text.contains("bash · failed"));
+    assert!(collapsed_text.contains("$ run command"));
+    assert!(collapsed_text.contains("permission denied"));
+    assert!(collapsed_text.contains("3 hidden rows"));
+    assert!(collapsed_text.contains("ctrl+o expand"));
     assert!(!collapsed_text.contains("private diagnostic"));
 
     let expanded = tool::durable_with_display(
@@ -1173,7 +1179,8 @@ fn failed_tool_cards_keep_status_summary_hint_and_error_body() {
     assert!(expanded_text.contains("input body"));
     assert!(expanded_text.contains("permission denied"));
     assert!(expanded_text.contains("private diagnostic"));
-    assert!(!expanded_text.contains("ctrl+o to expand"));
+    assert!(!expanded_text.contains("ctrl+o expand"));
+    assert!(expanded_text.contains("ctrl+o collapse"));
 
     let denied = tool::durable(
         &theme,
@@ -1192,14 +1199,9 @@ fn failed_tool_cards_keep_status_summary_hint_and_error_body() {
         80,
         false,
     );
-    assert!(
-        denied
-            .iter()
-            .map(line_text)
-            .collect::<Vec<_>>()
-            .join("\n")
-            .contains("denied: not allowed")
-    );
+    let denied_text = denied.iter().map(line_text).collect::<Vec<_>>().join("\n");
+    assert!(denied_text.contains("write · denied"));
+    assert!(denied_text.contains("not allowed"));
 
     let cancelled = tool::live(
         &theme,
@@ -1221,7 +1223,7 @@ fn failed_tool_cards_keep_status_summary_hint_and_error_body() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(cancelled_text.contains("cancelled"));
-    assert!(!cancelled_text.contains("cancellation detail"));
+    assert!(cancelled_text.contains("cancellation detail"));
 
     let long_result = "x".repeat(400);
     let long_text = tool::durable(

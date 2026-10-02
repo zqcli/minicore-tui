@@ -762,6 +762,19 @@ pub fn new_output_marker(theme: ThemeKind) -> App {
         ));
     }
     let mut app = open_with(theme, "ses_1", Some("Task"), "high", items);
+    app.update(AppEvent::SubmitTurn {
+        session_id: "ses_1".into(),
+        text: "continue".into(),
+    });
+    let started = serde_json::from_value(json!({
+        "type": "turn_started",
+        "data": {"turn": {"session_id": "ses_1", "loop_id": "loop_marker"},
+                 "meta": {"session_id": "ses_1", "dropped_before": 0}}
+    }))
+    .unwrap();
+    app.update(AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Notification(
+        RpcNotification::AgentEvent(started),
+    ))));
     let total = crate::ui::transcript::total_lines(&app, 80);
     app.update(AppEvent::Viewport {
         total_lines: total,
@@ -773,10 +786,16 @@ pub fn new_output_marker(theme: ThemeKind) -> App {
             crossterm::event::KeyModifiers::empty(),
         ),
     )));
-    app.update(AppEvent::Viewport {
-        total_lines: total + 2,
-        visible_rows: 10,
-    });
+    let output = serde_json::from_value(json!({
+        "type": "output_delta",
+        "data": {"turn": {"session_id": "ses_1", "loop_id": "loop_marker"},
+                 "request_index": 0, "channel": "text", "delta": "New output",
+                 "meta": {"session_id": "ses_1", "dropped_before": 0}}
+    }))
+    .unwrap();
+    app.update(AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Notification(
+        RpcNotification::AgentEvent(output),
+    ))));
     app
 }
 

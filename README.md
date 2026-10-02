@@ -135,7 +135,7 @@ The complete current keymap and slash-command semantics are in
 - `Ctrl+R` opens Sessions, `Ctrl+N` opens New Session, `Ctrl+L` opens Model, and `Shift+Tab` opens Reasoning;
 - In Sessions, `F2` renames, `F5` refreshes, `Ctrl+W` closes, and `Delete`/`Ctrl+D` deletes after the required confirmations;
 - `Ctrl+G` in Composer edits the current draft with the configured external editor; a read-only session keeps its explicit Continue action; `/editor` starts a blank draft;
-- `Ctrl+T` toggles reasoning and `Ctrl+O` toggles tool previews;
+- `Ctrl+T` shows/hides reasoning and `Ctrl+O` expands/collapses tool previews and visible reasoning;
 - `PageUp`/`PageDown` scroll with four rows of overlap; `Ctrl+Home`/`Ctrl+End` jump to the transcript ends;
 - mouse wheel moves one row, or five with Alt; the Pi-style scrollbar appears on scrolling/hover, supports live dragging, and hides after one second;
 - the bottom scroll-status hint overlays the transcript without consuming a row; see [scrollbar verification](docs/verification/scrollbar/README.md);
@@ -164,6 +164,21 @@ Implemented local commands include `/new`, `/resume`, `/sessions`, `/model`,
 the Agent. `/reload` sends empty `agent.reload` params, refreshes safe
 catalog/session reads and rereads a retained turn result once without duplicating
 an existing wait or replaying execution.
+
+### Conversation display
+
+User XML/HTML-like text is shown literally and safely instead of disappearing.
+Markdown replies support tables, with labeled cells at narrow widths. Code copying
+uses source positions, and streamed text selection preserves hard newlines without
+including card borders or soft-wrap breaks.
+
+Collapsed tool cards retain the action, target, execution status and a short result.
+Loaded historical tool calls retain bounded command/file targets after reopening a session.
+Bash process exit codes remain visible, including a warning for nonzero exits;
+command completion alone does not imply exit zero. Hidden-row counts describe the
+actual display body. Reasoning folds according to its rendered height and completed
+hidden reasoning is labeled separately from active thinking. Expanding old content
+or resizing the terminal does not create a new-output notification.
 
 ## Backend Contract And Scope
 

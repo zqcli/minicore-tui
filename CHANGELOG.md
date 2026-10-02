@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — Conversation usability
+
+- Preserve literal XML/HTML-like message content and source-aware fenced-code selection.
+- Preserve streamed copy hard breaks without copying soft wraps or card decoration.
+- Show tool targets, lifecycle, short outcomes and nonzero Bash exits while collapsed;
+  count actual hidden display rows and keep clipping explicit. Recover bounded
+  command/file targets from loaded history when reopening a session.
+- Fold reasoning by rendered height, support keyboard expansion, and distinguish
+  hidden completed reasoning from active thinking.
+- Render Markdown tables with a narrow-terminal fallback and support strikethrough.
+- Keep local fold/resize changes separate from incoming-output notifications.
+
 ## 0.3.0 — Protocol v1 refactor
 
 The 0.3.0 package targets the fixed `minicore-agent` 0.5.0 and

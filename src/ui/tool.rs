@@ -2,21 +2,25 @@
 //! `toolExecution` state colors; the user `!bash` surface is intentionally
 //! not inferred from a tool name and is not part of this renderer.
 
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::markdown::column_width;
+use crate::markdown::{CopyCells, column_width};
 use crate::protocol::{ToolDisplayWire, ToolOutcomeWire};
 use crate::state::tool::{LiveTool, ToolStatus};
 use crate::state::transcript::ToolBlock;
 use crate::theme::Theme;
 use crate::ui::rail::{self, ToolSurfaceState};
 
-/// A durable tool card. The optional display is the Agent's bounded
-/// whitelist presentation; without it, history remains safe and falls back
-/// to the tool name.
+/// Tool rows with explicit renderer-owned copy decorations.
+pub struct RenderedTool {
+    pub lines: Vec<Line<'static>>,
+    pub copy_cells: Vec<Option<CopyCells>>,
+}
+
+/// Compatibility entry points for callers without structured execution facts.
 pub fn durable(
     theme: &Theme,
     block: &ToolBlock,
@@ -33,54 +37,52 @@ pub fn durable_with_display(
     all_expanded: bool,
     display: Option<&ToolDisplayWire>,
 ) -> Vec<Line<'static>> {
-    let state = durable_state(block);
-    let colors = rail::tool_colors(theme, state);
-    let expanded = block.expanded || all_expanded;
-    let detail = display
-        .map(|display| display.detail.as_str())
-        .filter(|detail| !detail.is_empty())
-        .unwrap_or(&block.name);
-    let hidden = display
-        .and_then(|display| display.hidden_line_count)
-        .unwrap_or_else(|| {
-            wrapped_result_row_count(
-                block.result.as_deref().unwrap_or_default(),
-                width.saturating_sub(rail::SURFACE_CONTENT_START + 2).max(1),
-            )
-        });
-    let summary = durable_summary(block);
-    let mut out = vec![Line::default()];
-    if expanded {
-        expanded_rows(
-            theme,
-            width,
-            colors,
-            &block.name,
-            detail,
-            display,
-            summary.as_deref(),
-            block.result.as_deref(),
-            &mut out,
-        );
-    } else {
-        out.extend(simple_rows(
-            theme,
-            width,
-            colors,
-            &block.name,
-            detail,
-            hidden,
-            summary.as_deref(),
-        ));
-    }
-    out.push(Line::default());
-    out
+    render_card(
+        theme,
+        &block.name,
+        block.result.as_deref(),
+        display,
+        None,
+        width,
+        block.expanded || all_expanded,
+        durable_state(block),
+        durable_summary(block),
+    )
+    .lines
 }
 
-/// A live tool card. Its identity and display are supplied by the App event
-/// reducer; the renderer never guesses `bashExecution` from `tool.name`.
+pub fn durable_with_facts(
+    theme: &Theme,
+    block: &ToolBlock,
+    width: usize,
+    all_expanded: bool,
+    facts: Option<&crate::state::tool::ToolFacts>,
+) -> Vec<Line<'static>> {
+    durable_with_metadata(theme, block, width, all_expanded, facts).lines
+}
+
+pub fn durable_with_metadata(
+    theme: &Theme,
+    block: &ToolBlock,
+    width: usize,
+    all_expanded: bool,
+    facts: Option<&crate::state::tool::ToolFacts>,
+) -> RenderedTool {
+    render_card(
+        theme,
+        &block.name,
+        block.result.as_deref(),
+        facts.map(|f| f.display.as_ref()),
+        facts,
+        width,
+        block.expanded || all_expanded,
+        durable_state(block),
+        durable_summary(block),
+    )
+}
+
 pub fn live(theme: &Theme, tool: &LiveTool, width: usize) -> Vec<Line<'static>> {
-    live_with_display(theme, tool, width, None)
+    live_with_display(theme, tool, width, tool.display.as_deref())
 }
 
 pub fn live_with_display(
@@ -89,55 +91,379 @@ pub fn live_with_display(
     width: usize,
     display: Option<&ToolDisplayWire>,
 ) -> Vec<Line<'static>> {
-    let state = match tool.status {
-        ToolStatus::Pending | ToolStatus::Running => ToolSurfaceState::Pending,
-        ToolStatus::Succeeded => ToolSurfaceState::Success,
-        ToolStatus::Failed | ToolStatus::Denied => ToolSurfaceState::Error,
-        // Spec 4.2/6.4: a cancelled call uses its own surface even though the
-        // fixed Rail renderer has no distinct cancelled scene.
-        ToolStatus::Cancelled => ToolSurfaceState::Cancelled,
-    };
-    let colors = rail::tool_colors(theme, state);
-    let detail = display
-        .map(|display| display.detail.as_str())
-        .filter(|detail| !detail.is_empty())
-        .unwrap_or(tool.name.as_str());
-    let result = tool.result.as_deref();
-    let hidden = display
-        .and_then(|display| display.hidden_line_count)
-        .unwrap_or_else(|| {
-            wrapped_result_row_count(
-                result.unwrap_or_default(),
-                width.saturating_sub(rail::SURFACE_CONTENT_START + 2).max(1),
-            )
-        });
-    let summary = live_summary(tool);
+    render_card(
+        theme,
+        &tool.name,
+        tool.result.as_deref(),
+        display,
+        None,
+        width,
+        tool.expanded,
+        status_surface(tool.status),
+        live_summary(tool),
+    )
+    .lines
+}
+
+pub fn live_with_facts(
+    theme: &Theme,
+    tool: &LiveTool,
+    width: usize,
+    facts: Option<&crate::state::tool::ToolFacts>,
+) -> Vec<Line<'static>> {
+    live_with_metadata(theme, tool, width, facts).lines
+}
+
+pub fn live_with_metadata(
+    theme: &Theme,
+    tool: &LiveTool,
+    width: usize,
+    facts: Option<&crate::state::tool::ToolFacts>,
+) -> RenderedTool {
+    render_card(
+        theme,
+        &tool.name,
+        tool.result.as_deref(),
+        facts
+            .map(|f| f.display.as_ref())
+            .or(tool.display.as_deref()),
+        facts,
+        width,
+        tool.expanded,
+        status_surface(tool.status),
+        live_summary(tool),
+    )
+}
+
+/// Include only facts used by the card in the durable layout revision.
+pub fn facts_revision(facts: &crate::state::tool::ToolFacts) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    facts.command.is_some().hash(&mut hash);
+    if let Some(command) = &facts.command {
+        std::mem::discriminant(&command.status).hash(&mut hash);
+        command.exit_code.hash(&mut hash);
+        command.signal.hash(&mut hash);
+        (command.stderr_observed_end > 0).hash(&mut hash);
+    }
+    if let Some(invocation) = &facts.invocation {
+        std::mem::discriminant(&invocation.subject).hash(&mut hash);
+        match &invocation.subject {
+            crate::protocol::ToolSubjectWire::File { path } => path.hash(&mut hash),
+            crate::protocol::ToolSubjectWire::Command { script, .. } => script.hash(&mut hash),
+            crate::protocol::ToolSubjectWire::Other => invocation.input.preview.hash(&mut hash),
+        }
+    }
+    facts.result_truncated.hash(&mut hash);
+    hash.finish()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_card(
+    theme: &Theme,
+    name: &str,
+    result: Option<&str>,
+    display: Option<&ToolDisplayWire>,
+    facts: Option<&crate::state::tool::ToolFacts>,
+    width: usize,
+    expanded: bool,
+    state: ToolSurfaceState,
+    status: String,
+) -> RenderedTool {
+    let mut colors = rail::tool_colors(theme, state);
+    let mut detail = target(name, display, facts);
+    if matches!(name, "apply_patch" | "patch")
+        && (detail == name || detail == format!("tool {name}"))
+    {
+        if let Some(path) = result
+            .and_then(|r| r.strip_prefix("patched "))
+            .and_then(|r| r.split_once(" bytes at "))
+            .map(|(_, path)| path.trim())
+        {
+            detail = path.to_owned();
+        }
+    }
+    let (process, warning) = command_summary(name, result, facts);
+    if warning {
+        colors.rail = theme.warning;
+    }
+    let status = process.map_or(status.clone(), |process| format!("{status} · {process}"));
+    let title = format!("{} · {status}", clip_summary(name, 18));
     let mut out = vec![Line::default()];
-    if tool.expanded {
-        expanded_rows(
-            theme,
+    let available = width.saturating_sub(rail::SURFACE_CONTENT_START);
+    for (text, color) in [
+        (
+            &title,
+            if warning {
+                theme.warning
+            } else {
+                theme.tool_title
+            },
+        ),
+        (&detail, theme.tool_output),
+    ] {
+        out.push(rail::surface_row(
             width,
             colors,
-            &tool.name,
-            detail,
-            display,
-            summary.as_deref(),
-            result,
-            &mut out,
-        );
-    } else {
-        out.extend(simple_rows(
-            theme,
-            width,
-            colors,
-            &tool.name,
-            detail,
-            hidden,
-            summary.as_deref(),
+            rail::SURFACE_CONTENT_START,
+            Line::from(Span::styled(
+                if text == &detail {
+                    clip_target(text, available)
+                } else {
+                    // The conversation overlays its detail action at the right.
+                    clip_summary(
+                        text,
+                        available.saturating_sub(if width >= 16 { 9 } else { 0 }),
+                    )
+                },
+                Style::new().fg(color),
+            )),
         ));
     }
+    let mut footer_row = None;
+    if expanded {
+        append_body(theme, width, colors, display, result, &mut out);
+        footer_row = Some(out.len());
+        out.push(rail::surface_row(
+            width,
+            colors,
+            rail::SURFACE_CONTENT_START,
+            Line::from(Span::styled(
+                clip_summary("ctrl+o collapse", available),
+                Style::new().fg(theme.tool_muted),
+            )),
+        ));
+    } else {
+        if let Some(summary) = output_summary(name, result, facts) {
+            out.push(rail::surface_row(
+                width,
+                colors,
+                rail::SURFACE_CONTENT_START,
+                Line::from(Span::styled(
+                    clip_summary(&summary, available),
+                    Style::new().fg(theme.tool_output),
+                )),
+            ));
+        }
+        let content_width = width.saturating_sub(rail::SURFACE_CONTENT_START + 2).max(1);
+        let hidden = display
+            .and_then(|d| d.expanded_input.as_deref())
+            .map_or(0, |text| wrapped_result_row_count(text, content_width))
+            + result.map_or(0, |text| wrapped_result_row_count(text, content_width));
+        let partial =
+            display.is_some_and(|d| d.truncated) || facts.is_some_and(|f| f.result_truncated);
+        if hidden > 0 || partial {
+            footer_row = Some(out.len());
+            let hint = format!(
+                "{hidden} hidden rows{} · ctrl+o expand",
+                if partial { " · partial" } else { "" }
+            );
+            out.push(rail::surface_row(
+                width,
+                colors,
+                rail::SURFACE_CONTENT_START,
+                Line::from(Span::styled(
+                    clip_summary(&hint, available),
+                    Style::new().fg(theme.tool_muted),
+                )),
+            ));
+        }
+    }
     out.push(Line::default());
-    out
+    let mut copy_cells = vec![None; out.len()];
+    copy_cells[0] = Some(CopyCells::decoration());
+    copy_cells[out.len() - 1] = Some(CopyCells::decoration());
+    if let Some(row) = footer_row {
+        copy_cells[row] = Some(CopyCells::decoration());
+    }
+    RenderedTool {
+        lines: out,
+        copy_cells,
+    }
+}
+
+fn clip_summary(text: &str, width: usize) -> String {
+    let text = rail::collapsed_simple_line(text);
+    if column_width(&text) <= width {
+        text
+    } else if width == 0 {
+        String::new()
+    } else {
+        format!("{}…", rail::clip_cells(&text, width - 1))
+    }
+}
+
+/// Keep both the path/command prefix and its distinguishing suffix.
+fn clip_target(text: &str, width: usize) -> String {
+    let text = rail::collapsed_simple_line(text);
+    if column_width(&text) <= width || width < 5 {
+        return clip_summary(&text, width);
+    }
+    let prefix_width = (width - 1) / 3;
+    let suffix_width = width - 1 - prefix_width;
+    let mut suffix = String::new();
+    for grapheme in text.graphemes(true).rev() {
+        if column_width(grapheme) + column_width(&suffix) > suffix_width {
+            break;
+        }
+        suffix.insert_str(0, grapheme);
+    }
+    format!("{}…{suffix}", rail::clip_cells(&text, prefix_width))
+}
+
+fn target(
+    name: &str,
+    display: Option<&ToolDisplayWire>,
+    facts: Option<&crate::state::tool::ToolFacts>,
+) -> String {
+    if let Some(invocation) = facts.and_then(|f| f.invocation.as_deref()) {
+        match &invocation.subject {
+            crate::protocol::ToolSubjectWire::File { path } => return path.clone(),
+            crate::protocol::ToolSubjectWire::Command { script, .. } => return script.clone(),
+            crate::protocol::ToolSubjectWire::Other => {}
+        }
+        // apply_patch currently has an Other subject. Read only its explicit
+        // path field, never display the raw argument object.
+        if matches!(name, "apply_patch" | "patch") {
+            if let Ok(input) = serde_json::from_str::<serde_json::Value>(&invocation.input.preview)
+            {
+                if let Some(path) = input.get("path").and_then(|p| p.as_str()) {
+                    return path.to_owned();
+                }
+            }
+        }
+    }
+    if matches!(name, "apply_patch" | "patch") {
+        if let Some(input) = display.and_then(|d| d.expanded_input.as_deref()) {
+            let paths: Vec<_> = input
+                .lines()
+                .filter_map(|line| {
+                    [
+                        "*** Update File: ",
+                        "*** Add File: ",
+                        "*** Delete File: ",
+                        "+++ b/",
+                        "--- a/",
+                    ]
+                    .iter()
+                    .find_map(|prefix| line.strip_prefix(prefix))
+                })
+                .collect();
+            let mut unique = Vec::new();
+            for path in paths {
+                if !unique.contains(&path) {
+                    unique.push(path);
+                }
+            }
+            if !unique.is_empty() {
+                return unique.join(", ");
+            }
+        }
+    }
+    display
+        .map(|d| d.detail.as_str())
+        .filter(|d| !d.is_empty())
+        .unwrap_or(name)
+        .to_owned()
+}
+
+fn command_summary(
+    name: &str,
+    result: Option<&str>,
+    facts: Option<&crate::state::tool::ToolFacts>,
+) -> (Option<String>, bool) {
+    use crate::protocol::CommandStatusWire as S;
+    if let Some(command) = facts.and_then(|f| f.command.as_deref()) {
+        let (text, warning) = match command.status {
+            S::Exited => match (command.exit_code, command.signal) {
+                (Some(code), _) => (
+                    format!("exit {code}{}", if code != 0 { " (nonzero)" } else { "" }),
+                    code != 0,
+                ),
+                (_, Some(signal)) => (format!("signal {signal}"), true),
+                _ => ("exit unknown".to_owned(), true),
+            },
+            S::Running => ("process running".to_owned(), false),
+            S::Cancelling => ("process cancelling".to_owned(), true),
+            S::Cancelled => ("process cancelled".to_owned(), true),
+            S::TimedOut => ("timed out".to_owned(), true),
+            S::SpawnFailed => ("spawn failed".to_owned(), true),
+            S::Failed => ("process failed".to_owned(), true),
+        };
+        return (Some(text), warning);
+    }
+    // Older histories have only the Agent's formatted Bash output.
+    if name.eq_ignore_ascii_case("bash") {
+        if let Some(value) = result
+            .and_then(|r| r.lines().next())
+            .and_then(|l| l.strip_prefix("exit_code: "))
+        {
+            return match value.parse::<i32>() {
+                Ok(code) => (
+                    Some(format!(
+                        "exit {code}{}",
+                        if code != 0 { " (nonzero)" } else { "" }
+                    )),
+                    code != 0,
+                ),
+                Err(_) => (Some("exit unknown".to_owned()), true),
+            };
+        }
+    }
+    (None, false)
+}
+
+fn output_summary(
+    name: &str,
+    result: Option<&str>,
+    facts: Option<&crate::state::tool::ToolFacts>,
+) -> Option<String> {
+    if name.eq_ignore_ascii_case("bash") {
+        if let Some(result) = result {
+            if let Some((_, stderr)) = result.split_once("\nstderr:\n") {
+                if let Some(line) = stderr.lines().find(|l| !l.trim().is_empty()) {
+                    return Some(format!("stderr: {line}"));
+                }
+            }
+            if let Some((_, stdout)) = result.split_once("\nstdout:\n") {
+                if let Some(line) = stdout
+                    .split("\nstderr:")
+                    .next()
+                    .unwrap_or_default()
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                {
+                    return Some(format!("stdout: {line}"));
+                }
+            }
+        }
+        if facts
+            .and_then(|f| f.command.as_deref())
+            .is_some_and(|c| c.stderr_observed_end > 0)
+        {
+            return Some("stderr output available in detail".to_owned());
+        }
+    }
+    result_summary(result)
+}
+
+fn append_body(
+    theme: &Theme,
+    width: usize,
+    colors: rail::SurfaceColors,
+    display: Option<&ToolDisplayWire>,
+    result: Option<&str>,
+    out: &mut Vec<Line<'static>>,
+) {
+    for text in [display.and_then(|d| d.expanded_input.as_deref()), result]
+        .into_iter()
+        .flatten()
+        .filter(|text| !text.is_empty())
+    {
+        for line in text.split('\n') {
+            push_wrapped_row(theme, width, colors, line, "  ", out);
+        }
+    }
 }
 
 /// Returns the Rail default for a tool when no manual fold override exists.
@@ -150,139 +476,39 @@ pub fn default_expanded(name: &str, hidden_line_count: Option<usize>) -> bool {
     hidden_line_count.is_none_or(|hidden| hidden < 20)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn expanded_rows(
-    theme: &Theme,
-    width: usize,
-    colors: rail::SurfaceColors,
-    name: &str,
-    detail: &str,
-    display: Option<&ToolDisplayWire>,
-    summary: Option<&str>,
-    result: Option<&str>,
-    out: &mut Vec<Line<'static>>,
-) {
-    out.push(rail::surface_row(
-        width,
-        colors,
-        rail::SURFACE_CONTENT_START,
-        Line::from(Span::styled(
-            rail::collapsed_simple_line(name),
-            Style::new()
-                .fg(theme.tool_title)
-                .add_modifier(Modifier::BOLD),
-        )),
-    ));
-    let detail = rail::collapsed_simple_line(detail);
-    out.push(rail::surface_row(
-        width,
-        colors,
-        rail::SURFACE_CONTENT_START,
-        Line::from(Span::styled(detail, Style::new().fg(theme.tool_output))),
-    ));
-    if let Some(input) = display.and_then(|display| display.expanded_input.as_deref()) {
-        for line in input.split('\n') {
-            push_wrapped_row(theme, width, colors, line, "  ", out);
-        }
-    }
-    if let Some(result) = result.filter(|result| !result.is_empty()) {
-        for line in result.split('\n') {
-            push_wrapped_row(theme, width, colors, line, "  ", out);
-        }
-    } else if let Some(summary) = summary {
-        push_wrapped_row(theme, width, colors, summary, "  ", out);
-    }
-}
-
-fn simple_rows(
-    theme: &Theme,
-    width: usize,
-    colors: rail::SurfaceColors,
-    title: &str,
-    detail: &str,
-    hidden: usize,
-    summary: Option<&str>,
-) -> Vec<Line<'static>> {
-    let title = rail::collapsed_simple_line(title);
-    let detail = match summary {
-        Some(summary) => format!(
-            "{} · {}",
-            rail::collapsed_simple_line(summary),
-            rail::collapsed_simple_line(detail),
-        ),
-        None => rail::collapsed_simple_line(detail),
-    };
-    let mut hint = vec![Span::styled(
-        format!("... ({hidden} more lines, "),
-        Style::new().fg(theme.tool_muted),
-    )];
-    hint.push(Span::styled("ctrl+o", Style::new().fg(theme.dim)));
-    hint.push(Span::styled(
-        " to expand)",
-        Style::new().fg(theme.tool_muted),
-    ));
-    [
-        Line::from(Span::styled(
-            title,
-            Style::new()
-                .fg(theme.tool_title)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(detail, Style::new().fg(theme.tool_output))),
-        Line::from(hint),
-    ]
-    .into_iter()
-    .map(|line| rail::surface_row(width, colors, rail::SURFACE_CONTENT_START, line))
-    .collect()
-}
-
-fn durable_summary(block: &ToolBlock) -> Option<String> {
+fn durable_summary(block: &ToolBlock) -> String {
     if let Some(status) = block.live_status {
-        return status_summary(status, block.result.as_deref());
+        return status_summary(status);
     }
-    outcome_summary(block.outcome, block.result.as_deref())
-}
-
-fn live_summary(tool: &LiveTool) -> Option<String> {
-    status_summary(tool.status, tool.result.as_deref())
-}
-
-fn outcome_summary(outcome: Option<ToolOutcomeWire>, result: Option<&str>) -> Option<String> {
-    match outcome {
-        Some(ToolOutcomeWire::Failed) => Some(failure_summary("failed", result)),
-        Some(ToolOutcomeWire::Denied) => Some(failure_summary("denied", result)),
-        Some(ToolOutcomeWire::Cancelled) => Some(cancelled_summary()),
-        Some(ToolOutcomeWire::Unknown) => Some("outcome unknown: unconfirmed".to_owned()),
-        Some(ToolOutcomeWire::Success | ToolOutcomeWire::InputProvided) | None => None,
+    match block.outcome {
+        Some(ToolOutcomeWire::Failed) => "failed",
+        Some(ToolOutcomeWire::Denied) => "denied",
+        Some(ToolOutcomeWire::Cancelled) => "cancelled",
+        Some(ToolOutcomeWire::Unknown) => "outcome unknown: unconfirmed",
+        Some(ToolOutcomeWire::Success) => "completed",
+        Some(ToolOutcomeWire::InputProvided) => "input provided",
+        None => "pending",
     }
+    .to_owned()
 }
 
-fn status_summary(status: ToolStatus, result: Option<&str>) -> Option<String> {
+fn live_summary(tool: &LiveTool) -> String {
+    status_summary(tool.status)
+}
+fn status_summary(status: ToolStatus) -> String {
     match status {
-        ToolStatus::Failed => Some(failure_summary("failed", result)),
-        ToolStatus::Denied => Some(failure_summary("denied", result)),
-        ToolStatus::Cancelled => Some(cancelled_summary()),
-        ToolStatus::Pending | ToolStatus::Running | ToolStatus::Succeeded => None,
+        ToolStatus::Pending => "pending",
+        ToolStatus::Running => "running",
+        ToolStatus::Succeeded => "completed",
+        ToolStatus::Failed => "failed",
+        ToolStatus::Denied => "denied",
+        ToolStatus::Cancelled => "cancelled",
     }
+    .to_owned()
 }
-
-fn failure_summary(label: &str, result: Option<&str>) -> String {
-    format!(
-        "{label}: {}",
-        result_summary(result).unwrap_or_else(|| "unknown".to_owned())
-    )
-}
-
-fn cancelled_summary() -> String {
-    "cancelled".to_owned()
-}
-
 fn result_summary(result: Option<&str>) -> Option<String> {
     let line = result?.lines().find(|line| !line.trim().is_empty())?;
-    let sample: String = line.chars().take(160).collect();
-    let collapsed = rail::collapsed_simple_line(&sample);
-    let clipped = rail::clip_cells(&collapsed, 120);
-    (!clipped.is_empty()).then_some(clipped)
+    Some(clip_summary(line, 160))
 }
 
 fn durable_state(block: &ToolBlock) -> ToolSurfaceState {
@@ -331,6 +557,7 @@ pub fn wrapped_result_row_count(text: &str, content_width: usize) -> usize {
     let content_width = content_width.max(1);
     let mut rows = 0usize;
     for line in text.split('\n') {
+        let line = crate::safe_text::safe_display(line);
         if line.is_empty() {
             rows += 1;
             continue;
@@ -362,6 +589,15 @@ fn push_wrapped_row(
         .saturating_sub(rail::SURFACE_CONTENT_START)
         .saturating_sub(UnicodeWidthStr::width(indent));
     let content_width = content_width.max(1);
+    if line.is_empty() {
+        out.push(rail::surface_row(
+            width,
+            colors,
+            rail::SURFACE_CONTENT_START,
+            Line::default(),
+        ));
+        return;
+    }
     let mut current = String::new();
     let mut current_w = 0usize;
     let flush = |out: &mut Vec<Line<'static>>, current: &mut String| {
@@ -488,6 +724,244 @@ mod tests {
         assert!(
             rendered_long.ends_with(last),
             "a single long wrapped line must reproduce exactly"
+        );
+    }
+    fn card(name: &str, result: &str) -> ToolBlock {
+        ToolBlock {
+            index: None,
+            loop_id: "l".into(),
+            request_index: 0,
+            tool_call_id: "c".into(),
+            name: name.into(),
+            result: Some(result.to_owned().into()),
+            outcome: Some(ToolOutcomeWire::Success),
+            live_status: None,
+            progress: None,
+            expanded: false,
+        }
+    }
+    fn text(lines: &[ratatui::text::Line<'_>]) -> String {
+        lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+    fn display(detail: &str, input: Option<&str>) -> crate::protocol::ToolDisplayWire {
+        crate::protocol::ToolDisplayWire {
+            detail: detail.into(),
+            expanded_input: input.map(str::to_owned),
+            input_line_count: Some(999),
+            hidden_line_count: Some(999),
+            truncated: false,
+        }
+    }
+
+    #[test]
+    fn collapsed_success_and_failure_keep_target_and_result_in_both_themes() {
+        for theme in [Theme::dark(), Theme::light()] {
+            for width in [59, 79, 119] {
+                let display = display("release-notes.md", Some("one\ntwo"));
+                let mut block = card("write", "Wrote 37 lines successfully");
+                let rendered = text(&super::durable_with_display(
+                    &theme,
+                    &block,
+                    width,
+                    false,
+                    Some(&display),
+                ));
+                assert!(rendered.contains("write · completed"));
+                assert!(rendered.contains("release-notes.md"));
+                assert!(rendered.contains("Wrote 37 lines successfully"));
+                assert!(rendered.contains("3 hidden rows"));
+                block.outcome = Some(ToolOutcomeWire::Failed);
+                block.result = Some("The operation failed: ".repeat(50).into());
+                let rendered = text(&super::durable_with_display(
+                    &theme,
+                    &block,
+                    width,
+                    false,
+                    Some(&display),
+                ));
+                assert!(rendered.contains("write · failed"));
+                assert!(rendered.contains("release-notes.md"));
+                assert!(rendered.contains('…'));
+            }
+        }
+    }
+
+    #[test]
+    fn collapsed_lifecycle_is_textual_and_patch_target_is_recovered() {
+        let mut block = card(
+            "apply_patch",
+            "patched 67 bytes to 68 bytes at generated-live.txt",
+        );
+        let display = display(
+            "tool apply_patch",
+            Some("--- a/generated-live.txt\n+++ b/generated-live.txt\n@@ -1 +1 @@\n-old\n+new"),
+        );
+        for (status, label) in [
+            (crate::state::tool::ToolStatus::Pending, "pending"),
+            (crate::state::tool::ToolStatus::Running, "running"),
+            (crate::state::tool::ToolStatus::Succeeded, "completed"),
+        ] {
+            block.live_status = Some(status);
+            let rendered = text(&super::durable_with_display(
+                &Theme::dark(),
+                &block,
+                59,
+                false,
+                Some(&display),
+            ));
+            assert!(rendered.contains(&format!("apply_patch · {label}")));
+            assert!(rendered.contains("generated-live.txt"));
+            assert!(rendered.contains("patched 67 bytes to 68 bytes"));
+        }
+    }
+
+    #[test]
+    fn compact_bash_nonzero_warns_without_changing_invocation_outcome() {
+        for theme in [Theme::dark(), Theme::light()] {
+            let block = card("bash", "exit_code: 7\nstdout:\n\nstderr:\nSIMULATED-ERROR");
+            let rows = super::durable_with_display(
+                &theme,
+                &block,
+                59,
+                false,
+                Some(&display("exit 7", None)),
+            );
+            let rendered = text(&rows);
+            assert!(rendered.contains("completed · exit 7 (nonzero)"));
+            assert!(rendered.contains("stderr: SIMULATED-ERROR"));
+            assert_eq!(rows[1].spans[0].style.fg, Some(theme.warning));
+            assert_eq!(block.outcome, Some(ToolOutcomeWire::Success));
+        }
+    }
+
+    #[test]
+    fn hidden_count_matches_expanded_body_including_blank_sanitized_wrapped_rows() {
+        for width in [20, 59, 79] {
+            let block = card("read", &format!("{}\n\n\tend\n", "中文内容".repeat(30)));
+            let display = display("notes.txt", Some("a\n\n"));
+            let compact = text(&super::durable_with_display(
+                &Theme::dark(),
+                &block,
+                width,
+                false,
+                Some(&display),
+            ));
+            let expanded =
+                super::durable_with_display(&Theme::dark(), &block, width, true, Some(&display));
+            // Two common headers, expanded fold control, two exterior spacers.
+            assert!(
+                compact.contains(&format!("{} hidden rows", expanded.len() - 5)),
+                "{compact}"
+            );
+        }
+    }
+
+    #[test]
+    fn narrow_target_clips_explicitly_preserving_filename_and_graphemes() {
+        let target = format!("/a/very/long/{}/release-notes.md", "目录/".repeat(20));
+        let clipped = super::clip_target(&target, 45);
+        assert!(clipped.contains('…'));
+        assert!(clipped.ends_with("release-notes.md"));
+        assert!(crate::markdown::column_width(&clipped) <= 45);
+    }
+
+    #[test]
+    fn structured_command_status_preserves_unknown_signal_timeout_and_cancellation() {
+        use crate::protocol::{CommandResultWire, CommandStatusWire as S};
+        let mut facts = crate::state::tool::ToolFacts::new("bash");
+        for (status, exit_code, signal, label) in [
+            (S::Exited, None, None, "exit unknown"),
+            (S::Exited, None, Some(9), "signal 9"),
+            (S::TimedOut, None, None, "timed out"),
+            (S::Cancelled, None, None, "process cancelled"),
+            (S::Exited, Some(0), None, "exit 0"),
+        ] {
+            facts.command = Some(std::sync::Arc::new(CommandResultWire {
+                status,
+                exit_code,
+                signal,
+                termination_confirmed: true,
+                stdout_base_offset: 0,
+                stdout_observed_end: 0,
+                stderr_base_offset: 0,
+                stderr_observed_end: 10,
+                output_complete: true,
+                output_truncated: false,
+            }));
+            let result = super::command_summary("bash", Some("exit_code: 0"), Some(&facts));
+            assert_eq!(result.0.as_deref(), Some(label));
+            assert_eq!(result.1, exit_code != Some(0));
+            assert!(
+                super::output_summary("bash", None, Some(&facts))
+                    .unwrap()
+                    .contains("stderr")
+            );
+        }
+    }
+    #[test]
+    fn facts_patch_path_and_live_nonzero_share_durable_summary() {
+        use std::sync::Arc;
+        let mut facts = crate::state::tool::ToolFacts::new("apply_patch");
+        facts.invocation = Some(Arc::new(crate::protocol::ToolInvocationWire {
+            tool_ref: crate::protocol::ToolRefWire {
+                session_id: "s".into(),
+                loop_id: "l".into(),
+                request_index: 0,
+                tool_call_id: "c".into(),
+            },
+            name: "apply_patch".into(),
+            subject: crate::protocol::ToolSubjectWire::Other,
+            subject_truncated: false,
+            input: crate::protocol::ToolInputSummaryWire {
+                total_bytes: 30,
+                preview: r#"{"path":"patch-target.txt"}"#.into(),
+                truncated: false,
+                encoding: "utf8_json".into(),
+            },
+        }));
+        let rows = super::durable_with_facts(
+            &Theme::dark(),
+            &card("apply_patch", "tool failed"),
+            59,
+            false,
+            Some(&facts),
+        );
+        assert!(text(&rows).contains("patch-target.txt"));
+        let live = crate::state::tool::LiveTool {
+            tool_call_id: "c".into(),
+            name: "bash".into(),
+            status: crate::state::tool::ToolStatus::Succeeded,
+            progress: None,
+            display: Some(Arc::new(display("printf error >&2; exit 7", None))),
+            result: Some("exit_code: 7\nstdout:\n\nstderr:\nerror".into()),
+            result_truncated: false,
+            expanded: false,
+        };
+        let rendered = text(&super::live_with_facts(&Theme::dark(), &live, 59, None));
+        assert!(rendered.contains("completed · exit 7 (nonzero)"));
+        assert!(rendered.contains("stderr: error"));
+    }
+
+    #[test]
+    fn empty_collapsed_tool_has_no_empty_expand_claim() {
+        let rows = super::durable(&Theme::dark(), &card("read", ""), 59, false);
+        assert!(!text(&rows).contains("hidden rows"));
+        assert!(!text(&rows).contains("expand"));
+        assert_eq!(rows.len(), 4);
+        let rendered =
+            super::durable_with_metadata(&Theme::dark(), &card("read", ""), 59, false, None);
+        assert!(
+            rendered.copy_cells[2].is_none(),
+            "empty card target must remain copyable"
         );
     }
 }
