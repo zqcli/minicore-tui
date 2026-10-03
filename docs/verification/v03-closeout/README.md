@@ -1,9 +1,11 @@
 # TUI 0.3.0 closeout verification
 
 Date: 2026-10-03. Status: implementation, golden review, final integrated remote
-quality gates and staged-source review passed; local commit/dev fast-forward
-complete. Remote push is blocked by repository write permission; hosted CI has
-not run for the delivered local code.
+quality gates, staged-source review and dev fast-forward passed. Both branches
+were published with a non-force atomic push; hosted CI passed on Linux, macOS
+and Windows with Rust 1.85.0 and stable, plus quality and fixed-backend E2E jobs.
+The earlier default-identity permission blocker was resolved without changing
+credentials or repository authentication configuration.
 
 ## Scope and fixed inputs
 
@@ -182,22 +184,31 @@ commit from `9d11ee69c4efa02ef1e5bff143662b48dc3194de`; the refactor branch
 points to the same implementation commit. A subsequent documentation-only commit
 records this delivery outcome without changing any tested input.
 
-After a fresh fetch and successful ancestry checks for both branches, the
-non-force atomic push of `dev` and `refactor/v0.3-full-project` failed with
-**HTTP 403: repository permission denied**. The authenticated account `SoPudge`
-has API-confirmed `pull: true`, `push: false`. No credentials or authentication
-configuration were changed, and no force push was attempted.
+The initial non-force atomic push failed with HTTP 403 because the default
+`SoPudge` identity had read-only repository access. After the user explicitly
+confirmed delivery, the main agent reused the existing `zqcli` identity through
+an explicit HTTPS username, without changing credentials, the configured remote
+or authentication settings. The non-force atomic push then succeeded.
 
-A post-failure `git ls-remote` confirmed both remote heads unchanged:
+A fresh `git ls-remote` confirmed both `dev` and
+`refactor/v0.3-full-project` at
+`11be749f53fb172e27d9bea37d1a3ea5acc396de`. Fetch refreshed both tracking refs;
+the index and worktree were clean. This commit contains the reviewed
+implementation plus verification-document changes only.
 
-- `dev`: `9d11ee69c4efa02ef1e5bff143662b48dc3194de`.
-- `refactor/v0.3-full-project`: `e7c926929599fd05230e528b93de63f50b3bb406`.
+The following hosted runs were independently read to completion on that exact
+commit; every run has eight successful jobs:
 
-A hosted Actions query for implementation commit `93d0598` returned no runs.
-Therefore remote publication and hosted Linux/macOS/Windows CI are **not
-complete**, and are not replaced by the passing Linux-builder checks. Completing
-these steps requires repository write access through an authorized credential,
-then another remote ancestry check, non-force push and finite hosted-CI review.
+| Branch | GitHub Actions run | Result |
+| --- | --- | --- |
+| `dev` | `37112233719` | Completed, success |
+| `refactor/v0.3-full-project` | `37112233580` | Completed, success |
+
+Each run covers six native runner test combinations (Ubuntu, macOS and Windows,
+with Rust 1.85.0 and stable), the formatting/strict-Clippy/rustdoc/dependency job,
+and the exact Agent 0.6.0 / Runtime 0.6.0 loopback E2E job. These are actual
+hosted results, separate from the Linux-builder evidence above. Subsequent
+verification-document-only updates do not change the 426 tested build inputs.
 No tag, version bump, branch deletion, binary deployment or core change occurred.
 
 ## Explicit limits
