@@ -41,8 +41,8 @@ use crate::state::transcript::{
     TranscriptBlock, UserBlock,
 };
 use crate::state::turn::{
-    AppliedSteer, LiveLoop, LivePart, LocalSubmissionId, OperationRef, PendingSteer,
-    PendingSteerState, SteerQueueState, Submission, UnsavedLoop,
+    AppliedSteer, LiveLoop, LivePart, LocalSubmissionId, PendingSteer, PendingSteerState,
+    SteerQueueState, Submission, UnsavedLoop,
 };
 use crate::state::view::{
     ConversationLayout, ConversationSelection, FoldOverride, PreparedConversation, PreparedDurable,
@@ -60,6 +60,8 @@ mod changes_tests;
 mod command_admission_tests;
 #[cfg(test)]
 mod compact_slash_tests;
+#[cfg(test)]
+mod compaction_lifecycle_tests;
 pub mod context;
 #[cfg(test)]
 mod context_tests;
@@ -363,6 +365,12 @@ pub enum ContextQueryOwner {
     Panel(u64),
     Submission(LocalSubmissionId),
     ManualCompact(String),
+    /// Discover independent maintenance even when its notification was lost.
+    PostTurn(String),
+    /// Observe emergency recovery without changing turn ownership.
+    Turn(String),
+    /// A Session operation outlives the panel and the completed turn.
+    Operation(String),
     Explicit,
 }
 
@@ -370,6 +378,7 @@ pub enum ContextQueryOwner {
 struct ContextPoll {
     owner: ContextQueryOwner,
     due: Instant,
+    cancel_requested: bool,
 }
 
 /// One `session.read` chain step (spec §6.3). `window_start` drops a reused
@@ -7024,11 +7033,11 @@ impl App {
             }
             AgentEventWire::SessionState { data } => {
                 self.mark_gap(&data.meta);
-                self.apply_session_state(
+                commands.extend(self.apply_session_state(
                     &data.state,
                     data.meta.loop_id.as_ref(),
                     SessionStateSource::Notification,
-                );
+                ));
             }
             AgentEventWire::TurnStarted { data } => {
                 self.mark_gap(&data.meta);
@@ -7037,6 +7046,22 @@ impl App {
                 // usage rows (they now belong to persisted history/report).
                 if let Some(view) = self.sessions.known.get_mut(&data.turn.session_id) {
                     view.discard_live_request_usage();
+                }
+                let current = self
+                    .sessions
+                    .known
+                    .get(&data.turn.session_id)
+                    .and_then(|view| view.live.as_ref())
+                    .and_then(|live| live.reference.as_ref())
+                    == Some(&data.turn);
+                if current {
+                    if let Some(command) = self.arm_context_poll(
+                        &data.turn.session_id,
+                        ContextQueryOwner::Turn(data.turn.loop_id.clone()),
+                        false,
+                    ) {
+                        commands.push(command);
+                    }
                 }
                 if let Some(command) = self.request_session_presentation(&data.turn.session_id) {
                     commands.push(command);
@@ -7127,6 +7152,18 @@ impl App {
             }
             AgentEventWire::TurnFinished { data } => {
                 self.mark_gap(&data.meta);
+                if self
+                    .sessions
+                    .known
+                    .get(&data.turn.session_id)
+                    .is_some_and(|view| Self::wait_targets_current_turn(view, &data.turn))
+                {
+                    self.arm_context_poll(
+                        &data.turn.session_id,
+                        ContextQueryOwner::PostTurn(data.turn.loop_id.clone()),
+                        false,
+                    );
+                }
             }
             AgentEventWire::Unknown => {}
         }

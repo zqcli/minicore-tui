@@ -6870,7 +6870,7 @@ fn late_turn_started_does_not_consume_sealed_loop_steer() {
 }
 
 #[test]
-fn preparation_cancel_waits_for_the_observed_operation_id() {
+fn pending_submission_cancel_does_not_claim_previous_post_turn_operation() {
     let mut driver = Driver::new();
     bootstrap(&mut driver);
     open_idle(&mut driver, "ses_1");
@@ -6890,8 +6890,9 @@ fn preparation_cancel_waits_for_the_observed_operation_id() {
         request.method != "session.compact.cancel" && request.method != "turn.cancel"
     }));
 
-    // An explicit context read uses the existing submission-owned poll and
-    // therefore preserves its cancellation owner.
+    // A current Session operation belongs to the previous completed turn, not
+    // this pending send. Observing it must preserve its independent owner and
+    // must not replay the pending send's cancellation against it.
     submit_command(&mut driver, "/context");
     let context = driver.request("session.context");
     driver.respond(
@@ -6899,7 +6900,7 @@ fn preparation_cancel_waits_for_the_observed_operation_id() {
         json!({
             "session_id": "ses_1",
             "current_operation": {
-                "operation_id": "prep_exact",
+                "operation_id": "auto_previous",
                 "phase": "preparing",
                 "covered_item_count": 0,
                 "retained_item_count": 0
@@ -6911,16 +6912,22 @@ fn preparation_cancel_waits_for_the_observed_operation_id() {
             "last_prepare_failure": null
         }),
     );
-    let cancel = driver.request("session.compact.cancel");
-    assert_eq!(cancel.params["session_id"], "ses_1");
-    assert_eq!(cancel.params["operation_id"], "prep_exact");
-    assert!(matches!(
-        driver.app.pending_request_kind(cancel.id),
-        Some(RequestKind::CompactCancel { operation_id, .. }) if operation_id == "prep_exact"
-    ));
+    assert!(driver.queue.iter().all(|request| {
+        request.method != "session.compact.cancel" && request.method != "turn.cancel"
+    }));
+    assert_eq!(
+        driver.app.sessions.known["ses_1"]
+            .context
+            .as_ref()
+            .unwrap()
+            .current_operation
+            .as_ref()
+            .unwrap()
+            .operation_id,
+        "auto_previous"
+    );
 
-    // The deferred send is still owned by the original submission and is not
-    // resent while cancellation is being resolved.
+    // The pending send is still owned by its submission and is never resent.
     assert!(driver.app.request_is_pending(send.id));
     assert!(
         driver
@@ -6928,6 +6935,19 @@ fn preparation_cancel_waits_for_the_observed_operation_id() {
             .iter()
             .all(|request| request.method != "turn.send")
     );
+    driver.respond_error(send, -32000, "SessionBusy");
+    assert!(driver.app.sessions.known["ses_1"].live.is_none());
+    assert!(driver.app.sessions.known["ses_1"].is_preparing());
+    driver.step(AppEvent::CancelTurn {
+        session_id: "ses_1".to_owned(),
+    });
+    let cancel = driver.request("session.compact.cancel");
+    assert_eq!(cancel.params["session_id"], "ses_1");
+    assert_eq!(cancel.params["operation_id"], "auto_previous");
+    assert!(matches!(
+        driver.app.pending_request_kind(cancel.id),
+        Some(RequestKind::CompactCancel { operation_id, .. }) if operation_id == "auto_previous"
+    ));
 }
 
 /// REF-33 baseline fact: completed tool events update the existing card in

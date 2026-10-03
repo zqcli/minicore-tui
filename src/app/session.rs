@@ -2130,6 +2130,14 @@ impl App {
             .get(session_id)
             .is_none_or(|v| v.context_query_generation != generation)
             || matches!(&owner,ContextQueryOwner::Panel(g) if self.context_panel().is_none_or(|c|c.session!=*session_id || c.generation!=*g))
+                && !self.context_polls.get(session_id).is_some_and(|poll| {
+                    matches!(
+                        poll.owner,
+                        ContextQueryOwner::PostTurn(_)
+                            | ContextQueryOwner::Turn(_)
+                            | ContextQueryOwner::Operation(_)
+                    )
+                })
         {
             return Vec::new();
         }
@@ -2143,6 +2151,7 @@ impl App {
             );
             return Vec::new();
         }
+        let requested_owner = owner.clone();
         // An explicit panel read may precede a B-owned operation. Never
         // overwrite that newer execution poll owner with the old read purpose.
         let owner = self
@@ -2151,7 +2160,11 @@ impl App {
             .filter(|p| {
                 matches!(
                     p.owner,
-                    ContextQueryOwner::ManualCompact(_) | ContextQueryOwner::Submission(_)
+                    ContextQueryOwner::ManualCompact(_)
+                        | ContextQueryOwner::Submission(_)
+                        | ContextQueryOwner::PostTurn(_)
+                        | ContextQueryOwner::Turn(_)
+                        | ContextQueryOwner::Operation(_)
                 )
             })
             .map_or(owner, |p| p.owner.clone());
@@ -2175,7 +2188,45 @@ impl App {
             }
         };
 
-        let (current_operation, cancel_submission, cancel_manual, keep_polling) = {
+        if requested_owner != owner {
+            if matches!(
+                &owner,
+                ContextQueryOwner::Turn(_) | ContextQueryOwner::PostTurn(_)
+            ) {
+                self.reschedule_context_poll(session_id, &owner);
+                return Vec::new();
+            }
+            if let ContextQueryOwner::Operation(id) = &owner {
+                let confirms_owner = context
+                    .current_operation
+                    .as_ref()
+                    .is_some_and(|operation| operation.operation_id == *id)
+                    || context
+                        .last_result
+                        .as_ref()
+                        .is_some_and(|result| result.operation_id == *id);
+                if !confirms_owner {
+                    self.reschedule_context_poll(session_id, &owner);
+                    return Vec::new();
+                }
+            }
+        }
+        let previous_result = self
+            .sessions
+            .known
+            .get(session_id)
+            .and_then(|view| view.context.as_ref())
+            .and_then(|context| context.last_result.clone());
+        let latest_result = context.last_result.clone();
+        let owner = if let Some(operation) = context.current_operation.as_ref() {
+            match &owner {
+                ContextQueryOwner::ManualCompact(id) if *id == operation.operation_id => owner,
+                _ => ContextQueryOwner::Operation(operation.operation_id.clone()),
+            }
+        } else {
+            owner
+        };
+        let (current_operation, cancel_manual, keep_polling) = {
             let Some(view) = self.sessions.known.get_mut(session_id) else {
                 return Vec::new();
             };
@@ -2195,13 +2246,6 @@ impl App {
             if let Some(state) = view.state.as_mut() {
                 state.compaction = current_operation.clone();
             }
-            let cancel_submission = match &owner {
-                ContextQueryOwner::Submission(local_id) => self
-                    .submissions
-                    .get(local_id)
-                    .is_some_and(|submission| submission.cancel_requested),
-                _ => false,
-            };
             let cancel_manual = match &owner {
                 ContextQueryOwner::ManualCompact(operation_id) => {
                     view.manual_compact.as_ref().is_some_and(|compact| {
@@ -2214,32 +2258,54 @@ impl App {
             };
             let keep_polling = current_operation.is_some()
                 || automatic_active
+                || matches!(&owner, ContextQueryOwner::Turn(loop_id) if view.live.as_ref()
+                    .is_some_and(|live| !live.waiting && live.reference.as_ref()
+                        .is_some_and(|turn| turn.loop_id == *loop_id)))
                 || view.manual_compact.as_ref().is_some_and(|m|m.result.is_none())
                 || matches!(owner, ContextQueryOwner::Submission(_))
                     && self
                         .submissions
                         .keys()
                         .any(|local_id| matches!(&owner, ContextQueryOwner::Submission(owner_id) if owner_id == local_id));
-            (
-                current_operation,
-                cancel_submission,
-                cancel_manual,
-                keep_polling,
-            )
+            (current_operation, cancel_manual, keep_polling)
         };
 
         self.maybe_clear_unknown_compact_fence(session_id);
+        if let Some(result) = latest_result.filter(|result| {
+            previous_result.as_ref() != Some(result) && result.operation_id.starts_with("auto-")
+        }) {
+            let (level, detail) = match result.status {
+                crate::protocol::CompactStatusWire::Compacted
+                | crate::protocol::CompactStatusWire::Noop => (NoticeLevel::Info, "completed"),
+                crate::protocol::CompactStatusWire::Failed => (NoticeLevel::Warning, "failed"),
+                crate::protocol::CompactStatusWire::UnknownWrite => {
+                    (NoticeLevel::Error, "has unknown write outcome")
+                }
+            };
+            self.notice(
+                level,
+                format!(
+                    "post-turn context compaction {} {detail}",
+                    result.operation_id
+                ),
+            );
+        }
 
         if keep_polling {
             let due = self
                 .instant_now()
                 .checked_add(self.context_interval(session_id))
                 .expect("context poll deadline is representable");
+            let cancel_requested = self
+                .context_polls
+                .get(session_id)
+                .is_some_and(|poll| poll.owner == owner && poll.cancel_requested);
             self.context_polls.insert(
                 session_id.clone(),
                 ContextPoll {
                     owner: owner.clone(),
                     due,
+                    cancel_requested,
                 },
             );
         } else {
@@ -2247,16 +2313,7 @@ impl App {
         }
 
         if let Some(operation) = current_operation {
-            if let Some(submission) = match &owner {
-                ContextQueryOwner::Submission(local_id) => self.submissions.get_mut(local_id),
-                _ => None,
-            } {
-                submission.preparation = Some(OperationRef {
-                    session_id: session_id.clone(),
-                    operation_id: operation.operation_id.clone(),
-                });
-            }
-            if cancel_submission || cancel_manual {
+            if cancel_manual {
                 return self
                     .request_compact_cancel(session_id, &operation.operation_id)
                     .into_iter()
@@ -2279,16 +2336,38 @@ impl App {
         {
             return Vec::new();
         }
+        // Notifications only arm a read, never install a possibly stale
+        // operation. The Session query owns maintenance authority independently
+        // of retired-turn filtering below.
+        let operation_command = if state.compaction.is_some()
+            && self
+                .sessions
+                .known
+                .get(&state.session_id)
+                .is_some_and(|view| view.info.loaded && !view.closing)
+        {
+            let owner = self.context_polls.get(&state.session_id).map_or_else(
+                || {
+                    ContextQueryOwner::PostTurn(
+                        state.compaction.as_ref().unwrap().operation_id.clone(),
+                    )
+                },
+                |poll| poll.owner.clone(),
+            );
+            self.arm_context_poll(&state.session_id, owner, true)
+        } else {
+            None
+        };
         let show_unsupported = {
             let Some(view) = self.sessions.known.get_mut(&state.session_id) else {
-                return Vec::new();
+                return operation_command.into_iter().collect();
             };
             if event_loop_id.is_some_and(|event_loop_id| {
                 view.retired_loop
                     .as_ref()
                     .is_some_and(|retired| retired.loop_id == event_loop_id.as_str())
             }) {
-                return Vec::new();
+                return operation_command.into_iter().collect();
             }
             if event_loop_id.is_some_and(|event_loop_id| {
                 view.live
@@ -2296,7 +2375,7 @@ impl App {
                     .is_none_or(|live| live.reference.is_none())
                     && Self::is_prior_loop(view, event_loop_id)
             }) {
-                return Vec::new();
+                return operation_command.into_iter().collect();
             }
             if event_loop_id.is_some_and(|event_loop_id| {
                 view.live
@@ -2304,7 +2383,7 @@ impl App {
                     .and_then(|live| live.reference.as_ref())
                     .is_some_and(|reference| reference.loop_id.as_str() != event_loop_id.as_str())
             }) {
-                return Vec::new();
+                return operation_command.into_iter().collect();
             }
             if from_event
                 && event_loop_id.is_none()
@@ -2314,7 +2393,7 @@ impl App {
                     .as_ref()
                     .is_some_and(|live| live.reference.is_some())
             {
-                return Vec::new();
+                return operation_command.into_iter().collect();
             }
             if let Some(reference) = view.live.as_ref().and_then(|live| live.reference.as_ref()) {
                 if state.active_loop.as_ref().is_some_and(|loop_state| {
@@ -2323,7 +2402,7 @@ impl App {
                     && state.status != SessionStatusWire::Blocked
                     && state.active_loop.is_none())
                 {
-                    return Vec::new();
+                    return operation_command.into_iter().collect();
                 }
             }
             if view.live.is_none()
@@ -2334,7 +2413,7 @@ impl App {
                     })
                 })
             {
-                return Vec::new();
+                return operation_command.into_iter().collect();
             }
             let was_waiting = view
                 .state
@@ -2393,7 +2472,7 @@ impl App {
         if show_unsupported {
             self.sticky_notice(NoticeLevel::Warning, UNSUPPORTED_INTERACTION_NOTICE);
         }
-        Vec::new()
+        operation_command.into_iter().collect()
     }
 
     pub(super) fn on_update_session_response(

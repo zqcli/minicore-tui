@@ -45,21 +45,15 @@ fn context_idle_and_closed_panel_stop_polling_and_late_only_releases_slot() {
     assert!(!a.context_polls.is_empty());
     a.close_main_detail();
     assert!(
-        a.context_polls.is_empty(),
-        "panel-only observation stops even when an operation was observed"
+        !a.context_polls.is_empty(),
+        "an observed operation owns its poll independently of the panel"
     );
-    assert!(a.active_view().unwrap().context.is_none());
-    assert!(
-        a.active_view().unwrap().is_preparing(),
-        "closing the panel does not finish the operation"
-    );
-    let state = a.request_session_state(&"ses_1".into());
-    let state = take_requests(vec![state]).remove(0);
-    respond(
-        &mut a,
-        &state,
-        json!({"session_id":"ses_1","status":"idle","active_loop":null,"block_reason":null}),
-    );
+    assert!(a.active_view().unwrap().context.is_some());
+    assert!(a.active_view().unwrap().is_preparing());
+    time.store(5500, Ordering::Relaxed);
+    let context = take_requests(a.update(AppEvent::Tick)).remove(0);
+    respond(&mut a, &context, fixture("session-context-idle"));
+    assert!(a.context_polls.is_empty());
     assert!(!a.active_view().unwrap().is_preparing());
 }
 #[test]

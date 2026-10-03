@@ -1268,14 +1268,13 @@ pub struct SessionStateWire {
     pub status: SessionStatusWire,
     pub active_loop: Option<LoopStateWire>,
     pub block_reason: Option<SessionBlockReasonWire>,
-    /// Present while automatic or manual compaction is running. Stage B1 only
-    /// represents it (so a preparing/compaction state is never swallowed or
-    /// misread as idle); B2 drives the visible controls.
+    /// Agent-owned manual/post-turn compaction. It keeps an otherwise idle
+    /// Session busy; active-turn emergency recovery uses `SessionContext.recovery`.
     #[serde(default)]
     pub compaction: Option<CompactionProgressWire>,
 }
 
-/// The Runtime `CompactionProgress` a running compaction reports (spec §7.3).
+/// The Agent's Session operation progress (spec §7.3), not a Runtime stage.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct CompactionProgressWire {
     pub operation_id: String,
@@ -1514,7 +1513,7 @@ pub struct TurnResultViewWire {
     #[serde(default)]
     pub requests: Option<u32>,
     #[serde(default)]
-    pub tool_rounds: Option<u16>,
+    pub tool_rounds: Option<u64>,
     #[serde(default)]
     pub final_config_revision: Option<u64>,
     #[serde(default)]

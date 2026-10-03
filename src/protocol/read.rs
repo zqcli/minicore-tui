@@ -110,7 +110,7 @@ pub struct ReadTurnSummary {
     #[serde(default)]
     pub usage: UsageWire,
     pub requests: u32,
-    pub tool_rounds: u16,
+    pub tool_rounds: u64,
     pub final_config_revision: u64,
     pub completed_at: String,
 }
@@ -349,7 +349,7 @@ pub struct TurnResultPage {
     #[serde(default)]
     pub requests: Option<u32>,
     #[serde(default)]
-    pub tool_rounds: Option<u16>,
+    pub tool_rounds: Option<u64>,
     #[serde(default)]
     pub final_config_revision: Option<u64>,
     #[serde(default)]

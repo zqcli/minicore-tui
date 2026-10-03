@@ -612,7 +612,7 @@ pub struct PendingTurnPage {
     pub persistence: Option<crate::protocol::TurnPersistenceWire>,
     pub usage: Option<crate::protocol::UsageWire>,
     pub requests: Option<u32>,
-    pub tool_rounds: Option<u16>,
+    pub tool_rounds: Option<u64>,
     pub final_config_revision: Option<u64>,
     pub completed_at: Option<String>,
     pub total: usize,
@@ -3125,6 +3125,11 @@ impl App {
             return Vec::new();
         }
         let mut commands = vec![self.request_session_state(&turn.session_id)];
+        self.arm_context_poll(
+            &turn.session_id,
+            ContextQueryOwner::PostTurn(turn.loop_id.clone()),
+            false,
+        );
         let pending_history = self.pending_history(&turn.session_id);
         let fetch = {
             let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {

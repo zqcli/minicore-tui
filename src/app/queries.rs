@@ -466,14 +466,26 @@ impl App {
     ) -> Option<AppCommand> {
         let owner = if matches!(
             &owner,
-            ContextQueryOwner::Explicit | ContextQueryOwner::Panel(_)
+            ContextQueryOwner::Explicit
+                | ContextQueryOwner::Panel(_)
+                | ContextQueryOwner::Submission(_)
+                | ContextQueryOwner::PostTurn(_)
+                | ContextQueryOwner::Turn(_)
         ) {
             self.context_polls
                 .get(session_id)
                 .filter(|poll| {
                     matches!(
                         &poll.owner,
-                        ContextQueryOwner::ManualCompact(_) | ContextQueryOwner::Submission(_)
+                        ContextQueryOwner::ManualCompact(_) | ContextQueryOwner::Operation(_)
+                    ) || matches!(
+                        (&owner, &poll.owner),
+                        (
+                            ContextQueryOwner::Explicit | ContextQueryOwner::Panel(_),
+                            ContextQueryOwner::Submission(_)
+                                | ContextQueryOwner::PostTurn(_)
+                                | ContextQueryOwner::Turn(_)
+                        )
                     ) || matches!(
                         (&owner, &poll.owner),
                         (ContextQueryOwner::Panel(_), ContextQueryOwner::Explicit)
@@ -490,8 +502,18 @@ impl App {
                 .checked_add(self.context_interval(session_id))
                 .expect("context poll deadline is representable")
         };
-        self.context_polls
-            .insert(session_id.clone(), ContextPoll { owner, due });
+        let cancel_requested = self
+            .context_polls
+            .get(session_id)
+            .is_some_and(|poll| poll.owner == owner && poll.cancel_requested);
+        self.context_polls.insert(
+            session_id.clone(),
+            ContextPoll {
+                owner,
+                due,
+                cancel_requested,
+            },
+        );
         if immediate {
             self.request_session_context(session_id)
         } else {
@@ -540,11 +562,16 @@ impl App {
             .instant_now()
             .checked_add(self.context_interval(session_id))
             .expect("context poll deadline is representable");
+        let cancel_requested = self
+            .context_polls
+            .get(session_id)
+            .is_some_and(|poll| poll.owner == *owner && poll.cancel_requested);
         self.context_polls.insert(
             session_id.clone(),
             ContextPoll {
                 owner: owner.clone(),
                 due,
+                cancel_requested,
             },
         );
     }

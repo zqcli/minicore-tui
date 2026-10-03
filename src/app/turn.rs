@@ -783,10 +783,41 @@ impl App {
                     "the send queue is busy; the turn result will be read back instead",
                 );
             }
+            RequestKind::SessionContext {
+                session_id,
+                generation,
+                owner,
+            } => {
+                if self
+                    .sessions
+                    .known
+                    .get(&session_id)
+                    .is_some_and(|view| view.context_query_generation == generation)
+                {
+                    let current_owner = self
+                        .context_polls
+                        .get(&session_id)
+                        .map_or(owner, |poll| poll.owner.clone());
+                    self.reschedule_context_poll(&session_id, &current_owner);
+                }
+                self.notice(
+                    NoticeLevel::Warning,
+                    "context read was not admitted; observation stays pending",
+                );
+            }
+            RequestKind::Compact {
+                session_id,
+                operation_id,
+            } => {
+                self.finish_compact_failure(&session_id, &operation_id);
+                self.notice(
+                    NoticeLevel::Warning,
+                    "compaction was not admitted; no model work was started",
+                );
+            }
             RequestKind::History { session_id, .. }
             | RequestKind::SessionState { session_id, .. }
-            | RequestKind::SessionPresentation { session_id }
-            | RequestKind::SessionContext { session_id, .. } => {
+            | RequestKind::SessionPresentation { session_id } => {
                 self.mark_session_uncalibrated(&session_id);
                 self.notice(
                     NoticeLevel::Warning,
@@ -810,6 +841,7 @@ impl App {
         session_id: &SessionId,
         local_submission: LocalSubmissionId,
     ) {
+        self.clear_submission_context(session_id, local_submission);
         self.submissions.remove(&local_submission);
         let recovered = {
             let Some(view) = self.sessions.known.get_mut(session_id) else {
@@ -861,17 +893,40 @@ impl App {
                 item.handoff = false;
             }
             view.steer_queue_paused = true;
-            if view
-                .live
-                .as_ref()
-                .is_some_and(|live| live.local_submission == local_submission)
+        }
+    }
+
+    /// A rejected send owns only its preparation, never a concurrently
+    /// discovered post-turn operation.
+    fn clear_submission_context(&mut self, session_id: &SessionId, local_id: LocalSubmissionId) {
+        let operation = self
+            .submissions
+            .get(&local_id)
+            .and_then(|submission| submission.preparation.as_ref())
+            .map(|operation| operation.operation_id.clone());
+        if let Some(operation) = operation {
+            if let Some(state) = self
+                .sessions
+                .known
+                .get_mut(session_id)
+                .and_then(|view| view.state.as_mut())
             {
-                view.state
-                    .as_mut()
-                    .and_then(|state| state.compaction.take());
+                if state
+                    .compaction
+                    .as_ref()
+                    .is_some_and(|current| current.operation_id == operation)
+                {
+                    state.compaction = None;
+                }
             }
         }
-        self.context_polls.remove(session_id);
+        if self
+            .context_polls
+            .get(session_id)
+            .is_some_and(|poll| poll.owner == ContextQueryOwner::Submission(local_id))
+        {
+            self.context_polls.remove(session_id);
+        }
     }
 
     /// Records one content-free stderr notice. Only the byte length and any
@@ -1017,15 +1072,17 @@ impl App {
                 .as_mut()
                 .expect("manual compact ownership was checked");
             compact.result = Some(result.clone());
-            view.state
-                .as_mut()
-                .and_then(|state| state.compaction.take());
-            view.context_query_generation = view
-                .context_query_generation
-                .checked_add(1)
-                .expect("context query generations exhausted");
+            if let Some(state) = view.state.as_mut() {
+                if state
+                    .compaction
+                    .as_ref()
+                    .is_some_and(|current| current.operation_id == operation_id)
+                {
+                    state.compaction = None;
+                }
+            }
         }
-        self.context_polls.remove(session_id);
+        self.retire_manual_context_poll(session_id, operation_id);
         match result.status {
             crate::protocol::CompactStatusWire::Compacted
             | crate::protocol::CompactStatusWire::Noop => {
@@ -1075,16 +1132,30 @@ impl App {
                 .is_some_and(|compact| compact.operation_id == operation_id)
             {
                 view.manual_compact = None;
-                view.state
-                    .as_mut()
-                    .and_then(|state| state.compaction.take());
-                view.context_query_generation = view
-                    .context_query_generation
-                    .checked_add(1)
-                    .expect("context query generations exhausted");
+                if let Some(state) = view.state.as_mut() {
+                    if state
+                        .compaction
+                        .as_ref()
+                        .is_some_and(|current| current.operation_id == operation_id)
+                    {
+                        state.compaction = None;
+                    }
+                }
             }
         }
-        self.context_polls.remove(session_id);
+        self.retire_manual_context_poll(session_id, operation_id);
+    }
+
+    fn retire_manual_context_poll(&mut self, session_id: &SessionId, operation_id: &str) {
+        if self.context_polls.get(session_id).is_some_and(|poll| {
+            matches!(&poll.owner, ContextQueryOwner::ManualCompact(id) if id == operation_id)
+        }) {
+            self.context_polls.remove(session_id);
+            if let Some(view) = self.sessions.known.get_mut(session_id) {
+                view.context_query_generation = view.context_query_generation
+                    .checked_add(1).expect("context query generations exhausted");
+            }
+        }
     }
 
     pub(super) fn on_compact_cancel_response(
@@ -1095,6 +1166,7 @@ impl App {
     ) -> Vec<AppCommand> {
         if response.error.as_ref().is_some_and(|e| e.code == -32601) {
             self.compact_cancel_supported = false;
+            self.clear_compaction_cancel_intent(session_id, operation_id);
             self.notice(
                 NoticeLevel::Warning,
                 "Agent 不兼容 session.compact.cancel；不会改用 turn.cancel",
@@ -1122,21 +1194,32 @@ impl App {
             );
             return Vec::new();
         }
-        match response.result_as::<crate::protocol::CancelledResult>() {
+        let cancellation_confirmed = match response.result_as::<crate::protocol::CancelledResult>()
+        {
             Ok(result) if result.cancelled => {
                 self.notice(
                     NoticeLevel::Info,
                     format!("cancellation requested for compaction {operation_id}"),
                 );
+                true
             }
-            Ok(_) => self.notice(
-                NoticeLevel::Warning,
-                format!("compaction {operation_id} was not cancellable"),
-            ),
-            Err(error) => self.notice(
-                NoticeLevel::Warning,
-                format!("compaction cancel {operation_id} failed: {error}"),
-            ),
+            Ok(_) => {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("compaction {operation_id} was not cancellable"),
+                );
+                false
+            }
+            Err(error) => {
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("compaction cancel {operation_id} failed: {error}"),
+                );
+                false
+            }
+        };
+        if !cancellation_confirmed {
+            self.clear_compaction_cancel_intent(session_id, operation_id);
         }
         let owner = if self
             .sessions
@@ -1156,6 +1239,24 @@ impl App {
             .collect()
     }
 
+    fn clear_compaction_cancel_intent(&mut self, session_id: &SessionId, operation_id: &str) {
+        if let Some(poll) = self.context_polls.get_mut(session_id) {
+            if matches!(&poll.owner, ContextQueryOwner::Operation(id) | ContextQueryOwner::ManualCompact(id) if id == operation_id)
+            {
+                poll.cancel_requested = false;
+            }
+        }
+        if let Some(compact) = self
+            .sessions
+            .known
+            .get_mut(session_id)
+            .and_then(|view| view.manual_compact.as_mut())
+            .filter(|compact| compact.operation_id == operation_id)
+        {
+            compact.cancel_requested = false;
+        }
+    }
+
     pub(super) fn request_compact_cancel(
         &mut self,
         session_id: &SessionId,
@@ -1163,6 +1264,12 @@ impl App {
     ) -> Option<AppCommand> {
         if !self.compact_cancel_supported {
             return None;
+        }
+        if let Some(poll) = self.context_polls.get_mut(session_id) {
+            if matches!(&poll.owner, ContextQueryOwner::Operation(id) | ContextQueryOwner::ManualCompact(id) if id == operation_id)
+            {
+                poll.cancel_requested = true;
+            }
         }
         // Panel actions use the same exact-operation cancellation intent as
         // Esc during deferred preparation, never a fallback turn.cancel.
@@ -1188,6 +1295,13 @@ impl App {
             },
             |id| OutgoingRequest::session_compact_cancel(id, session_id, operation_id),
         ))
+    }
+
+    pub(crate) fn compaction_cancelling(&self, session_id: &str, operation_id: &str) -> bool {
+        self.context_polls.get(session_id).is_some_and(|poll| {
+            poll.cancel_requested && matches!(&poll.owner,
+                ContextQueryOwner::Operation(id) | ContextQueryOwner::ManualCompact(id) if id == operation_id)
+        })
     }
 
     pub(super) fn submit_turn(&mut self, session_id: SessionId, text: String) -> Vec<AppCommand> {
@@ -1379,19 +1493,33 @@ impl App {
         if !self.guard_ready() {
             return Vec::new();
         }
-        let manual_operation = self
-            .sessions
-            .known
-            .get(session_id)
-            .and_then(|view| {
-                view.manual_compact
-                    .as_ref()
-                    .filter(|compact| compact.result.is_none())
-            })
-            .map(|compact| compact.operation_id.clone());
-        if let Some(operation_id) = manual_operation {
+        let compact_operation = self.sessions.known.get(session_id).and_then(|view| {
+            view.manual_compact
+                .as_ref()
+                .filter(|compact| compact.result.is_none())
+                .map(|compact| compact.operation_id.clone())
+                .or_else(|| {
+                    if view.live.as_ref().is_some_and(|live| !live.waiting) {
+                        return None;
+                    }
+                    view.context
+                        .as_ref()
+                        .and_then(|context| context.current_operation.as_ref())
+                        .or_else(|| {
+                            view.state
+                                .as_ref()
+                                .and_then(|state| state.compaction.as_ref())
+                        })
+                        .map(|operation| operation.operation_id.clone())
+                })
+        });
+        if let Some(operation_id) = compact_operation {
             if let Some(view) = self.sessions.known.get_mut(session_id) {
-                if let Some(compact) = view.manual_compact.as_mut() {
+                if let Some(compact) = view
+                    .manual_compact
+                    .as_mut()
+                    .filter(|compact| compact.operation_id == operation_id)
+                {
                     compact.cancel_requested = true;
                 }
             }
@@ -1579,6 +1707,7 @@ impl App {
         local_submission: LocalSubmissionId,
         response: &RpcResponse,
     ) -> Vec<AppCommand> {
+        self.clear_submission_context(session_id, local_submission);
         let submission_state = self.submissions.remove(&local_submission);
         let submission_cancel_requested = submission_state
             .as_ref()
@@ -1739,6 +1868,11 @@ impl App {
                 if let Some(view) = self.sessions.known.get_mut(session_id) {
                     view.steer_queue.retain(|item| !item.handoff);
                 }
+                self.arm_context_poll(
+                    session_id,
+                    ContextQueryOwner::Turn(turn.loop_id.clone()),
+                    false,
+                );
                 let mut commands = Vec::new();
                 if let Some(command) = self.request_wait(turn.clone()) {
                     commands.push(command);
@@ -1772,17 +1906,36 @@ impl App {
                         crate::protocol::RpcResponseError::Parse(_)
                             | crate::protocol::RpcResponseError::Malformed
                     );
-                let revision_unchanged = submission_state.as_ref().is_none_or(|submission| {
-                    submission.editor_revision == self.composer.editor_revision()
-                });
-                if self.sessions.active.as_ref() == Some(session_id)
-                    && !is_handoff_send
-                    && revision_unchanged
-                {
-                    if let Some(text) =
-                        recovered.filter(|_| self.composer.content().trim().is_empty())
-                    {
-                        self.composer.set_text(&text);
+                if !is_handoff_send {
+                    if let Some(text) = recovered {
+                        let confirmed_rejection = matches!(&error, RpcResponseError::Agent(_));
+                        let composer = if self.sessions.active.as_ref() == Some(session_id) {
+                            Some(&mut self.composer)
+                        } else {
+                            self.sessions
+                                .known
+                                .get_mut(session_id)
+                                .map(|view| &mut view.composer)
+                        };
+                        if let Some(composer) = composer {
+                            let revision_unchanged =
+                                submission_state.as_ref().is_none_or(|submission| {
+                                    submission.editor_revision == composer.editor_revision()
+                                });
+                            let existing = composer.content();
+                            if confirmed_rejection && existing != text {
+                                // A definitive rejection owns no execution. Keep the
+                                // newer draft first without losing the rejected input.
+                                let restored = if existing.trim().is_empty() {
+                                    text
+                                } else {
+                                    format!("{existing}\n{text}")
+                                };
+                                composer.set_text(&restored);
+                            } else if revision_unchanged && existing.trim().is_empty() {
+                                composer.set_text(&text);
+                            }
+                        }
                     }
                 }
                 if let Some(view) = self.sessions.known.get_mut(session_id) {
@@ -1795,11 +1948,7 @@ impl App {
                         }
                     }
                     view.steer_queue_paused = true;
-                    view.state
-                        .as_mut()
-                        .and_then(|state| state.compaction.take());
                 }
-                self.context_polls.remove(session_id);
                 let message = if uncertain {
                     "turn send response could not be decoded; the queued steering is unconfirmed and will not be resubmitted automatically".to_owned()
                 } else if let crate::protocol::RpcResponseError::Agent(agent_error) = &error {
@@ -2313,14 +2462,23 @@ impl App {
                     ),
                 );
             }
-            RequestKind::SessionContext { session_id, .. } => {
-                if let Some(view) = self.sessions.known.get_mut(&session_id) {
-                    view.context_query_generation = view
-                        .context_query_generation
-                        .checked_add(1)
-                        .expect("context query generations exhausted");
+            RequestKind::SessionContext {
+                session_id,
+                generation,
+                owner,
+            } => {
+                if self
+                    .sessions
+                    .known
+                    .get(&session_id)
+                    .is_some_and(|view| view.context_query_generation == generation)
+                {
+                    let current_owner = self
+                        .context_polls
+                        .get(&session_id)
+                        .map_or(owner, |poll| poll.owner.clone());
+                    self.reschedule_context_poll(&session_id, &current_owner);
                 }
-                self.context_polls.remove(&session_id);
                 self.notice(
                     NoticeLevel::Warning,
                     format!("session.context failed for {session_id}: {error}"),
@@ -2330,16 +2488,7 @@ impl App {
                 session_id,
                 operation_id,
             } => {
-                if let Some(view) = self.sessions.known.get_mut(&session_id) {
-                    if view
-                        .manual_compact
-                        .as_ref()
-                        .is_some_and(|compact| compact.operation_id == operation_id)
-                    {
-                        view.manual_compact = None;
-                    }
-                }
-                self.context_polls.remove(&session_id);
+                self.finish_compact_failure(&session_id, &operation_id);
                 self.notice(
                     NoticeLevel::Warning,
                     format!("session.compact {operation_id} failed to send: {error}"),
@@ -2349,6 +2498,7 @@ impl App {
                 session_id,
                 operation_id,
             } => {
+                self.clear_compaction_cancel_intent(&session_id, &operation_id);
                 self.notice(
                     NoticeLevel::Warning,
                     format!(

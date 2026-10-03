@@ -141,6 +141,34 @@ notifications may be interleaved. In particular:
 After a successful `turn.send`, the TUI registers `turn.wait` immediately in
 the same update. A wait result with `persistence=persisted` starts a `session.state`
 refresh and incremental pinned `session.read` chain while the session remains loaded.
+It also schedules one `session.context` discovery through the existing per-Session
+poll owner. Successful persisted turns may reserve an independent post-turn
+compaction operation before their completion is published; `turn.wait` does not
+wait for its summary model. `current_operation`/`last_result` are the operation
+read-back authority, and `automatic` remains a mandatory compatibility shell.
+The discovery and exact-operation owner survive transient read errors and Context
+panel closure. The normal 500 ms foreground / 2 s background cadence and pending
+query deduplication apply; the UI never retries summary model work or resends a
+rejected prompt. A busy submit restores its own draft/preparation only, without
+clearing another operation. Manual `/compact` remains idle-only and its cancellation
+uses `session.compact.cancel` with the exact operation ID (including reserved
+`auto-` IDs), never a completed `turn.cancel`.
+
+Ordinary requests do not summarize on soft-threshold crossings. Confirmed safe,
+pre-output context-capacity rejection may recover within the still-active turn;
+its `recovery.outcome=recovering` observation displays `Recovering context`, not
+completion. The same poll owner observes an active turn until completion and then
+discovers post-turn maintenance. Stale turn notifications remain fenced; a
+compaction notification may only request a fresh Session context read independently
+of its retired loop metadata. Compaction results do not alter the original turn
+outcome, history, scroll anchor or fold state. `unknown_write` remains unknown and
+a context read is not a disk reload.
+
+`tool_rounds` is an unsigned 64-bit statistic in turn results, history summaries
+and turn-result pages. Existing small integer records remain compatible; clients
+with a 16-bit decoder cannot read counts above 65535. The legacy execution policy
+`max_tool_rounds` still has its existing zero-means-unlimited semantics; the RPC
+protocol version does not change merely because package versions change.
 Failed or unknown completion retains its live/result/gap facts without pretending
 that existing History recovers that loop. Raw history item indexes, not rendered block counts, drive pagination;
 tool results patch the matching tool call. Live event order is not used

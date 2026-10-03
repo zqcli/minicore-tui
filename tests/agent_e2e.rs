@@ -782,6 +782,66 @@ async fn wait_turn_landed(
     .await
 }
 
+/// Small completed-turn fixtures reserve a budget check even when it is a
+/// zero-utility Noop. Wait for that exact independent operation before a new
+/// submit/manual compact; cached Idle and durable history alone are not ready.
+/// This does not resend input or wait on a summarizing operation in the
+/// dedicated turn.wait-independence test.
+async fn wait_post_turn_noop(
+    process: &mut RpcProcess,
+    app: &mut App,
+    session_id: &str,
+) -> Result<(), String> {
+    let result = app.sessions.known[session_id]
+        .last_result
+        .as_ref()
+        .ok_or("completed fixture has no turn result")?;
+    if result.outcome != LoopOutcomeWire::Completed
+        || result.persistence != Some(TurnPersistenceWire::Persisted)
+    {
+        return Err("fixture turn did not complete and persist".to_owned());
+    }
+    let operation_id = format!("auto-{}", result.turn.loop_id);
+    pump_until(process, app, |app| {
+        app.sessions.known.get(session_id).is_some_and(|view| {
+            view.live.is_none()
+                && !view.is_preparing()
+                && view.state.as_ref().is_some_and(|state| {
+                    state.status == minicore_tui::protocol::SessionStatusWire::Idle
+                })
+                && view.context.as_ref().is_some_and(|context| {
+                    context.current_operation.is_none()
+                        && context
+                            .last_result
+                            .as_ref()
+                            .is_some_and(|result| result.operation_id == operation_id)
+                })
+        })
+    })
+    .await?;
+    let result = app.sessions.known[session_id]
+        .context
+        .as_ref()
+        .unwrap()
+        .last_result
+        .as_ref()
+        .unwrap();
+    assert_eq!(result.operation_id, operation_id);
+    assert_eq!(
+        result.status,
+        CompactStatusWire::Noop,
+        "small fixture must only check the post-turn budget"
+    );
+    assert!(
+        result
+            .utility_usage
+            .as_ref()
+            .is_none_or(|usage| usage.call_count == 0),
+        "Noop budget checks must not consume a summary response fixture"
+    );
+    Ok(())
+}
+
 async fn wait_for_active_session(
     process: &mut RpcProcess,
     app: &mut App,
@@ -2845,6 +2905,10 @@ fn e2e_scenario_e2_update_single_request_then_next_turn() {
         assert_eq!(t1_res.requests, Some(1), "Turn 1 must not be extended");
         assert_eq!(t1_res.tool_rounds, Some(0));
 
+        wait_post_turn_noop(&mut process, &mut app, &session_id)
+            .await
+            .unwrap();
+
         // Submit Turn 2
         dispatch(
             &mut process,
@@ -3057,6 +3121,11 @@ fn e2e_stress_six_loops_ten_requests_no_repeated_final_text() {
             })
             .await
             .unwrap();
+            if index > 0 {
+                wait_post_turn_noop(&mut process, &mut app, &session_id)
+                    .await
+                    .unwrap();
+            }
             let before = user_count(&app);
             assert_eq!(before, index, "each prior turn must have landed once");
             let commands = app.update(AppEvent::SubmitTurn {
@@ -3243,6 +3312,10 @@ fn e2e_stress_second_tool_expansion_survives_background_generation() {
             Some(&FoldOverride::Expanded),
             "second tool must be expanded before background generation"
         );
+
+        wait_post_turn_noop(&mut process, &mut app, &session_id)
+            .await
+            .unwrap();
 
         // Start the background loop and assert the override stays while it is
         // live (mid-generation), not just after it settles.
@@ -4242,6 +4315,9 @@ fn e2e_manual_compact_summarizes_history() {
         .await
         .unwrap();
 
+        wait_post_turn_noop(&mut process, &mut app, &session_id)
+            .await
+            .unwrap();
         submit_slash_command(&mut process, &mut app, "/compact")
             .await
             .unwrap();
@@ -4327,6 +4403,9 @@ fn e2e_manual_compact_deferred_cancel() {
         .await
         .unwrap();
 
+        wait_post_turn_noop(&mut process, &mut app, &session_id)
+            .await
+            .unwrap();
         submit_slash_command(&mut process, &mut app, "/compact")
             .await
             .unwrap();
@@ -4376,19 +4455,18 @@ fn e2e_manual_compact_deferred_cancel() {
     });
 }
 
-/// Automatic admission prepares before a loop exists. A large first answer
-/// pushes the estimated history over the automatic-compaction trigger, so the
-/// second submit really runs a summary utility call; the call is gated to keep
-/// the preparation observable. The app polls `session.context`, records the
-/// operation id and Esc cancels by that exact id.
+/// A successful persisted turn reserves independent post-turn maintenance.
+/// Its gated utility call must not hold turn.wait, and a stale UI snapshot
+/// cannot admit a new turn or lose that rejected prompt. The existing Context
+/// owner survives panel close and cancels the exact automatic operation.
 #[test]
 #[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
-fn e2e_automatic_preparation_is_observable_and_cancellable() {
+fn e2e_post_turn_compaction_is_independent_observable_and_cancellable() {
     let agent_bin = require_agent_bin();
     let (env, _) = E2eEnvironment::setup();
     let gate = Arc::new(AtomicBool::new(false));
     env._server
-        .enqueue_sse(sse_text_response(&"h".repeat(160 * 1024)));
+        .enqueue_sse(sse_text_response(&"h".repeat(96 * 1024)));
     env._server
         .enqueue_gated(sse_text_response("prepared summary"), gate.clone(), None);
 
@@ -4408,7 +4486,7 @@ fn e2e_automatic_preparation_is_observable_and_cancellable() {
             &mut process,
             &mut app,
             &env.workspace_path,
-            "Preparation E2E",
+            "Post-turn compaction E2E",
         )
         .await;
 
@@ -4431,31 +4509,24 @@ fn e2e_automatic_preparation_is_observable_and_cancellable() {
         .await
         .unwrap();
 
-        // The next submit must prepare: the agent starts a summary utility
-        // call before any loop exists, and the gate keeps it in flight.
-        dispatch(
-            &mut process,
-            &mut app,
-            AppEvent::SubmitTurn {
-                session_id: session_id.clone(),
-                text: "prepared turn".to_owned(),
-            },
-        )
-        .await
-        .unwrap();
+        let completed = app.sessions.known[&session_id].last_result.clone()
+            .expect("turn.wait must return while the summary remains gated");
+        assert_eq!(completed.outcome, LoopOutcomeWire::Completed);
+        assert_eq!(completed.persistence, Some(TurnPersistenceWire::Persisted));
+        assert!(!gate.load(Ordering::Relaxed));
         let deadline = Instant::now() + TIMEOUT;
         while env._server.recorded_requests().len() < 2 && Instant::now() < deadline {
             pump_step(&mut process, &mut app)
                 .await
-                .expect("pump while the preparation summary is in flight");
+                .expect("pump while the post-turn summary is in flight");
         }
         assert!(
-            env._server.recorded_requests().len() >= 2,
-            "automatic admission never started a summary call"
+            env._server.recorded_requests().len() == 2,
+            "post-turn compaction must start without a second submit"
         );
 
-        // The submission-owned context poll observes the live operation and
-        // records its exact identity.
+        // The completed turn's discovery read observes the independent
+        // operation even if its SessionState notification was lost.
         let deadline = Instant::now() + TIMEOUT;
         while app.sessions.known[&session_id]
             .state
@@ -4466,56 +4537,76 @@ fn e2e_automatic_preparation_is_observable_and_cancellable() {
         {
             pump_step(&mut process, &mut app)
                 .await
-                .expect("pump while observing the preparation operation");
+                .expect("pump while observing the post-turn operation");
         }
         let observed = app.sessions.known[&session_id]
             .state
             .as_ref()
             .and_then(|state| state.compaction.clone())
-            .expect("the app must observe the preparation operation from session.context");
-        assert!(
-            !observed.operation_id.is_empty(),
-            "the observed preparation carries the real operation id"
-        );
+            .expect("the app must observe post-turn maintenance from session.context");
+        assert!(observed.operation_id.starts_with("auto-"));
+        assert_eq!(observed.operation_id, format!("auto-{}", completed.turn.loop_id));
         assert!(
             app.sessions.known[&session_id].is_preparing(),
-            "the session stays preparing until the preparation settles"
+            "the independent operation owns submit admission until it settles"
         );
 
-        // Esc marks the submission cancelled; the next context poll that still
-        // sees `observed` routes session.compact.cancel by that exact id.
-        dispatch(
-            &mut process,
-            &mut app,
-            AppEvent::CancelTurn {
-                session_id: session_id.clone(),
-            },
-        )
-        .await
-        .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < deadline {
-            pump_step(&mut process, &mut app)
-                .await
-                .expect("pump while routing the preparation cancel");
-            tokio::time::sleep(Duration::from_millis(25)).await;
+        // Simulate a stale read arriving just before a new submit. Only the
+        // displayed snapshot is old: the already discovered operation owner
+        // must survive the real Agent's SessionBusy rejection.
+        {
+            let view = app.sessions.known.get_mut(&session_id).unwrap();
+            view.state.as_mut().unwrap().compaction = None;
+            view.context = None;
         }
-        gate.store(true, Ordering::Relaxed);
-
-        // The cancelled preparation fails the deferred send, and the prompt
-        // returns to the composer instead of being lost.
+        app.composer.set_text("next draft");
+        dispatch(&mut process, &mut app, AppEvent::SubmitTurn {
+            session_id: session_id.clone(), text: "next draft".to_owned(),
+        }).await.unwrap();
         pump_until(&mut process, &mut app, |a| {
             let view = &a.sessions.known[&session_id];
-            view.live.is_none()
-                && !view.is_preparing()
-                && a.composer.content().contains("prepared turn")
-        })
-        .await
-        .unwrap();
-        assert!(
-            app.composer.content().contains("prepared turn"),
-            "a cancelled preparation must not lose the prompt"
-        );
+            view.live.is_none() && a.composer.content() == "next draft"
+                && view.context.as_ref().and_then(|context| context.current_operation.as_ref())
+                    .is_some_and(|operation| operation.operation_id == observed.operation_id)
+        }).await.unwrap();
+        assert_eq!(app.sessions.known[&session_id].last_result.as_ref(), Some(&completed));
+        assert_eq!(env._server.recorded_requests().len(), 2, "busy must not resend the prompt");
+
+        // Panel close must not release the operation owner. Cancel through
+        // the existing exact-ID Context action, not the completed turn.
+        let commands = app.open_context();
+        dispatch_commands(&mut process, &mut app, commands).await.unwrap();
+        assert_eq!(app.context_cancel_target(), Some((session_id.clone(), observed.operation_id.clone())));
+        dispatch(&mut process, &mut app, AppEvent::Terminal(CrosstermEvent::Key(
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        ))).await.unwrap();
+        assert!(app.context_panel().is_none());
+        assert!(app.sessions.known[&session_id].is_preparing());
+        let commands = app.open_context();
+        dispatch_commands(&mut process, &mut app, commands).await.unwrap();
+        for code in [KeyCode::Tab, KeyCode::Tab, KeyCode::Enter] {
+            dispatch(&mut process, &mut app, AppEvent::Terminal(CrosstermEvent::Key(
+                KeyEvent::new(code, KeyModifiers::NONE),
+            ))).await.unwrap();
+        }
+        pump_until(&mut process, &mut app, |a| {
+            !a.pending_requests.values().any(|kind| matches!(kind,
+                RequestKind::CompactCancel { operation_id, .. } if operation_id == &observed.operation_id))
+        }).await.unwrap();
+        gate.store(true, Ordering::Relaxed);
+        pump_until(&mut process, &mut app, |a| {
+            let view = &a.sessions.known[&session_id];
+            !view.is_preparing() && view.context.as_ref()
+                .and_then(|context| context.last_result.as_ref())
+                .is_some_and(|result| result.operation_id == observed.operation_id)
+        }).await.unwrap();
+        let result = app.sessions.known[&session_id].context.as_ref().unwrap().last_result.as_ref().unwrap();
+        assert_eq!(result.status, CompactStatusWire::Failed,
+            "cancellation before commit must not claim successful compaction");
+        assert_eq!(result.failure_kind.as_deref(), Some("cancelled"));
+        assert_eq!(app.composer.content(), "next draft");
+        assert_eq!(app.sessions.known[&session_id].last_result.as_ref(), Some(&completed));
+        assert_eq!(env._server.recorded_requests().len(), 2);
 
         let report = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
         assert!(report.shutdown_ok && report.seen_eof && report.seen_exit);
@@ -5176,6 +5267,9 @@ fn e2e_full_search_and_export_real_agent_chain() {
         let session =
             create_compact_session(&mut process, &mut app, &env.workspace_path, "Export A").await;
         for index in 0..11 {
+            if index > 0 {
+                wait_post_turn_noop(&mut process, &mut app, &session).await.unwrap();
+            }
             dispatch(
                 &mut process,
                 &mut app,
@@ -5233,6 +5327,8 @@ fn e2e_full_search_and_export_real_agent_chain() {
         press_key(&mut process, &mut app, KeyCode::Esc)
             .await
             .unwrap();
+
+        wait_post_turn_noop(&mut process, &mut app, &session).await.unwrap();
 
         // A live turn that is not in saved history: appended only after the
         // explicit Ctrl+N choice.

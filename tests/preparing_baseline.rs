@@ -1,7 +1,7 @@
-//! Preparing-state migration checks (Spec §8.2, §8.4).
+//! Request preparation and independent Session operation checks.
 //!
-//! Preparation is visible, cancellable by exact operation identity, and
-//! observed through the Protocol v1 context endpoint.
+//! A pending normal submit never owns the previous completed turn's
+//! compaction; exact operation identities are observed through Protocol v1.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -134,9 +134,8 @@ fn session(id: &str) -> Value {
     })
 }
 
-/// Defect: before the `turn.send` ACK binds a TurnRef, an explicit cancel
-/// produces no `turn.cancel`, because the App has no operation identity to
-/// route. Stage B adds `request_cancel` routing via the preparation ID.
+/// Before the normal `turn.send` ACK binds a TurnRef, cancellation keeps its
+/// intent without guessing either a turn or an independent compaction ID.
 #[test]
 fn baseline_cannot_cancel_a_preparing_submission_before_turn_ref() {
     let mut driver = Driver::new();
@@ -147,7 +146,7 @@ fn baseline_cannot_cancel_a_preparing_submission_before_turn_ref() {
         text: "explain the parser".to_owned(),
     });
     let sent = driver.request("turn.send");
-    // Deliberately do NOT answer yet: the deferred admission is in flight.
+    // Deliberately do NOT answer yet: the normal submit ACK is in flight.
     driver.step(AppEvent::CancelTurn {
         session_id: "ses_prep".to_owned(),
     });
@@ -156,21 +155,21 @@ fn baseline_cannot_cancel_a_preparing_submission_before_turn_ref() {
             .queue
             .iter()
             .any(|request| request.method == "turn.cancel"),
-        "BASELINE: a deferred submission with no TurnRef cannot be cancelled"
+        "a pending submission cannot guess an exact TurnRef"
     );
     drop(sent);
 }
 
-/// Preparation polling must observe the backend operation instead of
-/// inventing a local identity for cancellation.
+/// Session operation polling observes backend identity independently of the
+/// pending Submission owner; it does not recreate startup compaction.
 #[test]
-fn preparation_observes_context_and_operation_identity() {
+fn context_observes_independent_operation_identity() {
     let app_source = app_modules_source();
     let protocol_source = include_str!("../src/protocol.rs");
     assert!(
         app_source.contains("request_session_context")
-            && app_source.contains("ContextQueryOwner::Submission"),
-        "preparation uses session.context polling"
+            && app_source.contains("ContextQueryOwner::Operation"),
+        "Session operations use the existing context poll scheduler"
     );
     assert!(
         protocol_source.contains("METHOD_SESSION_CONTEXT")
@@ -178,8 +177,13 @@ fn preparation_observes_context_and_operation_identity() {
         "Protocol v1 session.context builder exists"
     );
     assert!(
-        app_source.contains("OperationRef") && app_source.contains("operation_id"),
-        "preparation retains the observed operation identity"
+        app_source.contains("ContextQueryOwner::Operation(operation.operation_id.clone())")
+            && app_source.contains("current_operation"),
+        "context adopts the Agent operation identity, not a Submission preparation"
+    );
+    assert!(
+        !app_source.contains("submission.preparation = Some(OperationRef"),
+        "reading a previous operation cannot give the pending send cancellation ownership"
     );
 }
 
