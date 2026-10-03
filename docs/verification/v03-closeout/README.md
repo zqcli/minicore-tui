@@ -1,7 +1,9 @@
 # TUI 0.3.0 closeout verification
 
-Date: 2026-10-03. Status: implementation, fresh golden review and final integrated
-remote quality gates passed; staged-source review and Git/hosted-CI delivery pending.
+Date: 2026-10-03. Status: implementation, golden review, final integrated remote
+quality gates and staged-source review passed; local commit/dev fast-forward
+complete. Remote push is blocked by repository write permission; hosted CI has
+not run for the delivered local code.
 
 ## Scope and fixed inputs
 
@@ -169,11 +171,34 @@ binaries” refers to the Cargo Release profile, not publication or deployment.
 
 ## Delivery
 
-Independent staged-source review, logical commits, safe dev/refactor integration
-and hosted CI observation remain pending. A refreshed remote query still resolves
-`dev` to `9d11ee69c4efa02ef1e5bff143662b48dc3194de` and
-`refactor/v0.3-full-project` to `e7c926929599fd05230e528b93de63f50b3bb406`.
-Both must be ancestors of the delivered commit; no force push is authorized.
+Independent review approved staged tree
+`fe87d2e4b7ad6726d179e6c61d010654c9772d67`, including all 169 changed paths,
+all 426 exact tested build inputs, all 62 reviewed goldens, and immutable evidence.
+The implementation commit is
+`93d059815911bcf666a108628f023484fd3920ea`
+(`fix(tui): finalize stable page layout and preserve result statistics`).
+Its tree is exactly the approved staged tree. Local `dev` fast-forwarded to this
+commit from `9d11ee69c4efa02ef1e5bff143662b48dc3194de`; the refactor branch
+points to the same implementation commit. A subsequent documentation-only commit
+records this delivery outcome without changing any tested input.
+
+After a fresh fetch and successful ancestry checks for both branches, the
+non-force atomic push of `dev` and `refactor/v0.3-full-project` failed with
+**HTTP 403: repository permission denied**. The authenticated account `SoPudge`
+has API-confirmed `pull: true`, `push: false`. No credentials or authentication
+configuration were changed, and no force push was attempted.
+
+A post-failure `git ls-remote` confirmed both remote heads unchanged:
+
+- `dev`: `9d11ee69c4efa02ef1e5bff143662b48dc3194de`.
+- `refactor/v0.3-full-project`: `e7c926929599fd05230e528b93de63f50b3bb406`.
+
+A hosted Actions query for implementation commit `93d0598` returned no runs.
+Therefore remote publication and hosted Linux/macOS/Windows CI are **not
+complete**, and are not replaced by the passing Linux-builder checks. Completing
+these steps requires repository write access through an authorized credential,
+then another remote ancestry check, non-force push and finite hosted-CI review.
+No tag, version bump, branch deletion, binary deployment or core change occurred.
 
 ## Explicit limits
 
