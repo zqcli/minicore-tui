@@ -11,14 +11,14 @@
 
 
 
- ┌─────────────────────────────────────────────────────────────────────────────┐
- │New session                                                                  │
- │workspace  /project                                                          │
- │profile    coding  →                                                         │
- │model      deep  →                                                           │
- │reasoning  high  →                                                           │
- │title      (optional)                                                        │
- │action     Create session                                                    │
- │Tab moves · Enter confirms · Esc closes                                      │
- └─────────────────────────────────────────────────────────────────────────────┘
+ ┌───────────────────────────────────────────────────────────────────────────┐
+ │New session                                                                │
+ │workspace  /project                                                        │
+ │profile    coding  →                                                       │
+ │model      deep  →                                                         │
+ │reasoning  high  →                                                         │
+ │title      (optional)                                                      │
+ │action     Create session                                                  │
+ │Tab moves · Enter confirms · Esc closes                                    │
+ └───────────────────────────────────────────────────────────────────────────┘
  ● ready

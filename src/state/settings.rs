@@ -101,8 +101,10 @@ impl SettingsState {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.build_config()
-            .map_or(true, |config| config != self.original)
+        match self.build_config() {
+            Ok(config) => config != self.original,
+            Err(_) => true,
+        }
     }
 
     pub fn toggle(&mut self) {

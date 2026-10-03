@@ -7,18 +7,18 @@
 
 
 
- ┌─────────────────────────────────────────────────────────────────────────────┐
- │Select model                                                                 │
- │Model applies at the next model request.                                     │
- │> zzzz                                                                       │
- │No matching items                                                            │
- │                                                                             │
- │                                                                             │
- │                                                                             │
- │                                                                             │
- │                                                                             │
- │                                                                             │
- │                                                                             │
- │(0/0) ↑↓/PgUp/PgDn · Enter select · Esc back · type to filter                │
- └─────────────────────────────────────────────────────────────────────────────┘
- ▸ project@git? · deep · high · ● ready                                    ctx ?
+ ┌───────────────────────────────────────────────────────────────────────────┐
+ │Select model                                                               │
+ │Model applies at the next model request.                                   │
+ │> zzzz                                                                     │
+ │No matching items                                                          │
+ │                                                                           │
+ │                                                                           │
+ │                                                                           │
+ │                                                                           │
+ │                                                                           │
+ │                                                                           │
+ │                                                                           │
+ │(0/0) ↑↓/PgUp/PgDn · Enter select · Esc back · type to filter              │
+ └───────────────────────────────────────────────────────────────────────────┘
+ ▸ project@git? · deep · high · ● ready                                  ctx ?

@@ -94,7 +94,7 @@ fn consecutive_reasoning_parts_join_like_live_accumulation() {
 #[test]
 fn user_card_then_thinking_has_exactly_one_transparent_spacer() {
     let app = testapp::chat_with_reasoning(ThemeKind::Dark);
-    let prepared = transcript::prepare_conversation(&app, 79);
+    let prepared = transcript::prepare_conversation(&app, 77);
     let rows = content_rows(&prepared.lines());
     let thinking_first = rows
         .iter()
@@ -170,7 +170,7 @@ fn prepared_transcript_preserves_thinking_newlines_from_wire_entry() {
     };
     app.update(delta("reasoning", "first line"));
     app.update(delta("reasoning", "\nsecond line"));
-    let prepared = transcript::prepare_conversation(&app, 79);
+    let prepared = transcript::prepare_conversation(&app, 77);
     let rows = content_rows(&prepared.lines());
     let first = rows
         .iter()

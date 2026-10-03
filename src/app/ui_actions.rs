@@ -1593,9 +1593,13 @@ impl App {
     }
 
     pub(crate) fn terminal_content_width(&self) -> u16 {
-        self.terminal_size
-            .0
-            .saturating_sub(crate::ui::rail::APP_GUTTER_WIDTH)
+        crate::ui::layout::page_columns(ratatui::layout::Rect::new(
+            0,
+            0,
+            self.terminal_size.0,
+            self.terminal_size.1,
+        ))[1]
+            .width
     }
 
     fn earlier_history_hit(&self, column: u16, row: u16) -> bool {
@@ -1783,15 +1787,16 @@ impl App {
         if self.scrollbar_drag.is_some() {
             return false;
         }
-        let active = if self.sessions.active.is_some()
-            && column.checked_add(1) == Some(self.terminal_size.0)
-        {
+        let active = if self.sessions.active.is_some() {
             let screen = crate::ui::layout::screen_layout(
                 self,
                 ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1),
             );
             let (total, height) = self.transcript_scroll_extent();
-            total > height && screen.transcript.contains((column, row).into())
+            total > height
+                && screen
+                    .scrollbar_for(screen.transcript)
+                    .contains((column, row).into())
         } else {
             false
         };
@@ -1828,12 +1833,7 @@ impl App {
         } else {
             "↑ scroll position"
         };
-        crate::ui::transcript::marker_area(
-            area,
-            label,
-            self.scrollbar_visible(total, area.height as usize),
-        )
-        .contains((column, row).into())
+        crate::ui::transcript::marker_area(area, label).contains((column, row).into())
     }
 
     fn transcript_overlay_at(
@@ -1844,9 +1844,6 @@ impl App {
         row: u16,
     ) -> bool {
         self.marker_hit_in(area, total, column, row)
-            || (self.scrollbar_visible(total, area.height as usize)
-                && column.checked_add(1) == Some(area.right())
-                && area.contains((column, row).into()))
     }
 
     pub(super) fn begin_scrollbar_drag(&mut self, column: u16, row: u16) -> bool {
@@ -1857,7 +1854,8 @@ impl App {
             height: self.terminal_size.1,
         };
         let screen = crate::ui::layout::screen_layout(self, area);
-        if !screen.transcript.contains((column, row).into()) {
+        let scrollbar = screen.scrollbar_for(screen.transcript);
+        if !scrollbar.contains((column, row).into()) {
             return false;
         }
         let prepared = self.conversation_for_input(screen.content.width);
@@ -1865,8 +1863,7 @@ impl App {
         let current =
             crate::ui::transcript::scroll_position(self, total, screen.transcript.height as usize)
                 .offset;
-        let Some(geometry) = crate::ui::scrollbar::geometry(screen.transcript, total, current)
-        else {
+        let Some(geometry) = crate::ui::scrollbar::geometry(scrollbar, total, current) else {
             return false;
         };
         if column as usize != geometry.column
@@ -1912,9 +1909,11 @@ impl App {
         let total = prepared.total_rows();
         let height = screen.transcript.height as usize;
         let position = crate::ui::transcript::scroll_position(self, total, height);
-        let Some(geometry) =
-            crate::ui::scrollbar::geometry(screen.transcript, total, position.offset)
-        else {
+        let Some(geometry) = crate::ui::scrollbar::geometry(
+            screen.scrollbar_for(screen.transcript),
+            total,
+            position.offset,
+        ) else {
             self.cancel_scrollbar_drag();
             return;
         };
@@ -2624,6 +2623,179 @@ pub(super) fn toggle_reasoning_section(
 #[cfg(test)]
 mod tests {
     use super::word_cell_bounds;
+
+    #[test]
+    fn final_body_cells_remain_selectable_with_visible_scrollbar_and_wide_text() {
+        use crate::event::AppEvent;
+        use crate::state::view::{ConversationSelection, SelectionGranularity};
+        use crate::theme::ThemeKind;
+        use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+
+        let source = format!("{}Z\n", "界".repeat(37)).repeat(30);
+        let mut app = crate::ui::testapp::open_with(
+            ThemeKind::Dark,
+            "ses_1",
+            None,
+            "high",
+            vec![crate::ui::testapp::user_entry(0, "loop", &source)],
+        );
+        app.update(AppEvent::TerminalSize {
+            width: 80,
+            height: 24,
+        });
+        let screen = crate::ui::layout::screen_layout(&app, Rect::new(0, 0, 80, 24));
+        let prepared = crate::ui::transcript::prepare_conversation(&app, screen.content.width);
+        let row = prepared
+            .copy_ranges
+            .iter()
+            .find(|copy| !copy.decorative && copy.text.contains('Z'))
+            .unwrap()
+            .row;
+        let total = prepared.total_rows();
+        app.update(AppEvent::ConversationPrepared(prepared));
+        app.update(AppEvent::Viewport {
+            total_lines: total,
+            visible_rows: screen.transcript.height as usize,
+        });
+        let scroll = &mut app.active_session_mut().unwrap().scroll;
+        scroll.follow_tail = false;
+        scroll.offset = row;
+        app.update_scrollbar_hover(screen.scrollbar.x, screen.transcript.y);
+        assert!(app.scrollbar_active());
+        let anchor = app
+            .conversation_point(screen.content.right() - 3, screen.transcript.y)
+            .unwrap();
+        let focus = app
+            .conversation_point(screen.content.right() - 1, screen.transcript.y)
+            .unwrap();
+        assert_eq!(focus.column, screen.content.width as usize - 1);
+        app.selection = Some(ConversationSelection {
+            session_id: "ses_1".into(),
+            anchor,
+            focus,
+            granularity: SelectionGranularity::Character,
+            dragged: true,
+        });
+        assert_eq!(
+            crate::ui::transcript::selection_text(
+                app.prepared_conversation(screen.content.width).unwrap(),
+                app.selection.as_ref().unwrap(),
+            ),
+            "界Z",
+        );
+        for column in [screen.right_gap.x, screen.scrollbar.x] {
+            assert!(
+                app.conversation_point(column, screen.transcript.y)
+                    .is_none()
+            );
+            assert!(!app.pressed_cell_is_link(column, screen.transcript.y));
+            assert!(app.composer_point_at(column, screen.panel.y).is_none());
+        }
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::render(frame, &app))
+            .unwrap();
+        let cell = &terminal.backend().buffer()[(screen.content.right() - 1, screen.transcript.y)];
+        assert_eq!(cell.symbol(), "Z");
+        assert_eq!(cell.bg, crate::theme::Theme::dark().selection_bg);
+    }
+
+    #[test]
+    fn final_body_cell_wide_emoji_stays_inside_the_body_with_a_visible_scrollbar() {
+        use crate::event::AppEvent;
+        use crate::state::view::{ConversationSelection, SelectionGranularity};
+        use crate::theme::ThemeKind;
+        use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+
+        // 73 single cells followed by one 2-cell emoji fills the 75-cell user
+        // body exactly, so the emoji ends on the final body column and the gap
+        // column starts immediately after it. The rows repeat so the prepared
+        // conversation overflows the viewport and the scrollbar can activate.
+        let source = format!("{}🙂\n", "a".repeat(73)).repeat(30);
+        let mut app = crate::ui::testapp::open_with(
+            ThemeKind::Dark,
+            "ses_1",
+            None,
+            "high",
+            vec![crate::ui::testapp::user_entry(0, "loop", &source)],
+        );
+        app.update(AppEvent::TerminalSize {
+            width: 80,
+            height: 24,
+        });
+        let screen = crate::ui::layout::screen_layout(&app, Rect::new(0, 0, 80, 24));
+        let prepared = crate::ui::transcript::prepare_conversation(&app, screen.content.width);
+        let (emoji_row, emoji_start) = {
+            let row = prepared
+                .copy_ranges
+                .iter()
+                .find(|copy| copy.text.contains('🙂'))
+                .expect("emoji copy row");
+            let emoji_at = row.text.find('🙂').expect("emoji");
+            let emoji_start =
+                row.columns.start + unicode_width::UnicodeWidthStr::width(&row.text[..emoji_at]);
+            (row.row, emoji_start)
+        };
+        assert_eq!(
+            emoji_start + 2,
+            screen.content.width as usize,
+            "the emoji must end exactly on the final body column"
+        );
+        let total = prepared.total_rows();
+        assert!(
+            total > screen.transcript.height as usize,
+            "the emoji conversation must overflow so the scrollbar can activate"
+        );
+        app.update(AppEvent::ConversationPrepared(prepared));
+        app.update(AppEvent::Viewport {
+            total_lines: total,
+            visible_rows: screen.transcript.height as usize,
+        });
+        let scroll = &mut app.active_session_mut().unwrap().scroll;
+        scroll.follow_tail = false;
+        scroll.offset = emoji_row;
+        app.update_scrollbar_hover(screen.scrollbar.x, screen.transcript.y);
+        assert!(app.scrollbar_active());
+
+        let anchor = app
+            .conversation_point(screen.content.x + emoji_start as u16, screen.transcript.y)
+            .expect("emoji first cell");
+        let focus = app
+            .conversation_point(
+                screen.content.x + (emoji_start + 1) as u16,
+                screen.transcript.y,
+            )
+            .expect("emoji is selectable on the final body column");
+        app.selection = Some(ConversationSelection {
+            session_id: "ses_1".into(),
+            anchor,
+            focus,
+            granularity: SelectionGranularity::Character,
+            dragged: true,
+        });
+        assert_eq!(
+            crate::ui::transcript::selection_text(
+                app.prepared_conversation(screen.content.width).unwrap(),
+                app.selection.as_ref().unwrap(),
+            ),
+            "🙂",
+        );
+        for column in [screen.right_gap.x, screen.scrollbar.x] {
+            assert!(
+                app.conversation_point(column, screen.transcript.y)
+                    .is_none()
+            );
+            assert!(!app.pressed_cell_is_link(column, screen.transcript.y));
+            assert!(app.composer_point_at(column, screen.panel.y).is_none());
+        }
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::render(frame, &app))
+            .unwrap();
+        let emoji_cell =
+            &terminal.backend().buffer()[(screen.content.right() - 2, screen.transcript.y)];
+        assert_eq!(emoji_cell.symbol(), "🙂");
+    }
 
     #[test]
     fn word_bounds_keep_internal_word_punctuation_together() {

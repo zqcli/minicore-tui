@@ -7,7 +7,7 @@
 
  ▎thinking hard
 
- ▎ read · running                                                      [详 情 ]
+ ▎ read · running                                                    [详 情 ]
  ▎ read
  ▎ ctrl+o collapse
 
@@ -16,9 +16,9 @@
   ⊘ Turn cancelled (user) · persisted · requests: 1 · tool rounds: 1
 
  ⠋ Running read…
- Session ses_1 has active or unsaved/blocked state. Type '/close confirm' to pro
+ Session ses_1 has active or unsaved/blocked state. Type '/close confirm' to p
  ▎
  ▎
  ▎
  ▎
- ▸ project · deep · high · ⚠ incomplete                                    ctx ?
+ ▸ project · deep · high · ⚠ incomplete                                  ctx ?

@@ -1005,11 +1005,11 @@ impl App {
     ) {
         if self.export_capture.as_ref() != Some(capture)
             || self.sessions.active.as_deref() != Some(capture.session_id.as_str())
-            || !self
+            || self
                 .sessions
                 .known
                 .get(&capture.session_id)
-                .is_some_and(|view| view.session_epoch == capture.session_epoch)
+                .is_none_or(|view| view.session_epoch != capture.session_epoch)
         {
             return;
         }

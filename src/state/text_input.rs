@@ -11,13 +11,17 @@ pub(crate) fn boundary(text: &str, mut cursor: usize) -> usize {
 
 pub(crate) fn move_cursor(text: &str, cursor: &mut usize, delta: i32) {
     *cursor = boundary(text, *cursor);
-    if delta < 0 {
-        *cursor = text[..*cursor]
-            .char_indices()
-            .next_back()
-            .map_or(0, |(i, _)| i);
-    } else if delta > 0 {
-        *cursor += text[*cursor..].chars().next().map_or(0, char::len_utf8);
+    match delta.cmp(&0) {
+        std::cmp::Ordering::Less => {
+            *cursor = text[..*cursor]
+                .char_indices()
+                .next_back()
+                .map_or(0, |(i, _)| i);
+        }
+        std::cmp::Ordering::Greater => {
+            *cursor += text[*cursor..].chars().next().map_or(0, char::len_utf8);
+        }
+        std::cmp::Ordering::Equal => {}
     }
 }
 

@@ -52,7 +52,7 @@ fn prepared_tool_sections_keep_full_identity_and_mouse_toggle_uses_the_same_rang
         height: 24,
     });
 
-    let prepared = transcript::prepare_conversation(&app, 79);
+    let prepared = transcript::prepare_conversation(&app, 77);
     let tool_sections: Vec<_> = prepared
         .sections
         .iter()
@@ -134,7 +134,7 @@ fn prepared_tool_sections_keep_full_identity_and_mouse_toggle_uses_the_same_rang
         app.active_view().unwrap().tool_folds.get(&key),
         Some(&crate::state::view::FoldOverride::Collapsed)
     );
-    let prepared = transcript::prepare_conversation(&app, 79);
+    let prepared = transcript::prepare_conversation(&app, 77);
     let folded = prepared
         .sections
         .iter()
@@ -153,7 +153,7 @@ fn prepared_tool_sections_keep_full_identity_and_mouse_toggle_uses_the_same_rang
 fn stable_history_layout_is_cached_and_tool_projection_uses_the_index() {
     crate::perf::reset();
     let mut app = testapp::tools(ThemeKind::Dark);
-    let first = transcript::prepare_conversation(&app, 79);
+    let first = transcript::prepare_conversation(&app, 77);
     let mid = crate::perf::snapshot();
     assert_eq!(mid.tool_linear_scans, 0, "no block scan in the projection");
     assert!(
@@ -192,7 +192,7 @@ fn stable_history_layout_is_cached_and_tool_projection_uses_the_index() {
     // Same view and width: the installed durable cache is authoritative, so a
     // second preparation must not rebuild the stable history.
     app.install_conversation(first);
-    let second = transcript::prepare_conversation(&app, 79);
+    let second = transcript::prepare_conversation(&app, 77);
     let after = crate::perf::snapshot();
     assert_eq!(
         after.layout_calls, mid.layout_calls,
@@ -210,7 +210,7 @@ fn live_tool_mouse_click_collapses_the_running_card() {
         height: 24,
     });
 
-    let prepared = transcript::prepare_conversation(&app, 79);
+    let prepared = transcript::prepare_conversation(&app, 77);
     let live_tool = prepared
         .sections
         .iter()
@@ -246,7 +246,7 @@ fn live_tool_mouse_click_collapses_the_running_card() {
         Some(&crate::state::view::FoldOverride::Collapsed),
         "a plain click on a running live Tool must record a per-tool collapse"
     );
-    let folded = transcript::prepare_conversation(&app, 79)
+    let folded = transcript::prepare_conversation(&app, 77)
         .sections
         .into_iter()
         .find(|section| section.id == live_tool.id)
@@ -353,7 +353,7 @@ fn stale_durable_tool_toggle_cannot_mutate_the_current_live_card() {
 #[test]
 fn prepared_section_ids_survive_tool_result_updates() {
     let mut app = testapp::tools(ThemeKind::Dark);
-    let before: Vec<_> = transcript::prepare_conversation(&app, 79)
+    let before: Vec<_> = transcript::prepare_conversation(&app, 77)
         .sections
         .into_iter()
         .map(|section| section.id)
@@ -368,7 +368,7 @@ fn prepared_section_ids_survive_tool_result_updates() {
         }
     }
     view.transcript.invalidate();
-    let after: Vec<_> = transcript::prepare_conversation(&app, 79)
+    let after: Vec<_> = transcript::prepare_conversation(&app, 77)
         .sections
         .into_iter()
         .map(|section| section.id)
@@ -383,7 +383,7 @@ fn selection_rebases_when_older_history_prepends_rows() {
         width: 80,
         height: 24,
     });
-    let first = transcript::prepare_conversation(&app, 79);
+    let first = transcript::prepare_conversation(&app, 77);
     let section = first
         .sections
         .iter()
@@ -418,7 +418,7 @@ fn selection_rebases_when_older_history_prepends_rows() {
         }),
     );
     view.transcript.invalidate();
-    let second = transcript::prepare_conversation(&app, 79);
+    let second = transcript::prepare_conversation(&app, 77);
     let moved_start = second
         .sections
         .iter()
@@ -441,7 +441,7 @@ fn selection_rebases_when_a_live_section_grows_after_the_selected_row() {
         width: 80,
         height: 24,
     });
-    let first = transcript::prepare_conversation(&app, 79);
+    let first = transcript::prepare_conversation(&app, 77);
     let row = first
         .copy_ranges
         .iter()
@@ -484,7 +484,7 @@ fn selection_rebases_when_a_live_section_grows_after_the_selected_row() {
             event,
         )),
     )));
-    let second = transcript::prepare_conversation(&app, 79);
+    let second = transcript::prepare_conversation(&app, 77);
     app.update(AppEvent::ConversationPrepared(second.clone()));
     let selection = app
         .selection
@@ -509,7 +509,7 @@ fn selection_rebases_when_a_live_section_grows_after_the_selected_row() {
 #[test]
 fn conversation_copy_skips_external_section_spacers_but_keeps_timestamp_content() {
     let app = testapp::chat(ThemeKind::Dark);
-    let prepared = transcript::prepare_conversation(&app, 79);
+    let prepared = transcript::prepare_conversation(&app, 77);
     let user = prepared
         .sections
         .iter()
@@ -1073,7 +1073,7 @@ fn durable_tool_fold_override_is_honored_by_the_prepared_transcript() {
         crate::state::tool::ToolKey::new("ses_1", "loop_1", 0, "call-1"),
         crate::state::view::FoldOverride::Expanded,
     );
-    let prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+    let prepared = crate::ui::transcript::prepare_conversation(&app, 77);
     let tool_sections: Vec<_> = prepared
         .sections
         .iter()
@@ -1096,7 +1096,7 @@ fn durable_tool_fold_override_is_honored_by_the_prepared_transcript() {
     // Without the override the same card defaults to folded (60-line result), so
     // the fold override alone must be the thing widening it.
     std::sync::Arc::make_mut(&mut app.sessions.known.get_mut("ses_1").unwrap().tool_folds).clear();
-    let prepared_collapsed = crate::ui::transcript::prepare_conversation(&app, 79);
+    let prepared_collapsed = crate::ui::transcript::prepare_conversation(&app, 77);
     let read_section_collapsed = prepared_collapsed
         .sections
         .iter()
@@ -1806,8 +1806,9 @@ fn scrollbar_drag_body_follows_before_release() {
     let total = prepared.total_rows();
     let visible = transcript::visible_rows(&app, total, screen.transcript.height);
     let current = total.saturating_sub(visible);
-    let geometry = crate::ui::scrollbar::geometry(screen.transcript, total, current)
-        .expect("tool transcript overflows");
+    let geometry =
+        crate::ui::scrollbar::geometry(screen.scrollbar_for(screen.transcript), total, current)
+            .expect("tool transcript overflows");
     let view_offset_before = app.active_view().unwrap().scroll.offset;
     assert!(app.active_view().unwrap().scroll.follow_tail);
     let down = |kind, row| {
@@ -3997,7 +3998,7 @@ fn new_output_marker_overlays_without_reducing_viewport() {
             )
         })
         .unwrap();
-    let overlay = transcript::marker_area(screen.transcript, "↓ new output", false);
+    let overlay = transcript::marker_area(screen.transcript, "↓ new output");
     for column in screen.transcript.x..screen.transcript.right() {
         if !overlay.contains((column, marker_row as u16).into()) {
             assert_eq!(
@@ -4028,11 +4029,8 @@ fn new_output_marker_overlays_without_reducing_viewport() {
             .any(|line| line_text(line).contains("quoted wisdom")),
         "the covered transcript body remains available to scrolling"
     );
-    let marker_area = transcript::marker_area(
-        Rect::new(1, marker_row as u16, 79, 1),
-        "↓ new output",
-        false,
-    );
+    let marker_area =
+        transcript::marker_area(Rect::new(1, marker_row as u16, 77, 1), "↓ new output");
     let marker_cells = &terminal.backend().buffer().content()
         [marker_row * 80 + marker_area.x as usize..marker_row * 80 + marker_area.right() as usize];
     assert!(

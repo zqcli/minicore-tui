@@ -1,0 +1,13 @@
+    Checking smallvec v1.15.2
+    Checking zerotrie v0.2.5
+    Checking parking_lot_core v0.9.12
+    Checking parking_lot v0.12.5
+    Checking icu_provider v2.1.1
+    Checking crossterm v0.28.1
+    Checking icu_locale v2.1.1
+    Checking ratatui v0.29.0
+    Checking icu_segmenter v2.1.2
+    Checking tui-textarea v0.7.0
+ Documenting minicore-tui v0.3.0 (/root/minicore-tui-closeout-20261003/src-close2-final-c70c73c4)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 16.07s
+   Generated /root/minicore-tui-closeout-20261003/targets/src-close2-final-c70c73c4-1.85.0/doc/minicore_tui/index.html

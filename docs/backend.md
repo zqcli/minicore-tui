@@ -13,17 +13,17 @@ through `--agent-bin`; its config and data directory belong to the Agent.
 
 | Component | Repository | Revision | Package |
 |---|---|---|---|
-| TUI | `zqcli/minicore-tui` | `9e399d9` (current source; prior F-review `daa944a`; core baseline `0aa64c5e4d9211351123db059547beddb15c2cce` is historical) | `0.3.0` |
-| Agent | `zqcli/minicore-agent` | `061743369459299e66be97bf97d2b27352a39914` | `0.5.0` |
-| Runtime | `zqcli/minicore-runtime` | `6cd2bdbc634437dea925495c61c7eb0be10ba171` | `0.4.1` |
+| TUI | `zqcli/minicore-tui` | See [closeout source provenance](verification/v03-closeout/README.md) | `0.3.0` |
+| Agent | `zqcli/minicore-agent` | `d81728b13db68c76b05b4c8cb87161770769947f` | `0.6.0` |
+| Runtime | `zqcli/minicore-runtime` | `9e230617d36130e7ec77aba122b45f1347ac53f2` | `0.6.0` |
 
 The Agent and Runtime revisions are fixed inputs for the 0.3.0 release line;
-the TUI baseline above includes the phase-F lifecycle, ownership, bounds,
-privacy, shutdown, Tool Detail, history-reopen, and export-harness fixes. The
-TUI does not link either backend crate, does not modify the Agent or Runtime
-source, and does not read the Agent Store. Hosted CI is configured to check that
-the separate source checkouts resolve to these exact revisions before building
-them, but has not run for this release.
+the TUI retains the phase-F lifecycle, ownership, bounds, privacy, shutdown,
+Tool Detail, history-reopen, and export-harness fixes. It does not modify either
+backend or read the Agent Store. Hosted CI uses exact checkout pins, locked
+standalone builds and source-identity checks before the real-Agent loopback
+suite. Execution results, as distinct from workflow configuration, belong in
+[closeout verification](verification/v03-closeout/README.md).
 
 ## Handshake
 
@@ -31,7 +31,7 @@ them, but has not run for this release.
 
 ```json
 {
-  "version": "0.5.0",
+  "version": "0.6.0",
   "protocol_version": 1,
   "capabilities": [
     "session.read", "session.context", "turn.result", "tool.read",
@@ -45,22 +45,32 @@ them, but has not run for this release.
 The refactor requires `protocol_version == 1`. The old `is_supported_agent_version`
 package-minor gate (`minor == 3`) is deleted in stage B and replaced by
 `validate_backend(protocol_version, capabilities)`. Protocol v1 equality is a
-necessary but not sufficient condition; the fixed Agent 0.5.0 build plus this
+necessary but not sufficient condition; the fixed Agent 0.6.0 build plus this
 repository's fixtures/E2E remain the release gate.
 
-**Current status:** stage B1 (commit `afd2894`) removed the
-`is_supported_agent_version` package-minor gate and replaced it with
-`validate_backend(protocol_version, capabilities)`. The pinned Agent 0.5.0
-contract is covered by fixtures and reducer tests, including acceptance and
-rejection of the required Protocol v1 capability set. The authorized remote
-Rust 1.85/stable runs for the current F-review tree each pass 830 tests with 53 ignored
-and strict quality gates; the isolated fixed-Agent job passes 34/34 loopback
-E2Es. The accepted fixed-Agent binary hash is
-`661b32976ad6ae2fbe2b33411c7d0d082f9782da70745e4e4a6602c87fb7b273`; the
-isolated CI build hash is separate evidence. Protocol v1 equality remains
-necessary, not sufficient, for release acceptance. Phase F once violated the
-original remote-only Rust/Cargo requirement; the older local Rust 1.98.0 result
-is retained as excluded provenance and is not current acceptance evidence.
+Stage B1 (commit `afd2894`) removed the package-minor gate. Fixtures and reducer
+tests cover acceptance and rejection of the required Protocol v1 capabilities;
+the original 0.5.0 captures below remain historical compatibility fixtures.
+The 0.6.0 pair is checked separately through exact-source real-Agent loopback
+E2E and lifecycle regressions; see [closeout verification](verification/v03-closeout/README.md).
+The earlier 830-test / 34-E2E F-review counts and binary hashes are retained in
+[their original report](verification/v03-f/README.md), not current acceptance.
+
+## Compaction and turn ownership (0.6.0)
+
+Ordinary turns remain append-only and soft-threshold crossings never start a
+summary call. Only a confirmed safe pre-output upstream context-capacity
+rejection may compact and retry the rejected logical request once, within the
+active turn's cancellation/deadline and without redispatching completed tools.
+Successful completed and persisted turns may reserve independent post-turn
+maintenance; `turn.wait` does not wait for that summary. Manual `/compact` is
+idle-only. The TUI reads `current_operation` / `last_result` through its bounded
+Session context poll owner and cancels independent operations using their exact
+`session.compact.cancel` identity, not a completed `turn.cancel`. It adds no
+summary policy, provider calls or prompt retries. Turn statistics use `u64`
+`tool_rounds`; the legacy execution limit retains zero-means-unlimited semantics.
+See [the correlation contract](rpc-contract.md#correlation-and-ordering) for
+polling, draft restoration and late-event fences.
 
 ## Method surface (33 methods)
 
@@ -208,9 +218,20 @@ files on disk before exiting.
 `tests/agent_v1_fixtures.rs` decodes the fixtures and asserts the raw item
 envelope shape; it is the stage-B migration's starting contract.
 
-## Reproduction
+## Current reproduction
 
-The exact source under test is the remote checkout at
+Use the pinned revisions above and the commands in [Testing](testing.md).
+Every remote source export must have a recorded content manifest and its own
+source-specific target directory; never infer source identity from timestamps
+or reuse artifacts from a different export. Record backend commit and binary
+hashes alongside the final TUI source hash. The closeout report contains the
+actual commands, outcomes and remaining platform limits.
+
+## Historical phase-F reproduction
+
+The following paths, versions, counts and commands describe the earlier F-review
+run only; they are not instructions to reuse its targets for current validation.
+The exact source under test was the remote checkout at
 `/root/minicore-tui-v03-refactor/tui` on host `192.168.20.199`. Stage A did not
 build or test locally. The helper scripts below are session scratch under
 `/tmp` and are **not** part of the repository; they hold the host password and
@@ -265,10 +286,9 @@ reruns the E2E suite with the loopback mock, but no hosted run exists for this
 branch. Synthetic frame and editor timings are not terminal input-to-frame
 latency measurements.
 
-When reusing the existing `tui-target` directory after an rsync, run
-`cargo clean -p minicore-tui` (or touch the sources) before the build: rsync
-preserves source mtimes, and a newer stale rlib otherwise shadows the synced
-source, producing confusing "variant not found" errors.
+That run exposed a stale-artifact hazard when rsync preserved source mtimes
+in a reused target. Current verification instead uses immutable source exports
+and source-specific targets; touching sources is not source-identity evidence.
 
 The 34 Agent E2E scenarios and nine release/performance workloads are ignored
 by default and are evidence only when explicitly run with their required

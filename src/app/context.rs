@@ -144,15 +144,16 @@ impl App {
             ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1),
         );
         let body = crate::ui::workspace::file_body(screen.transcript);
+        let scrollbar = screen.scrollbar_for(body);
         let c = self.context_panel().unwrap();
         if matches!(self.dock, Dock::Composer)
-            && (c.scrollbar_grab.is_some()
-                || mouse.column == body.right().saturating_sub(1)
-                    && body.contains((mouse.column, mouse.row).into()))
+            && (c.scrollbar_grab.is_some() || scrollbar.contains((mouse.column, mouse.row).into()))
         {
-            if let Some(g) =
-                crate::ui::scrollbar::geometry(body, crate::ui::context::rows(self).len(), c.offset)
-            {
+            if let Some(g) = crate::ui::scrollbar::geometry(
+                scrollbar,
+                crate::ui::context::rows(self).len(),
+                c.offset,
+            ) {
                 match mouse.kind {
                     K::Down(MouseButton::Left) | K::Drag(MouseButton::Left) => {
                         let grab = c.scrollbar_grab.unwrap_or_else(|| {
@@ -179,7 +180,9 @@ impl App {
                 }
             }
         }
-        if !screen.transcript.contains((mouse.column, mouse.row).into()) {
+        if !screen.transcript.contains((mouse.column, mouse.row).into())
+            && !scrollbar.contains((mouse.column, mouse.row).into())
+        {
             if matches!(mouse.kind, K::Down(MouseButton::Left)) {
                 self.focus = Focus::Editor;
             }

@@ -22,6 +22,91 @@ fn ready() -> App {
 }
 
 #[test]
+fn only_the_dedicated_main_track_can_hover_or_capture() {
+    let mut app = ready();
+    let screen = crate::ui::layout::screen_layout(&app, Rect::new(0, 0, 80, 24));
+    for column in [screen.content.right() - 1, screen.right_gap.x] {
+        mouse(
+            &mut app,
+            MouseEventKind::Moved,
+            column,
+            1,
+            KeyModifiers::NONE,
+        );
+        assert!(!app.scrollbar_active());
+        mouse(
+            &mut app,
+            MouseEventKind::Down(MouseButton::Left),
+            column,
+            1,
+            KeyModifiers::NONE,
+        );
+        assert!(app.scrollbar_drag.is_none());
+    }
+    let cursor = app.composer.cursor();
+    for row in [screen.panel.y, screen.footer.y] {
+        mouse(
+            &mut app,
+            MouseEventKind::Down(MouseButton::Left),
+            screen.scrollbar.x,
+            row,
+            KeyModifiers::NONE,
+        );
+        assert!(app.scrollbar_drag.is_none());
+        assert_eq!(app.composer.cursor(), cursor);
+    }
+    mouse(
+        &mut app,
+        MouseEventKind::Moved,
+        screen.scrollbar.x,
+        1,
+        KeyModifiers::NONE,
+    );
+    assert!(app.scrollbar_active());
+    mouse(
+        &mut app,
+        MouseEventKind::Down(MouseButton::Left),
+        screen.scrollbar.x,
+        1,
+        KeyModifiers::NONE,
+    );
+    assert!(app.scrollbar_drag.is_some());
+}
+
+#[test]
+fn pending_async_resize_fences_the_external_scrollbar_as_well_as_the_body() {
+    use ratatui::{Terminal, backend::TestBackend};
+    let mut app = ready();
+    app.enable_async_layout();
+    let prepared = crate::ui::transcript::prepare_conversation(&app, app.terminal_content_width());
+    app.update(AppEvent::ConversationPrepared(prepared));
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    let frame = terminal
+        .draw(|frame| crate::ui::render(frame, &app))
+        .unwrap();
+    app.remember_transcript_frame(frame.buffer);
+    let before = app.active_view().unwrap().scroll.clone();
+    app.update(AppEvent::TerminalSize {
+        width: 100,
+        height: 24,
+    });
+    for kind in [
+        MouseEventKind::Moved,
+        MouseEventKind::Down(MouseButton::Left),
+    ] {
+        mouse(&mut app, kind, 99, 1, KeyModifiers::NONE);
+        assert!(!app.scrollbar_active());
+        assert!(app.scrollbar_drag.is_none());
+        assert!(app.selection.is_none());
+        let scroll = &app.active_view().unwrap().scroll;
+        assert_eq!(
+            (scroll.offset, scroll.follow_tail),
+            (before.offset, before.follow_tail)
+        );
+    }
+}
+
+#[test]
 fn early_scrollbar_tick_does_not_redraw() {
     let mut app = ready();
     let base = Instant::now();
@@ -141,8 +226,7 @@ fn marker_click_uses_prepared_geometry_before_viewport_receipt() {
     app.active_session_mut().unwrap().scroll.follow_tail = false;
     let screen = crate::ui::layout::screen_layout(&app, Rect::new(0, 0, 80, 24));
     app.viewport = (0, screen.transcript.height as usize);
-    let indicator =
-        crate::ui::transcript::marker_area(screen.transcript, "↑ scroll position", false);
+    let indicator = crate::ui::transcript::marker_area(screen.transcript, "↑ scroll position");
     mouse(
         &mut app,
         MouseEventKind::Down(MouseButton::Left),
@@ -157,7 +241,7 @@ fn marker_click_uses_prepared_geometry_before_viewport_receipt() {
 #[test]
 fn wheel_uses_current_prepared_extent_before_viewport_receipt() {
     let mut app = ready();
-    let mut prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+    let mut prepared = crate::ui::transcript::prepare_conversation(&app, 77);
     let mut base = prepared.lines();
     base.extend((0..100).map(|_| ratatui::text::Line::from("growth")));
     prepared.set_test_rows(base.len());
@@ -186,7 +270,7 @@ fn mouse(app: &mut App, kind: MouseEventKind, column: u16, row: u16, modifiers: 
 fn pi_wheel_steps_and_page_overlap_preserve_prepared_rows() {
     let mut app = ready();
     let maximum = app.viewport.0 - app.viewport.1;
-    let rows = app.prepared_conversation(79).unwrap().history_ptr();
+    let rows = app.prepared_conversation(77).unwrap().history_ptr();
     mouse(
         &mut app,
         MouseEventKind::ScrollUp,
@@ -204,7 +288,7 @@ fn pi_wheel_steps_and_page_overlap_preserve_prepared_rows() {
         app.active_view().unwrap().scroll.offset,
         maximum - 6 - app.viewport.1.saturating_sub(4).max(1)
     );
-    assert_eq!(app.prepared_conversation(79).unwrap().history_ptr(), rows);
+    assert_eq!(app.prepared_conversation(77).unwrap().history_ptr(), rows);
 }
 
 #[test]
@@ -315,7 +399,7 @@ fn pi_track_click_and_drag_are_live_release_does_not_recalculate() {
 #[test]
 fn boundary_wheel_is_noop_and_does_not_reveal_scrollbar() {
     let mut app = ready();
-    let rows = app.prepared_conversation(79).unwrap().history_ptr();
+    let rows = app.prepared_conversation(77).unwrap().history_ptr();
     for _ in 0..100 {
         mouse(
             &mut app,
@@ -329,7 +413,7 @@ fn boundary_wheel_is_noop_and_does_not_reveal_scrollbar() {
     assert!(app.active_view().unwrap().scroll.follow_tail);
     assert!(!app.scrollbar_visible(app.viewport.0, app.viewport.1));
     assert_eq!(app.next_tick(), None);
-    assert_eq!(app.prepared_conversation(79).unwrap().history_ptr(), rows);
+    assert_eq!(app.prepared_conversation(77).unwrap().history_ptr(), rows);
 }
 
 #[test]
@@ -350,7 +434,7 @@ fn viewport_growth_keeps_capture_and_drag_uses_new_geometry() {
         KeyModifiers::empty(),
     );
     let before = app.active_view().unwrap().scroll.offset;
-    let mut prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+    let mut prepared = crate::ui::transcript::prepare_conversation(&app, 77);
     let mut base = prepared.lines();
     base.extend((0..500).map(|_| ratatui::text::Line::from("synthetic growth")));
     prepared.set_test_rows(base.len());
@@ -407,7 +491,7 @@ fn app_scroll_and_visibility_trace_matches_pi() {
                     width: 80,
                     height: visible as u16 + chrome,
                 });
-                let mut prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+                let mut prepared = crate::ui::transcript::prepare_conversation(&app, 77);
                 prepared.set_test_rows(total);
                 app.update(AppEvent::Viewport {
                     total_lines: total,

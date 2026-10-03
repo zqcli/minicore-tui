@@ -1,0 +1,10 @@
+running full stable 2026-10-03T08:40:15Z
+full_stable=0
+running full 1.85.0 2026-10-03T08:42:37Z
+full_1.85.0=0
+running perfpty stable 2026-10-03T08:45:24Z
+perfpty_stable=0
+running perfpty 1.85.0 2026-10-03T08:47:31Z
+perfpty_1.85.0=0
+driver_exit=0
+finished=2026-10-03T08:49:41Z

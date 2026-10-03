@@ -1,13 +1,13 @@
-  A substantial assistant reply for block 22 with enough text to wrap over seve│
-  al rows.                                                                     │
+  A substantial assistant reply for block 22 with enough text to wrap over sev │
+  eral rows.                                                                   │
                                                                                │
  ▎                                                                             │
  ▎ a user turn                                                                 │
  ▎ time unavailable                                                            │
  ▎                                                                             │
                                                                                │
-  A substantial assistant reply for block 23 with enough text to wrap over seve│
-  al rows.                                                                     │
+  A substantial assistant reply for block 23 with enough text to wrap over sev │
+  eral rows.                                                                   │
                                                                                │
  ▎                                                                             │
  ▎ continue                                                                    │
@@ -15,10 +15,10 @@
  ▎                                                                             │
                                                                                │
   New output                                                                   ┃
-                                  ↓ new output                                 ┃
+                                 ↓ new output                                  ┃
  ⠋ Working
  ▎
  ▎
  ▎
  ▎
- ▸ project · deep · high · ⚠ incomplete                                    ctx ?
+ ▸ project · deep · high · ⚠ incomplete                                  ctx ?

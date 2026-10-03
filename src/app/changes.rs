@@ -515,7 +515,7 @@ impl App {
         let Some(layout) = &d.layout else {
             return vec![];
         };
-        if layout.identity.width != self.main_body_area().width.saturating_sub(17).max(1) {
+        if layout.identity.width != self.main_body_area().width.saturating_sub(16).max(1) {
             self.notice(NoticeLevel::Info, "等待当前宽度的 diff 布局后复制");
             return vec![];
         }
@@ -604,6 +604,7 @@ impl App {
             ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1),
         );
         let body = crate::ui::workspace::file_body(screen.transcript);
+        let scrollbar = screen.scrollbar_for(body);
         let s = self.changes().unwrap();
         let (total, offset) = if s.in_diff {
             let d = s.detail.as_ref().unwrap();
@@ -620,11 +621,9 @@ impl App {
             (s.records.len(), s.offset)
         };
         if matches!(self.dock, Dock::Composer)
-            && (s.scrollbar_grab.is_some()
-                || mouse.column == body.right().saturating_sub(1)
-                    && body.contains((mouse.column, mouse.row).into()))
+            && (s.scrollbar_grab.is_some() || scrollbar.contains((mouse.column, mouse.row).into()))
         {
-            if let Some(g) = crate::ui::scrollbar::geometry(body, total, offset) {
+            if let Some(g) = crate::ui::scrollbar::geometry(scrollbar, total, offset) {
                 match mouse.kind {
                     K::Down(MouseButton::Left) | K::Drag(MouseButton::Left) => {
                         let grab = s.scrollbar_grab.unwrap_or_else(|| {
@@ -657,7 +656,9 @@ impl App {
                 }
             }
         }
-        if !screen.transcript.contains((mouse.column, mouse.row).into()) {
+        if !screen.transcript.contains((mouse.column, mouse.row).into())
+            && !scrollbar.contains((mouse.column, mouse.row).into())
+        {
             if matches!(mouse.kind, K::Down(MouseButton::Left)) {
                 self.focus = Focus::Editor;
             }

@@ -9,11 +9,21 @@ Status values are deliberately strict:
   validation has not been run on the current tree.
 - **Not applicable** — the criterion does not apply to this project.
 
-## Current Remote Verification
+## Current Closeout Verification
 
-The current source/test tree is commit `9e399d9`, after F-review commit
+The current package remains TUI 0.3.0, paired with the pinned Agent 0.6.0 and
+Runtime 0.6.0 releases. Exact-source quality gates, layout/golden review,
+backend E2E and delivery evidence are tracked in
+[the closeout record](verification/v03-closeout/README.md). Until those gates
+complete, the historical Passed rows below describe their original phase-F
+coverage, not a claim that the current integrated worktree passed. Native
+manual/IME/desktop clipboard and real-provider limits remain explicit.
+
+## Historical Phase-F Remote Verification
+
+The phase-F source/test tree was commit `9e399d9`, after F-review commit
 `daa944a`; `0aa64c5e4d9211351123db059547beddb15c2cce` is historical core
-baseline provenance, not the current source hash. The remote source manifest
+baseline provenance, not the closeout source hash. The remote source manifest
 covers 375 `src/scripts/tests/snapshots` entries and has SHA-256
 `607a4b52d4b865b6210f8865473f3a8aa8126b15d374b604f050fc4ebb09ba00`.
 On the authorized builder `root@192.168.20.199`, Rust 1.85.0 and stable each
@@ -25,7 +35,7 @@ The fixed Agent/Runtime source checkouts resolved exactly to Agent
 `061743369459299e66be97bf97d2b27352a39914` / 0.5.0 and Runtime
 `6cd2bdbc634437dea925495c61c7eb0be10ba171` / 0.4.1. The isolated fixed job
 performed a clean TUI/backend locked fetch, offline backend builds, and passed
-**34/34** loopback E2Es. The current Rust 1.85.0 and stable Release performance sets each passed
+**34/34** loopback E2Es. Those Rust 1.85.0 and stable Release performance sets each passed
 **9/9**, including the 256 KiB draft and real
 clipboard probes. Linux OS-PTY validation passed the terminal lifecycle,
 negative same-slave raw-mode detection, panic, input/resize, real-TUI shutdown,
@@ -42,7 +52,7 @@ the authorized remote Rust 1.85.0 and stable environments.
 The historical E3 368-path build/test/snapshot input list retains content
 digest
 `1180a6f1ca4be7c61b1e7f3cab287b1f79aed63f8f9933629897fdf33bea6813`; the
-current 375-entry manifest is recorded above. The 60 committed snapshot files
+phase-F 375-entry manifest is recorded above. The 60 committed snapshot files
 have sorted-content digest
 `b8913f5f47d8a6a57bbfae09a54e98a283aa88e468c9df7bfa9e6f7691e325e2`.
 Raw current F-review logs remain on the authorized builder under
@@ -52,12 +62,12 @@ repository.
 
 ## Historical E3 Remote Evidence And Phase-F Delta
 
-The E3 counts below are retained for stage provenance; the final-source remote
-evidence is recorded above and is the current release validation. The current package is TUI 0.3.0 against
-Agent 0.5.0 / Runtime 0.4.1. Phase-F work began at `d5d1609` and continued
-through the current source baseline with query-lifecycle, ownership, bounds,
-privacy, shutdown, Tool Detail, history-reopen, and export-harness fixes.
-Hosted CI is configured but has not run in this workspace.
+The E3 counts below are retained for stage provenance; phase-F remote evidence
+is recorded above and is not current closeout validation. That package pair
+was TUI 0.3.0 against Agent 0.5.0 / Runtime 0.4.1. Phase-F work began at
+`d5d1609` and continued through its recorded source baseline with query-lifecycle,
+ownership, bounds, privacy, shutdown, Tool Detail, history-reopen, and
+export-harness fixes. Hosted CI had not run for that evidence record.
 
 The authoritative builder is `root@192.168.20.199`, workspace
 `/root/minicore-tui-v03-refactor/tui`, with Rust 1.85.0. The E3 C2c mainline

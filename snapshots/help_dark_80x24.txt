@@ -7,18 +7,18 @@
 
 
 
- ┌─────────────────────────────────────────────────────────────────────────────┐
- │Help                                                                         │
- │                                                                             │
- │Global:                                                                      │
- │Ctrl+C  clear the composer; empty: press again to quit                       │
- │Ctrl+D  quit when the composer is empty and idle                             │
- │F1  open/close help; q quits the application                                 │
- │Ctrl+R  session selector                                                     │
- │Ctrl+L  model selector; updates active session at a request boundary         │
- │Shift+Tab  reasoning selector; updates active session at a request boundary  │
- │Ctrl+N  open the new-session form                                            │
- │F2  rename the selected session                                              │
- │↑↓/PgUp/PgDn scroll · Esc/F1 close · q quit · 1–10/96                        │
- └─────────────────────────────────────────────────────────────────────────────┘
+ ┌───────────────────────────────────────────────────────────────────────────┐
+ │Help                                                                       │
+ │                                                                           │
+ │Global:                                                                    │
+ │Ctrl+C  clear the composer; empty: press again to quit                     │
+ │Ctrl+D  quit when the composer is empty and idle                           │
+ │F1  open/close help; q quits the application                               │
+ │Ctrl+R  session selector                                                   │
+ │Ctrl+L  model selector; updates active session at a request boundary       │
+ │Shift+Tab  reasoning selector; updates active session at a request boundary│
+ │Ctrl+N  open the new-session form                                          │
+ │F2  rename the selected session                                            │
+ │↑↓/PgUp/PgDn · Esc/F1 close · q quit · 1–10/98                             │
+ └───────────────────────────────────────────────────────────────────────────┘
  starting

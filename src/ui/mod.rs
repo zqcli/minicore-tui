@@ -95,16 +95,17 @@ pub fn render(frame: &mut Frame, app: &App) {
         return;
     }
     let screen = layout::screen_layout(app, area);
+    let scrollbar = screen.scrollbar_for(screen.transcript);
     if app.context_panel().is_some() {
-        context::render(frame, screen.transcript, app, &theme);
+        context::render(frame, screen.transcript, scrollbar, app, &theme);
     } else if app.changes().is_some() {
-        changes::render(frame, screen.transcript, app, &theme);
+        changes::render(frame, screen.transcript, scrollbar, app, &theme);
     } else if app.file_preview().is_some() {
-        workspace::render_file(frame, screen.transcript, app, &theme);
+        workspace::render_file(frame, screen.transcript, scrollbar, app, &theme);
     } else if app.tool_detail().is_some() {
-        tool_detail::render(frame, screen.transcript, app, &theme);
+        tool_detail::render(frame, screen.transcript, scrollbar, app, &theme);
     } else {
-        transcript::render(frame, screen.transcript, app, &theme);
+        transcript::render(frame, screen.transcript, scrollbar, app, &theme);
     }
 
     if let Some(status_area) = screen.status {
@@ -213,6 +214,62 @@ mod tests {
             terminal.draw(|frame| render(frame, &app)).unwrap();
             let bg = terminal.backend().buffer().cell((0, 0)).unwrap().bg;
             assert_eq!(bg, Theme::dark().page_bg, "page bg at {:?}", size);
+        }
+    }
+
+    #[test]
+    fn right_gap_stays_blank_and_scrollbar_never_reflows_body_editor_or_footer() {
+        use crate::event::AppEvent;
+        use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+
+        for kind in [ThemeKind::Dark, ThemeKind::Light] {
+            let theme = Theme::for_kind(kind);
+            for (width, height) in [(60, 16), (80, 24), (120, 40)] {
+                let mut app = crate::ui::testapp::tools(kind);
+                app.update(AppEvent::TerminalSize { width, height });
+                app.composer_mut().set_text(&"中文🙂e\u{301} ".repeat(35));
+                let screen = layout::screen_layout(&app, Rect::new(0, 0, width, height));
+                let prepared = transcript::prepare_conversation(&app, screen.content.width);
+                let total = prepared.total_rows();
+                app.update(AppEvent::Viewport {
+                    total_lines: total,
+                    visible_rows: screen.transcript.height as usize,
+                });
+                app.update(AppEvent::ConversationPrepared(prepared));
+                assert!(!app.scrollbar_visible(total, screen.transcript.height as usize));
+
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal.draw(|frame| render(frame, &app)).unwrap();
+                let hidden = terminal.backend().buffer().clone();
+                app.update(AppEvent::Terminal(Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::Moved,
+                    column: screen.scrollbar.x,
+                    row: screen.transcript.y,
+                    modifiers: KeyModifiers::NONE,
+                })));
+                assert!(app.scrollbar_active());
+                terminal.draw(|frame| render(frame, &app)).unwrap();
+                let visible = terminal.backend().buffer();
+
+                for row in 0..height {
+                    for column in screen.content.x..screen.content.right() {
+                        assert_eq!(hidden[(column, row)], visible[(column, row)]);
+                    }
+                    for column in [screen.gutter.x, screen.right_gap.x] {
+                        let cell = &visible[(column, row)];
+                        assert_eq!(cell.symbol(), " ", "{kind:?} {width}x{height} row {row}");
+                        assert_eq!(cell.bg, theme.page_bg);
+                    }
+                    let track = &visible[(screen.scrollbar.x, row)];
+                    assert_eq!(track.bg, theme.page_bg);
+                    if row < screen.transcript.bottom() {
+                        assert!(matches!(track.symbol(), "│" | "█"));
+                    } else {
+                        assert_eq!(track.symbol(), " ", "dock must not paint the track");
+                    }
+                    assert_eq!(hidden[(screen.scrollbar.x, row)].symbol(), " ");
+                }
+            }
         }
     }
 

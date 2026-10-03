@@ -19,7 +19,7 @@ impl App {
         };
         // Copy the same immutable snapshot the user can see. A newer stream
         // revision waiting on the worker must not starve copy during output.
-        let width = self.tool_body_area().width.saturating_sub(1).max(1);
+        let width = self.tool_body_area().width.max(1);
         let Some(layout) = detail
             .layout
             .as_ref()
@@ -52,16 +52,16 @@ impl App {
             ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1),
         );
         let body = crate::ui::tool_detail::body_area(screen.transcript);
+        let scrollbar = screen.scrollbar_for(body);
         let detail = self.tool_detail().unwrap();
         let dragging = detail.scrollbar_grab.is_some();
-        if dragging
-            || (mouse.column == body.right().saturating_sub(1)
-                && body.contains((mouse.column, mouse.row).into()))
-        {
+        if dragging || scrollbar.contains((mouse.column, mouse.row).into()) {
             let total = detail.layout.as_ref().map_or(0, |layout| layout.rows.len());
-            if let Some(geometry) =
-                crate::ui::scrollbar::geometry(body, total, detail.offset(body.height as usize))
-            {
+            if let Some(geometry) = crate::ui::scrollbar::geometry(
+                scrollbar,
+                total,
+                detail.offset(body.height as usize),
+            ) {
                 match mouse.kind {
                     Kind::Down(MouseButton::Left) | Kind::Drag(MouseButton::Left) => {
                         let grab = detail.scrollbar_grab.unwrap_or_else(|| {
@@ -88,7 +88,9 @@ impl App {
                 }
             }
         }
-        if !screen.transcript.contains((mouse.column, mouse.row).into()) {
+        if !screen.transcript.contains((mouse.column, mouse.row).into())
+            && !scrollbar.contains((mouse.column, mouse.row).into())
+        {
             if matches!(mouse.kind, Kind::Down(MouseButton::Left)) {
                 self.focus = Focus::Editor;
             }

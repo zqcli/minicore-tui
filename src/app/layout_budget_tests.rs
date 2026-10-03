@@ -37,7 +37,7 @@ fn section(session: &str, index: usize, bytes: usize) -> Arc<SectionLayout> {
                 history_index: Some(index),
             },
             revision: 0,
-            width: 79,
+            width: 77,
             theme: ThemeKind::Dark,
             folded: false,
             reasoning_visible: true,
@@ -51,7 +51,7 @@ fn section(session: &str, index: usize, bytes: usize) -> Arc<SectionLayout> {
         }),
         copy_ranges: Arc::new(Vec::new()),
         link_cells: Arc::new(Vec::new()),
-        content_columns: 0..79,
+        content_columns: 0..77,
         collapsible: false,
         folded: false,
     })
@@ -114,7 +114,7 @@ fn layout_budget_background_eviction_preserves_empty_terminal_batch_and_later_su
         let background = durable(
             &app,
             "ses_2",
-            79,
+            77,
             (0..23).map(|i| section("ses_2", i, 2 * MIB)).collect(),
         );
         app.sessions
@@ -123,7 +123,7 @@ fn layout_budget_background_eviction_preserves_empty_terminal_batch_and_later_su
             .unwrap()
             .transcript
             .render_cache = Some(background);
-        let id = begin(&mut app, 79);
+        let id = begin(&mut app, 77);
         batch(
             &mut app,
             &id,
@@ -142,7 +142,7 @@ fn layout_budget_background_eviction_preserves_empty_terminal_batch_and_later_su
         }
         batch(&mut app, &id, vec![], true);
         assert_eq!(
-            indices(&app, 79),
+            indices(&app, 77),
             if later_suffix {
                 vec![Some(0), Some(1), Some(2)]
             } else {
@@ -150,7 +150,7 @@ fn layout_budget_background_eviction_preserves_empty_terminal_batch_and_later_su
             }
         );
         assert!(app.layout_cache_bytes() <= crate::limits::LAYOUT_CACHE_BYTES);
-        assert!(app.layout_request(79).is_none());
+        assert!(app.layout_request(77).is_none());
     }
 }
 
@@ -160,7 +160,7 @@ fn layout_budget_releases_old_active_cache_without_invalidating_replacement() {
     let old = durable(
         &app,
         "ses_1",
-        79,
+        77,
         (0..23).map(|i| section("ses_1", i, 2 * MIB)).collect(),
     );
     let weak = Arc::downgrade(&old);
@@ -208,7 +208,7 @@ fn layout_budget_active_overflow_is_truthful_noncopyable_and_does_not_spin() {
     };
     app.active_session_mut().unwrap().scroll.follow_tail = false;
     app.active_session_mut().unwrap().scroll.anchor = Some(anchor.clone());
-    let id = begin(&mut app, 79);
+    let id = begin(&mut app, 77);
     batch(
         &mut app,
         &id,
@@ -217,10 +217,10 @@ fn layout_budget_active_overflow_is_truthful_noncopyable_and_does_not_spin() {
     );
     assert!(app.layout_pending.is_none());
     assert!(app.layout_partial.is_none());
-    let fallback = app.cached_durable(79).unwrap();
-    assert_eq!(indices(&app, 79), vec![None]);
+    let fallback = app.cached_durable(77).unwrap();
+    assert_eq!(indices(&app, 77), vec![None]);
     assert!(fallback.retained_bytes() < 4096);
-    let prepared = app.prepared_conversation(79).unwrap();
+    let prepared = app.prepared_conversation(77).unwrap();
     let text = prepared
         .lines()
         .iter()
@@ -246,8 +246,8 @@ fn layout_budget_active_overflow_is_truthful_noncopyable_and_does_not_spin() {
         batch(&mut app, &id, vec![section("ses_1", 99, 1024)], false);
         batch(&mut app, &id, vec![], true);
         app.update(AppEvent::Tick);
-        assert!(app.layout_request(79).is_none());
-        assert!(Arc::ptr_eq(&fallback, &app.cached_durable(79).unwrap()));
+        assert!(app.layout_request(77).is_none());
+        assert!(Arc::ptr_eq(&fallback, &app.cached_durable(77).unwrap()));
     }
     // A real geometry change permits a new, smaller layout; old chunks stay stale.
     let smaller = begin(&mut app, 159);
@@ -265,7 +265,7 @@ fn layout_budget_complete_active_cache_overflow_uses_the_same_bounded_fallback()
     let large = durable(
         &app,
         "ses_1",
-        79,
+        77,
         (0..25).map(|i| section("ses_1", i, 2 * MIB)).collect(),
     );
     app.sessions
@@ -275,12 +275,12 @@ fn layout_budget_complete_active_cache_overflow_uses_the_same_bounded_fallback()
         .transcript
         .render_cache = Some(large);
     app.enforce_layout_budget();
-    assert_eq!(indices(&app, 79), vec![None]);
+    assert_eq!(indices(&app, 77), vec![None]);
     assert!(app.layout_cache_bytes() < 4096);
-    assert!(app.layout_request(79).is_none());
+    assert!(app.layout_request(77).is_none());
     app.active_session_mut().unwrap().transcript.invalidate();
     assert!(
-        app.layout_request(79).is_some(),
+        app.layout_request(77).is_some(),
         "changed source generation can retry"
     );
 }
@@ -288,11 +288,11 @@ fn layout_budget_complete_active_cache_overflow_uses_the_same_bounded_fallback()
 #[test]
 fn layout_budget_stale_partial_never_marks_a_new_session_as_overflowed() {
     let mut app = app();
-    let id = begin(&mut app, 79);
+    let id = begin(&mut app, 77);
     let oversized = durable(
         &app,
         "ses_1",
-        79,
+        77,
         (0..25).map(|i| section("ses_1", i, 2 * MIB)).collect(),
     );
     app.layout_partial = Some((id, Arc::clone(&oversized.layout)));
@@ -300,8 +300,8 @@ fn layout_budget_stale_partial_never_marks_a_new_session_as_overflowed() {
     app.enforce_layout_budget();
     assert!(app.layout_pending.is_none());
     assert!(app.layout_partial.is_none());
-    assert!(app.cached_durable(79).is_none());
-    assert!(app.layout_request(79).is_some());
+    assert!(app.cached_durable(77).is_none());
+    assert!(app.layout_request(77).is_some());
 }
 
 #[test]

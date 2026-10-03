@@ -1,5 +1,5 @@
 //! Pi 0.85.1 fullscreen scrollbar geometry and auto visibility.
-//! The Session owns scroll position; this overlay never changes content width.
+//! The Session owns scroll position; the page reserves a separate track column.
 
 use std::time::{Duration, Instant};
 

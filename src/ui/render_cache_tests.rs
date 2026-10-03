@@ -20,9 +20,112 @@ use crate::state::view::{ConversationSelection, SelectionGranularity, SelectionP
 use crate::theme::ThemeKind;
 use crate::ui::transcript::{prepare_conversation, visible_rows};
 
-const WIDTH: u16 = 79;
+const WIDTH: u16 = 77;
 const HEIGHT: u16 = 24;
 const MD: &str = "# Title\n\nSome **bold** and *italic* text with `code`.\n\n- item 1\n- item 2\n\n```rust\nfn test() {}\n```\n";
+
+#[test]
+fn pending_layout_replays_body_and_track_without_painting_gap_or_grown_dock() {
+    let mut app = make_test_app(20);
+    app.enable_async_layout();
+    let prepared = prepare_conversation(&app, WIDTH);
+    app.update(AppEvent::ConversationPrepared(prepared));
+    let screen = crate::ui::layout::screen_layout(&app, Rect::new(0, 0, 80, 24));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+    let rendered = terminal
+        .draw(|frame| crate::ui::render(frame, &app))
+        .unwrap();
+    app.remember_transcript_frame(rendered.buffer);
+    app.update(AppEvent::Terminal(crossterm::event::Event::Mouse(
+        MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: screen.scrollbar.x,
+            row: screen.transcript.y,
+            modifiers: KeyModifiers::NONE,
+        },
+    )));
+    assert!(app.scrollbar_active());
+    let rendered = terminal
+        .draw(|frame| crate::ui::render(frame, &app))
+        .unwrap();
+    app.remember_transcript_frame(rendered.buffer);
+    let previous = terminal.backend().buffer().clone();
+    app.update(AppEvent::Rpc(RpcEvent::AgentStderr {
+        bytes: 1,
+        dropped: 0,
+    }));
+    assert!(app.prepared_conversation(WIDTH).is_none());
+    app.composer_mut().set_text(&"new draft row\n".repeat(8));
+    let current = crate::ui::layout::screen_layout(&app, Rect::new(0, 0, 80, 24));
+    assert!(current.transcript.height < screen.transcript.height);
+    assert!(
+        app.transition_transcript_frame(current.transcript)
+            .is_some()
+    );
+    terminal
+        .draw(|frame| crate::ui::render(frame, &app))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    for row in current.transcript.y..current.transcript.bottom() {
+        for column in current.content.x..current.content.right() {
+            assert_eq!(buffer[(column, row)], previous[(column, row)]);
+        }
+        assert_eq!(
+            buffer[(current.scrollbar.x, row)],
+            previous[(screen.scrollbar.x, row)]
+        );
+    }
+    for row in 0..24 {
+        assert_eq!(buffer[(current.right_gap.x, row)].symbol(), " ");
+        assert_eq!(
+            buffer[(current.right_gap.x, row)].bg,
+            crate::theme::Theme::dark().page_bg
+        );
+        if row >= current.transcript.bottom() {
+            assert_eq!(buffer[(current.scrollbar.x, row)].symbol(), " ");
+            assert_eq!(
+                buffer[(current.scrollbar.x, row)].bg,
+                crate::theme::Theme::dark().page_bg
+            );
+        }
+    }
+}
+
+#[test]
+fn pending_width_resize_discards_body_and_independent_track_replay() {
+    let mut app = make_test_app(20);
+    app.enable_async_layout();
+    let prepared = prepare_conversation(&app, WIDTH);
+    app.update(AppEvent::ConversationPrepared(prepared));
+    let screen = crate::ui::layout::screen_layout(&app, Rect::new(0, 0, 80, 24));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+    let rendered = terminal
+        .draw(|frame| crate::ui::render(frame, &app))
+        .unwrap();
+    app.remember_transcript_frame(rendered.buffer);
+    assert!(app.transition_transcript_frame(screen.transcript).is_some());
+    assert!(app.transition_scrollbar_frame(screen.transcript).is_some());
+
+    app.update(AppEvent::Rpc(RpcEvent::AgentStderr {
+        bytes: 1,
+        dropped: 0,
+    }));
+    assert!(app.prepared_conversation(WIDTH).is_none());
+    app.update(AppEvent::TerminalSize {
+        width: 100,
+        height: 24,
+    });
+    let current = crate::ui::layout::screen_layout(&app, Rect::new(0, 0, 100, 24));
+    assert_ne!(current.transcript, screen.transcript);
+    // A width change reflows every body row and relocates the track, so neither
+    // the old body nor the old right-edge column may be replayed at the new
+    // geometry while the replacement layout is pending.
+    assert!(
+        app.transition_transcript_frame(current.transcript)
+            .is_none()
+    );
+    assert!(app.transition_scrollbar_frame(current.transcript).is_none());
+}
 
 #[test]
 #[ignore = "manual matched scrollbar event benchmark"]
@@ -107,12 +210,12 @@ fn make_test_app(item_count: usize) -> App {
     app.sessions.known.insert("ses_test".into(), view);
     app.sessions.active = Some("ses_test".into());
     app.update(AppEvent::TerminalSize {
-        width: WIDTH + 1,
+        width: WIDTH + 3,
         height: HEIGHT,
     });
     let prepared = prepare_conversation(&app, WIDTH);
     let screen =
-        crate::ui::layout::screen_layout(&app, ratatui::layout::Rect::new(0, 0, WIDTH + 1, HEIGHT));
+        crate::ui::layout::screen_layout(&app, ratatui::layout::Rect::new(0, 0, WIDTH + 3, HEIGHT));
     let vis = visible_rows(&app, prepared.total_rows(), screen.transcript.height);
     app.update(AppEvent::Viewport {
         total_lines: prepared.total_rows(),
@@ -272,7 +375,7 @@ fn viewport_duplicate_is_idempotent_and_does_not_cancel_drag() {
     let mut app = make_test_app(5);
     let prepared = prepare_conversation(&app, WIDTH);
     let total = prepared.total_rows();
-    let area = ratatui::layout::Rect::new(0, 0, WIDTH + 1, HEIGHT);
+    let area = ratatui::layout::Rect::new(0, 0, WIDTH + 3, HEIGHT);
     let screen = crate::ui::layout::screen_layout(&app, area);
     let vis = visible_rows(&app, total, screen.transcript.height);
     app.update(AppEvent::ConversationPrepared(prepared));
@@ -282,8 +385,12 @@ fn viewport_duplicate_is_idempotent_and_does_not_cancel_drag() {
     });
 
     // Start scrollbar drag directly
-    let geo = crate::ui::scrollbar::geometry(screen.transcript, total, total.saturating_sub(vis))
-        .unwrap();
+    let geo = crate::ui::scrollbar::geometry(
+        screen.scrollbar_for(screen.transcript),
+        total,
+        total.saturating_sub(vis),
+    )
+    .unwrap();
     let drag_column = geo.column as u16;
     let drag_row = geo.thumb_top as u16;
 
@@ -318,11 +425,15 @@ fn unrelated_rpc_reprepare_keeps_scrollbar_drag_until_release() {
     let mut app = make_test_app(5);
     let prepared = prepare_conversation(&app, WIDTH);
     let total = prepared.total_rows();
-    let area = ratatui::layout::Rect::new(0, 0, WIDTH + 1, HEIGHT);
+    let area = ratatui::layout::Rect::new(0, 0, WIDTH + 3, HEIGHT);
     let screen = crate::ui::layout::screen_layout(&app, area);
     let visible = visible_rows(&app, total, screen.transcript.height);
-    let geometry = crate::ui::scrollbar::geometry(screen.transcript, total, total - visible)
-        .expect("overflowing transcript has a scrollbar");
+    let geometry = crate::ui::scrollbar::geometry(
+        screen.scrollbar_for(screen.transcript),
+        total,
+        total - visible,
+    )
+    .expect("overflowing transcript has a scrollbar");
 
     app.update(AppEvent::Terminal(crossterm::event::Event::Mouse(
         MouseEvent {
@@ -382,7 +493,7 @@ fn cached_render_and_mouse_hit_testing_do_not_parse_history() {
     for _ in 0..20 {
         app.update(AppEvent::Tick);
         let mut terminal =
-            ratatui::Terminal::new(ratatui::backend::TestBackend::new(WIDTH + 1, HEIGHT)).unwrap();
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(WIDTH + 3, HEIGHT)).unwrap();
         terminal
             .draw(|frame| crate::ui::render(frame, &app))
             .unwrap();
@@ -714,7 +825,7 @@ fn assert_user_gap(app: &App, expected: &str) {
     assert!(copied.contains("first prompt") && copied.contains(expected));
     assert!(!copied.contains("\n\n"));
 
-    let screen = crate::ui::layout::screen_layout(app, Rect::new(0, 0, WIDTH + 1, HEIGHT));
+    let screen = crate::ui::layout::screen_layout(app, Rect::new(0, 0, WIDTH + 3, HEIGHT));
     let position = crate::ui::transcript::scroll_position(
         app,
         prepared.total_rows(),
@@ -723,7 +834,7 @@ fn assert_user_gap(app: &App, expected: &str) {
     assert!(gap_row >= position.offset && gap_row < position.offset + position.visible_rows);
     let rows = crate::ui::component_tests::buffer_lines(&crate::ui::component_tests::draw(
         app,
-        WIDTH + 1,
+        WIDTH + 3,
         HEIGHT,
     ));
     assert!(
@@ -777,7 +888,7 @@ fn consecutive_user_cards_keep_one_transparent_gap_across_all_user_paths() {
     );
     let rows = crate::ui::component_tests::buffer_lines(&crate::ui::component_tests::draw(
         &queued,
-        WIDTH + 1,
+        WIDTH + 3,
         HEIGHT,
     ));
     assert!(

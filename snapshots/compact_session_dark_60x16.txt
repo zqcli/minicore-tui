@@ -11,6 +11,6 @@
  ▎/session
  ▎
  ▎
- ▎→ Session                                         [list ▾]
+ ▎→ Session                                       [list ▾]
  ▎Enter choose · Esc close · Tab fill · ↑↓ · 1/1
  starting

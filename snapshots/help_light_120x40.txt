@@ -13,28 +13,28 @@
 
 
 
- ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
- │Help                                                                                                                 │
- │                                                                                                                     │
- │Global:                                                                                                              │
- │Ctrl+C  clear the composer; empty: press again to quit                                                               │
- │Ctrl+D  quit when the composer is empty and idle                                                                     │
- │F1  open/close help; q quits the application                                                                         │
- │Ctrl+R  session selector                                                                                             │
- │Ctrl+L  model selector; updates active session at a request boundary                                                 │
- │Shift+Tab  reasoning selector; updates active session at a request boundary                                          │
- │Ctrl+N  open the new-session form                                                                                    │
- │F2  rename the selected session                                                                                      │
- │F5  refresh the session list                                                                                         │
- │Ctrl+G (Sessions)  continue a browsed closed session                                                                 │
- │Ctrl+W  close the selected session after confirmation                                                                │
- │Delete / Ctrl+D  delete the selected session after close and confirmation                                            │
- │Ctrl+O  expand/collapse tools and reasoning                                                                          │
- │Ctrl+T  show/hide reasoning                                                                                          │
- │PageUp/PageDown  scroll; page selectors when focused                                                                 │
- │Ctrl+Home / Ctrl+End  transcript top / tail                                                                          │
- │Esc  close a panel; cancel the running turn                                                                          │
- │                                                                                                                     │
- │↑↓/PgUp/PgDn scroll · Esc/F1 close · q quit · 1–20/75                                                                │
- └─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │Help                                                                                                               │
+ │                                                                                                                   │
+ │Global:                                                                                                            │
+ │Ctrl+C  clear the composer; empty: press again to quit                                                             │
+ │Ctrl+D  quit when the composer is empty and idle                                                                   │
+ │F1  open/close help; q quits the application                                                                       │
+ │Ctrl+R  session selector                                                                                           │
+ │Ctrl+L  model selector; updates active session at a request boundary                                               │
+ │Shift+Tab  reasoning selector; updates active session at a request boundary                                        │
+ │Ctrl+N  open the new-session form                                                                                  │
+ │F2  rename the selected session                                                                                    │
+ │F5  refresh the session list                                                                                       │
+ │Ctrl+G (Sessions)  continue a browsed closed session                                                               │
+ │Ctrl+W  close the selected session after confirmation                                                              │
+ │Delete / Ctrl+D  delete the selected session after close and confirmation                                          │
+ │Ctrl+O  expand/collapse tools and reasoning                                                                        │
+ │Ctrl+T  show/hide reasoning                                                                                        │
+ │PageUp/PageDown  scroll; page selectors when focused                                                               │
+ │Ctrl+Home / Ctrl+End  transcript top / tail                                                                        │
+ │Esc  close a panel; cancel the running turn                                                                        │
+ │                                                                                                                   │
+ │↑↓/PgUp/PgDn · Esc/F1 close · q quit · 1–20/75                                                                     │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
  starting

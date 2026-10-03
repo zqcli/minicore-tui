@@ -52,7 +52,7 @@ fn press(app: &mut App, code: KeyCode) -> Vec<AppCommand> {
 }
 fn install_layout(app: &mut App) {
     let request = app
-        .tool_layout_request(app.tool_body_area().width.saturating_sub(1).max(1))
+        .tool_layout_request(app.tool_body_area().width.max(1))
         .unwrap();
     app.mark_tool_layout_pending(request.identity.clone());
     app.update(AppEvent::ToolLayoutPrepared(

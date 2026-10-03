@@ -7,12 +7,12 @@
  ▎   line 59 of a long file
  ▎ ctrl+o collapse
 
- ▎ bash · denied                                                       [详 情 ]
+ ▎ bash · denied                                                     [详 情 ]
  ▎ bash
  ▎   not allowed
  ▎ ctrl+o collapse
 
- ▎ edit · failed                                                       [详 情 ]
+ ▎ edit · failed                                                     [详 情 ]
  ▎ edit
  ▎   edit rejected
  ▎ ctrl+o collapse
@@ -21,4 +21,4 @@
  ▎
  ▎
  ▎
- ▸ project · deep · high · ● ready                                         ctx ?
+ ▸ project · deep · high · ● ready                                       ctx ?

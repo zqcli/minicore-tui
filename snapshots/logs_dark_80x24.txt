@@ -7,18 +7,18 @@
 
 
 
- ┌─────────────────────────────────────────────────────────────────────────────┐
- │Agent logs                                                                   │
- │Recent stderr activity (newest first)                                        │
- │                                                                             │
- │agent stderr: 36 bytes                                                       │
- │agent stderr: 34 bytes                                                       │
- │agent stderr: 37 bytes                                                       │
- │                                                                             │
- │                                                                             │
- │                                                                             │
- │                                                                             │
- │                                                                             │
- │↑↓/PgUp/PgDn scroll · Esc close · 1–4/4                                      │
- └─────────────────────────────────────────────────────────────────────────────┘
+ ┌───────────────────────────────────────────────────────────────────────────┐
+ │Agent logs                                                                 │
+ │Recent stderr activity (newest first)                                      │
+ │                                                                           │
+ │agent stderr: 36 bytes                                                     │
+ │agent stderr: 34 bytes                                                     │
+ │agent stderr: 37 bytes                                                     │
+ │                                                                           │
+ │                                                                           │
+ │                                                                           │
+ │                                                                           │
+ │                                                                           │
+ │↑↓/PgUp/PgDn scroll · Esc close · 1–4/4                                    │
+ └───────────────────────────────────────────────────────────────────────────┘
  starting

@@ -5,12 +5,12 @@
 
  Type a message to begin · / commands · @ files · F1 help
 
- ┌─────────────────────────────────────────────────────────┐
- │Select model                                             │
- │Model applies at the next model request.                 │
- │>                                                        │
- │→ fast  32k context  — tools  • low/medium               │
- │  tiny  8k context  ✓ tools  • disabled/low              │
- │(2/3) ↑↓/PgUp/PgDn · Enter select · Esc back · type to fi│
- └─────────────────────────────────────────────────────────┘
- ▸ project@git? · deep · high · ● ready                ctx ?
+ ┌───────────────────────────────────────────────────────┐
+ │Select model                                           │
+ │Model applies at the next model request.               │
+ │>                                                      │
+ │→ fast  32k context  — tools  • low/medium             │
+ │  tiny  8k context  ✓ tools  • disabled/low            │
+ │(2/3) ↑↓/PgUp/PgDn · Enter select · Esc back · type to │
+ └───────────────────────────────────────────────────────┘
+ ▸ project@git? · deep · high · ● ready              ctx ?

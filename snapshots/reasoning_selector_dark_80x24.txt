@@ -7,18 +7,18 @@
 
 
 
- ┌─────────────────────────────────────────────────────────────────────────────┐
- │Select reasoning                                                             │
- │Current session: —                                                           │
- │New session setting: high                                                    │
- │>                                                                            │
- │  auto  Provider default                                                     │
- │  low  Light reasoning                                                       │
- │  medium  Moderate reasoning                                                 │
- │→ high  Deep reasoning                                                       │
- │                                                                             │
- │                                                                             │
- │                                                                             │
- │(4/4) ↑↓/PgUp/PgDn · Enter select · Esc back · type to filter                │
- └─────────────────────────────────────────────────────────────────────────────┘
+ ┌───────────────────────────────────────────────────────────────────────────┐
+ │Select reasoning                                                           │
+ │Current session: —                                                         │
+ │New session setting: high                                                  │
+ │>                                                                          │
+ │  auto  Provider default                                                   │
+ │  low  Light reasoning                                                     │
+ │  medium  Moderate reasoning                                               │
+ │→ high  Deep reasoning                                                     │
+ │                                                                           │
+ │                                                                           │
+ │                                                                           │
+ │(4/4) ↑↓/PgUp/PgDn · Enter select · Esc back · type to filter              │
+ └───────────────────────────────────────────────────────────────────────────┘
  ● ready

@@ -226,9 +226,11 @@ fn context_focus_scrollbar_and_exact_automatic_cancel_keep_editor_and_operation(
     let id = value["current_operation"]["operation_id"].clone();
     respond(&mut a, &r, value);
     let body = a.main_body_area();
+    let scrollbar = crate::ui::layout::screen_layout(&a, ratatui::layout::Rect::new(0, 0, 60, 16))
+        .scrollbar_for(body);
     a.update(AppEvent::Terminal(CrosstermEvent::Mouse(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
-        column: body.right() - 1,
+        column: scrollbar.x,
         row: body.bottom() - 1,
         modifiers: KeyModifiers::NONE,
     })));

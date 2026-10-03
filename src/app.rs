@@ -487,6 +487,7 @@ struct TranscriptFrame {
     scroll: (usize, bool, Option<usize>),
     tool_hits: Vec<(ratatui::layout::Rect, ToolKey)>,
     cells: ratatui::buffer::Buffer,
+    scrollbar_cells: ratatui::buffer::Buffer,
 }
 
 /// All app and UI state. The reducer owns mutations; the main loop also
@@ -1175,7 +1176,12 @@ impl App {
                 let area =
                     ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1);
                 let screen = crate::ui::layout::screen_layout(self, area);
-                if screen.transcript.contains((mouse.column, mouse.row).into()) || was_dragging {
+                if screen.transcript.contains((mouse.column, mouse.row).into())
+                    || screen
+                        .scrollbar_for(screen.transcript)
+                        .contains((mouse.column, mouse.row).into())
+                    || was_dragging
+                {
                     self.mouse_down = None;
                     self.mouse_pressed_on_link = false;
                     // The retained frame can still identify its own explicit
@@ -1930,6 +1936,13 @@ impl App {
                 cells[(x, y)] = buffer[(x, y)].clone();
             }
         }
+        let track = screen.scrollbar_for(screen.transcript);
+        let mut scrollbar_cells = ratatui::buffer::Buffer::empty(track);
+        for y in track.y..track.bottom() {
+            for x in track.x..track.right() {
+                scrollbar_cells[(x, y)] = buffer[(x, y)].clone();
+            }
+        }
         self.transcript_frame = Some(TranscriptFrame {
             generation: self.prepared_generation,
             session_id: view.info.session_id.clone(),
@@ -1943,6 +1956,7 @@ impl App {
             ),
             tool_hits,
             cells,
+            scrollbar_cells,
         });
     }
 
@@ -1961,6 +1975,18 @@ impl App {
             .filter(|cells| {
                 cells.area.x == area.x && cells.area.y == area.y && cells.area.width == area.width
             })
+    }
+
+    /// The track is retained separately from body cells, so replay cannot paint
+    /// the right gap or relocate the scrollbar into a view's content padding.
+    pub(crate) fn transition_scrollbar_frame(
+        &self,
+        body: ratatui::layout::Rect,
+    ) -> Option<&ratatui::buffer::Buffer> {
+        self.transition_transcript_frame(body)?;
+        self.transcript_frame
+            .as_ref()
+            .map(|saved| &saved.scrollbar_cells)
     }
 
     pub fn cached_durable(&self, width: u16) -> Option<Arc<PreparedDurable>> {
@@ -8800,14 +8826,14 @@ mod tests {
                 pending: false,
             }));
         }
-        let prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+        let prepared = crate::ui::transcript::prepare_conversation(&app, 77);
         app.install_conversation(prepared);
-        app.viewport = (app.prepared_conversation(79).unwrap().total_rows(), 6);
+        app.viewport = (app.prepared_conversation(77).unwrap().total_rows(), 6);
         app
     }
 
     fn anchor_target_row(app: &App, history_index: usize) -> usize {
-        app.prepared_conversation(79)
+        app.prepared_conversation(77)
             .unwrap()
             .sections
             .iter()
@@ -8847,7 +8873,7 @@ mod tests {
 
         // Layout installation occurs for same-height stream updates, resizing,
         // and live-to-durable Markdown reflow. None means the output was read.
-        for width in [79, 24, 120] {
+        for width in [77, 24, 120] {
             let prepared = crate::ui::transcript::prepare_conversation(&app, width);
             let total = prepared.total_rows();
             app.install_conversation(prepared);
@@ -8890,7 +8916,7 @@ mod tests {
                 terminal_error: None,
             }));
         view.transcript.invalidate();
-        let expanded = crate::ui::transcript::prepare_conversation(&app, 79);
+        let expanded = crate::ui::transcript::prepare_conversation(&app, 77);
         let target = expanded
             .sections
             .iter()
@@ -8908,7 +8934,7 @@ mod tests {
             FoldOverride::Collapsed,
         );
         app.active_session_mut().unwrap().transcript.invalidate();
-        let folded = crate::ui::transcript::prepare_conversation(&app, 79);
+        let folded = crate::ui::transcript::prepare_conversation(&app, 77);
         app.install_conversation(folded.clone());
         let row = folded.row_for_scroll_anchor(&anchor).unwrap();
         assert_eq!(
@@ -8938,7 +8964,7 @@ mod tests {
             }),
         );
         view.transcript.invalidate();
-        let prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+        let prepared = crate::ui::transcript::prepare_conversation(&app, 77);
         app.install_conversation(prepared.clone());
         let section = prepared
             .sections
@@ -8982,14 +9008,14 @@ mod tests {
         live.requests.push(request);
         view.live = Some(live);
         view.transcript.invalidate();
-        let live_prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+        let live_prepared = crate::ui::transcript::prepare_conversation(&app, 77);
         let live_section = live_prepared
             .sections
             .iter()
             .find(|section| section.id.tool_call_id.as_deref() == Some("call_tool"))
             .unwrap();
         app.install_conversation(live_prepared);
-        app.viewport = (app.prepared_conversation(79).unwrap().total_rows(), 6);
+        app.viewport = (app.prepared_conversation(77).unwrap().total_rows(), 6);
         app.active_session_mut().unwrap().scroll.follow_tail = false;
         app.active_session_mut().unwrap().scroll.offset = live_section.rows.start;
         app.capture_scroll_anchor();
@@ -9029,7 +9055,7 @@ mod tests {
             expanded: false,
         }));
         view.transcript.invalidate();
-        let saved = crate::ui::transcript::prepare_conversation(&app, 79);
+        let saved = crate::ui::transcript::prepare_conversation(&app, 77);
         app.install_conversation(saved.clone());
         let saved_section = saved
             .sections
@@ -9062,7 +9088,7 @@ mod tests {
     #[test]
     fn unloaded_scroll_anchor_falls_back_with_a_notice() {
         let mut app = anchor_fixture();
-        let prepared = app.prepared_conversation(79).unwrap().clone();
+        let prepared = app.prepared_conversation(77).unwrap().clone();
         app.active_session_mut().unwrap().scroll.follow_tail = false;
         app.active_session_mut().unwrap().scroll.anchor = Some(ScrollAnchor {
             section_id: crate::state::view::SectionId {
@@ -11662,14 +11688,17 @@ mod tests {
     fn wrapped_editor_vertical_motion_uses_visual_rows_and_preserves_history_edges() {
         let mut app = test_app();
         let text = "x".repeat(90);
+        // Fixed page columns at 80 cols give the composer a body of 77 and an
+        // inner editing width of 76 after the rail. 90 chars therefore wrap to
+        // row0=76, row1=14, so Up preserves the visual column at (0, 14).
         app.composer.set_text(&text);
         app.composer.submit_pushed("old message");
 
         app.apply_action(crate::keymap::Action::CursorMove(EditorCursor::Up));
-        assert_eq!(app.composer.cursor(), (0, 12));
+        assert_eq!(app.composer.cursor(), (0, 14));
         app.apply_action(crate::keymap::Action::CursorMove(EditorCursor::Up));
         assert_eq!(app.composer.content(), text);
-        assert_eq!(app.composer.cursor(), (0, 12));
+        assert_eq!(app.composer.cursor(), (0, 14));
 
         app.composer.move_to(0, 0);
         app.apply_action(crate::keymap::Action::CursorMove(EditorCursor::Up));
@@ -12121,7 +12150,7 @@ mod tests {
             app.pressed_cell_is_link(column, marker_row),
             "uncovered link remains interactive"
         );
-        let column = crate::ui::transcript::marker_area(screen.transcript, "↓ new output", false).x;
+        let column = crate::ui::transcript::marker_area(screen.transcript, "↓ new output").x;
         assert!(
             !app.pressed_cell_is_link(column, marker_row),
             "the indicator itself is not a markdown link cell"
@@ -12169,7 +12198,7 @@ mod tests {
         app.active_session_mut().unwrap().scroll.offset = tool.rows.start - budget;
         app.active_session_mut().unwrap().scroll.new_content = true;
         let marker_row = screen.transcript.bottom().saturating_sub(1);
-        let column = crate::ui::transcript::marker_area(screen.transcript, "↓ new output", false).x;
+        let column = crate::ui::transcript::marker_area(screen.transcript, "↓ new output").x;
         let before = app.active_view().unwrap().tool_folds.clone();
 
         app.update(AppEvent::Terminal(CrosstermEvent::Mouse(
@@ -12247,8 +12276,9 @@ mod tests {
                 view.scroll.offset
             }
         });
-        let geometry = crate::ui::scrollbar::geometry(screen.transcript, total, current)
-            .expect("overflowing transcript has a scrollbar");
+        let geometry =
+            crate::ui::scrollbar::geometry(screen.scrollbar_for(screen.transcript), total, current)
+                .expect("overflowing transcript has a scrollbar");
 
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
         app.update_scrollbar_drag((geometry.track_top + geometry.max_thumb_start / 2) as u16);
@@ -12284,8 +12314,9 @@ mod tests {
         } else {
             view.scroll.offset
         };
-        let geometry = crate::ui::scrollbar::geometry(screen.transcript, total, current)
-            .expect("scrollbar remains available");
+        let geometry =
+            crate::ui::scrollbar::geometry(screen.scrollbar_for(screen.transcript), total, current)
+                .expect("scrollbar remains available");
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
         app.update_scrollbar_drag((geometry.track_top + geometry.max_thumb_start) as u16);
         app.update(AppEvent::Terminal(CrosstermEvent::FocusLost));
@@ -12314,9 +12345,12 @@ mod tests {
             "a late mouse-up after focus cancellation must not change the applied position"
         );
 
-        let geometry =
-            crate::ui::scrollbar::geometry(screen.transcript, total, total.saturating_sub(visible))
-                .unwrap();
+        let geometry = crate::ui::scrollbar::geometry(
+            screen.scrollbar_for(screen.transcript),
+            total,
+            total.saturating_sub(visible),
+        )
+        .unwrap();
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
         app.update_scrollbar_drag((geometry.track_top + geometry.max_thumb_start) as u16);
         app.update(AppEvent::TerminalSize {
@@ -12342,9 +12376,12 @@ mod tests {
         let prepared = crate::ui::transcript::prepare_conversation(&app, screen.content.width);
         let total = prepared.total_rows();
         let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
-        let geometry =
-            crate::ui::scrollbar::geometry(screen.transcript, total, total.saturating_sub(visible))
-                .expect("overflowing transcript has a scrollbar");
+        let geometry = crate::ui::scrollbar::geometry(
+            screen.scrollbar_for(screen.transcript),
+            total,
+            total.saturating_sub(visible),
+        )
+        .expect("overflowing transcript has a scrollbar");
 
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
         app.update_scrollbar_drag((geometry.track_top + geometry.max_thumb_start / 2) as u16);
@@ -12415,9 +12452,12 @@ mod tests {
         let prepared = crate::ui::transcript::prepare_conversation(&app, screen.content.width);
         let total = prepared.total_rows();
         let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
-        let geometry =
-            crate::ui::scrollbar::geometry(screen.transcript, total, total.saturating_sub(visible))
-                .expect("overflowing transcript has a scrollbar");
+        let geometry = crate::ui::scrollbar::geometry(
+            screen.scrollbar_for(screen.transcript),
+            total,
+            total.saturating_sub(visible),
+        )
+        .expect("overflowing transcript has a scrollbar");
         app.update(AppEvent::ConversationPrepared(prepared));
 
         let mouse = |kind, row| {
@@ -12477,9 +12517,12 @@ mod tests {
         let prepared = crate::ui::transcript::prepare_conversation(&app, screen.content.width);
         let total = prepared.total_rows();
         let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
-        let geometry =
-            crate::ui::scrollbar::geometry(screen.transcript, total, total.saturating_sub(visible))
-                .expect("overflowing transcript has a scrollbar");
+        let geometry = crate::ui::scrollbar::geometry(
+            screen.scrollbar_for(screen.transcript),
+            total,
+            total.saturating_sub(visible),
+        )
+        .expect("overflowing transcript has a scrollbar");
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
         app.update_scrollbar_drag(geometry.track_top as u16);
 
@@ -12521,9 +12564,12 @@ mod tests {
         let prepared = crate::ui::transcript::prepare_conversation(&app, screen.content.width);
         let total = prepared.total_rows();
         let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
-        let geometry =
-            crate::ui::scrollbar::geometry(screen.transcript, total, total.saturating_sub(visible))
-                .expect("overflowing transcript has a scrollbar");
+        let geometry = crate::ui::scrollbar::geometry(
+            screen.scrollbar_for(screen.transcript),
+            total,
+            total.saturating_sub(visible),
+        )
+        .expect("overflowing transcript has a scrollbar");
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
 
         let info: crate::protocol::SessionInfo = serde_json::from_value(serde_json::json!({
@@ -12561,9 +12607,12 @@ mod tests {
         let prepared = crate::ui::transcript::prepare_conversation(&app, screen.content.width);
         let total = prepared.total_rows();
         let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
-        let geometry =
-            crate::ui::scrollbar::geometry(screen.transcript, total, total.saturating_sub(visible))
-                .expect("overflowing transcript has a scrollbar");
+        let geometry = crate::ui::scrollbar::geometry(
+            screen.scrollbar_for(screen.transcript),
+            total,
+            total.saturating_sub(visible),
+        )
+        .expect("overflowing transcript has a scrollbar");
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
         app.update_scrollbar_drag(geometry.track_top as u16);
         let committed = (
@@ -12612,8 +12661,9 @@ mod tests {
         let total = prepared.total_rows();
         let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
         let current = total.saturating_sub(visible);
-        let geometry = crate::ui::scrollbar::geometry(screen.transcript, total, current)
-            .expect("overflowing transcript has a scrollbar");
+        let geometry =
+            crate::ui::scrollbar::geometry(screen.scrollbar_for(screen.transcript), total, current)
+                .expect("overflowing transcript has a scrollbar");
 
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
         app.update_scrollbar_drag(geometry.track_top as u16);
@@ -12636,9 +12686,12 @@ mod tests {
         let prepared = crate::ui::transcript::prepare_conversation(&app, screen.content.width);
         let total = prepared.total_rows();
         let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
-        let geometry =
-            crate::ui::scrollbar::geometry(screen.transcript, total, total.saturating_sub(visible))
-                .expect("overflowing transcript has a scrollbar");
+        let geometry = crate::ui::scrollbar::geometry(
+            screen.scrollbar_for(screen.transcript),
+            total,
+            total.saturating_sub(visible),
+        )
+        .expect("overflowing transcript has a scrollbar");
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
         app.update_scrollbar_drag(geometry.track_top as u16);
         assert_eq!(
@@ -12675,8 +12728,9 @@ mod tests {
         let total = prepared.total_rows();
         let visible = crate::ui::transcript::visible_rows(&app, total, screen.transcript.height);
         let current = total.saturating_sub(visible);
-        let geometry = crate::ui::scrollbar::geometry(screen.transcript, total, current)
-            .expect("overflowing transcript has a scrollbar");
+        let geometry =
+            crate::ui::scrollbar::geometry(screen.scrollbar_for(screen.transcript), total, current)
+                .expect("overflowing transcript has a scrollbar");
 
         assert!(app.begin_scrollbar_drag(geometry.column as u16, geometry.thumb_top as u16));
         app.update(AppEvent::Viewport {
@@ -13014,7 +13068,7 @@ mod tests {
     #[test]
     fn paragraph_selection_stops_at_rendered_blank_boundaries() {
         let app = crate::ui::testapp::chat(ThemeKind::Dark);
-        let prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+        let prepared = crate::ui::transcript::prepare_conversation(&app, 77);
         let row = prepared
             .copy_ranges
             .iter()

@@ -7,18 +7,18 @@
 
 
  Showing all workspaces
- ┌─────────────────────────────────────────────────────────────────────────────┐
- │Select session — all workspaces                                              │
- │>                                                                            │
- │→ ses_main                                                   deep · high   5m│
- │  ◉ /work/cli                                                                │
- │  Web app                                                 fast · medium   15m│
- │  ○ /work/web                                                                │
- │  Rust port                                                  deep · high   1d│
- │  ● /work/rust                                                               │
- │                                                                             │
- │                                                                             │
- │Enter Open · Ctrl+B Read-only · Ctrl+G Continue · Ctrl+A Scope               │
- │Ctrl+N New · F5 Refresh · F2 Rename · Ctrl+W Close · Del Delete              │
- └─────────────────────────────────────────────────────────────────────────────┘
+ ┌───────────────────────────────────────────────────────────────────────────┐
+ │Select session — all workspaces                                            │
+ │>                                                                          │
+ │→ ses_main                                                 deep · high   5m│
+ │  ◉ /work/cli                                                              │
+ │  Web app                                               fast · medium   15m│
+ │  ○ /work/web                                                              │
+ │  Rust port                                                deep · high   1d│
+ │  ● /work/rust                                                             │
+ │                                                                           │
+ │                                                                           │
+ │Enter Open · Ctrl+B Read-only · Ctrl+G Continue · Ctrl+A Scope             │
+ │Ctrl+N New · F5 Refresh · F2 Rename · Ctrl+W Close · Del Delete            │
+ └───────────────────────────────────────────────────────────────────────────┘
  ● ready

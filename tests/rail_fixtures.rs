@@ -383,30 +383,38 @@ fn assert_composer_fixture_with_setup(
     }
     setup(&mut app);
 
-    let render_width = width.max(60);
+    // The native captures pre-date the fixed page columns: their editor body
+    // is `cols - 1` (one app gutter plus content). The current layout spends
+    // two more cells on the right gap and scrollbar (`body = width - 3`), so
+    // give the TUI a terminal two cells wider to reproduce the native body
+    // width and keep the external capture comparable. The page-column
+    // contract itself is pinned by the snapshot suite and ui::render tests.
+    let render_width = (width + 2).max(60);
     app.update(AppEvent::TerminalSize {
         width: render_width,
         height: terminal_height,
     });
     let mut terminal = Terminal::new(TestBackend::new(render_width, terminal_height)).unwrap();
-    let (row_offset, local_x) = if width >= 60 {
+    let (row_offset, local_x, comparable_width) = if width >= 60 {
         terminal
             .draw(|frame| minicore_tui::ui::render(frame, &app))
             .unwrap();
         let screen = layout::screen_layout(&app, Rect::new(0, 0, render_width, terminal_height));
-        (screen.panel.y as usize, 1usize)
+        (
+            screen.panel.y as usize,
+            screen.panel.x as usize,
+            screen.panel.width as usize,
+        )
     } else {
         terminal
             .draw(|frame| {
                 composer::render(frame, Rect::new(0, 0, width, height), &app, &Theme::dark())
             })
             .unwrap();
-        (0, 0)
+        (0, 0, width as usize)
     };
     let actual_cursor = terminal.backend_mut().get_cursor_position().unwrap();
     let buffer = terminal.backend().buffer();
-    let source_width = width as usize;
-    let comparable_width = source_width.saturating_sub(local_x);
 
     // The upgraded completion menu intentionally adds command purposes and
     // controls. Keep the native editor/cursor and every Rail/background cell

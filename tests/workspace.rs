@@ -316,9 +316,11 @@ fn rendered_file(app: &minicore_tui::app::App) -> String {
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 18)).unwrap();
     terminal
         .draw(|frame| {
+            let area = frame.area();
             minicore_tui::ui::workspace::render_file(
                 frame,
-                frame.area(),
+                ratatui::layout::Rect::new(1, area.y, area.width.saturating_sub(3), area.height),
+                ratatui::layout::Rect::new(area.right() - 1, area.y, 1, area.height),
                 app,
                 &minicore_tui::theme::ThemeKind::Dark.theme(),
             )

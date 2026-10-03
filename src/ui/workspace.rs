@@ -59,7 +59,7 @@ fn file_progress(file: &FilePreviewState) -> String {
     }
     parts.join(" · ")
 }
-pub fn render_file(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+pub fn render_file(frame: &mut Frame, area: Rect, scrollbar: Rect, app: &App, theme: &Theme) {
     let Some(file) = app.file_preview() else {
         return;
     };
@@ -123,6 +123,7 @@ pub fn render_file(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         ),
     );
     let body = file_body(area);
+    let scrollbar = crate::ui::layout::fit_scrollbar(scrollbar, body);
     if let Some(layout) = &file.layout {
         let offset = file.scroll_offset(body.height as usize);
         let rows: Vec<_> = layout
@@ -142,11 +143,11 @@ pub fn render_file(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             .collect();
         frame.render_widget(
             Paragraph::new(rows).style(Style::new().fg(theme.text)),
-            Rect::new(body.x, body.y, body.width.saturating_sub(1), body.height),
+            body,
         );
         crate::ui::scrollbar::render(
             frame,
-            body,
+            scrollbar,
             layout.rows.len(),
             offset,
             theme,

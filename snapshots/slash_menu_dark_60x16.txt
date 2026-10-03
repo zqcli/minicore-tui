@@ -9,8 +9,8 @@
  ▎
  ▎
  ▎Commands
- ▎  Workspace                                      [files ▾]
- ▎  Conversation                                  [search ▾]
- ▎→ App                                         [settings ▾]
+ ▎  Workspace                                    [files ▾]
+ ▎  Conversation                                [search ▾]
+ ▎→ App                                       [settings ▾]
  ▎Enter choose · Esc close · Tab fill · ↑↓ · 6/6
  starting

@@ -26,7 +26,7 @@ fn version(v: &ChangeRevision) -> String {
         } => format!("metadata {bytes}B mtime:{modified_unix_ms:?}"),
     }
 }
-pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+pub fn render(frame: &mut Frame, area: Rect, scrollbar: Rect, app: &App, theme: &Theme) {
     let Some(s) = app.changes() else {
         return;
     };
@@ -34,6 +34,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         "← 返回 · Changes 只读 · Tab 范围/比较 · F5 刷新",
     )];
     let body = super::workspace::file_body(area);
+    let scrollbar = crate::ui::layout::fit_scrollbar(scrollbar, body);
     let focused = app.focused_region() == crate::state::panels::Focus::Main;
     if s.in_diff {
         headers[0] = Line::from("← Diff · F5刷新 F6编辑 ^N更多 ^⇧C复制行源");
@@ -122,11 +123,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                     ])
                 })
                 .collect();
-            frame.render_widget(
-                Paragraph::new(rows),
-                Rect::new(body.x, body.y, body.width.saturating_sub(1), body.height),
-            );
-            super::scrollbar::render(frame, body, layout.rows.len(), offset, theme, focused);
+            frame.render_widget(Paragraph::new(rows), body);
+            super::scrollbar::render(frame, scrollbar, layout.rows.len(), offset, theme, focused);
         }
     } else {
         headers.push(Line::from(match &s.scope {
@@ -188,11 +186,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 })
             })
             .collect();
-        frame.render_widget(
-            Paragraph::new(rows),
-            Rect::new(body.x, body.y, body.width.saturating_sub(1), body.height),
-        );
-        super::scrollbar::render(frame, body, s.records.len(), s.offset, theme, focused);
+        frame.render_widget(Paragraph::new(rows), body);
+        super::scrollbar::render(frame, scrollbar, s.records.len(), s.offset, theme, focused);
     }
     frame.render_widget(
         Paragraph::new(headers).style(Style::new().fg(theme.muted)),

@@ -9,15 +9,15 @@ pinned Agent contract and updating the local DTOs and fixtures together.
 
 | Item | Value |
 |---|---|
-| TUI current source / prior F-review remediation | `9e399d9` / `daa944a` (historical core baseline `0aa64c5e4d9211351123db059547beddb15c2cce`) |
+| TUI | `0.3.0`; exact-source evidence in [closeout verification](verification/v03-closeout/README.md) |
 | Agent repository | `https://github.com/zqcli/minicore-agent` |
-| Agent commit | `061743369459299e66be97bf97d2b27352a39914` (`0.5.0`) |
-| Runtime commit | `6cd2bdbc634437dea925495c61c7eb0be10ba171` (`0.4.1`) |
+| Agent commit | `d81728b13db68c76b05b4c8cb87161770769947f` (`0.6.0`) |
+| Runtime commit | `9e230617d36130e7ec77aba122b45f1347ac53f2` (`0.6.0`) |
 | RPC protocol | `Protocol v1` |
 
 These values are the compatibility baseline, not a claim that an arbitrary
-Agent build is compatible. The documentation-only follow-up is separate from
-the code/test/snapshot baseline above.
+Agent build is compatible. Historical fixture and verification pins retain
+their original provenance; they are not silently relabeled as 0.6.0 captures.
 
 ## Transport
 
@@ -155,7 +155,9 @@ uses `session.compact.cancel` with the exact operation ID (including reserved
 `auto-` IDs), never a completed `turn.cancel`.
 
 Ordinary requests do not summarize on soft-threshold crossings. Confirmed safe,
-pre-output context-capacity rejection may recover within the still-active turn;
+pre-output upstream context-capacity rejection may compact and retry the rejected
+logical model request once within the still-active turn, sharing its cancellation
+and deadline without redispatching completed tools;
 its `recovery.outcome=recovering` observation displays `Recovering context`, not
 completion. The same poll owner observes an active turn until completion and then
 discovers post-turn maintenance. Stale turn notifications remain fenced; a
@@ -185,7 +187,7 @@ automatic steer FIFO are paused; composer text and previously admitted queue
 items remain owned by the App. The reload start/end/failure event and a
 `ReloadWaitTurn` response or send failure, including one arriving after staging
 has ended, do not release the FIFO in the same reducer pass. A later ordinary
-event resumes the existing settled/handoff rules. Reads issued before reload
+event resumes the existing running-turn queue rules. Reads issued before reload
 are fenced as `StaleRead`; any retired read or
 lifecycle ACK that leaves authority uncertain clears the old session state and
 keeps the session's `event_gap`/incomplete-history fence. Recovery issues
@@ -198,8 +200,9 @@ while the independent history-gap fence remains. The reload-installed state is
 also not Steer authority: the App issues a fresh normal `session.state` read,
 and only a matching `Running` response for the retained `TurnRef` releases the
 Steer fence. Idle notifications and Idle responses cannot release it for the
-retained live loop. Once that loop is completed, persisted, history-settled and
-Idle, the separate queued fresh-turn handoff remains available exactly once.
+retained live loop. Once that loop ends, remaining unsent steering text is
+paused, not automatically handed off as a fresh turn. The user must deliberately
+retrieve it into the empty composer before submitting a new prompt.
 After a matching Running pairing, explicit and FIFO `turn.steer` may proceed through an ordinary
 History gap, while `turn.send`, lifecycle mutations, and `session.update`
 remain protected by the gap. History completion alone cannot authorize a

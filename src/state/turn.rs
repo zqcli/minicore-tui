@@ -58,9 +58,10 @@ pub struct SteerQueueItem {
     /// Composer revision at admission; the late-ACK guard compares it so new
     /// editor content is never cleared by an old steer response.
     pub editor_revision: Option<u64>,
-    /// True while this queued message is being re-submitted as a fresh turn
-    /// after its loop sealed (race fallback). The entry is kept until the
-    /// turn.send ACK so a send failure cannot drop the text.
+    /// Historical fresh-turn handoff fallback flag. Current execution never
+    /// sets it: a loop that sealed before this entry could be sent leaves it
+    /// `Unsent` and pauses the queue instead of re-submitting a new turn, so
+    /// the retained text can only be withdrawn deliberately.
     pub handoff: bool,
 }
 

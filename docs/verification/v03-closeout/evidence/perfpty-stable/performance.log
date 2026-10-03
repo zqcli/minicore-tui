@@ -1,0 +1,51 @@
+   Compiling smallvec v1.15.2
+   Compiling icu_properties_data v2.1.2
+   Compiling icu_normalizer_data v2.1.1
+   Compiling percent-encoding v2.3.2
+   Compiling zerotrie v0.2.5
+   Compiling form_urlencoded v1.2.2
+   Compiling parking_lot_core v0.9.12
+   Compiling parking_lot v0.12.5
+   Compiling icu_provider v2.1.1
+   Compiling crossterm v0.28.1
+   Compiling icu_locale v2.1.1
+   Compiling icu_properties v2.1.2
+   Compiling icu_normalizer v2.1.1
+   Compiling ratatui v0.29.0
+   Compiling icu_segmenter v2.1.2
+   Compiling idna_adapter v1.2.1
+   Compiling idna v1.1.0
+   Compiling url v2.5.4
+   Compiling tui-textarea v0.7.0
+   Compiling minicore-tui v0.3.0 (/root/minicore-tui-closeout-20261003/src-close2-final-c70c73c4)
+    Finished `release` profile [optimized] target(s) in 40.14s
+     Running tests/performance.rs (/root/minicore-tui-closeout-20261003/targets/src-close2-final-c70c73c4-stable/release/deps/performance-0c8717925086d0c3)
+
+running 9 tests
+
+running 1 test
+measure_live_delta_rebuild_cost: deltas=1000 history_rows_before=51101 history_rows_after=51234 delta_rows=133 push_ms=73.68
+test measure_live_delta_rebuild_cost ... ok
+composer_direct_256k_release: edits=4096 p95_us=217 p99_us=248 draft_bytes=258048 retained_capacity_estimate=5402688 composer_full_joins_delta=0
+test measure_release_256k_composer_direct_p95 ... ok
+measure_all_lines_clone_latency: helper 20 clones rows_total=140020 per_call_ms=46.01
+test measure_all_lines_clone_latency ... ok
+measure_prepare_frame_path_over_50k_rows: total_rows=51101 per_call_ms=317.96
+test measure_prepare_frame_path_over_50k_rows ... ok
+native_clipboard_real_helper: pid=3946611 elapsed_ms=2003 cancel=true draft_bytes=38
+test real_native_clipboard_helper_keeps_event_loop_live_and_reaps ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out; finished in 2.01s
+
+test real_native_clipboard_helper_keeps_event_loop_live_and_reaps ... ok
+composer_256k_release: edits=4096 p95_us=795 p99_us=886 draft_bytes=258048 retained_capacity_estimate=5402688 composer_full_joins_delta=0
+test measure_release_256k_draft_edit_p95 ... ok
+measure_c2: frames=1000 deltas=250 live_rows=28 layout_calls_delta=0          history_bytes_cloned=0 viewport_rows=40000          viewport_bytes=2742348 window_rows=40000 rebuild_frames=[] elapsed_ms=4859.46
+test measure_c2_stable_layout_and_viewport_ownership ... ok
+c2c_120x40: p95_us=8676 p99_us=9015 durable_rows=43875 history_bytes_cloned=0 layout_calls=0 viewport_rows=40000 viewport_bytes=4390161 retained_layout_bytes_estimate=8035600
+test measure_c2c_release_workload_120x40 ... ok
+c2b_worker: durable_rows=51101 deltas=1000 layout_calls=0 history_bytes_cloned=0 viewport_rows=40000 viewport_bytes=2982006
+test measure_c2b_worker_over_50k_rows_and_1000_output_deltas ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 9.30s
+

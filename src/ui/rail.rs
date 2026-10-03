@@ -13,6 +13,8 @@ use crate::markdown::{column_width, line_width};
 use crate::theme::Theme;
 
 pub const APP_GUTTER_WIDTH: u16 = 1;
+pub const APP_RIGHT_GAP_WIDTH: u16 = 1;
+pub const APP_SCROLLBAR_WIDTH: u16 = 1;
 pub const RAIL_GLYPH: &str = "▎";
 pub const RAIL_WIDTH: usize = 1;
 /// User and Tool native content has one transparent cell after the rail.

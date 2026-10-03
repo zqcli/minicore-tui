@@ -1,11 +1,11 @@
 
   ⚠ UNSAVED TURN
-  This turn finished, but the Agent did not confirm saving
-  it.
-  The session is blocked. Tool side effects may already exi
-  st.
-  Closing releases this result; reopening reads whatever th
-  e Store can recover.
+  This turn finished, but the Agent did not confirm savin
+  g it.
+  The session is blocked. Tool side effects may already e
+  xist.
+  Closing releases this result; reopening reads whatever
+  the Store can recover.
   Some live output may be missing.
 
  ⠋ Blocked · persistence · completed · persistence failed
@@ -13,4 +13,4 @@
  ▎Session blocked
  ▎
  ▎
- ▸ project · deep · high · ● blocked                   ctx ?
+ ▸ project · deep · high · ● blocked                 ctx ?

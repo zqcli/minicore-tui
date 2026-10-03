@@ -8,11 +8,14 @@ enter an alternate screen during normal CI tests.
 
 ## Current 0.3.0 Verification Boundary
 
-The current package is TUI **0.3.0**, paired with Agent **0.5.0** and Runtime
-**0.4.1**. Current source/test tree is `9e399d9`, after F-review remediation
-`daa944a`; core baseline `0aa64c5e4d9211351123db059547beddb15c2cce` is historical.
-All current Rust/Cargo evidence below was executed on the authorized remote
-Linux builder, not locally.
+The current package is TUI **0.3.0**, paired with Agent **0.6.0** and Runtime
+**0.6.0** at the exact revisions in [the backend contract](backend.md).
+[Closeout verification](verification/v03-closeout/README.md) records the final
+source manifest, per-toolchain results, 35-case real-Agent mock suite and
+remaining platform limits. All closeout Rust/Cargo checks run on the authorized
+remote Linux builder or the existing hosted CI matrix, never locally. Each
+immutable source export uses its own target directory; shared-target timestamps
+are not evidence that the intended source was built.
 
 Remote quality commands use locked dependencies and offline execution after a
 single fetch:
@@ -25,13 +28,16 @@ RUSTUP_TOOLCHAIN=1.85.0 cargo clippy --locked --offline --all-targets -- -D warn
 RUSTDOCFLAGS="-D warnings" RUSTUP_TOOLCHAIN=1.85.0 cargo doc --locked --offline --no-deps
 ```
 
+### Historical phase-F results
+
+For the older `9e399d9` source after remediation `daa944a`,
 Rust 1.85.0 and stable each reported **830 passed, 0 failed, 53 ignored**;
 `tests/app_flow.rs` remained **137/137**. The fixed-backend isolated job passed
-34/34 loopback E2Es. The current Release performance set passed 9/9 on both
+34/34 loopback E2Es. That Release performance set passed 9/9 on both
 Rust toolchains, and the Linux OS-PTY report passed the lifecycle, negative
 same-slave raw-mode, panic, input/resize, shutdown, idle, and production
 clipboard cases. The independent 0.2.8 direct Composer baseline measured P95 1492 µs
-and P99 1907 µs, versus current Rust 1.85 values of 192 µs and 220 µs (stable:
+and P99 1907 µs, versus that run's Rust 1.85 values of 192 µs and 220 µs (stable:
 238 µs and 243 µs). See
 [`verification/v03-f/README.md`](verification/v03-f/README.md) for scope and
 limitations.
@@ -130,9 +136,10 @@ against portable fixtures, so it also runs on Linux without macOS tools.
 targets. The `agent_process` target has `harness = false`, so it is an executable
 fake-Agent harness and intentionally has no libtest `test result` line. For the
 other targets, count the `passed`, `failed`, and `ignored` fields from each
-`test result: ok` line in the unabridged `cargo test` output. The current
-remote Rust 1.85/stable all-target runs each total **830 passed, 0 failed, 53
-ignored**. Do not count compile messages or the harness-free
+`test result` line in the unabridged `cargo test` output, including failed
+summaries, and retain the command exit status. The historical phase-F remote
+Rust 1.85/stable all-target runs each totaled **830 passed, 0 failed, 53
+ignored**; current totals belong in the closeout report. Do not count compile messages or the harness-free
 executable as tests. The older local Rust 1.98.0 total is disclosed as
 excluded provenance only.
 
@@ -144,8 +151,11 @@ captured through the production `ui::render` path using Ratatui
 selectors, new-session forms, tools, reasoning, scrolling, CJK, help/logs,
 and small-terminal scenes.
 
-`src/ui/snapshots.rs` compares the 27 committed snapshot files; it can update
-them only when `MCT_UPDATE_SNAPSHOTS=1` is explicitly set. The integration
+`src/ui/snapshots.rs` compares the committed scene snapshots; it can update
+them only when `MCT_UPDATE_SNAPSHOTS=1` is explicitly set. Generate candidates
+remotely only after confirming the layout/behavior contract, then independently
+review before/after differences before adopting them; regeneration is not itself
+proof of correctness. The integration
 target `tests/render_snapshots.rs` independently compares representative
 80×24 scenes. Snapshot drift is therefore covered by the default all-targets
 test command. This repository does not depend on `insta`; the committed text
@@ -170,9 +180,10 @@ comparison is deterministic and works without a review tool.
   Running state response; an ordinary History gap alone does not create that
   fence. Coverage includes late TurnRef binding, Idle notifications during state
   recovery, dropped close-verification reads, and independent History/state
-  reconciliation. The terminal FIFO regression verifies that a completed,
-  persisted, history-settled Idle loop can hand off queued input exactly once
-  without sending another Steer to the old loop.
+  reconciliation. The terminal FIFO regression verifies that unsent steering
+  remains paused after a loop ends: no automatic fresh-turn handoff and no
+  further Steer to the old loop. The user explicitly retrieves unsent input
+  into the empty composer before submitting it.
 - `src/ui/transcript.rs` tests durable cache preparation/install, revision and
   key invalidation, stale preparation rejection, session-local caches, live
   delta isolation, and parse-count cache hits.
@@ -208,7 +219,7 @@ cargo test --locked --offline --test agent_e2e -- --ignored --test-threads=1 --n
 ```
 
 The test harness creates an isolated configuration, data directory, workspace,
-and loopback mock model endpoint. The current ignored target contains 34
+and loopback mock model endpoint. The current ignored target contains 35
 scenarios covering discovery, turns, steering, updates, configuration reload,
 shutdown, Tool/file/workspace/Changes/Context workflows, and editor/background
 lifecycle behavior. No provider key or real user data is used.
@@ -216,9 +227,10 @@ lifecycle behavior. No provider key or real user data is used.
 A delivery run should wrap this command in a 300-second timeout and a cleanup
 trap. The trap must kill/reap only processes created by the run and remove its
 temporary root. The official serial command is `--ignored --test-threads=1`.
-The final-source remote run passed 34/34 on both Linux toolchains against the
-recorded fixed Agent binary. This is loopback evidence against the real Agent
-binary, not external-provider coverage.
+The historical phase-F run passed 34/34 on both Linux toolchains against its
+recorded fixed Agent binary. Current 35-case, 0.6.0 results are recorded separately
+in the closeout report. These are loopback checks against a real Agent binary,
+not external-provider coverage.
 
 
 ## Historical Stage 7 PTY Evidence
@@ -281,9 +293,9 @@ this pair passed on the Linux builder (cross-clippy `-D warnings` and all-target
   and no provider credentials.
 
 The workflow first fetches locked dependencies, then uses `--offline` for the
-actual checks. Hosted jobs have not been run for this release branch yet, so
-this file is CI configuration rather than execution evidence. Remote Linux
-records and local focused tests remain separate evidence.
+actual checks. This file describes CI configuration, not execution evidence;
+actual hosted run IDs, source commits and conclusions are recorded in the
+closeout report. Remote Linux and hosted matrix results remain separate evidence.
 
 ## Secret Hygiene
 

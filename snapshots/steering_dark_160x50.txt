@@ -12,7 +12,7 @@
 
  ▎thinking hard
 
- ▎ read · running                                                                                                                                      [详 情 ]
+ ▎ read · running                                                                                                                                    [详 情 ]
  ▎ read
  ▎ ctrl+o collapse
 
@@ -47,4 +47,4 @@
  ▎
  ▎
  ▎
- ▸ project · deep · high · ⚠ incomplete                                                                                                                    ctx ?
+ ▸ project · deep · high · ⚠ incomplete                                                                                                                  ctx ?

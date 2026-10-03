@@ -40,7 +40,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         Paragraph::new(Line::from(Span::styled(
             layout::truncate(
                 &format!(
-                    "↑↓/PgUp/PgDn scroll · Esc/F1 close · q quit · {}–{}/{}",
+                    "↑↓/PgUp/PgDn · Esc/F1 close · q quit · {}–{}/{}",
                     scroll + 1,
                     (scroll + panel.content.height as usize).min(lines.len()),
                     lines.len()

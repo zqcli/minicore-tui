@@ -475,7 +475,7 @@ fn prepare_frame_with_jobs(app: &mut App, jobs: &mut LocalJobs, area: Rect) -> V
     }
     if app.changes().is_some() {
         let body = ui::workspace::file_body(screen.transcript);
-        if let Some(request) = app.diff_layout_request(body.width.saturating_sub(17).max(1)) {
+        if let Some(request) = app.diff_layout_request(body.width.saturating_sub(16).max(1)) {
             let identity = request.identity.clone();
             if jobs.try_schedule_diff_layout(request) {
                 app.mark_diff_layout_pending(identity);
@@ -485,7 +485,7 @@ fn prepare_frame_with_jobs(app: &mut App, jobs: &mut LocalJobs, area: Rect) -> V
     }
     if app.file_preview().is_some() {
         let body = ui::workspace::file_body(screen.transcript);
-        if let Some(request) = app.file_layout_request(body.width.saturating_sub(9).max(1)) {
+        if let Some(request) = app.file_layout_request(body.width.saturating_sub(8).max(1)) {
             let identity = request.identity.clone();
             if jobs.try_schedule_file_layout(request) {
                 app.mark_file_layout_pending(identity);
@@ -495,7 +495,7 @@ fn prepare_frame_with_jobs(app: &mut App, jobs: &mut LocalJobs, area: Rect) -> V
     }
     if app.tool_detail().is_some() {
         let body = ui::tool_detail::body_area(screen.transcript);
-        if let Some(request) = app.tool_layout_request(body.width.saturating_sub(1).max(1)) {
+        if let Some(request) = app.tool_layout_request(body.width.max(1)) {
             let identity = request.identity.clone();
             if jobs.try_schedule_tool_layout(request) {
                 app.mark_tool_layout_pending(identity);

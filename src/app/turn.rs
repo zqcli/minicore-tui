@@ -329,11 +329,12 @@ impl App {
     /// Central FIFO queue advance for every session. At most ONE steer RPC (or
     /// accepted-but-unconfirmed item) per session until a receipt proves the
     /// previous one was issued into a request. A loop that sealed before the
-    /// next unsent steer could be sent falls back to a fresh turn once the
-    /// previous loop completed, persisted, and settled.
+    /// next unsent steer could be sent does not convert it into a fresh turn:
+    /// the entry stays `Unsent` and the queue is paused until the user
+    /// deliberately withdraws it into the empty composer.
     pub(super) fn advance_steer_queues(&mut self) -> Vec<AppCommand> {
-        // Never issue a NEW steer (or fresh-turn) RPC once the connection is
-        // failed, shutting down, or staging a configuration reload.
+        // Never issue a NEW steer RPC once the connection is failed, shutting
+        // down, or staging a configuration reload.
         if self.reload.is_some() || !self.can_send_requests() {
             return Vec::new();
         }

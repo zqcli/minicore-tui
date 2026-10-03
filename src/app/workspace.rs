@@ -67,14 +67,14 @@ impl App {
         }
         let file = self.file_preview()?;
         let body = crate::ui::workspace::file_body(screen.transcript);
+        let scrollbar = screen.scrollbar_for(body);
         if matches!(self.dock, Dock::Composer)
             && (file.scrollbar_grab.is_some()
-                || (mouse.column == body.right().saturating_sub(1)
-                    && body.contains((mouse.column, mouse.row).into())))
+                || scrollbar.contains((mouse.column, mouse.row).into()))
         {
             let total = file.layout.as_ref().map_or(0, |l| l.rows.len());
             if let Some(geometry) = crate::ui::scrollbar::geometry(
-                body,
+                scrollbar,
                 total,
                 file.scroll_offset(body.height as usize),
             ) {
@@ -105,7 +105,9 @@ impl App {
                 }
             }
         }
-        if screen.transcript.contains((mouse.column, mouse.row).into()) {
+        if screen.transcript.contains((mouse.column, mouse.row).into())
+            || scrollbar.contains((mouse.column, mouse.row).into())
+        {
             if !matches!(self.dock, Dock::Composer) {
                 return Some(vec![]);
             }

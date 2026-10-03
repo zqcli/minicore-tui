@@ -7,6 +7,7 @@ use crate::state::{
 use crate::ui::testapp::{self, respond, take_requests};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
+use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 fn app() -> App {
     testapp::open_empty(ThemeKind::Dark, "ses_1", None, "high")
@@ -41,7 +42,7 @@ fn file(app: &mut App, path: &str) -> Vec<AppCommand> {
 }
 fn layout(app: &mut App) {
     let req = app
-        .file_layout_request(app.main_body_area().width.saturating_sub(9).max(1))
+        .file_layout_request(app.main_body_area().width.saturating_sub(8).max(1))
         .unwrap();
     app.mark_file_layout_pending(req.identity.clone());
     app.update(AppEvent::FileLayoutPrepared(
@@ -374,9 +375,10 @@ fn file_preview_width_reflow_preserves_selected_source_position() {
         ReturnTarget::Conversation,
     ))
     .remove(0);
-    let text: String = (1..=80)
-        .map(|i| format!("ROW-{i:03} {}\n", "甲".repeat(95)))
-        .collect();
+    let mut text = String::new();
+    for i in 1..=80 {
+        writeln!(text, "ROW-{i:03} {}", "甲".repeat(95)).unwrap();
+    }
     respond(
         &mut a,
         &r,
@@ -645,13 +647,15 @@ fn file_scrollbar_drag_is_local_and_focus_loss_releases_it() {
     );
     layout(&mut a);
     let body = a.main_body_area();
+    let scrollbar = crate::ui::layout::screen_layout(&a, ratatui::layout::Rect::new(0, 0, 80, 24))
+        .scrollbar_for(body);
     for (kind, row) in [
         (MouseEventKind::Down(MouseButton::Left), body.y),
         (MouseEventKind::Drag(MouseButton::Left), body.bottom() - 1),
     ] {
         a.update(AppEvent::Terminal(CrosstermEvent::Mouse(MouseEvent {
             kind,
-            column: body.right() - 1,
+            column: scrollbar.x,
             row,
             modifiers: KeyModifiers::NONE,
         })));

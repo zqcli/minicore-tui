@@ -75,7 +75,7 @@ fn line(frame: &mut Frame, area: Rect, row: u16, text: String, theme: &Theme) {
         );
     }
 }
-pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+pub fn render(frame: &mut Frame, area: Rect, scrollbar: Rect, app: &App, theme: &Theme) {
     let Some(detail) = app.tool_detail() else {
         return;
     };
@@ -214,10 +214,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         theme,
     );
     let body = body_area(area);
+    let scrollbar = crate::ui::layout::fit_scrollbar(scrollbar, body);
     if let Some(layout) = detail
         .layout
         .as_ref()
-        .filter(|layout| layout.identity.width == body.width.saturating_sub(1).max(1))
+        .filter(|layout| layout.identity.width == body.width.max(1))
     {
         let offset = detail.offset(body.height as usize);
         let lines: Vec<_> = layout
@@ -233,7 +234,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         );
         crate::ui::scrollbar::render(
             frame,
-            body,
+            scrollbar,
             layout.rows.len(),
             offset,
             theme,

@@ -1,0 +1,15 @@
+source_before=0
+release_build=0
+performance=0
+performance_count=0
+artifact_terminal_restore=0
+artifact_agent_process=0
+artifact_minicore-tui=0
+terminal_bin=/root/minicore-tui-closeout-20261003/targets/src-close2-final-c70c73c4-stable/debug/deps/terminal_restore-cef1f2435aa77504
+fake_agent_bin=/root/minicore-tui-closeout-20261003/targets/src-close2-final-c70c73c4-stable/debug/deps/agent_process-c6809e69871a8a3e
+main_test_bin=/root/minicore-tui-closeout-20261003/targets/src-close2-final-c70c73c4-stable/debug/deps/minicore_tui-efd519f648f754a4
+pty=0
+pty_report=0
+source_after=0
+tree_immutable=0
+final_status=0

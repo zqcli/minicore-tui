@@ -196,7 +196,7 @@ pub fn rows(app: &App) -> Vec<String> {
     r.push("观察频率：idle 不轮询；活跃操作前台 500ms / 后台 2s".into());
     r
 }
-pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+pub fn render(frame: &mut Frame, area: Rect, scrollbar: Rect, app: &App, theme: &Theme) {
     let Some(c) = app.context_panel() else {
         return;
     };
@@ -242,6 +242,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         Rect::new(area.x, area.y, area.width, area.height.min(4)),
     );
     let body = super::workspace::file_body(area);
+    let scrollbar = crate::ui::layout::fit_scrollbar(scrollbar, body);
     let all = rows(app);
     let offset = c.offset.min(all.len().saturating_sub(body.height as usize));
     let visible: Vec<_> = all
@@ -253,11 +254,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         .collect();
     frame.render_widget(
         Paragraph::new(visible).style(Style::new().fg(theme.text)),
-        Rect::new(body.x, body.y, body.width.saturating_sub(1), body.height),
+        body,
     );
     super::scrollbar::render(
         frame,
-        body,
+        scrollbar,
         all.len(),
         offset,
         theme,

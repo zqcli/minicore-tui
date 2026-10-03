@@ -1,0 +1,6 @@
+d81728b13db68c76b05b4c8cb87161770769947f
+9e230617d36130e7ec77aba122b45f1347ac53f2
+47ca2b2e2c11da29194456a5673a5d21a84860073446c7e68556f0963e5edc35  /root/minicore-tui-closeout-20261003/fixed-backend/minicore-agent/Cargo.lock
+9575341eab386bdf411a002e5acc576768b1673718b014b23032918a3cc563d2  /root/minicore-tui-closeout-20261003/fixed-backend/minicore-runtime/Cargo.lock
+854361e303cbafe6bb39492441590087eacd1bee74eabb15ad69e7596607561f  /root/minicore-tui-closeout-20261003/targets/fixed-agent-stable/debug/minicore-agent
+5b003dc09308577c03bbbab4ee85aca3a3c4ffa3d3cd8ee8b6b3dd152a3fc341  /root/minicore-tui-closeout-20261003/targets/fixed-agent-1.85.0/debug/minicore-agent

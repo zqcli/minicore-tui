@@ -30,6 +30,15 @@ fn capture(app: &App, width: u16, height: u16) -> String {
     rows.join("\n") + "\n"
 }
 
+/// Snapshot rows keep the renderer's line breaks and `wrap_plain` may cut
+/// inside a word at a display-cell boundary, so a sentence spanning a wrapped
+/// page row cannot be matched with a plain `contains`. Strip all layout
+/// whitespace from both the capture and the expected text so the exact
+/// character and punctuation order must still appear.
+fn unspaced(text: &str) -> String {
+    text.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
 fn snapshot(app: &App, name: &str, width: u16, height: u16) {
     let actual = capture(app, width, height);
     let dir = format!("{}/snapshots", env!("CARGO_MANIFEST_DIR"));
@@ -77,7 +86,7 @@ fn workspace_e2_panels() {
         .remove(0);
         testapp::respond(&mut app, &request, fixture("workspace-read-ok"));
         let request = app
-            .file_layout_request(app.main_body_area().width.saturating_sub(9).max(1))
+            .file_layout_request(app.main_body_area().width.saturating_sub(8).max(1))
             .unwrap();
         app.mark_file_layout_pending(request.identity.clone());
         app.update(AppEvent::FileLayoutPrepared(
@@ -166,7 +175,7 @@ fn review_e3_panels_at_three_sizes() {
         value["comparison"] = request.params["comparison"].clone();
         testapp::respond(&mut app, &request, value);
         let request = app
-            .diff_layout_request(app.main_body_area().width.saturating_sub(17).max(1))
+            .diff_layout_request(app.main_body_area().width.saturating_sub(16).max(1))
             .unwrap();
         app.mark_diff_layout_pending(request.identity.clone());
         app.update(AppEvent::DiffLayoutPrepared(
@@ -420,10 +429,17 @@ fn unsaved_gap_dark_80x24() {
     assert!(cap.contains("UNSAVED TURN"));
     assert!(cap.contains("This turn finished, but the Agent did not confirm saving it."));
     assert!(cap.contains("The session is blocked. Tool side effects may already exist."));
+    // `wrap_plain` breaks rows at display-cell boundaries and may cut inside a
+    // word, so compare the visible text and the complete warning with all
+    // layout whitespace removed; every character and punctuation mark must
+    // still appear in order, and a truncated or scrolled-away sentence cannot
+    // match.
+    let warning = "This turn finished, but the Agent did not confirm saving it. \
+                   The session is blocked. Tool side effects may already exist. \
+                   Closing releases this result; reopening reads whatever the Store can recover.";
     assert!(
-        cap.contains(
-            "Closing releases this result; reopening reads whatever the Store can recover."
-        )
+        unspaced(&cap).contains(&unspaced(warning)),
+        "the complete unsaved-turn warning must stay visible across soft wraps"
     );
     assert!(cap.contains("Some live output may be missing."));
     snapshot(&app, "unsaved_gap_dark_80x24", 80, 24);
@@ -560,7 +576,72 @@ fn unknown_cancel_result_dark_80x24() {
     let cap = capture(&app, 80, 24);
     assert!(cap.contains("cancelled (sandbox_evicted)"));
     assert!(cap.contains("persisted"));
+    // The result notice is one cell wider than the fixed body, so it must
+    // wrap instead of truncating. `unspaced` ignores the soft wrap so a
+    // dropped trailing `0` cannot hide behind a line break; every character
+    // of the statistic must still be present.
+    assert!(
+        unspaced(&cap).contains(&unspaced(
+            "⊘ Turn cancelled (sandbox_evicted) · persisted · requests: 1 · tool rounds: 0"
+        )),
+        "complete result statistics must stay visible at 80x24:\n{cap}"
+    );
     snapshot(&app, "unknown_cancel_result_dark_80x24", 80, 24);
+}
+
+#[test]
+fn unknown_cancel_result_keeps_statistics_at_narrow_width() {
+    let app = testapp::unknown_cancel_result(ThemeKind::Dark);
+    let cap = capture(&app, 60, 24);
+    assert!(cap.contains("cancelled (sandbox_evicted)"));
+    assert!(cap.contains("persisted"));
+    assert!(
+        unspaced(&cap).contains("requests:1") && unspaced(&cap).contains("toolrounds:0"),
+        "narrow result statistics must stay visible at 60x24:\n{cap}"
+    );
+}
+
+#[test]
+fn last_result_keeps_full_u64_and_request_digits_visible() {
+    // Regression: the fixed body width is narrower than the native 79-column
+    // body, so a longer notice must still surface every statistic character
+    // (reason, persistence, requests and a full u64 tool-rounds count).
+    for (width, height) in [(80, 24), (60, 24)] {
+        let mut app = testapp::unknown_cancel_result(ThemeKind::Dark);
+        let requests = u32::MAX;
+        let tool_rounds = u64::MAX;
+        let view = app.sessions.known.get_mut("ses_1").expect("session view");
+        view.last_result = Some(crate::protocol::TurnResultViewWire {
+            turn: crate::protocol::TurnRef {
+                session_id: "ses_1".to_owned(),
+                loop_id: "loop_big".to_owned(),
+            },
+            outcome: crate::protocol::LoopOutcomeWire::Cancelled {
+                reason: crate::protocol::CancelReasonWire::Unknown("sandbox_evicted".to_owned()),
+            },
+            usage: None,
+            requests: Some(requests),
+            tool_rounds: Some(tool_rounds),
+            final_config_revision: Some(0),
+            persistence: Some(crate::protocol::TurnPersistenceWire::Persisted),
+            accepted_at: None,
+            completed_at: None,
+        });
+        let cap = capture(&app, width, height);
+        let flat = unspaced(&cap);
+        assert!(
+            flat.contains("cancelled(sandbox_evicted)") && flat.contains("persisted"),
+            "reason and persistence must stay visible at {width}x{height}:\n{cap}"
+        );
+        assert!(
+            flat.contains(&format!("requests:{requests}")),
+            "request digits must stay visible at {width}x{height}:\n{cap}"
+        );
+        assert!(
+            flat.contains(&format!("toolrounds:{tool_rounds}")),
+            "u64 tool-rounds digits must stay visible at {width}x{height}:\n{cap}"
+        );
+    }
 }
 
 #[test]

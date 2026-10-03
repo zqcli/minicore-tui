@@ -1,0 +1,14 @@
+source_before=0
+tests=0
+fmt=0
+clippy=0
+doc=0
+metadata=0
+agent_identity_before=0
+agent_version=0
+e2e=0
+e2e_count=0
+agent_identity_after=0
+source_after=0
+tree_immutable=0
+final_status=0

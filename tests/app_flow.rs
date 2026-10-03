@@ -1,6 +1,7 @@
 //! Focused App reducer tests for the Agent v0.3 / TUI r2 contract.
 
 use std::collections::VecDeque;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
@@ -896,7 +897,7 @@ fn new_session_and_empty_created_session_keep_startup_header() {
         );
     }
 
-    let prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 79);
+    let prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 77);
     assert_eq!(
         driver.app.sessions.known["ses_1"].transcript.blocks.len(),
         2
@@ -957,7 +958,7 @@ fn new_session_and_empty_created_session_keep_startup_header() {
             "empty created-session screen is missing {expected:?}:\n{empty_screen}"
         );
     }
-    let empty_prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 79);
+    let empty_prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 77);
     assert!(
         empty_prepared
             .copy_ranges
@@ -992,7 +993,7 @@ fn welcome_prefix_survives_first_message_scroll_resize_and_session_switch() {
         session_id: "ses_1".to_owned(),
         text: "first prompt".to_owned(),
     });
-    let prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 79);
+    let prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 77);
     assert_eq!(
         prepared.header_rows(),
         5,
@@ -1007,9 +1008,10 @@ fn welcome_prefix_survives_first_message_scroll_resize_and_session_switch() {
     // Its presentation prefix remains local and is never copied into history.
     // Blank lines make distinct Markdown paragraphs; soft newlines alone
     // collapse into a short wrapped paragraph that fits a large viewport.
-    let long_prompt = (0..60)
-        .map(|n| format!("prompt line {n}\n\n"))
-        .collect::<String>();
+    let long_prompt = (0..60).fold(String::new(), |mut out, n| {
+        write!(out, "prompt line {n}\n\n").unwrap();
+        out
+    });
     driver.respond_method(
         "turn.send",
         json!({"turn": {"session_id": "ses_1", "loop_id": "loop_1"}}),
@@ -1073,7 +1075,7 @@ fn welcome_prefix_survives_first_message_scroll_resize_and_session_switch() {
 
     // A reader in the middle remains anchored on content when resizing the
     // same transcript with its retained prefix.
-    let prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 119);
+    let prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 117);
     let target = prepared
         .lines()
         .iter()
@@ -1092,7 +1094,7 @@ fn welcome_prefix_survives_first_message_scroll_resize_and_session_switch() {
         .anchor
         .clone()
         .expect("content anchor captured");
-    let resized = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 59);
+    let resized = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 57);
     let expected = resized
         .row_for_scroll_anchor(&anchor)
         .unwrap()
@@ -1191,9 +1193,9 @@ fn session_footer_new_invalidates_prepared_header_cache() {
         height: 24,
     });
 
-    let prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 79);
+    let prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 77);
     driver.step(AppEvent::ConversationPrepared(prepared));
-    assert!(driver.app.prepared_conversation(79).is_some());
+    assert!(driver.app.prepared_conversation(77).is_some());
 
     let (has_error, panel_area) = match &driver.app.dock {
         Dock::SessionSelector(state) => {
@@ -1228,7 +1230,7 @@ fn session_footer_new_invalidates_prepared_header_cache() {
         crossterm::event::MouseButton::Left,
     )));
     assert!(driver.app.new_session().is_some());
-    assert!(driver.app.prepared_conversation(79).is_none());
+    assert!(driver.app.prepared_conversation(77).is_none());
     assert!(rendered_text(&driver.app, 120, 40).contains("MINICORE  v0.3.0"));
 }
 
@@ -10063,7 +10065,7 @@ fn layout_budget_overflow_keeps_full_search_and_real_export_independent() {
     let item = user(0, "loop_1", "exact saved needle survives display overflow");
     open_chat_with(&mut driver, vec![item.clone()]);
     driver.app.enable_async_layout();
-    let request = driver.app.layout_request(79).unwrap();
+    let request = driver.app.layout_request(77).unwrap();
     let identity = request.identity;
     driver.app.mark_layout_pending(identity.clone());
     let parts = (0..25)
@@ -10081,7 +10083,7 @@ fn layout_budget_overflow_keeps_full_search_and_real_export_independent() {
                         history_index: Some(index),
                     },
                     revision: 0,
-                    width: 79,
+                    width: 77,
                     theme: driver.app.theme,
                     folded: false,
                     reasoning_visible: driver.app.reasoning_visible,
@@ -10095,7 +10097,7 @@ fn layout_budget_overflow_keeps_full_search_and_real_export_independent() {
                 }),
                 copy_ranges: Arc::new(vec![]),
                 link_cells: Arc::new(vec![]),
-                content_columns: 0..79,
+                content_columns: 0..77,
                 collapsible: false,
                 folded: false,
             })
@@ -10104,7 +10106,7 @@ fn layout_budget_overflow_keeps_full_search_and_real_export_independent() {
     let durable = Arc::new(PreparedDurable {
         key: DurableCacheKey::new(
             &driver.app.sessions.known["ses_1"],
-            79,
+            77,
             driver.app.theme,
             driver.app.reasoning_visible,
         ),
@@ -10117,7 +10119,7 @@ fn layout_budget_overflow_keeps_full_search_and_real_export_independent() {
         tool_index_lookups: 0,
         complete: false,
     }));
-    let placeholder = driver.app.cached_durable(79).unwrap();
+    let placeholder = driver.app.cached_durable(77).unwrap();
     assert!(
         placeholder
             .layout
@@ -10125,7 +10127,7 @@ fn layout_budget_overflow_keeps_full_search_and_real_export_independent() {
             .iter()
             .all(|s| s.layout.key.section.history_index.is_none())
     );
-    assert!(driver.app.layout_request(79).is_none());
+    assert!(driver.app.layout_request(77).is_none());
     slash(&mut driver, "/search full needle");
     let read = driver.request("session.read");
     assert_eq!(read.params["cursor"]["item"], 0);
@@ -10173,7 +10175,7 @@ fn layout_budget_overflow_keeps_full_search_and_real_export_independent() {
     );
     assert!(!written.contains("Conversation display limit reached"));
     assert!(
-        Arc::ptr_eq(&placeholder, &driver.app.cached_durable(79).unwrap()),
+        Arc::ptr_eq(&placeholder, &driver.app.cached_durable(77).unwrap()),
         "independent scans did not replace or copy the display notice"
     );
 }

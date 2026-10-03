@@ -304,7 +304,7 @@ fn assistant_entry(index: usize, loop_id: &str, text: &str, reasoning: &str) -> 
 }
 
 fn section_copy(app: &App, predicate: impl Fn(&SectionId) -> bool) -> String {
-    let prepared = transcript::prepare_conversation(app, 79);
+    let prepared = transcript::prepare_conversation(app, 77);
     let section = prepared
         .sections
         .iter()
@@ -535,7 +535,7 @@ fn provisional_steer_selection_never_rebases_onto_a_wrong_durable_user() {
     let mut app = steer_identity_app(8, 7);
 
     // Anchor a selection on the live steer card (kind User, ordinal 7).
-    let prepared = transcript::prepare_conversation(&app, 79);
+    let prepared = transcript::prepare_conversation(&app, 77);
     let steer_section = prepared
         .sections
         .iter()
@@ -572,7 +572,7 @@ fn provisional_steer_selection_never_rebases_onto_a_wrong_durable_user() {
         granularity: SelectionGranularity::Paragraph,
         dragged: false,
     });
-    let prepared = transcript::prepare_conversation(&app, 79);
+    let prepared = transcript::prepare_conversation(&app, 77);
     app.install_conversation(prepared);
     assert!(
         app.selection.is_some(),
@@ -594,7 +594,7 @@ fn provisional_steer_selection_never_rebases_onto_a_wrong_durable_user() {
             .retain(|applied| applied.text != "steer body");
         view.transcript.invalidate();
     }
-    let prepared = transcript::prepare_conversation(&app, 79);
+    let prepared = transcript::prepare_conversation(&app, 77);
     assert_eq!(
         prepared
             .sections

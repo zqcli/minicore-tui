@@ -562,17 +562,19 @@ mod tests {
     fn long_wrapped_line_cursor_is_visible_with_correct_hardware_position() {
         let mut app = app_with("x".repeat(70).as_str());
         // Move the cursor to the very end (char index 70) — row 0, col 70.
-        // Inner width is 78 -> 0..  ok, not wrapping. Now use a 79-char line
-        // so it wraps into two visual rows inside the 78-column inner area.
+        // The fixed page columns (gutter1 + body77 + gap1 + track1 at 80
+        // cols) leave the composer an inner width of 76 once the rail cell is
+        // removed, so 0..  ok here does not wrap. Now use a 79-char line
+        // so it wraps into two visual rows inside the 76-column inner area.
         let long = "a".repeat(79);
         app.composer.set_text(&long);
         let (row, col) = app.composer.cursor();
         assert_eq!((row, col), (0, 79));
-        let (cursor_row, cursor_col) = cursor_cell(&app, 78);
+        let (cursor_row, cursor_col) = cursor_cell(&app, 76);
         assert_eq!(
             (cursor_row, cursor_col),
-            (1, 1),
-            "78 cols on row 0, cursor at 79th char starts row 1 col 1"
+            (1, 3),
+            "76 cols on row 0, cursor at 79th char starts row 1 col 3"
         );
 
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
@@ -582,8 +584,9 @@ mod tests {
         let pos = terminal.backend_mut().get_cursor_position().unwrap();
         // Rail composer: dock = footer(1) + composer(4) => composer at
         // y=19..23. Two wrapped rows are vertically centered, so row 1 is
-        // y=21; the rail and first content column place the cursor at x=3.
-        assert_eq!((pos.x, pos.y), (3, 21));
+        // y=21; the gutter plus rail injects two cells before the content, so
+        // the third content column lands at x=5.
+        assert_eq!((pos.x, pos.y), (5, 21));
     }
 
     #[test]

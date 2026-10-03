@@ -72,7 +72,7 @@ fn fragmented_diff_copy_uses_visible_safe_source_and_late_layout_cannot_install_
         p
     };
     respond(&mut a, &first, page(0, "中", false, cursor.clone()));
-    let width = a.main_body_area().width.saturating_sub(17).max(1);
+    let width = a.main_body_area().width.saturating_sub(16).max(1);
     let layout = a.diff_layout_request(width).unwrap();
     a.mark_diff_layout_pending(layout.identity.clone());
     a.update(AppEvent::DiffLayoutPrepared(

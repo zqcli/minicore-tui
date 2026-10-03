@@ -53,6 +53,9 @@ pub fn is_too_small(area: Rect) -> bool {
 pub struct ScreenLayout {
     pub gutter: Rect,
     pub content: Rect,
+    pub right_gap: Rect,
+    /// Dedicated page column; only scrollable main-view rows paint it.
+    pub scrollbar: Rect,
     pub transcript: Rect,
     pub dock: Rect,
     pub status: Option<Rect>,
@@ -62,6 +65,34 @@ pub struct ScreenLayout {
     pub queue: Option<Rect>,
     pub panel: Rect,
     pub footer: Rect,
+}
+
+impl ScreenLayout {
+    /// Align a main view's track with its scrollable body, not its header or dock.
+    pub fn scrollbar_for(self, body: Rect) -> Rect {
+        fit_scrollbar(self.scrollbar, body)
+    }
+}
+
+pub(crate) fn fit_scrollbar(track: Rect, body: Rect) -> Rect {
+    track.intersection(Rect::new(track.x, body.y, track.width, body.height))
+}
+
+/// Stable page columns, independent of scrollbar visibility. At 80 columns:
+/// gutter 0, body 1..=77, gap 78, scrollbar 79. Tiny widths saturate safely.
+pub(crate) fn page_columns(area: Rect) -> [Rect; 4] {
+    use crate::ui::rail::{APP_GUTTER_WIDTH, APP_RIGHT_GAP_WIDTH, APP_SCROLLBAR_WIDTH};
+    let left = area.width.min(APP_GUTTER_WIDTH);
+    let remaining = area.width - left;
+    let track = remaining.min(APP_SCROLLBAR_WIDTH);
+    let gap = (remaining - track).min(APP_RIGHT_GAP_WIDTH);
+    let body = remaining - track - gap;
+    [
+        Rect::new(area.x, area.y, left, area.height),
+        Rect::new(area.x + left, area.y, body, area.height),
+        Rect::new(area.x + left + body, area.y, gap, area.height),
+        Rect::new(area.x + left + body + gap, area.y, track, area.height),
+    ]
 }
 
 /// Bound for the dock's steering queue display; more entries are summarized
@@ -118,11 +149,7 @@ pub fn steer_queue_rows(app: &App) -> u16 {
 /// viewport/hit-test callers can use these same rectangles instead of
 /// independently re-deriving gutter, dock, and footer boundaries.
 pub fn screen_layout(app: &App, area: Rect) -> ScreenLayout {
-    let [gutter, content] = ratatui::layout::Layout::horizontal([
-        ratatui::layout::Constraint::Length(crate::ui::rail::APP_GUTTER_WIDTH),
-        ratatui::layout::Constraint::Min(1),
-    ])
-    .areas(area);
+    let [gutter, content, right_gap, scrollbar] = page_columns(area);
     let short = content.height < 24;
     let panel = match &app.dock {
         Dock::Composer => composer_height_phase5(app, content.width, content.height, short)
@@ -209,6 +236,8 @@ pub fn screen_layout(app: &App, area: Rect) -> ScreenLayout {
     ScreenLayout {
         gutter,
         content,
+        right_gap,
+        scrollbar,
         transcript,
         dock,
         status,
@@ -459,6 +488,60 @@ mod tests {
     use crate::theme::ThemeKind;
     use std::path::PathBuf;
 
+    #[test]
+    fn page_columns_partition_translated_and_tiny_rectangles() {
+        for x in [0, 7] {
+            for width in 0..=120 {
+                let area = Rect::new(x, 3, width, 16);
+                let columns = page_columns(area);
+                let mut next = area.x;
+                for column in columns {
+                    assert_eq!(column.x, next);
+                    assert_eq!((column.y, column.height), (area.y, area.height));
+                    next = column.right();
+                }
+                assert_eq!(next, area.right());
+                assert_eq!(columns[1].width, width.saturating_sub(3));
+                if width >= 3 {
+                    assert_eq!(columns[0].width, 1);
+                    assert_eq!(columns[2].width, 1);
+                    assert_eq!(columns[3].width, 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dock_and_main_views_share_body_edges_and_page_scrollbar_column() {
+        for (width, height) in [(60, 16), (80, 24), (120, 40)] {
+            for dock in [Dock::Composer, Dock::Help, Dock::Logs] {
+                let mut app = crate::ui::testapp::fresh(ThemeKind::Dark);
+                app.dock = dock;
+                app.update(AppEvent::TerminalSize { width, height });
+                let screen = screen_layout(&app, Rect::new(0, 0, width, height));
+                assert_eq!(app.terminal_content_width(), width - 3);
+                assert_eq!(screen.content, Rect::new(1, 0, width - 3, height));
+                for body in [screen.transcript, screen.dock, screen.panel, screen.footer] {
+                    assert_eq!(
+                        (body.x, body.width),
+                        (screen.content.x, screen.content.width)
+                    );
+                    assert_eq!(body.right(), screen.right_gap.x);
+                }
+                assert_eq!(screen.right_gap, Rect::new(width - 2, 0, 1, height));
+                assert_eq!(screen.scrollbar, Rect::new(width - 1, 0, 1, height));
+                for body in [
+                    screen.transcript,
+                    crate::ui::workspace::file_body(screen.transcript),
+                    crate::ui::tool_detail::body_area(screen.transcript),
+                ] {
+                    let track = screen.scrollbar_for(body);
+                    assert_eq!(track, Rect::new(width - 1, body.y, 1, body.height));
+                    assert!(!body.intersects(track));
+                }
+            }
+        }
+    }
     fn app() -> App {
         let mut app = App::new(PathBuf::from("/ws"));
         app.update(AppEvent::SetTheme(ThemeKind::Dark));

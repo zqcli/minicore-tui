@@ -2034,11 +2034,15 @@ fn last_result_lines(
             .map_or_else(|| "unknown".to_owned(), |value| value.to_string())
     );
 
-    vec![
-        Line::default(),
-        layout::filled(&content, width, outcome_style),
-        Line::default(),
-    ]
+    // The fixed body columns can be narrower than the whole summary, so wrap
+    // the notice with the shared line layout instead of `filled`-truncating it.
+    // Otherwise trailing statistics (notably `tool rounds`) silently vanish.
+    let mut lines = vec![Line::default()];
+    for wrapped in crate::markdown::wrap_plain(&content, width, outcome_style) {
+        lines.push(layout::filled(&wrapped.to_string(), width, outcome_style));
+    }
+    lines.push(Line::default());
+    lines
 }
 
 struct LiveRenderContext<'a> {
@@ -2525,7 +2529,7 @@ fn summary_lines(theme: &Theme, width: usize, content: &str) -> Vec<Line<'static
     ]
 }
 
-pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
+pub fn render(frame: &mut Frame<'_>, area: Rect, scrollbar: Rect, app: &App, theme: &Theme) {
     let width = area.width as usize;
     let height = area.height as usize;
     if width == 0 || height == 0 {
@@ -2535,12 +2539,20 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
         || (app.async_layout_enabled() && app.prepared_conversation(area.width).is_none())
     {
         if let Some(previous) = app.transition_transcript_frame(area) {
-            // Only transcript cells are replayed; composer/footer keep drawing
-            // from current App state. A growing composer simply crops the view.
-            let overlap = area.intersection(previous.area);
-            for y in overlap.y..overlap.bottom() {
-                for x in overlap.x..overlap.right() {
-                    frame.buffer_mut()[(x, y)] = previous[(x, y)].clone();
+            // Body and dedicated track replay independently; neither includes
+            // the gap or dock. A growing composer simply crops both snapshots.
+            for (target, saved) in [
+                (area, Some(previous)),
+                (scrollbar, app.transition_scrollbar_frame(area)),
+            ] {
+                let Some(saved) = saved else {
+                    continue;
+                };
+                let overlap = target.intersection(saved.area);
+                for y in overlap.y..overlap.bottom() {
+                    for x in overlap.x..overlap.right() {
+                        frame.buffer_mut()[(x, y)] = saved[(x, y)].clone();
+                    }
                 }
             }
             return;
@@ -2574,7 +2586,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
         app.selection.as_ref(),
         &prepared.sections,
         theme,
-        width.saturating_sub(usize::from(app.scrollbar_visible(total, height))),
+        width,
     );
     let body_area = Rect {
         x: area.x,
@@ -2599,20 +2611,21 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
             width: area.width,
             height: 1,
         };
-        render_marker(
-            frame,
-            marker_area,
-            app,
-            theme,
-            app.scrollbar_visible(total, height),
-        );
+        render_marker(frame, marker_area, app, theme);
     }
     if app.scrollbar_visible(total, height) {
-        crate::ui::scrollbar::render(frame, area, total, offset, theme, app.scrollbar_active());
+        crate::ui::scrollbar::render(
+            frame,
+            scrollbar,
+            total,
+            offset,
+            theme,
+            app.scrollbar_active(),
+        );
     }
 }
 
-fn render_marker(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme, scrollbar: bool) {
+fn render_marker(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
     let label = if app
         .active_view()
         .is_some_and(|view| view.scroll.new_content)
@@ -2621,7 +2634,7 @@ fn render_marker(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme, sc
     } else {
         "↑ scroll position"
     };
-    let area = marker_area(area, label, scrollbar);
+    let area = marker_area(area, label);
     layout::clear_wide_overlay_edges(frame.buffer_mut(), area);
     let line = layout::filled(
         label,
@@ -2631,8 +2644,8 @@ fn render_marker(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme, sc
     frame.render_widget(ratatui::widgets::Paragraph::new(line), area);
 }
 
-pub(crate) fn marker_area(area: Rect, label: &str, scrollbar: bool) -> Rect {
-    let width = area.width.saturating_sub(u16::from(scrollbar));
+pub(crate) fn marker_area(area: Rect, label: &str) -> Rect {
+    let width = area.width;
     let label_width = crate::markdown::column_width(label).min(width as usize) as u16;
     Rect::new(
         area.x + (width - label_width) / 2,

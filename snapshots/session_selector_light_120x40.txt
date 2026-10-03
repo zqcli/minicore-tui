@@ -23,18 +23,18 @@
 
 
 
- ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
- │Select session — this workspace                                                                                      │
- │>                                                                                                                    │
- │No matching sessions                                                                                                 │
- │                                                                                                                     │
- │                                                                                                                     │
- │                                                                                                                     │
- │                                                                                                                     │
- │                                                                                                                     │
- │                                                                                                                     │
- │                                                                                                                     │
- │Enter Open · Ctrl+B Read-only · Ctrl+G Continue · Ctrl+A Scope                                                       │
- │Ctrl+N New · F5 Refresh · F2 Rename · Ctrl+W Close · Del Delete                                                      │
- └─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │Select session — this workspace                                                                                    │
+ │>                                                                                                                  │
+ │No matching sessions                                                                                               │
+ │                                                                                                                   │
+ │                                                                                                                   │
+ │                                                                                                                   │
+ │                                                                                                                   │
+ │                                                                                                                   │
+ │                                                                                                                   │
+ │                                                                                                                   │
+ │Enter Open · Ctrl+B Read-only · Ctrl+G Continue · Ctrl+A Scope                                                     │
+ │Ctrl+N New · F5 Refresh · F2 Rename · Ctrl+W Close · Del Delete                                                    │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
  ● ready

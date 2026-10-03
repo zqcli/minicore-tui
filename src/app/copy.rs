@@ -366,7 +366,7 @@ mod tests {
             ConversationSelection, SectionKind, SelectionGranularity, SelectionPoint,
         };
         let app = crate::ui::testapp::chat(crate::theme::ThemeKind::Dark);
-        let prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+        let prepared = crate::ui::transcript::prepare_conversation(&app, 77);
         let user = prepared
             .sections
             .iter()
@@ -412,7 +412,7 @@ mod tests {
                 accepted_at: Some("2026-01-02T03:04:05.000Z".into()),
                 request_index: 0,
             });
-        let prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+        let prepared = crate::ui::transcript::prepare_conversation(&app, 77);
         let steer = prepared
             .sections
             .iter()
@@ -546,7 +546,7 @@ mod tests {
             )
         };
         app.update(AppEvent::TerminalSize {
-            width: width + 1,
+            width: width + 3,
             height: 24,
         });
         if thinking {
@@ -597,7 +597,7 @@ mod tests {
             "**前言** {}\u{1b}[31mintro\u{1b}[0m\n\n```rust\n{first}\n```\n\nBetween\n\n~~~sh\nSECOND\n~~~\n\n```\nTHIRD\n```\n",
             "长段落".repeat(35)
         );
-        for width in [59, 79, 119] {
+        for width in [57, 77, 117] {
             for live in [false, true] {
                 for thinking in [false, true] {
                     let mut app = copy_app(&source, thinking, live, width);
@@ -626,7 +626,7 @@ mod tests {
         use crate::state::view::{
             ConversationSelection, SectionKind, SelectionGranularity, SelectionPoint,
         };
-        for width in [59, 79, 119] {
+        for width in [57, 77, 117] {
             for thinking in [false, true] {
                 let body = format!("{}\n\n{}", "变量🙂X".repeat(70), "NEXT".repeat(45));
                 let source = if thinking {
@@ -698,15 +698,15 @@ mod tests {
             width: 60,
             height: 24,
         });
-        select_copy_row(&mut user, 59, "Review release notes.");
+        select_copy_row(&mut user, 57, "Review release notes.");
         let CopyPlan::Text(text) = user.plan_section_copy(super::SectionPick::ViewportOrSelection)
         else {
             panic!("XML user source must be copyable")
         };
         assert_eq!(text, source);
         for live in [false, true] {
-            let mut app = copy_app(source, false, live, 59);
-            select_copy_row(&mut app, 59, "Review release notes.");
+            let mut app = copy_app(source, false, live, 57);
+            select_copy_row(&mut app, 57, "Review release notes.");
             let CopyPlan::Text(text) =
                 app.plan_section_copy(super::SectionPick::ViewportOrSelection)
             else {
@@ -719,7 +719,7 @@ mod tests {
     #[test]
     fn copying_soft_wrapped_words_keeps_separator_spaces() {
         let source = "alpha beta gamma delta epsilon ".repeat(30);
-        for width in [59, 79, 119] {
+        for width in [57, 77, 117] {
             for live in [false, true] {
                 let app = copy_app(source.trim_end(), false, live, width);
                 let prepared = crate::ui::transcript::prepare_conversation(&app, width);
@@ -760,7 +760,7 @@ mod tests {
                     width: 80,
                     height: 24,
                 });
-                let prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+                let prepared = crate::ui::transcript::prepare_conversation(&app, 77);
                 let section = prepared
                     .sections
                     .iter()
@@ -774,7 +774,7 @@ mod tests {
                         tool_call_id: "call_copy".into(),
                     });
                 }
-                let prepared = crate::ui::transcript::prepare_conversation(&app, 79);
+                let prepared = crate::ui::transcript::prepare_conversation(&app, 77);
                 let section = prepared
                     .sections
                     .iter()

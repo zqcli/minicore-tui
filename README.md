@@ -33,7 +33,7 @@ dependencies. Debug information and assertions remain enabled, but optimization
 can affect stepping and local-variable visibility. Terminal output batches small
 ANSI writes through a 64 KiB buffer; render rates are unchanged. The Release
 profile is unchanged. The current release line is **0.3.0**, paired with Agent
-**0.5.0** and Runtime **0.4.1** over Protocol v1; the fixed revisions are
+**0.6.0** and Runtime **0.6.0** over Protocol v1; the fixed revisions are
 listed in [the backend contract](docs/backend.md). The older 0.2.x release
 notes remain historical and are not evidence for this release.
 
@@ -122,6 +122,13 @@ best-effort live display data and may be dropped. `turn.wait`, `session.state`,
 and the paged `session.read` path are authoritative; `session.history` remains a
 compatibility/diagnostic method and is not the application history path.
 
+Ordinary turns remain append-only and do not summarize on soft-threshold
+crossings. After successful persistence, the Agent may run an independent
+post-turn compaction operation; `/compact` is idle-only. The TUI observes the
+Agent's operation state and cancels the exact operation, never runs summary
+policy or retries a prompt itself. Unsent steering text remains paused after
+a turn ends until explicitly retrieved into the composer.
+
 Tools run automatically under the Agent. Bash is not sandboxed. The TUI supports
 mid-turn steering via `turn.steer`. It does not add approval, live Bash PTY output,
 MCP, plugins, skills, subagents, session branching, or reconnect/restart behavior.
@@ -189,9 +196,10 @@ matrix. `persisted` acknowledges appending the process's durable items, not
 transaction/fsync/crash durability. A failed append blocks the Session while
 retaining its in-process completion.
 
-- Agent 0.5.0 commit `061743369459299e66be97bf97d2b27352a39914`;
-- Runtime 0.4.1 commit `6cd2bdbc634437dea925495c61c7eb0be10ba171`;
-- TUI current source/test tree `9e399d9`, after F-review remediation `daa944a` (core baseline `0aa64c5e4d9211351123db059547beddb15c2cce` is historical);
+- Agent 0.6.0 commit `d81728b13db68c76b05b4c8cb87161770769947f`;
+- Runtime 0.6.0 commit `9e230617d36130e7ec77aba122b45f1347ac53f2`;
+- TUI 0.3.0 closeout source and verification provenance are recorded in
+  [the closeout report](docs/verification/v03-closeout/README.md);
 - RPC Protocol v1 with the required capability set;
 - NDJSON over stdio, with one TUI writer, one stdout reader, one stderr reader,
   bounded frames (up to 32 MiB), request IDs, response/event interleaving, and no event replay.
@@ -233,15 +241,14 @@ refactor matrix is [docs/refactor-acceptance.md](docs/refactor-acceptance.md);
 
 A real-Agent E2E is ignored by default and must use the pinned Agent binary plus
 a loopback mock endpoint; it does not require or permit access to a real
-provider. The current remote Rust 1.85/stable runs each pass 830 tests with 0 failures
-and 53 ignored, the isolated fixed-backend job passes 34/34 serial E2Es on both
-toolchains, and the current Release performance set passes 9/9 on both. Linux
-kernel-PTY evidence covers
-terminal lifecycle, same-slave negative raw-mode detection, input/resize,
-shutdown, idle draw scheduling, and the real clipboard child path; it is not
-manual iTerm2/IME or native macOS/Windows evidence. Hosted CI remains a
-separate unrun matrix. Do not put secrets or real user data in fixtures, logs,
-E2E config, or snapshots. See [the F-review evidence](docs/verification/v03-f/README.md).
+provider. See [the closeout report](docs/verification/v03-closeout/README.md)
+for exact-source remote Rust 1.85/stable quality gates, pinned-backend E2E,
+performance, Linux kernel-PTY and hosted CI evidence. Linux PTY checks are not
+manual iTerm2/IME or native desktop clipboard acceptance; mock-provider checks
+are not real-provider acceptance. The earlier 830-test, 34-E2E F-review results
+remain [historical evidence](docs/verification/v03-f/README.md), not results for
+the current source. Do not put secrets or real user data in fixtures, logs,
+E2E config, or snapshots.
 
 ## License
 

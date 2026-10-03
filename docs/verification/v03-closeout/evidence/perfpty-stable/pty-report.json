@@ -1,0 +1,95 @@
+{
+  "status": "PASS",
+  "pty": "Linux kernel PTY via pty.openpty/fork/setsid/TIOCSCTTY/TIOCSWINSZ",
+  "native_manual_iTerm2": "Not run",
+  "hosted_ci": "Not run",
+  "macos_windows_native": "Not run",
+  "results": [
+    {
+      "name": "real_pty_enter_and_restore_round_trip",
+      "exit": 0,
+      "bytes": 309,
+      "cpu_user_ms": 0.0,
+      "cpu_sys_ms": 3.85,
+      "max_rss_kib": 11236,
+      "pty_cooked_after_exit": true
+    },
+    {
+      "name": "real_pty_editor_suspend_and_resume_round_trip",
+      "exit": 0,
+      "bytes": 433,
+      "cpu_user_ms": 0.0,
+      "cpu_sys_ms": 3.044,
+      "max_rss_kib": 11244,
+      "pty_cooked_after_exit": true
+    },
+    {
+      "name": "real_pty_raw_mode_is_restored_across_suspend_and_exit",
+      "exit": 0,
+      "bytes": 441,
+      "cpu_user_ms": 3.645,
+      "cpu_sys_ms": 0.0,
+      "max_rss_kib": 11248,
+      "pty_cooked_after_exit": true
+    },
+    {
+      "name": "real_pty_negative_leaves_raw_mode",
+      "exit": 0,
+      "bytes": 161,
+      "cpu_user_ms": 0.0,
+      "cpu_sys_ms": 3.177,
+      "max_rss_kib": 11252,
+      "pty_cooked_after_exit": false,
+      "expected_raw_detection": true
+    },
+    {
+      "name": "real_pty_delivers_input_resize_and_shutdown_signal",
+      "exit": 0,
+      "bytes": 182,
+      "cpu_user_ms": 1.597,
+      "cpu_sys_ms": 1.597,
+      "max_rss_kib": 11252,
+      "pty_cooked_after_exit": true
+    },
+    {
+      "name": "real_pty_panic_child_restores_terminal_before_exit",
+      "exit": 0,
+      "bytes": 769,
+      "cpu_user_ms": 6.398,
+      "cpu_sys_ms": 0.0,
+      "max_rss_kib": 11252,
+      "pty_cooked_after_exit": true
+    },
+    {
+      "name": "real_tui_input_resize_shutdown",
+      "exit": 0,
+      "bytes": 6418,
+      "cpu_user_ms": 1.25,
+      "cpu_sys_ms": 26.195,
+      "max_rss_kib": 11368,
+      "pty_cooked_after_exit": true,
+      "draw_calls": 11,
+      "perf": "minicore-tui perf: draws=11 layout_calls=0 history_bytes_cloned=0 viewport_rows=0 viewport_bytes=0 composer_full_joins=50 retained_history_bytes=0"
+    },
+    {
+      "name": "real_tui_idle_30s",
+      "exit": 0,
+      "bytes": 1613,
+      "cpu_user_ms": 3.664,
+      "cpu_sys_ms": 19.906,
+      "max_rss_kib": 11376,
+      "pty_cooked_after_exit": true,
+      "draw_calls": 4,
+      "perf": "minicore-tui perf: draws=4 layout_calls=0 history_bytes_cloned=0 viewport_rows=0 viewport_bytes=0 composer_full_joins=20 retained_history_bytes=0"
+    },
+    {
+      "name": "real_run_commands_native_clipboard",
+      "exit": 0,
+      "bytes": 435,
+      "cpu_user_ms": 7.125,
+      "cpu_sys_ms": 8.797,
+      "max_rss_kib": 11224,
+      "pty_cooked_after_exit": true
+    }
+  ]
+}
