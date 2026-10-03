@@ -1986,6 +1986,40 @@ fn build_live_tail(
             }
         }
 
+        if !view.compaction_feedback.is_empty() {
+            let style = Style::new().fg(theme.muted).bg(theme.page_bg);
+            let mut feedback = crate::markdown::wrap_plain(
+                "Recent compaction results · session feedback",
+                width,
+                style,
+            );
+            for result in &view.compaction_feedback {
+                let text = format!(
+                    "{} compaction {}: {:?} · compaction projection ≈{} → {} tokens (not latest request) · covered loops:{} items:{} retained:{}",
+                    result.origin_label(),
+                    crate::safe_text::safe_display(&result.operation_id),
+                    result.status,
+                    result
+                        .before_tokens
+                        .map_or("unknown".into(), |v| v.to_string()),
+                    result
+                        .after_tokens
+                        .map_or("unknown".into(), |v| v.to_string()),
+                    result
+                        .covered_loop_count
+                        .map_or("unknown".into(), |v| v.to_string()),
+                    result
+                        .covered_item_count
+                        .map_or("unknown".into(), |v| v.to_string()),
+                    result
+                        .retained_item_count
+                        .map_or("unknown".into(), |v| v.to_string())
+                );
+                feedback.extend(crate::markdown::wrap_plain(&text, width, style));
+            }
+            layout::append_section(&mut lines, feedback);
+        }
+
         if view.can_show_last_result() {
             if let Some(result) = &view.last_result {
                 layout::append_section(&mut lines, last_result_lines(theme, result, width));
@@ -2023,7 +2057,7 @@ fn last_result_lines(
         .bg(theme.page_bg);
 
     let content = format!(
-        " {} Turn {} · requests: {} · tool rounds: {}",
+        " {} Last turn {} · requests: {} · tool rounds: {}",
         badge,
         result_summary(result),
         result
@@ -2658,6 +2692,47 @@ pub(crate) fn marker_area(area: Rect, label: &str) -> Rect {
 #[cfg(test)]
 mod source_map_tests {
     use super::*;
+
+    #[test]
+    fn feedback_is_separate_metadata_with_aligned_link_and_copy_rows() {
+        let mut app =
+            crate::ui::testapp::open_empty(crate::theme::ThemeKind::Dark, "feedback", None, "high");
+        let view = app.sessions.known.get_mut("feedback").unwrap();
+        view.record_compaction_result(serde_json::from_value(serde_json::json!({
+            "operation_id":"auto-result", "status":"compacted", "before_tokens":900,"after_tokens":200,
+            "covered_loop_count":2,"covered_item_count":8,"retained_item_count":2,
+            "summary":"PRIVATE SUMMARY", "encrypted_content":"PRIVATE REPLAY"
+        })).unwrap());
+        view.last_result = Some(
+            serde_json::from_value(serde_json::json!({
+                "turn":{"session_id":"feedback","loop_id":"loop"},
+                "outcome":{"type":"failed","kind":"model_error","model_error":{
+                    "kind":"context_length_exceeded","delivery":"not_sent","retryable":false,
+                    "local_context_budget":{"estimated_tokens":123456,"input_budget_tokens":32000}
+                }}, "persistence":"persisted"
+            }))
+            .unwrap(),
+        );
+        for width in [20, 80, 120] {
+            let (rows, links, copies) =
+                build_live_tail(&Theme::dark(), &app, width, None, None, None);
+            let text = rows
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("");
+            assert!(text.contains("Recent compaction results"));
+            assert!(text.contains("session feedback"));
+            assert!(text.contains("123456 / input budget 32000"));
+            assert!(text.contains("/compact"));
+            assert!(text.contains("Last turn"));
+            assert!(!text.contains("PRIVATE"));
+            assert_eq!(rows.len(), links.len());
+            assert!(links.iter().all(Vec::is_empty));
+            assert!(copies.is_empty());
+        }
+        assert!(app.active_view().unwrap().transcript.blocks.is_empty());
+    }
 
     #[test]
     fn terminal_failure_uses_error_text_and_conversation_background() {

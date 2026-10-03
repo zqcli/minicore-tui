@@ -197,6 +197,19 @@ fn review_e3_panels_at_three_sizes() {
             width,
             height,
         );
+        let text = unspaced(&capture(&app, width, height));
+        assert!(text.contains("historytailtokens:0bytes:0items:0"));
+        assert!(text.contains("historytailexcludessummary"));
+        let projection_row = crate::ui::context::rows(&app)
+            .iter()
+            .position(|line| line.contains("compaction projection"))
+            .unwrap();
+        if let crate::state::panels::MainView::Context(context) = &mut app.main_view {
+            context.offset = projection_row;
+        }
+        let text = unspaced(&capture(&app, width, height));
+        assert!(text.contains("compactionprojection(notlatestrequest)"));
+        assert!(text.contains("≈before:3571after:458"));
     }
 }
 
@@ -582,7 +595,7 @@ fn unknown_cancel_result_dark_80x24() {
     // of the statistic must still be present.
     assert!(
         unspaced(&cap).contains(&unspaced(
-            "⊘ Turn cancelled (sandbox_evicted) · persisted · requests: 1 · tool rounds: 0"
+            "⊘ Last turn cancelled (sandbox_evicted) · persisted · requests: 1 · tool rounds: 0"
         )),
         "complete result statistics must stay visible at 80x24:\n{cap}"
     );

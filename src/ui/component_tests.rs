@@ -1596,6 +1596,7 @@ fn last_result_renders_outcome_and_persistence_in_status_and_transcript() {
             outcome: crate::protocol::LoopOutcomeWire::Failed {
                 kind: "model_error".to_owned(),
                 model_error: Some(crate::protocol::ModelErrorWire {
+                    local_context_budget: None,
                     kind: "rate_limit".to_owned(),
                     delivery: "upstream".to_owned(),
                     retryable: true,
@@ -4211,4 +4212,84 @@ fn new_session_form_fits_fields_without_changing_short_screen_window() {
             Some((NewSessionField::Create, None))
         );
     }
+}
+
+fn restored_usage_app(missing_fields: bool) -> App {
+    let assistant = |index, loop_id: &str, usage| {
+        json!({"index":index,"item":{"type":"assistant","data":{
+            "loop_id":loop_id,"request_index":0,"model":"model","reasoning":"high",
+            "content":[{"type":"text","data":"Visible answer"}], "usage":usage,"finish_reason":"stop",
+            "provider_replay":{"encrypted_content":"PRIVATE PROVIDER REPLAY","input":[{"secret":"PRIVATE PROVIDER REPLAY"}]}
+        }}})
+    };
+    let first = json!({"input_tokens":100,"output_tokens":20,"reasoning_tokens":30,"cache_read_tokens":400,"cache_write_tokens":0,"provider_total_tokens":550});
+    let mut second = json!({"input_tokens":60,"output_tokens":15,"reasoning_tokens":25,"cache_read_tokens":800,"cache_write_tokens":0,"provider_total_tokens":900});
+    if missing_fields {
+        second.as_object_mut().unwrap().remove("input_tokens");
+        second.as_object_mut().unwrap().remove("cache_write_tokens");
+    }
+    testapp::open_with(
+        ThemeKind::Dark,
+        "ses_1",
+        None,
+        "high",
+        vec![
+            testapp::user_entry(0, "loop_1", "First prompt"),
+            assistant(1, "loop_1", first),
+            testapp::user_entry(2, "loop_2", "Second prompt"),
+            assistant(3, "loop_2", second),
+        ],
+    )
+}
+
+#[test]
+fn restored_two_turn_history_preserves_usage_without_replay_or_double_counting() {
+    let mut app = restored_usage_app(false);
+    let view = app.sessions.known.get_mut("ses_1").unwrap();
+    let expected = crate::protocol::UsageWire {
+        input_tokens: Some(160),
+        output_tokens: Some(35),
+        reasoning_tokens: Some(55),
+        cache_read_tokens: Some(1200),
+        cache_write_tokens: Some(0),
+        provider_total_tokens: Some(1450),
+    };
+    assert_eq!(view.usage_projection.usage, expected);
+    assert_eq!(
+        view.usage_projection.completeness,
+        crate::state::session::UsageCompleteness::Complete
+    );
+    view.last_result = Some(serde_json::from_value(json!({
+        "turn":{"session_id":"ses_1","loop_id":"loop_2"},"outcome":{"type":"completed"},"persistence":"persisted",
+        "usage":{"input_tokens":60,"output_tokens":15,"reasoning_tokens":25,"cache_read_tokens":800,"cache_write_tokens":0,"provider_total_tokens":900}
+    })).unwrap());
+    for _ in 0..2 {
+        view.recompute_usage_projection();
+        assert_eq!(view.usage_projection.usage, expected);
+    }
+    let text = transcript::all_lines(&Theme::dark(), &app, 120)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("First prompt"));
+    assert!(text.contains("Second prompt"));
+    assert!(!text.contains("PRIVATE PROVIDER REPLAY"));
+    assert!(!text.contains("provider_replay"));
+}
+
+#[test]
+fn restored_history_missing_input_and_cache_write_remain_unknown() {
+    let app = restored_usage_app(true);
+    let projection = &app.active_view().unwrap().usage_projection;
+    assert_eq!(projection.usage.input_tokens, None);
+    assert_eq!(projection.usage.cache_write_tokens, None);
+    assert_eq!(projection.usage.cache_read_tokens, Some(1200));
+    assert_eq!(projection.usage.output_tokens, Some(35));
+    assert_eq!(projection.usage.reasoning_tokens, Some(55));
+    assert_eq!(projection.usage.provider_total_tokens, Some(1450));
+    assert_eq!(
+        projection.completeness,
+        crate::state::session::UsageCompleteness::Partial
+    );
 }

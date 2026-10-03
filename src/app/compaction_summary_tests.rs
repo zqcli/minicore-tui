@@ -186,6 +186,7 @@ fn compaction_summary_manual_outcomes_never_read_history_or_synthesize_body() {
         for has_summary in [false, true] {
             for read_inflight in [false, true] {
                 let mut app = app();
+                app.composer.type_text("preserve compaction draft");
                 if has_summary {
                     install_page(&mut app, "existing history summary", 'a');
                 }
@@ -210,7 +211,11 @@ fn compaction_summary_manual_outcomes_never_read_history_or_synthesize_body() {
                 };
                 let commands =
                     app.on_compact_response(&SESSION.to_owned(), "summary-op", &response);
+                assert_eq!(app.composer.content(), "preserve compaction draft");
                 let view = &app.sessions.known[SESSION];
+                assert_eq!(view.compaction_feedback.len(), 1);
+                assert_eq!(view.compaction_feedback[0].origin_label(), "manual");
+                let feedback = view.compaction_feedback.clone();
                 assert!(Arc::ptr_eq(&blocks, &view.transcript.blocks), "{status}");
                 assert_eq!(view.history_query_generation, generation, "{status}");
                 assert!(!view.history_read.post_wait_pending(), "{status}");
@@ -228,6 +233,7 @@ fn compaction_summary_manual_outcomes_never_read_history_or_synthesize_body() {
                         "no deferred compaction reread: {status}"
                     );
                     assert_summary_owner(&app, "existing history summary");
+                    assert_eq!(app.sessions.known[SESSION].compaction_feedback, feedback);
                 }
             }
         }

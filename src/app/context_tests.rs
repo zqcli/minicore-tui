@@ -202,7 +202,7 @@ fn context_metadata_unknowns_do_not_become_zero_or_summary_prompt_text() {
     value["summary"] = "PRIVATE SUMMARY NEVER DISPLAY".into();
     respond(&mut a, &r, value);
     let text = crate::ui::context::rows(&a).join("\n");
-    assert!(text.contains("history tokens:unknown"));
+    assert!(text.contains("history tail tokens:unknown"));
     assert!(!text.contains("PRIVATE SUMMARY"));
     assert_eq!(a.composer.content(), "draft");
     a.sessions.known.get_mut("ses_1").unwrap().info.loaded = false;

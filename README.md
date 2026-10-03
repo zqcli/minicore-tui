@@ -256,3 +256,28 @@ Licensed under either the Apache License, Version 2.0 or the MIT license, at
 your option.
 
 [`minicore-agent`]: https://github.com/zqcli/minicore-agent
+
+### Context and usage observations
+
+Context estimates describe the last prepared request and the history tail
+(excluding any summary), not a live total of the current conversation.
+Compaction before/after values are projections, not the latest request; recovery
+before/after values describe full requests. The latest authoritative
+`session.context.last_result` takes precedence over a cached manual result.
+Newer Agents identify manual/automatic origin explicitly; older automatic IDs
+use the reserved `auto-` prefix, while unrecognized origins remain unknown.
+
+The conversation shows up to 16 recent compaction results per session as a
+separate session-feedback group. This process-local metadata survives redraws,
+history refreshes and reopening in the same TUI process. It is not written to
+model history or a disk log and contains no summary or encrypted replay body.
+A local context-budget failure shows the Agent's estimate and input budget when
+available, with `/compact` or a larger-context model as recovery options.
+
+Usage fields keep the Agent/Runtime normalization: input excludes cache reads
+and writes; output excludes reasoning; reasoning, cache counts and provider total
+remain separate fields. Provider total is not recomputed from displayed counts.
+Missing fields stay unknown, including cache writes; they do not become zero.
+Restored history and persisted loop totals replace overlapping request evidence
+instead of counting it twice. Compaction utility usage is separate from ordinary
+loop usage. Provider replay data is never rendered as conversation text.

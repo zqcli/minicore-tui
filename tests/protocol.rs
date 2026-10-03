@@ -191,3 +191,58 @@ fn unknown_fields_and_usage_defaults_and_outcome_tolerance() {
     assert_eq!(result.usage.as_ref().unwrap().input_tokens, Some(42));
     assert_eq!(result.usage.as_ref().unwrap().output_tokens, None);
 }
+
+#[test]
+fn local_budget_failure_is_optional_numeric_and_round_trips() {
+    use minicore_tui::protocol::ModelErrorWire;
+    for field in [
+        None,
+        Some(serde_json::Value::Null),
+        Some(serde_json::json!({
+            "estimated_tokens": 0, "input_budget_tokens": u64::MAX
+        })),
+    ] {
+        let mut wire = serde_json::json!({"kind":"context_length_exceeded", "delivery":"not_sent", "retryable":false});
+        if let Some(field) = field {
+            wire["local_context_budget"] = field;
+        }
+        let parsed: ModelErrorWire = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            parsed.local_context_budget.is_some(),
+            wire["local_context_budget"].is_object()
+        );
+        if let Some(budget) = &parsed.local_context_budget {
+            assert_eq!(budget.estimated_tokens, 0);
+            assert_eq!(budget.input_budget_tokens, u64::MAX);
+        }
+        assert_eq!(
+            serde_json::from_value::<ModelErrorWire>(serde_json::to_value(&parsed).unwrap())
+                .unwrap(),
+            parsed
+        );
+    }
+}
+
+#[test]
+fn compaction_origin_is_optional_and_explicit_origin_wins_over_id() {
+    use minicore_tui::protocol::CompactResultWire;
+    for (id, origin, expected) in [
+        ("auto-old", None, "automatic"),
+        ("old-manual", None, "unknown"),
+        ("auto-explicit", Some("manual"), "manual"),
+        ("new-id", Some("automatic"), "automatic"),
+        ("auto-new", Some("future_origin"), "unknown"),
+    ] {
+        let result: CompactResultWire = serde_json::from_value(serde_json::json!({
+            "operation_id":id, "status":"compacted", "origin":origin,
+            "summary":"must not be retained", "encrypted_content":"must not be retained"
+        }))
+        .unwrap();
+        assert_eq!(result.origin_label(), expected);
+        assert!(
+            !serde_json::to_string(&result)
+                .unwrap()
+                .contains("must not be retained")
+        );
+    }
+}

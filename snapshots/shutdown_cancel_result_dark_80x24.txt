@@ -3,7 +3,7 @@
  Coding agent TUI
  Ctrl+C: clear / quit · F1 help
 
-  ⊘ Turn cancelled (shutdown) · persisted · requests: 1 · tool rounds: 0
+  ⊘ Last turn cancelled (shutdown) · persisted · requests: 1 · tool rounds: 0
 
 
 

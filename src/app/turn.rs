@@ -1037,7 +1037,7 @@ impl App {
             );
             return Vec::new();
         }
-        let result = match response.parse_session_compact() {
+        let mut result = match response.parse_session_compact() {
             Ok(result) if result.operation_id == operation_id => result,
             Ok(_) => {
                 self.notice(
@@ -1072,7 +1072,12 @@ impl App {
                 .manual_compact
                 .as_mut()
                 .expect("manual compact ownership was checked");
+            // Ownership proves manual origin for older Agents that omit it.
+            result
+                .origin
+                .get_or_insert(crate::protocol::CompactOriginWire::Manual);
             compact.result = Some(result.clone());
+            view.record_compaction_result(result.clone());
             if let Some(state) = view.state.as_mut() {
                 if state
                     .compaction

@@ -81,16 +81,17 @@ pub fn rows(app: &App) -> Vec<String> {
     let mut r = vec![
         "上下文估算（≈，不是 Provider 实际用量）".into(),
         format!(
-            "  ≈request context:{} / input budget:{} tokens",
+            "  ≈last prepared request:{} / input budget:{} tokens",
             number(b.estimated_request_context_tokens),
             number(b.input_budget_tokens)
         ),
         format!(
-            "  ≈history tokens:{} bytes:{} items:{}",
+            "  ≈history tail tokens:{} bytes:{} items:{}",
             number(b.estimated_history_tokens),
             number(b.estimated_history_bytes),
             number(b.estimated_history_items)
         ),
+        "  history tail excludes summary".into(),
         String::new(),
         format!(
             "当前压缩观察: {}",
@@ -105,19 +106,35 @@ pub fn rows(app: &App) -> Vec<String> {
                 ))
         ),
     ];
-    let result = v
-        .manual_compact
+    let result = x
+        .last_result
         .as_ref()
-        .and_then(|m| m.result.as_ref())
-        .or(x.last_result.as_ref());
-    r.push("最近手动压缩结果".into());
+        .or_else(|| v.manual_compact.as_ref().and_then(|m| m.result.as_ref()));
+    r.push("最近压缩结果".into());
     if let Some(o) = result {
+        let origin = if o.origin.is_none() {
+            if v.manual_compact
+                .as_ref()
+                .is_some_and(|manual| manual.operation_id == o.operation_id)
+            {
+                "manual"
+            } else {
+                v.compaction_feedback
+                    .iter()
+                    .find(|entry| entry.operation_id == o.operation_id)
+                    .map_or_else(|| o.origin_label(), |entry| entry.origin_label())
+            }
+        } else {
+            o.origin_label()
+        };
         r.push(format!(
-            "  {} {:?} failure:{}",
+            "  {} {} {:?} failure:{}",
+            origin,
             safe(&o.operation_id),
             o.status,
             safe(o.failure_kind.as_deref().unwrap_or("none"))
         ));
+        r.push("  compaction projection (not latest request)".into());
         r.push(format!(
             "  ≈before:{} after:{}",
             number(o.before_tokens),
@@ -161,7 +178,7 @@ pub fn rows(app: &App) -> Vec<String> {
         ));
     }
     if x.automatic.current.is_none() && x.automatic.last.is_none() {
-        r.push("自动压缩: 暂无观察记录".into());
+        r.push("自动 preparation 字段: 暂无观察记录（不代表没有自动压缩）".into());
     } else {
         if x.automatic.current.is_some() {
             automatic(
@@ -187,7 +204,7 @@ pub fn rows(app: &App) -> Vec<String> {
             safe(o.failure_kind.as_deref().unwrap_or("none"))
         ));
         r.push(format!(
-            "  ≈before:{} after:{}",
+            "  recovery full request ≈before:{} after:{}",
             number(o.before_tokens),
             number(o.after_tokens)
         ));
@@ -288,16 +305,78 @@ mod tests {
         app.open_context();
         let lines = rows(&app);
         assert!(lines[0].contains("不是 Provider 实际用量"));
-        assert!(lines[1].contains("≈request context:unknown / input budget:32000"));
-        assert!(lines[2].contains("≈history tokens:0"));
+        assert!(lines[1].contains("≈last prepared request:unknown / input budget:32000"));
+        assert!(lines[2].contains("≈history tail tokens:0"));
         let text = lines.join("\n");
         assert!(text.contains("unknown / 尚无结果；不是零 usage"));
         assert!(text.contains("loops:0 items:0 retained:0"));
         assert!(text.contains("trigger:24000 target:16000"));
         assert!(text.contains("runtime items:4096 bytes:2097152 within:unknown"));
-        assert!(text.find("最近手动压缩结果") < text.find("详细诊断"));
-        assert!(text.contains("自动压缩: 暂无观察记录"));
+        assert!(text.find("最近压缩结果") < text.find("详细诊断"));
+        assert!(text.contains("自动 preparation 字段: 暂无观察记录（不代表没有自动压缩）"));
         assert!(!text.contains("自动 preparation current: none observed"));
         assert!(lines.last().unwrap().contains("idle 不轮询"));
+    }
+    #[test]
+    fn authoritative_automatic_result_supersedes_manual_cache() {
+        let mut app = crate::ui::testapp::open_empty(ThemeKind::Dark, "context-test", None, "high");
+        let view = app.sessions.known.get_mut("context-test").unwrap();
+        let old: crate::protocol::CompactResultWire = serde_json::from_value(
+            json!({"operation_id":"manual-old", "origin":"manual", "status":"compacted"}),
+        )
+        .unwrap();
+        view.manual_compact = Some(crate::state::session::ManualCompactState {
+            operation_id: "manual-old".into(),
+            cancel_requested: false,
+            result: Some(old),
+            state_refresh_confirmed: false,
+            context_refresh_confirmed: false,
+        });
+        view.context = Some(serde_json::from_value(json!({
+            "session_id":"context-test", "coverage":{"covered_loop_count":2,"covered_item_count":8,"retained_item_count":2},
+            "last_result":{"operation_id":"auto-new", "origin":"automatic", "status":"compacted", "before_tokens":1234,"after_tokens":456},
+            "budget":{"estimated_request_context_tokens":900,"estimated_history_tokens":200}, "automatic":{},
+            "recovery":{"loop_id":"loop", "request_index":0,"before_tokens":1500,"after_tokens":700,"outcome":"recovered"}
+        })).unwrap());
+        app.open_context();
+        let text = rows(&app).join("\n");
+        assert!(text.contains("automatic auto-new Compacted"));
+        assert!(!text.contains("manual-old Compacted"));
+        assert!(text.contains("last prepared request:900"));
+        assert!(text.contains("history tail tokens:200"));
+        assert!(
+            text.contains("compaction projection (not latest request)\n  ≈before:1234 after:456")
+        );
+        assert!(text.contains("recovery full request ≈before:1500 after:700"));
+        assert!(!text.contains("自动压缩: 暂无观察记录"));
+        let view = app.sessions.known.get_mut("context-test").unwrap();
+        let context = view.context.as_mut().unwrap();
+        let result = context.last_result.as_mut().unwrap();
+        result.operation_id = "manual-old".into();
+        result.origin = None;
+        result.before_tokens = Some(555);
+        let text = rows(&app).join("\n");
+        assert!(text.contains("manual manual-old Compacted"));
+        assert!(text.contains("≈before:555"));
+        let view = app.sessions.known.get_mut("context-test").unwrap();
+        let known_manual = view.manual_compact.take().unwrap().result.unwrap();
+        view.record_compaction_result(known_manual);
+        assert!(
+            rows(&app)
+                .join("\n")
+                .contains("manual manual-old Compacted")
+        );
+    }
+
+    #[test]
+    fn utility_usage_preserves_missing_cache_write_and_normalized_counts() {
+        let value = serde_json::from_value(json!({"call_count":1,"complete":true,"usage":{
+            "input_tokens":10,"output_tokens":20,"reasoning_tokens":30,"cache_read_tokens":40,"provider_total_tokens":100
+        }})).unwrap();
+        let mut rows = Vec::new();
+        usage(&mut rows, Some(&value));
+        let text = rows.join("\n");
+        assert!(text.contains("utility input:10 output:20 reasoning:30"));
+        assert!(text.contains("utility cache read:40 write:unknown provider-total:100"));
     }
 }

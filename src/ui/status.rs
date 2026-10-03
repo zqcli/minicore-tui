@@ -31,7 +31,14 @@ pub(crate) fn result_summary(result: &TurnResultViewWire) -> String {
         }
         LoopOutcomeWire::Failed { kind, model_error } => {
             if let Some(model_error) = model_error {
-                format!("failed: {kind}: {}", model_error.kind)
+                if let Some(budget) = &model_error.local_context_budget {
+                    format!(
+                        "failed: {kind}: {} · estimated {} / input budget {} tokens · try /compact or a model with a larger context window",
+                        model_error.kind, budget.estimated_tokens, budget.input_budget_tokens
+                    )
+                } else {
+                    format!("failed: {kind}: {}", model_error.kind)
+                }
             } else {
                 format!("failed: {kind}")
             }
@@ -119,7 +126,7 @@ fn busy_label(app: &App) -> String {
         {
             view.last_result.as_ref().map_or_else(
                 || label.to_owned(),
-                |result| format!("{label} · {}", result_summary(result)),
+                |result| format!("{label} · Last turn: {}", result_summary(result)),
             )
         } else {
             label.to_owned()
@@ -276,7 +283,10 @@ mod tests {
                 covered_item_count: 2,
                 retained_item_count: 0,
             });
-        assert_eq!(busy_label(&app), "Compacting · completed · persisted");
+        assert_eq!(
+            busy_label(&app),
+            "Compacting · Last turn: completed · persisted"
+        );
     }
 
     #[test]

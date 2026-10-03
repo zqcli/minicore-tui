@@ -13,7 +13,7 @@
 
   more
 
-  ⊘ Turn cancelled (user) · persisted · requests: 1 · tool rounds: 1
+  ⊘ Last turn cancelled (user) · persisted · requests: 1 · tool rounds: 1
 
  ⠋ Running read…
  Session ses_1 has active or unsaved/blocked state. Type '/close confirm' to p

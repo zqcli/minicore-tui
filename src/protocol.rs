@@ -1401,6 +1401,8 @@ pub struct CompactUtilityUsageWire {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct CompactResultWire {
     pub operation_id: String,
+    #[serde(default)]
+    pub origin: Option<CompactOriginWire>,
     pub status: CompactStatusWire,
     #[serde(default)]
     pub before_tokens: Option<u64>,
@@ -1416,6 +1418,29 @@ pub struct CompactResultWire {
     pub failure_kind: Option<String>,
     #[serde(default)]
     pub utility_usage: Option<CompactUtilityUsageWire>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactOriginWire {
+    Manual,
+    Automatic,
+    #[serde(other)]
+    Unknown,
+}
+
+impl CompactResultWire {
+    /// Older Agents reserved `auto-` for automatic compaction operations.
+    /// Other IDs alone cannot establish an operation's origin.
+    pub fn origin_label(&self) -> &'static str {
+        match self.origin {
+            Some(CompactOriginWire::Manual) => "manual",
+            Some(CompactOriginWire::Automatic) => "automatic",
+            Some(CompactOriginWire::Unknown) => "unknown",
+            None if self.operation_id.starts_with("auto-") => "automatic",
+            None => "unknown",
+        }
+    }
 }
 
 /// `preparing` means compaction has NOT started model work yet: the session is
@@ -1492,11 +1517,18 @@ pub enum CancelReasonWire {
     Unknown(String),
 }
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct LocalContextBudgetFailureWire {
+    pub estimated_tokens: u64,
+    pub input_budget_tokens: u64,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ModelErrorWire {
     pub kind: String,
     pub delivery: String,
     pub retryable: bool,
     pub retry_after_millis: Option<u64>,
+    #[serde(default)]
+    pub local_context_budget: Option<LocalContextBudgetFailureWire>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]

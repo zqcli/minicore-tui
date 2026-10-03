@@ -3,8 +3,8 @@
  Coding agent TUI
  Ctrl+C: clear / quit · F1 help
 
-  ⊘ Turn cancelled (sandbox_evicted) · persisted · requests: 1 · tool rounds:
- 0
+  ⊘ Last turn cancelled (sandbox_evicted) · persisted · requests: 1 · tool rou
+ nds: 0
 
 
 

@@ -357,6 +357,7 @@ fn stale_operation_read_cannot_retire_new_owner_or_cross_session_epoch() {
         ContextQueryOwner::Operation("auto-new".into())
     );
     assert!(app.active_view().unwrap().context.is_none());
+    assert!(app.active_view().unwrap().compaction_feedback.is_empty());
     let request = take_requests(
         app.arm_context_poll(
             &"ses_1".into(),
@@ -374,6 +375,7 @@ fn stale_operation_read_cannot_retire_new_owner_or_cross_session_epoch() {
         .context_query_generation += 1;
     respond(&mut app, &request, context(Some("auto-new"), None));
     assert!(app.active_view().unwrap().context.is_none());
+    assert!(app.active_view().unwrap().compaction_feedback.is_empty());
 }
 
 #[test]
@@ -400,6 +402,7 @@ fn pre_completion_context_read_cannot_discharge_post_turn_discovery() {
     respond(&mut app, &old, context(None, None));
     assert!(app.context_polls.contains_key("ses_1"));
     assert!(app.active_view().unwrap().context.is_none());
+    assert!(app.active_view().unwrap().compaction_feedback.is_empty());
     time.store(500, Ordering::Relaxed);
     let request = take_requests(app.update(AppEvent::Tick)).remove(0);
     respond(
@@ -607,4 +610,58 @@ fn wide_round_counts_decode_across_result_history_and_recovery_pages() {
         .unwrap();
         assert_eq!(page.tool_rounds, Some(count));
     }
+}
+
+#[test]
+fn terminal_compaction_feedback_is_bounded_deduplicated_and_survives_reopen() {
+    let mut app = app();
+    for n in 0..20 {
+        let request = take_requests(
+            app.arm_context_poll(&"ses_1".into(), ContextQueryOwner::Explicit, true)
+                .into_iter()
+                .collect(),
+        )
+        .remove(0);
+        respond(
+            &mut app,
+            &request,
+            context(None, Some((&format!("auto-{n}"), "compacted"))),
+        );
+    }
+    for _ in 0..2 {
+        let request = take_requests(
+            app.arm_context_poll(&"ses_1".into(), ContextQueryOwner::Explicit, true)
+                .into_iter()
+                .collect(),
+        )
+        .remove(0);
+        respond(&mut app, &request, context(None, Some(("auto-19", "noop"))));
+    }
+    let view = app.active_view().unwrap();
+    assert_eq!(view.compaction_feedback.len(), 16);
+    assert_eq!(view.compaction_feedback[0].operation_id, "auto-4");
+    assert_eq!(
+        view.compaction_feedback[15].status,
+        crate::protocol::CompactStatusWire::Noop
+    );
+    assert!(view.transcript.blocks.is_empty());
+    let expected = view.compaction_feedback.clone();
+    let mut other = view.info.clone();
+    other.session_id = "ses_other".into();
+    let mut other = crate::state::session::SessionView::new(other);
+    other.record_compaction_result(
+        serde_json::from_value(json!({"operation_id":"auto-19", "status":"failed"})).unwrap(),
+    );
+    app.sessions.known.insert("ses_other".into(), other);
+    app.set_active_session(Some("ses_other".into()));
+    assert_eq!(app.active_view().unwrap().compaction_feedback.len(), 1);
+    app.set_active_session(Some("ses_1".into()));
+    let response = RpcResponse {
+        id: crate::protocol::RequestId(1),
+        error: None,
+        result: Some(json!({"session": app.active_view().unwrap().info})),
+    };
+    app.on_open_response("ses_1".into(), None, &response);
+    assert_eq!(app.active_view().unwrap().compaction_feedback, expected);
+    assert!(app.active_view().unwrap().transcript.blocks.is_empty());
 }

@@ -183,6 +183,8 @@ pub struct SessionView {
     pub context_query_generation: u64,
     pub workspace_status: crate::state::changes::StatusObservation,
     pub manual_compact: Option<ManualCompactState>,
+    /// Process-local UI feedback, never model history or a persistent log.
+    pub compaction_feedback: Vec<CompactResultWire>,
     /// Read-only Agent presentation snapshot for the footer/detail surface.
     pub presentation: Option<SessionPresentationWire>,
     /// Coalesces the one in-flight `session.presentation` request.
@@ -298,6 +300,27 @@ pub struct SessionView {
 }
 
 impl SessionView {
+    pub fn record_compaction_result(&mut self, mut result: CompactResultWire) {
+        if let Some(existing) = self
+            .compaction_feedback
+            .iter_mut()
+            .find(|entry| entry.operation_id == result.operation_id)
+        {
+            // An older Agent reread may omit the origin already established
+            // by the locally owned manual operation.
+            if result.origin.is_none() {
+                result.origin = existing.origin;
+            }
+            *existing = result;
+            return;
+        }
+        const MAX_COMPACTION_FEEDBACK: usize = 16;
+        if self.compaction_feedback.len() == MAX_COMPACTION_FEEDBACK {
+            self.compaction_feedback.remove(0);
+        }
+        self.compaction_feedback.push(result);
+    }
+
     pub fn new(info: SessionInfo) -> Self {
         Self {
             info,
@@ -306,6 +329,7 @@ impl SessionView {
             context_query_generation: 0,
             workspace_status: Default::default(),
             manual_compact: None,
+            compaction_feedback: Vec::new(),
             browsing: false,
             presentation: None,
             presentation_pending: false,

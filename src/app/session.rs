@@ -2235,6 +2235,17 @@ impl App {
             }
             let current_operation = context.current_operation.clone();
             let automatic_active = context.automatic.current.is_some();
+            if let Some(mut result) = context.last_result.clone() {
+                if result.origin.is_none()
+                    && view
+                        .manual_compact
+                        .as_ref()
+                        .is_some_and(|manual| manual.operation_id == result.operation_id)
+                {
+                    result.origin = Some(crate::protocol::CompactOriginWire::Manual);
+                }
+                view.record_compaction_result(result);
+            }
             view.context = Some(context);
             if let Some(compact) = view.manual_compact.as_mut() {
                 if compact.result.as_ref().is_some_and(|result| {
@@ -2272,7 +2283,7 @@ impl App {
 
         self.maybe_clear_unknown_compact_fence(session_id);
         if let Some(result) = latest_result.filter(|result| {
-            previous_result.as_ref() != Some(result) && result.operation_id.starts_with("auto-")
+            previous_result.as_ref() != Some(result) && result.origin_label() == "automatic"
         }) {
             let (level, detail) = match result.status {
                 crate::protocol::CompactStatusWire::Compacted
