@@ -527,10 +527,9 @@ impl App {
             },
             |id| OutgoingRequest::session_compact(id, &session_id, &operation_id),
         )];
-        if let Some(command) = self.arm_context_poll(
+        if let Some(command) = self.queue_context_read(
             &session_id,
             ContextQueryOwner::ManualCompact(operation_id.clone()),
-            true,
         ) {
             commands.push(command);
         }
@@ -800,11 +799,9 @@ impl App {
                     .get(&session_id)
                     .is_some_and(|view| view.context_query_generation == generation)
                 {
-                    let current_owner = self
-                        .context_polls
-                        .get(&session_id)
-                        .map_or(owner, |poll| poll.owner.clone());
-                    self.reschedule_context_poll(&session_id, &current_owner);
+                    self.context_reads
+                        .entry(session_id.clone())
+                        .or_insert(owner);
                 }
                 self.notice(
                     NoticeLevel::Warning,
@@ -927,11 +924,11 @@ impl App {
             }
         }
         if self
-            .context_polls
+            .context_reads
             .get(session_id)
-            .is_some_and(|poll| poll.owner == ContextQueryOwner::Submission(local_id))
+            .is_some_and(|owner| *owner == ContextQueryOwner::Submission(local_id))
         {
-            self.context_polls.remove(session_id);
+            self.context_reads.remove(session_id);
         }
     }
 
@@ -1093,7 +1090,7 @@ impl App {
                 }
             }
         }
-        self.retire_manual_context_poll(session_id, operation_id);
+        self.retire_manual_context_read(session_id, operation_id);
         match result.status {
             crate::protocol::CompactStatusWire::Compacted
             | crate::protocol::CompactStatusWire::Noop => {
@@ -1101,7 +1098,7 @@ impl App {
                     NoticeLevel::Info,
                     format!("context compaction {operation_id} completed"),
                 );
-                self.arm_context_poll(session_id, ContextQueryOwner::Explicit, true)
+                self.queue_context_read(session_id, ContextQueryOwner::Explicit)
                     .into_iter()
                     .collect()
             }
@@ -1113,7 +1110,7 @@ impl App {
                         result.failure_kind.as_deref().unwrap_or("unknown failure")
                     ),
                 );
-                self.arm_context_poll(session_id, ContextQueryOwner::Explicit, true)
+                self.queue_context_read(session_id, ContextQueryOwner::Explicit)
                     .into_iter()
                     .collect()
             }
@@ -1126,7 +1123,7 @@ impl App {
                 );
                 let mut commands = vec![self.request_session_state(session_id)];
                 if let Some(command) =
-                    self.arm_context_poll(session_id, ContextQueryOwner::Explicit, true)
+                    self.queue_context_read(session_id, ContextQueryOwner::Explicit)
                 {
                     commands.push(command);
                 }
@@ -1154,17 +1151,28 @@ impl App {
                 }
             }
         }
-        self.retire_manual_context_poll(session_id, operation_id);
+        self.retire_manual_context_read(session_id, operation_id);
     }
 
-    fn retire_manual_context_poll(&mut self, session_id: &SessionId, operation_id: &str) {
-        if self.context_polls.get(session_id).is_some_and(|poll| {
-            matches!(&poll.owner, ContextQueryOwner::ManualCompact(id) if id == operation_id)
-        }) {
-            self.context_polls.remove(session_id);
+    fn retire_manual_context_read(&mut self, session_id: &SessionId, operation_id: &str) {
+        let generation = self
+            .sessions
+            .known
+            .get(session_id)
+            .map(|view| view.context_query_generation);
+        let owns_read = self.context_reads.get(session_id).is_some_and(|owner|
+            matches!(owner, ContextQueryOwner::ManualCompact(id) if id == operation_id))
+            || self.pending_requests.values().any(|request|
+                matches!(request, RequestKind::SessionContext { session_id: session, generation: current, owner: ContextQueryOwner::ManualCompact(id) }
+                    if session == session_id && Some(*current) == generation && id == operation_id));
+        if owns_read {
+            self.context_reads.remove(session_id);
+            self.invalidate_query_scope(&queries::QueryScope::Context(session_id.clone()));
             if let Some(view) = self.sessions.known.get_mut(session_id) {
-                view.context_query_generation = view.context_query_generation
-                    .checked_add(1).expect("context query generations exhausted");
+                view.context_query_generation = view
+                    .context_query_generation
+                    .checked_add(1)
+                    .expect("context query generations exhausted");
             }
         }
     }
@@ -1240,21 +1248,18 @@ impl App {
             .is_some_and(|m| m.operation_id == operation_id && m.result.is_none())
         {
             ContextQueryOwner::ManualCompact(operation_id.to_owned())
-        } else if let Some(poll) = self.context_polls.get(session_id) {
-            poll.owner.clone()
         } else {
-            return Vec::new();
+            ContextQueryOwner::Operation(operation_id.to_owned())
         };
-        self.arm_context_poll(session_id, owner, true)
+        self.queue_context_read(session_id, owner)
             .into_iter()
             .collect()
     }
 
     fn clear_compaction_cancel_intent(&mut self, session_id: &SessionId, operation_id: &str) {
-        if let Some(poll) = self.context_polls.get_mut(session_id) {
-            if matches!(&poll.owner, ContextQueryOwner::Operation(id) | ContextQueryOwner::ManualCompact(id) if id == operation_id)
-            {
-                poll.cancel_requested = false;
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            if view.compaction_cancel_requested.as_deref() == Some(operation_id) {
+                view.compaction_cancel_requested = None;
             }
         }
         if let Some(compact) = self
@@ -1276,11 +1281,8 @@ impl App {
         if !self.compact_cancel_supported {
             return None;
         }
-        if let Some(poll) = self.context_polls.get_mut(session_id) {
-            if matches!(&poll.owner, ContextQueryOwner::Operation(id) | ContextQueryOwner::ManualCompact(id) if id == operation_id)
-            {
-                poll.cancel_requested = true;
-            }
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            view.compaction_cancel_requested = Some(operation_id.to_owned());
         }
         // Panel actions use the same exact-operation cancellation intent as
         // Esc during deferred preparation, never a fallback turn.cancel.
@@ -1309,10 +1311,10 @@ impl App {
     }
 
     pub(crate) fn compaction_cancelling(&self, session_id: &str, operation_id: &str) -> bool {
-        self.context_polls.get(session_id).is_some_and(|poll| {
-            poll.cancel_requested && matches!(&poll.owner,
-                ContextQueryOwner::Operation(id) | ContextQueryOwner::ManualCompact(id) if id == operation_id)
-        })
+        self.sessions
+            .known
+            .get(session_id)
+            .is_some_and(|view| view.compaction_cancel_requested.as_deref() == Some(operation_id))
     }
 
     pub(super) fn submit_turn(&mut self, session_id: SessionId, text: String) -> Vec<AppCommand> {
@@ -1489,15 +1491,7 @@ impl App {
                 submission_state.request_id = Some(request.id);
             }
         }
-        let mut commands = vec![send];
-        if let Some(command) = self.arm_context_poll(
-            &session_id,
-            ContextQueryOwner::Submission(submission),
-            false,
-        ) {
-            commands.push(command);
-        }
-        commands
+        vec![send]
     }
 
     pub(super) fn cancel_turn(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
@@ -1879,11 +1873,6 @@ impl App {
                 if let Some(view) = self.sessions.known.get_mut(session_id) {
                     view.steer_queue.retain(|item| !item.handoff);
                 }
-                self.arm_context_poll(
-                    session_id,
-                    ContextQueryOwner::Turn(turn.loop_id.clone()),
-                    false,
-                );
                 let mut commands = Vec::new();
                 if let Some(command) = self.request_wait(turn.clone()) {
                     commands.push(command);
@@ -1975,7 +1964,13 @@ impl App {
                     format!("turn send failed: {error}")
                 };
                 self.notice(NoticeLevel::Warning, message);
-                Vec::new()
+                if matches!(error, RpcResponseError::Agent(_)) {
+                    self.queue_context_read(session_id, ContextQueryOwner::Explicit)
+                        .into_iter()
+                        .collect()
+                } else {
+                    Vec::new()
+                }
             }
             Plan::Mismatch => {
                 self.connection_terminated("turn.send response does not match the live loop");
@@ -2478,23 +2473,7 @@ impl App {
                     ),
                 );
             }
-            RequestKind::SessionContext {
-                session_id,
-                generation,
-                owner,
-            } => {
-                if self
-                    .sessions
-                    .known
-                    .get(&session_id)
-                    .is_some_and(|view| view.context_query_generation == generation)
-                {
-                    let current_owner = self
-                        .context_polls
-                        .get(&session_id)
-                        .map_or(owner, |poll| poll.owner.clone());
-                    self.reschedule_context_poll(&session_id, &current_owner);
-                }
+            RequestKind::SessionContext { session_id, .. } => {
                 self.notice(
                     NoticeLevel::Warning,
                     format!("session.context failed for {session_id}: {error}"),

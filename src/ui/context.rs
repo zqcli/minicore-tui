@@ -197,8 +197,9 @@ pub fn rows(app: &App) -> Vec<String> {
         safe(x.last_prepare_failure.as_deref().unwrap_or("none observed"))
     ));
     if let Some(o) = &x.recovery {
+        r.push("恢复观察（最近一次读取的快照；不代表当前状态；F5 刷新）".into());
         r.push(format!(
-            "恢复观察: loop:{} request:{} outcome:{} failure:{}",
+            "  loop:{} request:{} outcome:{} failure:{}",
             safe(&o.loop_id),
             o.request_index,
             safe(&o.outcome),
@@ -211,7 +212,7 @@ pub fn rows(app: &App) -> Vec<String> {
         ));
         usage(&mut r, o.utility_usage.as_ref());
     }
-    r.push("观察频率：idle 不轮询；活跃操作前台 500ms / 后台 2s".into());
+    r.push("上下文按事件/操作结果单次读取；无周期轮询；F5 显式刷新".into());
     r
 }
 pub fn render(frame: &mut Frame, area: Rect, scrollbar: Rect, app: &App, theme: &Theme) {
@@ -316,7 +317,30 @@ mod tests {
         assert!(text.find("最近压缩结果") < text.find("详细诊断"));
         assert!(text.contains("自动 preparation 字段: 暂无观察记录（不代表没有自动压缩）"));
         assert!(!text.contains("自动 preparation current: none observed"));
-        assert!(lines.last().unwrap().contains("idle 不轮询"));
+        assert!(lines.last().unwrap().contains("无周期轮询；F5 显式刷新"));
+        assert!(!text.contains("500ms"));
+        assert!(!text.contains("后台 2s"));
+    }
+
+    #[test]
+    fn recovering_observation_is_a_latest_read_snapshot_with_explicit_refresh() {
+        let mut app = crate::ui::testapp::open_empty(ThemeKind::Dark, "context-test", None, "high");
+        app.sessions.known.get_mut("context-test").unwrap().context = Some(
+            serde_json::from_value(json!({
+                "session_id": "context-test",
+                "coverage": {"covered_loop_count": 0, "covered_item_count": 0, "retained_item_count": 0},
+                "budget": {}, "automatic": {},
+                "recovery": {"loop_id": "loop", "request_index": 0,
+                    "before_tokens": 1500, "after_tokens": 700, "outcome": "recovering"}
+            }))
+            .unwrap(),
+        );
+        app.open_context();
+        let text = rows(&app).join("\n");
+        assert!(text.contains("恢复观察（最近一次读取的快照；不代表当前状态；F5 刷新）"));
+        assert!(text.contains("loop:loop request:0 outcome:recovering failure:none"));
+        assert!(text.contains("recovery full request ≈before:1500 after:700"));
+        assert!(text.contains("无周期轮询；F5 显式刷新"));
     }
     #[test]
     fn authoritative_automatic_result_supersedes_manual_cache() {

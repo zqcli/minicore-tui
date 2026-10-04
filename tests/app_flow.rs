@@ -3272,6 +3272,10 @@ fn a_catalog_reload_leaves_no_stale_wait_for_a_settled_turn() {
     );
     let t1_wait = driver.request("turn.wait");
     driver.respond(t1_wait, t1_result.clone());
+    driver.respond_method(
+        "session.context",
+        context_result("ses_1", Value::Null, Value::Null),
+    );
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
     let t1_history = driver.request("session.read");
     driver.respond(
@@ -3315,6 +3319,10 @@ fn a_catalog_reload_leaves_no_stale_wait_for_a_settled_turn() {
     let t2_wait = driver.request("turn.wait");
     let t2_result = wait_result_with_usage("ses_1", "loop_t2", "persisted", 22, 7);
     driver.respond(t2_wait, t2_result.clone());
+    driver.respond_method(
+        "session.context",
+        context_result("ses_1", Value::Null, Value::Null),
+    );
     driver.respond_method("session.state", state("ses_1", "idle", Value::Null));
     let t2_history = driver.request("session.read");
     driver.respond(

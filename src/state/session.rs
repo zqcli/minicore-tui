@@ -183,6 +183,8 @@ pub struct SessionView {
     pub context_query_generation: u64,
     pub workspace_status: crate::state::changes::StatusObservation,
     pub manual_compact: Option<ManualCompactState>,
+    /// Exact operation cancellation intent, independent of one-shot reads.
+    pub compaction_cancel_requested: Option<String>,
     /// Process-local UI feedback, never model history or a persistent log.
     pub compaction_feedback: Vec<CompactResultWire>,
     /// Read-only Agent presentation snapshot for the footer/detail surface.
@@ -329,6 +331,7 @@ impl SessionView {
             context_query_generation: 0,
             workspace_status: Default::default(),
             manual_compact: None,
+            compaction_cancel_requested: None,
             compaction_feedback: Vec::new(),
             browsing: false,
             presentation: None,

@@ -25,7 +25,7 @@ fn clock(a: &mut App) -> Arc<AtomicU64> {
     elapsed
 }
 #[test]
-fn context_idle_and_closed_panel_stop_polling_and_late_only_releases_slot() {
+fn context_idle_and_closed_panel_stay_silent_and_late_only_releases_slot() {
     let mut a = app();
     let time = clock(&mut a);
     let r = take_requests(a.open_context()).remove(0);
@@ -39,25 +39,35 @@ fn context_idle_and_closed_panel_stop_polling_and_late_only_releases_slot() {
     respond(&mut a, &r, fixture("session-context-preparing"));
     assert_eq!(a.active_view().unwrap().context, saved);
     assert!(a.queries.is_empty());
-    assert!(a.context_polls.is_empty());
+    assert!(a.context_reads.is_empty());
     let r = take_requests(a.open_context()).remove(0);
-    respond(&mut a, &r, fixture("session-context-preparing"));
-    assert!(!a.context_polls.is_empty());
+    assert!(respond(&mut a, &r, fixture("session-context-preparing")).is_empty());
+    assert!(a.context_reads.is_empty());
+    let operation = a.context_cancel_target().unwrap();
     a.close_main_detail();
     assert!(
-        !a.context_polls.is_empty(),
-        "an observed operation owns its poll independently of the panel"
+        a.context_reads.is_empty(),
+        "an observed operation retains its identity without recurring read intent"
     );
     assert!(a.active_view().unwrap().context.is_some());
     assert!(a.active_view().unwrap().is_preparing());
-    time.store(5500, Ordering::Relaxed);
-    let context = take_requests(a.update(AppEvent::Tick)).remove(0);
+    for elapsed in [5500, 7000, 60_000] {
+        time.store(elapsed, Ordering::Relaxed);
+        assert!(a.update(AppEvent::Tick).is_empty());
+        assert!(a.context_reads.is_empty());
+        assert!(a.active_view().unwrap().is_preparing());
+    }
+    // A missed final event followed by silence does not repair itself. A
+    // deliberate reopen reads once and keeps exact cancellation available.
+    let context = take_requests(a.open_context()).remove(0);
+    assert_eq!(context.method, "session.context");
+    assert_eq!(a.context_cancel_target(), Some(operation));
     respond(&mut a, &context, fixture("session-context-idle"));
-    assert!(a.context_polls.is_empty());
+    assert!(a.context_reads.is_empty());
     assert!(!a.active_view().unwrap().is_preparing());
 }
 #[test]
-fn context_active_polls_obey_foreground_and_background_minimums() {
+fn context_active_foreground_and_background_ticks_stay_silent_until_refresh() {
     let mut a = app();
     let time = clock(&mut a);
     let r = take_requests(a.open_context()).remove(0);
@@ -73,18 +83,35 @@ fn context_active_polls_obey_foreground_and_background_minimums() {
         .unwrap();
     let mut preparing = fixture("session-context-preparing");
     preparing["current_operation"]["operation_id"] = compact.params["operation_id"].clone();
-    respond(&mut a, context, preparing.clone());
-    time.store(499, Ordering::Relaxed);
-    assert!(a.update(AppEvent::Tick).is_empty());
-    time.store(500, Ordering::Relaxed);
-    let r = take_requests(a.update(AppEvent::Tick)).remove(0);
-    respond(&mut a, &r, preparing);
+    assert!(respond(&mut a, context, preparing.clone()).is_empty());
+    assert!(a.context_reads.is_empty());
+    for elapsed in [499, 500, 2000, 60_000] {
+        time.store(elapsed, Ordering::Relaxed);
+        assert!(a.update(AppEvent::Tick).is_empty());
+        assert!(a.context_reads.is_empty());
+    }
     a.set_active_session(None);
-    time.store(2499, Ordering::Relaxed);
-    assert!(a.update(AppEvent::Tick).is_empty());
-    time.store(2500, Ordering::Relaxed);
-    let r = take_requests(a.update(AppEvent::Tick)).remove(0);
-    respond(&mut a, &r, fixture("session-context-idle"));
+    for elapsed in [60_499, 60_500, 61_999, 62_000, 120_000] {
+        time.store(elapsed, Ordering::Relaxed);
+        assert!(a.update(AppEvent::Tick).is_empty());
+        assert!(a.context_reads.is_empty());
+    }
+    assert!(a.sessions.known.get("ses_1").unwrap().is_preparing());
+    a.set_active_session(Some("ses_1".into()));
+    let reopened = take_requests(a.open_context());
+    assert_eq!(reopened.len(), 1);
+    assert_eq!(reopened[0].method, "session.context");
+    assert!(respond(&mut a, &reopened[0], preparing.clone()).is_empty());
+    let refreshed = take_requests(a.update(AppEvent::Terminal(CrosstermEvent::Key(
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::F(5),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    ))));
+    assert_eq!(refreshed.len(), 1);
+    assert_eq!(refreshed[0].method, "session.context");
+    assert!(respond(&mut a, &refreshed[0], preparing).is_empty());
+    assert!(a.context_reads.is_empty());
     let refresh = take_requests(respond(
         &mut a,
         compact,
@@ -92,7 +119,7 @@ fn context_active_polls_obey_foreground_and_background_minimums() {
     ))
     .remove(0);
     respond(&mut a, &refresh, fixture("session-context-idle"));
-    assert!(a.context_polls.is_empty());
+    assert!(a.context_reads.is_empty());
 }
 #[test]
 fn context_compact_outcomes_preserve_history_and_confirm_unknown_write() {
@@ -132,8 +159,23 @@ fn context_compact_outcomes_preserve_history_and_confirm_unknown_write() {
             assert!(a.active_view().unwrap().manual_compact.is_some());
         }
         let context = rs.iter().find(|r| r.method == "session.context").unwrap();
-        respond(&mut a, context, fixture("session-context-idle"));
-        assert!(a.context_polls.is_empty());
+        let next = take_requests(respond(&mut a, context, fixture("session-context-idle")));
+        if status == "unknown_write" {
+            let compact = a.active_view().unwrap().manual_compact.as_ref().unwrap();
+            assert!(compact.state_refresh_confirmed);
+            assert!(
+                !compact.context_refresh_confirmed,
+                "reopening Context makes the older read stale, not a fresh confirmation"
+            );
+            assert!(!a.can_manual_compact());
+            assert_eq!(next.len(), 1);
+            assert_eq!(next[0].method, "session.context");
+            assert_ne!(next[0].id, context.id);
+            assert!(respond(&mut a, &next[0], fixture("session-context-idle")).is_empty());
+        } else {
+            assert!(next.is_empty());
+        }
+        assert!(a.context_reads.is_empty());
         assert!(a.can_manual_compact());
         if status == "unknown_write" {
             assert!(a.active_view().unwrap().manual_compact.is_none());
@@ -155,6 +197,11 @@ fn context_cancel_is_exact_and_closing_does_not_cancel() {
         .unwrap()
         .params["operation_id"]
         .clone();
+    let context = rs.iter().find(|r| r.method == "session.context").unwrap();
+    let mut preparing = fixture("session-context-preparing");
+    preparing["current_operation"]["operation_id"] = op.clone();
+    assert!(respond(&mut a, context, preparing.clone()).is_empty());
+    assert!(a.context_reads.is_empty());
     if let MainView::Context(c) = &mut a.main_view {
         c.action = 2;
     }
@@ -162,6 +209,29 @@ fn context_cancel_is_exact_and_closing_does_not_cancel() {
     assert_eq!(cancel.len(), 1);
     assert_eq!(cancel[0].method, "session.compact.cancel");
     assert_eq!(cancel[0].params["operation_id"], op);
+    assert_eq!(
+        a.active_view()
+            .unwrap()
+            .compaction_cancel_requested
+            .as_deref(),
+        op.as_str()
+    );
+    let confirmation = take_requests(respond(&mut a, &cancel[0], json!({"cancelled":true})));
+    assert_eq!(confirmation.len(), 1);
+    assert_eq!(confirmation[0].method, "session.context");
+    let commands = take_requests(respond(&mut a, &confirmation[0], preparing));
+    assert!(
+        commands.is_empty(),
+        "an accepted manual cancel with a still-active snapshot must not resend cancel or context"
+    );
+    assert!(a.context_reads.is_empty());
+    assert_eq!(
+        a.active_view()
+            .unwrap()
+            .compaction_cancel_requested
+            .as_deref(),
+        op.as_str()
+    );
     a.close_main_detail();
     assert!(a.update(AppEvent::Tick).is_empty());
     assert!(
@@ -175,6 +245,48 @@ fn context_cancel_is_exact_and_closing_does_not_cancel() {
     );
 }
 #[test]
+fn context_cancel_intent_outlives_its_one_shot_read_and_panel() {
+    let mut a = app();
+    let time = clock(&mut a);
+    let context = take_requests(a.open_context()).remove(0);
+    let preparing = fixture("session-context-preparing");
+    let operation = preparing["current_operation"]["operation_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(respond(&mut a, &context, preparing.clone()).is_empty());
+    assert!(a.context_reads.is_empty());
+    if let MainView::Context(c) = &mut a.main_view {
+        c.action = 2;
+    }
+    let cancel = take_requests(a.context_action()).remove(0);
+    assert_eq!(cancel.method, "session.compact.cancel");
+    assert_eq!(cancel.params["operation_id"], operation);
+    assert_eq!(
+        a.active_view()
+            .unwrap()
+            .compaction_cancel_requested
+            .as_deref(),
+        Some(operation.as_str())
+    );
+    let confirmation = take_requests(respond(&mut a, &cancel, json!({"cancelled":true})));
+    assert_eq!(confirmation.len(), 1);
+    assert_eq!(confirmation[0].method, "session.context");
+    assert!(respond(&mut a, &confirmation[0], preparing).is_empty());
+    assert!(a.context_reads.is_empty());
+    assert!(a.compaction_cancelling("ses_1", &operation));
+    a.close_main_detail();
+    time.store(60_000, Ordering::Relaxed);
+    assert!(a.update(AppEvent::Tick).is_empty());
+    assert!(a.compaction_cancelling("ses_1", &operation));
+    assert!(a.active_view().unwrap().is_preparing());
+    let refreshed = take_requests(a.open_context()).remove(0);
+    respond(&mut a, &refreshed, fixture("session-context-idle"));
+    assert!(a.context_reads.is_empty());
+    assert!(!a.compaction_cancelling("ses_1", &operation));
+    assert!(!a.active_view().unwrap().is_preparing());
+}
+#[test]
 fn context_method_not_found_disables_only_unsupported_actions_without_fallback() {
     let mut a = app();
     let r = take_requests(a.open_context()).remove(0);
@@ -183,7 +295,7 @@ fn context_method_not_found_disables_only_unsupported_actions_without_fallback()
     assert!(!a.can_manual_compact());
     assert!(a.refresh_context_panel().is_empty());
     assert!(a.start_manual_compact().is_empty());
-    assert!(a.context_polls.is_empty());
+    assert!(a.context_reads.is_empty());
     let mut a = app();
     let rs = take_requests(a.start_manual_compact());
     let r = rs.iter().find(|r| r.method == "session.compact").unwrap();
@@ -291,12 +403,12 @@ fn context_confirmation_resumes_when_retired_read_releases_its_actual_slot() {
     assert_eq!(
         next.len(),
         1,
-        "the confirmation is due and must resume after the old read actually finishes"
+        "the pending one-shot confirmation must resume after the old read actually finishes"
     );
     assert_eq!(next[0].method, "session.context");
     assert_ne!(next[0].id, old.id);
     respond(&mut a, &next[0], fixture("session-context-idle"));
-    assert!(a.context_polls.is_empty());
+    assert!(a.context_reads.is_empty());
     assert!(!a.active_view().unwrap().is_preparing());
 }
 

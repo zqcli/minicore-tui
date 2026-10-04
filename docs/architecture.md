@@ -370,12 +370,19 @@ coverage, estimated budgets, automatic preparation, manual results and separate
 utility usage. No summary body is displayed or attached. Manual admission,
 process-unique operation IDs, exact cancellation and unknown-write confirmation
 reuse B. Compacted/noop and main-view `/refresh` do not re-pin history.
-Panel-only reads stop on close/idle; actual B execution/settlement reads outlive
-the panel. An unmaintained active panel snapshot is discarded without cancelling
-the authoritative operation. Foreground/background deadlines are at least
-500 ms/2 s. Retired reads retain slots, do not spin a zero-duration timer, and
-resume due confirmation when they actually finish. Unsupported context/compact/
-cancel methods disable their corresponding entry; no alternate mutation is used.
+Context reads are one-shot demands from panel open/explicit refresh, relevant
+session-state events, authoritative completion, compact/cancel responses,
+rejected submissions and known gaps. No elapsed-time deadline, Tick or active
+response renews a context read. Pending demand coalesces through the existing
+query slots; a trigger received during an older read keeps a fresh follow-up,
+admitted on actual slot/queue progress. Retired reads retain their slots until
+they finish. Closing Context cancels only its unsent panel demand, not independent
+operation ownership, exact cancellation or required confirmation. Recovery rows
+are latest-read snapshots with F5 refresh; cached recovery does not control the
+live busy label. A lost final best-effort event followed by silence leaves the
+snapshot unconfirmed until another trigger or explicit refresh. Unsupported
+context/compact/cancel methods disable their corresponding entry; no alternate
+mutation is used.
 
 Both surfaces reuse the two shared read slots, deferred budget, finite focus
 and existing worker. There are no optional Tool→Changes or Diff→FilePreview

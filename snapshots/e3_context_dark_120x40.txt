@@ -28,7 +28,7 @@
    trigger:23161 target:14476 utility-before:unknown after:unknown
    utility usage: unknown（ 不 计 入 普 通  Loop usage）
  最 近  preparation failure:none observed
- 观 察 频 率 ： idle 不 轮 询 ； 活 跃 操 作 前 台  500ms / 后 台  2s
+ 上 下 文 按 事 件 /操 作 结 果 单 次 读 取 ； 无 周 期 轮 询 ； F5 显 式 刷 新
 
 
 

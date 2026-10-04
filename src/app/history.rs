@@ -3175,11 +3175,10 @@ impl App {
             return Vec::new();
         }
         let mut commands = vec![self.request_session_state(&turn.session_id)];
-        self.arm_context_poll(
+        commands.extend(self.queue_context_read(
             &turn.session_id,
             ContextQueryOwner::PostTurn(turn.loop_id.clone()),
-            false,
-        );
+        ));
         let pending_history = self.pending_history(&turn.session_id);
         let fetch = {
             let Some(view) = self.sessions.known.get_mut(&turn.session_id) else {

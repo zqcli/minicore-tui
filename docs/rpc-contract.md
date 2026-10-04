@@ -143,16 +143,24 @@ notifications may be interleaved. In particular:
 After a successful `turn.send`, the TUI registers `turn.wait` immediately in
 the same update. A wait result with `persistence=persisted` starts a `session.state`
 refresh and incremental pinned `session.read` chain while the session remains loaded.
-It also schedules one `session.context` discovery through the existing per-Session
-poll owner. Successful persisted turns may reserve an independent post-turn
+It also requests one fresh `session.context` read after authoritative completion.
+Successful persisted turns may reserve an independent post-turn
 compaction operation before their completion is published; `turn.wait` does not
 wait for its summary model. `current_operation`/`last_result` are the operation
 read-back authority, and `automatic` remains a mandatory compatibility shell.
-The discovery and exact-operation owner survive transient read errors and Context
-panel closure. The normal 500 ms foreground / 2 s background cadence and pending
-query deduplication apply; the UI never retries summary model work or resends a
-rejected prompt. A busy submit restores its own draft/preparation only, without
-clearing another operation. Manual `/compact` remains idle-only and its cancellation
+Context reads are one-shot: opening Context, F5/Refresh in that view, relevant
+`session.state` notifications (including idle/blocked with no active loop and no
+compaction), authoritative turn completion, compact/cancel responses, rejected
+submissions and known event gaps can request a fresh snapshot. They share the
+existing query slots and coalesce pending per-session demand. A newer trigger
+received during an older read retains a fresh follow-up; slot/queue progress
+admits unsent demand without a timer. Active snapshots, success, read errors and
+stale/mismatched responses do not generate another read. There is no periodic
+`session.context` polling for foreground or background sessions, open panels,
+running turns or operations. Exact-operation cancellation ownership survives
+the one-shot read and Context panel closure. The UI never retries summary model
+work or resends a rejected prompt. A busy submit restores its own draft/preparation
+only, without clearing another operation. Manual `/compact` remains idle-only and its cancellation
 uses `session.compact.cancel` with the exact operation ID (including reserved
 `auto-` IDs), never a completed `turn.cancel`.
 
@@ -160,13 +168,21 @@ Ordinary requests do not summarize on soft-threshold crossings. Confirmed safe,
 pre-output upstream context-capacity rejection may compact and retry the rejected
 logical model request once within the still-active turn, sharing its cancellation
 and deadline without redispatching completed tools;
-its `recovery.outcome=recovering` observation displays `Recovering context`, not
-completion. The same poll owner observes an active turn until completion and then
-discovers post-turn maintenance. Stale turn notifications remain fenced; a
-compaction notification may only request a fresh Session context read independently
-of its retired loop metadata. Compaction results do not alter the original turn
+its `recovery` observation is only a latest-read snapshot in Context, with F5
+available to refresh it. Recovery has no independent change notification, so the
+busy row uses the existing Working/tool states rather than a cached recovery
+phase. Stale turn notifications remain fenced; a compaction start/phase or
+session-level terminal notification may only request a fresh Session context
+read independently of its retired loop metadata. Compaction results do not alter the original turn
 outcome, history, scroll anchor or fold state. `unknown_write` remains unknown and
 a context read is not a disk reload.
+
+Notifications remain best-effort. If the final compaction notification is lost
+and the session then stays silent, the TUI cannot automatically discover the
+terminal result. The next relevant event, known gap, operation response or
+explicit Context open/F5/Refresh can request a new snapshot. Read failure or
+silence preserves unconfirmed state and existing admission/unknown-write fences;
+it does not imply operation completion. This adds no RPC, replay, ACK or watchdog.
 
 `tool_rounds` is an unsigned 64-bit statistic in turn results, history summaries
 and turn-result pages. Existing small integer records remain compatible; clients

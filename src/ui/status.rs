@@ -102,22 +102,8 @@ fn busy_label(app: &App) -> String {
     {
         return "Cancelling".to_owned();
     }
-    if view
-        .context
-        .as_ref()
-        .and_then(|context| context.recovery.as_ref())
-        .is_some_and(|recovery| {
-            recovery.outcome == "recovering"
-                && view
-                    .live
-                    .as_ref()
-                    .and_then(|live| live.reference.as_ref())
-                    .is_some_and(|turn| turn.loop_id == recovery.loop_id)
-                && view.live.as_ref().is_some_and(|live| !live.waiting)
-        })
-    {
-        return "Recovering context".to_owned();
-    }
+    // Recovery is a latest-read Context snapshot, not a live phase: its
+    // completion has no independent notification to clear a cached label.
     if let Some(operation) = view
         .context
         .as_ref()
@@ -346,29 +332,37 @@ mod tests {
     }
 
     #[test]
-    fn recovery_remains_an_active_turn_and_post_turn_compaction_keeps_completion_visible() {
+    fn cached_recovery_does_not_override_live_work_or_compaction() {
         let mut app = crate::ui::testapp::live_turn(ThemeKind::Dark);
         let value = serde_json::json!({
             "session_id": "ses_1", "coverage": {"covered_loop_count": 0,
                 "covered_item_count": 0, "retained_item_count": 0},
             "budget": {}, "automatic": {"current": null, "last": null},
-            "current_operation": {"operation_id": "recover-compact", "phase": "summarizing",
-                "covered_item_count": 2, "retained_item_count": 0},
             "recovery": {"loop_id": "loop_live", "request_index": 0, "outcome": "recovering"}
         });
         app.sessions.known.get_mut("ses_1").unwrap().context =
             Some(serde_json::from_value(value).unwrap());
-        assert_eq!(busy_label(&app), "Recovering context");
+        assert_eq!(busy_label(&app), "Running read…");
         assert!(app.active_view().unwrap().live.is_some());
         let view = app.sessions.known.get_mut("ses_1").unwrap();
-        view.context
-            .as_mut()
-            .unwrap()
-            .recovery
-            .as_mut()
-            .unwrap()
-            .loop_id = "old".into();
-        assert!(!busy_label(&app).contains("Recovering"));
+        for request in &mut view.live.as_mut().unwrap().requests {
+            request.tools.clear();
+        }
+        assert_eq!(busy_label(&app), "Working");
+        // The same loop/request can keep running after the sampled recovery
+        // ends without another recovery notification. Redraws cannot turn
+        // that cached snapshot into a live phase.
+        app.frame_count += 1;
+        assert_eq!(busy_label(&app), "Working");
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        view.context.as_mut().unwrap().current_operation =
+            Some(crate::protocol::CompactionProgressWire {
+                operation_id: "recover-compact".into(),
+                phase: CompactionPhaseWire::Summarizing,
+                covered_item_count: 2,
+                retained_item_count: 0,
+            });
+        assert_eq!(busy_label(&app), "Compacting · Summarizing");
         let view = app.sessions.known.get_mut("ses_1").unwrap();
         view.live = None;
         view.last_result = Some(

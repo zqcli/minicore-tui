@@ -43,7 +43,7 @@ pub enum QueryKey {
         session_id: String,
         loop_id: String,
     },
-    /// A bounded context snapshot used by preparation/compaction polling.
+    /// A bounded context snapshot requested by an event, result, or user action.
     Context {
         session_id: String,
         generation: u64,
@@ -318,8 +318,21 @@ impl App {
         }
     }
 
-    pub(super) fn drain_query_followups(&mut self, commands: &mut Vec<AppCommand>) {
-        while let Some(key) = self.pending_query_followups.pop_front() {
+    pub(super) fn drain_query_followups(
+        &mut self,
+        commands: &mut Vec<AppCommand>,
+        context_progress: bool,
+    ) {
+        // A context key freed by QueueFull is retained until actual transport
+        // progress. Drain each existing key at most once in this reducer pass.
+        for _ in 0..self.pending_query_followups.len() {
+            let Some(key) = self.pending_query_followups.pop_front() else {
+                break;
+            };
+            if matches!(key, QueryKey::Context { .. }) && !context_progress {
+                self.pending_query_followups.push_back(key);
+                continue;
+            }
             let was_ready = self.queries.ready_contains(&key);
             let followup_key = key.clone();
             let command = match key {
@@ -405,7 +418,7 @@ impl App {
                         .known
                         .get(&session_id)
                         .is_some_and(|view| view.context_query_generation == generation)
-                        && self.context_polls.contains_key(&session_id);
+                        && self.context_reads.contains_key(&session_id);
                     if !current {
                         self.invalidate_query_scope(&QueryScope::ContextGeneration {
                             session_id,
@@ -444,136 +457,79 @@ impl App {
         }
     }
 
-    pub(super) fn context_interval(&self, session_id: &SessionId) -> Duration {
-        if self.sessions.active.as_ref() == Some(session_id) {
-            Duration::from_millis(500)
-        } else {
-            Duration::from_secs(2)
-        }
-    }
-
     pub(super) fn context_query_pending(&self, session_id: &SessionId) -> bool {
         self.pending_requests.values().any(|kind| {
             matches!(kind, RequestKind::SessionContext { session_id: pending, .. } if pending == session_id)
         })
     }
 
-    pub(super) fn arm_context_poll(
+    /// Retain one finite read intent per known session. A newer trigger makes
+    /// an older snapshot stale, even when both refer to the same operation.
+    pub(super) fn queue_context_read(
         &mut self,
         session_id: &SessionId,
         owner: ContextQueryOwner,
-        immediate: bool,
     ) -> Option<AppCommand> {
+        if !self.context_supported
+            || !self.can_send_requests()
+            || self.sessions.closed.contains(session_id)
+            || self.sessions.pending_deletes.contains(session_id)
+        {
+            return None;
+        }
+        let view = self.sessions.known.get_mut(session_id)?;
+        if !view.info.loaded || view.closing {
+            return None;
+        }
+        let previous_generation = view.context_query_generation;
+        view.context_query_generation = view
+            .context_query_generation
+            .checked_add(1)
+            .expect("context query generations exhausted");
+        self.invalidate_query_scope(&QueryScope::Context(session_id.clone()));
+        // Closing a panel must not cancel an independent pending or in-flight
+        // confirmation that its fresh read supersedes.
         let owner = if matches!(
-            &owner,
-            ContextQueryOwner::Explicit
-                | ContextQueryOwner::Panel(_)
-                | ContextQueryOwner::Submission(_)
-                | ContextQueryOwner::PostTurn(_)
-                | ContextQueryOwner::Turn(_)
+            owner,
+            ContextQueryOwner::Panel(_) | ContextQueryOwner::Explicit
         ) {
-            self.context_polls
+            self.context_reads
                 .get(session_id)
-                .filter(|poll| {
-                    matches!(
-                        &poll.owner,
-                        ContextQueryOwner::ManualCompact(_) | ContextQueryOwner::Operation(_)
-                    ) || matches!(
-                        (&owner, &poll.owner),
-                        (
-                            ContextQueryOwner::Explicit | ContextQueryOwner::Panel(_),
-                            ContextQueryOwner::Submission(_)
-                                | ContextQueryOwner::PostTurn(_)
-                                | ContextQueryOwner::Turn(_)
-                        )
-                    ) || matches!(
-                        (&owner, &poll.owner),
-                        (ContextQueryOwner::Panel(_), ContextQueryOwner::Explicit)
-                    )
+                .filter(|pending| !matches!(pending, ContextQueryOwner::Panel(_)))
+                .cloned()
+                .or_else(|| {
+                    self.pending_requests
+                        .values()
+                        .find_map(|request| match request {
+                            RequestKind::SessionContext {
+                                session_id: session,
+                                owner,
+                                generation,
+                            } if session == session_id
+                                && *generation == previous_generation
+                                && !matches!(owner, ContextQueryOwner::Panel(_)) =>
+                            {
+                                Some(owner.clone())
+                            }
+                            _ => None,
+                        })
                 })
-                .map_or(owner.clone(), |poll| poll.owner.clone())
+                .unwrap_or(owner)
         } else {
             owner
         };
-        let due = if immediate {
-            self.instant_now()
-        } else {
-            self.instant_now()
-                .checked_add(self.context_interval(session_id))
-                .expect("context poll deadline is representable")
-        };
-        let cancel_requested = self
-            .context_polls
-            .get(session_id)
-            .is_some_and(|poll| poll.owner == owner && poll.cancel_requested);
-        self.context_polls.insert(
-            session_id.clone(),
-            ContextPoll {
-                owner,
-                due,
-                cancel_requested,
-            },
-        );
-        if immediate {
-            self.request_session_context(session_id)
-        } else {
-            None
-        }
+        self.context_reads.insert(session_id.clone(), owner);
+        self.request_session_context(session_id)
     }
 
-    pub(super) fn poll_contexts(&mut self) -> Vec<AppCommand> {
-        let now = self.instant_now();
-        let due: Vec<SessionId> = self
-            .context_polls
-            .iter()
-            .filter_map(|(session_id, poll)| (poll.due <= now).then_some(session_id.clone()))
-            .collect();
-        let mut commands = Vec::new();
-        for session_id in due {
-            if self.context_query_pending(&session_id) {
-                continue;
-            }
-            if let Some(command) = self.request_session_context(&session_id) {
-                commands.push(command);
-            }
-            let interval = self.context_interval(&session_id);
-            if let Some(poll) = self.context_polls.get_mut(&session_id) {
-                poll.due = now
-                    .checked_add(interval)
-                    .expect("context poll deadline is representable");
-            }
-        }
-        commands
-    }
-
-    pub(super) fn reschedule_context_poll(
-        &mut self,
-        session_id: &SessionId,
-        owner: &ContextQueryOwner,
-    ) {
-        if matches!(
-            owner,
-            ContextQueryOwner::Explicit | ContextQueryOwner::Panel(_)
-        ) {
-            self.context_polls.remove(session_id);
-            return;
-        }
-        let due = self
-            .instant_now()
-            .checked_add(self.context_interval(session_id))
-            .expect("context poll deadline is representable");
-        let cancel_requested = self
-            .context_polls
-            .get(session_id)
-            .is_some_and(|poll| poll.owner == *owner && poll.cancel_requested);
-        self.context_polls.insert(
-            session_id.clone(),
-            ContextPoll {
-                owner: owner.clone(),
-                due,
-                cancel_requested,
-            },
-        );
+    /// QueueSlots and the outbound FIFO can refuse admission. These are still
+    /// the original intents, not new reads generated by a response or clock.
+    pub(super) fn resume_context_reads(&mut self) -> Vec<AppCommand> {
+        let sessions: Vec<_> = self.context_reads.keys().cloned().collect();
+        sessions
+            .into_iter()
+            .filter_map(|session| self.request_session_context(&session))
+            .collect()
     }
 }
 

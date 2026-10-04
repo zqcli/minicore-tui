@@ -204,23 +204,11 @@ impl App {
         let (session, epoch, scroll, scope) = match std::mem::take(&mut self.main_view) {
             MainView::Conversation => return,
             MainView::Context(c) => {
-                if self
-                    .context_polls
-                    .get(&c.session)
-                    .is_some_and(|p| p.owner == ContextQueryOwner::Panel(c.generation))
+                if self.context_reads.get(&c.session)
+                    == Some(&ContextQueryOwner::Panel(c.generation))
                 {
-                    self.context_polls.remove(&c.session);
-                    // This was only a panel observation, not B's execution
-                    // or settlement poll. Do not leave an unmaintained active
-                    // context snapshot as a permanent execution fence. The
-                    // authoritative state/operation and local B owner remain.
-                    if let Some(view) = self.sessions.known.get_mut(&c.session) {
-                        if view.context.as_ref().is_some_and(|x| {
-                            x.current_operation.is_some() || x.automatic.current.is_some()
-                        }) {
-                            view.context = None;
-                        }
-                    }
+                    self.context_reads.remove(&c.session);
+                    self.invalidate_query_scope(&QueryScope::Context(c.session.clone()));
                 }
                 (
                     c.session.clone(),
@@ -251,7 +239,9 @@ impl App {
                 },
             ),
         };
-        self.invalidate_query_scope(&scope);
+        if !matches!(scope, QueryScope::Context(_)) {
+            self.invalidate_query_scope(&scope);
+        }
         if let Some(view) = self
             .sessions
             .known

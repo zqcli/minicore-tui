@@ -264,6 +264,12 @@ Context estimates describe the last prepared request and the history tail
 Compaction before/after values are projections, not the latest request; recovery
 before/after values describe full requests. The latest authoritative
 `session.context.last_result` takes precedence over a cached manual result.
+Context reads are one-shot, triggered by relevant events, operation/completion
+responses, known gaps and opening or refreshing the Context view. There is no
+periodic context polling. Recovery details are a latest-read snapshot rather
+than a live status; use F5/Refresh in Context to update them. If a final best-effort
+compaction event is lost and the session stays silent, the next trigger or
+explicit refresh is needed to discover the result.
 Newer Agents identify manual/automatic origin explicitly; older automatic IDs
 use the reserved `auto-` prefix, while unrecognized origins remain unknown.
 

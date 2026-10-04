@@ -71,13 +71,18 @@ rejection may compact and retry the rejected logical request once, within the
 active turn's cancellation/deadline and without redispatching completed tools.
 Successful completed and persisted turns may reserve independent post-turn
 maintenance; `turn.wait` does not wait for that summary. Manual `/compact` is
-idle-only. The TUI reads `current_operation` / `last_result` through its bounded
-Session context poll owner and cancels independent operations using their exact
+idle-only. The TUI reads `current_operation` / `last_result` through bounded,
+one-shot Session context queries triggered by existing events, operation
+responses, authoritative turn completion, known gaps and Context open/refresh.
+There is no periodic context polling or new RPC design. It cancels independent
+operations using their exact
 `session.compact.cancel` identity, not a completed `turn.cancel`. It adds no
 summary policy, provider calls or prompt retries. Turn statistics use `u64`
 `tool_rounds`; the legacy execution limit retains zero-means-unlimited semantics.
 See [the correlation contract](rpc-contract.md#correlation-and-ordering) for
-polling, draft restoration and late-event fences.
+one-shot read triggers, best-effort notification limits, draft restoration and
+late-event fences. Recovery remains a latest-read Context snapshot, refreshed
+with F5, and does not drive the live busy label.
 
 ## Method surface (33 methods)
 

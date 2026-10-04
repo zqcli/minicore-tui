@@ -65,7 +65,7 @@ impl App {
             return vec![];
         };
         let (session, generation) = (c.session.clone(), c.generation);
-        self.arm_context_poll(&session, ContextQueryOwner::Panel(generation), true)
+        self.queue_context_read(&session, ContextQueryOwner::Panel(generation))
             .into_iter()
             .collect()
     }

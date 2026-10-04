@@ -140,9 +140,14 @@ summary body is attached or rendered. Tab selects Refresh / compact / exact
 operation cancel; Enter invokes the selected enabled action. F5 or `/refresh`
 reads context only. Manual compact uses the existing loaded/idle/settled/
 unblocked admission; cancellation never substitutes a guessed TurnRef.
-Page/arrows/End and wheel/scrollbar stay local. Closing the page stops its
-observation, not a B-owned operation or mandatory confirmation. Idle does not
-poll; active foreground/background operation reads are bounded by 500 ms/2 s.
+Page/arrows/End and wheel/scrollbar stay local. Opening Context or explicitly
+refreshing it requests one read. Relevant events and operation/completion
+responses also request one-shot reads; no session or panel periodically polls
+context. Closing the page cancels only its unsent panel read, not a B-owned
+operation or mandatory confirmation. Recovery details are a latest-read snapshot,
+not the current live phase; use F5/Refresh to read them again. A lost final
+best-effort event followed by silence can leave a stale observation until the
+next trigger or explicit refresh.
 
 Both pages retain the existing Editor and one-line Footer. F6 switches focus;
 Editor keys keep their normal meanings. Dock/selection Esc precedes closing

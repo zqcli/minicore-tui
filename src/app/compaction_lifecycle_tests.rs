@@ -29,6 +29,25 @@ fn clock(app: &mut App) -> Arc<AtomicU64> {
     elapsed
 }
 
+fn state_event(app: &mut App, operation: Option<&str>) -> Vec<AppCommand> {
+    let state: SessionStateWire = serde_json::from_value(json!({
+        "session_id": "ses_1", "status": "idle", "active_loop": null,
+        "compaction": operation.map(|id| json!({"operation_id": id, "phase": "summarizing",
+            "covered_item_count": 2, "retained_item_count": 0}))
+    }))
+    .unwrap();
+    app.apply_session_state(&state, None, SessionStateSource::Notification)
+}
+
+fn observed_operation(app: &App) -> Option<&str> {
+    app.active_view()?
+        .context
+        .as_ref()?
+        .current_operation
+        .as_ref()
+        .map(|operation| operation.operation_id.as_str())
+}
+
 #[test]
 fn only_new_successful_compaction_refreshes_reported_context_presentation() {
     for origin in ["manual", "automatic"] {
@@ -44,10 +63,9 @@ fn only_new_successful_compaction_refreshes_reported_context_presentation() {
             let mut snapshot = context(None, Some(("compact-done", status)));
             snapshot["last_result"]["origin"] = json!(origin);
             let request = take_requests(
-                app.arm_context_poll(
+                app.queue_context_read(
                     &"ses_1".into(),
                     ContextQueryOwner::Operation("compact-done".into()),
-                    true,
                 )
                 .into_iter()
                 .collect(),
@@ -95,46 +113,42 @@ fn only_new_successful_compaction_refreshes_reported_context_presentation() {
 }
 
 #[test]
-fn post_turn_discovery_retries_errors_and_operation_survives_panel_close() {
+fn post_turn_read_does_not_retry_errors_and_operation_survives_panel_close() {
     let mut app = app();
     let time = clock(&mut app);
     let request = take_requests(
-        app.arm_context_poll(
+        app.queue_context_read(
             &"ses_1".into(),
             ContextQueryOwner::PostTurn("loop_done".into()),
-            true,
         )
         .into_iter()
         .collect(),
     )
     .remove(0);
     respond_rpc_error(&mut app, &request, -32603, "temporary read error");
-    assert!(matches!(
-        app.context_polls["ses_1"].owner,
-        ContextQueryOwner::PostTurn(_)
-    ));
+    assert!(app.context_reads.is_empty());
     time.store(500, Ordering::Relaxed);
-    let request = take_requests(app.update(AppEvent::Tick)).remove(0);
+    assert!(take_requests(app.update(AppEvent::Tick)).is_empty());
+    let request = take_requests(state_event(&mut app, Some("auto-loop_done"))).remove(0);
     respond(&mut app, &request, context(Some("auto-loop_done"), None));
-    assert_eq!(
-        app.context_polls["ses_1"].owner,
-        ContextQueryOwner::Operation("auto-loop_done".into())
-    );
+    assert_eq!(observed_operation(&app), Some("auto-loop_done"));
     let revision = app.active_view().unwrap().transcript.render_revision;
     let scroll = app.active_view().unwrap().scroll.clone();
     app.composer.type_text("draft remains");
     let request = take_requests(app.open_context()).remove(0);
     respond(&mut app, &request, context(Some("auto-loop_done"), None));
     app.close_main_detail();
-    assert!(app.context_polls.contains_key("ses_1"));
+    assert!(app.context_reads.is_empty());
+    assert!(app.active_view().unwrap().is_preparing());
     time.store(1000, Ordering::Relaxed);
-    let request = take_requests(app.update(AppEvent::Tick)).remove(0);
+    assert!(take_requests(app.update(AppEvent::Tick)).is_empty());
+    let request = take_requests(state_event(&mut app, None)).remove(0);
     respond(
         &mut app,
         &request,
         context(None, Some(("auto-loop_done", "failed"))),
     );
-    assert!(!app.context_polls.contains_key("ses_1"));
+    assert!(!app.context_reads.contains_key("ses_1"));
     assert!(!app.active_view().unwrap().is_preparing());
     assert_eq!(app.composer.content(), "draft remains");
     assert_eq!(
@@ -168,10 +182,9 @@ fn post_turn_discovery_retries_errors_and_operation_survives_panel_close() {
 fn instant_post_turn_result_is_discovered_without_a_running_notification() {
     let mut app = app();
     let request = take_requests(
-        app.arm_context_poll(
+        app.queue_context_read(
             &"ses_1".into(),
             ContextQueryOwner::PostTurn("loop_done".into()),
-            true,
         )
         .into_iter()
         .collect(),
@@ -182,7 +195,7 @@ fn instant_post_turn_result_is_discovered_without_a_running_notification() {
         &request,
         context(None, Some(("auto-loop_done", "unknown_write"))),
     );
-    assert!(app.context_polls.is_empty());
+    assert!(app.context_reads.is_empty());
     assert_eq!(
         app.active_view()
             .unwrap()
@@ -216,7 +229,8 @@ fn failed_submit_restores_text_without_clearing_an_independent_operation() {
         .find(|request| request.method == "turn.send")
         .unwrap();
     time.store(500, Ordering::Relaxed);
-    let request = take_requests(app.update(AppEvent::Tick)).remove(0);
+    assert!(take_requests(app.update(AppEvent::Tick)).is_empty());
+    let request = take_requests(state_event(&mut app, Some("auto-previous"))).remove(0);
     respond(&mut app, &request, context(Some("auto-previous"), None));
     let commands = respond_rpc_error(&mut app, send, -32000, "SessionBusy");
     assert!(
@@ -226,10 +240,7 @@ fn failed_submit_restores_text_without_clearing_an_independent_operation() {
     );
     assert_eq!(app.composer.content(), "prompt");
     assert!(app.active_view().unwrap().live.is_none());
-    assert_eq!(
-        app.context_polls["ses_1"].owner,
-        ContextQueryOwner::Operation("auto-previous".into())
-    );
+    assert_eq!(observed_operation(&app), Some("auto-previous"));
     assert_eq!(
         app.active_view()
             .unwrap()
@@ -256,7 +267,8 @@ fn busy_response_preserves_later_draft_and_pending_esc_does_not_cancel_previous_
         .unwrap();
     assert!(app.composer.is_empty());
     time.store(500, Ordering::Relaxed);
-    let request = take_requests(app.update(AppEvent::Tick)).remove(0);
+    assert!(take_requests(app.update(AppEvent::Tick)).is_empty());
+    let request = take_requests(state_event(&mut app, Some("auto-previous"))).remove(0);
     respond(&mut app, &request, context(Some("auto-previous"), None));
     assert!(
         app.submissions
@@ -278,10 +290,7 @@ fn busy_response_preserves_later_draft_and_pending_esc_does_not_cancel_previous_
             .iter()
             .all(|request| request.method != "turn.send")
     );
-    assert_eq!(
-        app.context_polls["ses_1"].owner,
-        ContextQueryOwner::Operation("auto-previous".into())
-    );
+    assert_eq!(observed_operation(&app), Some("auto-previous"));
     assert!(
         app.active_view()
             .unwrap()
@@ -311,10 +320,9 @@ fn unsent_submit_does_not_erase_new_draft_or_operation_owner() {
         _ => unreachable!(),
     };
     let request = take_requests(
-        app.arm_context_poll(
+        app.queue_context_read(
             &"ses_1".into(),
             ContextQueryOwner::PostTurn("previous".into()),
-            true,
         )
         .into_iter()
         .collect(),
@@ -324,10 +332,7 @@ fn unsent_submit_does_not_erase_new_draft_or_operation_owner() {
     app.composer.type_text("new draft");
     app.restore_unsent_turn(&"ses_1".into(), local_id);
     assert_eq!(app.composer.content(), "new draft\nunsent");
-    assert!(matches!(
-        app.context_polls["ses_1"].owner,
-        ContextQueryOwner::Operation(_)
-    ));
+    assert_eq!(observed_operation(&app), Some("auto-previous"));
     assert!(
         app.active_view()
             .unwrap()
@@ -361,10 +366,7 @@ fn retired_turn_notification_discovers_operation_without_reviving_turn_state() {
     .remove(0);
     assert_eq!(app.active_view().unwrap().state, previous);
     respond(&mut app, &request, context(Some("auto-old"), None));
-    assert_eq!(
-        app.context_polls["ses_1"].owner,
-        ContextQueryOwner::Operation("auto-old".into())
-    );
+    assert_eq!(observed_operation(&app), Some("auto-old"));
     assert!(app.active_view().unwrap().live.is_none());
 }
 
@@ -372,13 +374,9 @@ fn retired_turn_notification_discovers_operation_without_reviving_turn_state() {
 fn cancel_after_turn_completion_targets_only_the_independent_operation() {
     let mut app = app();
     let request = take_requests(
-        app.arm_context_poll(
-            &"ses_1".into(),
-            ContextQueryOwner::PostTurn("done".into()),
-            true,
-        )
-        .into_iter()
-        .collect(),
+        app.queue_context_read(&"ses_1".into(), ContextQueryOwner::PostTurn("done".into()))
+            .into_iter()
+            .collect(),
     )
     .remove(0);
     respond(&mut app, &request, context(Some("auto-done"), None));
@@ -398,41 +396,27 @@ fn cancel_after_turn_completion_targets_only_the_independent_operation() {
 fn stale_operation_read_cannot_retire_new_owner_or_cross_session_epoch() {
     let mut app = app();
     let old = take_requests(
-        app.arm_context_poll(
+        app.queue_context_read(
             &"ses_1".into(),
             ContextQueryOwner::Operation("auto-old".into()),
-            true,
         )
         .into_iter()
         .collect(),
     )
     .remove(0);
-    app.arm_context_poll(
+    app.queue_context_read(
         &"ses_1".into(),
         ContextQueryOwner::Operation("auto-new".into()),
-        false,
     );
-    respond(
+    let request = take_requests(respond(
         &mut app,
         &old,
         context(None, Some(("auto-old", "compacted"))),
-    );
-    assert_eq!(
-        app.context_polls["ses_1"].owner,
-        ContextQueryOwner::Operation("auto-new".into())
-    );
+    ))
+    .remove(0);
+    assert!(app.context_reads.is_empty());
     assert!(app.active_view().unwrap().context.is_none());
     assert!(app.active_view().unwrap().compaction_feedback.is_empty());
-    let request = take_requests(
-        app.arm_context_poll(
-            &"ses_1".into(),
-            ContextQueryOwner::Operation("auto-new".into()),
-            true,
-        )
-        .into_iter()
-        .collect(),
-    )
-    .remove(0);
     app.sessions
         .known
         .get_mut("ses_1")
@@ -446,88 +430,74 @@ fn stale_operation_read_cannot_retire_new_owner_or_cross_session_epoch() {
 #[test]
 fn pre_completion_context_read_cannot_discharge_post_turn_discovery() {
     let mut app = app();
-    let time = clock(&mut app);
     let old = take_requests(
-        app.arm_context_poll(
-            &"ses_1".into(),
-            ContextQueryOwner::Turn("done".into()),
-            true,
-        )
-        .into_iter()
-        .collect(),
+        app.queue_context_read(&"ses_1".into(), ContextQueryOwner::Turn("done".into()))
+            .into_iter()
+            .collect(),
     )
     .remove(0);
-    app.arm_context_poll(
-        &"ses_1".into(),
-        ContextQueryOwner::PostTurn("done".into()),
-        false,
-    );
+    app.queue_context_read(&"ses_1".into(), ContextQueryOwner::PostTurn("done".into()));
     // This snapshot was captured before the completion reservation. Accepting
     // it as a discovery result would miss an instant post-turn operation.
-    respond(&mut app, &old, context(None, None));
-    assert!(app.context_polls.contains_key("ses_1"));
+    let request = take_requests(respond(&mut app, &old, context(None, None))).remove(0);
+    assert!(app.context_reads.is_empty());
     assert!(app.active_view().unwrap().context.is_none());
     assert!(app.active_view().unwrap().compaction_feedback.is_empty());
-    time.store(500, Ordering::Relaxed);
-    let request = take_requests(app.update(AppEvent::Tick)).remove(0);
     respond(
         &mut app,
         &request,
         context(None, Some(("auto-done", "compacted"))),
     );
-    assert!(app.context_polls.is_empty());
+    assert!(app.context_reads.is_empty());
     let view = app.active_view().unwrap();
     assert!(view.context.as_ref().unwrap().last_result.is_some());
 }
 
 #[test]
-fn operation_read_send_failure_and_queue_full_keep_the_single_owner() {
+fn operation_read_send_failure_is_silent_and_queue_full_retains_one_intent() {
     for queue_full in [false, true] {
         let mut app = app();
         let time = clock(&mut app);
-        let request = take_requests(
-            app.arm_context_poll(
-                &"ses_1".into(),
-                ContextQueryOwner::PostTurn("done".into()),
-                true,
-            )
-            .into_iter()
-            .collect(),
-        )
-        .remove(0);
-        app.arm_context_poll(
-            &"ses_1".into(),
-            ContextQueryOwner::Operation("auto-done".into()),
-            false,
-        );
-        if queue_full {
+        let request = take_requests(state_event(&mut app, Some("auto-done"))).remove(0);
+        let commands = if queue_full {
             app.update(AppEvent::RpcQueueFull {
                 request,
                 class: SendClass::Normal,
-            });
+            })
         } else {
             app.update(AppEvent::RpcSendFailed {
                 id: request.id,
                 error: RpcError::Closed,
-            });
-        }
-        assert_eq!(
-            app.context_polls["ses_1"].owner,
-            ContextQueryOwner::Operation("auto-done".into())
-        );
-        assert!(
-            !app.active_view().unwrap().event_gap,
-            "context backpressure is not a turn-history gap"
-        );
-        time.store(500, Ordering::Relaxed);
-        let request = take_requests(app.update(AppEvent::Tick)).remove(0);
-        assert_eq!(request.method, "session.context");
-        respond(
+            })
+        };
+        assert!(take_requests(commands).is_empty());
+        assert_eq!(app.context_reads.contains_key("ses_1"), queue_full);
+        assert!(!app.active_view().unwrap().event_gap);
+        time.store(50_000, Ordering::Relaxed);
+        assert!(take_requests(app.update(AppEvent::Tick)).is_empty());
+        // A real unrelated response can admit the retained unsent read only.
+        let progress = app.request_session_state(&"ses_1".into());
+        let progress = take_requests(vec![progress]).remove(0);
+        let reads = take_requests(respond(
             &mut app,
-            &request,
-            context(None, Some(("auto-done", "compacted"))),
+            &progress,
+            json!({"session_id":"ses_1", "status":"idle", "active_loop":null}),
+        ));
+        assert_eq!(
+            reads
+                .iter()
+                .filter(|r| r.method == "session.context")
+                .count(),
+            usize::from(queue_full)
         );
-        assert!(app.context_polls.is_empty());
+        if queue_full {
+            let read = reads
+                .iter()
+                .find(|r| r.method == "session.context")
+                .unwrap();
+            respond(&mut app, read, context(None, Some(("auto-done", "noop"))));
+        }
+        assert!(app.context_reads.is_empty());
     }
 }
 
@@ -536,13 +506,9 @@ fn compaction_cancel_failure_is_exact_and_queue_full_retains_intent() {
     for failure in ["rpc", "unsupported", "send", "queue"] {
         let mut app = app();
         let request = take_requests(
-            app.arm_context_poll(
-                &"ses_1".into(),
-                ContextQueryOwner::PostTurn("done".into()),
-                true,
-            )
-            .into_iter()
-            .collect(),
+            app.queue_context_read(&"ses_1".into(), ContextQueryOwner::PostTurn("done".into()))
+                .into_iter()
+                .collect(),
         )
         .remove(0);
         respond(&mut app, &request, context(Some("auto-done"), None));
@@ -576,18 +542,14 @@ fn compaction_cancel_failure_is_exact_and_queue_full_retains_intent() {
             app.compaction_cancelling("ses_1", "auto-done"),
             failure == "queue"
         );
-        assert!(app.context_polls.contains_key("ses_1"));
+        assert_eq!(observed_operation(&app), Some("auto-done"));
     }
 
     let mut app = app();
     let request = take_requests(
-        app.arm_context_poll(
-            &"ses_1".into(),
-            ContextQueryOwner::PostTurn("old".into()),
-            true,
-        )
-        .into_iter()
-        .collect(),
+        app.queue_context_read(&"ses_1".into(), ContextQueryOwner::PostTurn("old".into()))
+            .into_iter()
+            .collect(),
     )
     .remove(0);
     respond(&mut app, &request, context(Some("auto-old"), None));
@@ -596,10 +558,9 @@ fn compaction_cancel_failure_is_exact_and_queue_full_retains_intent() {
     }))
     .remove(0);
     let request = take_requests(
-        app.arm_context_poll(
+        app.queue_context_read(
             &"ses_1".into(),
             ContextQueryOwner::Operation("auto-new".into()),
-            true,
         )
         .into_iter()
         .collect(),
@@ -634,10 +595,7 @@ fn stale_manual_send_failure_cannot_clear_a_new_automatic_owner() {
         id: compact.id,
         error: RpcError::Closed,
     });
-    assert_eq!(
-        app.context_polls["ses_1"].owner,
-        ContextQueryOwner::Operation("auto-new".into())
-    );
+    assert_eq!(observed_operation(&app), Some("auto-new"));
     assert!(
         app.active_view()
             .unwrap()
@@ -682,7 +640,7 @@ fn terminal_compaction_feedback_is_bounded_deduplicated_and_survives_reopen() {
     let mut app = app();
     for n in 0..20 {
         let request = take_requests(
-            app.arm_context_poll(&"ses_1".into(), ContextQueryOwner::Explicit, true)
+            app.queue_context_read(&"ses_1".into(), ContextQueryOwner::Explicit)
                 .into_iter()
                 .collect(),
         )
@@ -695,7 +653,7 @@ fn terminal_compaction_feedback_is_bounded_deduplicated_and_survives_reopen() {
     }
     for _ in 0..2 {
         let request = take_requests(
-            app.arm_context_poll(&"ses_1".into(), ContextQueryOwner::Explicit, true)
+            app.queue_context_read(&"ses_1".into(), ContextQueryOwner::Explicit)
                 .into_iter()
                 .collect(),
         )
@@ -729,4 +687,351 @@ fn terminal_compaction_feedback_is_bounded_deduplicated_and_survives_reopen() {
     app.on_open_response("ses_1".into(), None, &response);
     assert_eq!(app.active_view().unwrap().compaction_feedback, expected);
     assert!(app.active_view().unwrap().transcript.blocks.is_empty());
+}
+
+#[test]
+fn every_context_owner_is_one_shot_after_active_success_or_failure() {
+    for owner in [
+        ContextQueryOwner::Submission(LocalSubmissionId(1)),
+        ContextQueryOwner::Turn("loop".into()),
+        ContextQueryOwner::PostTurn("loop".into()),
+        ContextQueryOwner::Operation("auto".into()),
+        ContextQueryOwner::ManualCompact("manual".into()),
+        ContextQueryOwner::Explicit,
+        ContextQueryOwner::Panel(0),
+    ] {
+        for failure in ["active", "rpc", "parse", "session"] {
+            for foreground in [true, false] {
+                let mut app = app();
+                let time = clock(&mut app);
+                let request = if matches!(owner, ContextQueryOwner::Panel(_)) {
+                    take_requests(app.open_context()).remove(0)
+                } else {
+                    take_requests(
+                        app.queue_context_read(&"ses_1".into(), owner.clone())
+                            .into_iter()
+                            .collect(),
+                    )
+                    .remove(0)
+                };
+                let commands = match failure {
+                    "rpc" => respond_rpc_error(&mut app, &request, -32603, "read failed"),
+                    "parse" => respond(&mut app, &request, json!({})),
+                    "session" => {
+                        let mut snapshot = context(None, None);
+                        snapshot["session_id"] = json!("wrong-session");
+                        respond(&mut app, &request, snapshot)
+                    }
+                    _ => respond(&mut app, &request, context(Some("active-operation"), None)),
+                };
+                assert!(take_requests(commands).is_empty(), "{owner:?} {failure}");
+                assert!(app.context_reads.is_empty());
+                if !foreground {
+                    app.set_active_session(None);
+                }
+                app.close_main_detail();
+                // No context deadline is added even with a cached active operation.
+                app.notices.clear();
+                assert_eq!(
+                    app.next_tick(),
+                    (failure == "active").then_some(SPINNER_INTERVAL),
+                    "only the existing visual spinner can request a wake"
+                );
+                for elapsed in [500, 2_000, 50_000] {
+                    time.store(elapsed, Ordering::Relaxed);
+                    assert!(
+                        take_requests(app.update(AppEvent::Tick)).is_empty(),
+                        "{owner:?} {failure} foreground={foreground}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn terminal_session_events_discover_all_results_without_start_or_live_turn() {
+    for status in ["compacted", "noop", "failed", "unknown_write"] {
+        for retired in [false, true] {
+            let mut app = app();
+            if retired {
+                app.sessions.known.get_mut("ses_1").unwrap().retired_loop = Some(TurnRef {
+                    session_id: "ses_1".into(),
+                    loop_id: "old".into(),
+                });
+            }
+            let state: SessionStateWire = serde_json::from_value(json!({
+                "session_id":"ses_1", "status":"idle", "active_loop":null,
+                "compaction":null,
+            }))
+            .unwrap();
+            let old_loop = "old".to_owned();
+            let request = take_requests(app.apply_session_state(
+                &state,
+                retired.then_some(&old_loop),
+                SessionStateSource::Notification,
+            ))
+            .remove(0);
+            assert_eq!(request.method, "session.context");
+            respond(
+                &mut app,
+                &request,
+                context(None, Some(("auto-finished", status))),
+            );
+            assert!(app.active_view().unwrap().live.is_none());
+            assert_eq!(
+                app.active_view()
+                    .unwrap()
+                    .context
+                    .as_ref()
+                    .unwrap()
+                    .last_result
+                    .as_ref()
+                    .unwrap()
+                    .operation_id,
+                "auto-finished"
+            );
+        }
+    }
+}
+
+#[test]
+fn terminal_event_behind_old_read_is_coalesced_and_cannot_accept_old_snapshot() {
+    let mut app = app();
+    let old = take_requests(state_event(&mut app, Some("auto"))).remove(0);
+    assert!(state_event(&mut app, None).is_empty());
+    assert!(state_event(&mut app, None).is_empty());
+    assert_eq!(app.context_reads.len(), 1);
+    let reads = take_requests(respond(&mut app, &old, context(Some("auto"), None)));
+    assert_eq!(reads.len(), 1);
+    assert_eq!(reads[0].method, "session.context");
+    assert!(app.active_view().unwrap().context.is_none());
+    assert!(app.context_reads.is_empty());
+    assert!(
+        take_requests(respond(
+            &mut app,
+            &reads[0],
+            context(None, Some(("auto", "noop")))
+        ))
+        .is_empty()
+    );
+}
+
+#[test]
+fn context_intent_survives_query_slots_waiting_queue_and_deferred_budget_saturation() {
+    use crate::app::queries::{QueryAdmission, QueryKey, QuerySlots};
+    for saturation in ["slots", "waiting", "deferred"] {
+        let mut app = app();
+        let time = clock(&mut app);
+        let mut blockers = Vec::new();
+        let count = if saturation == "deferred" {
+            MAX_DEFERRED_REQUESTS
+        } else {
+            2
+        };
+        for n in 0..count {
+            let kind = if saturation == "deferred" {
+                RequestKind::WaitTurn(TurnRef {
+                    session_id: format!("other-{n}"),
+                    loop_id: "loop".into(),
+                })
+            } else {
+                RequestKind::StaleRead
+            };
+            let request = take_requests(vec![
+                app.request(kind, |id| OutgoingRequest::session_state(id, "other")),
+            ])
+            .remove(0);
+            if saturation != "deferred" {
+                assert_eq!(
+                    app.queries.request_query(
+                        QueryKey::History {
+                            session_id: format!("other-{n}"),
+                            generation: 0,
+                        },
+                        request.id
+                    ),
+                    QueryAdmission::Admitted
+                );
+            }
+            blockers.push(request);
+        }
+        if saturation == "waiting" {
+            for n in 0..QuerySlots::MAX_WAITING {
+                assert_eq!(
+                    app.queries.request_query(
+                        QueryKey::History {
+                            session_id: format!("queued-{n}"),
+                            generation: 0,
+                        },
+                        RequestId(1000 + n as u64)
+                    ),
+                    QueryAdmission::Busy
+                );
+            }
+        }
+        assert!(state_event(&mut app, None).is_empty());
+        assert!(state_event(&mut app, None).is_empty());
+        assert_eq!(app.context_reads.len(), 1);
+        assert!(
+            app.next_tick().is_none(),
+            "a parked context read has no wake deadline"
+        );
+        time.store(60_000, Ordering::Relaxed);
+        assert!(take_requests(app.update(AppEvent::Tick)).is_empty());
+        if saturation == "waiting" {
+            // Other views close and invalidate their queued reads. The context
+            // intent did not fit QuerySlots, but must survive that refusal.
+            for n in 0..QuerySlots::MAX_WAITING {
+                app.invalidate_query_scope(&queries::QueryScope::Session(format!("queued-{n}")));
+            }
+        }
+        let requests = take_requests(respond_rpc_error(
+            &mut app,
+            &blockers[0],
+            -32603,
+            "finished",
+        ));
+        let reads: Vec<_> = requests
+            .iter()
+            .filter(|r| r.method == "session.context")
+            .collect();
+        assert_eq!(reads.len(), 1, "{saturation}");
+        assert!(app.context_reads.is_empty());
+        respond(&mut app, reads[0], context(None, Some(("auto", "noop"))));
+        time.store(120_000, Ordering::Relaxed);
+        assert!(take_requests(app.update(AppEvent::Tick)).is_empty());
+    }
+}
+
+#[test]
+fn lost_terminal_event_stays_stale_until_context_refresh_or_reported_gap() {
+    for recovery in ["refresh", "gap"] {
+        let mut app = app();
+        let time = clock(&mut app);
+        let request = take_requests(state_event(&mut app, Some("auto"))).remove(0);
+        respond(&mut app, &request, context(Some("auto"), None));
+        time.store(600_000, Ordering::Relaxed);
+        assert!(take_requests(app.update(AppEvent::Tick)).is_empty());
+        assert_eq!(observed_operation(&app), Some("auto"));
+        let requests = if recovery == "refresh" {
+            let initial = take_requests(app.open_context()).remove(0);
+            respond(&mut app, &initial, context(Some("auto"), None));
+            take_requests(app.refresh_context_panel())
+        } else {
+            let event: AgentEventWire = serde_json::from_value(json!({
+                "type": "session_state",
+                "data": {"meta": {"session_id":"ses_1", "dropped_before":1},
+                    "state":{"session_id":"ses_1", "status":"idle", "active_loop":null, "compaction":null}}
+            })).unwrap();
+            take_requests(app.on_agent_event(event))
+        };
+        let request = requests
+            .iter()
+            .find(|r| r.method == "session.context")
+            .unwrap();
+        let mut next = take_requests(respond(
+            &mut app,
+            request,
+            context(None, Some(("auto", "noop"))),
+        ));
+        // A simultaneous terminal event plus gap coalesces a fresh follow-up.
+        if let Some(read) = next.iter_mut().find(|r| r.method == "session.context") {
+            respond(&mut app, read, context(None, Some(("auto", "noop"))));
+        }
+        assert!(!app.active_view().unwrap().is_preparing());
+    }
+}
+
+#[test]
+fn newer_terminal_intent_survives_old_send_failure_without_retrying_failed_reads() {
+    let mut app = app();
+    let time = clock(&mut app);
+    let old = take_requests(state_event(&mut app, Some("auto"))).remove(0);
+    assert!(state_event(&mut app, None).is_empty());
+    // An unknown failure and a timer do not establish queue progress.
+    assert!(
+        take_requests(app.update(AppEvent::RpcSendFailed {
+            id: RequestId(u64::MAX),
+            error: RpcError::Closed,
+        }))
+        .is_empty()
+    );
+    assert!(take_requests(app.update(AppEvent::Tick)).is_empty());
+    let fresh = take_requests(app.update(AppEvent::RpcSendFailed {
+        id: old.id,
+        error: RpcError::Closed,
+    }));
+    assert_eq!(fresh.len(), 1);
+    assert_eq!(fresh[0].method, "session.context");
+    assert!(app.active_view().unwrap().context.is_none());
+    assert!(app.context_reads.is_empty());
+    // Failure consumes this newer read; it must not generate another demand.
+    assert!(
+        take_requests(app.update(AppEvent::RpcSendFailed {
+            id: fresh[0].id,
+            error: RpcError::Closed,
+        }))
+        .is_empty()
+    );
+    time.store(50_000, Ordering::Relaxed);
+    assert!(take_requests(app.update(AppEvent::Tick)).is_empty());
+}
+
+#[test]
+fn retired_manual_read_cannot_keep_a_later_closed_panel_intent_alive() {
+    let mut app = app();
+    let requests = take_requests(app.start_manual_compact());
+    let compact = requests
+        .iter()
+        .find(|r| r.method == "session.compact")
+        .unwrap();
+    let old = requests
+        .iter()
+        .find(|r| r.method == "session.context")
+        .unwrap();
+    assert!(respond_rpc_error(&mut app, compact, -32603, "failed before start").is_empty());
+    assert!(app.active_view().unwrap().manual_compact.is_none());
+    assert!(app.open_context().is_empty());
+    assert!(matches!(
+        app.context_reads.get("ses_1"),
+        Some(ContextQueryOwner::Panel(_))
+    ));
+    app.close_main_detail();
+    assert!(app.context_reads.is_empty());
+    assert!(take_requests(respond(&mut app, old, context(Some("retired"), None))).is_empty());
+    assert!(app.active_view().unwrap().context.is_none());
+}
+
+#[test]
+fn cancelled_operation_terminal_event_clears_exact_intent_from_fresh_result() {
+    let mut app = app();
+    let read = take_requests(state_event(&mut app, Some("auto-cancelled"))).remove(0);
+    respond(&mut app, &read, context(Some("auto-cancelled"), None));
+    let cancel = take_requests(app.update(AppEvent::CancelTurn {
+        session_id: "ses_1".into(),
+    }))
+    .remove(0);
+    let read = take_requests(respond(&mut app, &cancel, json!({"cancelled":true}))).remove(0);
+    respond(&mut app, &read, context(Some("auto-cancelled"), None));
+    assert!(app.compaction_cancelling("ses_1", "auto-cancelled"));
+    let terminal = take_requests(state_event(&mut app, None)).remove(0);
+    let mut snapshot = context(None, Some(("auto-cancelled", "failed")));
+    snapshot["last_result"]["failure_kind"] = json!("cancelled");
+    assert!(take_requests(respond(&mut app, &terminal, snapshot)).is_empty());
+    assert!(!app.compaction_cancelling("ses_1", "auto-cancelled"));
+    assert!(!app.active_view().unwrap().is_preparing());
+    assert_eq!(
+        app.active_view()
+            .unwrap()
+            .context
+            .as_ref()
+            .unwrap()
+            .last_result
+            .as_ref()
+            .unwrap()
+            .failure_kind
+            .as_deref(),
+        Some("cancelled")
+    );
 }

@@ -8,6 +8,16 @@ The current refactor package is **0.3.0**. The E1–E3 measurements below are
 recorded remote-Linux evidence; they do not imply that the new hosted matrix or
 native macOS/Windows execution has already run.
 
+## Current Context Read Scheduling
+
+`session.context` has no recurring timer or foreground/background cadence.
+Existing events, operation responses, authoritative completion, known gaps and
+Context open/F5/Refresh produce one-shot demand through the shared query slots.
+Pending demand resumes on real slot/queue progress, and an active snapshot or
+read error does not schedule another read. This is a scheduling change, not a
+new throughput, RSS or interactive latency measurement. Historical measurements
+and archived verification reports below remain evidence for their named sources.
+
 ## Current Remote F-Review Run
 
 The current remote tree is source commit `9e399d9`, after remediation
@@ -250,12 +260,12 @@ metadata has a separate global 1 MiB bound and is observed only explicitly.
 An extreme-width layout test checks the display-row/capacity bound; a real
 140 KB single-line diff checks raw fragment assembly through the worker.
 
-Context reuses B's query/operation owner. Idle/panel-only closed reads stop;
-actual operation/confirmation deadlines remain bounded at 500 ms foreground /
-2 s background. A retired-read regression checks there is no zero-duration
-timer spin while a slot is occupied and confirmation resumes on completion.
-The Agent harness now honors the application's actual timer deadlines rather
-than starving a quiet transport; no Provider deadline or assertion was relaxed.
+At E3, Context reused B's query/operation owner and its recurring scheduling.
+The retired-read regression checked that occupied slots did not cause timer
+spin and that confirmation resumed on completion. Those historical checks do
+not describe the current one-shot context scheduling above. The E3 Agent harness
+honored the application's actual timer deadlines rather than starving a quiet
+transport; no Provider deadline or assertion was relaxed.
 There is no fresh E3 peak-RSS, allocation benchmark or interactive latency claim.
 
 ## Not run / Remaining

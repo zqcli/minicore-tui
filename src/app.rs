@@ -372,20 +372,13 @@ pub enum ContextQueryOwner {
     Panel(u64),
     Submission(LocalSubmissionId),
     ManualCompact(String),
-    /// Discover independent maintenance even when its notification was lost.
+    /// One observation issued after authoritative turn completion.
     PostTurn(String),
-    /// Observe emergency recovery without changing turn ownership.
+    /// An explicit observation associated with a running turn.
     Turn(String),
     /// A Session operation outlives the panel and the completed turn.
     Operation(String),
     Explicit,
-}
-
-#[derive(Debug, Clone)]
-struct ContextPoll {
-    owner: ContextQueryOwner,
-    due: Instant,
-    cancel_requested: bool,
 }
 
 /// One `session.read` chain step (spec §6.3). `window_start` drops a reused
@@ -670,7 +663,7 @@ pub struct App {
     /// Deferred turn submissions retain their exact draft identity until the
     /// Agent returns a real TurnRef or a preparation failure.
     submissions: HashMap<LocalSubmissionId, Submission>,
-    context_polls: HashMap<SessionId, ContextPoll>,
+    context_reads: HashMap<SessionId, ContextQueryOwner>,
     next_operation_id: u64,
     pub context_supported: bool,
     pub compact_supported: bool,
@@ -893,7 +886,7 @@ impl App {
             retained_results: HashMap::new(),
             retained_result_order: VecDeque::new(),
             submissions: HashMap::new(),
-            context_polls: HashMap::new(),
+            context_reads: HashMap::new(),
             next_operation_id: 0,
             context_supported: true,
             compact_supported: true,
@@ -1036,13 +1029,6 @@ impl App {
                     earliest = Some(earliest.map_or(remaining, |e| e.min(remaining)));
                 }
             }
-        }
-        for (session, poll) in &self.context_polls {
-            if self.context_query_pending(session) {
-                continue;
-            }
-            let remaining = poll.due.saturating_duration_since(now);
-            earliest = Some(earliest.map_or(remaining, |e| e.min(remaining)));
         }
         if self
             .selection_drag
@@ -1298,6 +1284,15 @@ impl App {
         // Admission-failure retries are only re-emitted after a progress
         // signal, never in direct response to another `RpcQueueFull`. That
         // keeps `run_commands` from ping-ponging inside one reducer pass.
+        // Context intents only resume after real request progress, never a
+        // timer, unrelated notification, or another queue-full refusal.
+        let context_progress = match &event {
+            AppEvent::Rpc(RpcEvent::Frame(IncomingFrame::Response(response))) => {
+                self.pending_requests.contains_key(&response.id)
+            }
+            AppEvent::RpcSendFailed { id, .. } => self.pending_requests.contains_key(id),
+            _ => false,
+        };
         let progress_signal = matches!(
             &event,
             AppEvent::Tick
@@ -1403,7 +1398,7 @@ impl App {
                 {
                     self.selection_copied_until = None;
                 }
-                self.poll_contexts()
+                Vec::new()
             }
             AppEvent::Rendered => unreachable!("handled before the match"),
             AppEvent::SetTheme(kind) => {
@@ -1578,7 +1573,7 @@ impl App {
         // A coalesced/queued read waits until the response that freed the slot
         // has been fully handled, so it observes the newest cursor and never
         // overtakes that reducer pass.
-        self.drain_query_followups(&mut commands);
+        self.drain_query_followups(&mut commands, context_progress);
         if self.context_panel().is_some_and(|c| {
             self.sessions.active.as_ref() != Some(&c.session)
                 || self
@@ -1594,10 +1589,9 @@ impl App {
         commands.extend(self.poll_workspace());
         commands.extend(self.poll_changes());
         commands.extend(self.poll_workspace_status());
-        // A newer confirmation can be parked behind a retired context read.
-        // Resume due work when that read actually releases its slot, not only
-        // on a later timer. The poll owner still enforces its real deadline.
-        commands.extend(self.poll_contexts());
+        if context_progress {
+            commands.extend(self.resume_context_reads());
+        }
         // A queued scan page may have missed the slot that freed before its
         // follow-up drained; both chains retry idempotently while they need a
         // page and no read is in flight.
@@ -1697,17 +1691,6 @@ impl App {
             .is_some_and(|saved| saved.session_owner.is_some())
         {
             self.help_return = None;
-        }
-        // A foreground 500ms deadline must not follow its Session into the
-        // background. Start the slower observation interval at this boundary.
-        let background_due = self.instant_now() + Duration::from_secs(2);
-        if let Some(poll) = self
-            .sessions
-            .active
-            .as_ref()
-            .and_then(|id| self.context_polls.get_mut(id))
-        {
-            poll.due = poll.due.max(background_due);
         }
         if let Some(current) = self.sessions.active.take() {
             match self.sessions.known.get_mut(&current) {
@@ -6995,22 +6978,6 @@ impl App {
                 if let Some(view) = self.sessions.known.get_mut(&data.turn.session_id) {
                     view.discard_live_request_usage();
                 }
-                let current = self
-                    .sessions
-                    .known
-                    .get(&data.turn.session_id)
-                    .and_then(|view| view.live.as_ref())
-                    .and_then(|live| live.reference.as_ref())
-                    == Some(&data.turn);
-                if current {
-                    if let Some(command) = self.arm_context_poll(
-                        &data.turn.session_id,
-                        ContextQueryOwner::Turn(data.turn.loop_id.clone()),
-                        false,
-                    ) {
-                        commands.push(command);
-                    }
-                }
                 if let Some(command) = self.request_session_presentation(&data.turn.session_id) {
                     commands.push(command);
                 }
@@ -7105,18 +7072,6 @@ impl App {
             }
             AgentEventWire::TurnFinished { data } => {
                 self.mark_gap(&data.meta);
-                if self
-                    .sessions
-                    .known
-                    .get(&data.turn.session_id)
-                    .is_some_and(|view| Self::wait_targets_current_turn(view, &data.turn))
-                {
-                    self.arm_context_poll(
-                        &data.turn.session_id,
-                        ContextQueryOwner::PostTurn(data.turn.loop_id.clone()),
-                        false,
-                    );
-                }
             }
             AgentEventWire::Unknown => {}
         }
@@ -7126,6 +7081,7 @@ impl App {
             }
         }
         if let Some(session_id) = gap_session {
+            commands.extend(self.queue_context_read(&session_id, ContextQueryOwner::Explicit));
             commands.extend(self.start_gap_reconcile(&session_id));
         }
         commands
