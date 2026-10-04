@@ -6991,6 +6991,7 @@ impl App {
                     &data.model,
                     data.reasoning,
                 );
+                commands.extend(self.refresh_prepared_context(&data.turn, data.request_index));
                 if let Some(command) = self.request_session_presentation(&data.turn.session_id) {
                     commands.push(command);
                 }

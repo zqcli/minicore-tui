@@ -1054,3 +1054,237 @@ fn cancelled_operation_terminal_event_clears_exact_intent_from_fresh_result() {
         Some("cancelled")
     );
 }
+
+fn automatic_preparation_context(current: bool, outcome: &str) -> Value {
+    let mut snapshot = context(None, None);
+    let observation = json!({"loop_id":"loop-preparing", "request_index":0,
+        "outcome":outcome});
+    snapshot["automatic"] = if current {
+        json!({"current":observation,"last":null})
+    } else {
+        json!({"current":null,"last":observation})
+    };
+    snapshot
+}
+
+fn automatic_preparation_app() -> App {
+    let mut app = app();
+    let view = app.sessions.known.get_mut("ses_1").unwrap();
+    let mut live = LiveLoop::new(LocalSubmissionId(91), String::new());
+    live.reference = Some(TurnRef {
+        session_id: "ses_1".into(),
+        loop_id: "loop-preparing".into(),
+    });
+    view.live = Some(live);
+    app
+}
+
+fn automatic_boundary_event(app: &mut App, kind: &str, loop_id: &str) -> Vec<AppCommand> {
+    let meta = json!({"session_id":"ses_1", "loop_id":loop_id, "dropped_before":0});
+    let event = if kind == "request_started" {
+        json!({"type":"request_started", "data": {
+            "turn":{"session_id":"ses_1", "loop_id":loop_id},
+            "request_index":0, "config_revision":0, "model":"deep", "reasoning":"high",
+            "meta":meta
+        }})
+    } else {
+        json!({"type":"session_state", "data": {
+            "state":{"session_id":"ses_1", "status":"running", "active_loop":{
+                "loop_id":loop_id, "status":kind, "request_index":0,
+                "config_revision":0, "model":"deep", "pending_interaction":null
+            }}, "meta":meta
+        }})
+    };
+    app.on_agent_event(serde_json::from_value(event).unwrap())
+}
+
+fn only_context_requests(commands: Vec<AppCommand>) -> Vec<OutgoingRequest> {
+    take_requests(commands)
+        .into_iter()
+        .filter(|request| request.method == "session.context")
+        .collect()
+}
+
+#[test]
+fn automatic_preparation_settles_from_model_start_without_polling_or_operation_ownership() {
+    for event in ["request_started", "running_model"] {
+        let mut app = automatic_preparation_app();
+        let time = clock(&mut app);
+        let read = only_context_requests(app.open_context()).remove(0);
+        respond(
+            &mut app,
+            &read,
+            automatic_preparation_context(true, "running"),
+        );
+        assert!(app.active_view().unwrap().is_preparing());
+        assert!(app.context_cancel_target().is_none());
+        let read =
+            only_context_requests(automatic_boundary_event(&mut app, event, "loop-preparing"))
+                .remove(0);
+        assert!(
+            only_context_requests(respond(
+                &mut app,
+                &read,
+                automatic_preparation_context(false, "compacted"),
+            ))
+            .is_empty()
+        );
+        assert!(!app.active_view().unwrap().is_preparing());
+        assert!(app.active_view().unwrap().manual_compact.is_none());
+        assert!(
+            app.active_view()
+                .unwrap()
+                .compaction_cancel_requested
+                .is_none()
+        );
+        assert!(app.context_reads.is_empty());
+        time.store(50_000, Ordering::Relaxed);
+        assert!(only_context_requests(app.update(AppEvent::Tick)).is_empty());
+    }
+}
+
+#[test]
+fn automatic_preparation_old_snapshot_cannot_restore_preparing_after_model_start() {
+    for event in ["request_started", "running_model"] {
+        for background in [false, true] {
+            let mut app = automatic_preparation_app();
+            let old = only_context_requests(app.open_context()).remove(0);
+            let old_generation = app.active_view().unwrap().context_query_generation;
+            for _ in 0..3 {
+                assert!(
+                    only_context_requests(automatic_boundary_event(
+                        &mut app,
+                        event,
+                        "loop-preparing",
+                    ))
+                    .is_empty()
+                );
+            }
+            assert!(app.active_view().unwrap().context_query_generation > old_generation);
+            assert_eq!(app.context_reads.len(), 1);
+            app.close_main_detail();
+            if background {
+                app.set_active_session(None);
+            }
+            let fresh = only_context_requests(respond(
+                &mut app,
+                &old,
+                automatic_preparation_context(true, "running"),
+            ));
+            assert_eq!(fresh.len(), 1);
+            assert!(app.sessions.known["ses_1"].context.is_none());
+            assert!(
+                only_context_requests(respond(
+                    &mut app,
+                    &fresh[0],
+                    automatic_preparation_context(false, "compacted"),
+                ))
+                .is_empty()
+            );
+            assert!(!app.sessions.known["ses_1"].is_preparing());
+            assert!(app.context_reads.is_empty());
+        }
+    }
+}
+
+#[test]
+fn automatic_preparation_refresh_is_conditional_and_respects_active_loop_and_stage() {
+    for event in ["request_started", "running_model"] {
+        let mut app = automatic_preparation_app();
+        assert!(
+            only_context_requests(automatic_boundary_event(&mut app, event, "loop-preparing",))
+                .is_empty(),
+            "ordinary model-start events do not discover context"
+        );
+    }
+    for event in [
+        "starting",
+        "running_tools",
+        "request_started",
+        "running_model",
+    ] {
+        let mut app = automatic_preparation_app();
+        let read = only_context_requests(app.open_context()).remove(0);
+        respond(
+            &mut app,
+            &read,
+            automatic_preparation_context(true, "running"),
+        );
+        let generation = app.active_view().unwrap().context_query_generation;
+        let loop_id = if matches!(event, "starting" | "running_tools") {
+            "loop-preparing"
+        } else {
+            "different-loop"
+        };
+        assert!(
+            only_context_requests(automatic_boundary_event(&mut app, event, loop_id,)).is_empty()
+        );
+        assert_eq!(
+            app.active_view().unwrap().context_query_generation,
+            generation
+        );
+    }
+    for event in ["request_started", "running_model"] {
+        let mut app = automatic_preparation_app();
+        let old = only_context_requests(app.open_context()).remove(0);
+        app.close_main_detail(); // Retires this panel owner even if its read is in flight.
+        let generation = app.active_view().unwrap().context_query_generation;
+        assert!(
+            only_context_requests(automatic_boundary_event(&mut app, event, "loop-preparing",))
+                .is_empty(),
+            "an already-retired read is not capturing demand"
+        );
+        assert_eq!(
+            app.active_view().unwrap().context_query_generation,
+            generation
+        );
+        assert!(
+            only_context_requests(respond(
+                &mut app,
+                &old,
+                automatic_preparation_context(true, "running"),
+            ))
+            .is_empty()
+        );
+        assert!(app.active_view().unwrap().context.is_none());
+    }
+}
+
+#[test]
+fn automatic_preparation_failure_and_cancel_settle_on_terminal_state() {
+    for outcome in ["failed", "cancelled"] {
+        for status in ["idle", "blocked"] {
+            let mut app = automatic_preparation_app();
+            let read = only_context_requests(app.open_context()).remove(0);
+            respond(
+                &mut app,
+                &read,
+                automatic_preparation_context(true, "running"),
+            );
+            let state = serde_json::from_value(json!({"session_id":"ses_1", "status":status,
+                "active_loop":null, "compaction":null}))
+            .unwrap();
+            let read = only_context_requests(app.apply_session_state(
+                &state,
+                Some(&"loop-preparing".into()),
+                SessionStateSource::Notification,
+            ))
+            .remove(0);
+            assert!(
+                only_context_requests(respond(
+                    &mut app,
+                    &read,
+                    automatic_preparation_context(false, outcome),
+                ))
+                .is_empty()
+            );
+            assert!(!app.active_view().unwrap().is_preparing());
+            assert!(
+                app.active_view()
+                    .unwrap()
+                    .compaction_cancel_requested
+                    .is_none()
+            );
+        }
+    }
+}

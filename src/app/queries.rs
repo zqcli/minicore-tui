@@ -467,6 +467,58 @@ impl App {
         })
     }
 
+    /// Model-start events follow completed preparation. Only refresh context
+    /// that is cached as preparing or could still arrive from an older read.
+    pub(super) fn refresh_prepared_context(
+        &mut self,
+        turn: &TurnRef,
+        request_index: u32,
+    ) -> Option<AppCommand> {
+        let view = self.sessions.known.get(&turn.session_id)?;
+        if Self::is_prior_loop(view, &turn.loop_id)
+            || view.live.as_ref().and_then(|live| live.reference.as_ref()) != Some(turn)
+            || view.last_request.as_ref().is_some_and(|request| {
+                request.loop_id.as_deref() == Some(turn.loop_id.as_str())
+                    && request.request_index > request_index
+            })
+        {
+            return None;
+        }
+        let preparing = view.context.as_ref().is_some_and(|context| {
+            context.automatic.current.as_ref().is_some_and(|current| {
+                current.loop_id.as_deref() == Some(turn.loop_id.as_str())
+                    && current
+                        .request_index
+                        .is_none_or(|index| index <= request_index)
+            })
+        });
+        // A closed panel's admitted read retains its query slot, but its
+        // response is already fenced and cannot restore preparation.
+        let current_owner = |owner: &ContextQueryOwner| {
+            !matches!(owner, ContextQueryOwner::Panel(generation)
+                if self.context_panel().is_none_or(|panel|
+                    panel.session != turn.session_id || panel.generation != *generation))
+        };
+        let capturing = self
+            .context_reads
+            .get(&turn.session_id)
+            .is_some_and(current_owner)
+            || self.pending_requests.values().any(|request| {
+                matches!(request, RequestKind::SessionContext { session_id, generation, owner }
+                    if session_id == &turn.session_id
+                        && *generation == view.context_query_generation && current_owner(owner))
+            });
+        if !preparing && !capturing {
+            return None;
+        }
+        // The new generation fences snapshots captured during utility work,
+        // including a read whose response arrives after RequestStarted.
+        self.queue_context_read(
+            &turn.session_id,
+            ContextQueryOwner::Turn(turn.loop_id.clone()),
+        )
+    }
+
     /// Retain one finite read intent per known session. A newer trigger makes
     /// an older snapshot stale, even when both refer to the same operation.
     pub(super) fn queue_context_read(

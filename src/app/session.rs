@@ -2429,7 +2429,21 @@ impl App {
         if show_unsupported {
             self.sticky_notice(NoticeLevel::Warning, UNSUPPORTED_INTERACTION_NOTICE);
         }
-        operation_command.into_iter().collect()
+        let mut commands: Vec<_> = operation_command.into_iter().collect();
+        if from_event {
+            if let Some(loop_state) = state.active_loop.as_ref().filter(|loop_state| {
+                loop_state.status == crate::protocol::LoopStatusWire::RunningModel
+            }) {
+                commands.extend(self.refresh_prepared_context(
+                    &TurnRef {
+                        session_id: state.session_id.clone(),
+                        loop_id: loop_state.loop_id.clone(),
+                    },
+                    loop_state.request_index,
+                ));
+            }
+        }
+        commands
     }
 
     pub(super) fn on_update_session_response(
