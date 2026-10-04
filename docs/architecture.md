@@ -369,10 +369,14 @@ subprocess, repository write, watcher or renderer I/O.
 coverage, estimated budgets, automatic preparation, manual results and separate
 utility usage. No summary body is displayed or attached. Manual admission,
 process-unique operation IDs, exact cancellation and unknown-write confirmation
-reuse B. Compacted/noop and main-view `/refresh` do not re-pin history.
+reuse B. A newly successful Compacted result and conversation `/refresh` re-pin
+the display-history chain, retaining stronger owed Gap/PostWait reconciliation.
+Noop does not refresh summary history; detail-view `/refresh` targets that view.
 Context reads are one-shot demands from panel open/explicit refresh, relevant
 session-state events, authoritative completion, compact/cancel responses,
-rejected submissions and known gaps. No elapsed-time deadline, Tick or active
+rejected submissions and known gaps. Accepted RequestStarted / RunningModel
+events refresh only matching cached automatic preparation or valid in-flight
+context demand; older snapshots are fenced by the new context generation. No elapsed-time deadline, Tick or active
 response renews a context read. Pending demand coalesces through the existing
 query slots; a trigger received during an older read keeps a fresh follow-up,
 admitted on actual slot/queue progress. Retired reads retain their slots until

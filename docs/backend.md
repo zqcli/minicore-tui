@@ -13,9 +13,9 @@ through `--agent-bin`; its config and data directory belong to the Agent.
 
 | Component | Repository | Revision | Package |
 |---|---|---|---|
-| TUI | `zqcli/minicore-tui` | See [closeout source provenance](verification/v03-closeout/README.md) | `0.3.0` |
-| Agent | `zqcli/minicore-agent` | `d81728b13db68c76b05b4c8cb87161770769947f` | `0.6.0` |
-| Runtime | `zqcli/minicore-runtime` | `9e230617d36130e7ec77aba122b45f1347ac53f2` | `0.6.0` |
+| TUI | `zqcli/minicore-tui` | Current checkout; historical [closeout provenance](verification/v03-closeout/README.md) | `0.3.0` |
+| Agent | `zqcli/minicore-agent` | `eed44e466a009df41a596436efcc2877e9551b4c` | `0.6.2` |
+| Runtime | `zqcli/minicore-runtime` | `666d5a15ac08c614ce75dd90337f95f10ec29f80` | `0.6.1` |
 
 The Agent and Runtime revisions are fixed inputs for the 0.3.0 release line;
 the TUI retains the phase-F lifecycle, ownership, bounds, privacy, shutdown,
@@ -58,22 +58,30 @@ locked Runtime revision before publication.
 Stage B1 (commit `afd2894`) removed the package-minor gate. Fixtures and reducer
 tests cover acceptance and rejection of the required Protocol v1 capabilities;
 the original 0.5.0 captures below remain historical compatibility fixtures.
-The 0.6.0 pair is checked separately through exact-source real-Agent loopback
-E2E and lifecycle regressions; see [closeout verification](verification/v03-closeout/README.md).
+The current pair requires exact-source real-Agent loopback E2E and lifecycle
+regressions. The earlier 0.6.0 pair's results remain historical in
+[closeout verification](verification/v03-closeout/README.md).
 The earlier 830-test / 34-E2E F-review counts and binary hashes are retained in
 [their original report](verification/v03-f/README.md), not current acceptance.
 
-## Compaction and turn ownership (0.6.0)
+## Compaction and turn ownership (Agent 0.6.2 / Runtime 0.6.1)
 
-Ordinary turns remain append-only and soft-threshold crossings never start a
-summary call. Only a confirmed safe pre-output upstream context-capacity
-rejection may compact and retry the rejected logical request once, within the
-active turn's cancellation/deadline and without redispatching completed tools.
+Durable turn history remains append-only. With automatic compaction enabled,
+request preparation may summarize settled context at the configured soft
+threshold before the first request or between complete assistant/tool exchanges.
+New User/Steer text and the newest unread tool exchange remain verbatim.
+`automatic.current` / `last` describe this bounded, turn-owned preparation by
+loop and request index; current is cleared before model-start or terminal events.
+Separately, a confirmed safe pre-output upstream context-capacity rejection may
+compact and retry the rejected logical request once, within the active turn's
+cancellation/deadline and without redispatching completed tools.
 Successful completed and persisted turns may reserve independent post-turn
 maintenance; `turn.wait` does not wait for that summary. Manual `/compact` is
 idle-only. The TUI reads `current_operation` / `last_result` through bounded,
 one-shot Session context queries triggered by existing events, operation
 responses, authoritative turn completion, known gaps and Context open/refresh.
+Existing RequestStarted / RunningModel events also refresh a matching cached
+or in-flight preparation observation, fencing older snapshots by generation.
 There is no periodic context polling or new RPC design. It cancels independent
 operations using their exact
 `session.compact.cancel` identity, not a completed `turn.cancel`. It adds no

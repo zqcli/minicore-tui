@@ -33,7 +33,7 @@ dependencies. Debug information and assertions remain enabled, but optimization
 can affect stepping and local-variable visibility. Terminal output batches small
 ANSI writes through a 64 KiB buffer; render rates are unchanged. The Release
 profile is unchanged. The current release line is **0.3.0**, paired with Agent
-**0.6.0** and Runtime **0.6.0** over Protocol v1; the fixed revisions are
+**0.6.2** and Runtime **0.6.1** over Protocol v1; the fixed revisions are
 listed in [the backend contract](docs/backend.md). The older 0.2.x release
 notes remain historical and are not evidence for this release.
 
@@ -122,11 +122,12 @@ best-effort live display data and may be dropped. `turn.wait`, `session.state`,
 and the paged `session.read` path are authoritative; `session.history` remains a
 compatibility/diagnostic method and is not the application history path.
 
-Ordinary turns remain append-only and do not summarize on soft-threshold
-crossings. After successful persistence, the Agent may run an independent
-post-turn compaction operation; `/compact` is idle-only. The TUI observes the
-Agent's operation state and cancels the exact operation, never runs summary
-policy or retries a prompt itself. Unsent steering text remains paused after
+Durable turn history remains append-only. The Agent may summarize settled
+context before the first request or between completed assistant/tool exchanges,
+and may run independent post-turn compaction after successful persistence.
+`/compact` is idle-only. Request-boundary preparation belongs to the active turn;
+independent compaction has its own exact cancellation identity. The TUI observes
+these states and never runs summary policy or retries a prompt itself. Unsent steering text remains paused after
 a turn ends until explicitly retrieved into the composer.
 
 Tools run automatically under the Agent. Bash is not sandboxed. The TUI supports
@@ -196,10 +197,10 @@ matrix. `persisted` acknowledges appending the process's durable items, not
 transaction/fsync/crash durability. A failed append blocks the Session while
 retaining its in-process completion.
 
-- Agent 0.6.0 commit `d81728b13db68c76b05b4c8cb87161770769947f`;
-- Runtime 0.6.0 commit `9e230617d36130e7ec77aba122b45f1347ac53f2`;
-- TUI 0.3.0 closeout source and verification provenance are recorded in
-  [the closeout report](docs/verification/v03-closeout/README.md);
+- Agent 0.6.2 commit `eed44e466a009df41a596436efcc2877e9551b4c`;
+- Runtime 0.6.1 commit `666d5a15ac08c614ce75dd90337f95f10ec29f80`;
+- TUI 0.3.0 uses the current checkout and fixed-backend CI pins; historical
+  closeout provenance remains in [its report](docs/verification/v03-closeout/README.md);
 - RPC Protocol v1 with the required capability set;
 - NDJSON over stdio, with one TUI writer, one stdout reader, one stderr reader,
   bounded frames (up to 32 MiB), request IDs, response/event interleaving, and no event replay.
@@ -266,7 +267,9 @@ before/after values describe full requests. The latest authoritative
 `session.context.last_result` takes precedence over a cached manual result.
 Context reads are one-shot, triggered by relevant events, operation/completion
 responses, known gaps and opening or refreshing the Context view. There is no
-periodic context polling. Recovery details are a latest-read snapshot rather
+periodic context polling. Existing model-start events refresh cached or in-flight
+automatic-preparation observations with a newer generation; stale snapshots
+cannot restore the Preparing state. Recovery details are a latest-read snapshot rather
 than a live status; use F5/Refresh in Context to update them. If a final best-effort
 compaction event is lost and the session stays silent, the next trigger or
 explicit refresh is needed to discover the result.

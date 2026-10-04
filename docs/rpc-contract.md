@@ -9,15 +9,15 @@ pinned Agent contract and updating the local DTOs and fixtures together.
 
 | Item | Value |
 |---|---|
-| TUI | `0.3.0`; exact-source evidence in [closeout verification](verification/v03-closeout/README.md) |
+| TUI | `0.3.0`; current checkout, with historical [closeout evidence](verification/v03-closeout/README.md) |
 | Agent repository | `https://github.com/zqcli/minicore-agent` |
-| Agent commit | `d81728b13db68c76b05b4c8cb87161770769947f` (`0.6.0`) |
-| Runtime commit | `9e230617d36130e7ec77aba122b45f1347ac53f2` (`0.6.0`) |
+| Agent commit | `eed44e466a009df41a596436efcc2877e9551b4c` (`0.6.2`) |
+| Runtime commit | `666d5a15ac08c614ce75dd90337f95f10ec29f80` (`0.6.1`) |
 | RPC protocol | `Protocol v1` |
 
 These values are the compatibility baseline, not a claim that an arbitrary
 Agent build is compatible. Historical fixture and verification pins retain
-their original provenance; they are not silently relabeled as 0.6.0 captures.
+their original provenance; they are not silently relabeled as current captures.
 
 ## Transport
 
@@ -147,14 +147,19 @@ It also requests one fresh `session.context` read after authoritative completion
 Successful persisted turns may reserve an independent post-turn
 compaction operation before their completion is published; `turn.wait` does not
 wait for its summary model. `current_operation`/`last_result` are the operation
-read-back authority, and `automatic` remains a mandatory compatibility shell.
+read-back authority. `automatic.current` / `last` describe bounded request-boundary
+preparation by loop and request index, not independent operations.
 Context reads are one-shot: opening Context, F5/Refresh in that view, relevant
 `session.state` notifications (including idle/blocked with no active loop and no
 compaction), authoritative turn completion, compact/cancel responses, rejected
 submissions and known event gaps can request a fresh snapshot. They share the
 existing query slots and coalesce pending per-session demand. A newer trigger
 received during an older read retains a fresh follow-up; slot/queue progress
-admits unsent demand without a timer. Active snapshots, success, read errors and
+admits unsent demand without a timer. Accepted RequestStarted or RunningModel
+state events refresh only a matching cached automatic preparation or a still-valid
+current-generation context read that could return one. Starting/RunningTools,
+retired loops and closed-panel-only reads do not arm this refresh. The newer
+generation prevents a late pre-settlement snapshot from restoring Preparing. Active snapshots, success, read errors and
 stale/mismatched responses do not generate another read. There is no periodic
 `session.context` polling for foreground or background sessions, open panels,
 running turns or operations. Exact-operation cancellation ownership survives
@@ -164,8 +169,12 @@ only, without clearing another operation. Manual `/compact` remains idle-only an
 uses `session.compact.cancel` with the exact operation ID (including reserved
 `auto-` IDs), never a completed `turn.cancel`.
 
-Ordinary requests do not summarize on soft-threshold crossings. Confirmed safe,
-pre-output upstream context-capacity rejection may compact and retry the rejected
+With automatic compaction enabled, preparation can summarize settled context at
+the configured soft threshold before the first request or between completed
+assistant/tool exchanges. It preserves current User/Steer text and the newest
+unread tool exchange, and shares the active turn's cancellation/deadline.
+Confirmed safe, pre-output upstream context-capacity rejection may separately
+compact and retry the rejected
 logical model request once within the still-active turn, sharing its cancellation
 and deadline without redispatching completed tools;
 its `recovery` observation is only a latest-read snapshot in Context, with F5
