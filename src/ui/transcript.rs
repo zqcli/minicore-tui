@@ -400,18 +400,17 @@ fn prepare_conversation_inner(
     // so the frame shifts live rows by one less when it is dropped.
     let live_skip =
         usize::from(durable_last_row_blank && live.first().is_some_and(layout::line_is_blank));
-    // While the busy status row is visible, exactly one clear transparent
-    // blank must separate the last *frame* row (which may be the last durable
-    // row when the live tail is empty) from it. Sections that already end with
-    // a transparent blank must not get a second one; this row belongs to no
-    // section, so ranges/copy/hits exclude it consistently.
+    // Every conversation tail has one clear transparent separator, whether
+    // the dock is idle or showing status/notices. This is independent of
+    // transient feedback so cached rows stay valid when a notice expires.
+    // Reuse a section's trailing blank; exclude this row from copy/hit ranges.
     let last_frame_blank = match (live.last(), durable_rows, header.last()) {
         (Some(line), ..) => layout::line_is_blank(line),
         (None, rows, _) if rows > 0 => durable_last_row_blank,
         (None, _, Some(line)) => layout::line_is_blank(line),
         (None, _, None) => true,
     };
-    if layout::busy(app) && !last_frame_blank {
+    if !last_frame_blank {
         live.push(Line::default());
         live_links.push(Vec::new());
     }

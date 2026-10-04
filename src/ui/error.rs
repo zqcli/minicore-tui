@@ -12,22 +12,23 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::{Notice, NoticeLevel};
 use crate::theme::Theme;
-use crate::ui::layout;
+use crate::ui::{feedback, layout};
 
 pub fn render_notice(frame: &mut Frame, area: Rect, theme: &Theme, notice: &Notice) {
-    let fg = match notice.level {
-        NoticeLevel::Error => theme.error,
-        NoticeLevel::Warning => theme.warning,
-        NoticeLevel::Info => theme.dim,
+    let style = match notice.level {
+        NoticeLevel::Error => Style::new().fg(theme.error),
+        NoticeLevel::Warning => Style::new().fg(theme.warning),
+        NoticeLevel::Info => feedback::neutral_style(theme),
     };
-    let prefix = if notice.sticky { "⚠ " } else { "" };
-    let raw = format!("{prefix}{}", notice.text);
-    let text = crate::safe_text::safe_display(&raw).into_owned();
-    let line = Line::styled(
-        layout::truncate(&text, area.width as usize),
-        Style::new().fg(fg),
+    feedback::render_row(
+        frame,
+        area,
+        notice
+            .sticky
+            .then(|| ratatui::text::Span::styled("⚠ ", style)),
+        &notice.text,
+        style,
     );
-    frame.render_widget(Paragraph::new(line), area);
 }
 
 pub struct FatalResultState<'a> {

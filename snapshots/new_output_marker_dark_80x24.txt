@@ -13,10 +13,10 @@
  ▎ continue                                                                    │
  ▎ time pending                                                                │
  ▎                                                                             │
-                                                                               │
-  New output                                                                   ┃
+                                                                               ┃
                                  ↓ new output                                  ┃
  ⠋ Working
+
  ▎
  ▎
  ▎

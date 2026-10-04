@@ -30,9 +30,9 @@
 
 
 
-
  ⠋ Running read…
  Saved · applies at next model request (rev 2)
+
  ▎
  ▎
  ▎

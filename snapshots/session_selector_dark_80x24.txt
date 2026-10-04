@@ -5,8 +5,8 @@
 
  Open a session — /new, Ctrl+R, or F1 for help
 
-
  Showing all workspaces
+
  ┌───────────────────────────────────────────────────────────────────────────┐
  │Select session — all workspaces                                            │
  │>                                                                          │

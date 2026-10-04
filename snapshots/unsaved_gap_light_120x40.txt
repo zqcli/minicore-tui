@@ -31,8 +31,8 @@
 
 
 
-
  ⠋ Blocked · persistence · completed · persistence failed
+
  ▎
  ▎Session blocked
  ▎

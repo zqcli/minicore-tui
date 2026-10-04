@@ -94,16 +94,17 @@ pub fn rows(app: &App) -> Vec<String> {
         "  history tail excludes summary".into(),
         String::new(),
         format!(
-            "当前压缩观察: {}",
-            x.current_operation
-                .as_ref()
-                .map_or("未观察到活跃操作".into(), |o| format!(
-                    "{} {:?} covered:{} retained:{}",
+            "Current compaction: {}",
+            x.current_operation.as_ref().map_or(
+                "no active operation observed".into(),
+                |o| format!(
+                    "{} {} covered:{} retained:{}",
                     safe(&o.operation_id),
-                    o.phase,
+                    crate::ui::status::compaction_phase_label(o.phase),
                     o.covered_item_count,
                     o.retained_item_count
-                ))
+                )
+            )
         ),
     ];
     let result = x

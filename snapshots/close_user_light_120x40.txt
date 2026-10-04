@@ -30,9 +30,9 @@
 
 
 
-
  ⠋ Running read…
  Session ses_1 has active or unsaved/blocked state. Type '/close confirm' to proceed.
+
  ▎
  ▎
  ▎

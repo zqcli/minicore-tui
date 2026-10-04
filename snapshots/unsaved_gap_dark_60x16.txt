@@ -1,4 +1,3 @@
-
   ⚠ UNSAVED TURN
   This turn finished, but the Agent did not confirm savin
   g it.
@@ -9,6 +8,7 @@
   Some live output may be missing.
 
  ⠋ Blocked · persistence · completed · persistence failed
+
  ▎
  ▎Session blocked
  ▎

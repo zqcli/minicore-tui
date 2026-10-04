@@ -17,6 +17,7 @@ pub mod context;
 pub mod editor_layout;
 pub mod error;
 pub mod export;
+mod feedback;
 pub mod footer;
 pub mod header;
 pub mod help;
@@ -50,6 +51,8 @@ use crate::theme::Theme;
 
 #[cfg(test)]
 mod component_tests;
+#[cfg(test)]
+mod feedback_tests;
 #[cfg(test)]
 mod render_cache_tests;
 #[cfg(test)]

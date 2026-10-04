@@ -7,7 +7,7 @@
    ≈history tail tokens:0 bytes:0 items:0                  │
    history tail excludes summary                           │
                                                            │
- 当 前 压 缩 观 察 : 未 观 察 到 活 跃 操 作                             │
+ Current compaction: no active operation observed          │
  最 近 压 缩 结 果                                               │
  ▎
  ▎preserved draft

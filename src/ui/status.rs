@@ -1,15 +1,17 @@
 //! The busy status row (development spec 15.6): a 10-frame spinner plus a
-//! Working / `Running <tool>` / Cancelling label, only rendered while busy.
+//! Working / tool / compaction phase / Cancelling label, only rendered while busy.
 
 use ratatui::Frame;
 use ratatui::style::Style;
-use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::text::Span;
 
 use crate::app::App;
-use crate::protocol::{CancelReasonWire, LoopOutcomeWire, TurnPersistenceWire, TurnResultViewWire};
+use crate::protocol::{
+    CancelReasonWire, CompactionPhaseWire, LoopOutcomeWire, TurnPersistenceWire, TurnResultViewWire,
+};
 use crate::state::tool::ToolStatus;
 use crate::theme::Theme;
+use crate::ui::feedback;
 
 /// Spinner frames advance with `App.frame_count` via `AppEvent::Tick`.
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -66,14 +68,27 @@ pub(crate) fn result_color(result: &TurnResultViewWire, theme: &Theme) -> ratatu
 
 pub fn render(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, theme: &Theme) {
     let frame_index = (app.frame_count % SPINNER.len() as u64) as usize;
-    let line = Line::from(vec![
-        Span::styled(SPINNER[frame_index], Style::new().fg(theme.accent)),
-        Span::styled(
-            format!(" {}", busy_label(app)),
-            Style::new().fg(theme.muted),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(line), area);
+    feedback::render_row(
+        frame,
+        area,
+        Some(Span::styled(
+            format!("{} ", SPINNER[frame_index]),
+            Style::new().fg(theme.accent),
+        )),
+        &busy_label(app),
+        feedback::neutral_style(theme),
+    );
+}
+
+/// English display names shared by the primary status and context details.
+/// Only observed wire phases use these names; admission has no guessed phase.
+pub(crate) fn compaction_phase_label(phase: CompactionPhaseWire) -> &'static str {
+    match phase {
+        CompactionPhaseWire::Preparing => "Preparing",
+        CompactionPhaseWire::Summarizing => "Summarizing",
+        CompactionPhaseWire::Merging => "Merging",
+        CompactionPhaseWire::Committing => "Committing",
+    }
 }
 
 fn busy_label(app: &App) -> String {
@@ -118,9 +133,9 @@ fn busy_label(app: &App) -> String {
                 compact.operation_id == operation.operation_id && compact.cancel_requested
             });
         let label = if cancelling {
-            "Cancelling compaction"
+            "Cancelling compaction".to_owned()
         } else {
-            "Compacting"
+            format!("Compacting · {}", compaction_phase_label(operation.phase))
         };
         return if view.live.as_ref().is_none_or(|live| live.waiting) && view.can_show_last_result()
         {
@@ -246,12 +261,99 @@ mod tests {
     use crate::theme::ThemeKind;
 
     #[test]
+    fn observed_phases_use_context_first_then_state_and_keep_cancel_priority() {
+        for (phase, label) in [
+            (CompactionPhaseWire::Preparing, "Preparing"),
+            (CompactionPhaseWire::Summarizing, "Summarizing"),
+            (CompactionPhaseWire::Merging, "Merging"),
+            (CompactionPhaseWire::Committing, "Committing"),
+        ] {
+            let mut app = crate::ui::feedback_tests::compacting(ThemeKind::Dark, phase);
+            assert_eq!(busy_label(&app), format!("Compacting · {label}"));
+            let view = app.sessions.known.get_mut("ses_1").unwrap();
+            view.context = Some(
+                serde_json::from_value(serde_json::json!({
+                    "session_id": "ses_1",
+                    "current_operation": {"operation_id": "observed", "phase": phase,
+                        "covered_item_count": 2, "retained_item_count": 0},
+                    "coverage": {"covered_loop_count": 1, "covered_item_count": 2,
+                        "retained_item_count": 0},
+                    "budget": {}, "automatic": {"current": null, "last": null}
+                }))
+                .unwrap(),
+            );
+            view.state
+                .as_mut()
+                .unwrap()
+                .compaction
+                .as_mut()
+                .unwrap()
+                .phase = CompactionPhaseWire::Preparing;
+            assert_eq!(busy_label(&app), format!("Compacting · {label}"));
+            app.open_context();
+            assert!(
+                crate::ui::context::rows(&app)
+                    .iter()
+                    .any(|row| row.contains(&format!("Current compaction: observed {label}")))
+            );
+            app.sessions.known.get_mut("ses_1").unwrap().manual_compact =
+                Some(crate::state::session::ManualCompactState {
+                    operation_id: "observed".into(),
+                    cancel_requested: true,
+                    result: None,
+                    state_refresh_confirmed: false,
+                    context_refresh_confirmed: false,
+                });
+            assert_eq!(busy_label(&app), "Cancelling compaction");
+        }
+        let mut app = crate::ui::testapp::live_turn(ThemeKind::Dark);
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        view.state.as_mut().unwrap().compaction = Some(crate::protocol::CompactionProgressWire {
+            operation_id: "observed".into(),
+            phase: CompactionPhaseWire::Committing,
+            covered_item_count: 2,
+            retained_item_count: 0,
+        });
+        view.live.as_mut().unwrap().cancel_requested = true;
+        assert_eq!(busy_label(&app), "Cancelling");
+    }
+
+    #[test]
+    fn unobserved_manual_operation_does_not_guess_a_phase() {
+        let mut app = crate::ui::testapp::open_empty(ThemeKind::Dark, "ses_1", None, "high");
+        app.sessions.known.get_mut("ses_1").unwrap().manual_compact =
+            Some(crate::state::session::ManualCompactState {
+                operation_id: "pending".into(),
+                cancel_requested: false,
+                result: None,
+                state_refresh_confirmed: false,
+                context_refresh_confirmed: false,
+            });
+        assert_eq!(busy_label(&app), "Compacting");
+        app.sessions
+            .known
+            .get_mut("ses_1")
+            .unwrap()
+            .manual_compact
+            .as_mut()
+            .unwrap()
+            .cancel_requested = true;
+        assert_eq!(busy_label(&app), "Cancelling compaction");
+        assert_eq!(
+            busy_label(&crate::ui::testapp::fresh(ThemeKind::Dark)),
+            "Working"
+        );
+    }
+
+    #[test]
     fn recovery_remains_an_active_turn_and_post_turn_compaction_keeps_completion_visible() {
         let mut app = crate::ui::testapp::live_turn(ThemeKind::Dark);
         let value = serde_json::json!({
             "session_id": "ses_1", "coverage": {"covered_loop_count": 0,
                 "covered_item_count": 0, "retained_item_count": 0},
             "budget": {}, "automatic": {"current": null, "last": null},
+            "current_operation": {"operation_id": "recover-compact", "phase": "summarizing",
+                "covered_item_count": 2, "retained_item_count": 0},
             "recovery": {"loop_id": "loop_live", "request_index": 0, "outcome": "recovering"}
         });
         app.sessions.known.get_mut("ses_1").unwrap().context =
@@ -285,7 +387,7 @@ mod tests {
             });
         assert_eq!(
             busy_label(&app),
-            "Compacting · Last turn: completed · persisted"
+            "Compacting · Summarizing · Last turn: completed · persisted"
         );
     }
 

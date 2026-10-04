@@ -187,8 +187,13 @@ pub fn screen_layout(app: &App, area: Rect) -> ScreenLayout {
     // (the reference requires queue.bottom < status.y, so the gap is not part
     // of the queue rect).
     let queue_gap = u16::from(queue_height > 0);
-    let dock_height =
-        status_height + notice_height + queue_height + queue_gap + panel + footer_height;
+    let feedback_height = status_height + notice_height;
+    let base_dock_height = feedback_height + queue_height + queue_gap + panel + footer_height;
+    // Status and notices form one feedback group. Match the transcript's tail
+    // separator below it, but never squeeze an editor/modal to add decoration.
+    let feedback_gap =
+        u16::from(feedback_height > 0 && base_dock_height.saturating_add(1) < content.height);
+    let dock_height = base_dock_height + feedback_gap;
     let [transcript, dock] = ratatui::layout::Layout::vertical([
         ratatui::layout::Constraint::Min(1),
         ratatui::layout::Constraint::Length(dock_height),
@@ -206,6 +211,9 @@ pub fn screen_layout(app: &App, area: Rect) -> ScreenLayout {
     }
     if notice_height == 1 {
         rows.push(ratatui::layout::Constraint::Length(1));
+    }
+    if feedback_gap > 0 {
+        rows.push(ratatui::layout::Constraint::Length(feedback_gap));
     }
     rows.push(ratatui::layout::Constraint::Length(panel));
     rows.push(ratatui::layout::Constraint::Length(footer_height));
@@ -230,6 +238,9 @@ pub fn screen_layout(app: &App, area: Rect) -> ScreenLayout {
         index += 1;
         rect
     });
+    if feedback_gap > 0 {
+        index += 1;
+    }
     let panel_rect = chunks[index];
     index += 1;
     let footer = chunks[index];
