@@ -51,7 +51,7 @@ jobs:
     name: fixed Agent/Runtime and loopback E2E
     runs-on: ubuntu-latest
     env:
-      AGENT_REV: eed44e466a009df41a596436efcc2877e9551b4c
+      AGENT_REV: 6f12a22c246ce2689493e359607aa2da9c5cbdde
       RUNTIME_REV: 666d5a15ac08c614ce75dd90337f95f10ec29f80
       MINICORE_E2E_MOCK_API_KEY: ci-loopback-only
     steps:
@@ -59,7 +59,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zqcli/minicore-agent
-          ref: eed44e466a009df41a596436efcc2877e9551b4c
+          ref: 6f12a22c246ce2689493e359607aa2da9c5cbdde
           path: .ci-fixed/minicore-agent
           fetch-depth: 1
       - uses: actions/checkout@v4

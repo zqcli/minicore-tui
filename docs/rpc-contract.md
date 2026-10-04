@@ -11,7 +11,7 @@ pinned Agent contract and updating the local DTOs and fixtures together.
 |---|---|
 | TUI | `0.3.0`; current checkout, with historical [closeout evidence](verification/v03-closeout/README.md) |
 | Agent repository | `https://github.com/zqcli/minicore-agent` |
-| Agent commit | `eed44e466a009df41a596436efcc2877e9551b4c` (`0.6.2`) |
+| Agent commit | `6f12a22c246ce2689493e359607aa2da9c5cbdde` (`0.6.2`) |
 | Runtime commit | `666d5a15ac08c614ce75dd90337f95f10ec29f80` (`0.6.1`) |
 | RPC protocol | `Protocol v1` |
 

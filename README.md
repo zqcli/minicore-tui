@@ -197,7 +197,7 @@ matrix. `persisted` acknowledges appending the process's durable items, not
 transaction/fsync/crash durability. A failed append blocks the Session while
 retaining its in-process completion.
 
-- Agent 0.6.2 commit `eed44e466a009df41a596436efcc2877e9551b4c`;
+- Agent 0.6.2 commit `6f12a22c246ce2689493e359607aa2da9c5cbdde`;
 - Runtime 0.6.1 commit `666d5a15ac08c614ce75dd90337f95f10ec29f80`;
 - TUI 0.3.0 uses the current checkout and fixed-backend CI pins; historical
   closeout provenance remains in [its report](docs/verification/v03-closeout/README.md);
