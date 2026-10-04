@@ -4687,6 +4687,16 @@ fn e2e_browse_closed_session_survives_deleted_workspace_and_dead_model() {
         .await
         .unwrap();
 
+        let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
+        assert!(rep.shutdown_ok && rep.seen_eof && rep.seen_exit);
+        process.terminate().await;
+        let directory = env.temp_dir.join("agent_data/sessions").join(session_id.as_str());
+        let history_path = directory.join("history.jsonl");
+        let record_path = directory.join("session.json");
+        let history_before = std::fs::read(&history_path).unwrap();
+        let record_before = std::fs::read(&record_path).unwrap();
+        let provider_requests_before = env._server.recorded_requests().len();
+
         // Remove the workspace and point the model at a dead provider.
         std::fs::remove_dir_all(&env.workspace_path).unwrap();
         let config = std::fs::read_to_string(&env.config_path).unwrap();
@@ -4695,22 +4705,17 @@ fn e2e_browse_closed_session_survives_deleted_workspace_and_dead_model() {
             "base_url = \"http://127.0.0.1:1\"",
         );
         std::fs::write(&env.config_path, config).unwrap();
-        dispatch(&mut process, &mut app, AppEvent::Reload)
-            .await
-            .unwrap();
-        pump_until(&mut process, &mut app, |a| {
-            !a.pending_requests.values().any(|kind| {
-                matches!(
-                    kind,
-                    RequestKind::Reload { .. }
-                        | RequestKind::ReloadModels { .. }
-                        | RequestKind::ReloadProfiles { .. }
-                        | RequestKind::ReloadSessions { .. }
-                )
-            })
-        })
-        .await
-        .unwrap();
+        // Both process and App are fresh: no loaded Session or cached User
+        // block can satisfy the read-completion assertion below.
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+        assert!(app.sessions.known.is_empty());
+        dispatch(&mut process, &mut app, AppEvent::Bootstrap).await.unwrap();
+        pump_until(&mut process, &mut app, |a| a.connection == ConnectionState::Ready)
+            .await.unwrap();
+        assert!(app.sessions.known.get(&session_id).is_none_or(|view|
+            !view.info.loaded && !view.transcript.window.items()
+                .any(|(_, entry)| matches!(entry.as_ref(), TranscriptBlock::User(_)))));
         assert!(
             !std::path::Path::new(&env.workspace_path).exists(),
             "the workspace is really gone"
@@ -4734,19 +4739,25 @@ fn e2e_browse_closed_session_survives_deleted_workspace_and_dead_model() {
         .await
         .unwrap();
 
-        dispatch(
-            &mut process,
-            &mut app,
-            AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
-                KeyCode::Char('b'),
-                KeyModifiers::CONTROL,
-            ))),
-        )
-        .await
-        .unwrap();
+        let commands = app.update(AppEvent::Terminal(CrosstermEvent::Key(KeyEvent::new(
+            KeyCode::Char('b'), KeyModifiers::CONTROL,
+        ))));
+        let requests = commands.iter().filter_map(|command| match command {
+            AppCommand::Rpc(request) => Some(request), _ => None,
+        }).collect::<Vec<_>>();
+        assert_eq!(requests.len(), 1, "cold browse sends exactly one read");
+        assert_eq!(requests[0].method, "session.read");
+        assert_eq!(requests[0].params["view"], "display");
+        assert!(app.sessions.known[&session_id].history_read.is_loading());
+        assert!(!app.sessions.known[&session_id].transcript.window.items()
+            .any(|(_, entry)| matches!(entry.as_ref(), TranscriptBlock::User(_))));
+        dispatch_commands(&mut process, &mut app, commands).await.unwrap();
         pump_until(&mut process, &mut app, |a| {
             a.sessions.known.get(&session_id).is_some_and(|view| {
                 view.browsing
+                    && !view.history_read.is_loading()
+                    && view.transcript.complete
+                    && !view.info.loaded
                     && view
                         .transcript
                         .window
@@ -4766,6 +4777,10 @@ fn e2e_browse_closed_session_survives_deleted_workspace_and_dead_model() {
         let view = &app.sessions.known[&session_id];
         assert!(view.browsing, "the view stays read-only");
         assert_eq!(view.info.model, "deep");
+        assert!(!view.info.loaded, "cold browse leaves the Session closed");
+        assert_eq!(std::fs::read(&history_path).unwrap(), history_before);
+        assert_eq!(std::fs::read(&record_path).unwrap(), record_before);
+        assert_eq!(env._server.recorded_requests().len(), provider_requests_before);
 
         let rep = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
         assert!(rep.shutdown_ok && rep.seen_eof && rep.seen_exit);
