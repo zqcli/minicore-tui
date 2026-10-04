@@ -2777,6 +2777,58 @@ impl App {
         self.reconcile_after_wait(turn)
     }
 
+    /// A validated display summary can replace every raw item of the just
+    /// persisted turn. Usage completeness is unrelated to this exact coverage.
+    fn display_summary_confirms_live_turn(
+        view: &SessionView,
+        session_id: &SessionId,
+        read: &ReadRequest,
+    ) -> bool {
+        let Some(live) = view.live.as_ref() else {
+            return false;
+        };
+        let Some(turn) = live.reference.as_ref() else {
+            return false;
+        };
+        if turn.session_id != *session_id
+            || view.info.session_id != *session_id
+            || view.closing
+            || view.close_verification_unknown
+            || view.is_blocked()
+            || view.unsaved_loop.is_some()
+            || view.result_confirmation != ResultConfirmation::Confirmed
+            || !live.last_result.as_ref().is_some_and(|result| {
+                result.turn == *turn && result.persistence == Some(TurnPersistenceWire::Persisted)
+            })
+            || read.gap_revision != view.gap_revision
+            || view.transcript.next_cursor.is_some()
+            || !view.transcript.window.complete()
+            || view
+                .read_page
+                .as_ref()
+                .is_some_and(|page| !page.pending_encoded.is_empty() || page.pending_page.is_some())
+        {
+            return false;
+        }
+        let Some(pin) = view.transcript.window.pin() else {
+            return false;
+        };
+        let Some(projection) = pin.projection.as_ref() else {
+            return false;
+        };
+        read.pin.as_ref().is_none_or(|expected| expected == pin)
+            && projection.first_item.checked_add(1) == Some(projection.covered_item_count)
+            && projection.covered_item_count <= pin.total
+            && projection.covered_usage.loop_count > 0
+            && projection.covered_usage.last_loop_id.as_deref() == Some(turn.loop_id.as_str())
+            && view.summary_history_revision.as_deref() == Some(projection.revision.as_str())
+            && view
+                .transcript
+                .window
+                .item(projection.first_item)
+                .is_some_and(|item| matches!(item.as_ref(), TranscriptBlock::Summary(_)))
+    }
+
     /// Reconciles the live loop once the read chain is complete (spec §6.4,
     /// §7.1). Returns the next chain step, if any.
     pub(super) fn finish_read_chain(
@@ -2802,15 +2854,17 @@ impl App {
                 })
         });
 
-        let loop_contained_in_history = match &live_loop_id {
-            Some(id) => view.transcript.blocks.iter().any(|b| match b.as_ref() {
-                TranscriptBlock::User(u) => !u.pending && u.loop_id.as_deref() == Some(id),
-                TranscriptBlock::Assistant(a) => a.loop_id.as_str() == id.as_str(),
-                TranscriptBlock::Tool(t) => t.loop_id.as_str() == id.as_str(),
-                _ => false,
-            }),
-            None => false,
-        };
+        let covered_current_loop = Self::display_summary_confirms_live_turn(view, session_id, read);
+        let loop_contained_in_history = covered_current_loop
+            || match &live_loop_id {
+                Some(id) => view.transcript.blocks.iter().any(|b| match b.as_ref() {
+                    TranscriptBlock::User(u) => !u.pending && u.loop_id.as_deref() == Some(id),
+                    TranscriptBlock::Assistant(a) => a.loop_id.as_str() == id.as_str(),
+                    TranscriptBlock::Tool(t) => t.loop_id.as_str() == id.as_str(),
+                    _ => false,
+                }),
+                None => false,
+            };
 
         let same_turn_persisted = match &live_loop_id {
             Some(id) => {
@@ -2829,7 +2883,7 @@ impl App {
         };
 
         let turn_satisfied = if live_loop_id.is_some() {
-            same_turn_persisted && raw_items_contain_loop
+            same_turn_persisted && (raw_items_contain_loop || covered_current_loop)
         } else {
             view.live.is_none()
         };
@@ -2889,7 +2943,9 @@ impl App {
                             PendingSteerState::Persisted
                         };
                     } else if steer.state == PendingSteerState::Queued && terminal {
-                        steer.state = if blocked {
+                        // A summary hides individual steering entries. Missing
+                        // raw text cannot prove an accepted steer was omitted.
+                        steer.state = if blocked || covered_current_loop {
                             PendingSteerState::Unconfirmed
                         } else {
                             PendingSteerState::NotRecorded

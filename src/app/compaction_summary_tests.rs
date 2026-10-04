@@ -1030,3 +1030,339 @@ fn compaction_summary_queued_tail_after_probe_keeps_cursor_pin_and_generation() 
         }
     }
 }
+
+const COVERED_TERMINAL_LOOP: &str = "loop-covered-terminal";
+
+fn covered_terminal_result() -> crate::protocol::TurnResultViewWire {
+    serde_json::from_value(json!({
+        "turn":{"session_id":SESSION,"loop_id":COVERED_TERMINAL_LOOP},
+        "outcome":{"type":"completed"},"persistence":"persisted",
+        "usage":{"input_tokens":100,"output_tokens":20},"requests":52,"tool_rounds":51
+    }))
+    .unwrap()
+}
+
+fn covered_terminal_page(app: &App, partial: bool) -> serde_json::Value {
+    let data = json!({"display":true,"derived_summary":true,
+        "item":{"type":"summary","data":{"content":"Settled summary"}}})
+    .to_string();
+    json!({"session":app.sessions.known[SESSION].info,"items":[{
+        "index":171,"offset":0,"total_bytes":data.len(),"encoding":"utf8_json",
+        "data":data,"complete":true}],"total":172,"records":[],"records_truncated":false,
+        "history_revision":"a".repeat(64),"captured_end":1312539,"trailing_incomplete":false,
+        "projection":{"revision":"b".repeat(64),"first_item":171,"covered_item_count":172,
+            "covered_usage":{"loop_count":1,"last_loop_id":COVERED_TERMINAL_LOOP,
+                "usage":{"input_tokens":100,"output_tokens":20},"partial":partial}}})
+}
+
+fn attach_covered_terminal_live(app: &mut App) {
+    let result = covered_terminal_result();
+    let mut live = LiveLoop::new(LocalSubmissionId(77), "finished prompt".into());
+    live.reference = Some(result.turn.clone());
+    live.waiting = true;
+    live.last_result = Some(result.clone());
+    let view = app.sessions.known.get_mut(SESSION).unwrap();
+    view.live = Some(live);
+    view.last_result = Some(result);
+}
+
+fn covered_terminal_fixture() -> (App, ReadRequest) {
+    let mut app = app();
+    idle(&mut app);
+    let read = begin_history_read(&mut app);
+    let page = serde_json::from_value(covered_terminal_page(&app, false)).unwrap();
+    app.continue_read_chain(&SESSION.to_owned(), &read, &page);
+    attach_covered_terminal_live(&mut app);
+    (app, read)
+}
+
+fn covered_terminal_wire_fixture() -> (App, crate::protocol::OutgoingRequest) {
+    use crate::ui::testapp::{respond, take_requests};
+    let mut app = crate::ui::testapp::open_empty(ThemeKind::Dark, SESSION, None, "high");
+    let result = covered_terminal_result();
+    let mut live = LiveLoop::new(LocalSubmissionId(77), "finished prompt".into());
+    live.reference = Some(result.turn.clone());
+    app.sessions.known.get_mut(SESSION).unwrap().live = Some(live);
+    let wait = take_requests(app.request_wait(result.turn.clone()).into_iter().collect()).remove(0);
+    let commands = respond(&mut app, &wait, serde_json::to_value(result).unwrap());
+    let mut pending = std::collections::VecDeque::from(take_requests(commands));
+    let mut history = None;
+    while let Some(request) = pending.pop_front() {
+        let value = match request.method {
+            "session.read" => {
+                assert!(history.replace(request).is_none());
+                continue;
+            }
+            "session.state" => json!({"session_id":SESSION,"status":"idle","active_loop":null}),
+            "session.context" => json!({"session_id":SESSION,"current_operation":null,
+                "last_result":null,"coverage":{"covered_loop_count":0,"covered_item_count":0,"retained_item_count":0},"budget":{},"automatic":{"current":null,"last":null}}),
+            "session.presentation" => json!({"session_id":SESSION,"context":{"kind":"unknown"}}),
+            other => panic!("unexpected terminal request: {other}"),
+        };
+        pending.extend(take_requests(respond(&mut app, &request, value)));
+    }
+    (app, history.expect("post-wait display read"))
+}
+
+#[test]
+fn summary_only_terminal_wire_read_retires_live_and_admits_a_genuinely_new_turn() {
+    use crate::ui::testapp::{respond, take_requests};
+    for (partial, unknown_usage) in [(false, false), (true, false), (true, true)] {
+        let (mut app, read) = covered_terminal_wire_fixture();
+        assert!(app.active_view().unwrap().live.as_ref().unwrap().waiting);
+        let mut page = covered_terminal_page(&app, partial);
+        if unknown_usage {
+            page["projection"]["covered_usage"]["usage"] = json!({});
+        }
+        assert!(take_requests(respond(&mut app, &read, page)).is_empty());
+        let view = app.active_view().unwrap();
+        assert!(view.live.is_none());
+        assert!(view.transcript.complete);
+        assert_eq!(
+            view.usage_projection.usage.input_tokens,
+            (!unknown_usage).then_some(100)
+        );
+        assert_eq!(
+            view.usage_projection.usage.output_tokens,
+            (!unknown_usage).then_some(20)
+        );
+        assert_eq!(
+            crate::ui::footer::footer_view(&app).status,
+            crate::ui::footer::FooterStatus::Ready
+        );
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 8)).unwrap();
+        terminal
+            .draw(|frame| {
+                crate::ui::composer::render(frame, frame.area(), &app, &ThemeKind::Dark.theme())
+            })
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(!text.contains("Unsupported interaction"));
+        assert!(
+            !app.notices
+                .iter()
+                .any(|notice| notice.text.contains("not contained"))
+        );
+        app.composer.set_text("a genuinely new prompt");
+        let requests = take_requests(app.submit_composer());
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.method == "turn.send")
+                .count(),
+            1
+        );
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.method != "turn.steer")
+        );
+    }
+}
+
+#[test]
+fn summary_only_terminal_proof_preserves_all_identity_and_completion_fences() {
+    for invalid in [
+        "result_session",
+        "result_loop",
+        "projection_loop",
+        "missing_persistence",
+        "failed_persistence",
+        "missing_result",
+        "needs_read",
+        "unknown_result",
+        "blocked",
+        "closing",
+        "unknown_close",
+        "unsaved",
+        "stale_gap",
+        "stale_summary_revision",
+        "stale_pin",
+        "cursor",
+        "zero_loops",
+        "zero_items",
+        "wrong_boundary",
+        "overflow_boundary",
+        "outside_pin",
+        "absent_summary",
+    ] {
+        let (mut app, mut read) = covered_terminal_fixture();
+        let view = app.sessions.known.get_mut(SESSION).unwrap();
+        let mut pin = view.transcript.window.pin().unwrap().clone();
+        match invalid {
+            "result_session" => {
+                view.live
+                    .as_mut()
+                    .unwrap()
+                    .last_result
+                    .as_mut()
+                    .unwrap()
+                    .turn
+                    .session_id = "other".into()
+            }
+            "result_loop" => {
+                view.live
+                    .as_mut()
+                    .unwrap()
+                    .last_result
+                    .as_mut()
+                    .unwrap()
+                    .turn
+                    .loop_id = "other".into()
+            }
+            "projection_loop" => {
+                pin.projection.as_mut().unwrap().covered_usage.last_loop_id = Some("other".into())
+            }
+            "missing_persistence" => {
+                view.live
+                    .as_mut()
+                    .unwrap()
+                    .last_result
+                    .as_mut()
+                    .unwrap()
+                    .persistence = None
+            }
+            "failed_persistence" => {
+                view.live
+                    .as_mut()
+                    .unwrap()
+                    .last_result
+                    .as_mut()
+                    .unwrap()
+                    .persistence = Some(TurnPersistenceWire::Failed)
+            }
+            "missing_result" => view.live.as_mut().unwrap().last_result = None,
+            "needs_read" => view.result_confirmation = ResultConfirmation::NeedsRead,
+            "unknown_result" => view.result_confirmation = ResultConfirmation::Unknown,
+            "blocked" => view.state.as_mut().unwrap().status = SessionStatusWire::Blocked,
+            "closing" => view.closing = true,
+            "unknown_close" => view.close_verification_unknown = true,
+            "unsaved" => {
+                let result = covered_terminal_result();
+                view.unsaved_loop = Some(crate::state::turn::UnsavedLoop {
+                    turn: result.turn.clone(),
+                    user_text: String::new(),
+                    requests: Vec::new(),
+                    result: Some(result),
+                    event_gap: false,
+                });
+            }
+            "stale_gap" => read.gap_revision = view.gap_revision.wrapping_add(1),
+            "stale_summary_revision" => view.summary_history_revision = Some("c".repeat(64)),
+            "stale_pin" => {
+                let mut old = pin.clone();
+                old.history_revision = "c".repeat(64);
+                read.pin = Some(old);
+            }
+            "cursor" => {
+                view.transcript.next_cursor = Some(ReadCursor {
+                    item: 172,
+                    offset: 0,
+                })
+            }
+            "zero_loops" => pin.projection.as_mut().unwrap().covered_usage.loop_count = 0,
+            "zero_items" => pin.projection.as_mut().unwrap().covered_item_count = 0,
+            "wrong_boundary" => pin.projection.as_mut().unwrap().covered_item_count = 171,
+            "overflow_boundary" => {
+                let p = pin.projection.as_mut().unwrap();
+                p.first_item = usize::MAX;
+                p.covered_item_count = 0;
+            }
+            "outside_pin" => pin.total = 171,
+            "absent_summary" => view.transcript.window.replace_pin(pin.clone()),
+            _ => unreachable!(),
+        }
+        view.transcript.window.install_pin(pin);
+        assert!(
+            !App::display_summary_confirms_live_turn(view, &SESSION.to_owned(), &read),
+            "{invalid}"
+        );
+        App::finish_read_chain(view, &SESSION.to_owned(), &read);
+        assert!(view.live.is_some(), "{invalid}");
+    }
+}
+
+#[test]
+fn summary_only_terminal_coverage_does_not_invent_steering_outcomes() {
+    use crate::state::turn::PendingSteer;
+    let (mut app, read) = covered_terminal_fixture();
+    let view = app.sessions.known.get_mut(SESSION).unwrap();
+    for (index, state) in [
+        PendingSteerState::Sending,
+        PendingSteerState::Queued,
+        PendingSteerState::Unconfirmed,
+        PendingSteerState::Persisted,
+        PendingSteerState::NotRecorded,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        view.live
+            .as_mut()
+            .unwrap()
+            .pending_steers
+            .push(PendingSteer {
+                local_id: index as u64,
+                text: format!("steer-{index}"),
+                state,
+                accepted_at: None,
+                steer_index: None,
+            });
+    }
+    App::finish_read_chain(view, &SESSION.to_owned(), &read);
+    assert!(view.live.is_none());
+    assert_eq!(
+        view.completed_steers
+            .iter()
+            .map(|steer| steer.state.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            PendingSteerState::Unconfirmed,
+            PendingSteerState::Unconfirmed,
+            PendingSteerState::Unconfirmed,
+            PendingSteerState::Persisted,
+            PendingSteerState::NotRecorded,
+        ]
+    );
+}
+
+#[tokio::test]
+async fn summary_only_terminal_waits_for_complete_page_and_owned_decode() {
+    use crate::ui::testapp::{respond, take_requests};
+    let (mut app, read) = covered_terminal_wire_fixture();
+    let mut page = covered_terminal_page(&app, false);
+    let data = page["items"][0]["data"].as_str().unwrap().to_owned();
+    let split = data.len() / 2;
+    page["items"][0]["data"] = json!(&data[..split]);
+    page["items"][0]["complete"] = json!(false);
+    page["next_cursor"] = json!({"item":171,"offset":split});
+    let requests = take_requests(respond(&mut app, &read, page));
+    assert!(app.active_view().unwrap().live.is_some());
+    let read = requests
+        .iter()
+        .find(|request| request.method == "session.read")
+        .unwrap();
+    app.enable_async_decode();
+    let mut page = covered_terminal_page(&app, false);
+    page["items"][0]["offset"] = json!(split);
+    page["items"][0]["data"] = json!(&data[split..]);
+    respond(&mut app, read, page);
+    assert!(
+        app.active_view().unwrap().live.is_some(),
+        "decode still owns the summary"
+    );
+    let request = app.pending_decode_request().expect("summary decode");
+    let mut jobs = crate::jobs::LocalJobs::new();
+    assert!(jobs.try_schedule_decode(request));
+    app.mark_decode_scheduled();
+    app.update(jobs.events().recv().await.unwrap());
+    assert!(app.active_view().unwrap().live.is_none());
+    jobs.shutdown().await;
+}
