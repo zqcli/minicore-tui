@@ -40,6 +40,8 @@ impl fmt::Debug for ToolProcessChunkWire {
 pub struct ToolReadResult {
     pub invocation: Option<ToolInvocationWire>,
     pub execution: ToolExecutionWire,
+    #[serde(default)]
+    pub display: Option<ToolDisplayWire>,
 }
 
 #[derive(Clone, PartialEq, Eq, Deserialize)]
@@ -95,6 +97,11 @@ impl OutgoingRequest {
             })
             .expect("tool read params"),
         )
+    }
+    pub fn tool_read_display(id: RequestId, tool_ref: &ToolRefWire) -> Self {
+        let mut request = Self::tool_read(id, tool_ref);
+        request.params["display"] = serde_json::Value::Bool(true);
+        request
     }
     pub fn tool_output(
         id: RequestId,

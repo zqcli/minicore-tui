@@ -322,6 +322,22 @@ impl OutgoingRequest {
         Self::new(id, METHOD_SESSION_READ, Value::Object(params))
     }
 
+    pub fn session_display_read(
+        id: RequestId,
+        session_id: &str,
+        cursor: Option<ReadCursor>,
+        limit: usize,
+        max_bytes: usize,
+        pin: Option<&SnapshotPin>,
+    ) -> Self {
+        let mut request = Self::session_read(id, session_id, cursor, limit, max_bytes, pin);
+        request.params["view"] = json!("display");
+        if let Some(projection) = pin.and_then(|pin| pin.projection.as_ref()) {
+            request.params["projection_revision"] = json!(projection.revision);
+        }
+        request
+    }
+
     pub fn turn_result(
         id: RequestId,
         turn: &TurnRef,
@@ -702,6 +718,8 @@ pub struct ToolExecutionWire {
     pub outcome: Option<ToolOutcomeWire>,
     pub input_availability: ToolDataAvailabilityWire,
     pub output_availability: ToolDataAvailabilityWire,
+    #[serde(default)]
+    pub output_line_count: Option<usize>,
     pub input_bytes: usize,
     pub result_bytes: usize,
     pub input_truncated: bool,
@@ -1105,6 +1123,8 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// TUI must not invent one (spec §4.1).
 pub const REQUIRED_CAPABILITIES: &[&str] = &[
     "session.read",
+    "session.read.display",
+    "tool.read.display",
     "turn.result",
     "session.context",
     "tool.read",
@@ -1699,6 +1719,8 @@ pub struct SummaryHistoryViewWire {
 
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ToolDisplayWire {
+    #[serde(default)]
+    pub body_truncated: bool,
     pub detail: String,
     #[serde(default)]
     pub expanded_input: Option<String>,
@@ -1880,8 +1902,7 @@ mod tests {
         let all: Vec<&str> = REQUIRED_CAPABILITIES.to_vec();
         assert_eq!(validate_backend(&full(all.clone())), Ok(()));
 
-        // The pinned 0.5 baseline: protocol 1 with the capability set passes
-        // even though the package version is not 0.3.x.
+        // Package versions are advisory; the complete capability contract is required.
         let ping: PingResult = serde_json::from_value(json!({
             "version": "0.5.0",
             "protocol_version": 1,
@@ -1903,6 +1924,16 @@ mod tests {
             })
         ));
 
+        for capability in ["session.read.display", "tool.read.display"] {
+            let mut missing = all.clone();
+            missing.retain(|value| *value != capability);
+            let BackendError::MissingCapabilities { missing, .. } =
+                validate_backend(&full(missing)).unwrap_err()
+            else {
+                panic!("missing display capability")
+            };
+            assert_eq!(missing, capability);
+        }
         let mut missing = all.clone();
         missing.retain(|capability| *capability != "turn.result");
         assert!(matches!(
@@ -1999,6 +2030,7 @@ mod tests {
     #[test]
     fn presentation_wire_debug_redacts_content_bodies() {
         let display = ToolDisplayWire {
+            body_truncated: false,
             detail: "$ cat secret".to_owned(),
             expanded_input: Some("private body".to_owned()),
             input_line_count: Some(1),

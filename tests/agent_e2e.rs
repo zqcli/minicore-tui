@@ -5666,3 +5666,216 @@ fn e2e_default_startup_respects_agent_defaults_and_explicit_overrides_without_in
         }
     });
 }
+
+/// Cold history must restore only the three-row summary. A click, not restore,
+/// owns the extra tool reads that recover the whitelisted body.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; cold display restore and inline lazy loading"]
+fn e2e_cold_write_summary_then_inline_expand_recovers_body() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    let body = (0..57)
+        .map(|line| format!("line-{line:02} recovered input"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    env._server.enqueue_sse(sse_tool_call_response(
+        "cold_write",
+        "write",
+        &json!({"path":"recovered.txt","content":body}).to_string(),
+    ));
+    env._server.enqueue_sse(sse_text_response("write complete"));
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async move {
+            let mut process = env.spawn_agent(&agent_bin);
+            let mut app = App::new(env.workspace_path.clone());
+            dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+                .await
+                .unwrap();
+            pump_until(&mut process, &mut app, |app| {
+                app.connection == ConnectionState::Ready
+            })
+            .await
+            .unwrap();
+            let session = create_additional_session(
+                &mut process,
+                &mut app,
+                &env.workspace_path,
+                "cold write",
+            )
+            .await;
+            dispatch(
+                &mut process,
+                &mut app,
+                AppEvent::SubmitTurn {
+                    session_id: session.clone(),
+                    text: "write the fixture".into(),
+                },
+            )
+            .await
+            .unwrap();
+            pump_until_with_decode(&mut process, &mut app, |app| {
+                app.active_view()
+                    .is_some_and(|view| view.live.is_none() && view.transcript.complete)
+            })
+            .await
+            .unwrap();
+            assert!(
+                drain_shutdown_strict(&mut process, &mut app)
+                    .await
+                    .unwrap()
+                    .shutdown_ok
+            );
+            process.terminate().await;
+
+            let mut process = env.spawn_agent(&agent_bin);
+            let mut app = App::new(env.workspace_path.clone());
+            dispatch(&mut process, &mut app, AppEvent::Bootstrap)
+                .await
+                .unwrap();
+            pump_until(&mut process, &mut app, |app| {
+                app.connection == ConnectionState::Ready
+            })
+            .await
+            .unwrap();
+            dispatch(
+                &mut process,
+                &mut app,
+                AppEvent::OpenSession {
+                    session_id: session.clone(),
+                },
+            )
+            .await
+            .unwrap();
+            wait_for_session_ready(&mut process, &mut app, &session)
+                .await
+                .unwrap();
+            let key = app
+                .active_view()
+                .unwrap()
+                .tool_presentations
+                .keys()
+                .find(|key| key.tool_call_id == "cold_write")
+                .unwrap()
+                .clone();
+            let view = app.active_view().unwrap();
+            let facts = &view.tool_presentations[&key];
+            assert!(facts.body_deferred);
+            assert!(facts.inline.is_none(), "restore never started a body read");
+            assert!(facts.result.is_none());
+            assert!(facts.display.expanded_input.is_none());
+            assert_eq!(facts.display.input_line_count, Some(57));
+            assert_eq!(facts.output_line_count, Some(1));
+            let block = view
+                .transcript
+                .blocks
+                .iter()
+                .find_map(|block| match block.as_ref() {
+                    TranscriptBlock::Tool(tool) if tool.tool_call_id == "cold_write" => Some(tool),
+                    _ => None,
+                })
+                .unwrap();
+            let rows = minicore_tui::ui::tool::durable_with_metadata(
+                &minicore_tui::theme::Theme::dark(),
+                block,
+                77,
+                false,
+                Some(facts),
+            );
+            assert_eq!(rows.lines.len(), 5);
+            let text = rows
+                .lines
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains("58 lines hidden"));
+            assert!(!text.contains("line-00"));
+            assert!(!text.contains("详情"));
+            println!("COLD THREE-ROW CARD:\n{text}");
+
+            dispatch(
+                &mut process,
+                &mut app,
+                AppEvent::TerminalSize {
+                    width: 80,
+                    height: 24,
+                },
+            )
+            .await
+            .unwrap();
+            dispatch(
+                &mut process,
+                &mut app,
+                AppEvent::ToggleTool {
+                    session_id: session.clone(),
+                    loop_id: key.loop_id.clone(),
+                    request_index: key.request_index,
+                    tool_call_id: key.tool_call_id.clone(),
+                },
+            )
+            .await
+            .unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                let screen = minicore_tui::ui::layout::screen_layout(
+                    &app,
+                    ratatui::layout::Rect::new(0, 0, 80, 24),
+                );
+                let prepared =
+                    minicore_tui::ui::transcript::prepare_conversation(&app, screen.content.width);
+                let total_lines = prepared.total_rows();
+                dispatch(
+                    &mut process,
+                    &mut app,
+                    AppEvent::ConversationPrepared(prepared),
+                )
+                .await
+                .unwrap();
+                dispatch(
+                    &mut process,
+                    &mut app,
+                    AppEvent::Viewport {
+                        total_lines,
+                        visible_rows: screen.transcript.height as usize,
+                    },
+                )
+                .await
+                .unwrap();
+                if app.active_view().unwrap().tool_presentations[&key]
+                    .inline
+                    .as_ref()
+                    .is_some_and(|load| load.output.eof)
+                {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "inline recovery timed out"
+                );
+                pump_step(&mut process, &mut app).await.unwrap();
+            }
+            let facts = &app.active_view().unwrap().tool_presentations[&key];
+            assert_eq!(facts.display.expanded_input.as_deref(), Some(body.as_str()));
+            assert!(facts.result.as_deref().unwrap().starts_with("wrote "));
+            assert!(facts.inline.as_ref().unwrap().error.is_none());
+            assert_eq!(
+                env._server.recorded_requests().len(),
+                2,
+                "restore/expand must not invoke the provider"
+            );
+            println!("RECOVERED_INPUT_BYTES={}", body.len());
+            assert!(
+                drain_shutdown_strict(&mut process, &mut app)
+                    .await
+                    .unwrap()
+                    .shutdown_ok
+            );
+            process.terminate().await;
+        });
+}

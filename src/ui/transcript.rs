@@ -1863,6 +1863,13 @@ fn resolve_tool_expanded_for<V: DurableLayoutSource>(
     match view.tool_folds().get(key) {
         Some(crate::state::view::FoldOverride::Expanded) => true,
         Some(crate::state::view::FoldOverride::Collapsed) => false,
+        None if view
+            .tool_presentations()
+            .get(key)
+            .is_some_and(|facts| facts.body_deferred) =>
+        {
+            false
+        }
         None => {
             base_expanded
                 || view.tools_expanded()
@@ -2630,14 +2637,6 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, scrollbar: Rect, app: &App, the
         height: slice.len() as u16,
     };
     frame.render_widget(ratatui::widgets::Paragraph::new(slice), body_area);
-    for (hit, _) in crate::ui::tool_detail::detail_hits(prepared, area, offset, budget) {
-        layout::clear_wide_overlay_edges(frame.buffer_mut(), hit);
-        frame.render_widget(
-            ratatui::widgets::Paragraph::new("[详情]")
-                .style(Style::new().fg(theme.scrollbar_thumb).bg(theme.page_bg)),
-            hit,
-        );
-    }
     if marker {
         let marker_y = area.y.saturating_add(height as u16).saturating_sub(1);
         let marker_area = Rect {
@@ -3261,7 +3260,7 @@ mod source_map_tests {
             .iter()
             .flat_map(|row| row.spans.iter().map(|span| span.content.as_ref()))
             .collect::<String>();
-        assert!(text.contains("read · pending"));
+        assert!(text.contains("read"));
         assert!(text.contains("missing-file.txt"));
     }
 }

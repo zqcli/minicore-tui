@@ -787,18 +787,14 @@ mod tests {
                     .unwrap();
                 assert_eq!(section.folded, !expanded);
                 let footer = prepared.copy_row(section.rows.end - 2).unwrap();
-                assert_eq!(
-                    footer.decorative,
-                    expanded || !result.is_empty(),
-                    "only an actual tool footer is decoration"
-                );
+                assert!(footer.decorative, "the fixed count/footer is decoration");
                 let text = section_copy_text(&prepared, &section);
                 assert_eq!(
                     text.matches("ctrl+o collapse").count(),
-                    usize::from(!result.is_empty())
+                    usize::from(expanded && !result.is_empty())
                 );
                 assert!(!text.contains("ctrl+o expand"));
-                assert!(!text.contains("hidden rows"));
+                assert!(!text.contains("lines hidden"));
                 let point = |row, column| SelectionPoint {
                     row,
                     column,
@@ -819,8 +815,9 @@ mod tests {
                 // Empty cards still retain their target row; it must not be
                 // mistaken for the absent expand affordance.
                 if result.is_empty() && !expanded {
-                    assert!(!footer.decorative);
-                    assert!(!footer.text.is_empty());
+                    let target = prepared.copy_row(section.rows.start + 2).unwrap();
+                    assert!(!target.decorative);
+                    assert!(!target.text.is_empty());
                 }
             }
         }

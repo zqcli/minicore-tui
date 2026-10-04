@@ -790,6 +790,7 @@ fn rust_surface_primitives_match_source_rail_and_content_geometry() {
         80,
         false,
         Some(&ToolDisplayWire {
+            body_truncated: false,
             detail: "$ cargo test --all-targets".to_owned(),
             expanded_input: None,
             input_line_count: None,
@@ -812,7 +813,7 @@ fn rust_surface_primitives_match_source_rail_and_content_geometry() {
     );
     let source_title = token_text(source_token(source_row, 2));
     assert!(source_title.starts_with("bash"));
-    assert_eq!(rust_tool[1].spans[2].content.as_ref(), "bash · completed");
+    assert_eq!(rust_tool[1].spans[2].content.as_ref(), "bash");
     assert_eq!(
         rust_tool[1].spans[2].style.fg,
         Some(token_rgb(source_token(source_row, 2), "fg"))
@@ -862,6 +863,7 @@ fn rust_tool_state_colors_and_hidden_count_boundaries_match_source_facts() {
             expanded: false,
         };
         let display = minicore_tui::protocol::ToolDisplayWire {
+            body_truncated: false,
             detail: block.name.clone(),
             expanded_input: None,
             input_line_count: None,
@@ -921,6 +923,7 @@ fn rust_tool_state_colors_and_hidden_count_boundaries_match_source_facts() {
     };
     let theme = Theme::dark();
     let display = minicore_tui::protocol::ToolDisplayWire {
+        body_truncated: false,
         detail: cancelled.name.clone(),
         expanded_input: None,
         input_line_count: None,
@@ -967,24 +970,25 @@ fn rust_tool_state_colors_and_hidden_count_boundaries_match_source_facts() {
             expanded: false,
         };
         let display = minicore_tui::protocol::ToolDisplayWire {
+            body_truncated: false,
             detail: "bash".to_owned(),
             expanded_input: None,
-            input_line_count: None,
+            input_line_count: Some(0),
             hidden_line_count: Some(hidden),
             truncated: false,
         };
         let lines = tool::durable_with_display(&Theme::dark(), &block, 80, false, Some(&display));
         // The legacy fixture counts a non-rendered input row. The current
-        // hint counts only the actual expandable body at this width.
+        // count covers the actual expandable logical body, independent of width.
         let text = lines
             .iter()
             .map(rust_row_text)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("bash · completed"));
-        assert!(text.contains("line 0"));
-        assert!(text.contains(&format!("{result_lines} hidden rows")));
-        assert!(text.contains("ctrl+o expand"));
+        assert!(text.contains("bash"));
+        assert!(!text.contains("line 0"));
+        assert!(text.contains(&format!("{result_lines} lines hidden")));
+        assert!(!text.contains("ctrl+o expand"));
     }
 }
 

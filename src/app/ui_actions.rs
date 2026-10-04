@@ -791,38 +791,6 @@ impl App {
         if let Some(commands) = self.handle_tool_mouse(mouse) {
             return commands;
         }
-        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
-            && matches!(self.dock, Dock::Composer)
-        {
-            if self.async_layout && !self.transcript_input_ready() {
-                if let Some(key) = self.displayed_tool_hit(mouse.column, mouse.row) {
-                    return self.open_tool_detail(key);
-                }
-            }
-            let screen = crate::ui::layout::screen_layout(
-                self,
-                ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1),
-            );
-            if let Some(prepared) = self.prepared_conversation(screen.transcript.width) {
-                let position = crate::ui::transcript::scroll_position(
-                    self,
-                    prepared.total_rows(),
-                    screen.transcript.height as usize,
-                );
-                let key = crate::ui::tool_detail::detail_hits(
-                    prepared,
-                    screen.transcript,
-                    position.offset,
-                    position.visible_rows,
-                )
-                .into_iter()
-                .find(|(hit, _)| hit.contains((mouse.column, mouse.row).into()))
-                .map(|(_, key)| key);
-                if let Some(key) = key {
-                    return self.open_tool_detail(key);
-                }
-            }
-        }
         if !self.scrollbar_allowed() && self.scrollbar_drag.is_some() {
             self.cancel_scrollbar_drag();
         }
@@ -2093,6 +2061,25 @@ impl App {
                             return;
                         };
                         let expanded = !current;
+                        if expanded {
+                            if let Some(facts) =
+                                Arc::make_mut(&mut view.tool_presentations).get_mut(&key)
+                            {
+                                if let Some(load) = Arc::make_mut(facts)
+                                    .inline
+                                    .as_mut()
+                                    .filter(|load| load.error.is_some())
+                                {
+                                    load.generation = load.generation.wrapping_add(1);
+                                    load.read = false;
+                                    load.pending = false;
+                                    load.error = None;
+                                    load.output = crate::state::tool::StreamView::new(
+                                        crate::protocol::ToolDataStreamWire::Output,
+                                    );
+                                }
+                            }
+                        }
                         Arc::make_mut(&mut view.tool_folds).insert(
                             key,
                             if expanded {
@@ -2442,6 +2429,7 @@ pub(super) fn cancel_scrollbar_drag(app: &mut App) {
 
 /// Ctrl+O toggles all visible foldable details, including reasoning.
 pub(super) fn toggle_tools(app: &mut App, session_id: &str) {
+    let now = app.instant_now();
     let reasoning = if app.sessions.active.as_deref() == Some(session_id) {
         let width = app.terminal_content_width();
         let prepared = app.conversation_for_input(width);
@@ -2464,6 +2452,13 @@ pub(super) fn toggle_tools(app: &mut App, session_id: &str) {
             && reasoning.iter().all(|section| !section.folded);
         let expanded = !all_open;
         set_all_tools_expanded(view, expanded);
+        if expanded {
+            for facts in Arc::make_mut(&mut view.tool_presentations).values_mut() {
+                if let Some(load) = Arc::make_mut(facts).inline.as_mut() {
+                    load.retry(now);
+                }
+            }
+        }
         for section in reasoning {
             if let (Some(loop_id), Some(request_index)) =
                 (section.id.loop_id.as_deref(), section.id.request_index)
@@ -2494,6 +2489,7 @@ pub(super) fn toggle_tool(
     request_index: u32,
     tool_call_id: &str,
 ) {
+    let now = app.instant_now();
     let Some(view) = app.sessions.known.get_mut(session_id) else {
         return;
     };
@@ -2511,6 +2507,17 @@ pub(super) fn toggle_tool(
         )
     });
     let expanded = !current;
+    if expanded {
+        if let Some(facts) = Arc::make_mut(&mut view.tool_presentations).get_mut(&key) {
+            if let Some(load) = Arc::make_mut(facts)
+                .inline
+                .as_mut()
+                .filter(|load| load.error.is_some())
+            {
+                load.retry(now);
+            }
+        }
+    }
     for block in view.transcript.blocks_mut() {
         let block = std::sync::Arc::make_mut(block);
         if let TranscriptBlock::Tool(tool) = &mut *block {

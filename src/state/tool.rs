@@ -49,6 +49,7 @@ pub(crate) fn history_display(
         detail.push('…');
     }
     Some(ToolDisplayWire {
+        body_truncated: false,
         detail,
         expanded_input: None,
         input_line_count: None,
@@ -399,6 +400,40 @@ impl ToolKey {
     }
 }
 
+/// Allocated only after an inline card is expanded. Completed text is moved to
+/// the existing result owner; the page window then releases its byte chunks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineToolLoad {
+    pub epoch: u64,
+    pub generation: u64,
+    pub read: bool,
+    pub pending: bool,
+    pub due: std::time::Instant,
+    pub error: Option<String>,
+    pub output: StreamView,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StreamLineCount {
+    next: u64,
+    newlines: usize,
+    seen: bool,
+    pub gap: bool,
+}
+
+impl InlineToolLoad {
+    pub fn retry(&mut self, now: std::time::Instant) {
+        if self.error.take().is_none() {
+            return;
+        }
+        self.generation = self.generation.wrapping_add(1);
+        self.read = false;
+        self.pending = false;
+        self.due = now;
+        self.output = StreamView::new(Stream::Output);
+    }
+}
+
 /// The single semantic owner for one tool call. The presentation map owns
 /// these facts; live and durable cards retain the shared result `Arc<str>`
 /// projected from them instead of copying the body. `status`/`outcome` are
@@ -409,6 +444,11 @@ pub struct ToolFacts {
     pub display: Arc<ToolDisplayWire>,
     pub result: Option<Arc<str>>,
     pub result_truncated: bool,
+    pub output_line_count: Option<usize>,
+    pub inline: Option<InlineToolLoad>,
+    pub body_deferred: bool,
+    pub count_partial: bool,
+    pub stream_lines: [StreamLineCount; 2],
     pub status: ToolStatus,
     pub outcome: Option<crate::protocol::ToolOutcomeWire>,
     pub needs_read: bool,
@@ -433,6 +473,7 @@ impl ToolFacts {
     pub fn new(name: &str) -> Self {
         Self {
             display: Arc::new(ToolDisplayWire {
+                body_truncated: false,
                 detail: name.to_owned(),
                 expanded_input: None,
                 input_line_count: None,
@@ -441,6 +482,11 @@ impl ToolFacts {
             }),
             result: None,
             result_truncated: false,
+            output_line_count: None,
+            inline: None,
+            body_deferred: false,
+            count_partial: false,
+            stream_lines: Default::default(),
             status: ToolStatus::Pending,
             outcome: None,
             needs_read: false,
@@ -459,6 +505,11 @@ impl ToolFacts {
     ) {
         if self.is_terminal() && !execution.state.is_terminal() {
             return;
+        }
+        if let Some(count) = execution.output_line_count {
+            self.output_line_count = Some(count);
+            self.stream_lines = Default::default();
+            self.count_partial = self.display.body_truncated || execution.result_truncated;
         }
         self.input_available |= matches!(
             execution.input_availability,
@@ -497,6 +548,42 @@ impl ToolFacts {
         self.execution = Some(Arc::new(execution));
     }
 
+    pub fn accept_process_count(&mut self, chunk: &crate::protocol::ToolProcessChunkWire) {
+        if self.is_terminal() {
+            return;
+        }
+        let index = match chunk.stream {
+            Stream::Stdout => 0,
+            Stream::Stderr => 1,
+            _ => return,
+        };
+        let Ok(bytes) = decode_stream(chunk.stream, &chunk.encoding, &chunk.data) else {
+            return;
+        };
+        let count = &mut self.stream_lines[index];
+        if chunk.next_offset <= count.next {
+            return;
+        }
+        count.gap |= chunk.base_offset > count.next || chunk.expired || chunk.dropped;
+        let skip = count.next.saturating_sub(chunk.base_offset) as usize;
+        if skip > bytes.len() {
+            count.gap = true;
+            return;
+        }
+        let added = &bytes[skip..];
+        count.newlines = count
+            .newlines
+            .saturating_add(added.iter().filter(|byte| **byte == b'\n').count());
+        count.seen |= !added.is_empty();
+        count.next = chunk.next_offset;
+        self.output_line_count = Some(
+            self.stream_lines
+                .iter()
+                .map(|s| s.newlines + usize::from(s.seen))
+                .sum(),
+        );
+    }
+
     pub fn accept_command(&mut self, command: crate::protocol::CommandResultWire) {
         use crate::protocol::CommandStatusWire::{Cancelling, Running};
         if self
@@ -520,6 +607,9 @@ impl ToolFacts {
                 .as_ref()
                 .map_or(0, String::capacity)
             + self.result.as_ref().map_or(0, |result| result.len())
+            + self.inline.as_ref().map_or(0, |load| {
+                load.output.capacity_bytes() + load.error.as_ref().map_or(0, String::capacity)
+            })
     }
 
     fn invocation_bytes(&self) -> usize {
@@ -584,6 +674,14 @@ impl ToolFacts {
             self.outcome = Some(outcome);
         }
         if result.is_some() && (self.result.is_none() || same_terminal) {
+            self.output_line_count = result.as_deref().map(|text| {
+                if text.is_empty() {
+                    0
+                } else {
+                    text.bytes().filter(|b| *b == b'\n').count() + 1
+                }
+            });
+            self.stream_lines = Default::default();
             self.result = result;
         }
         if self.display.hidden_line_count.is_none() {
@@ -604,7 +702,19 @@ impl ToolFacts {
         )
     }
 
-    pub fn truncate_to_bytes(&mut self, budget: usize) {
+    pub fn truncate_to_bytes(&mut self, mut budget: usize) {
+        if let Some(load) = self.inline.as_mut() {
+            self.result_truncated |= !load.output.chunks.is_empty();
+            load.output.chunks.clear();
+            load.output.retained_bytes = 0;
+            load.output.eof = true;
+            let error_bytes = load.error.as_ref().map_or(0, String::capacity);
+            if error_bytes > budget {
+                load.error = None;
+            } else {
+                budget -= error_bytes;
+            }
+        }
         let invocation_bytes = self.invocation_bytes();
         let mut budget = if invocation_bytes > budget {
             self.invocation = None;
@@ -624,7 +734,9 @@ impl ToolFacts {
         let display = Arc::make_mut(&mut self.display);
         truncate_string(&mut display.detail, budget, &mut used);
         if let Some(input) = &mut display.expanded_input {
+            let before = input.len();
             truncate_string(input, budget, &mut used);
+            display.body_truncated |= input.len() < before;
         }
         if let Some(result) = &mut self.result {
             let available = budget.saturating_sub(used);
@@ -692,6 +804,7 @@ mod tests {
     fn facts() -> ToolFacts {
         ToolFacts {
             display: Arc::new(ToolDisplayWire {
+                body_truncated: false,
                 detail: "tool".to_owned(),
                 expanded_input: None,
                 input_line_count: None,
@@ -700,6 +813,11 @@ mod tests {
             }),
             result: None,
             result_truncated: false,
+            output_line_count: None,
+            inline: None,
+            body_deferred: false,
+            count_partial: false,
+            stream_lines: Default::default(),
             status: ToolStatus::Pending,
             outcome: None,
             needs_read: false,
@@ -756,6 +874,7 @@ mod tests {
         detail.push_str("tool");
         let mut facts = facts();
         facts.display = Arc::new(ToolDisplayWire {
+            body_truncated: false,
             detail,
             expanded_input: None,
             input_line_count: None,
@@ -799,6 +918,7 @@ mod tests {
             outcome: None,
             input_availability: Availability::Available,
             output_availability: Availability::Pending,
+            output_line_count: None,
             input_bytes: 0,
             result_bytes: 0,
             input_truncated: false,
@@ -858,5 +978,44 @@ mod tests {
         assert!(!display.detail.contains('\u{202e}'));
         assert!(!display.detail.contains("DO_NOT_RETAIN"));
         assert!(display.expanded_input.is_none());
+    }
+}
+
+#[cfg(test)]
+mod live_line_count_tests {
+    use super::*;
+    use base64::Engine;
+
+    fn chunk(stream: Stream, base: u64, bytes: &[u8]) -> crate::protocol::ToolProcessChunkWire {
+        crate::protocol::ToolProcessChunkWire {
+            stream,
+            encoding: "base64".into(),
+            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+            base_offset: base,
+            next_offset: base + bytes.len() as u64,
+            observed_end: base + bytes.len() as u64,
+            dropped: false,
+            expired: false,
+        }
+    }
+
+    #[test]
+    fn streamed_lines_count_new_suffix_only_and_flag_gaps_without_retaining_body() {
+        let mut facts = ToolFacts::new("bash");
+        facts.accept_started("bash");
+        let first = chunk(Stream::Stdout, 0, b"a\n");
+        facts.accept_process_count(&first);
+        assert_eq!(facts.output_line_count, Some(2));
+        facts.accept_process_count(&first);
+        assert_eq!(facts.output_line_count, Some(2));
+        facts.accept_process_count(&chunk(Stream::Stdout, 1, b"\nb\n"));
+        assert_eq!(facts.output_line_count, Some(3));
+        facts.accept_process_count(&chunk(Stream::Stderr, 0, b"err"));
+        assert_eq!(facts.output_line_count, Some(4));
+        facts.accept_process_count(&chunk(Stream::Stdout, 10, b"lost\n"));
+        assert!(facts.stream_lines[0].gap);
+        assert_eq!(facts.output_line_count, Some(5));
+        assert!(facts.result.is_none());
+        assert!(facts.display.expanded_input.is_none());
     }
 }

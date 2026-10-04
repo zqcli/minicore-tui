@@ -898,8 +898,8 @@ fn user_assistant_and_tool_boundaries_share_one_blank_row() {
     assert_no_adjacent_blank_rows(&lines, "user/assistant/tool");
     assert_eq!(
         lines.iter().filter(|line| !is_blank(line)).count(),
-        5,
-        "surface sections expose content, timestamp, and tool status/target without an empty-body fold hint"
+        6,
+        "tool cards retain exactly three content rows, including the count"
     );
 }
 
@@ -1112,8 +1112,9 @@ fn durable_tool_fold_override_is_honored_by_the_prepared_transcript() {
 fn failed_tool_cards_keep_status_summary_hint_and_error_body() {
     let theme = Theme::dark();
     let display = crate::protocol::ToolDisplayWire {
+        body_truncated: false,
         detail: "$ run command".to_owned(),
-        expanded_input: Some("input body".to_owned()),
+        expanded_input: Some("run command".to_owned()),
         input_line_count: Some(1),
         hidden_line_count: Some(2),
         truncated: false,
@@ -1141,11 +1142,11 @@ fn failed_tool_cards_keep_status_summary_hint_and_error_body() {
         .map(line_text)
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(collapsed_text.contains("bash · failed"));
-    assert!(collapsed_text.contains("$ run command"));
-    assert!(collapsed_text.contains("permission denied"));
-    assert!(collapsed_text.contains("3 hidden rows"));
-    assert!(collapsed_text.contains("ctrl+o expand"));
+    assert!(collapsed_text.contains("bash"));
+    assert!(collapsed_text.contains("run command"));
+    assert!(!collapsed_text.contains("permission denied"));
+    assert!(collapsed_text.contains("3 lines hidden"));
+    assert!(!collapsed_text.contains("ctrl+o expand"));
     assert!(!collapsed_text.contains("private diagnostic"));
 
     let expanded = tool::durable_with_display(
@@ -1176,7 +1177,7 @@ fn failed_tool_cards_keep_status_summary_hint_and_error_body() {
         .map(line_text)
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(expanded_text.contains("input body"));
+    assert!(expanded_text.contains("run command"));
     assert!(expanded_text.contains("permission denied"));
     assert!(expanded_text.contains("private diagnostic"));
     assert!(!expanded_text.contains("ctrl+o expand"));
@@ -1200,8 +1201,8 @@ fn failed_tool_cards_keep_status_summary_hint_and_error_body() {
         false,
     );
     let denied_text = denied.iter().map(line_text).collect::<Vec<_>>().join("\n");
-    assert!(denied_text.contains("write · denied"));
-    assert!(denied_text.contains("not allowed"));
+    assert!(denied_text.contains("write"));
+    assert!(!denied_text.contains("not allowed"));
 
     let cancelled = tool::live(
         &theme,
@@ -1222,8 +1223,8 @@ fn failed_tool_cards_keep_status_summary_hint_and_error_body() {
         .map(line_text)
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(cancelled_text.contains("cancelled"));
-    assert!(cancelled_text.contains("cancellation detail"));
+    assert!(cancelled_text.contains("read"));
+    assert!(!cancelled_text.contains("cancellation detail"));
 
     let long_result = "x".repeat(400);
     let long_text = tool::durable(

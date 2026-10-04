@@ -593,17 +593,15 @@ async fn production_async_display_preserves_selection_and_scroll_anchor_until_co
 fn displayed_tool_button(app: &App) -> (u16, u16) {
     let screen = ui::layout::screen_layout(app, AREA);
     let prepared = app.prepared_conversation(screen.content.width).unwrap();
-    let (hit, key) = ui::tool_detail::detail_hits(
-        prepared,
-        screen.transcript,
-        0,
-        screen.transcript.height as usize,
+    let section = prepared
+        .sections
+        .iter()
+        .find(|s| s.id.kind == minicore_tui::state::view::SectionKind::Tool)
+        .unwrap();
+    (
+        screen.transcript.right().saturating_sub(9),
+        screen.transcript.y + section.rows.start as u16 + 1,
     )
-    .into_iter()
-    .next()
-    .expect("visible fixture tool button");
-    assert_eq!(key.tool_call_id, "call");
-    (hit.x, hit.y)
 }
 
 fn press_tool_button(app: &mut App, point: (u16, u16)) -> Vec<AppCommand> {
@@ -616,7 +614,7 @@ fn press_tool_button(app: &mut App, point: (u16, u16)) -> Vec<AppCommand> {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn production_async_display_tool_button_uses_exact_displayed_identity_during_reprepare() {
+async fn production_async_display_has_no_detail_hit_during_reprepare() {
     let mut app = fixture();
     let mut jobs = LocalJobs::new();
     let mut terminal = Terminal::new(TestBackend::new(AREA.width, AREA.height)).unwrap();
@@ -632,17 +630,11 @@ async fn production_async_display_tool_button_uses_exact_displayed_identity_duri
         before
     );
 
-    let commands = press_tool_button(&mut app, point);
-    let detail = app
-        .tool_detail()
-        .expect("still-displayed tool button opens");
-    assert_eq!(detail.key.session_id, "display");
-    assert_eq!(detail.key.loop_id, "loop");
-    assert_eq!(detail.key.request_index, 0);
-    assert_eq!(detail.key.tool_call_id, "call");
-    assert!(commands.iter().any(|command| matches!(command,
-        AppCommand::Rpc(request) if request.method == "tool.read"
-            && request.params["tool_call_id"] == "call")));
+    press_tool_button(&mut app, point);
+    assert!(
+        app.tool_detail().is_none(),
+        "removed detail label leaves no invisible hit"
+    );
     jobs.shutdown().await;
 }
 

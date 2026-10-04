@@ -31,10 +31,10 @@ suite. Execution results, as distinct from workflow configuration, belong in
 
 ```json
 {
-  "version": "0.6.0",
+  "version": "0.6.2",
   "protocol_version": 1,
   "capabilities": [
-    "session.read", "session.context", "turn.result", "tool.read",
+    "session.read", "session.read.display", "session.context", "turn.result", "tool.read", "tool.read.display",
     "tool.output", "session.history", "workspace.read", "workspace.files",
     "workspace.search", "workspace.status", "changes.list", "changes.diff",
     "deferred.waiter_limit"
@@ -45,8 +45,15 @@ suite. Execution results, as distinct from workflow configuration, belong in
 The refactor requires `protocol_version == 1`. The old `is_supported_agent_version`
 package-minor gate (`minor == 3`) is deleted in stage B and replaced by
 `validate_backend(protocol_version, capabilities)`. Protocol v1 equality is a
-necessary but not sufficient condition; the fixed Agent 0.6.0 build plus this
+necessary but not sufficient condition; the integrated display-capable Agent build plus this
 repository's fixtures/E2E remain the release gate.
+
+`session.read.display` and `tool.read.display` are required together for summary-only
+restore and explicit inline-body recovery. Missing either capability stops the
+handshake; the TUI never falls back to transferring raw tool bodies on restore.
+Historical fixtures below remain decoder evidence, not supported-backend promises.
+The fixed-backend CI pins must name the integrated display-capable Agent and its
+locked Runtime revision before publication.
 
 Stage B1 (commit `afd2894`) removed the package-minor gate. Fixtures and reducer
 tests cover acceptance and rejection of the required Protocol v1 capabilities;

@@ -30,6 +30,7 @@ fn fixture(total: usize) -> App {
         .transcript
         .window
         .install_pin(SnapshotPin {
+            projection: None,
             captured_end: total as u64,
             history_revision: "a".repeat(64),
             total,

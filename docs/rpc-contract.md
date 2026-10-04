@@ -81,7 +81,9 @@ to reconstruct the application transcript.
 | `workspace.*` / `changes.*` | session, scope and opaque cursors | bounded read-only workspace/change observations |
 | `session.context` / `session.compact*` | session and operation identity | context/compaction facts and typed outcomes |
 
-`agent.ping` must report `protocol_version == 1` and the required capabilities;
+`agent.ping` must report `protocol_version == 1` and the required capabilities,
+including `session.read.display` and `tool.read.display` for summary-only restore
+and lazy inline bodies;
 there is no Agent 0.3 package-minor fallback. `agent.reload` is sent with `{}`
 parameters and accepts only the exact successful result shape `{"ok":true}`;
 malformed, missing, false, or extra fields fail closed. A valid `{"ok":true}`

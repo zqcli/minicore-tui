@@ -5841,10 +5841,11 @@ fn failed_tool_survives_live_finished_wait_and_history_with_folded_geometry() {
         .map(line_text)
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(collapsed_text.contains("bash · failed"));
+    assert!(collapsed_text.contains("bash"));
     assert!(collapsed_text.contains("$ failing command"));
-    assert!(collapsed_text.contains("tool execution failed"));
-    assert!(collapsed_text.contains("ctrl+o expand"));
+    assert!(!collapsed_text.contains("tool execution failed"));
+    assert!(collapsed_text.contains("Lines unknown"));
+    assert!(!collapsed_text.contains("ctrl+o expand"));
 
     let prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 100);
     let tool_section = prepared
@@ -6041,9 +6042,9 @@ fn failed_tool_survives_live_finished_wait_and_history_with_folded_geometry() {
         .map(line_text)
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(final_collapsed_text.contains("bash · failed"));
-    assert!(final_collapsed_text.contains("tool failed"));
-    assert!(final_collapsed_text.contains("ctrl+o expand"));
+    assert!(final_collapsed_text.contains("bash"));
+    assert!(!final_collapsed_text.contains("tool failed"));
+    assert!(final_collapsed_text.contains("Lines unknown"));
 }
 
 #[test]

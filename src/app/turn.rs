@@ -710,6 +710,11 @@ impl App {
             RequestKind::Workspace {
                 generation, kind, ..
             } => self.workspace_send_failed(generation, kind),
+            RequestKind::ToolInline {
+                key, generation, ..
+            } => {
+                self.inline_tool_failed(&key, generation, "tool query was not sent");
+            }
             RequestKind::ToolDetail {
                 key, generation, ..
             } => {
@@ -2419,6 +2424,11 @@ impl App {
             } => {
                 self.restore_unsent_turn(&session_id, local_submission);
                 self.notice(NoticeLevel::Warning, format!("turn send failed: {error}"));
+            }
+            RequestKind::ToolInline {
+                key, generation, ..
+            } => {
+                self.inline_tool_failed(&key, generation, "tool query was not sent");
             }
             RequestKind::ToolDetail {
                 key, generation, ..

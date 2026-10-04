@@ -478,7 +478,9 @@ impl App {
 
     pub(super) fn request_session_id(kind: &RequestKind) -> Option<&str> {
         match kind {
-            RequestKind::ToolDetail { key, .. } => Some(&key.session_id),
+            RequestKind::ToolDetail { key, .. } | RequestKind::ToolInline { key, .. } => {
+                Some(&key.session_id)
+            }
             RequestKind::Changes { session_id, .. }
             | RequestKind::WorkspaceStatus { session_id, .. } => Some(session_id),
             RequestKind::Workspace { session_id, .. }
@@ -814,6 +816,16 @@ impl App {
             self.submissions.remove(&local_submission);
         }
         for id in stale_ids {
+            if let Some(RequestKind::ToolInline {
+                key, generation, ..
+            }) = self.pending_requests.get(&id).cloned()
+            {
+                self.inline_tool_failed(
+                    &key,
+                    generation,
+                    "tool load interrupted by session switch",
+                );
+            }
             self.pending_requests.insert(id, RequestKind::StaleRead);
         }
         let retry_keys: Vec<RetryKey> = self

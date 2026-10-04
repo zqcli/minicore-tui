@@ -415,7 +415,10 @@ fn safe_inline(text: &str) -> String {
 /// A tool result body: its text when present, otherwise an explicit marker for
 /// a body the runtime did not return. Never the raw provider envelope.
 fn tool_result_body(result: &crate::protocol::read::RuntimeToolResultItem) -> String {
-    let content = result.output.content.as_str();
+    let Some(output) = &result.output else {
+        return "(tool body not loaded)".to_owned();
+    };
+    let content = output.content.as_str();
     if content.is_empty() {
         "(no textual result was returned)".to_owned()
     } else {
@@ -774,6 +777,7 @@ mod tests {
 
     fn user(text: &str) -> RawHistoryItem {
         RawHistoryItem {
+            tool_summaries: Vec::new(),
             item: RuntimeItem::User(crate::protocol::read::RuntimeUserItem {
                 loop_id: "loop".to_owned(),
                 kind: RuntimeUserKind::Prompt,
@@ -787,6 +791,7 @@ mod tests {
 
     fn assistant(parts: Vec<RuntimeAssistantPart>) -> RawHistoryItem {
         RawHistoryItem {
+            tool_summaries: Vec::new(),
             item: RuntimeItem::Assistant(RuntimeAssistantItem {
                 loop_id: "loop".to_owned(),
                 request_index: 0,
@@ -1080,6 +1085,7 @@ mod tests {
     #[test]
     fn summary_items_export_their_text() {
         let item = RawHistoryItem {
+            tool_summaries: Vec::new(),
             item: RuntimeItem::Summary(RuntimeSummaryItem {
                 content: "condensed".to_owned(),
             }),

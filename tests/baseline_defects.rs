@@ -63,12 +63,10 @@ fn respond(
     )
 }
 
-/// The pinned Agent 0.5 handshake (protocol_version 1 + required
-/// capabilities) must bootstrap successfully. Formerly a RED baseline pin of
-/// the 0.3.x-only gate; stage B flipped it to the contract the new code must
-/// satisfy (spec §4.1).
+/// Compatibility is capability-based, including both display-only reads;
+/// package version strings alone do not authorize raw-history fallback.
 #[test]
-fn bootstrap_accepts_the_pinned_agent_0_5_protocol_v1() {
+fn bootstrap_accepts_protocol_v1_with_all_required_capabilities() {
     let mut app = ready_app();
     let requests = take_requests(app.update(AppEvent::Bootstrap));
     let ping = requests

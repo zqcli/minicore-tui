@@ -609,15 +609,17 @@ impl<'a> ScanPlan<'a> {
                     Some(result.call_id.clone()),
                     &result.tool_name,
                 );
-                self.push(
-                    Some(index),
-                    SearchSource::ToolResult,
-                    Some(result.loop_id.clone()),
-                    Some(result.request_index),
-                    0,
-                    Some(result.call_id.clone()),
-                    &result.output.content,
-                );
+                if let Some(output) = &result.output {
+                    self.push(
+                        Some(index),
+                        SearchSource::ToolResult,
+                        Some(result.loop_id.clone()),
+                        Some(result.request_index),
+                        0,
+                        Some(result.call_id.clone()),
+                        &output.content,
+                    );
+                }
             }
             RuntimeItem::Summary(summary) => {
                 self.push(

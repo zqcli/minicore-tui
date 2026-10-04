@@ -434,7 +434,7 @@ fn detail_render_is_safe_narrow_and_keeps_the_existing_editor_footer_geometry() 
     }
 }
 #[test]
-fn title_detail_hit_does_not_replace_the_original_tool_fold() {
+fn removed_detail_label_has_no_invisible_hit() {
     let mut app = testapp::tools(ThemeKind::Dark);
     app.terminal_size = (80, 24);
     let area = ratatui::layout::Rect::new(0, 0, 80, 24);
@@ -445,28 +445,17 @@ fn title_detail_hit_does_not_replace_the_original_tool_fold() {
         prepared.total_rows(),
         screen.transcript.height as usize,
     );
-    let (hit, key) = crate::ui::tool_detail::detail_hits(
-        &prepared,
-        screen.transcript,
-        position.offset,
-        position.visible_rows,
-    )
-    .remove(0);
+    let title_y = screen.transcript.y + position.visible_rows.saturating_sub(1) as u16;
     app.update(AppEvent::ConversationPrepared(prepared));
-    let commands = app.update(AppEvent::Terminal(CrosstermEvent::Mouse(
+    app.update(AppEvent::Terminal(CrosstermEvent::Mouse(
         crossterm::event::MouseEvent {
             kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
-            column: hit.x,
-            row: hit.y,
+            column: screen.transcript.right().saturating_sub(9),
+            row: title_y,
             modifiers: KeyModifiers::NONE,
         },
     )));
-    assert!(matches!(app.main_view, MainView::ToolDetail(_)));
-    assert_eq!(app.tool_detail().unwrap().key, key);
-    assert_eq!(
-        take_requests(commands)[0].params["tool_call_id"],
-        key.tool_call_id
-    );
+    assert!(!matches!(app.main_view, MainView::ToolDetail(_)));
 }
 
 #[test]

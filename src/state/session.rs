@@ -489,14 +489,29 @@ impl SessionView {
     }
 
     pub fn recompute_usage_projection(&mut self) {
+        let covered = self
+            .transcript
+            .window
+            .pin()
+            .and_then(|pin| pin.projection.as_ref())
+            .map(|p| &p.covered_usage);
         let persisted = self
             .last_result
             .as_ref()
-            .filter(|result| result.persistence == Some(TurnPersistenceWire::Persisted));
+            .filter(|result| result.persistence == Some(TurnPersistenceWire::Persisted))
+            .filter(|result| {
+                covered.is_none_or(|covered| {
+                    covered.last_loop_id.as_deref() != Some(result.turn.loop_id.as_str())
+                })
+            });
         let persisted_loop = persisted.map(|result| result.turn.loop_id.as_str());
         let mut accumulator = UsageAccumulator::default();
         let mut request_keys = HashSet::new();
         let mut source_count = 0;
+        if let Some(covered) = covered.filter(|covered| covered.loop_count > 0) {
+            accumulator.add(covered.usage);
+            source_count += 1;
+        }
         for block in self.transcript.blocks.iter() {
             let TranscriptBlock::Assistant(assistant) = block.as_ref() else {
                 continue;
@@ -537,6 +552,7 @@ impl SessionView {
         let completeness = if source_count == 0 || !accumulator.has_known_value() {
             UsageCompleteness::Unknown
         } else if accumulator.has_unknown()
+            || covered.is_some_and(|covered| covered.partial)
             || !self.transcript.complete
             || self.history_read.is_loading()
             || self.event_gap

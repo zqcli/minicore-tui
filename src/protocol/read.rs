@@ -43,6 +43,7 @@ pub struct SnapshotPin {
     pub captured_end: u64,
     pub history_revision: String,
     pub total: usize,
+    pub projection: Option<DisplayProjection>,
 }
 
 impl SnapshotPin {
@@ -56,6 +57,17 @@ impl SnapshotPin {
             return Err(ReadError::InvalidPin {
                 detail: "history_revision is not a 64-character hexadecimal digest".to_owned(),
             });
+        }
+        if let Some(projection) = &self.projection {
+            if projection.revision.len() != 64
+                || !projection.revision.bytes().all(|b| b.is_ascii_hexdigit())
+                || projection.first_item > self.total
+                || projection.covered_item_count > self.total
+            {
+                return Err(ReadError::InvalidPin {
+                    detail: "invalid display projection identity".into(),
+                });
+            }
         }
         Ok(())
     }
@@ -88,6 +100,8 @@ pub struct ReadSessionResult {
     pub captured_end: u64,
     #[serde(default)]
     pub trailing_incomplete: bool,
+    #[serde(default)]
+    pub projection: Option<DisplayProjection>,
 }
 
 impl ReadSessionResult {
@@ -96,6 +110,7 @@ impl ReadSessionResult {
             captured_end: self.captured_end,
             history_revision: self.history_revision.clone(),
             total: self.total,
+            projection: self.projection.clone(),
         }
     }
 }
@@ -113,6 +128,42 @@ pub struct ReadTurnSummary {
     pub tool_rounds: u64,
     pub final_config_revision: u64,
     pub completed_at: String,
+}
+
+/// Identity and accounting of one explicitly selected display read chain.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct DisplayProjection {
+    pub revision: String,
+    pub first_item: usize,
+    pub covered_item_count: usize,
+    pub covered_usage: CoveredUsage,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct CoveredUsage {
+    pub usage: UsageWire,
+    pub loop_count: usize,
+    pub last_loop_id: Option<String>,
+    pub partial: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCountState {
+    Exact,
+    LowerBound,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct ToolSummary {
+    pub tool_ref: super::ToolRefWire,
+    pub tool_call_id: String,
+    pub name: String,
+    pub display: super::ToolDisplayWire,
+    pub output_line_count: Option<usize>,
+    pub output_truncated: bool,
+    pub count_state: ToolCountState,
 }
 
 /// One complete canonical item body emitted by [`ChunkAssembler`]. The
@@ -136,6 +187,16 @@ impl EncodedHistoryItem {
 pub struct RawHistoryItem {
     pub item: RuntimeItem,
     pub timestamp: Option<String>,
+    pub tool_summaries: Vec<ToolSummary>,
+}
+
+impl RawHistoryItem {
+    pub fn tool_display(&self, call_id: &str) -> Option<&super::ToolDisplayWire> {
+        self.tool_summaries
+            .iter()
+            .find(|summary| summary.tool_call_id == call_id)
+            .map(|summary| &summary.display)
+    }
 }
 
 /// A sanitized Runtime `HistoryItem`, decoded from its canonical JSON.
@@ -290,7 +351,7 @@ pub struct RuntimeToolResultItem {
     pub call_id: String,
     pub tool_name: String,
     pub outcome: String,
-    pub output: RuntimeToolOutput,
+    pub output: Option<RuntimeToolOutput>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -589,6 +650,10 @@ impl ChunkAssembler {
 struct Envelope {
     item: RuntimeItem,
     #[serde(default)]
+    display: bool,
+    #[serde(default)]
+    tool_summaries: Vec<ToolSummary>,
+    #[serde(default)]
     timestamp: Option<String>,
 }
 
@@ -597,8 +662,121 @@ struct Envelope {
 /// compatibility paths.
 pub fn decode_item(raw: &str) -> Result<RawHistoryItem, String> {
     let envelope: Envelope = serde_json::from_str(raw).map_err(|error| error.to_string())?;
+    for summary in &envelope.tool_summaries {
+        let matches = match &envelope.item {
+            RuntimeItem::Assistant(assistant) => {
+                summary.tool_ref.loop_id == assistant.loop_id
+                    && summary.tool_ref.request_index == assistant.request_index
+                    && assistant.content.iter().any(|part| {
+                        matches!(part, RuntimeAssistantPart::ToolCall { tool_call_id, name, .. }
+                    if tool_call_id == &summary.tool_call_id && name == &summary.name)
+                    })
+            }
+            RuntimeItem::ToolResult(result) => {
+                summary.tool_ref.loop_id == result.loop_id
+                    && summary.tool_ref.request_index == result.request_index
+                    && summary.tool_call_id == result.call_id
+                    && summary.name == result.tool_name
+            }
+            _ => false,
+        };
+        if !matches
+            || summary.tool_ref.tool_call_id != summary.tool_call_id
+            || summary.display.expanded_input.is_some()
+        {
+            return Err("display tool summary identity or body mismatch".into());
+        }
+    }
+    if let RuntimeItem::ToolResult(result) = &envelope.item {
+        if result.output.is_none()
+            && (!envelope.display
+                || !envelope.tool_summaries.iter().any(|s| {
+                    s.tool_ref.loop_id == result.loop_id
+                        && s.tool_ref.request_index == result.request_index
+                        && s.tool_ref.tool_call_id == result.call_id
+                        && s.name == result.tool_name
+                }))
+        {
+            return Err("tool result body missing outside display projection".into());
+        }
+    }
+    if !envelope.display && !envelope.tool_summaries.is_empty() {
+        return Err("tool summaries require display projection".into());
+    }
     Ok(RawHistoryItem {
         item: envelope.item,
         timestamp: envelope.timestamp,
+        tool_summaries: envelope.tool_summaries,
     })
+}
+
+#[cfg(test)]
+mod display_projection_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn missing_result_body_requires_matching_explicit_display_summary() {
+        let mut envelope = json!({"item":{"type":"tool_result","data":{
+            "loop_id":"l", "request_index":0, "call_id":"c", "tool_name":"write", "outcome":"success"
+        }}});
+        assert!(decode_item(&envelope.to_string()).is_err());
+        envelope["display"] = json!(true);
+        assert!(decode_item(&envelope.to_string()).is_err());
+        envelope["tool_summaries"] = json!([{
+            "tool_ref":{"session_id":"s","loop_id":"l","request_index":0,"tool_call_id":"c"},
+            "tool_call_id":"c", "name":"write", "display":{"detail":"a.rs","input_line_count":57},
+            "output_line_count":1,"output_truncated":false,"count_state":"exact"
+        }]);
+        let decoded = decode_item(&envelope.to_string()).unwrap();
+        let RuntimeItem::ToolResult(result) = decoded.item else {
+            panic!("result")
+        };
+        assert!(
+            result.output.is_none(),
+            "summary is never an empty/full result owner"
+        );
+        envelope["tool_summaries"][0]["tool_ref"]["loop_id"] = json!("another");
+        assert!(decode_item(&envelope.to_string()).is_err());
+    }
+
+    #[test]
+    fn display_request_binds_projection_while_raw_export_remains_raw() {
+        let pin = SnapshotPin {
+            captured_end: 100,
+            history_revision: "a".repeat(64),
+            total: 4,
+            projection: Some(DisplayProjection {
+                revision: "b".repeat(64),
+                first_item: 1,
+                covered_item_count: 2,
+                covered_usage: CoveredUsage {
+                    usage: UsageWire::default(),
+                    loop_count: 1,
+                    last_loop_id: Some("l".into()),
+                    partial: true,
+                },
+            }),
+        };
+        let display = crate::protocol::OutgoingRequest::session_display_read(
+            crate::protocol::RequestId(1),
+            "s",
+            Some(ReadCursor { item: 2, offset: 0 }),
+            10,
+            4096,
+            Some(&pin),
+        );
+        assert_eq!(display.params["view"], "display");
+        assert_eq!(display.params["projection_revision"], "b".repeat(64));
+        let raw = crate::protocol::OutgoingRequest::session_read(
+            crate::protocol::RequestId(2),
+            "s",
+            None,
+            10,
+            4096,
+            None,
+        );
+        assert!(raw.params.get("view").is_none());
+        assert!(raw.params.get("projection_revision").is_none());
+    }
 }

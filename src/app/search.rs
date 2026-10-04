@@ -335,7 +335,29 @@ impl App {
         session_id: &SessionId,
     ) -> Option<crate::state::search::LoadedScanSnapshot> {
         let view = self.sessions.known.get(session_id)?;
-        let blocks = Arc::clone(&view.transcript.blocks);
+        let mut blocks = Arc::clone(&view.transcript.blocks);
+        // Search borrows recovered bodies from the same bounded fact owner as
+        // rendering; it does not install another persistent history payload.
+        for (index, block) in view.transcript.blocks.iter().enumerate() {
+            if let TranscriptBlock::Tool(tool) = block.as_ref() {
+                let key = ToolKey::new(
+                    session_id,
+                    &tool.loop_id,
+                    tool.request_index,
+                    &tool.tool_call_id,
+                );
+                if let Some(result) = view
+                    .tool_presentations
+                    .get(&key)
+                    .filter(|facts| facts.body_deferred)
+                    .and_then(|facts| facts.result.as_ref())
+                {
+                    let mut tool = tool.clone();
+                    tool.result = Some(Arc::clone(result));
+                    Arc::make_mut(&mut blocks)[index] = Arc::new(TranscriptBlock::Tool(tool));
+                }
+            }
+        }
         let known_items = view.transcript.window.len();
         let total_items = view.transcript.window.total();
         let mut live = Vec::new();
@@ -394,7 +416,19 @@ impl App {
                         tool_call_id: Some(tool.tool_call_id.clone()),
                         text: tool.name.clone(),
                     });
-                    if let Some(result) = tool.result.as_deref() {
+                    let result = loop_id
+                        .as_deref()
+                        .and_then(|loop_id| {
+                            view.tool_presentations.get(&ToolKey::new(
+                                session_id,
+                                loop_id,
+                                request.request_index,
+                                &tool.tool_call_id,
+                            ))
+                        })
+                        .and_then(|facts| facts.result.as_deref())
+                        .or(tool.result.as_deref());
+                    if let Some(result) = result {
                         live.push(crate::jobs::LiveScanText {
                             source: SearchSource::ToolResult,
                             index: None,
@@ -470,6 +504,9 @@ impl App {
         let Some(session_id) = self.active_session_id() else {
             return Vec::new();
         };
+        if self.reject_compacted_match(&session_id, target) {
+            return Vec::new();
+        }
         self.install_search_folds(target);
         let resident = target
             .index
@@ -528,7 +565,14 @@ impl App {
                 self.notice(NoticeLevel::Info, "no earlier prompt is loaded");
                 return Vec::new();
             };
-            if before == 0 {
+            let first_prompt = self
+                .sessions
+                .known
+                .get(&session_id)
+                .and_then(|view| view.transcript.window.pin())
+                .and_then(|pin| pin.projection.as_ref())
+                .map_or(0, |projection| projection.covered_item_count);
+            if before <= first_prompt {
                 self.notice(NoticeLevel::Info, "no earlier prompt in this session");
                 return Vec::new();
             }
@@ -858,6 +902,34 @@ impl App {
         }
     }
 
+    fn reject_compacted_match(&mut self, session_id: &SessionId, target: &SearchMatch) -> bool {
+        let active_view_scope = self
+            .search_panel()
+            .is_none_or(|panel| panel.scope == SearchScope::Loaded);
+        let covered = self
+            .sessions
+            .known
+            .get(session_id)
+            .and_then(|view| view.transcript.window.pin())
+            .and_then(|pin| pin.projection.as_ref())
+            .is_some_and(|projection| {
+                target.index.is_some_and(|index| {
+                    index < projection.covered_item_count
+                        && !(index == projection.first_item
+                            && target.source == SearchSource::Summary
+                            && active_view_scope)
+                })
+            });
+        if covered {
+            self.pending_search_jump = None;
+            self.notice(
+                NoticeLevel::Info,
+                "Match is in compacted history; export raw history to inspect",
+            );
+        }
+        covered
+    }
+
     fn history_item_resident(&self, session_id: &SessionId, index: usize) -> bool {
         self.sessions
             .known
@@ -880,6 +952,9 @@ impl App {
         }
         match pending {
             PendingSearchJump::Match(target) => {
+                if self.reject_compacted_match(session_id, &target) {
+                    return Vec::new();
+                }
                 let resident = target
                     .index
                     .is_some_and(|index| self.history_item_resident(session_id, index));
@@ -925,8 +1000,13 @@ impl App {
                         .and_then(|view| view.transcript.window.loaded_ranges().first())
                         .map(|range| range.start)
                         .unwrap_or(0);
-                    let loaded_from_start = self.history_item_resident(session_id, 0);
-                    if !loaded_from_start && earliest_loaded > 0 {
+                    let floor = self
+                        .sessions
+                        .known
+                        .get(session_id)
+                        .map_or(0, |view| view.transcript.window.first_item());
+                    let loaded_from_start = self.history_item_resident(session_id, floor);
+                    if !loaded_from_start && earliest_loaded > floor {
                         let next = earliest_loaded.saturating_sub(1);
                         if let Some((_, PendingSearchJump::Prompt { before, .. })) =
                             self.pending_search_jump.as_mut()
@@ -995,7 +1075,12 @@ impl App {
             .sessions
             .known
             .get(&session_id)
-            .and_then(|view| view.transcript.window.pin().cloned());
+            .and_then(|view| view.transcript.window.pin().cloned())
+            .map(|mut pin| {
+                // Explicit archive search starts a new canonical chain at offset zero.
+                pin.projection = None;
+                pin
+            });
         if let Some(panel) = self.search_panel_mut() {
             panel.coverage.total_items = pin.as_ref().map_or(0, |pin| pin.total);
         }
@@ -1457,6 +1542,7 @@ impl App {
         let Some(view) = self.sessions.known.get(session_id) else {
             return Vec::new();
         };
+        let index = index.max(view.transcript.window.first_item());
         if view.read_page.is_some()
             || self.history_decode_pending(session_id)
             || self.pending_history(session_id)

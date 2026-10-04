@@ -65,6 +65,13 @@ impl HistoryWindow {
         self.pin.as_ref()
     }
 
+    pub fn first_item(&self) -> usize {
+        self.pin
+            .as_ref()
+            .and_then(|pin| pin.projection.as_ref())
+            .map_or(0, |projection| projection.first_item)
+    }
+
     pub fn total(&self) -> usize {
         self.pin.as_ref().map_or(0, |pin| pin.total)
     }
@@ -119,8 +126,8 @@ impl HistoryWindow {
         let end = self
             .loaded_ranges
             .iter()
-            .find(|range| range.start == 0)
-            .map_or(0, |range| range.end);
+            .find(|range| range.start == self.first_item())
+            .map_or(self.first_item(), |range| range.end);
         self.pending_large_items
             .keys()
             .next()
@@ -369,7 +376,10 @@ fn item_bytes(item: &RawHistoryItem) -> usize {
             .iter()
             .map(|part| part.visible_bytes())
             .sum(),
-        RuntimeItem::ToolResult(result) => result.output.content.len(),
+        RuntimeItem::ToolResult(result) => result
+            .output
+            .as_ref()
+            .map_or(0, |output| output.content.len()),
         RuntimeItem::Summary(summary) => summary.content.len(),
     }
 }
@@ -518,7 +528,10 @@ pub(super) fn raw_item_owner(index: usize, item: &RawHistoryItem) -> Arc<Transcr
                             tool_call_id: tool_call_id.clone(),
                             name: name.clone(),
                             call_index: *call_index,
-                            display: crate::state::tool::history_display(name, arguments),
+                            display: item
+                                .tool_display(tool_call_id)
+                                .cloned()
+                                .or_else(|| crate::state::tool::history_display(name, arguments)),
                         };
                         parts.push(AssistantPart::ToolCall(call.clone()));
                         tool_calls.push(call);
@@ -554,7 +567,10 @@ pub(super) fn raw_item_owner(index: usize, item: &RawHistoryItem) -> Arc<Transcr
             request_index: result.request_index,
             tool_call_id: result.call_id.clone(),
             name: result.tool_name.clone(),
-            result: Some(Arc::<str>::from(result.output.content.as_str())),
+            result: result
+                .output
+                .as_ref()
+                .map(|output| Arc::<str>::from(output.content.as_str())),
             outcome: serde_json::from_value::<crate::protocol::ToolOutcomeWire>(
                 serde_json::Value::String(result.outcome.clone()),
             )
@@ -884,6 +900,7 @@ pub(crate) fn validate_chain_pin(
     if let Some(want) = pin.as_ref() {
         if want.captured_end != result.captured_end
             || want.history_revision != result.history_revision
+            || want.projection != result.projection
         {
             return Err(PinError::RevisionChanged);
         }
@@ -941,7 +958,9 @@ pub(crate) fn advance_chain_page(
     }
 
     let previous = page.cursor;
-    let mut expected = previous.item;
+    let mut expected = previous
+        .item
+        .max(result.projection.as_ref().map_or(0, |p| p.first_item));
     let mut explicit_large = false;
     for chunk in &result.items {
         match page.assembler.push(chunk.clone()) {
@@ -1106,6 +1125,7 @@ pub fn apply_page(
     if let Some(want) = page.want_pin.as_ref() {
         if want.captured_end != result.captured_end
             || want.history_revision != result.history_revision
+            || want.projection != result.projection
         {
             return Ok(ReadApply::Stale(PinError::RevisionChanged));
         }
@@ -1131,7 +1151,10 @@ pub fn apply_page(
     let mut explicit_large_item = false;
     // The page must be contiguous from the requested cursor, and its items must
     // advance by exactly one; a gap is a protocol violation, never spliced.
-    let mut expected = page.cursor.item;
+    let mut expected = page
+        .cursor
+        .item
+        .max(result.projection.as_ref().map_or(0, |p| p.first_item));
     for chunk in &result.items {
         match page.assembler.push(chunk.clone()) {
             Ok(Assembled::Pending) => {}
@@ -1391,6 +1414,16 @@ impl App {
         durable_skip: usize,
     ) -> Vec<Range<usize>> {
         let mut ranges = Vec::new();
+        if let Some(projection) = view
+            .transcript
+            .window
+            .pin()
+            .and_then(|pin| pin.projection.as_ref())
+        {
+            if projection.covered_item_count > 0 {
+                ranges.push(projection.first_item..projection.first_item + 1);
+            }
+        }
         if active && tail > 0 {
             let scroll_offset = if view.scroll.follow_tail {
                 view.transcript.render_cache.as_ref().map_or_else(
@@ -1989,7 +2022,22 @@ impl App {
         if read.probe {
             view.reconcile_summary_revision(&page.history_revision);
             let pin = page.pin();
-            let window_start = pin.total.saturating_sub(crate::protocol::READ_TAIL_ITEMS);
+            if let Some(projection) = &pin.projection {
+                view.transcript.blocks_mut().retain(|block| {
+                    block
+                        .index()
+                        .is_none_or(|index| index >= projection.covered_item_count)
+                });
+                view.transcript.invalidate();
+            }
+            let window_start = pin
+                .projection
+                .as_ref()
+                .filter(|p| p.covered_item_count > 0)
+                .map_or_else(
+                    || pin.total.saturating_sub(crate::protocol::READ_TAIL_ITEMS),
+                    |p| p.first_item,
+                );
             view.transcript.window.replace_pin(pin);
             view.read_page = None;
             view.transcript.next_cursor = None;
@@ -2058,7 +2106,9 @@ impl App {
                     }
                     page_state.pending_encoded.clear();
                     page_state.pending_page = None;
-                    if applied.explicit_large_item && window_start == 0 {
+                    if applied.explicit_large_item
+                        && window_start == view.transcript.window.first_item()
+                    {
                         view.read_page = Some(page_state);
                         view.transcript.next_cursor = applied.next;
                         view.transcript.sync_from_window();
@@ -2089,7 +2139,7 @@ impl App {
                             NextChain::Done => Vec::new(),
                         };
                     }
-                    if window_start == 0 {
+                    if window_start == view.transcript.window.first_item() {
                         // The probe item belongs to the window; continue from
                         // the backend's own next cursor under the new pin.
                         view.read_page = Some(page_state);
@@ -2431,7 +2481,7 @@ impl App {
         if pending.explicit_large_item {
             view.transcript.sync_from_window();
             view.history_read.finish();
-            if page_state.window_start == 0 {
+            if page_state.window_start == view.transcript.window.first_item() {
                 view.read_page = Some(page_state);
             }
             return Vec::new();
@@ -3627,6 +3677,7 @@ mod budget_tests {
 
     fn item(bytes: usize) -> RawHistoryItem {
         RawHistoryItem {
+            tool_summaries: Vec::new(),
             item: serde_json::from_value(serde_json::json!({
                 "type": "user",
                 "data": {
@@ -4011,6 +4062,7 @@ mod earlier_rejoin_tests {
     fn window() -> HistoryWindow {
         let mut window = HistoryWindow::default();
         window.install_pin(SnapshotPin {
+            projection: None,
             captured_end: 90_000,
             history_revision: "a".repeat(64),
             total: 8,
@@ -4040,5 +4092,243 @@ mod earlier_rejoin_tests {
         window.forget_loaded(6);
         assert!(!window.contains_suffix_from(ReadCursor { item: 3, offset: 0 }));
         assert!(window.contains_suffix_from(ReadCursor { item: 7, offset: 0 }));
+    }
+}
+
+#[cfg(test)]
+mod display_view_tests {
+    use super::*;
+    use crate::protocol::read::{CoveredUsage, DisplayProjection, ReadChunk, ReadSessionResult};
+    use serde_json::json;
+
+    fn projection() -> DisplayProjection {
+        DisplayProjection {
+            revision: "b".repeat(64),
+            first_item: 99,
+            covered_item_count: 100,
+            covered_usage: CoveredUsage {
+                usage: crate::protocol::UsageWire {
+                    input_tokens: Some(40),
+                    ..Default::default()
+                },
+                loop_count: 1,
+                last_loop_id: Some("covered".into()),
+                partial: false,
+            },
+        }
+    }
+
+    #[test]
+    fn display_chain_keeps_original_indices_real_summary_and_mode_pin() {
+        let app = crate::ui::testapp::open_empty(ThemeKind::Dark, "s", None, "high");
+        let data = json!({"display":true,"derived_summary":true,"item":{"type":"summary","data":{"content":"REAL COMPACTION BODY"}}}).to_string();
+        let page = ReadSessionResult {
+            session: app.active_view().unwrap().info.clone(),
+            items: vec![ReadChunk {
+                index: 99,
+                offset: 0,
+                total_bytes: data.len(),
+                encoding: "utf8_json".into(),
+                data,
+                complete: true,
+            }],
+            next_cursor: Some(ReadCursor {
+                item: 100,
+                offset: 0,
+            }),
+            total: 102,
+            records: vec![],
+            records_truncated: false,
+            history_revision: "a".repeat(64),
+            captured_end: 1000,
+            trailing_incomplete: false,
+            projection: Some(projection()),
+        };
+        let mut window = HistoryWindow::default();
+        let mut state = ReadPage::new(ReadCursor::start(), None, 99);
+        let ReadApply::Ok(applied) = apply_page(&mut window, &mut state, &page).unwrap() else {
+            panic!("display page")
+        };
+        assert!(applied.error.is_none());
+        assert_eq!(applied.inserted[0].index, 99);
+        let decoded = crate::protocol::read::decode_item(&applied.inserted[0].data).unwrap();
+        let crate::protocol::read::RuntimeItem::Summary(summary) = decoded.item else {
+            panic!("summary")
+        };
+        assert_eq!(summary.content, "REAL COMPACTION BODY");
+        let mut switched = page.clone();
+        switched.projection = None;
+        assert!(matches!(
+            validate_chain_pin(&Some(page.pin()), &Some(102), &switched),
+            Err(PinError::RevisionChanged)
+        ));
+        window.install_pin(page.pin());
+        assert_eq!(window.first_item(), 99);
+        assert_eq!(window.confirmed_prefix(), 99);
+    }
+
+    #[test]
+    fn covered_usage_and_latest_persisted_result_are_not_added_twice() {
+        let mut app = crate::ui::testapp::open_empty(ThemeKind::Dark, "s", None, "high");
+        let view = app.active_session_mut().unwrap();
+        view.transcript.window.install_pin(SnapshotPin {
+            captured_end: 1000,
+            history_revision: "a".repeat(64),
+            total: 101,
+            projection: Some(projection()),
+        });
+        view.last_result = Some(
+            serde_json::from_value(json!({"turn":{"session_id":"s","loop_id":"covered"},
+            "outcome":{"type":"completed"},"usage":{"input_tokens":40},"persistence":"persisted"}))
+            .unwrap(),
+        );
+        view.transcript
+            .push_block(TranscriptBlock::Assistant(AssistantBlock {
+                index: 100,
+                loop_id: "tail".into(),
+                request_index: 0,
+                model: "test".into(),
+                reasoning_level: Default::default(),
+                parts: vec![],
+                tool_calls: vec![],
+                usage: crate::protocol::UsageWire {
+                    input_tokens: Some(7),
+                    ..Default::default()
+                },
+                finish_reason: "stop".into(),
+                terminal_error: None,
+            }));
+        view.recompute_usage_projection();
+        assert_eq!(view.usage_projection.usage.input_tokens, Some(47));
+        view.recompute_usage_projection();
+        assert_eq!(view.usage_projection.usage.input_tokens, Some(47));
+        assert_eq!(crate::ui::header::earlier_history_start(&app), None);
+    }
+    #[test]
+    fn covered_search_matches_do_not_jump_to_the_summary_or_send_window_reads() {
+        let mut app = crate::ui::testapp::open_empty(ThemeKind::Dark, "s", None, "high");
+        app.active_session_mut()
+            .unwrap()
+            .transcript
+            .window
+            .install_pin(SnapshotPin {
+                captured_end: 1000,
+                history_revision: "a".repeat(64),
+                total: 101,
+                projection: Some(projection()),
+            });
+        app.active_session_mut().unwrap().scroll.offset = 17;
+        for index in [98, 99] {
+            let target = crate::state::search::SearchMatch {
+                index: Some(index),
+                source: crate::state::search::SearchSource::ToolResult,
+                loop_id: Some("covered".into()),
+                request_index: Some(0),
+                ordinal: 0,
+                tool_call_id: Some("old-call".into()),
+                preview: "old".into(),
+                source_offset: 0,
+                byte_range: 0..3,
+            };
+            assert!(app.jump_to_match(&target).is_empty());
+            assert_eq!(app.active_view().unwrap().scroll.offset, 17);
+            assert!(app.pending_search_jump.is_none());
+        }
+    }
+    #[test]
+    fn explicit_archive_search_starts_a_canonical_pin_without_changing_display_view() {
+        let mut app = crate::ui::testapp::open_empty(ThemeKind::Dark, "s", None, "high");
+        app.active_session_mut()
+            .unwrap()
+            .transcript
+            .window
+            .install_pin(SnapshotPin {
+                captured_end: 1000,
+                history_revision: "a".repeat(64),
+                total: 101,
+                projection: Some(projection()),
+            });
+        let requests = crate::ui::testapp::take_requests(app.open_search(
+            "needle".into(),
+            crate::state::search::SearchScope::FullSession,
+        ));
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "session.read");
+        assert_eq!(requests[0].params["cursor"], json!({"item":0,"offset":0}));
+        assert!(requests[0].params.get("view").is_none());
+        assert!(
+            app.search_scan
+                .as_ref()
+                .unwrap()
+                .pin
+                .as_ref()
+                .unwrap()
+                .projection
+                .is_none()
+        );
+        assert!(
+            app.active_view()
+                .unwrap()
+                .transcript
+                .window
+                .pin()
+                .unwrap()
+                .projection
+                .is_some()
+        );
+    }
+    #[test]
+    fn only_loaded_summary_matches_can_use_the_derived_summary_index() {
+        use crate::state::search::{SearchMatch, SearchScope, SearchSource};
+        let mut app = crate::ui::testapp::open_empty(ThemeKind::Dark, "s", None, "high");
+        let view = app.active_session_mut().unwrap();
+        view.transcript.window.install_pin(SnapshotPin {
+            captured_end: 1000,
+            history_revision: "a".repeat(64),
+            total: 101,
+            projection: Some(projection()),
+        });
+        let owner = Arc::new(TranscriptBlock::Summary(SummaryBlock {
+            index: 99,
+            content: "derived summary".into(),
+        }));
+        view.transcript
+            .window
+            .insert_owner(99, Arc::clone(&owner), 0, 15);
+        view.transcript.insert_history_owner(owner);
+        let target = SearchMatch {
+            index: Some(99),
+            source: SearchSource::Summary,
+            loop_id: None,
+            request_index: None,
+            ordinal: 0,
+            tool_call_id: None,
+            preview: "summary".into(),
+            source_offset: 0,
+            byte_range: 0..7,
+        };
+        app.open_search("summary".into(), SearchScope::Loaded);
+        assert!(app.jump_to_match(&target).is_empty());
+        assert_eq!(
+            app.active_view()
+                .unwrap()
+                .scroll
+                .anchor
+                .as_ref()
+                .unwrap()
+                .section_id
+                .history_index,
+            Some(99)
+        );
+        app.open_search("summary".into(), SearchScope::FullSession);
+        app.active_session_mut().unwrap().scroll.anchor = None;
+        let pending = app.pending_requests.len();
+        assert!(app.jump_to_match(&target).is_empty());
+        assert!(app.active_view().unwrap().scroll.anchor.is_none());
+        assert_eq!(
+            app.pending_requests.len(),
+            pending,
+            "raw match must not start a display window read"
+        );
     }
 }

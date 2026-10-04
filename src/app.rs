@@ -76,6 +76,7 @@ mod help_return_tests;
 pub mod history;
 #[cfg(test)]
 mod history_navigation_tests;
+mod inline_tools;
 #[cfg(test)]
 mod panel_input_tests;
 pub mod panels;
@@ -258,6 +259,12 @@ pub enum RequestKind {
         epoch: u64,
         generation: u64,
         stream: Option<crate::protocol::ToolDataStreamWire>,
+    },
+    ToolInline {
+        key: ToolKey,
+        epoch: u64,
+        generation: u64,
+        output: bool,
     },
     /// A read request retired by a completed reload. Its response is
     /// consumed and intentionally ignored.
@@ -484,8 +491,6 @@ struct TranscriptFrame {
     session_epoch: u64,
     theme: ThemeKind,
     terminal_size: (u16, u16),
-    scroll: (usize, bool, Option<usize>),
-    tool_hits: Vec<(ratatui::layout::Rect, ToolKey)>,
     cells: ratatui::buffer::Buffer,
     scrollbar_cells: ratatui::buffer::Buffer,
 }
@@ -1184,17 +1189,8 @@ impl App {
                 {
                     self.mouse_down = None;
                     self.mouse_pressed_on_link = false;
-                    // The retained frame can still identify its own explicit
-                    // tool button. Never resolve other stale cells against a
-                    // newer layout (selection, links, folds and scrolling).
-                    if mouse.kind
-                        != crossterm::event::MouseEventKind::Down(
-                            crossterm::event::MouseButton::Left,
-                        )
-                        || self.displayed_tool_hit(mouse.column, mouse.row).is_none()
-                    {
-                        return Vec::new();
-                    }
+                    // Stale transcript cells have no active hit targets.
+                    return Vec::new();
                 }
             }
         }
@@ -1594,6 +1590,7 @@ impl App {
             self.close_main_detail();
         }
         commands.extend(self.poll_tool_detail());
+        commands.extend(self.poll_inline_tools());
         commands.extend(self.poll_workspace());
         commands.extend(self.poll_changes());
         commands.extend(self.poll_workspace_status());
@@ -1622,22 +1619,6 @@ impl App {
         // user switches away and back before the next terminal draw.
         if !self.transcript_frame_matches() {
             self.transcript_frame = None;
-        } else if !matches!(self.dock, Dock::Composer)
-            || self.has_main_detail()
-            || self.transcript_frame.as_ref().is_some_and(|saved| {
-                self.active_view().is_none_or(|view| {
-                    saved.scroll
-                        != (
-                            view.scroll.offset,
-                            view.scroll.follow_tail,
-                            view.scroll.prompt_cursor,
-                        )
-                })
-            })
-        {
-            if let Some(saved) = self.transcript_frame.as_mut() {
-                saved.tool_hits.clear();
-            }
         }
         // A settled tail window may retain a leading history gap, so
         // transcript.complete (the full prefix) is not required here.
@@ -1830,71 +1811,6 @@ impl App {
         })
     }
 
-    /// Only the bounded tool buttons of the frame actually on screen may
-    /// remain interactive while replacement layout is pending. Their stable
-    /// identities must still exist; no old row is interpreted as a new one.
-    fn displayed_tool_hit(&self, column: u16, row: u16) -> Option<ToolKey> {
-        if !matches!(self.dock, Dock::Composer)
-            || self.has_main_detail()
-            || !self.transcript_frame_matches()
-        {
-            return None;
-        }
-        let saved = self.transcript_frame.as_ref()?;
-        let screen = crate::ui::layout::screen_layout(
-            self,
-            ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1),
-        );
-        let view = self.active_view()?;
-        if saved.cells.area != screen.transcript
-            || saved.scroll
-                != (
-                    view.scroll.offset,
-                    view.scroll.follow_tail,
-                    view.scroll.prompt_cursor,
-                )
-        {
-            return None;
-        }
-        let (_, key) = saved
-            .tool_hits
-            .iter()
-            .find(|(hit, _)| hit.contains((column, row).into()))?;
-        let present = view.tool_presentations.contains_key(key)
-            || view.live.as_ref().is_some_and(|live| {
-                live.reference.as_ref().is_some_and(|reference| {
-                    reference.session_id == key.session_id && reference.loop_id == key.loop_id
-                }) && live.requests.iter().any(|request| {
-                    request.request_index == key.request_index
-                        && request
-                            .tools
-                            .iter()
-                            .any(|tool| tool.tool_call_id == key.tool_call_id)
-                })
-            })
-            || view
-                .transcript
-                .blocks
-                .iter()
-                .any(|block| match block.as_ref() {
-                    TranscriptBlock::Tool(tool) => {
-                        tool.loop_id == key.loop_id
-                            && tool.request_index == key.request_index
-                            && tool.tool_call_id == key.tool_call_id
-                    }
-                    TranscriptBlock::Assistant(assistant) => {
-                        assistant.loop_id == key.loop_id
-                            && assistant.request_index == key.request_index
-                            && assistant
-                                .tool_calls
-                                .iter()
-                                .any(|tool| tool.tool_call_id == key.tool_call_id)
-                    }
-                    _ => false,
-                });
-        present.then(|| key.clone())
-    }
-
     /// Capture only the actually displayed viewport after a successful draw.
     /// This bounded cell buffer cannot pin evicted transcript sections.
     pub fn remember_transcript_frame(&mut self, buffer: &ratatui::buffer::Buffer) {
@@ -1908,27 +1824,12 @@ impl App {
             self.transcript_frame = None;
             return;
         }
-        let Some(prepared) = self.prepared_conversation(screen.content.width) else {
+        if self.prepared_conversation(screen.content.width).is_none() {
             return;
-        };
+        }
         let Some(view) = self.active_view() else {
             self.transcript_frame = None;
             return;
-        };
-        let position = crate::ui::transcript::scroll_position(
-            self,
-            prepared.total_rows(),
-            screen.transcript.height as usize,
-        );
-        let tool_hits = if matches!(self.dock, Dock::Composer) {
-            crate::ui::tool_detail::detail_hits(
-                prepared,
-                screen.transcript,
-                position.offset,
-                position.visible_rows,
-            )
-        } else {
-            Vec::new()
         };
         let mut cells = ratatui::buffer::Buffer::empty(screen.transcript);
         for y in screen.transcript.y..screen.transcript.bottom() {
@@ -1949,19 +1850,12 @@ impl App {
             session_epoch: view.session_epoch,
             theme: self.theme,
             terminal_size: self.terminal_size,
-            scroll: (
-                view.scroll.offset,
-                view.scroll.follow_tail,
-                view.scroll.prompt_cursor,
-            ),
-            tool_hits,
             cells,
             scrollbar_cells,
         });
     }
 
-    /// Retained cells; only their separately saved exact tool buttons may
-    /// accept input without a current layout.
+    /// Retained transition cells remain read-only until the current layout arrives.
     pub fn transition_transcript_frame(
         &self,
         area: ratatui::layout::Rect,
@@ -5006,7 +4900,13 @@ impl App {
             view.scroll.follow_tail = false;
         }
         self.capture_scroll_anchor();
-        self.request_history_window_at(&session_id, start.saturating_sub(READ_PAGE_LIMIT))
+        let floor = self
+            .active_view()
+            .map_or(0, |view| view.transcript.window.first_item());
+        self.request_history_window_at(
+            &session_id,
+            start.saturating_sub(READ_PAGE_LIMIT).max(floor),
+        )
     }
 
     fn transcript_scroll_bottom(&mut self) -> Vec<AppCommand> {
@@ -5963,7 +5863,7 @@ impl App {
             } else {
                 (READ_PAGE_LIMIT, READ_PAGE_MAX_BYTES)
             };
-            OutgoingRequest::session_read(
+            OutgoingRequest::session_display_read(
                 id,
                 session_id,
                 Some(cursor),
@@ -6606,6 +6506,17 @@ impl App {
             self.mark_session_uncalibrated(&session_id);
         }
         for view in self.sessions.known.values_mut() {
+            for facts in Arc::make_mut(&mut view.tool_presentations).values_mut() {
+                if let Some(load) = Arc::make_mut(facts)
+                    .inline
+                    .as_mut()
+                    .filter(|load| load.pending)
+                {
+                    load.pending = false;
+                    load.error = Some("Connection closed".to_owned());
+                }
+            }
+
             Self::mark_pending_steers_unconfirmed(view);
             // Transport loss pauses the unsent queue: never auto-send or
             // retry an ambiguous accepted message.
@@ -6713,6 +6624,12 @@ impl App {
                 generation,
                 stream,
             } => self.on_tool_detail_response(key, epoch, generation, stream, &response),
+            RequestKind::ToolInline {
+                key,
+                epoch,
+                generation,
+                output,
+            } => self.on_inline_tool_response(key, epoch, generation, output, &response),
             RequestKind::StaleRead => Vec::new(),
             RequestKind::TurnResult(turn) => self.on_turn_result_response(&turn, &response),
             RequestKind::Reload { generation } => self.on_reload_response(generation, &response),
@@ -7362,6 +7279,7 @@ impl App {
                     key.clone(),
                     std::sync::Arc::new(ToolPresentationState {
                         display: Arc::new(ToolDisplayWire {
+                            body_truncated: false,
                             detail: tool_name.to_owned(),
                             expanded_input: None,
                             input_line_count: None,
@@ -7370,6 +7288,11 @@ impl App {
                         }),
                         result: None,
                         result_truncated: false,
+                        output_line_count: None,
+                        inline: None,
+                        body_deferred: false,
+                        count_partial: false,
+                        stream_lines: Default::default(),
                         status: ToolStatus::Running,
                         outcome: None,
                         needs_read: false,
@@ -7612,6 +7535,7 @@ impl App {
                 key.clone(),
                 std::sync::Arc::new(ToolPresentationState {
                     display: Arc::new(ToolDisplayWire {
+                        body_truncated: false,
                         detail: fallback_name,
                         expanded_input: None,
                         input_line_count: None,
@@ -7620,6 +7544,11 @@ impl App {
                     }),
                     result: shared_result,
                     result_truncated: content_truncated,
+                    output_line_count: None,
+                    inline: None,
+                    body_deferred: false,
+                    count_partial: false,
+                    stream_lines: Default::default(),
                     status: tool_outcome_status(outcome),
                     outcome: Some(outcome),
                     needs_read: false,
@@ -7710,6 +7639,11 @@ impl App {
                 result_truncated: existing_result
                     .as_ref()
                     .is_some_and(|(_, truncated)| *truncated),
+                output_line_count: None,
+                inline: None,
+                body_deferred: false,
+                count_partial: false,
+                stream_lines: Default::default(),
                 status: ToolStatus::Pending,
                 outcome: None,
                 needs_read: false,
@@ -7903,6 +7837,43 @@ fn install_history_item(
 ) -> Option<std::sync::Arc<TranscriptBlock>> {
     use crate::protocol::read::{RuntimeAssistantPart, RuntimeItem, RuntimeUserKind};
 
+    for summary in &item.tool_summaries {
+        if summary.tool_ref.session_id != view.info.session_id {
+            return None;
+        }
+        let key = ToolKey::from(&summary.tool_ref);
+        let facts = Arc::make_mut(&mut view.tool_presentations)
+            .entry(key)
+            .or_insert_with(|| Arc::new(crate::state::tool::ToolFacts::new(&summary.name)));
+        let facts = Arc::make_mut(facts);
+        let display = Arc::make_mut(&mut facts.display);
+        if display.expanded_input.is_none() {
+            display.detail = summary.display.detail.clone();
+        }
+        if summary.display.input_line_count.is_some() {
+            display.input_line_count = summary.display.input_line_count;
+        }
+        let loaded = facts
+            .inline
+            .as_ref()
+            .is_some_and(|load| load.output.eof && load.error.is_none());
+        if !loaded {
+            if let Some(count) = summary.output_line_count {
+                facts.output_line_count = Some(count);
+            }
+            facts.count_partial =
+                summary.count_state == crate::protocol::read::ToolCountState::LowerBound;
+            display.body_truncated = summary.display.body_truncated;
+        }
+        display.hidden_line_count = display
+            .input_line_count
+            .zip(facts.output_line_count)
+            .map(|(input, output)| input.saturating_add(output));
+        if facts.inline.is_none() && facts.result.is_none() {
+            facts.body_deferred = true;
+        }
+    }
+
     match &item.item {
         RuntimeItem::User(user) => {
             let kind = match user.kind {
@@ -8026,7 +7997,10 @@ fn install_history_item(
                             tool_call_id: tool_call_id.clone(),
                             name: name.clone(),
                             call_index: *call_index,
-                            display: crate::state::tool::history_display(name, arguments),
+                            display: item
+                                .tool_display(tool_call_id)
+                                .cloned()
+                                .or_else(|| crate::state::tool::history_display(name, arguments)),
                         };
                         parts.push(AssistantPart::ToolCall(call.clone()));
                         tool_calls.push(call);
@@ -8072,7 +8046,10 @@ fn install_history_item(
                 result.request_index,
                 &result.call_id,
             );
-            let durable_result = Arc::<str>::from(result.output.content.as_str());
+            let durable_result = result
+                .output
+                .as_ref()
+                .map(|output| Arc::<str>::from(output.content.as_str()));
             let (
                 shared_result,
                 accepted_outcome,
@@ -8084,6 +8061,7 @@ fn install_history_item(
                 let state = presentations.entry(tool_key.clone()).or_insert_with(|| {
                     std::sync::Arc::new(ToolPresentationState {
                         display: Arc::new(ToolDisplayWire {
+                            body_truncated: false,
                             detail: result.tool_name.clone(),
                             expanded_input: None,
                             input_line_count: None,
@@ -8092,6 +8070,11 @@ fn install_history_item(
                         }),
                         result: None,
                         result_truncated: false,
+                        output_line_count: None,
+                        inline: None,
+                        body_deferred: false,
+                        count_partial: false,
+                        stream_lines: Default::default(),
                         status: ToolStatus::Pending,
                         outcome: None,
                         needs_read: false,
@@ -8103,9 +8086,9 @@ fn install_history_item(
                     })
                 });
                 let state = std::sync::Arc::make_mut(state);
-                state.accept_finished(outcome, Some(durable_result), false);
+                state.accept_finished(outcome, durable_result, false);
                 (
-                    state.result.clone().expect("durable tool result owner"),
+                    state.result.clone(),
                     state.outcome,
                     state.status,
                     state.result_truncated,
@@ -8124,7 +8107,7 @@ fn install_history_item(
                         .find(|tool| tool.tool_call_id == result.call_id)
                     {
                         tool.status = accepted_status;
-                        tool.result = Some(Arc::clone(&shared_result));
+                        tool.result = shared_result.clone();
                         tool.result_truncated = accepted_truncated;
                         tool.display = Some(Arc::clone(&accepted_display));
                     }
@@ -8152,7 +8135,7 @@ fn install_history_item(
                     request_index: result.request_index,
                     tool_call_id: result.call_id.clone(),
                     name: result.tool_name.clone(),
-                    result: Some(Arc::clone(&shared_result)),
+                    result: shared_result.clone(),
                     outcome: accepted_outcome,
                     live_status: None,
                     progress: None,
@@ -8195,7 +8178,7 @@ fn install_history_item(
                     request_index: result.request_index,
                     tool_call_id: result.call_id.clone(),
                     name: result.tool_name.clone(),
-                    result: Some(Arc::clone(&shared_result)),
+                    result: shared_result.clone(),
                     outcome: accepted_outcome,
                     live_status: None,
                     progress: None,
@@ -10766,6 +10749,7 @@ mod tests {
                 read: ReadRequest {
                     cursor: crate::protocol::ReadCursor { item: 2, offset: 0 },
                     pin: Some(crate::protocol::SnapshotPin {
+                        projection: None,
                         captured_end: 3,
                         history_revision:
                             "0000000000000000000000000000000000000000000000000000000000000000"
@@ -11518,7 +11502,8 @@ mod tests {
         ];
         for (index, (name, field, target)) in calls.into_iter().enumerate() {
             let call_id = format!("call_{index}");
-            let item = RawHistoryItem { timestamp: None, item: serde_json::from_value::<RuntimeItem>(json!({
+            let item = RawHistoryItem { tool_summaries: Vec::new(),
+ timestamp: None, item: serde_json::from_value::<RuntimeItem>(json!({
                 "type": "assistant", "data": { "loop_id": "restored", "request_index": index, "model": "test", "finish_reason": "tool_calls",
                     "content": [{"type": "tool_call", "data": {"tool_call_id": call_id, "name": name, "call_index": 0, "arguments": {(field): target, "private": "NOT DISPLAYED"}}}] }
             })).unwrap() };
@@ -11548,7 +11533,8 @@ mod tests {
                 target
             );
             // A result arriving later must merge outcome without losing target.
-            let result = RawHistoryItem { timestamp: None, item: serde_json::from_value::<RuntimeItem>(json!({
+            let result = RawHistoryItem { tool_summaries: Vec::new(),
+ timestamp: None, item: serde_json::from_value::<RuntimeItem>(json!({
                 "type": "tool_result", "data": {"loop_id": "restored", "request_index": index, "call_id": call_id,
                     "tool_name": name, "outcome": "failed", "output": {"content": "tool failed"} }
             })).unwrap() };
@@ -11562,6 +11548,7 @@ mod tests {
                     .unwrap(),
             )
             .display = Arc::new(ToolDisplayWire {
+                body_truncated: false,
                 detail: format!("tool {name}"),
                 expanded_input: Some("retained patch/body".into()),
                 input_line_count: Some(3),
@@ -11585,6 +11572,7 @@ mod tests {
                     .unwrap(),
             )
             .display = Arc::new(ToolDisplayWire {
+                body_truncated: false,
                 detail: "richer live metadata".into(),
                 expanded_input: None,
                 input_line_count: None,
@@ -11645,6 +11633,7 @@ mod tests {
         let weak = {
             let view = app.sessions.known.get_mut("ses_1").unwrap();
             let item = crate::protocol::read::RawHistoryItem {
+                tool_summaries: Vec::new(),
                 item: crate::protocol::read::RuntimeItem::ToolResult(
                     crate::protocol::read::RuntimeToolResultItem {
                         loop_id: "loop_shared".to_owned(),
@@ -11652,9 +11641,9 @@ mod tests {
                         call_id: "call_shared".to_owned(),
                         tool_name: "read".to_owned(),
                         outcome: "success".to_owned(),
-                        output: crate::protocol::read::RuntimeToolOutput {
+                        output: Some(crate::protocol::read::RuntimeToolOutput {
                             content: "shared".to_owned(),
-                        },
+                        }),
                     },
                 ),
                 timestamp: None,

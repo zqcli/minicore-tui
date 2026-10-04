@@ -232,6 +232,7 @@ fn malformed_history_pages_do_not_advance_or_fabricate_completion() {
     offset_page.next_cursor = None;
     let mut window = HistoryWindow::default();
     window.install_pin(SnapshotPin {
+        projection: None,
         captured_end: base.captured_end,
         history_revision: base.history_revision.clone(),
         total: 1,
@@ -332,6 +333,7 @@ fn unknown_encoding_is_refused() {
 fn valid_snapshot_pins_require_the_agent_revision_shape() {
     assert!(
         SnapshotPin {
+            projection: None,
             captured_end: 0,
             history_revision: "a".repeat(64),
             total: 0,
@@ -341,6 +343,7 @@ fn valid_snapshot_pins_require_the_agent_revision_shape() {
     );
     assert!(
         SnapshotPin {
+            projection: None,
             captured_end: 0,
             history_revision: "fixture-revision".to_owned(),
             total: 0,

@@ -15,6 +15,7 @@ fn fixture(start: usize, total: usize, theme: ThemeKind) -> App {
     let mut app = testapp::open_empty(theme, "ses_1", None, "high");
     let view = app.active_session_mut().unwrap();
     view.transcript.window.install_pin(SnapshotPin {
+        projection: None,
         captured_end: 90_000,
         history_revision: "a".repeat(64),
         total,

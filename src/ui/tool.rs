@@ -71,7 +71,9 @@ pub fn durable_with_metadata(
     render_card(
         theme,
         &block.name,
-        block.result.as_deref(),
+        facts
+            .and_then(|f| f.result.as_deref())
+            .or(block.result.as_deref()),
         facts.map(|f| f.display.as_ref()),
         facts,
         width,
@@ -123,7 +125,9 @@ pub fn live_with_metadata(
     render_card(
         theme,
         &tool.name,
-        tool.result.as_deref(),
+        facts
+            .and_then(|f| f.result.as_deref())
+            .or(tool.result.as_deref()),
         facts
             .map(|f| f.display.as_ref())
             .or(tool.display.as_deref()),
@@ -154,6 +158,31 @@ pub fn facts_revision(facts: &crate::state::tool::ToolFacts) -> u64 {
             crate::protocol::ToolSubjectWire::Other => invocation.input.preview.hash(&mut hash),
         }
     }
+    facts.output_line_count.hash(&mut hash);
+    facts.count_partial.hash(&mut hash);
+    facts.display.body_truncated.hash(&mut hash);
+    facts.display.input_line_count.hash(&mut hash);
+    facts.stream_lines.iter().any(|s| s.gap).hash(&mut hash);
+    facts
+        .inline
+        .as_ref()
+        .and_then(|load| load.error.as_deref())
+        .hash(&mut hash);
+    facts
+        .execution
+        .as_ref()
+        .map(|execution| std::mem::discriminant(&execution.input_availability))
+        .hash(&mut hash);
+    facts
+        .result
+        .as_ref()
+        .map(|text| {
+            (
+                std::sync::Arc::as_ptr(text) as *const u8 as usize,
+                text.len(),
+            )
+        })
+        .hash(&mut hash);
     facts.result_truncated.hash(&mut hash);
     hash.finish()
 }
@@ -190,7 +219,11 @@ fn render_card(
         colors.background = theme.page_bg;
     }
     let status = process.map_or(status.clone(), |process| format!("{status} · {process}"));
-    let title = format!("{} · {status}", clip_summary(name, 18));
+    let title = if expanded {
+        format!("{} · {status}", clip_summary(name, 18))
+    } else {
+        name.to_owned()
+    };
     let mut out = vec![Line::default()];
     let available = width.saturating_sub(rail::SURFACE_CONTENT_START);
     for (text, color) in [
@@ -210,86 +243,116 @@ fn render_card(
             rail::SURFACE_CONTENT_START,
             Line::from(Span::styled(
                 if text == &detail {
-                    clip_target(text, available)
+                    if expanded {
+                        clip_target(text, available)
+                    } else {
+                        clip_line(
+                            &visible_tool_line(text.lines().next().unwrap_or_default()),
+                            available,
+                        )
+                    }
                 } else {
-                    // The conversation overlays its detail action at the right.
-                    clip_summary(
-                        text,
-                        available.saturating_sub(if width >= 16 { 9 } else { 0 }),
-                    )
+                    clip_summary(text, available)
                 },
                 Style::new().fg(color),
             )),
         ));
     }
-    let partial = display.is_some_and(|d| d.truncated) || facts.is_some_and(|f| f.result_truncated);
-    let mut footer_row = None;
+    let partial = display.is_some_and(|d| d.body_truncated || d.truncated)
+        || facts.is_some_and(|f| f.result_truncated || f.count_partial);
+    let footer_row;
     if expanded {
         append_body(
             theme, width, colors, name, display, result, failed, &mut out,
         );
-        footer_row = Some(out.len());
+        footer_row = out.len();
+        let load_error = facts
+            .and_then(|f| f.inline.as_ref())
+            .and_then(|load| load.error.as_deref());
+        let input_state = facts
+            .and_then(|f| f.execution.as_ref())
+            .and_then(|execution| {
+                if !matches!(name, "bash" | "write" | "edit" | "apply_patch" | "patch") {
+                    return None;
+                }
+                match execution.input_availability {
+                    crate::protocol::ToolDataAvailabilityWire::Expired => Some("Input expired"),
+                    crate::protocol::ToolDataAvailabilityWire::Unavailable => {
+                        Some("Input unavailable")
+                    }
+                    _ => None,
+                }
+            });
+        let error_hint = load_error
+            .map(|error| format!("{error} · collapse and expand to retry"))
+            .or_else(|| input_state.map(str::to_owned));
         out.push(rail::surface_row(
             width,
             colors,
             rail::SURFACE_CONTENT_START,
             Line::from(Span::styled(
                 clip_summary(
-                    if partial {
+                    error_hint.as_deref().unwrap_or(if partial {
                         "partial · ctrl+o collapse"
                     } else {
                         "ctrl+o collapse"
-                    },
+                    }),
                     available,
                 ),
                 Style::new().fg(theme.tool_muted),
             )),
         ));
     } else {
-        if let Some(summary) = output_summary(name, result, facts) {
-            out.push(rail::surface_row(
-                width,
-                colors,
-                rail::SURFACE_CONTENT_START,
-                Line::from(Span::styled(
-                    clip_summary(&summary, available),
-                    Style::new().fg(if failed {
-                        theme.error
-                    } else {
-                        theme.tool_output
-                    }),
-                )),
-            ));
-        }
-        let content_width = width.saturating_sub(rail::SURFACE_CONTENT_START + 2).max(1);
-        let hidden = display
-            .and_then(|d| d.expanded_input.as_deref())
-            .map_or(0, |text| wrapped_result_row_count(text, content_width))
-            + result.map_or(0, |text| wrapped_result_row_count(text, content_width));
-        if hidden > 0 || partial {
-            footer_row = Some(out.len());
-            let hint = format!(
-                "{hidden} hidden rows{} · ctrl+o expand",
-                if partial { " · partial" } else { "" }
-            );
-            out.push(rail::surface_row(
-                width,
-                colors,
-                rail::SURFACE_CONTENT_START,
-                Line::from(Span::styled(
-                    clip_summary(&hint, available),
-                    Style::new().fg(theme.tool_muted),
-                )),
-            ));
-        }
+        footer_row = out.len();
+        let input_lines = display
+            .and_then(|d| d.input_line_count)
+            .or_else(|| {
+                display
+                    .and_then(|d| d.expanded_input.as_deref())
+                    .map(result_line_count_text)
+            })
+            .or_else(|| {
+                (!matches!(name, "bash" | "write" | "edit" | "apply_patch" | "patch")).then_some(0)
+            });
+        let output_lines = facts
+            .and_then(|f| f.output_line_count)
+            .or_else(|| result.map(result_line_count_text));
+        let known_lines = input_lines.zip(output_lines).or_else(|| {
+            (facts.is_some_and(|f| f.count_partial)
+                && (input_lines.is_some() || output_lines.is_some()))
+            .then_some((input_lines.unwrap_or(0), output_lines.unwrap_or(0)))
+        });
+        let hint = match known_lines {
+            Some((input, output)) => format!(
+                "{}{count} lines hidden",
+                if facts.is_some_and(|f| f.count_partial
+                    || f.result_truncated
+                    || f.display.body_truncated
+                    || f.stream_lines.iter().any(|s| s.gap))
+                {
+                    "≥"
+                } else {
+                    ""
+                },
+                count = input.saturating_add(output)
+            ),
+            None => "Lines unknown".to_owned(),
+        };
+        out.push(rail::surface_row(
+            width,
+            colors,
+            rail::SURFACE_CONTENT_START,
+            Line::from(Span::styled(
+                clip_summary(&hint, available),
+                Style::new().fg(theme.tool_muted),
+            )),
+        ));
     }
     out.push(Line::default());
     let mut copy_cells = vec![None; out.len()];
     copy_cells[0] = Some(CopyCells::decoration());
     copy_cells[out.len() - 1] = Some(CopyCells::decoration());
-    if let Some(row) = footer_row {
-        copy_cells[row] = Some(CopyCells::decoration());
-    }
+    copy_cells[footer_row] = Some(CopyCells::decoration());
     RenderedTool {
         lines: out,
         copy_cells,
@@ -297,13 +360,16 @@ fn render_card(
 }
 
 fn clip_summary(text: &str, width: usize) -> String {
-    let text = rail::collapsed_simple_line(text);
-    if column_width(&text) <= width {
-        text
+    clip_line(&rail::collapsed_simple_line(text), width)
+}
+
+fn clip_line(text: &str, width: usize) -> String {
+    if column_width(text) <= width {
+        text.to_owned()
     } else if width == 0 {
         String::new()
     } else {
-        format!("{}…", rail::clip_cells(&text, width - 1))
+        format!("{}…", rail::clip_cells(text, width - 1))
     }
 }
 
@@ -345,6 +411,11 @@ fn target(
                     return path.to_owned();
                 }
             }
+        }
+    }
+    if name == "bash" {
+        if let Some(command) = display.and_then(|d| d.expanded_input.as_deref()) {
+            return command.to_owned();
         }
     }
     if matches!(name, "apply_patch" | "patch") {
@@ -425,40 +496,6 @@ fn command_summary(
         }
     }
     (None, false)
-}
-
-fn output_summary(
-    name: &str,
-    result: Option<&str>,
-    facts: Option<&crate::state::tool::ToolFacts>,
-) -> Option<String> {
-    if name.eq_ignore_ascii_case("bash") {
-        if let Some(result) = result {
-            if let Some((_, stderr)) = result.split_once("\nstderr:\n") {
-                if let Some(line) = stderr.lines().find(|l| !l.trim().is_empty()) {
-                    return Some(format!("stderr: {line}"));
-                }
-            }
-            if let Some((_, stdout)) = result.split_once("\nstdout:\n") {
-                if let Some(line) = stdout
-                    .split("\nstderr:")
-                    .next()
-                    .unwrap_or_default()
-                    .lines()
-                    .find(|l| !l.trim().is_empty())
-                {
-                    return Some(format!("stdout: {line}"));
-                }
-            }
-        }
-        if facts
-            .and_then(|f| f.command.as_deref())
-            .is_some_and(|c| c.stderr_observed_end > 0)
-        {
-            return Some("stderr output available in detail".to_owned());
-        }
-    }
-    result_summary(result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -573,11 +610,6 @@ fn status_summary(status: ToolStatus) -> String {
     }
     .to_owned()
 }
-fn result_summary(result: Option<&str>) -> Option<String> {
-    let line = result?.lines().find(|line| !line.trim().is_empty())?;
-    Some(clip_summary(line, 160))
-}
-
 fn durable_state(block: &ToolBlock) -> ToolSurfaceState {
     if let Some(status) = block.live_status {
         return status_surface(status);
@@ -601,6 +633,10 @@ fn status_surface(status: ToolStatus) -> ToolSurfaceState {
         ToolStatus::Failed | ToolStatus::Denied => ToolSurfaceState::Error,
         ToolStatus::Cancelled => ToolSurfaceState::Cancelled,
     }
+}
+
+fn result_line_count_text(text: &str) -> usize {
+    result_line_count(Some(text))
 }
 
 /// Raw source-line count; used where no content width is available.
@@ -827,115 +863,101 @@ mod tests {
     }
     fn display(detail: &str, input: Option<&str>) -> crate::protocol::ToolDisplayWire {
         crate::protocol::ToolDisplayWire {
+            body_truncated: false,
             detail: detail.into(),
             expanded_input: input.map(str::to_owned),
-            input_line_count: Some(999),
+            input_line_count: input.map(super::result_line_count_text),
             hidden_line_count: Some(999),
             truncated: false,
         }
     }
 
     #[test]
-    fn collapsed_success_and_failure_keep_target_and_result_in_both_themes() {
+    fn collapsed_cards_have_three_content_rows_without_result_summaries() {
         for theme in [Theme::dark(), Theme::light()] {
-            for width in [59, 79, 119] {
-                let display = display("release-notes.md", Some("one\ntwo"));
-                let mut block = card("write", "Wrote 37 lines successfully");
-                let rendered = text(&super::durable_with_display(
-                    &theme,
-                    &block,
-                    width,
-                    false,
-                    Some(&display),
-                ));
-                assert!(rendered.contains("write · completed"));
-                assert!(rendered.contains("release-notes.md"));
-                assert!(rendered.contains("Wrote 37 lines successfully"));
-                assert!(rendered.contains("3 hidden rows"));
-                block.outcome = Some(ToolOutcomeWire::Failed);
-                block.result = Some("The operation failed: ".repeat(50).into());
-                let rendered = text(&super::durable_with_display(
-                    &theme,
-                    &block,
-                    width,
-                    false,
-                    Some(&display),
-                ));
-                assert!(rendered.contains("write · failed"));
-                assert!(rendered.contains("release-notes.md"));
-                assert!(rendered.contains('…'));
+            for name in ["bash", "read", "write", "edit", "apply_patch", "custom"] {
+                for width in [24, 59, 79, 119] {
+                    let rows = super::durable_with_display(
+                        &theme,
+                        &card(name, "PRIVATE RESULT"),
+                        width,
+                        false,
+                        Some(&display(
+                            "target-first-line\nHIDDEN COMMAND CONTINUATION",
+                            Some("a\nb"),
+                        )),
+                    );
+                    assert_eq!(rows.len(), 5); // Three content rows and the existing outer spacing.
+                    let visible = text(&rows);
+                    assert!(visible.contains(name));
+                    assert!(visible.contains("3 lines hidden"));
+                    assert!(!visible.contains("PRIVATE RESULT"));
+                    assert!(!visible.contains("CONTINUATION"));
+                    assert!(!visible.contains("completed"));
+                    assert!(!visible.contains("ctrl+o"));
+                    assert!(
+                        rows.iter()
+                            .all(|line| crate::markdown::line_width(line) <= width)
+                    );
+                }
             }
         }
     }
 
     #[test]
-    fn collapsed_lifecycle_is_textual_and_patch_target_is_recovered() {
-        let mut block = card(
-            "apply_patch",
-            "patched 67 bytes to 68 bytes at generated-live.txt",
+    fn collapsed_command_preserves_spaces_and_only_its_first_physical_line() {
+        let display = display("ignored", Some("printf 'a  b'\nsecond command"));
+        let rows = super::durable_with_display(
+            &Theme::dark(),
+            &card("bash", ""),
+            59,
+            false,
+            Some(&display),
         );
-        let display = display(
-            "tool apply_patch",
-            Some("--- a/generated-live.txt\n+++ b/generated-live.txt\n@@ -1 +1 @@\n-old\n+new"),
-        );
-        for (status, label) in [
-            (crate::state::tool::ToolStatus::Pending, "pending"),
-            (crate::state::tool::ToolStatus::Running, "running"),
-            (crate::state::tool::ToolStatus::Succeeded, "completed"),
-        ] {
-            block.live_status = Some(status);
-            let rendered = text(&super::durable_with_display(
-                &Theme::dark(),
-                &block,
-                59,
-                false,
-                Some(&display),
-            ));
-            assert!(rendered.contains(&format!("apply_patch · {label}")));
-            assert!(rendered.contains("generated-live.txt"));
-            assert!(rendered.contains("patched 67 bytes to 68 bytes"));
-        }
+        assert!(text(&rows).contains("printf 'a  b'"));
+        assert!(!text(&rows).contains("second command"));
     }
 
     #[test]
-    fn compact_bash_nonzero_warns_without_changing_invocation_outcome() {
-        for theme in [Theme::dark(), Theme::light()] {
-            let block = card("bash", "exit_code: 7\nstdout:\n\nstderr:\nSIMULATED-ERROR");
-            let rows = super::durable_with_display(
-                &theme,
-                &block,
-                59,
-                false,
-                Some(&display("exit 7", None)),
-            );
-            let rendered = text(&rows);
-            assert!(rendered.contains("completed · exit 7 (nonzero)"));
-            assert!(rendered.contains("stderr: SIMULATED-ERROR"));
-            assert_eq!(rows[1].spans[0].style.fg, Some(theme.error));
-            assert_eq!(block.outcome, Some(ToolOutcomeWire::Success));
-        }
-    }
-
-    #[test]
-    fn hidden_count_matches_expanded_body_including_blank_sanitized_wrapped_rows() {
+    fn hidden_logical_lines_are_width_independent_and_do_not_count_target() {
+        let block = card("write", &format!("{}\n\nend\n", "中文内容".repeat(30)));
+        let display = display("target", Some("a\n\n"));
         for width in [20, 59, 79] {
-            let block = card("read", &format!("{}\n\n\tend\n", "中文内容".repeat(30)));
-            let display = display("notes.txt", Some("a\n\n"));
-            let compact = text(&super::durable_with_display(
-                &Theme::dark(),
-                &block,
-                width,
-                false,
-                Some(&display),
-            ));
-            let expanded =
-                super::durable_with_display(&Theme::dark(), &block, width, true, Some(&display));
-            // Two common headers, expanded fold control, two exterior spacers.
-            assert!(
-                compact.contains(&format!("{} hidden rows", expanded.len() - 5)),
-                "{compact}"
-            );
+            let rows =
+                super::durable_with_display(&Theme::dark(), &block, width, false, Some(&display));
+            assert!(text(&rows).contains("7 lines hidden"));
         }
+    }
+
+    #[test]
+    fn missing_counts_are_unknown_and_target_clipping_is_not_a_body_lower_bound() {
+        use std::sync::Arc;
+        let mut facts = crate::state::tool::ToolFacts::new("write");
+        facts.display = Arc::new(display("very long target", None));
+        let block = card("write", "");
+        assert!(
+            text(
+                &super::durable_with_metadata(&Theme::dark(), &block, 59, false, Some(&facts))
+                    .lines
+            )
+            .contains("Lines unknown")
+        );
+        Arc::make_mut(&mut facts.display).input_line_count = Some(42);
+        Arc::make_mut(&mut facts.display).truncated = true;
+        facts.output_line_count = Some(0);
+        let rendered =
+            super::durable_with_metadata(&Theme::dark(), &block, 59, false, Some(&facts));
+        assert!(text(&rendered.lines).contains("42 lines hidden"));
+        assert!(!text(&rendered.lines).contains('≥'));
+        assert!(rendered.copy_cells[3].as_ref().unwrap().decorative);
+        facts.count_partial = true;
+        assert!(
+            text(
+                &super::durable_with_metadata(&Theme::dark(), &block, 59, false, Some(&facts))
+                    .lines
+            )
+            .contains("≥42 lines hidden")
+        );
     }
 
     #[test]
@@ -973,11 +995,6 @@ mod tests {
             let result = super::command_summary("bash", Some("exit_code: 0"), Some(&facts));
             assert_eq!(result.0.as_deref(), Some(label));
             assert_eq!(result.1, exit_code != Some(0));
-            assert!(
-                super::output_summary("bash", None, Some(&facts))
-                    .unwrap()
-                    .contains("stderr")
-            );
         }
     }
     #[test]
@@ -1020,8 +1037,8 @@ mod tests {
             expanded: false,
         };
         let rendered = text(&super::live_with_facts(&Theme::dark(), &live, 59, None));
-        assert!(rendered.contains("completed · exit 7 (nonzero)"));
-        assert!(rendered.contains("stderr: error"));
+        assert!(rendered.contains("bash"));
+        assert!(!rendered.contains("stderr: error"));
     }
 
     #[test]
@@ -1029,7 +1046,7 @@ mod tests {
         let rows = super::durable(&Theme::dark(), &card("read", ""), 59, false);
         assert!(!text(&rows).contains("hidden rows"));
         assert!(!text(&rows).contains("expand"));
-        assert_eq!(rows.len(), 4);
+        assert_eq!(rows.len(), 5);
         let rendered =
             super::durable_with_metadata(&Theme::dark(), &card("read", ""), 59, false, None);
         assert!(
@@ -1073,7 +1090,7 @@ mod tests {
                     false,
                     Some(&display),
                 );
-                assert!(text(&collapsed).contains("hidden rows"));
+                assert!(text(&collapsed).contains("lines hidden"));
             }
         }
     }
@@ -1238,13 +1255,15 @@ mod tests {
                             .unwrap_or(ratatui::style::Color::Reset)
                             == theme.page_bg)
                     );
-                    assert!(rows.iter().flat_map(|line| &line.spans).any(|span| {
-                        span.content.contains(if block.name == "bash" {
-                            "error"
-                        } else {
-                            "cannot read"
-                        }) && span.style.fg == Some(theme.error)
-                    }));
+                    if expanded {
+                        assert!(rows.iter().flat_map(|line| &line.spans).any(|span| {
+                            span.content.contains(if block.name == "bash" {
+                                "error"
+                            } else {
+                                "cannot read"
+                            }) && span.style.fg == Some(theme.error)
+                        }));
+                    }
                 }
             }
         }

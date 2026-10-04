@@ -501,7 +501,7 @@ impl App {
         // its slot. Never recursively retry a failed/resource-exhausted read.
         Vec::new()
     }
-    fn tool_facts_mut(&mut self, key: &ToolKey, name: &str) -> Option<&mut ToolFacts> {
+    pub(super) fn tool_facts_mut(&mut self, key: &ToolKey, name: &str) -> Option<&mut ToolFacts> {
         let view = self.sessions.known.get_mut(&key.session_id)?;
         let facts = Arc::make_mut(&mut view.tool_presentations)
             .entry(key.clone())
@@ -544,6 +544,11 @@ impl App {
     }
     pub(super) fn accept_tool_process(&mut self, process: ToolProcessWire) {
         let key = ToolKey::from(&process.tool_ref);
+        if let Some(chunk) = &process.chunk {
+            if let Some(facts) = self.tool_facts_mut(&key, "tool") {
+                facts.accept_process_count(chunk);
+            }
+        }
         if let Some(command) = process.command {
             if let Some(facts) = self.tool_facts_mut(&key, "tool") {
                 facts.accept_command(command);

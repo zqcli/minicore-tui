@@ -8,50 +8,6 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-/// Exact title-only hit geometry, shared with drawing; no fold target changes.
-pub fn detail_hits(
-    prepared: &crate::state::view::PreparedConversation,
-    area: Rect,
-    offset: usize,
-    visible: usize,
-) -> Vec<(Rect, crate::state::tool::ToolKey)> {
-    let mut hits = Vec::new();
-    if area.width < 16 {
-        return hits;
-    }
-    for local in 0..visible {
-        let row = offset + local;
-        let Some(section) = prepared.sections.at_row(row) else {
-            continue;
-        };
-        let title_row = section.rows.start
-            + usize::from(
-                prepared
-                    .row(section.rows.start)
-                    .is_some_and(crate::ui::layout::line_is_blank),
-            );
-        if section.id.kind != crate::state::view::SectionKind::Tool || row != title_row {
-            continue;
-        }
-        if let (Some(loop_id), Some(request_index), Some(call)) = (
-            &section.id.loop_id,
-            section.id.request_index,
-            &section.id.tool_call_id,
-        ) {
-            hits.push((
-                Rect::new(area.right().saturating_sub(9), area.y + local as u16, 6, 1),
-                crate::state::tool::ToolKey::new(
-                    &section.id.session_id,
-                    loop_id,
-                    request_index,
-                    call,
-                ),
-            ));
-        }
-    }
-    hits
-}
-
 pub fn body_area(area: Rect) -> Rect {
     let header = if area.width < 80 { 5 } else { 6 };
     Rect::new(
