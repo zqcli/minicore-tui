@@ -3960,107 +3960,137 @@ fn new_output_marker_renders_when_scrolled_away() {
 }
 
 #[test]
-fn new_output_marker_overlays_without_reducing_viewport() {
+fn new_output_marker_reserves_a_row_without_covering_content() {
     let mut app = testapp::scrolled(ThemeKind::Dark);
-    let all = transcript::all_lines(&Theme::dark(), &app, 80);
-    let total = all.len();
+    let screen = layout::screen_layout(&app, Rect::new(0, 0, 80, 24));
+    let prepared = transcript::prepare_conversation(&app, screen.content.width);
+    let total = prepared.total_rows();
+    let position = transcript::scroll_position(&app, total, screen.transcript.height as usize);
+    assert!(position.marker);
+    assert_eq!(position.visible_rows, screen.transcript.height as usize - 1);
     app.update(AppEvent::Viewport {
         total_lines: total,
-        visible_rows: 16,
+        visible_rows: position.visible_rows,
     });
     let terminal = draw(&app, 80, 24);
     let rows = buffer_lines(&terminal);
-    let marker_row = rows
-        .iter()
-        .position(|row| row.contains("↓ new output"))
-        .expect("scrolled transcript shows the new-output marker");
-    assert!(rows[marker_row].contains("↓ new output"));
-    let screen = layout::screen_layout(&app, Rect::new(0, 0, 80, 24));
-    let prepared = transcript::prepare_conversation(&app, screen.content.width);
-    let position = transcript::scroll_position(
-        &app,
-        prepared.total_rows(),
-        screen.transcript.height as usize,
-    );
-    let mut underlay = Terminal::new(TestBackend::new(80, 24)).unwrap();
-    underlay
+    let marker_row = screen.transcript.bottom() as usize - 1;
+    assert_eq!(rows[marker_row].trim(), "↓ new output");
+
+    let mut expected = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    expected
         .draw(|frame| {
             frame.render_widget(
                 ratatui::widgets::Paragraph::new(
-                    prepared
-                        .lines()
-                        .iter()
-                        .skip(position.offset)
-                        .take(position.visible_rows)
-                        .cloned()
-                        .collect::<Vec<_>>(),
+                    prepared.window(position.offset, position.visible_rows),
                 ),
                 screen.transcript,
             )
         })
         .unwrap();
-    let overlay = transcript::marker_area(screen.transcript, "↓ new output");
-    for column in screen.transcript.x..screen.transcript.right() {
-        if !overlay.contains((column, marker_row as u16).into()) {
+    for row in screen.transcript.y..screen.transcript.bottom() - 1 {
+        for column in screen.transcript.x..screen.transcript.right() {
             assert_eq!(
-                terminal
-                    .backend()
-                    .buffer()
-                    .cell((column, marker_row as u16))
-                    .unwrap()
-                    .symbol(),
-                underlay
-                    .backend()
-                    .buffer()
-                    .cell((column, marker_row as u16))
-                    .unwrap()
-                    .symbol()
+                terminal.backend().buffer()[(column, row)].symbol(),
+                expected.backend().buffer()[(column, row)].symbol(),
+                "visible transcript text must remain intact at ({column}, {row})"
             );
         }
     }
+    assert_eq!(transcript::total_lines(&app, screen.content.width), total);
+    assert_eq!(transcript::visible_rows(&app, total, 17), 16);
 
-    assert_eq!(transcript::total_lines(&app, 80), total);
+    app.sessions
+        .known
+        .get_mut(app.sessions.active.as_ref().unwrap())
+        .unwrap()
+        .scroll
+        .new_content = false;
     assert_eq!(
-        transcript::visible_rows(&app, total, 17),
-        17,
-        "the marker must not change scroll geometry"
-    );
-    assert!(
-        all.iter()
-            .any(|line| line_text(line).contains("quoted wisdom")),
-        "the covered transcript body remains available to scrolling"
-    );
-    let marker_area =
-        transcript::marker_area(Rect::new(1, marker_row as u16, 77, 1), "↓ new output");
-    let marker_cells = &terminal.backend().buffer().content()
-        [marker_row * 80 + marker_area.x as usize..marker_row * 80 + marker_area.right() as usize];
-    assert!(
-        marker_cells
-            .iter()
-            .all(|cell| cell.bg == Theme::dark().page_bg),
-        "only the indicator cells replace the transcript background"
-    );
-
-    for _ in 0..3 {
-        app.update(AppEvent::Terminal(crossterm::event::Event::Mouse(
-            crossterm::event::MouseEvent {
-                kind: crossterm::event::MouseEventKind::ScrollDown,
-                column: 0,
-                row: 0,
-                modifiers: crossterm::event::KeyModifiers::empty(),
-            },
-        )));
-    }
-    assert!(
-        buffer_lines(&draw(&app, 80, 24))
-            .iter()
-            .any(|row| row.contains("wisdom")),
-        "scrolling down exposes the transcript row below the marker window"
+        buffer_lines(&draw(&app, 80, 24))[marker_row].trim(),
+        "↑ scroll position"
     );
 }
 
 #[test]
-fn end_resumes_follow_with_marker_overlay() {
+fn scroll_marker_keeps_content_in_tiny_viewports_and_only_reserves_when_needed() {
+    let mut app = testapp::scrolled(ThemeKind::Dark);
+    for height in 0..=3 {
+        let position = transcript::scroll_position(&app, 10, height);
+        assert_eq!(position.marker, height > 1);
+        assert_eq!(
+            position.visible_rows,
+            if height > 1 { height - 1 } else { height }
+        );
+    }
+    assert_eq!(transcript::visible_rows(&app, 3, 3), 3);
+    assert!(!transcript::scroll_position(&app, 3, 3).marker);
+    app.sessions
+        .known
+        .get_mut(app.sessions.active.as_ref().unwrap())
+        .unwrap()
+        .scroll
+        .follow_tail = true;
+    assert_eq!(transcript::visible_rows(&app, 10, 3), 3);
+    assert!(!transcript::scroll_position(&app, 10, 3).marker);
+}
+
+#[test]
+fn marker_measurement_stays_stable_at_tail_and_after_resize() {
+    let mut app = testapp::scrolled(ThemeKind::Dark);
+    for (height, scroll_down) in [(24, true), (26, false)] {
+        app.update(AppEvent::TerminalSize {
+            width: 80,
+            height: 24,
+        });
+        let screen = layout::screen_layout(&app, Rect::new(0, 0, 80, 24));
+        let prepared = transcript::prepare_conversation(&app, screen.content.width);
+        let total = prepared.total_rows();
+        app.update(AppEvent::ConversationPrepared(prepared));
+        let view = app
+            .sessions
+            .known
+            .get_mut(app.sessions.active.as_ref().unwrap())
+            .unwrap();
+        view.scroll.follow_tail = false;
+        view.scroll.offset = total - screen.transcript.height as usize - 1;
+        app.update(AppEvent::Viewport {
+            total_lines: total,
+            visible_rows: transcript::visible_rows(&app, total, screen.transcript.height),
+        });
+        if scroll_down {
+            app.update(AppEvent::Terminal(CrosstermEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: screen.transcript.x,
+                row: screen.transcript.y,
+                modifiers: KeyModifiers::empty(),
+            })));
+        } else {
+            app.update(AppEvent::TerminalSize { width: 80, height });
+        }
+        let screen = layout::screen_layout(&app, Rect::new(0, 0, 80, height));
+        for _ in 0..3 {
+            app.update(AppEvent::Viewport {
+                total_lines: total,
+                visible_rows: transcript::visible_rows(&app, total, screen.transcript.height),
+            });
+            let view = app.active_view().unwrap();
+            assert!(
+                view.scroll.follow_tail,
+                "height={height}, scroll_down={scroll_down}"
+            );
+            assert_eq!(view.scroll.offset, 0);
+            assert_eq!(
+                transcript::visible_rows(&app, total, screen.transcript.height),
+                screen.transcript.height as usize
+            );
+            assert!(!text(&draw(&app, 80, height)).contains("↓ new output"));
+        }
+    }
+}
+
+#[test]
+fn end_resumes_follow_and_restores_marker_row() {
     let mut app = testapp::scrolled(ThemeKind::Dark);
     let total = transcript::total_lines(&app, 80);
     app.update(AppEvent::Viewport {

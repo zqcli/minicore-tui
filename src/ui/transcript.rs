@@ -614,8 +614,10 @@ pub(crate) fn scroll_position(app: &App, total: usize, height: usize) -> ScrollP
             marker: false,
         };
     };
-    let marker = !view.scroll.follow_tail && total > height;
-    let visible_rows = height;
+    // Keep one content row even in a one-row viewport. The marker owns its
+    // row; drawing it over content would hide text and break pointer mapping.
+    let marker = height > 1 && !view.scroll.follow_tail && total > height;
+    let visible_rows = height - usize::from(marker);
     let max_offset = if view.scroll.fold_pinned {
         total.saturating_sub(1)
     } else {

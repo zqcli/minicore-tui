@@ -27,7 +27,7 @@ fn prepare(app: &mut App) {
     app.update(AppEvent::ConversationPrepared(prepared));
     app.update(AppEvent::Viewport {
         total_lines: total,
-        visible_rows: area.height as usize,
+        visible_rows: transcript::visible_rows(app, total, area.height),
     });
     frame(app);
 }
@@ -137,12 +137,20 @@ fn fold_resume_clicked_headers_stay_fixed_at_tail_and_in_long_history() {
                 assert!(!app.active_view().unwrap().scroll.follow_tail);
                 prepare(&mut app);
                 assert!(!target(&app, kind).folded);
-                let position = transcript::scroll_position(&app, app.viewport.0, app.viewport.1);
+                let position = transcript::scroll_position(
+                    &app,
+                    app.viewport.0,
+                    screen(&app).transcript.height as usize,
+                );
                 assert_eq!(target(&app, kind).rows.start - position.offset, row);
                 assert_eq!(click_header(&mut app, kind), row);
                 prepare(&mut app);
                 assert!(target(&app, kind).folded);
-                let position = transcript::scroll_position(&app, app.viewport.0, app.viewport.1);
+                let position = transcript::scroll_position(
+                    &app,
+                    app.viewport.0,
+                    screen(&app).transcript.height as usize,
+                );
                 assert_eq!(target(&app, kind).rows.start - position.offset, row);
                 assert!(!app.active_view().unwrap().scroll.follow_tail);
                 app.transcript_scroll_bottom();
@@ -165,7 +173,11 @@ fn fold_resume_collapse_keeps_bottom_padding_until_explicit_scroll() {
     frame(&mut app);
     assert_eq!(click_header(&mut app, SectionKind::Tool), 2);
     prepare(&mut app);
-    let position = transcript::scroll_position(&app, app.viewport.0, app.viewport.1);
+    let position = transcript::scroll_position(
+        &app,
+        app.viewport.0,
+        screen(&app).transcript.height as usize,
+    );
     assert_eq!(
         target(&app, SectionKind::Tool).rows.start - position.offset,
         2

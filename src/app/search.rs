@@ -664,7 +664,12 @@ impl App {
             return anchor;
         }
         let _view = self.sessions.known.get(session_id)?;
-        let height = self.viewport.1.max(1);
+        let height = crate::ui::layout::screen_layout(
+            self,
+            ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1),
+        )
+        .transcript
+        .height as usize;
         let position = crate::ui::transcript::scroll_position(self, prepared.total_rows(), height);
         let start = position.offset;
         let end = start

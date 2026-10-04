@@ -325,6 +325,9 @@ fn right_usage_parts(view: &SessionView, theme: &Theme) -> Vec<FooterPart> {
     append_unsaved_usage(&mut parts, projection, theme);
     if let Some(presentation) = &view.presentation {
         let context = match (presentation.context.kind, presentation.context.percent) {
+            (crate::protocol::ContextKindWire::Reported, Some(percent)) => {
+                format!("ctx {percent:.2}% last")
+            }
             (crate::protocol::ContextKindWire::Estimated, Some(percent)) => {
                 format!("ctx ~{percent:.2}%")
             }
@@ -723,6 +726,34 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn context_footer_distinguishes_latest_report_from_estimate_and_unknown() {
+        let mut app = crate::ui::testapp::open_empty(
+            crate::theme::ThemeKind::Dark,
+            "ses_1",
+            Some("Task"),
+            "high",
+        );
+        let theme = Theme::dark();
+        for (kind, percent, expected) in [
+            ("reported", Some(5.0), "ctx 5.00% last"),
+            ("reported", Some(0.0), "ctx 0.00% last"),
+            ("reported", None, "ctx ?"),
+            ("estimated", Some(5.0), "ctx ~5.00%"),
+            ("unknown", None, "ctx ?"),
+        ] {
+            app.sessions.known.get_mut("ses_1").unwrap().presentation = Some(
+                serde_json::from_value(serde_json::json!({
+                    "session_id": "ses_1",
+                    "context": {"kind": kind, "percent": percent}
+                }))
+                .unwrap(),
+            );
+            let parts = footer_parts(&app, &theme);
+            assert_eq!(parts_text(&parts.right), expected);
+        }
     }
 
     #[test]

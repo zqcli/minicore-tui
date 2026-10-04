@@ -30,6 +30,71 @@ fn clock(app: &mut App) -> Arc<AtomicU64> {
 }
 
 #[test]
+fn only_new_successful_compaction_refreshes_reported_context_presentation() {
+    for origin in ["manual", "automatic"] {
+        for status in ["compacted", "noop", "failed", "unknown_write"] {
+            let mut app = app();
+            app.sessions.known.get_mut("ses_1").unwrap().presentation = Some(
+                serde_json::from_value(json!({
+                    "session_id": "ses_1",
+                    "context": {"kind": "reported", "tokens": 5000, "window": 100000, "percent": 5.0}
+                }))
+                .unwrap(),
+            );
+            let mut snapshot = context(None, Some(("compact-done", status)));
+            snapshot["last_result"]["origin"] = json!(origin);
+            let request = take_requests(
+                app.arm_context_poll(
+                    &"ses_1".into(),
+                    ContextQueryOwner::Operation("compact-done".into()),
+                    true,
+                )
+                .into_iter()
+                .collect(),
+            )
+            .remove(0);
+            let refresh = take_requests(respond(&mut app, &request, snapshot.clone()));
+            if status == "compacted" {
+                assert_eq!(refresh.len(), 1, "{origin} {status}");
+                assert_eq!(refresh[0].method, "session.presentation");
+                assert!(
+                    take_requests(respond(
+                        &mut app,
+                        &refresh[0],
+                        json!({
+                            "session_id": "ses_1", "context": {"kind": "unknown"}
+                        })
+                    ))
+                    .is_empty()
+                );
+                let presentation = app.active_view().unwrap().presentation.as_ref().unwrap();
+                assert_eq!(
+                    presentation.context.kind,
+                    crate::protocol::ContextKindWire::Unknown
+                );
+                assert_eq!(presentation.context.percent, None);
+            } else {
+                assert!(refresh.is_empty(), "{origin} {status}");
+                assert_eq!(
+                    app.active_view()
+                        .unwrap()
+                        .presentation
+                        .as_ref()
+                        .unwrap()
+                        .context
+                        .percent,
+                    Some(5.0)
+                );
+            }
+            // Re-reading the same terminal result is not another invalidation.
+            let request = take_requests(app.open_context()).remove(0);
+            assert!(take_requests(respond(&mut app, &request, snapshot)).is_empty());
+            assert!(!app.active_view().unwrap().presentation_refresh_pending);
+        }
+    }
+}
+
+#[test]
 fn post_turn_discovery_retries_errors_and_operation_survives_panel_close() {
     let mut app = app();
     let time = clock(&mut app);

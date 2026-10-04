@@ -1755,6 +1755,7 @@ impl fmt::Debug for AssistantDisplayPartWire {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextKindWire {
+    Reported,
     Estimated,
     #[serde(other)]
     Unknown,
@@ -1824,6 +1825,26 @@ pub enum Reasoning {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn context_usage_decodes_reported_and_preserves_older_kinds() {
+        for (kind, expected) in [
+            ("reported", ContextKindWire::Reported),
+            ("estimated", ContextKindWire::Estimated),
+            ("unknown", ContextKindWire::Unknown),
+            ("future_kind", ContextKindWire::Unknown),
+        ] {
+            let context: ContextUsageWire = serde_json::from_value(json!({
+                "kind": kind, "tokens": 5_000, "window": 100_000, "percent": 5.0
+            }))
+            .unwrap();
+            assert_eq!(context.kind, expected);
+            assert_eq!(context.tokens, Some(5_000));
+            assert_eq!(context.window, Some(100_000));
+            assert_eq!(context.percent, Some(5.0));
+        }
+    }
+
     #[test]
     fn reasoning_wire_roundtrips_all_agent_levels() {
         for (level, wire) in [

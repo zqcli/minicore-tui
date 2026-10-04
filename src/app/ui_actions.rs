@@ -1402,10 +1402,12 @@ impl App {
             drag.next_deadline = now + Duration::from_millis(50);
         }
 
+        let position =
+            crate::ui::transcript::scroll_position(self, total, screen.transcript.height as usize);
         let row = if direction < 0 {
             screen.transcript.y
         } else {
-            screen.transcript.bottom().saturating_sub(1)
+            screen.transcript.y + position.visible_rows.saturating_sub(1) as u16
         };
         let column = drag_column.min(
             screen
@@ -1825,7 +1827,7 @@ impl App {
         let Some(view) = self.active_view() else {
             return false;
         };
-        if view.scroll.follow_tail || total <= area.height as usize {
+        if !crate::ui::transcript::scroll_position(self, total, area.height as usize).marker {
             return false;
         }
         let label = if view.scroll.new_content {

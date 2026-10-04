@@ -219,7 +219,12 @@ impl App {
                 }
             }
         }
-        let height = self.viewport.1.max(1);
+        let height = crate::ui::layout::screen_layout(
+            self,
+            ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1),
+        )
+        .transcript
+        .height as usize;
         let position = crate::ui::transcript::scroll_position(self, prepared.total_rows(), height);
         (position.offset..position.offset.saturating_add(position.visible_rows).max(1)).find_map(
             |row| {

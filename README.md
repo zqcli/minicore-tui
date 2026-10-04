@@ -138,7 +138,7 @@ MCP, plugins, skills, subagents, session branching, or reconnect/restart behavio
 The complete current keymap and slash-command semantics are in
 [docs/keybindings.md](docs/keybindings.md). The short list is:
 
-- `F1` opens Help;
+- `F1` opens Help; if your terminal intercepts `F1`, enter `/help` in the Composer instead;
 - `Ctrl+R` opens Sessions, `Ctrl+N` opens New Session, `Ctrl+L` opens Model, and `Shift+Tab` opens Reasoning;
 - In Sessions, `F2` renames, `F5` refreshes, `Ctrl+W` closes, and `Delete`/`Ctrl+D` deletes after the required confirmations;
 - `Ctrl+G` in Composer edits the current draft with the configured external editor; a read-only session keeps its explicit Continue action; `/editor` starts a blank draft;

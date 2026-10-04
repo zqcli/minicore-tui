@@ -2392,7 +2392,12 @@ impl App {
         if view.scroll.fold_pinned {
             return;
         }
-        let height = self.viewport.1.max(1);
+        let height = crate::ui::layout::screen_layout(
+            self,
+            ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1),
+        )
+        .transcript
+        .height as usize;
         let position = crate::ui::transcript::scroll_position(self, prepared.total_rows(), height);
         let start = position.offset;
         let end = start
@@ -7109,6 +7114,11 @@ impl App {
             AgentEventWire::RequestUsage { data } => {
                 self.mark_gap(&data.meta);
                 self.on_request_usage(&data.turn, data.request_index, data.usage);
+                // Usage is reported before the next model request (or while
+                // tools run). Refresh now, coalescing with any in-flight read.
+                if let Some(command) = self.request_session_presentation(&data.turn.session_id) {
+                    commands.push(command);
+                }
             }
             AgentEventWire::SteerProgress { data } => {
                 self.mark_gap(&data.meta);
@@ -11359,7 +11369,7 @@ mod tests {
             last_result: None,
         });
 
-        app.update(event(wire_event(json!({
+        let requests = take_requests(app.update(event(wire_event(json!({
             "type": "request_usage",
             "data": {
                 "turn": turn_ref_json("ses_1", "loop_fallback"),
@@ -11373,8 +11383,10 @@ mod tests {
                 },
                 "meta": meta_json("ses_1", 0)
             }
-        }))));
+        })))));
 
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "session.presentation");
         let view = &app.sessions.known["ses_1"];
         assert_eq!(
             view.live_request_usage
@@ -11392,6 +11404,51 @@ mod tests {
             view.usage_projection.completeness,
             crate::state::session::UsageCompleteness::Partial
         );
+
+        // A second request reports usage while the first presentation read is
+        // in flight. Coalesce it, then fetch a fresh snapshot without waiting
+        // for another RequestStarted or TurnFinished event.
+        let commands = app.update(event(wire_event(json!({
+            "type": "request_usage",
+            "data": {
+                "turn": turn_ref_json("ses_1", "loop_fallback"),
+                "request_index": 1,
+                "usage": {"input_tokens": 21, "output_tokens": 3},
+                "meta": meta_json("ses_1", 0)
+            }
+        }))));
+        assert!(take_requests(commands).is_empty());
+        assert!(app.sessions.known["ses_1"].presentation_refresh_pending);
+        let followup = take_requests(respond(
+            &mut app,
+            &requests[0],
+            json!({
+                "session_id": "ses_1",
+                "context": {"kind": "reported", "tokens": 49, "window": 1000, "percent": 4.9}
+            }),
+        ));
+        assert_eq!(followup.len(), 1);
+        assert_eq!(followup[0].method, "session.presentation");
+        assert!(
+            take_requests(respond(
+                &mut app,
+                &followup[0],
+                json!({
+                    "session_id": "ses_1",
+                    "context": {"kind": "reported", "tokens": 24, "window": 1000, "percent": 2.4}
+                })
+            ))
+            .is_empty()
+        );
+        let view = &app.sessions.known["ses_1"];
+        assert_eq!(
+            view.presentation.as_ref().unwrap().context.percent,
+            Some(2.4)
+        );
+        assert_eq!(view.usage_projection.usage.input_tokens, Some(63));
+        assert!(view.live.is_some(), "context refresh must work mid-loop");
+        assert!(!view.presentation_pending);
+        assert!(!view.presentation_refresh_pending);
     }
 
     #[test]
@@ -12005,6 +12062,11 @@ mod tests {
         app.update(AppEvent::Tick);
         let after = app.active_view().unwrap().scroll.offset;
         assert!(after > before, "selection auto-scroll fires at 50ms");
+        assert_eq!(
+            app.selection.as_ref().unwrap().focus.row,
+            after + screen.transcript.height as usize - 2,
+            "selection must advance to the final content row above the marker"
+        );
         assert_eq!(app.frame_count, 0, "selection must not advance the spinner");
         elapsed.store(60, Ordering::Relaxed);
         app.update(AppEvent::Tick);
@@ -12120,7 +12182,7 @@ mod tests {
     }
 
     #[test]
-    fn marker_overlay_leaves_uncovered_links_and_blocks_its_own_cells() {
+    fn reserved_marker_row_blocks_links_and_selection_across_its_width() {
         let mut app = crate::ui::testapp::chat(ThemeKind::Dark);
         app.terminal_size = (80, 24);
         let screen =
@@ -12147,8 +12209,26 @@ mod tests {
         let marker_row = screen.transcript.bottom().saturating_sub(1);
         let column = screen.content.x + link_cell as u16;
         assert!(
-            app.pressed_cell_is_link(column, marker_row),
-            "uncovered link remains interactive"
+            !app.pressed_cell_is_link(column, marker_row),
+            "the reserved row must not expose an undrawn link"
+        );
+        for column in screen.transcript.x..screen.transcript.right() {
+            assert!(!app.pressed_cell_is_link(column, marker_row));
+        }
+        app.active_session_mut().unwrap().scroll.offset += 1;
+        assert!(app.pressed_cell_is_link(column, marker_row - 1));
+        app.active_session_mut().unwrap().scroll.offset = offset;
+        app.update(AppEvent::Terminal(CrosstermEvent::Mouse(
+            crossterm::event::MouseEvent {
+                kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                column,
+                row: marker_row,
+                modifiers: crossterm::event::KeyModifiers::empty(),
+            },
+        )));
+        assert!(
+            app.selection.is_none(),
+            "blank marker cells cannot select hidden content"
         );
         let column = crate::ui::transcript::marker_area(screen.transcript, "↓ new output").x;
         assert!(

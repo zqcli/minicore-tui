@@ -2218,6 +2218,10 @@ impl App {
             .and_then(|view| view.context.as_ref())
             .and_then(|context| context.last_result.clone());
         let latest_result = context.last_result.clone();
+        let refresh_presentation = latest_result.as_ref().is_some_and(|result| {
+            previous_result.as_ref() != Some(result)
+                && result.status == crate::protocol::CompactStatusWire::Compacted
+        });
         let owner = if let Some(operation) = context.current_operation.as_ref() {
             match &owner {
                 ContextQueryOwner::ManualCompact(id) if *id == operation.operation_id => owner,
@@ -2323,16 +2327,20 @@ impl App {
             self.context_polls.remove(session_id);
         }
 
+        // Successful compaction invalidates the last request's reported
+        // context. Refresh the authoritative presentation for both manual and
+        // automatic compaction, without refreshing on unchanged polls.
+        let mut commands = Vec::new();
+        if refresh_presentation {
+            commands.extend(self.request_session_presentation(session_id));
+        }
         if let Some(operation) = current_operation {
             if cancel_manual {
-                return self
-                    .request_compact_cancel(session_id, &operation.operation_id)
-                    .into_iter()
-                    .collect();
+                commands.extend(self.request_compact_cancel(session_id, &operation.operation_id));
             }
         }
 
-        Vec::new()
+        commands
     }
 
     pub(super) fn apply_session_state(

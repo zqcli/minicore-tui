@@ -8819,7 +8819,19 @@ fn copy_message_and_code_reuse_the_hit_operations_without_remote_reads() {
             ),
         ],
     );
-    driver.app.viewport = (40, 8);
+    // Use a real short viewport whose first visible content is the reply.
+    driver.step(AppEvent::TerminalSize {
+        width: 80,
+        height: 16,
+    });
+    let screen = layout::screen_layout(&driver.app, ratatui::layout::Rect::new(0, 0, 80, 16));
+    let total = minicore_tui::ui::transcript::total_lines(&driver.app, screen.content.width);
+    let visible =
+        minicore_tui::ui::transcript::visible_rows(&driver.app, total, screen.transcript.height);
+    driver.step(AppEvent::Viewport {
+        total_lines: total,
+        visible_rows: visible,
+    });
 
     slash(&mut driver, "/copy message");
     assert_eq!(driver.copies.len(), 1, "{:?}", driver.copies);
