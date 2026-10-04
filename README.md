@@ -142,7 +142,7 @@ The complete current keymap and slash-command semantics are in
 - `Ctrl+R` opens Sessions, `Ctrl+N` opens New Session, `Ctrl+L` opens Model, and `Shift+Tab` opens Reasoning;
 - In Sessions, `F2` renames, `F5` refreshes, `Ctrl+W` closes, and `Delete`/`Ctrl+D` deletes after the required confirmations;
 - `Ctrl+G` in Composer edits the current draft with the configured external editor; a read-only session keeps its explicit Continue action; `/editor` starts a blank draft;
-- `Ctrl+T` shows/hides reasoning and `Ctrl+O` expands/collapses tool previews and visible reasoning;
+- `Ctrl+T` shows/hides reasoning and `Ctrl+O` expands/collapses tool previews, visible reasoning and compaction summaries;
 - `PageUp`/`PageDown` scroll with four rows of overlap; `Ctrl+Home`/`Ctrl+End` jump to the transcript ends;
 - mouse wheel moves one row, or five with Alt; the Pi-style scrollbar appears on scrolling/hover, supports live dragging, and hides after one second;
 - the bottom scroll-status hint overlays the transcript without consuming a row; see [scrollbar verification](docs/verification/scrollbar/README.md);
@@ -273,10 +273,18 @@ explicit refresh is needed to discover the result.
 Newer Agents identify manual/automatic origin explicitly; older automatic IDs
 use the reserved `auto-` prefix, while unrecognized origins remain unknown.
 
-The conversation shows up to 16 recent compaction results per session as a
-separate session-feedback group. This process-local metadata survives redraws,
-history refreshes and reopening in the same TUI process. It is not written to
-model history or a disk log and contains no summary or encrypted replay body.
+The conversation shows the Agent's actual latest display summary as a purple-rail
+card, collapsed to one content line by default. Click toggles only that summary;
+`Ctrl+O` toggles it together with tool/reasoning details. A new display projection
+starts collapsed, including when the raw archive revision is unchanged.
+Successful compaction refreshes the existing display-history chain once; result
+metadata never becomes summary text. Past success results no longer stack below
+new turns. Current unknown-write and blocked states remain visible and gated.
+If the read fails, return to the ordinary conversation and use `/refresh` to
+retry history; inside Context or another detail view it refreshes that view.
+Manual `/compact` requires a settled, safe session, but does not require loading
+an unvisited archive prefix. Partial large items and pending reconciliations
+still block admission; the Agent retains compaction policy and authority.
 A local context-budget failure shows the Agent's estimate and input budget when
 available, with `/compact` or a larger-context model as recovery options.
 

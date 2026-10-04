@@ -1,6 +1,6 @@
  ← 返 回  · Context（ 快 照 /操 作 分 开 ； 关 闭 不 取 消 ）
- ›[刷 新 ]  [compact]  [cancel disabled]
- 手 动 压 缩 可 用 ； Esc 返 回 对 话
+ ›[刷 新 ]  [compact disabled]  [cancel disabled]
+ 手 动 压 缩 暂 不 可 用 ： 会 话 需 已 加 载 、 空 闲 且 历 史 已 同 步
  正 文 焦 点  · Tab 选 择  Enter 执 行  · F6 编 辑  · F5 刷 新
  上 下 文 估 算 （ ≈， 不 是  Provider 实 际 用 量 ）                                        █
    ≈last prepared request:2343 / input budget:28952 tokens                     █
@@ -8,15 +8,15 @@
    history tail excludes summary                                               █
                                                                                █
  Current compaction: no active operation observed                              █
- 最 近 压 缩 结 果                                                                   █
-   unknown fixture-compacted-1 Compacted failure:none                          █
+ 最 近 压 缩 结 果                                                                   │
+   unknown fixture-compacted-1 Compacted failure:none                          │
    compaction projection (not latest request)                                  │
    ≈before:3571 after:458                                                      │
    utility attempts:1 complete:true                                            │
    utility input:10 output:12 reasoning:0                                      │
    utility cache read:0 write:0 provider-total:22                              │
-                                                                               │
- 压 缩 覆 盖 （ 计 数 ； 不 展 示  summary 正 文 ）                                          │
+ Compaction completed · refreshing summary
+
  ▎
  ▎preserved draft
  ▎

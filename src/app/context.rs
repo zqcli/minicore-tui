@@ -10,17 +10,10 @@ impl App {
             && self.deferred_pending() < MAX_DEFERRED_REQUESTS
             && self.active_view().is_some_and(|v| {
                 v.info.loaded
-                    && !v.closing
-                    && !v.is_blocked()
                     && !v.is_preparing()
-                    && v.live.is_none()
-                    && v.unsaved_loop.is_none()
-                    && !v.event_gap
-                    && v.transcript.complete
-                    && v.state
-                        .as_ref()
-                        .is_some_and(|s| s.status == SessionStatusWire::Idle)
-                    && v.manual_compact.as_ref().is_none_or(|m| m.result.is_some())
+                    && self.session_action_safety(&v.info.session_id) == SessionActionSafety::Safe
+                    && !v.history_read.post_wait_pending()
+                    && v.transcript.next_cursor.is_none()
             })
     }
     pub fn context_panel(&self) -> Option<&ContextState> {

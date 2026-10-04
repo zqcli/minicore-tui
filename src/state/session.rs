@@ -136,9 +136,21 @@ impl HistoryRead {
         self.active = None;
     }
 
+    /// A declined read keeps its lifecycle obligation for an explicit retry.
+    pub fn pause(&mut self) {
+        if let Some(trigger) = self.active.take() {
+            self.defer(trigger);
+        }
+    }
+
     /// Records a chain that must start later.
     pub fn defer(&mut self, trigger: HistoryTrigger) {
-        self.pending = Some(trigger);
+        // A display refresh must not replace an owed lifecycle reconciliation.
+        if self.pending != Some(HistoryTrigger::Gap)
+            && (trigger != HistoryTrigger::Refresh || self.pending.is_none())
+        {
+            self.pending = Some(trigger);
+        }
     }
 
     /// Consumes the owed trigger, if any.
@@ -292,7 +304,7 @@ pub struct SessionView {
     /// Stable per-section fold choices. These are local UI state only.
     pub tool_folds: Arc<HashMap<ToolKey, FoldOverride>>,
     pub reasoning_folds: Arc<HashMap<ReasoningKey, FoldOverride>>,
-    /// Summary indexes belong to one authoritative history revision only.
+    /// Summary indexes belong to one authoritative display (or raw) revision only.
     pub summary_folds: Arc<HashMap<usize, FoldOverride>>,
     pub summary_history_revision: Option<String>,
     /// This session's own draft: text, cursor, undo/redo, paste markers and
@@ -378,7 +390,7 @@ impl SessionView {
         }
     }
 
-    /// A summary's index is meaningful only within its read revision. Clear
+    /// A summary's index is meaningful only within its projection/read revision. Clear
     /// both its projection and UI overrides before installing a different pin.
     pub(crate) fn reconcile_summary_revision(&mut self, revision: &str) {
         if self.summary_history_revision.as_deref() == Some(revision) {

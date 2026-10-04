@@ -2427,17 +2427,22 @@ pub(super) fn cancel_scrollbar_drag(app: &mut App) {
     app.cancel_scrollbar_drag();
 }
 
-/// Ctrl+O toggles all visible foldable details, including reasoning.
+/// Ctrl+O toggles all visible foldable details, including reasoning and summaries.
 pub(super) fn toggle_tools(app: &mut App, session_id: &str) {
     let now = app.instant_now();
-    let reasoning = if app.sessions.active.as_deref() == Some(session_id) {
+    let details = if app.sessions.active.as_deref() == Some(session_id) {
         let width = app.terminal_content_width();
         let prepared = app.conversation_for_input(width);
         prepared
             .sections
             .iter()
             .filter(|section| {
-                section.collapsible && section.id.kind == crate::state::view::SectionKind::Thinking
+                section.collapsible
+                    && matches!(
+                        section.id.kind,
+                        crate::state::view::SectionKind::Thinking
+                            | crate::state::view::SectionKind::Summary
+                    )
             })
             .collect::<Vec<_>>()
     } else {
@@ -2445,11 +2450,11 @@ pub(super) fn toggle_tools(app: &mut App, session_id: &str) {
     };
     if let Some(view) = app.sessions.known.get_mut(session_id) {
         let keys = all_tool_keys(view);
-        let all_open = (!keys.is_empty() || !reasoning.is_empty())
+        let all_open = (!keys.is_empty() || !details.is_empty())
             && keys
                 .iter()
                 .all(|key| current_tool_expanded(view, key) == Some(true))
-            && reasoning.iter().all(|section| !section.folded);
+            && details.iter().all(|section| !section.folded);
         let expanded = !all_open;
         set_all_tools_expanded(view, expanded);
         if expanded {
@@ -2459,7 +2464,20 @@ pub(super) fn toggle_tools(app: &mut App, session_id: &str) {
                 }
             }
         }
-        for section in reasoning {
+        for section in details {
+            if section.id.kind == crate::state::view::SectionKind::Summary {
+                if let Some(index) = section.id.history_index {
+                    Arc::make_mut(&mut view.summary_folds).insert(
+                        index,
+                        if expanded {
+                            FoldOverride::Expanded
+                        } else {
+                            FoldOverride::Collapsed
+                        },
+                    );
+                }
+                continue;
+            }
             if let (Some(loop_id), Some(request_index)) =
                 (section.id.loop_id.as_deref(), section.id.request_index)
             {

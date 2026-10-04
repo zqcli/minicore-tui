@@ -986,14 +986,11 @@ impl App {
         };
         let mut commands = Vec::new();
         commands.extend(self.request_session_presentation(&session_id));
-        if let Some(view) = self.sessions.known.get_mut(&session_id) {
-            view.history_read.begin(HistoryTrigger::Refresh);
-        }
-        commands.extend(self.request_history(&session_id));
         self.notice(
             NoticeLevel::Info,
             format!("Refreshing {session_id}'s view data"),
         );
+        commands.extend(self.refresh_history_view(&session_id));
         commands
     }
 
@@ -2171,7 +2168,7 @@ impl App {
             Err(error) => {
                 self.notice(
                     NoticeLevel::Warning,
-                    format!("failed to read context for {session_id}: {error}"),
+                    format!("failed to read context for {session_id}: {error}; summary view not refreshed · return to conversation and /refresh to retry"),
                 );
                 return Vec::new();
             }
@@ -2185,8 +2182,11 @@ impl App {
             .and_then(|context| context.last_result.clone());
         let latest_result = context.last_result.clone();
         let refresh_presentation = latest_result.as_ref().is_some_and(|result| {
-            previous_result.as_ref() != Some(result)
-                && result.status == crate::protocol::CompactStatusWire::Compacted
+            result.status == crate::protocol::CompactStatusWire::Compacted
+                && previous_result.as_ref().is_none_or(|previous| {
+                    previous.operation_id != result.operation_id
+                        || previous.status != crate::protocol::CompactStatusWire::Compacted
+                })
         });
         let (current_operation, cancel_manual) = {
             let Some(view) = self.sessions.known.get_mut(session_id) else {
@@ -2242,8 +2242,13 @@ impl App {
             previous_result.as_ref() != Some(result) && result.origin_label() == "automatic"
         }) {
             let (level, detail) = match result.status {
-                crate::protocol::CompactStatusWire::Compacted
-                | crate::protocol::CompactStatusWire::Noop => (NoticeLevel::Info, "completed"),
+                crate::protocol::CompactStatusWire::Compacted => (NoticeLevel::Info, "completed"),
+                crate::protocol::CompactStatusWire::Noop => (NoticeLevel::Info, "not needed"),
+                crate::protocol::CompactStatusWire::Failed
+                    if result.failure_kind.as_deref() == Some("cancelled") =>
+                {
+                    (NoticeLevel::Warning, "cancelled")
+                }
                 crate::protocol::CompactStatusWire::Failed => (NoticeLevel::Warning, "failed"),
                 crate::protocol::CompactStatusWire::UnknownWrite => {
                     (NoticeLevel::Error, "has unknown write outcome")
@@ -2263,6 +2268,11 @@ impl App {
         // automatic compaction, without refreshing an unchanged result.
         let mut commands = Vec::new();
         if refresh_presentation {
+            self.notice(
+                NoticeLevel::Info,
+                "Compaction completed · refreshing summary",
+            );
+            commands.extend(self.refresh_history_view(session_id));
             commands.extend(self.request_session_presentation(session_id));
         }
         if let Some(operation) = current_operation {

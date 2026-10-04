@@ -1994,38 +1994,19 @@ fn build_live_tail(
             }
         }
 
-        if !view.compaction_feedback.is_empty() {
-            let style = Style::new().fg(theme.muted).bg(theme.page_bg);
-            let mut feedback = crate::markdown::wrap_plain(
-                "Recent compaction results · session feedback",
-                width,
-                style,
+        if view.manual_compact.as_ref().is_some_and(|compact| {
+            compact.result.as_ref().is_some_and(|result| {
+                result.status == crate::protocol::CompactStatusWire::UnknownWrite
+            })
+        }) {
+            layout::append_section(
+                &mut lines,
+                crate::markdown::wrap_plain(
+                    "Compaction write outcome unknown · state/context confirmation required",
+                    width,
+                    Style::new().fg(theme.muted).bg(theme.page_bg),
+                ),
             );
-            for result in &view.compaction_feedback {
-                let text = format!(
-                    "{} compaction {}: {:?} · compaction projection ≈{} → {} tokens (not latest request) · covered loops:{} items:{} retained:{}",
-                    result.origin_label(),
-                    crate::safe_text::safe_display(&result.operation_id),
-                    result.status,
-                    result
-                        .before_tokens
-                        .map_or("unknown".into(), |v| v.to_string()),
-                    result
-                        .after_tokens
-                        .map_or("unknown".into(), |v| v.to_string()),
-                    result
-                        .covered_loop_count
-                        .map_or("unknown".into(), |v| v.to_string()),
-                    result
-                        .covered_item_count
-                        .map_or("unknown".into(), |v| v.to_string()),
-                    result
-                        .retained_item_count
-                        .map_or("unknown".into(), |v| v.to_string())
-                );
-                feedback.extend(crate::markdown::wrap_plain(&text, width, style));
-            }
-            layout::append_section(&mut lines, feedback);
         }
 
         if view.can_show_last_result() {
@@ -2518,14 +2499,22 @@ fn compaction_summary_lines(
     folded: bool,
 ) -> (Vec<Line<'static>>, Vec<Vec<Range<usize>>>, Vec<bool>) {
     let label = if folded {
-        "[compaction] Compaction summary · click to expand"
+        "▸ [compaction] Compaction summary · Ctrl+O / click to expand"
     } else if content.len() > crate::limits::LAYOUT_SECTION_BYTES {
-        "[compaction] Compaction summary · exceeds layout budget; /export to read"
+        "▾ [compaction] Compaction summary · exceeds layout budget; /export to read"
     } else {
-        "[compaction] Compaction summary · click to collapse"
+        "▾ [compaction] Compaction summary · Ctrl+O / click to collapse"
     };
     let surface = |line| {
-        crate::ui::rail::surface_row(width, crate::ui::rail::thinking_colors(theme), 1, line)
+        crate::ui::rail::surface_row(
+            width,
+            crate::ui::rail::SurfaceColors {
+                rail: theme.rail_thinking,
+                background: theme.card_bg,
+            },
+            1,
+            line,
+        )
     };
     let mut lines = vec![
         Line::default(),
@@ -2721,8 +2710,8 @@ mod source_map_tests {
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join("");
-            assert!(text.contains("Recent compaction results"));
-            assert!(text.contains("session feedback"));
+            assert!(!text.contains("Recent compaction results"));
+            assert!(!text.contains("auto-result"));
             assert!(text.contains("123456 / input budget 32000"));
             assert!(text.contains("/compact"));
             assert!(text.contains("Last turn"));

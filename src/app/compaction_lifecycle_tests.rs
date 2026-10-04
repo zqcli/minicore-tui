@@ -49,7 +49,7 @@ fn observed_operation(app: &App) -> Option<&str> {
 }
 
 #[test]
-fn only_new_successful_compaction_refreshes_reported_context_presentation() {
+fn only_new_successful_compaction_refreshes_display_and_reported_context_presentation() {
     for origin in ["manual", "automatic"] {
         for status in ["compacted", "noop", "failed", "unknown_write"] {
             let mut app = app();
@@ -73,12 +73,31 @@ fn only_new_successful_compaction_refreshes_reported_context_presentation() {
             .remove(0);
             let refresh = take_requests(respond(&mut app, &request, snapshot.clone()));
             if status == "compacted" {
-                assert_eq!(refresh.len(), 1, "{origin} {status}");
-                assert_eq!(refresh[0].method, "session.presentation");
+                assert_eq!(refresh.len(), 2, "{origin} {status}");
+                let presentation = refresh
+                    .iter()
+                    .find(|request| request.method == "session.presentation")
+                    .unwrap();
+                let history = refresh
+                    .iter()
+                    .find(|request| request.method == "session.read")
+                    .unwrap();
+                assert_eq!(history.params["view"], "display");
+                let body = json!({"display": true, "derived_summary": true,
+                    "item": {"type": "summary", "data": {"content": "Agent summary"}}})
+                .to_string();
+                let info = app.active_view().unwrap().info.clone();
+                assert!(take_requests(respond(&mut app, history, json!({
+                    "session": info, "items": [{"index": 0, "offset": 0, "total_bytes": body.len(),
+                        "encoding": "utf8_json", "data": body, "complete": true}],
+                    "total": 1, "history_revision": "a".repeat(64), "captured_end": 1,
+                    "trailing_incomplete": false
+                }))).is_empty());
+                assert!(app.active_view().unwrap().summary_folds.is_empty());
                 assert!(
                     take_requests(respond(
                         &mut app,
-                        &refresh[0],
+                        presentation,
                         json!({
                             "session_id": "ses_1", "context": {"kind": "unknown"}
                         })

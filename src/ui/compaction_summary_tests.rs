@@ -85,3 +85,99 @@ fn compaction_summary_large_body_never_enters_markdown_layout() {
         assert_eq!(layout.source_map.source.len(), source.len());
     }
 }
+
+#[test]
+fn compaction_summary_dark_light_and_narrow_header_keep_one_line_and_neutral_surface() {
+    for theme in [Theme::dark(), Theme::light()] {
+        for width in [8, 24, 80] {
+            let (lines, links, breaks) =
+                compaction_summary_lines(&theme, width, "hidden body", true);
+            assert_eq!(lines.len(), 3);
+            assert_eq!(links.len(), lines.len());
+            assert_eq!(breaks.len(), lines.len());
+            assert_eq!(crate::markdown::line_width(&lines[1]), width);
+            assert!(lines[1].to_string().contains('▸'));
+            assert_eq!(lines[1].spans[0].style.fg, Some(theme.rail_thinking));
+            assert!(
+                lines[1]
+                    .spans
+                    .iter()
+                    .all(|span| span.style.bg == Some(theme.card_bg))
+            );
+        }
+    }
+}
+
+#[test]
+fn compaction_summary_success_feedback_does_not_stack_and_current_unknown_stays_visible() {
+    let mut app =
+        crate::ui::testapp::open_empty(crate::theme::ThemeKind::Dark, "ses_1", None, "high");
+    for index in 0..16 {
+        app.sessions
+            .known
+            .get_mut("ses_1")
+            .unwrap()
+            .record_compaction_result(
+            serde_json::from_value(
+                serde_json::json!({"operation_id": format!("op-{index}"), "status": "compacted"}),
+            )
+            .unwrap(),
+        );
+        let (rows, _, _) = build_live_tail(&Theme::dark(), &app, 100, None, None, None);
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.to_string().contains("compaction"))
+        );
+    }
+    let mut context: serde_json::Value = serde_json::from_str::<serde_json::Value>(
+        &std::fs::read_to_string("tests/fixtures/agent-v1/session-context-idle.json").unwrap(),
+    )
+    .unwrap()["result"]
+        .clone();
+    context["session_id"] = "ses_1".into();
+    context["last_result"] = serde_json::json!({"operation_id": "unknown", "status": "unknown_write", "origin": "automatic"});
+    let view = app.sessions.known.get_mut("ses_1").unwrap();
+    view.context = Some(serde_json::from_value(context).unwrap());
+    view.state.as_mut().unwrap().status = crate::protocol::SessionStatusWire::Blocked;
+    app.notices.clear();
+    for status in [
+        crate::protocol::SessionStatusWire::Blocked,
+        crate::protocol::SessionStatusWire::Idle,
+        crate::protocol::SessionStatusWire::Blocked,
+    ] {
+        app.sessions
+            .known
+            .get_mut("ses_1")
+            .unwrap()
+            .state
+            .as_mut()
+            .unwrap()
+            .status = status;
+        let (rows, _, _) = build_live_tail(&Theme::dark(), &app, 100, None, None, None);
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.to_string().contains("Compaction write outcome unknown")),
+            "old automatic result must not be attributed to a new block"
+        );
+        if status == crate::protocol::SessionStatusWire::Blocked {
+            let backend = ratatui::backend::TestBackend::new(100, 2);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal
+                .draw(|frame| crate::ui::status::render(frame, frame.area(), &app, &Theme::dark()))
+                .unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(
+                text.contains("Blocked"),
+                "current authoritative block survives notice expiry"
+            );
+        }
+    }
+}

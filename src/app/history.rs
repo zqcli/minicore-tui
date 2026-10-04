@@ -1680,6 +1680,45 @@ impl App {
         }
     }
 
+    /// Re-pin the existing display chain, retaining any stronger owed read.
+    /// In-flight pages and decode keep their owner until the chain finishes.
+    pub(super) fn refresh_history_view(&mut self, session_id: &SessionId) -> Vec<AppCommand> {
+        if !self.can_send_requests()
+            || self.reload.is_some()
+            || self.sessions.closed.contains(session_id)
+            || self.session_pending_deletion(session_id)
+            || self
+                .sessions
+                .known
+                .get(session_id)
+                .is_none_or(|view| view.closing || (!view.info.loaded && !view.browsing))
+        {
+            self.notice(
+                NoticeLevel::Warning,
+                "Summary view not refreshed · return to conversation and /refresh to retry",
+            );
+            return Vec::new();
+        }
+        let pending = self.pending_history(session_id) || self.history_decode_pending(session_id);
+        let view = self.sessions.known.get_mut(session_id).unwrap();
+        view.history_read.defer(HistoryTrigger::Refresh);
+        if view.history_read.is_loading() || pending {
+            return Vec::new();
+        }
+        let trigger = view.history_read.take_pending().unwrap();
+        view.read_page = None;
+        view.transcript.next_cursor = None;
+        view.history_read.begin(trigger);
+        let command = self.request_history(session_id);
+        if command.is_none() {
+            self.notice(
+                NoticeLevel::Warning,
+                "Summary view not refreshed · return to conversation and /refresh to retry",
+            );
+        }
+        command.into_iter().collect()
+    }
+
     pub(super) fn request_history(&mut self, session_id: &SessionId) -> Option<AppCommand> {
         if self.history_decode_pending(session_id) {
             return None;
@@ -1690,6 +1729,13 @@ impl App {
                     .history_query_generation
                     .checked_add(1)
                     .expect("history query generations exhausted");
+                // Retain the assembler across admission retries so this chain
+                // keeps its generation and its queued query reservation.
+                view.read_page = Some(ReadPage::new(
+                    view.transcript.next_cursor.unwrap_or(ReadCursor::start()),
+                    None,
+                    0,
+                ));
             }
         }
         let (cursor, pin, window_start, replacement, reconcile, probe) = self
@@ -1702,8 +1748,16 @@ impl App {
                 (
                     next.unwrap_or(crate::protocol::ReadCursor::start()),
                     pin.clone(),
-                    view.transcript.window.confirmed_prefix(),
-                    view.transcript.window.is_empty(),
+                    view.read_page
+                        .as_ref()
+                        .filter(|page| page.want_pin.is_some())
+                        .map_or(view.transcript.window.confirmed_prefix(), |page| {
+                            page.window_start
+                        }),
+                    view.read_page
+                        .as_ref()
+                        .filter(|page| page.want_pin.is_some())
+                        .map_or(view.transcript.window.is_empty(), |page| page.replacement),
                     view.event_gap,
                     // Probe whenever this request carries no pin: the read then
                     // has to establish the prefix before any windowed read.
@@ -1723,7 +1777,7 @@ impl App {
             .known
             .get(session_id)
             .map_or(0, |view| view.gap_revision);
-        self.request_read(
+        let command = self.request_read(
             session_id,
             ReadRequest {
                 cursor,
@@ -1734,7 +1788,21 @@ impl App {
                 probe,
                 gap_revision,
             },
-        )
+        );
+        if command.is_none() {
+            let view = self.sessions.known.get_mut(session_id)?;
+            let key = crate::app::queries::QueryKey::History {
+                session_id: session_id.clone(),
+                generation: view.history_query_generation,
+            };
+            if !self.queries.contains_or_queued(&key) {
+                // A full bounded backlog can decline the intent entirely.
+                // Leave an explicit retry possible, rather than a stuck load.
+                view.read_page = None;
+                view.history_read.pause();
+            }
+        }
+        command
     }
 
     fn queue_history_decode(&mut self, session_id: &SessionId) {
@@ -1949,7 +2017,7 @@ impl App {
             Err(error) => {
                 self.notice(
                     NoticeLevel::Error,
-                    format!("malformed history for {session_id}: {error}"),
+                    format!("malformed history for {session_id}: {error}; view not refreshed · return to conversation and /refresh to retry"),
                 );
                 if let Some(view) = self.sessions.known.get_mut(session_id) {
                     Self::mark_history_unconfirmed(view);
@@ -2020,7 +2088,13 @@ impl App {
         // so a stray chunk below the window is never faked as loaded (§6.3
         // step 3).
         if read.probe {
-            view.reconcile_summary_revision(&page.history_revision);
+            view.reconcile_summary_revision(
+                page.projection
+                    .as_ref()
+                    .map_or(page.history_revision.as_str(), |projection| {
+                        projection.revision.as_str()
+                    }),
+            );
             let pin = page.pin();
             if let Some(projection) = &pin.projection {
                 view.transcript.blocks_mut().retain(|block| {
@@ -2067,7 +2141,7 @@ impl App {
                                 format!("history for {session_id} is not decodable: {other}")
                             }
                         };
-                        self.notice(NoticeLevel::Error, message);
+                        self.notice(NoticeLevel::Error, format!("{message}; view not refreshed · return to conversation and /refresh to retry"));
                         return Vec::new();
                     }
                     for (index, total_bytes) in &applied.placeholders {
@@ -2089,7 +2163,7 @@ impl App {
                                 Self::mark_history_unconfirmed(view);
                                 self.notice(
                                     NoticeLevel::Error,
-                                    format!("history for {session_id} is not decodable: {detail}"),
+                                    format!("history for {session_id} is not decodable: {detail}; view not refreshed · return to conversation and /refresh to retry"),
                                 );
                                 return Vec::new();
                             }
@@ -2164,12 +2238,16 @@ impl App {
             next_request.replacement = false;
             next_request.probe = false;
             next_request.pin = view.transcript.window.pin().cloned();
+            // Retain the tail cursor and assembler if query admission queues it.
+            view.transcript.next_cursor = Some(next_request.cursor);
+            view.read_page = Some(ReadPage::new(
+                next_request.cursor,
+                next_request.pin.clone(),
+                window_start,
+            ));
             view.transcript.sync_from_window();
             view.history_read.continue_loading();
-            return self
-                .request_read(session_id, next_request)
-                .into_iter()
-                .collect();
+            return self.request_history(session_id).into_iter().collect();
         }
 
         let applied = match crate::app::history::apply_page(
@@ -2182,7 +2260,7 @@ impl App {
                 Self::mark_history_unconfirmed(view);
                 self.notice(
                     NoticeLevel::Error,
-                    format!("history for {session_id} is not decodable: {error}"),
+                    format!("history for {session_id} is not decodable: {error}; view not refreshed · return to conversation and /refresh to retry"),
                 );
                 return Vec::new();
             }
@@ -2193,7 +2271,7 @@ impl App {
                 view.history_read.finish();
                 self.notice(
                     NoticeLevel::Warning,
-                    format!("history for {session_id} became stale: {error}; reload to continue"),
+                    format!("history for {session_id} became stale: {error}; return to conversation and /refresh to retry"),
                 );
                 return Vec::new();
             }
@@ -2219,7 +2297,7 @@ impl App {
                     Self::mark_history_unconfirmed(view);
                     self.notice(
                         NoticeLevel::Error,
-                        format!("history for {session_id} is not decodable: {detail}"),
+                        format!("history for {session_id} is not decodable: {detail}; view not refreshed · return to conversation and /refresh to retry"),
                     );
                     return Vec::new();
                 }
@@ -2250,9 +2328,16 @@ impl App {
                 crate::protocol::ReadError::ItemChanged { index } => {
                     format!("history for {session_id} changed at an existing item index {index}")
                 }
-                _ => format!("history for {session_id} is not decodable: {error}"),
+                _ => format!(
+                    "history for {session_id} is not decodable: {error}; view not refreshed · return to conversation and /refresh to retry"
+                ),
             };
-            self.notice(NoticeLevel::Error, message);
+            self.notice(
+                NoticeLevel::Error,
+                format!(
+                    "{message}; view not refreshed · return to conversation and /refresh to retry"
+                ),
+            );
             return Vec::new();
         }
 
@@ -2428,7 +2513,7 @@ impl App {
                 Self::mark_history_unconfirmed(view);
                 self.notice(
                     NoticeLevel::Error,
-                    format!("history for {session_id} is not decodable: {detail}"),
+                    format!("history for {session_id} is not decodable: {detail}; view not refreshed · return to conversation and /refresh to retry"),
                 );
                 return Vec::new();
             }
@@ -2467,7 +2552,7 @@ impl App {
             Self::mark_history_unconfirmed(view);
             self.notice(
                 NoticeLevel::Error,
-                format!("history for {session_id} is not decodable: {error}"),
+                format!("history for {session_id} is not decodable: {error}; view not refreshed · return to conversation and /refresh to retry"),
             );
             return Vec::new();
         }
@@ -2859,13 +2944,13 @@ impl App {
             view.history_read.take_pending();
             view.history_read.begin(HistoryTrigger::Gap);
             NextChain::Reconcile
-        } else if view.history_read.take_pending() == Some(HistoryTrigger::PostWait) {
-            if !loop_contained_in_history && view.live.is_some() {
-                view.history_read.begin(HistoryTrigger::PostWait);
-                NextChain::Reconcile
-            } else {
-                NextChain::Done
-            }
+        } else if let Some(trigger) = view.history_read.take_pending() {
+            // The old window containing a finished loop cannot prove that a
+            // later compaction projection was read. Every owed chain re-pins.
+            view.read_page = None;
+            view.transcript.next_cursor = None;
+            view.history_read.begin(trigger);
+            NextChain::Reconcile
         } else if !loop_contained_in_history
             && view.live.as_ref().is_some_and(|l| l.last_result.is_some())
         {

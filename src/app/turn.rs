@@ -499,9 +499,26 @@ impl App {
         };
         let allowed = self.can_manual_compact();
         if !allowed {
+            let Some(view) = self.sessions.known.get(&session_id) else {
+                self.notice(NoticeLevel::Warning, "No loaded session to compact");
+                return Vec::new();
+            };
+            let reason = if !view.info.loaded {
+                "continue the session before compacting"
+            } else if view.is_preparing() {
+                "compaction is active or its write outcome needs confirmation"
+            } else if view.history_read.is_loading()
+                || view.history_read.post_wait_pending()
+                || view.transcript.next_cursor.is_some()
+                || self.pending_history(&session_id)
+            {
+                "history is still syncing; finish the read or use /refresh in conversation"
+            } else {
+                "wait for an idle, unblocked session with confirmed saved results"
+            };
             self.notice(
                 NoticeLevel::Warning,
-                "manual compaction requires a loaded, idle, settled, unblocked session",
+                format!("Manual compaction unavailable: {reason}"),
             );
             return Vec::new();
         }
@@ -1096,7 +1113,11 @@ impl App {
             | crate::protocol::CompactStatusWire::Noop => {
                 self.notice(
                     NoticeLevel::Info,
-                    format!("context compaction {operation_id} completed"),
+                    if result.status == crate::protocol::CompactStatusWire::Compacted {
+                        "Compaction completed · refreshing summary".to_owned()
+                    } else {
+                        "No compaction needed".to_owned()
+                    },
                 );
                 self.queue_context_read(session_id, ContextQueryOwner::Explicit)
                     .into_iter()
@@ -1105,10 +1126,16 @@ impl App {
             crate::protocol::CompactStatusWire::Failed => {
                 self.notice(
                     NoticeLevel::Warning,
-                    format!(
-                        "context compaction {operation_id} failed ({})",
-                        result.failure_kind.as_deref().unwrap_or("unknown failure")
-                    ),
+                    if result.failure_kind.as_deref() == Some("cancelled") {
+                        "Compaction cancelled".to_owned()
+                    } else {
+                        format!(
+                            "Compaction failed · {}",
+                            crate::safe_text::safe_display(
+                                result.failure_kind.as_deref().unwrap_or("unknown failure")
+                            )
+                        )
+                    },
                 );
                 self.queue_context_read(session_id, ContextQueryOwner::Explicit)
                     .into_iter()

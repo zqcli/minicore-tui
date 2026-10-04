@@ -120,6 +120,10 @@ impl QuerySlots {
         self.in_flight.iter().any(|(_, existing)| existing == key)
     }
 
+    pub(super) fn contains_or_queued(&self, key: &QueryKey) -> bool {
+        self.contains(key) || self.waiting_set.contains(key) || self.ready.contains(key)
+    }
+
     /// Admits a read for `key`, recording `request_id` as its owner. A repeated
     /// key does not consume a second slot; it sets one refresh flag instead.
     pub fn request_query(&mut self, key: QueryKey, request_id: RequestId) -> QueryAdmission {
