@@ -4465,8 +4465,14 @@ fn e2e_post_turn_compaction_is_independent_observable_and_cancellable() {
     let agent_bin = require_agent_bin();
     let (env, _) = E2eEnvironment::setup();
     let gate = Arc::new(AtomicBool::new(false));
-    env._server
-        .enqueue_sse(sse_text_response(&"h".repeat(96 * 1024)));
+    // Native-usage threshold fixture: 28,000 exceeds the 27,504 trigger.
+    // Synthetic source size does not assert a tokenizer correspondence.
+    env._server.enqueue_sse(sse_text_response_with_usage(
+        &"h".repeat(96 * 1024),
+        27_000,
+        1_000,
+        0,
+    ));
     env._server
         .enqueue_gated(sse_text_response("prepared summary"), gate.clone(), None);
 
