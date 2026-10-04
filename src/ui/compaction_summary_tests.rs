@@ -109,6 +109,55 @@ fn compaction_summary_dark_light_and_narrow_header_keep_one_line_and_neutral_sur
 }
 
 #[test]
+fn compaction_summary_header_foreground_survives_surface_in_every_theme_and_variant() {
+    let oversized = "x".repeat(crate::limits::LAYOUT_SECTION_BYTES + 1);
+    for theme in [Theme::dark(), Theme::light()] {
+        for (folded, source) in [(true, "body"), (false, "body"), (false, oversized.as_str())] {
+            for width in [2, 8, 24, 80] {
+                let (lines, _, _) = compaction_summary_lines(&theme, width, source, folded);
+                let header = &lines[1];
+                assert!(
+                    header
+                        .spans
+                        .iter()
+                        .skip(1)
+                        .any(|span| !span.content.trim().is_empty())
+                );
+                for span in header
+                    .spans
+                    .iter()
+                    .skip(1)
+                    .filter(|span| !span.content.trim().is_empty())
+                {
+                    assert_eq!(span.style.fg, Some(theme.muted));
+                    assert_eq!(span.style.bg, Some(theme.card_bg));
+                }
+                let backend = ratatui::backend::TestBackend::new(width as u16, 1);
+                let mut terminal = ratatui::Terminal::new(backend).unwrap();
+                terminal
+                    .draw(|frame| {
+                        frame.render_widget(
+                            ratatui::widgets::Paragraph::new(header.clone()),
+                            frame.area(),
+                        );
+                    })
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                assert_eq!(buffer[(0, 0)].fg, theme.rail_thinking);
+                for x in 1..width as u16 {
+                    let cell = &buffer[(x, 0)];
+                    assert_eq!(cell.bg, theme.card_bg);
+                    if !cell.symbol().trim().is_empty() {
+                        assert_eq!(cell.fg, theme.muted);
+                        assert_ne!(cell.fg, cell.bg);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn compaction_summary_success_feedback_does_not_stack_and_current_unknown_stays_visible() {
     let mut app =
         crate::ui::testapp::open_empty(crate::theme::ThemeKind::Dark, "ses_1", None, "high");

@@ -2518,7 +2518,10 @@ fn compaction_summary_lines(
     };
     let mut lines = vec![
         Line::default(),
-        surface(Line::styled(label, Style::new().fg(theme.muted))),
+        surface(Line::from(Span::styled(
+            label,
+            Style::new().fg(theme.muted),
+        ))),
     ];
     let mut links = vec![Vec::new(), Vec::new()];
     let mut breaks = vec![false, false];
