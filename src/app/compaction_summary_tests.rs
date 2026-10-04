@@ -1080,10 +1080,19 @@ fn covered_terminal_wire_fixture() -> (App, crate::protocol::OutgoingRequest) {
     use crate::ui::testapp::{respond, take_requests};
     let mut app = crate::ui::testapp::open_empty(ThemeKind::Dark, SESSION, None, "high");
     let result = covered_terminal_result();
-    let mut live = LiveLoop::new(LocalSubmissionId(77), "finished prompt".into());
-    live.reference = Some(result.turn.clone());
-    app.sessions.known.get_mut(SESSION).unwrap().live = Some(live);
-    let wait = take_requests(app.request_wait(result.turn.clone()).into_iter().collect()).remove(0);
+    app.composer.set_text("finished prompt");
+    let send = take_requests(app.submit_composer()).remove(0);
+    assert_eq!(send.method, "turn.send");
+    let wait = take_requests(respond(
+        &mut app,
+        &send,
+        json!({
+            "turn":result.turn,"accepted_at":"2026-01-02T03:04:05Z"
+        }),
+    ))
+    .into_iter()
+    .find(|request| request.method == "turn.wait")
+    .unwrap();
     let commands = respond(&mut app, &wait, serde_json::to_value(result).unwrap());
     let mut pending = std::collections::VecDeque::from(take_requests(commands));
     let mut history = None;
@@ -1195,6 +1204,15 @@ fn summary_only_terminal_proof_preserves_all_identity_and_completion_fences() {
     ] {
         let (mut app, mut read) = covered_terminal_fixture();
         let view = app.sessions.known.get_mut(SESSION).unwrap();
+        let pending = Arc::new(TranscriptBlock::User(UserBlock {
+            index: None,
+            loop_id: Some(COVERED_TERMINAL_LOOP.into()),
+            kind: UserMessageKindWire::Prompt,
+            text: "uncertain accepted prompt".into(),
+            pending: true,
+        }));
+        view.transcript.blocks_mut().push(pending.clone());
+        let revision = view.transcript.render_revision;
         let mut pin = view.transcript.window.pin().unwrap().clone();
         match invalid {
             "result_session" => {
@@ -1286,6 +1304,14 @@ fn summary_only_terminal_proof_preserves_all_identity_and_completion_fences() {
         );
         App::finish_read_chain(view, &SESSION.to_owned(), &read);
         assert!(view.live.is_some(), "{invalid}");
+        assert!(
+            view.transcript
+                .blocks
+                .iter()
+                .any(|block| Arc::ptr_eq(block, &pending)),
+            "{invalid}"
+        );
+        assert_eq!(view.transcript.render_revision, revision, "{invalid}");
     }
 }
 
@@ -1345,6 +1371,10 @@ async fn summary_only_terminal_waits_for_complete_page_and_owned_decode() {
     page["next_cursor"] = json!({"item":171,"offset":split});
     let requests = take_requests(respond(&mut app, &read, page));
     assert!(app.active_view().unwrap().live.is_some());
+    assert!(app.active_view().unwrap().transcript.blocks.iter().any(
+        |block| matches!(block.as_ref(),TranscriptBlock::User(user) if user.pending
+            && user.loop_id.as_deref()==Some(COVERED_TERMINAL_LOOP))
+    ));
     let read = requests
         .iter()
         .find(|request| request.method == "session.read")
@@ -1364,5 +1394,219 @@ async fn summary_only_terminal_waits_for_complete_page_and_owned_decode() {
     app.mark_decode_scheduled();
     app.update(jobs.events().recv().await.unwrap());
     assert!(app.active_view().unwrap().live.is_none());
+    assert!(app.active_view().unwrap().transcript.blocks.iter().all(
+        |block| !matches!(block.as_ref(),TranscriptBlock::User(user) if user.pending
+            && user.loop_id.as_deref()==Some(COVERED_TERMINAL_LOOP))
+    ));
     jobs.shutdown().await;
+}
+
+fn covered_prompt_summary_cells(app: &App) -> Vec<ratatui::buffer::Cell> {
+    let prepared = crate::ui::transcript::prepare_conversation(app, 80);
+    assert!(prepared.total_rows() <= 16);
+    let rows = prepared
+        .sections
+        .iter()
+        .find(|section| section.id.kind == crate::state::view::SectionKind::Summary)
+        .unwrap()
+        .rows
+        .clone();
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 16)).unwrap();
+    terminal
+        .draw(|frame| {
+            crate::ui::transcript::render(
+                frame,
+                ratatui::layout::Rect::new(0, 0, 80, 16),
+                ratatui::layout::Rect::default(),
+                app,
+                &app.theme.theme(),
+            );
+        })
+        .unwrap();
+    // Welcome chrome may coalesce the section's leading blank spacer. The
+    // collapsed summary must have exactly one nonblank rendered row in either
+    // view; compare every cell in that row, including style and padding.
+    let content_rows = terminal.backend().buffer().content[rows.start * 80..rows.end * 80]
+        .chunks(80)
+        .filter(|row| row.iter().any(|cell| !cell.symbol().trim().is_empty()))
+        .collect::<Vec<_>>();
+    assert_eq!(content_rows.len(), 1);
+    content_rows[0].to_vec()
+}
+
+#[test]
+fn covered_pending_prompt_retirement_matches_cold_view_and_keeps_next_ack_owner() {
+    use crate::ui::testapp::{respond, take_requests};
+    let (mut live_app, read) = covered_terminal_wire_fixture();
+    let before = live_app.active_view().unwrap();
+    assert!(
+        before
+            .transcript
+            .blocks
+            .iter()
+            .any(|block| matches!(block.as_ref(),
+        TranscriptBlock::User(user) if user.pending && user.index.is_none()
+            && user.kind==UserMessageKindWire::Prompt && user.text=="finished prompt"
+            && user.loop_id.as_deref()==Some(COVERED_TERMINAL_LOOP)))
+    );
+    assert_eq!(
+        before.live_user_timestamp.as_deref(),
+        Some("2026-01-02T03:04:05Z")
+    );
+    let page = covered_terminal_page(&live_app, false);
+    assert!(take_requests(respond(&mut live_app, &read, page)).is_empty());
+    let view = live_app.active_view().unwrap();
+    assert!(view.live.is_none());
+    assert_eq!(
+        view.transcript.blocks.len(),
+        1,
+        "only the authoritative summary remains"
+    );
+    assert!(matches!(
+        view.transcript.blocks[0].as_ref(),
+        TranscriptBlock::Summary(_)
+    ));
+
+    let mut cold = app();
+    idle(&mut cold);
+    let read = begin_history_read(&mut cold);
+    let page = serde_json::from_value(covered_terminal_page(&cold, false)).unwrap();
+    cold.continue_read_chain(&SESSION.to_owned(), &read, &page);
+    assert_eq!(
+        live_app.active_view().unwrap().transcript.blocks,
+        cold.active_view().unwrap().transcript.blocks
+    );
+    assert_eq!(
+        covered_prompt_summary_cells(&live_app),
+        covered_prompt_summary_cells(&cold)
+    );
+
+    live_app.composer.set_text("second accepted prompt");
+    let send = take_requests(live_app.submit_composer()).remove(0);
+    assert_eq!(send.method, "turn.send");
+    let requests = take_requests(respond(
+        &mut live_app,
+        &send,
+        json!({
+            "turn":{"session_id":SESSION,"loop_id":"loop-next-accepted"},
+            "accepted_at":"2026-01-02T04:05:06Z"
+        }),
+    ));
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.method == "turn.wait")
+            .count(),
+        1
+    );
+    let view = live_app.active_view().unwrap();
+    let prompts = view
+        .transcript
+        .blocks
+        .iter()
+        .filter_map(|block| match block.as_ref() {
+            TranscriptBlock::User(user) => Some(user),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].text, "second accepted prompt");
+    assert_eq!(prompts[0].loop_id.as_deref(), Some("loop-next-accepted"));
+    assert!(prompts[0].pending && prompts[0].index.is_none());
+    assert_eq!(
+        view.live_user_timestamp.as_deref(),
+        Some("2026-01-02T04:05:06Z")
+    );
+    assert!(view.live_user_time_accepted);
+    assert!(live_app.composer.is_empty());
+}
+
+#[test]
+fn covered_pending_prompt_cleanup_preserves_all_other_cards_drafts_and_queue() {
+    use crate::state::turn::{SteerQueueItem, SteerQueueState};
+    for include_owned_prompt in [false, true] {
+        let (mut app, read) = covered_terminal_fixture();
+        app.composer.set_text("do not submit this draft");
+        let view = app.sessions.known.get_mut(SESSION).unwrap();
+        // These deliberately unbound synthetic cards never pass through a new
+        // send/ACK. Generic first-binding behavior is outside this regression.
+        let kept = [
+            (None, None, true, UserMessageKindWire::Prompt),
+            (None, Some("future-loop"), true, UserMessageKindWire::Prompt),
+            (
+                Some(171),
+                Some(COVERED_TERMINAL_LOOP),
+                false,
+                UserMessageKindWire::Prompt,
+            ),
+            (
+                Some(171),
+                Some(COVERED_TERMINAL_LOOP),
+                true,
+                UserMessageKindWire::Prompt,
+            ),
+            (
+                None,
+                Some(COVERED_TERMINAL_LOOP),
+                false,
+                UserMessageKindWire::Prompt,
+            ),
+            (
+                None,
+                Some(COVERED_TERMINAL_LOOP),
+                true,
+                UserMessageKindWire::Steering,
+            ),
+        ]
+        .into_iter()
+        .map(|(index, loop_id, pending, kind)| {
+            Arc::new(TranscriptBlock::User(UserBlock {
+                index,
+                loop_id: loop_id.map(str::to_owned),
+                pending,
+                kind,
+                text: "identical text".into(),
+            }))
+        })
+        .collect::<Vec<_>>();
+        view.transcript.blocks_mut().extend(kept.iter().cloned());
+        if include_owned_prompt {
+            view.transcript.push_block(TranscriptBlock::User(UserBlock {
+                index: None,
+                loop_id: Some(COVERED_TERMINAL_LOOP.into()),
+                pending: true,
+                kind: UserMessageKindWire::Prompt,
+                text: "identical text".into(),
+            }));
+        }
+        view.steer_queue.push(SteerQueueItem {
+            local_id: 900,
+            text: "queued text".into(),
+            state: SteerQueueState::Unsent,
+            editor_revision: None,
+            handoff: false,
+        });
+        view.steer_queue_paused = true;
+        let revision = view.transcript.render_revision;
+        App::finish_read_chain(view, &SESSION.to_owned(), &read);
+        assert!(view.live.is_none());
+        assert_eq!(view.transcript.blocks.len(), kept.len() + 1);
+        for block in &kept {
+            assert!(
+                view.transcript
+                    .blocks
+                    .iter()
+                    .any(|current| Arc::ptr_eq(current, block))
+            );
+        }
+        assert_eq!(
+            view.transcript.render_revision,
+            revision + u64::from(include_owned_prompt)
+        );
+        assert_eq!(view.steer_queue.len(), 1);
+        assert_eq!(view.steer_queue[0].text, "queued text");
+        assert_eq!(view.steer_queue[0].state, SteerQueueState::Unsent);
+        assert!(view.steer_queue_paused);
+        assert_eq!(app.composer.content(), "do not submit this draft");
+    }
 }

@@ -2982,6 +2982,20 @@ impl App {
                     .as_ref()
                     .map(|r| r.loop_id.clone())
                     .unwrap_or_default();
+                if covered_current_loop {
+                    // The decoded summary owns this accepted prompt now. Other
+                    // local, durable, or steering cards retain their owners.
+                    let previous_len = view.transcript.blocks.len();
+                    view.transcript.blocks_mut().retain(|block| {
+                        !matches!(block.as_ref(), TranscriptBlock::User(user)
+                            if user.pending && user.index.is_none()
+                                && user.kind == UserMessageKindWire::Prompt
+                                && user.loop_id.as_deref() == Some(current_loop.as_str()))
+                    });
+                    if view.transcript.blocks.len() != previous_len {
+                        view.transcript.invalidate();
+                    }
+                }
                 for steer in live.pending_steers {
                     view.completed_steers
                         .push(crate::state::session::CompletedSteerNotice {
