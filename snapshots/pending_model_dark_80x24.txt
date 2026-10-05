@@ -14,7 +14,7 @@
 
   more
 
- ⠋ Running read…
+ ⠋ Working
  Saved · applies at next model request (rev 2)
 
  ▎

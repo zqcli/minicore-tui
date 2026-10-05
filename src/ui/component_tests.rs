@@ -1524,8 +1524,8 @@ fn running_live_turn_shows_gap_footer_and_status_spinner() {
         "event gap shows in the footer"
     );
     assert!(
-        content.contains("Running read"),
-        "running tool in the status row"
+        content.contains("Working"),
+        "ordinary tool work keeps the shared status"
     );
 }
 

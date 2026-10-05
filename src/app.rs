@@ -53,6 +53,8 @@ use crate::ui::transcript::{
     DurableLayoutIdentity, DurableLayoutRequest, DurableLayoutResult, DurableLayoutSnapshot,
 };
 
+#[cfg(test)]
+mod bash_stream_tests;
 pub mod changes;
 #[cfg(test)]
 mod changes_tests;
@@ -4938,6 +4940,20 @@ impl App {
                         std::mem::discriminant(&tool.status).hash(&mut stamp);
                         tool.progress.hash(&mut stamp);
                         tool.result.as_ref().map(|text| text.len()).hash(&mut stamp);
+                        if let Some(streams) = view
+                            .tool_presentations
+                            .get(&crate::state::tool::ToolKey::new(
+                                &view.info.session_id,
+                                live.reference.as_ref().map_or("", |turn| &turn.loop_id),
+                                request.request_index,
+                                &tool.tool_call_id,
+                            ))
+                            .and_then(|facts| facts.process_output.as_ref())
+                        {
+                            for stream in streams {
+                                stream.observed_end.hash(&mut stamp);
+                            }
+                        }
                     }
                 }
             }
@@ -7250,6 +7266,7 @@ impl App {
                         body_deferred: false,
                         count_partial: false,
                         stream_lines: Default::default(),
+                        process_output: None,
                         status: ToolStatus::Running,
                         outcome: None,
                         needs_read: false,
@@ -7506,6 +7523,7 @@ impl App {
                     body_deferred: false,
                     count_partial: false,
                     stream_lines: Default::default(),
+                    process_output: None,
                     status: tool_outcome_status(outcome),
                     outcome: Some(outcome),
                     needs_read: false,
@@ -7601,6 +7619,7 @@ impl App {
                 body_deferred: false,
                 count_partial: false,
                 stream_lines: Default::default(),
+                process_output: None,
                 status: ToolStatus::Pending,
                 outcome: None,
                 needs_read: false,
@@ -8032,6 +8051,7 @@ fn install_history_item(
                         body_deferred: false,
                         count_partial: false,
                         stream_lines: Default::default(),
+                        process_output: None,
                         status: ToolStatus::Pending,
                         outcome: None,
                         needs_read: false,

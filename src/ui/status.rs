@@ -1,5 +1,5 @@
 //! The busy status row (development spec 15.6): a 10-frame spinner plus a
-//! Working / tool / compaction phase / Cancelling label, only rendered while busy.
+//! Working / compaction phase / Cancelling label, only rendered while busy.
 
 use ratatui::Frame;
 use ratatui::style::Style;
@@ -9,7 +9,6 @@ use crate::app::App;
 use crate::protocol::{
     CancelReasonWire, CompactionPhaseWire, LoopOutcomeWire, TurnPersistenceWire, TurnResultViewWire,
 };
-use crate::state::tool::ToolStatus;
 use crate::theme::Theme;
 use crate::ui::feedback;
 
@@ -150,18 +149,25 @@ fn busy_label(app: &App) -> String {
         .to_owned();
     }
     if view.is_preparing() {
-        return "Preparing".to_owned();
+        return if view
+            .context
+            .as_ref()
+            .is_some_and(|context| context.automatic.current.is_some())
+            || view
+                .manual_compact
+                .as_ref()
+                .and_then(|compact| compact.result.as_ref())
+                .is_some_and(|result| {
+                    result.status == crate::protocol::CompactStatusWire::UnknownWrite
+                })
+        {
+            "Preparing"
+        } else {
+            "Working"
+        }
+        .to_owned();
     }
     if let Some(state) = view.state.as_ref() {
-        if let Some(active) = state.active_loop.as_ref().filter(|active| {
-            active.status == crate::protocol::LoopStatusWire::Starting
-                && state.status == crate::protocol::SessionStatusWire::Running
-        }) {
-            return format!(
-                "Preparing · request {}",
-                active.request_index.saturating_add(1)
-            );
-        }
         match state.status {
             crate::protocol::SessionStatusWire::WaitingForInput => {
                 return "Waiting for input".to_owned();
@@ -218,24 +224,6 @@ fn busy_label(app: &App) -> String {
     }
     if live.cancel_requested {
         return "Cancelling".to_owned();
-    }
-    if let Some(tool) = live
-        .requests
-        .iter()
-        .flat_map(|request| request.tools.iter())
-        .find(|tool| matches!(tool.status, ToolStatus::Pending | ToolStatus::Running))
-    {
-        return format!("Running {}…", tool.name);
-    }
-    if let Some(request) = live
-        .requests
-        .last()
-        .filter(|request| request.parts.is_empty() && request.tools.is_empty())
-    {
-        return format!(
-            "Waiting for model · request {}",
-            request.request_index.saturating_add(1)
-        );
     }
     "Working".to_owned()
 }
@@ -342,7 +330,7 @@ mod tests {
         });
         app.sessions.known.get_mut("ses_1").unwrap().context =
             Some(serde_json::from_value(value).unwrap());
-        assert_eq!(busy_label(&app), "Running read…");
+        assert_eq!(busy_label(&app), "Working");
         assert!(app.active_view().unwrap().live.is_some());
         let view = app.sessions.known.get_mut("ses_1").unwrap();
         for request in &mut view.live.as_mut().unwrap().requests {
@@ -386,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn request_preparation_and_model_wait_are_distinct_and_cancellable() {
+    fn request_preparation_and_model_wait_keep_working_and_remain_cancellable() {
         let mut app = crate::ui::testapp::live_turn(ThemeKind::Dark);
         crate::ui::testapp::set_session_running(&mut app, "ses_1", "loop_live");
         let view = app.sessions.known.get_mut("ses_1").unwrap();
@@ -397,7 +385,7 @@ mod tests {
         active.status = LoopStatusWire::Starting;
         active.request_index = 7;
         view.context = None;
-        assert_eq!(busy_label(&app), "Preparing · request 8");
+        assert_eq!(busy_label(&app), "Working");
 
         let view = app.sessions.known.get_mut("ses_1").unwrap();
         view.live.as_mut().unwrap().cancel_requested = true;
@@ -419,7 +407,7 @@ mod tests {
             "model".into(),
             crate::protocol::Reasoning::High,
         ));
-        assert_eq!(busy_label(&app), "Waiting for model · request 8");
+        assert_eq!(busy_label(&app), "Working");
         let live = app
             .sessions
             .known
@@ -431,5 +419,65 @@ mod tests {
         live.cancel_requested = true;
         live.waiting = true;
         assert_eq!(busy_label(&app), "Result unconfirmed");
+    }
+
+    #[test]
+    fn ordinary_admission_and_tool_progress_keep_working_while_spinner_advances() {
+        let mut app = crate::ui::testapp::live_turn(ThemeKind::Dark);
+        assert_eq!(busy_label(&app), "Working");
+        let first = crate::ui::component_tests::draw(&app, 80, 24);
+        app.frame_count += 1;
+        assert_eq!(busy_label(&app), "Working");
+        let second = crate::ui::component_tests::draw(&app, 80, 24);
+        let screen =
+            crate::ui::layout::screen_layout(&app, ratatui::layout::Rect::new(0, 0, 80, 24));
+        let status = screen.status.unwrap();
+        assert_ne!(
+            first.backend().buffer()[(status.x, status.y)].symbol(),
+            second.backend().buffer()[(status.x, status.y)].symbol()
+        );
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        view.live.as_mut().unwrap().reference = None;
+        assert!(view.is_preparing());
+        assert_eq!(busy_label(&app), "Working");
+    }
+
+    #[test]
+    fn automatic_preparation_and_unknown_manual_write_keep_their_status() {
+        let mut app = crate::ui::testapp::open_empty(ThemeKind::Dark, "ses_1", None, "high");
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        view.context = Some(serde_json::from_value(serde_json::json!({
+            "session_id":"ses_1", "coverage":{"covered_loop_count":0,"covered_item_count":0,"retained_item_count":0},
+            "budget":{}, "automatic":{"current":{"operation_id":"auto"},"last":null}
+        })).unwrap());
+        assert_eq!(busy_label(&app), "Preparing");
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        view.context = None;
+        view.manual_compact = Some(crate::state::session::ManualCompactState {
+            operation_id: "manual".into(),
+            cancel_requested: false,
+            result: Some(
+                serde_json::from_value(
+                    serde_json::json!({"operation_id":"manual", "status":"unknown_write"}),
+                )
+                .unwrap(),
+            ),
+            state_refresh_confirmed: false,
+            context_refresh_confirmed: false,
+        });
+        assert_eq!(busy_label(&app), "Preparing");
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        view.manual_compact = None;
+        view.state.as_mut().unwrap().status = SessionStatusWire::WaitingForInput;
+        assert_eq!(busy_label(&app), "Waiting for input");
+        app.sessions
+            .known
+            .get_mut("ses_1")
+            .unwrap()
+            .state
+            .as_mut()
+            .unwrap()
+            .status = SessionStatusWire::Blocked;
+        assert!(busy_label(&app).starts_with("Blocked"));
     }
 }

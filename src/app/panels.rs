@@ -498,12 +498,42 @@ impl App {
             .or_insert_with(|| Arc::new(ToolFacts::new(name)));
         Some(Arc::make_mut(facts))
     }
+    pub(super) fn invalidate_durable_tool(view: &mut super::SessionView, key: &ToolKey) {
+        // A still-running tool may already be projected in history.
+        // Invalidate only its owning durable view; live-only streams
+        // must not rebuild unrelated history on every process chunk.
+        let live_owner = crate::state::view::live_tool_keys(view).contains(key);
+        let durable_owner = view.transcript.blocks.iter().any(|block| match block.as_ref() {
+            crate::state::transcript::TranscriptBlock::Tool(tool) => tool.loop_id == key.loop_id
+                && tool.request_index == key.request_index && tool.tool_call_id == key.tool_call_id,
+            crate::state::transcript::TranscriptBlock::Assistant(assistant) => !live_owner
+                && assistant.loop_id == key.loop_id && assistant.request_index == key.request_index
+                && assistant.parts.iter().any(|part| matches!(part,
+                    crate::state::transcript::AssistantPart::ToolCall(call) if call.tool_call_id == key.tool_call_id)),
+            _ => false,
+        });
+        if durable_owner {
+            // Retain the previous layout for section-level reuse. Its
+            // old generation prevents treating it as a current frame.
+            view.transcript.render_revision = view.transcript.render_revision.wrapping_add(1);
+        }
+    }
+
     pub(super) fn accept_tool_invocation(&mut self, invocation: ToolInvocationWire) {
         let key = ToolKey::from(&invocation.tool_ref);
         let name = invocation.name.clone();
-        if let Some(facts) = self.tool_facts_mut(&key, &name) {
+        let changed = if let Some(facts) = self.tool_facts_mut(&key, &name) {
+            let before = crate::ui::tool::facts_revision(facts);
             facts.input_available = true;
             facts.invocation = Some(Arc::new(invocation));
+            before != crate::ui::tool::facts_revision(facts)
+        } else {
+            false
+        };
+        if changed {
+            if let Some(view) = self.sessions.known.get_mut(&key.session_id) {
+                Self::invalidate_durable_tool(view, &key);
+            }
         }
     }
     pub(super) fn accept_tool_execution(
@@ -513,8 +543,17 @@ impl App {
     ) {
         let key = ToolKey::from(&execution.tool_ref);
         let name = execution.name.clone();
-        if let Some(facts) = self.tool_facts_mut(&key, &name) {
+        let changed = if let Some(facts) = self.tool_facts_mut(&key, &name) {
+            let before = crate::ui::tool::facts_revision(facts);
             facts.accept_execution(execution, authoritative);
+            before != crate::ui::tool::facts_revision(facts)
+        } else {
+            false
+        };
+        if changed {
+            if let Some(view) = self.sessions.known.get_mut(&key.session_id) {
+                Self::invalidate_durable_tool(view, &key);
+            }
         }
         let needs_read = self
             .sessions
@@ -534,14 +573,21 @@ impl App {
     }
     pub(super) fn accept_tool_process(&mut self, process: ToolProcessWire) {
         let key = ToolKey::from(&process.tool_ref);
-        if let Some(chunk) = &process.chunk {
-            if let Some(facts) = self.tool_facts_mut(&key, "tool") {
-                facts.accept_process_count(chunk);
+        let changed = if let Some(facts) = self.tool_facts_mut(&key, "tool") {
+            let before = crate::ui::tool::facts_revision(facts);
+            if let Some(chunk) = &process.chunk {
+                facts.accept_process_chunk(chunk);
             }
-        }
-        if let Some(command) = process.command {
-            if let Some(facts) = self.tool_facts_mut(&key, "tool") {
+            if let Some(command) = process.command {
                 facts.accept_command(command);
+            }
+            before != crate::ui::tool::facts_revision(facts)
+        } else {
+            false
+        };
+        if changed {
+            if let Some(view) = self.sessions.known.get_mut(&key.session_id) {
+                Self::invalidate_durable_tool(view, &key);
             }
         }
         let now = self.instant_now();

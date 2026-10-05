@@ -35,6 +35,9 @@ use minicore_tui::state::{FoldOverride, ToolKey};
 use minicore_tui::theme::ThemeKind;
 use serde_json::json;
 
+#[cfg(unix)]
+#[path = "agent_e2e/bash_stream.rs"]
+mod bash_stream_e2e;
 #[path = "agent_e2e/changes.rs"]
 mod changes_e2e;
 #[path = "agent_e2e/workspace.rs"]

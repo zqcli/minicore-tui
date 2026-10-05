@@ -131,7 +131,8 @@ these states and never runs summary policy or retries a prompt itself. Unsent st
 a turn ends until explicitly retrieved into the composer.
 
 Tools run automatically under the Agent. Bash is not sandboxed. The TUI supports
-mid-turn steering via `turn.steer`. It does not add approval, live Bash PTY output,
+mid-turn steering via `turn.steer`. Model-issued Bash commands show bounded live
+stdout/stderr previews. It does not add approval, interactive Bash PTY output,
 MCP, plugins, skills, subagents, session branching, or reconnect/restart behavior.
 
 ## Keys And Commands
@@ -207,7 +208,7 @@ retaining its in-process completion.
 
 The Agent executes native stateless `subagent` single/parallel/chain calls;
 the TUI displays their ordinary Tool results. Persistent subagent orchestration,
-manager/tree UI, approval UI, live Bash/PTY output, MCP, plugins, skills,
+manager/tree UI, approval UI, interactive Bash/PTY output, MCP, plugins, skills,
 remote agents and image input remain outside this delivery. The TUI supports
 bounded tool details, workspace file/search and preview views, read-only Changes/
 Diff and Context views, local settings, and a direct external-editor draft

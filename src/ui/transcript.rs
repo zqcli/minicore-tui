@@ -1860,6 +1860,20 @@ fn resolve_tool_expanded_for<V: DurableLayoutSource>(
     name: &str,
     hidden_line_count: Option<usize>,
 ) -> bool {
+    let known_lines = view
+        .tool_presentations()
+        .get(key)
+        .filter(|facts| facts.result.is_none())
+        .and_then(|facts| {
+            let input = facts.input_line_count().map(|(count, _)| count);
+            let output = facts.output_line_count;
+            (input.is_some() || output.is_some())
+                .then(|| input.unwrap_or(0).saturating_add(output.unwrap_or(0)))
+        });
+    let hidden_line_count = match (hidden_line_count, known_lines) {
+        (Some(reported), Some(known)) => Some(reported.max(known)),
+        (reported, known) => reported.or(known),
+    };
     match view.tool_folds().get(key) {
         Some(crate::state::view::FoldOverride::Expanded) => true,
         Some(crate::state::view::FoldOverride::Collapsed) => false,

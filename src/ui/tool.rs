@@ -143,6 +143,12 @@ pub fn live_with_metadata(
 pub fn facts_revision(facts: &crate::state::tool::ToolFacts) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
+    std::mem::discriminant(&facts.status).hash(&mut hash);
+    facts
+        .outcome
+        .as_ref()
+        .map(std::mem::discriminant)
+        .hash(&mut hash);
     facts.command.is_some().hash(&mut hash);
     if let Some(command) = &facts.command {
         std::mem::discriminant(&command.status).hash(&mut hash);
@@ -158,6 +164,18 @@ pub fn facts_revision(facts: &crate::state::tool::ToolFacts) -> u64 {
             crate::protocol::ToolSubjectWire::Other => invocation.input.preview.hash(&mut hash),
         }
     }
+    facts
+        .process_output
+        .as_ref()
+        .map(|streams| [streams[0].revision, streams[1].revision])
+        .hash(&mut hash);
+    facts.process_count_partial().hash(&mut hash);
+    facts.process_output_partial().hash(&mut hash);
+    facts.input_line_count().hash(&mut hash);
+    facts
+        .input_text()
+        .map(|(_, partial)| partial)
+        .hash(&mut hash);
     facts.output_line_count.hash(&mut hash);
     facts.count_partial.hash(&mut hash);
     facts.display.body_truncated.hash(&mut hash);
@@ -258,13 +276,54 @@ fn render_card(
             )),
         ));
     }
+    let input = facts.and_then(|f| f.input_text()).or_else(|| {
+        display.and_then(|d| {
+            d.expanded_input
+                .as_deref()
+                .map(|text| (text, d.body_truncated))
+        })
+    });
     let partial = display.is_some_and(|d| d.body_truncated || d.truncated)
-        || facts.is_some_and(|f| f.result_truncated || f.count_partial);
+        || input.is_some_and(|(_, partial)| partial)
+        || facts
+            .is_some_and(|f| f.result_truncated || f.count_partial || f.process_output_partial());
     let footer_row;
     if expanded {
+        // A complete one-line Bash command is already present in its target
+        // row. Keep the body when clipping or normalization would lose bytes.
+        let body_input = input.map(|(text, _)| text).filter(|text| {
+            name != "bash"
+                || text.contains('\n')
+                || visible_tool_line(text) != clip_target(&detail, available)
+        });
         append_body(
-            theme, width, colors, name, display, result, failed, &mut out,
+            theme, width, colors, name, body_input, result, failed, &mut out,
         );
+        if result.is_none() {
+            if let Some(streams) = facts.and_then(|f| f.process_output.as_ref()) {
+                for (stream, label) in streams.iter().zip(["stdout:", "stderr:"]) {
+                    let text = stream.display_text();
+                    if text.is_empty() {
+                        continue;
+                    }
+                    push_wrapped_row(theme.tool_muted, width, colors, label, "  ", &mut out);
+                    for line in text.split('\n') {
+                        push_wrapped_row(
+                            if failed {
+                                theme.error
+                            } else {
+                                theme.tool_output
+                            },
+                            width,
+                            colors,
+                            line,
+                            "  ",
+                            &mut out,
+                        );
+                    }
+                }
+            }
+        }
         footer_row = out.len();
         let load_error = facts
             .and_then(|f| f.inline.as_ref())
@@ -304,8 +363,10 @@ fn render_card(
         ));
     } else {
         footer_row = out.len();
-        let input_lines = display
-            .and_then(|d| d.input_line_count)
+        let input_count = facts.and_then(|f| f.input_line_count());
+        let input_lines = input_count
+            .map(|(count, _)| count)
+            .or_else(|| display.and_then(|d| d.input_line_count))
             .or_else(|| {
                 display
                     .and_then(|d| d.expanded_input.as_deref())
@@ -318,7 +379,7 @@ fn render_card(
             .and_then(|f| f.output_line_count)
             .or_else(|| result.map(result_line_count_text));
         let known_lines = input_lines.zip(output_lines).or_else(|| {
-            (facts.is_some_and(|f| f.count_partial)
+            (facts.is_some_and(|f| f.count_partial || f.process_count_partial())
                 && (input_lines.is_some() || output_lines.is_some()))
             .then_some((input_lines.unwrap_or(0), output_lines.unwrap_or(0)))
         });
@@ -328,7 +389,8 @@ fn render_card(
                 if facts.is_some_and(|f| f.count_partial
                     || f.result_truncated
                     || f.display.body_truncated
-                    || f.stream_lines.iter().any(|s| s.gap))
+                    || f.process_count_partial())
+                    || input_count.is_some_and(|(_, partial)| partial)
                 {
                     "≥"
                 } else {
@@ -504,15 +566,12 @@ fn append_body(
     width: usize,
     colors: rail::SurfaceColors,
     name: &str,
-    display: Option<&ToolDisplayWire>,
+    input: Option<&str>,
     result: Option<&str>,
     failed: bool,
     out: &mut Vec<Line<'static>>,
 ) {
-    if let Some(input) = display
-        .and_then(|d| d.expanded_input.as_deref())
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(input) = input.filter(|s| !s.is_empty()) {
         // Only explicit patch formats carry diff semantics. Legacy edit displays
         // concatenate old/new text and must not be guessed from a leading +/-.
         let diff = matches!(name, "apply_patch" | "patch" | "apply_batch")

@@ -350,3 +350,102 @@ fn row_helper_handles_empty_narrow_and_control_text_without_changing_neighbor_ro
     assert_eq!(screen.panel.y, screen.transcript.bottom());
     assert!(matches!(app.dock, Dock::Composer));
 }
+
+#[test]
+fn live_tools_keep_a_transparent_row_before_the_visible_editor_surface() {
+    for kind in [ThemeKind::Dark, ThemeKind::Light] {
+        let theme = Theme::for_kind(kind);
+        for (width, height) in [(60, 16), (80, 24), (120, 40)] {
+            for with_notice in [false, true] {
+                let mut app = testapp::live_turn(kind);
+                if with_notice {
+                    app.notice(NoticeLevel::Info, "Notice");
+                }
+                let screen = layout::screen_layout(&app, Rect::new(0, 0, width, height));
+                let terminal = draw(&app, width, height);
+                let status = screen.status.unwrap();
+                assert!(buffer_lines(&terminal)[status.y as usize].contains("Working"));
+                let feedback_end = screen.notice.unwrap_or(status).bottom();
+                assert_eq!(screen.panel.y, feedback_end + 1);
+                assert_blank(
+                    &terminal,
+                    Rect::new(screen.panel.x, feedback_end, screen.panel.width, 1),
+                );
+                let buffer = terminal.backend().buffer();
+                for x in screen.panel.x..screen.panel.right() {
+                    assert_eq!(buffer[(x, feedback_end)].bg, theme.page_bg);
+                }
+                assert_eq!(
+                    buffer[(screen.panel.x, screen.panel.y)].bg,
+                    theme.user_message_bg
+                );
+                assert_eq!(buffer[(screen.panel.x, screen.panel.y)].symbol(), "▎");
+            }
+        }
+    }
+}
+
+#[test]
+fn folded_and_expanded_tool_cards_have_no_detail_action_overlay() {
+    use crate::state::{
+        tool::{ToolFacts, ToolKey},
+        transcript::{ToolBlock, TranscriptBlock},
+        view::FoldOverride,
+    };
+    use std::sync::Arc;
+    for kind in [ThemeKind::Dark, ThemeKind::Light] {
+        for (width, height) in [(60, 16), (80, 24), (120, 40)] {
+            for live in [false, true] {
+                let mut app = if live {
+                    testapp::live_turn(kind)
+                } else {
+                    testapp::open_empty(kind, "ses_1", None, "high")
+                };
+                let key = ToolKey::new("ses_1", "loop_live", 0, "c1");
+                let view = app.sessions.known.get_mut("ses_1").unwrap();
+                let mut facts = ToolFacts::new("bash");
+                Arc::make_mut(&mut facts.display).detail = "cargo build".into();
+                facts.result = Some(Arc::from("BODY MARKER"));
+                if live {
+                    let request = &mut view.live.as_mut().unwrap().requests[0];
+                    request
+                        .parts
+                        .retain(|part| matches!(part, crate::state::turn::LivePart::Tool { .. }));
+                    let tool = &mut request.tools[0];
+                    tool.name = "bash".into();
+                } else {
+                    view.transcript.push_block(TranscriptBlock::Tool(ToolBlock {
+                        index: Some(0),
+                        loop_id: "loop_live".into(),
+                        request_index: 0,
+                        tool_call_id: "c1".into(),
+                        name: "bash".into(),
+                        result: None,
+                        outcome: None,
+                        live_status: None,
+                        progress: None,
+                        expanded: false,
+                    }));
+                }
+                Arc::make_mut(&mut view.tool_presentations).insert(key.clone(), Arc::new(facts));
+                for expanded in [false, true, false, true] {
+                    let view = app.sessions.known.get_mut("ses_1").unwrap();
+                    Arc::make_mut(&mut view.tool_folds).insert(
+                        key.clone(),
+                        if expanded {
+                            FoldOverride::Expanded
+                        } else {
+                            FoldOverride::Collapsed
+                        },
+                    );
+                    view.transcript.invalidate();
+                    let terminal = draw(&app, width, height);
+                    let visible = buffer_lines(&terminal).join("\n");
+                    assert!(!visible.contains("详情"));
+                    assert!(visible.contains("bash") && visible.contains("cargo build"));
+                    assert_eq!(visible.contains("BODY MARKER"), expanded, "{visible}");
+                }
+            }
+        }
+    }
+}
