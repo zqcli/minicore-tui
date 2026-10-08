@@ -461,6 +461,8 @@ pub struct ToolFacts {
     pub command: Option<Arc<crate::protocol::CommandResultWire>>,
     /// Display timing derived only from recorded per-tool timestamps.
     pub timing: Option<ToolTiming>,
+    /// Issuing epoch of the one metadata-read attempt for this retained tool.
+    pub timing_read_epoch: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -507,6 +509,7 @@ impl ToolFacts {
             execution: None,
             command: None,
             timing: None,
+            timing_read_epoch: None,
         }
     }
 
@@ -1042,6 +1045,7 @@ mod tests {
             execution: None,
             command: None,
             timing: None,
+            timing_read_epoch: None,
         }
     }
 

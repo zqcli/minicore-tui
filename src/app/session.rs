@@ -479,9 +479,9 @@ impl App {
 
     pub(super) fn request_session_id(kind: &RequestKind) -> Option<&str> {
         match kind {
-            RequestKind::ToolDetail { key, .. } | RequestKind::ToolInline { key, .. } => {
-                Some(&key.session_id)
-            }
+            RequestKind::ToolDetail { key, .. }
+            | RequestKind::ToolInline { key, .. }
+            | RequestKind::ToolTiming { key, .. } => Some(&key.session_id),
             RequestKind::Changes { session_id, .. }
             | RequestKind::WorkspaceStatus { session_id, .. } => Some(session_id),
             RequestKind::Workspace { session_id, .. }

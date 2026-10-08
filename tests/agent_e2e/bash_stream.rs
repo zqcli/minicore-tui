@@ -315,3 +315,94 @@ printf 'stderr-final\n' >&2
             assert!(report.shutdown_ok && report.seen_eof && report.seen_exit);
         });
 }
+
+/// A real, initially silent Bash is held before its first output byte. The
+/// normal production reducer must obtain the recorded start itself; the test
+/// never injects an execution timestamp or asks for tool.read on its behalf.
+#[test]
+#[ignore = "requires MINICORE_AGENT_BIN; real silent Bash and loopback model"]
+fn e2e_bash_elapsed_uses_recorded_start_before_silent_process_output() {
+    let agent_bin = require_agent_bin();
+    let (env, _) = E2eEnvironment::setup();
+    enable_bash_profile(&env);
+    const FIRST: &str = ".timing-first-output";
+    const FINISH: &str = ".timing-finish";
+    const CALL: &str = "recorded_bash_timing";
+    std::fs::write(
+        env.workspace_path.join("timing-stream.sh"),
+        r#"set -eu
+while [ ! -f .timing-first-output ]; do sleep 0.02; done
+printf 'timing-output\n'
+while [ ! -f .timing-finish ]; do sleep 0.02; done
+"#,
+    )
+    .unwrap();
+    env._server.enqueue_sse(sse_tool_call_response(
+        CALL,
+        "bash",
+        &json!({"command":"bash timing-stream.sh"}).to_string(),
+    ));
+    let model_gate = Arc::new(AtomicBool::new(false));
+    env._server.enqueue_gated(
+        sse_text_response("timing complete"),
+        Arc::clone(&model_gate),
+        Some("deep-model"),
+    );
+    tokio::runtime::Runtime::new().unwrap().block_on(async move {
+        let mut process = env.spawn_agent(&agent_bin);
+        let mut app = App::new(env.workspace_path.clone());
+        let outcome = AssertUnwindSafe(async {
+            dispatch(&mut process, &mut app, AppEvent::Bootstrap).await.unwrap();
+            pump_until(&mut process, &mut app, |app| app.connection == ConnectionState::Ready).await.unwrap();
+            let session = create_additional_session(&mut process, &mut app, &env.workspace_path, "recorded Bash timing").await;
+            dispatch(&mut process, &mut app, AppEvent::SubmitTurn { session_id: session.clone(), text: "run the silent timing fixture".into() }).await.unwrap();
+            pump_until(&mut process, &mut app, |app| app.sessions.known[&session].tool_presentations.iter()
+                .any(|(key, facts)| key.tool_call_id == CALL && facts.timing.is_some_and(|timing| timing.running))).await.unwrap();
+            let key = app.sessions.known[&session].tool_presentations.keys().find(|key| key.tool_call_id == CALL).unwrap().clone();
+            let initial = facts(&app, &key);
+            assert!(!initial.is_terminal() && initial.result.is_none());
+            assert!(initial.inline.is_none() && initial.process_output.is_none(), "the recorded clock precedes stdout/stderr and needs no output read");
+            assert!(initial.timing_read_epoch.is_some(), "production issued the one metadata read");
+            let recorded_start = initial.execution.as_ref().unwrap().started_at.clone().unwrap();
+            let first = initial.timing.unwrap().elapsed;
+            assert!(transcript_text(&app).contains("Elapsed"));
+            assert!(!env.workspace_path.join(FIRST).exists());
+            pump_until(&mut process, &mut app, |app| facts(app, &key).timing.is_some_and(|timing| timing.running && timing.elapsed >= first + Duration::from_secs(2))).await.unwrap();
+            let later = facts(&app, &key).timing.unwrap().elapsed;
+            assert!(!facts(&app, &key).is_terminal());
+            assert!(facts(&app, &key).process_output.is_none());
+            assert_eq!(facts(&app, &key).execution.as_ref().unwrap().started_at.as_deref(), Some(recorded_start.as_str()));
+            assert!(transcript_text(&app).contains("Elapsed"));
+            eprintln!("real silent Bash: recorded_start={recorded_start}; elapsed_before_output_ms={} -> {}; result_absent=true; output_absent=true", first.as_millis(), later.as_millis());
+
+            release(&env.workspace_path, FIRST);
+            pump_until(&mut process, &mut app, |app| facts(app, &key).process_output.as_ref().is_some_and(|streams| streams[0].display_text().contains("timing-output"))).await.unwrap();
+            assert!(facts(&app, &key).timing.is_some_and(|timing| timing.running));
+            assert!(facts(&app, &key).inline.is_none());
+            release(&env.workspace_path, FINISH);
+            pump_until(&mut process, &mut app, |app| facts(app, &key).timing.is_some_and(|timing| !timing.running)).await.unwrap();
+            let final_timing = facts(&app, &key).timing.unwrap();
+            let execution = facts(&app, &key).execution.as_ref().unwrap();
+            let start = minicore_tui::state::selection::parse_rfc3339(execution.started_at.as_deref().unwrap()).unwrap();
+            let finish = minicore_tui::state::selection::parse_rfc3339(execution.finished_at.as_deref().unwrap()).unwrap();
+            assert_eq!(final_timing.elapsed, finish.duration_since(start).unwrap());
+            assert!(transcript_text(&app).contains("Took"));
+            assert!(!transcript_text(&app).contains("Elapsed"));
+            dispatch(&mut process, &mut app, AppEvent::Tick).await.unwrap();
+            assert_eq!(facts(&app, &key).timing, Some(final_timing));
+            eprintln!("real Bash completion: recorded_duration_ms={}; Took matches endpoints; no clock restart", final_timing.elapsed.as_millis());
+            model_gate.store(true, Ordering::Relaxed);
+            pump_until_with_decode(&mut process, &mut app, |app| app.active_view().is_some_and(|view| view.live.is_none() && view.transcript.complete)).await.unwrap();
+        }).catch_unwind().await;
+        for gate in [FIRST, FINISH] { let _ = std::fs::write(env.workspace_path.join(gate), b"release\n"); }
+        model_gate.store(true, Ordering::Relaxed);
+        let shutdown = drain_shutdown_strict(&mut process, &mut app).await;
+        process.terminate_with_observer(|_| {}).await;
+        if let Err(panic) = outcome {
+            if let Err(error) = shutdown { eprintln!("Bash timing cleanup also failed: {error}"); }
+            std::panic::resume_unwind(panic);
+        }
+        let report = shutdown.expect("Bash timing Agent must shut down and drain cleanly");
+        assert!(report.shutdown_ok && report.seen_eof && report.seen_exit);
+    });
+}

@@ -87,6 +87,7 @@ mod panels_tests;
 pub mod queries;
 pub mod search;
 pub mod session;
+mod tool_timing;
 pub mod turn;
 pub mod ui_actions;
 pub mod workspace;
@@ -267,6 +268,11 @@ pub enum RequestKind {
         epoch: u64,
         generation: u64,
         output: bool,
+    },
+    /// One bounded read of an already-running Bash tool's recorded start.
+    ToolTiming {
+        key: ToolKey,
+        epoch: u64,
     },
     /// A read request retired by a completed reload. Its response is
     /// consumed and intentionally ignored.
@@ -1589,6 +1595,7 @@ impl App {
         }
         commands.extend(self.poll_tool_detail());
         commands.extend(self.poll_inline_tools());
+        commands.extend(self.poll_bash_timing_reads());
         commands.extend(self.poll_workspace());
         commands.extend(self.poll_changes());
         commands.extend(self.poll_workspace_status());
@@ -6631,6 +6638,10 @@ impl App {
                 generation,
                 output,
             } => self.on_inline_tool_response(key, epoch, generation, output, &response),
+            RequestKind::ToolTiming { key, epoch } => {
+                self.on_bash_timing_response(key, epoch, &response);
+                Vec::new()
+            }
             RequestKind::StaleRead => Vec::new(),
             RequestKind::TurnResult(turn) => self.on_turn_result_response(&turn, &response),
             RequestKind::Reload { generation } => self.on_reload_response(generation, &response),
@@ -7278,6 +7289,7 @@ impl App {
                         execution: None,
                         command: None,
                         timing: None,
+                        timing_read_epoch: None,
                     }),
                 );
             }
@@ -7536,6 +7548,7 @@ impl App {
                     execution: None,
                     command: None,
                     timing: None,
+                    timing_read_epoch: None,
                 }),
             );
         }
@@ -7633,6 +7646,7 @@ impl App {
                 execution: None,
                 command: None,
                 timing: None,
+                timing_read_epoch: None,
             })
         });
         let state = std::sync::Arc::make_mut(state);
@@ -8066,6 +8080,7 @@ fn install_history_item(
                         execution: None,
                         command: None,
                         timing: None,
+                        timing_read_epoch: None,
                     })
                 });
                 let state = std::sync::Arc::make_mut(state);
