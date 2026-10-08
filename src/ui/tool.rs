@@ -508,11 +508,7 @@ fn render_card(
         copy_cells[row] = Some(CopyCells::decoration());
     }
     for (row, columns, hard_break, source_offset) in preview_rows {
-        copy_cells[row] = Some(CopyCells {
-            columns,
-            source_offset,
-            decorative: false,
-        });
+        copy_cells[row] = Some(CopyCells::content(columns, source_offset));
         hard_breaks[row] = hard_break;
     }
     RenderedTool {

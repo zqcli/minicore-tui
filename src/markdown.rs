@@ -1,7 +1,7 @@
 //! Lightweight Markdown rendering on top of `pulldown-cmark` (development
 //! spec 20). Durable messages are parsed during update-owned cache
-//! preparation into pre-wrapped, styled lines. Live answer text uses
-//! `wrap_plain`; live reasoning parses its request-local buffer as Markdown.
+//! preparation into pre-wrapped, styled lines. Live answer text and reasoning
+//! parse their request-local buffers through the same Markdown renderer.
 //! Neither path invalidates or reparses the durable cache on a delta.
 //! No other UI module depends on pulldown-cmark.
 //!
@@ -14,6 +14,7 @@
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+use std::sync::Arc;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::theme::Theme;
@@ -26,6 +27,24 @@ thread_local! {
     static MARKDOWN_PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
 }
 
+/// A visible chunk of one parsed table cell. Only cell content is retained;
+/// borders, alignment padding, and repeated narrow-layout labels are absent.
+/// Raw source offsets identify the logical row/cell across wraps and deltas.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TableCopyFragment {
+    /// Actual glyph columns, or the empty cell's layout slot when `text` is
+    /// empty. Selecting that slot contributes no glyphs, only its column place.
+    pub columns: std::ops::Range<usize>,
+    pub text: String,
+    pub row_offset: usize,
+    pub cell_offset: usize,
+    pub cell_index: usize,
+    /// Byte position in the cell's visible text, independent of display rows.
+    pub chunk_offset: usize,
+    /// The original pipe between this cell and its parsed predecessor, if any.
+    pub separator_before: Option<usize>,
+}
+
 /// Renderer-owned copy geometry for a decorated row. Bounds are display cells,
 /// not bytes; `decorative` rows have no source content (for example a code frame).
 #[derive(Clone, Debug)]
@@ -34,12 +53,53 @@ pub struct CopyCells {
     pub decorative: bool,
     /// Raw Markdown byte position, independent of visual wrapping and escaping.
     pub source_offset: Option<usize>,
+    /// Ordinary Markdown rows retain their existing list-marker copy behavior;
+    /// code/table frames keep explicit content bounds when a list prefixes them.
+    list_prefix_copyable: bool,
+    /// Table-only discontinuous content geometry; shared with prepared rows.
+    pub table_fragments: Option<Arc<[TableCopyFragment]>>,
 }
 
 impl CopyCells {
+    /// Explicit source-content bounds for framed Markdown or tool rows.
+    pub(crate) fn content(columns: std::ops::Range<usize>, source_offset: Option<usize>) -> Self {
+        Self {
+            columns,
+            decorative: false,
+            source_offset,
+            ..Self::decoration()
+        }
+    }
+
     pub fn shifted(mut self, offset: usize) -> Self {
-        self.columns = self.columns.start + offset..self.columns.end + offset;
+        self.shift_columns(offset);
         self
+    }
+
+    fn shift_columns(&mut self, offset: usize) {
+        self.columns = self.columns.start + offset..self.columns.end + offset;
+        if let Some(fragments) = self.table_fragments.as_mut() {
+            for fragment in Arc::make_mut(fragments) {
+                fragment.columns = fragment.columns.start + offset..fragment.columns.end + offset;
+            }
+        }
+    }
+
+    fn table(
+        columns: std::ops::Range<usize>,
+        fragments: Vec<TableCopyFragment>,
+        source_offset: Option<usize>,
+    ) -> Self {
+        if fragments.is_empty() {
+            return Self::decoration();
+        }
+        Self {
+            columns,
+            decorative: false,
+            source_offset,
+            list_prefix_copyable: false,
+            table_fragments: Some(fragments.into()),
+        }
     }
 
     pub fn decoration() -> Self {
@@ -47,6 +107,8 @@ impl CopyCells {
             columns: 0..0,
             decorative: true,
             source_offset: None,
+            list_prefix_copyable: false,
+            table_fragments: None,
         }
     }
 }
@@ -62,6 +124,116 @@ pub struct RenderedMarkdown {
     pub copy_cells: Vec<Option<CopyCells>>,
 }
 
+/// Sparse positions where displayed bytes diverge from raw Markdown bytes.
+/// Ordinary text needs only a start offset; parser transformations and stripped
+/// code indentation add boundaries, never a full per-character source map.
+#[derive(Clone, Default)]
+struct SourceSpan {
+    start: usize,
+    adjustments: Vec<(usize, usize)>,
+}
+
+impl SourceSpan {
+    fn at(&self, display: usize) -> usize {
+        let index = self
+            .adjustments
+            .partition_point(|(offset, _)| *offset <= display);
+        match index.checked_sub(1).map(|index| self.adjustments[index]) {
+            Some((offset, raw)) => raw + display - offset,
+            None => self.start + display,
+        }
+    }
+
+    fn literal(raw: &str, start: usize) -> Self {
+        let mut span = Self {
+            start,
+            adjustments: Vec::new(),
+        };
+        let mut expansion = 0;
+        for (offset, ch) in raw.char_indices() {
+            if crate::safe_text::is_unsafe_display_control(ch) {
+                let escaped = crate::safe_text::safe_display(&ch.to_string()).into_owned();
+                let display = offset + expansion;
+                // A wrap inside a multi-character escape still refers to the
+                // original control character, never an interior UTF-8 byte.
+                span.adjustments.extend(
+                    escaped
+                        .char_indices()
+                        .map(|(index, _)| (display + index, start + offset)),
+                );
+                expansion += escaped.len() - ch.len_utf8();
+                span.adjustments.push((
+                    offset + ch.len_utf8() + expansion,
+                    start + offset + ch.len_utf8(),
+                ));
+            }
+        }
+        span
+    }
+
+    fn parsed(text: &str, raw: &str, start: usize) -> Self {
+        if text == raw {
+            return Self {
+                start,
+                adjustments: Vec::new(),
+            };
+        }
+        let safe = crate::safe_text::safe_display(raw);
+        let mut offset = safe.find(text);
+        if offset.is_none() {
+            // Code spans normalize embedded newlines to spaces and may trim
+            // one surrounding space. These substitutions preserve byte widths;
+            // a long multiline span must not give every wrap the opening tick.
+            let ticks = safe.bytes().take_while(|byte| *byte == b'`').count();
+            if ticks > 0 && safe.len() >= ticks * 2 && safe.ends_with(&safe[..ticks]) {
+                let body = safe[ticks..safe.len() - ticks].replace('\n', " ");
+                let trim = usize::from(
+                    body.starts_with(' ')
+                        && body.ends_with(' ')
+                        && body.chars().any(|ch| ch != ' '),
+                );
+                if body.get(trim..body.len().saturating_sub(trim)) == Some(text) {
+                    offset = Some(ticks + trim);
+                }
+            }
+        }
+        if let Some(offset) = offset {
+            let literal = Self::literal(raw, start);
+            return Self {
+                start: literal.at(offset),
+                adjustments: literal
+                    .adjustments
+                    .into_iter()
+                    .filter(|(display, _)| *display >= offset && *display <= offset + text.len())
+                    .map(|(display, raw)| (display - offset, raw))
+                    .collect(),
+            };
+        }
+        // Entity/backslash decoding and a parser-generated partial tab can
+        // produce a glyph with no one-to-one source byte. Keep its raw span.
+        let mut adjustments: Vec<_> = text
+            .char_indices()
+            .map(|(offset, _)| (offset, start))
+            .collect();
+        adjustments.push((text.len(), start + raw.len()));
+        Self { start, adjustments }
+    }
+
+    fn append(&mut self, display: usize, other: Self) {
+        if display == 0 {
+            self.start = other.start;
+        } else if self.at(display) != other.start {
+            self.adjustments.push((display, other.start));
+        }
+        self.adjustments.extend(
+            other
+                .adjustments
+                .into_iter()
+                .map(|(offset, raw)| (display + offset, raw)),
+        );
+    }
+}
+
 /// One styled inline run.
 #[derive(Clone)]
 struct Seg {
@@ -70,6 +242,7 @@ struct Seg {
     /// True when this segment belongs to a markdown link (visible text or the
     /// surfaced URL). Used for real link geometry, not colors.
     link: bool,
+    source: Option<SourceSpan>,
 }
 
 /// A block-level markdown element.
@@ -77,7 +250,7 @@ enum Block {
     /// Lossless, width-wrapped source when list layout exceeds safe bounds.
     Plain {
         text: String,
-        line_offsets: Vec<usize>,
+        source: SourceSpan,
     },
     Paragraph(Vec<Seg>),
     Heading {
@@ -87,15 +260,26 @@ enum Block {
     Quote(Vec<Seg>),
     Code {
         text: String,
-        source_offset: usize,
+        source: SourceSpan,
     },
-    Table(Vec<Vec<Vec<Seg>>>),
+    Table(Vec<TableRow>),
     List {
         ordered: bool,
         start: u64,
         items: Vec<Vec<Block>>,
     },
     Rule,
+}
+
+struct TableRow {
+    source_offset: usize,
+    cells: Vec<TableCell>,
+}
+
+struct TableCell {
+    source_range: std::ops::Range<usize>,
+    separator_before: Option<usize>,
+    segs: Vec<Seg>,
 }
 
 #[derive(Clone, Copy)]
@@ -125,15 +309,16 @@ struct Builder<'a> {
     heading: Option<HeadingLevel>,
     inline: Vec<Seg>,
     attrs: Vec<InlineAttr>,
-    link: Option<(String, usize)>,
+    link: Option<(String, usize, SourceSpan)>,
     code: Option<String>,
-    code_offset: usize,
-    table: Option<Vec<Vec<Vec<Seg>>>>,
+    code_source: SourceSpan,
+    table: Option<Vec<TableRow>>,
 }
 
 impl Builder<'_> {
-    fn text(&mut self, text: &str) {
+    fn text(&mut self, text: &str, source: SourceSpan) {
         if let Some(buf) = self.code.as_mut() {
+            self.code_source.append(buf.len(), source);
             buf.push_str(text);
             return;
         }
@@ -166,12 +351,14 @@ impl Builder<'_> {
             text: text.to_owned(),
             style,
             link: matches!(self.attrs.last(), Some(InlineAttr::Link)),
+            source: Some(source),
         });
     }
 
     /// Inline code arrives as a single text event (no start/end pair).
-    fn text_code(&mut self, text: &str) {
+    fn text_code(&mut self, text: &str, source: SourceSpan) {
         if let Some(buf) = self.code.as_mut() {
+            self.code_source.append(buf.len(), source);
             buf.push_str(text);
             return;
         }
@@ -179,6 +366,7 @@ impl Builder<'_> {
             text: text.to_owned(),
             style: Style::new().fg(self.theme.md_code),
             link: matches!(self.attrs.last(), Some(InlineAttr::Link)),
+            source: Some(source),
         });
     }
 
@@ -279,6 +467,7 @@ impl Builder<'_> {
                     text: " ".to_owned(),
                     style: Style::new(),
                     link: false,
+                    source: None,
                 });
             }
             segs.extend(para);
@@ -302,7 +491,7 @@ impl Builder<'_> {
         // Close the link attr, then surface a URL that differs from the
         // visible text as a dim parenthetical (spec 16.2 mdLinkUrl).
         self.attrs.pop();
-        let Some((url, start)) = self.link.take() else {
+        let Some((url, start, url_source)) = self.link.take() else {
             return;
         };
         let visible: String = self.inline[start..]
@@ -310,10 +499,15 @@ impl Builder<'_> {
             .map(|seg| seg.text.as_str())
             .collect();
         if !url.is_empty() && url != visible && !url.contains(char::is_whitespace) {
+            let mut source = SourceSpan::parsed(" (", "", url_source.start);
+            let end = url_source.at(url.len());
+            source.append(2, url_source);
+            source.append(2 + url.len(), SourceSpan::parsed(")", "", end));
             self.push_seg(Seg {
                 text: format!(" ({url})"),
                 style: Style::new().fg(self.theme.md_link_url),
                 link: true,
+                source: Some(source),
             });
         }
     }
@@ -332,25 +526,26 @@ impl Builder<'_> {
     }
 }
 
+/// Parser positions are in sanitized display bytes. Table identities must use
+/// raw source positions so escaping earlier text cannot shift a stable cell.
+fn raw_table_offset(display_offset: usize, offsets: Option<&[(usize, usize)]>) -> usize {
+    offsets.map_or(display_offset, |offsets| {
+        let index = offsets.partition_point(|(display, _)| *display <= display_offset);
+        let (display, raw) = offsets[index.saturating_sub(1)];
+        raw + display_offset - display
+    })
+}
+
 /// Sanitizing never removes newlines, so literal rows can retain their raw
 /// source-line offsets without a second parser or per-character source map.
 fn literal_source(display: &str, source: &str) -> Block {
-    let mut offset = 0;
-    let line_offsets = source
-        .split('\n')
-        .map(|line| {
-            let start = offset;
-            offset += line.len() + 1;
-            start
-        })
-        .collect();
     Block::Plain {
         text: display.to_owned(),
-        line_offsets,
+        source: SourceSpan::literal(source, 0),
     }
 }
 
-/// Renders durable Markdown messages and request-local live reasoning.
+/// Renders durable Markdown messages and request-local live text/reasoning.
 pub struct MarkdownRenderer<'a> {
     theme: &'a Theme,
     /// Thinking sections preserve raw single newlines as visual line breaks
@@ -412,10 +607,22 @@ impl<'a> MarkdownRenderer<'a> {
             attrs: Vec::new(),
             link: None,
             code: None,
-            code_offset: 0,
+            code_source: SourceSpan::default(),
             table: None,
         };
         for (event, range) in parser.into_offset_iter() {
+            let raw_offset = |position| {
+                source_offsets.as_ref().map_or(position, |offsets| {
+                    let index = offsets.partition_point(|(display, _)| *display <= position);
+                    let (display, raw) = offsets[index.saturating_sub(1)];
+                    raw + position - display
+                })
+            };
+            let event_source = |display: &str| {
+                let start = raw_offset(range.start);
+                let end = raw_offset(range.end);
+                SourceSpan::parsed(display, &source[start..end], start)
+            };
             let list_content_width = match &event {
                 Event::Start(Tag::List(_) | Tag::Item) => Some(2),
                 Event::Start(Tag::CodeBlock(_)) if !b.lists.is_empty() => Some(4),
@@ -435,7 +642,34 @@ impl<'a> MarkdownRenderer<'a> {
                     }
                     Tag::TableHead | Tag::TableRow => {
                         if let Some(rows) = b.table.as_mut() {
-                            rows.push(Vec::new());
+                            rows.push(TableRow {
+                                source_offset: raw_table_offset(
+                                    range.start,
+                                    source_offsets.as_deref(),
+                                ),
+                                cells: Vec::new(),
+                            });
+                        }
+                    }
+                    Tag::TableCell => {
+                        if let Some(row) = b.table.as_mut().and_then(|rows| rows.last_mut()) {
+                            let source_range =
+                                raw_table_offset(range.start, source_offsets.as_deref())
+                                    ..raw_table_offset(range.end, source_offsets.as_deref());
+                            // The parser gives cell boundaries excluding separators.
+                            // Inspect only the gap between neighboring parsed cells,
+                            // never a displayed border or a literal pipe inside a cell.
+                            let separator_before = row.cells.last().and_then(|previous| {
+                                source
+                                    .get(previous.source_range.end..source_range.start)
+                                    .and_then(|gap| gap.find('|'))
+                                    .map(|offset| previous.source_range.end + offset)
+                            });
+                            row.cells.push(TableCell {
+                                source_range,
+                                separator_before,
+                                segs: Vec::new(),
+                            });
                         }
                     }
                     Tag::Heading { level, .. } => b.heading = Some(level),
@@ -445,12 +679,7 @@ impl<'a> MarkdownRenderer<'a> {
                     Tag::Item => b.item_begin(),
                     Tag::CodeBlock(CodeBlockKind::Indented | CodeBlockKind::Fenced(_)) => {
                         b.flush();
-                        b.code_offset = source_offsets.as_ref().map_or(range.start, |offsets| {
-                            let index =
-                                offsets.partition_point(|(display, _)| *display <= range.start);
-                            let (display, raw) = offsets[index.saturating_sub(1)];
-                            raw + range.start - display
-                        });
+                        b.code_source = SourceSpan::default();
                         b.code = Some(String::new())
                     }
                     Tag::Emphasis => b.attrs.push(InlineAttr::Italic),
@@ -458,15 +687,24 @@ impl<'a> MarkdownRenderer<'a> {
                     Tag::Strikethrough => b.attrs.push(InlineAttr::Strike),
                     Tag::Link { dest_url, .. } => {
                         b.attrs.push(InlineAttr::Link);
-                        b.link = Some((dest_url.to_string(), b.inline.len()));
+                        b.link = Some((
+                            dest_url.to_string(),
+                            b.inline.len(),
+                            event_source(&dest_url),
+                        ));
                     }
                     _ => {}
                 },
                 Event::End(tag) => match tag {
                     TagEnd::TableCell => {
-                        let cell = std::mem::take(&mut b.inline);
-                        if let Some(row) = b.table.as_mut().and_then(|rows| rows.last_mut()) {
-                            row.push(cell);
+                        let segs = std::mem::take(&mut b.inline);
+                        if let Some(cell) = b
+                            .table
+                            .as_mut()
+                            .and_then(|rows| rows.last_mut())
+                            .and_then(|row| row.cells.last_mut())
+                        {
+                            cell.segs = segs;
                         }
                     }
                     TagEnd::Table => {
@@ -481,10 +719,8 @@ impl<'a> MarkdownRenderer<'a> {
                     TagEnd::Item => b.flush(),
                     TagEnd::CodeBlock => {
                         let text = b.code.take().unwrap_or_default();
-                        b.push_block(Block::Code {
-                            text,
-                            source_offset: b.code_offset,
-                        });
+                        let source = std::mem::take(&mut b.code_source);
+                        b.push_block(Block::Code { text, source });
                     }
                     TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => {
                         b.attrs.pop();
@@ -498,8 +734,8 @@ impl<'a> MarkdownRenderer<'a> {
                 Event::Html(_) | Event::InlineHtml(_) => {
                     return vec![literal_source(&text, source)];
                 }
-                Event::Text(text) => b.text(&text),
-                Event::Code(text) => b.text_code(&text),
+                Event::Text(text) => b.text(&text, event_source(&text)),
+                Event::Code(text) => b.text_code(&text, event_source(&text)),
                 Event::SoftBreak => b.push_seg(Seg {
                     text: if self.preserve_breaks {
                         "\n".to_owned()
@@ -508,11 +744,13 @@ impl<'a> MarkdownRenderer<'a> {
                     },
                     style: Style::new(),
                     link: matches!(b.attrs.last(), Some(InlineAttr::Link)),
+                    source: Some(event_source(if self.preserve_breaks { "\n" } else { " " })),
                 }),
                 Event::HardBreak => b.push_seg(Seg {
                     text: "\n".to_owned(),
                     style: Style::new(),
                     link: matches!(b.attrs.last(), Some(InlineAttr::Link)),
+                    source: Some(event_source("\n")),
                 }),
                 Event::Rule => {
                     b.flush();
@@ -623,6 +861,8 @@ impl<'a> MarkdownRenderer<'a> {
                     columns: 0..line_width(line),
                     decorative: false,
                     source_offset: None,
+                    list_prefix_copyable: true,
+                    table_fragments: None,
                 });
             }
         }
@@ -650,36 +890,42 @@ impl<'a> MarkdownRenderer<'a> {
     ) {
         copy_cells.resize(out.len(), None);
         match block {
-            Block::Plain { text, line_offsets } => {
-                // Unlike Markdown soft breaks, every source newline (including
-                // consecutive and trailing ones) survives the safe fallback.
-                for (source_line, raw) in text.split('\n').enumerate() {
-                    let chunks = chunk_line(raw, width);
-                    let last = chunks.len() - 1;
-                    for (index, chunk) in chunks.into_iter().enumerate() {
-                        copy_cells.push(Some(CopyCells {
-                            columns: 0..UnicodeWidthStr::width(chunk.as_str()),
-                            decorative: false,
-                            source_offset: line_offsets.get(source_line).copied(),
-                        }));
+            Block::Plain { text, source } => {
+                let mut line_offset = 0;
+                for raw in text.split('\n') {
+                    let chunks = chunk_line_offsets(raw, width);
+                    let last = chunks.len().saturating_sub(1);
+                    for (index, (chunk, offset)) in chunks.into_iter().enumerate() {
+                        copy_cells.push(Some(CopyCells::content(
+                            0..UnicodeWidthStr::width(chunk.as_str()),
+                            Some(source.at(line_offset + offset)),
+                        )));
                         out.push(Line::from(Span::styled(chunk, base)));
                         hard_breaks.push(index == last);
                     }
+                    line_offset += raw.len() + 1;
                 }
             }
-            Block::Paragraph(segs) => {
-                let lines = wrap_segments_breaks(segs, width, base);
-                for (line, hard) in lines {
-                    out.push(line);
-                    hard_breaks.push(hard);
-                }
-            }
-            Block::Heading { level, segs } => {
-                let mut style = base.fg(self.theme.md_heading);
-                if *level <= 2 {
-                    style = style.add_modifier(Modifier::BOLD);
-                }
-                for (line, hard) in wrap_segments_breaks(segs, width, style) {
+            Block::Paragraph(segs) | Block::Heading { segs, .. } => {
+                let style = match block {
+                    Block::Heading { level, .. } => {
+                        let heading = base.fg(self.theme.md_heading);
+                        if *level <= 2 {
+                            heading.add_modifier(Modifier::BOLD)
+                        } else {
+                            heading
+                        }
+                    }
+                    _ => base,
+                };
+                for (line, hard, source_offset) in wrap_segments_metadata(segs, width, style) {
+                    copy_cells.push(Some(CopyCells {
+                        columns: 0..line_width(&line),
+                        decorative: false,
+                        source_offset,
+                        list_prefix_copyable: true,
+                        table_fragments: None,
+                    }));
                     out.push(line);
                     hard_breaks.push(hard);
                 }
@@ -687,10 +933,17 @@ impl<'a> MarkdownRenderer<'a> {
             Block::Quote(segs) => {
                 let inner = width.saturating_sub(2).max(1);
                 let quote = base.fg(self.theme.md_quote);
-                let wrapped = wrap_segments_breaks(segs, inner, quote);
+                let wrapped = wrap_segments_metadata(segs, inner, quote);
                 let marker = Span::styled("▍ ", Style::new().fg(self.theme.md_quote));
                 let indent = Span::styled("  ", Style::new().fg(self.theme.md_quote));
-                for (index, (line, hard)) in wrapped.into_iter().enumerate() {
+                for (index, (line, hard, source_offset)) in wrapped.into_iter().enumerate() {
+                    copy_cells.push(Some(CopyCells {
+                        columns: 0..2 + line_width(&line),
+                        decorative: false,
+                        source_offset,
+                        list_prefix_copyable: true,
+                        table_fragments: None,
+                    }));
                     let mut spans = vec![if index == 0 {
                         marker.clone()
                     } else {
@@ -701,17 +954,8 @@ impl<'a> MarkdownRenderer<'a> {
                     hard_breaks.push(hard);
                 }
             }
-            Block::Code {
-                text,
-                source_offset,
-            } => {
-                let start = out.len();
-                self.code_lines(text, width, out, hard_breaks, copy_cells);
-                for copy in copy_cells[start..].iter_mut().flatten() {
-                    if !copy.decorative {
-                        copy.source_offset = Some(*source_offset);
-                    }
-                }
+            Block::Code { text, source } => {
+                self.code_lines(text, source, width, out, hard_breaks, copy_cells);
             }
             Block::Table(rows) => self.table_lines(rows, width, base, out, hard_breaks, copy_cells),
             Block::List {
@@ -749,8 +993,11 @@ impl<'a> MarkdownRenderer<'a> {
                     let indent = Span::styled(" ".repeat(marker_w), Style::new());
                     for (line_index, line) in out[item_start..].iter_mut().enumerate() {
                         if let Some(Some(copy)) = copy_cells.get_mut(item_start + line_index) {
-                            copy.columns =
-                                copy.columns.start + marker_w..copy.columns.end + marker_w;
+                            if copy.list_prefix_copyable {
+                                copy.columns.end += marker_w;
+                            } else {
+                                copy.shift_columns(marker_w);
+                            }
                         }
                         if line_index == 0 {
                             line.spans.insert(0, bullet.clone());
@@ -785,7 +1032,7 @@ impl<'a> MarkdownRenderer<'a> {
         copy_cells.resize(out.len(), None);
         match block {
             Block::Paragraph(segs) => {
-                wrap_segments_links(segs, width, base, out, link_cells, hard_breaks);
+                wrap_segments_links(segs, width, base, out, link_cells, hard_breaks, copy_cells);
             }
             _ => {
                 self.block_lines_breaks(block, width, base, out, hard_breaks, copy_cells);
@@ -802,14 +1049,14 @@ impl<'a> MarkdownRenderer<'a> {
     #[allow(clippy::too_many_arguments)]
     fn table_lines(
         &self,
-        rows: &[Vec<Vec<Seg>>],
+        rows: &[TableRow],
         width: usize,
         base: Style,
         out: &mut Vec<Line<'static>>,
         hard_breaks: &mut Vec<bool>,
         copy_cells: &mut Vec<Option<CopyCells>>,
     ) {
-        let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+        let columns = rows.iter().map(|row| row.cells.len()).max().unwrap_or(0);
         if columns == 0 {
             return;
         }
@@ -820,21 +1067,83 @@ impl<'a> MarkdownRenderer<'a> {
                 if row_index > 0 {
                     out.push(Line::default());
                     hard_breaks.push(true);
+                    copy_cells.push(Some(CopyCells::decoration()));
                 }
-                for (column, cell) in row.iter().enumerate() {
+                for (column, cell) in row.cells.iter().enumerate() {
                     let mut segs = Vec::new();
                     if row_index > 0 {
-                        if let Some(header) = rows[0].get(column) {
-                            segs.extend(header.iter().cloned());
+                        if let Some(header) = rows[0].cells.get(column) {
+                            segs.extend(header.segs.iter().cloned().map(|mut seg| {
+                                seg.source = None;
+                                seg
+                            }));
                             segs.push(Seg {
                                 text: ": ".into(),
                                 style: Style::new(),
                                 link: false,
+                                source: None,
                             });
                         }
                     }
-                    segs.extend(cell.iter().cloned());
-                    for (line, hard) in wrap_segments_breaks(&segs, width, base) {
+                    // Wrapping omits inline newlines. Count only emitted label
+                    // bytes, then split each actual row at the label/value edge.
+                    let label_bytes: usize = segs
+                        .iter()
+                        .map(|seg| {
+                            seg.text
+                                .chars()
+                                .filter(|ch| *ch != '\n')
+                                .map(char::len_utf8)
+                                .sum::<usize>()
+                        })
+                        .sum();
+                    segs.extend(cell.segs.iter().cloned());
+                    let empty_value = cell
+                        .segs
+                        .iter()
+                        .all(|seg| seg.text.chars().all(|ch| ch == '\n'));
+                    let mut displayed_bytes = 0;
+                    let wrapped = wrap_segments_metadata(&segs, width, base);
+                    let last = wrapped.len().saturating_sub(1);
+                    for (line_index, (line, hard, source_offset)) in wrapped.into_iter().enumerate()
+                    {
+                        let text = line.to_string();
+                        let skip = label_bytes.saturating_sub(displayed_bytes).min(text.len());
+                        let start = UnicodeWidthStr::width(&text[..skip]);
+                        let mut fragments = Vec::new();
+                        if skip < text.len() {
+                            fragments.push(TableCopyFragment {
+                                columns: start..start + UnicodeWidthStr::width(&text[skip..]),
+                                text: text[skip..].to_owned(),
+                                row_offset: row.source_offset,
+                                cell_offset: cell.source_range.start,
+                                cell_index: column,
+                                chunk_offset: displayed_bytes.saturating_sub(label_bytes),
+                                separator_before: cell.separator_before,
+                            });
+                        } else if empty_value && line_index == last {
+                            // An empty source cell still owns a column place.
+                            // One marker on its final label row preserves that
+                            // place without copying any generated label text.
+                            fragments.push(TableCopyFragment {
+                                columns: 0..line_width(&line).max(1),
+                                text: String::new(),
+                                row_offset: row.source_offset,
+                                cell_offset: cell.source_range.start,
+                                cell_index: column,
+                                chunk_offset: 0,
+                                separator_before: cell.separator_before,
+                            });
+                        }
+                        displayed_bytes += text.len();
+                        // Only value glyphs carry provenance; repeated labels
+                        // cannot steal the anchor from this source cell.
+                        copy_cells.push(Some(CopyCells::table(
+                            0..line_width(&line),
+                            fragments,
+                            source_offset
+                                .or_else(|| empty_value.then_some(cell.source_range.start)),
+                        )));
                         out.push(line);
                         hard_breaks.push(hard);
                     }
@@ -843,8 +1152,8 @@ impl<'a> MarkdownRenderer<'a> {
         } else {
             let mut widths = vec![4; columns];
             for row in rows {
-                for (column, cell) in row.iter().enumerate() {
-                    let text: String = cell.iter().map(|seg| seg.text.as_str()).collect();
+                for (column, cell) in row.cells.iter().enumerate() {
+                    let text: String = cell.segs.iter().map(|seg| seg.text.as_str()).collect();
                     widths[column] = widths[column].max(UnicodeWidthStr::width(text.as_str()));
                 }
             }
@@ -859,8 +1168,12 @@ impl<'a> MarkdownRenderer<'a> {
                     .iter()
                     .enumerate()
                     .map(|(column, width)| {
-                        let segs = row.get(column).map(Vec::as_slice).unwrap_or(&[]);
-                        wrap_segments_breaks(
+                        let segs = row
+                            .cells
+                            .get(column)
+                            .map(|cell| cell.segs.as_slice())
+                            .unwrap_or(&[]);
+                        wrap_segments_metadata(
                             segs,
                             *width,
                             if row_index == 0 {
@@ -872,26 +1185,71 @@ impl<'a> MarkdownRenderer<'a> {
                     })
                     .collect();
                 let height = cells.iter().map(Vec::len).max().unwrap_or(1);
+                let mut chunk_offsets = vec![0; columns];
                 for line_index in 0..height {
                     let mut spans = Vec::new();
-                    for (column, cell) in cells.iter().enumerate() {
+                    let mut fragments = Vec::new();
+                    let mut display_column = 0;
+                    let mut row_source_offset = None;
+                    let mut empty_source_offset = None;
+                    for (column, wrapped) in cells.iter().enumerate() {
                         if column > 0 {
                             spans.push(Span::styled(" │ ", base.fg(self.theme.border)));
+                            display_column += 3;
                         }
-                        let line = cell
+                        let line = wrapped
                             .get(line_index)
-                            .map(|(line, _)| line.clone())
+                            .map(|(line, _, _)| line.clone())
                             .unwrap_or_default();
-                        let padding = widths[column].saturating_sub(line_width(&line));
+                        let cell_width = line_width(&line);
+                        let padding = widths[column].saturating_sub(cell_width);
+                        if let Some(cell) = row.cells.get(column) {
+                            let text = line.to_string();
+                            if !text.is_empty() {
+                                if row_source_offset.is_none() {
+                                    row_source_offset =
+                                        wrapped.get(line_index).and_then(|(_, _, offset)| *offset);
+                                }
+                                let text_bytes = text.len();
+                                fragments.push(TableCopyFragment {
+                                    columns: display_column..display_column + cell_width,
+                                    text,
+                                    row_offset: row.source_offset,
+                                    cell_offset: cell.source_range.start,
+                                    cell_index: column,
+                                    chunk_offset: chunk_offsets[column],
+                                    separator_before: cell.separator_before,
+                                });
+                                chunk_offsets[column] += text_bytes;
+                            } else if line_index == 0 && wrapped.len() == 1 {
+                                empty_source_offset.get_or_insert(cell.source_range.start);
+                                fragments.push(TableCopyFragment {
+                                    columns: display_column..display_column + widths[column],
+                                    text: String::new(),
+                                    row_offset: row.source_offset,
+                                    cell_offset: cell.source_range.start,
+                                    cell_index: column,
+                                    chunk_offset: 0,
+                                    separator_before: cell.separator_before,
+                                });
+                            }
+                        }
                         spans.extend(line.spans);
+                        display_column += cell_width;
                         if column + 1 < columns {
                             spans.push(Span::raw(" ".repeat(padding)));
+                            display_column += padding;
                         }
                     }
+                    copy_cells.push(Some(CopyCells::table(
+                        0..display_column,
+                        fragments,
+                        row_source_offset.or(empty_source_offset),
+                    )));
                     out.push(Line::from(spans));
-                    // Column wraps are separate visible table rows, not prose
-                    // wraps: preserve readable row boundaries when copying.
-                    hard_breaks.push(true);
+                    // Source-copy joins chunks by their parsed logical cell,
+                    // regardless of which other columns wrap on this row.
+                    hard_breaks.push(line_index + 1 == height);
                 }
                 if row_index == 0 {
                     let border = widths
@@ -899,14 +1257,12 @@ impl<'a> MarkdownRenderer<'a> {
                         .map(|width| "─".repeat(*width))
                         .collect::<Vec<_>>()
                         .join("─┼─");
-                    copy_cells.resize(out.len(), None);
                     out.push(Line::from(Span::styled(border, base.fg(self.theme.border))));
                     hard_breaks.push(false);
                     copy_cells.push(Some(CopyCells::decoration()));
                 }
             }
         }
-        copy_cells.resize(out.len(), None);
     }
 
     /// A single-color framed code block: border in `md_code_border`, content
@@ -915,6 +1271,7 @@ impl<'a> MarkdownRenderer<'a> {
     fn code_lines(
         &self,
         text: &str,
+        source: &SourceSpan,
         width: usize,
         out: &mut Vec<Line<'static>>,
         hard_breaks: &mut Vec<bool>,
@@ -924,23 +1281,19 @@ impl<'a> MarkdownRenderer<'a> {
         let content = Style::new().fg(self.theme.md_code_block);
         let inner = width.saturating_sub(2).max(1);
         if width < 3 {
+            let mut line_offset = 0;
             for line in text.lines() {
-                let chunks = chunk_line(line, inner);
-                let chunks = if chunks.is_empty() {
-                    vec![String::new()]
-                } else {
-                    chunks
-                };
+                let chunks = chunk_line_offsets(line, inner);
                 let last = chunks.len() - 1;
-                for (index, chunk) in chunks.into_iter().enumerate() {
-                    copy_cells.push(Some(CopyCells {
-                        columns: 0..UnicodeWidthStr::width(chunk.as_str()),
-                        decorative: false,
-                        source_offset: None,
-                    }));
+                for (index, (chunk, offset)) in chunks.into_iter().enumerate() {
+                    copy_cells.push(Some(CopyCells::content(
+                        0..UnicodeWidthStr::width(chunk.as_str()),
+                        Some(source.at(line_offset + offset)),
+                    )));
                     out.push(Line::from(Span::styled(chunk, content)));
                     hard_breaks.push(index == last);
                 }
+                line_offset += line.len() + 1;
             }
             return;
         }
@@ -951,21 +1304,16 @@ impl<'a> MarkdownRenderer<'a> {
         ]));
         hard_breaks.push(false);
         copy_cells.push(Some(CopyCells::decoration()));
+        let mut line_offset = 0;
         for raw in text.lines() {
-            let chunks = chunk_line(raw, inner);
-            let chunks = if chunks.is_empty() {
-                vec![String::new()]
-            } else {
-                chunks
-            };
+            let chunks = chunk_line_offsets(raw, inner);
             let last = chunks.len() - 1;
-            for (index, chunk) in chunks.into_iter().enumerate() {
+            for (index, (chunk, offset)) in chunks.into_iter().enumerate() {
                 let source_width = UnicodeWidthStr::width(chunk.as_str());
-                copy_cells.push(Some(CopyCells {
-                    columns: 1..1 + source_width,
-                    decorative: false,
-                    source_offset: None,
-                }));
+                copy_cells.push(Some(CopyCells::content(
+                    1..1 + source_width,
+                    Some(source.at(line_offset + offset)),
+                )));
                 let pad = " ".repeat(inner.saturating_sub(source_width));
                 out.push(Line::from(vec![
                     Span::styled("│", border),
@@ -974,6 +1322,7 @@ impl<'a> MarkdownRenderer<'a> {
                 ]));
                 hard_breaks.push(index == last);
             }
+            line_offset += raw.len() + 1;
         }
         out.push(Line::from(vec![
             Span::styled("╰", border),
@@ -988,24 +1337,36 @@ impl<'a> MarkdownRenderer<'a> {
 /// Splits a (possibly indented) line into `width`-wide chunks, preserving
 /// leading whitespace and replacing tabs.
 fn chunk_line(line: &str, width: usize) -> Vec<String> {
-    let line = line.replace('\t', "    ");
+    chunk_line_offsets(line, width)
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect()
+}
+
+/// Offset before display-only tab expansion, including a wrap inside a tab.
+fn chunk_line_offsets(line: &str, width: usize) -> Vec<(String, usize)> {
     let width = width.max(1);
-    let mut chunks: Vec<String> = Vec::new();
+    let mut chunks = Vec::new();
     let mut current = String::new();
-    let mut current_w = 0usize;
-    for ch in line.chars() {
-        let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if current_w + cw > width && !current.is_empty() {
-            chunks.push(std::mem::take(&mut current));
-            current_w = 0;
+    let mut current_w = 0;
+    let mut current_offset = 0;
+    for (offset, ch) in line.char_indices() {
+        let (ch, count) = if ch == '\t' { (' ', 4) } else { (ch, 1) };
+        for _ in 0..count {
+            let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if current_w + cw > width && !current.is_empty() {
+                chunks.push((std::mem::take(&mut current), current_offset));
+                current_w = 0;
+            }
+            if current.is_empty() {
+                current_offset = offset;
+            }
+            current.push(ch);
+            current_w += cw;
         }
-        current.push(ch);
-        current_w += cw;
     }
-    if !current.is_empty() {
-        chunks.push(current);
-    } else if line.is_empty() {
-        chunks.push(String::new());
+    if !current.is_empty() || chunks.is_empty() {
+        chunks.push((current, current_offset));
     }
     chunks
 }
@@ -1013,44 +1374,66 @@ fn chunk_line(line: &str, width: usize) -> Vec<String> {
 /// Wraps styled segments to `width` cells. Each emitted row reports whether it
 /// terminated a logical source line (a `\n` inside the run or the end of the
 /// run) rather than a soft wrap, so copy/export can rebuild the original text.
-fn wrap_segments_breaks(segs: &[Seg], width: usize, base: Style) -> Vec<(Line<'static>, bool)> {
+fn wrap_segments_metadata(
+    segs: &[Seg],
+    width: usize,
+    base: Style,
+) -> Vec<(Line<'static>, bool, Option<usize>)> {
     let width = width.max(1);
-    let mut lines: Vec<(Line<'static>, bool)> = Vec::new();
+    let mut lines: Vec<(Line<'static>, bool, Option<usize>)> = Vec::new();
     let mut current: Vec<Span<'static>> = Vec::new();
     let mut current_w = 0usize;
+    let mut current_source = None;
     for seg in segs {
         let style = base.patch(seg.style);
-        for ch in seg.text.chars() {
+        for (offset, ch) in seg.text.char_indices() {
             if ch == '\n' {
                 if !current.is_empty() {
-                    lines.push((Line::from(std::mem::take(&mut current)), true));
+                    lines.push((
+                        Line::from(std::mem::take(&mut current)),
+                        true,
+                        current_source.take(),
+                    ));
                     current_w = 0;
                 }
                 continue;
             }
             let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
             if current_w + cw > width && !current.is_empty() {
-                lines.push((Line::from(std::mem::take(&mut current)), false));
+                lines.push((
+                    Line::from(std::mem::take(&mut current)),
+                    false,
+                    current_source.take(),
+                ));
                 current_w = 0;
+            }
+            if current_source.is_none() {
+                current_source = seg.source.as_ref().map(|source| source.at(offset));
             }
             push_span_char(&mut current, ch, style);
             current_w += cw;
         }
     }
     if !current.is_empty() {
-        lines.push((Line::from(current), true));
+        lines.push((Line::from(current), true, current_source));
     }
     if lines.is_empty() {
-        lines.push((Line::default(), true));
+        lines.push((
+            Line::default(),
+            true,
+            segs.first()
+                .and_then(|seg| seg.source.as_ref().map(|source| source.start)),
+        ));
     }
     lines
 }
 
-/// Wraps styled segments like [`wrap_segments_breaks`] and records, per
+/// Wraps styled segments like [`wrap_segments_metadata`] and records, per
 /// emitted line, the content-cell
 /// ranges covered by link segments and whether the line ended a logical
 /// source line. All outputs come from one walk so they can never describe
 /// different layouts.
+#[allow(clippy::too_many_arguments)]
 fn wrap_segments_links(
     segs: &[Seg],
     width: usize,
@@ -1058,6 +1441,7 @@ fn wrap_segments_links(
     lines: &mut Vec<Line<'static>>,
     link_cells: &mut Vec<Vec<std::ops::Range<usize>>>,
     hard_breaks: &mut Vec<bool>,
+    copy_cells: &mut Vec<Option<CopyCells>>,
 ) {
     let width = width.max(1);
     #[allow(clippy::too_many_arguments)]
@@ -1065,32 +1449,44 @@ fn wrap_segments_links(
         lines: &mut Vec<Line<'static>>,
         link_cells: &mut Vec<Vec<std::ops::Range<usize>>>,
         hard_breaks: &mut Vec<bool>,
+        copy_cells: &mut Vec<Option<CopyCells>>,
         current: &mut Vec<Span<'static>>,
         current_links: &mut Vec<std::ops::Range<usize>>,
         current_w: &mut usize,
+        current_source: &mut Option<usize>,
         hard: bool,
     ) {
         if !current.is_empty() {
+            copy_cells.push(Some(CopyCells {
+                columns: 0..*current_w,
+                decorative: false,
+                source_offset: current_source.take(),
+                list_prefix_copyable: true,
+                table_fragments: None,
+            }));
             lines.push(Line::from(std::mem::take(current)));
             link_cells.push(std::mem::take(current_links));
             hard_breaks.push(hard);
             *current_w = 0;
         }
     }
-    let mut current: Vec<Span<'static>> = Vec::new();
-    let mut current_links: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut current = Vec::new();
+    let mut current_links = Vec::new();
     let mut current_w = 0usize;
+    let mut current_source = None;
     for seg in segs {
         let style = base.patch(seg.style);
-        for ch in seg.text.chars() {
+        for (offset, ch) in seg.text.char_indices() {
             if ch == '\n' {
                 flush(
                     lines,
                     link_cells,
                     hard_breaks,
+                    copy_cells,
                     &mut current,
                     &mut current_links,
                     &mut current_w,
+                    &mut current_source,
                     true,
                 );
                 continue;
@@ -1101,11 +1497,16 @@ fn wrap_segments_links(
                     lines,
                     link_cells,
                     hard_breaks,
+                    copy_cells,
                     &mut current,
                     &mut current_links,
                     &mut current_w,
+                    &mut current_source,
                     false,
                 );
+            }
+            if current_source.is_none() {
+                current_source = seg.source.as_ref().map(|source| source.at(offset));
             }
             if seg.link && cw > 0 {
                 current_links.push(current_w..current_w + cw);
@@ -1118,15 +1519,26 @@ fn wrap_segments_links(
         lines,
         link_cells,
         hard_breaks,
+        copy_cells,
         &mut current,
         &mut current_links,
         &mut current_w,
+        &mut current_source,
         true,
     );
     if lines.is_empty() {
         lines.push(Line::default());
         link_cells.push(Vec::new());
         hard_breaks.push(true);
+        copy_cells.push(Some(CopyCells {
+            columns: 0..0,
+            decorative: false,
+            source_offset: segs
+                .first()
+                .and_then(|seg| seg.source.as_ref().map(|source| source.start)),
+            list_prefix_copyable: true,
+            table_fragments: None,
+        }));
     }
 }
 
@@ -1143,14 +1555,14 @@ fn push_span_char(spans: &mut Vec<Span<'static>>, ch: char, style: Style) {
     spans.push(Span::styled(ch.to_string(), style));
 }
 
-/// Wraps plain text for streaming answers and the composer (spec 20.4)
+/// Wraps plain text for unformatted UI rows and the composer (spec 20.4)
 /// with no markdown parsing. `\n` is a real line boundary: a newline ends
 /// the current line, so consecutive newlines yield the same number of blank
 /// lines and a leading/trailing newline yields a blank row — the rendered
 /// line count is exactly `text.split('\n').count()`. Long lines are greedy-
 /// chunked to `width` display cells. Appending a streamed delta after a
 /// newline only fills the tail line, so the paragraph structure of a live
-/// message matches the original text after every delta.
+/// plain-text buffer matches the original text after every delta.
 pub fn wrap_plain(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
     let text = crate::safe_text::safe_display(text);
     let width = width.max(1);
@@ -1253,15 +1665,90 @@ mod tests {
                 .flatten()
                 .filter_map(|copy| copy.source_offset)
                 .collect();
-            assert!(offsets.contains(&source.find("```rust").unwrap()));
-            assert!(offsets.contains(&source.find("~~~text").unwrap()));
+            assert!(offsets.contains(&source.find("FIRST_LONG_LINE").unwrap()));
+            assert!(offsets.contains(&source.find("SECOND").unwrap()));
             assert!(
                 offsets
                     .iter()
-                    .all(|offset| source[*offset..].starts_with("```rust")
-                        || source[*offset..].starts_with("~~~text"))
+                    .all(|offset| source.is_char_boundary(*offset))
             );
+            for (line, copy) in rendered.lines.iter().zip(&rendered.copy_cells) {
+                let Some(copy) = copy.as_ref().filter(|copy| !copy.decorative) else {
+                    continue;
+                };
+                let Some(offset) = copy.source_offset else {
+                    continue;
+                };
+                let body = source.find("FIRST_LONG_LINE").unwrap();
+                if (body..body + "FIRST_LONG_LINE".len()).contains(&offset) {
+                    assert!(
+                        text_of(line).contains(
+                            &source[offset..body + "FIRST_LONG_LINE".len()]
+                                .chars()
+                                .next()
+                                .unwrap()
+                                .to_string()
+                        )
+                    );
+                }
+            }
             assert_eq!(rendered.copy_cells.len(), rendered.lines.len());
+        }
+    }
+
+    #[test]
+    fn wrapped_source_offsets_are_utf8_safe_across_parser_transformations() {
+        let theme = dark_theme();
+        for source in [
+            "one 中文\nsecond café **bold** &amp; \\*literal\nlast 🙂",
+            "   ```\n\tfoo中文café\n  \u{1b}a\u{9b}b\u{202e}c\n   ```",
+            "- item\n\n  ```\n  first中文\n  second\n  ```",
+            "    first中文\n    second café\n",
+            "before <br> \u{1b}escaped 中文\nlast",
+        ] {
+            for width in [1, 2, 3, 8, 19, 79] {
+                let rendered =
+                    MarkdownRenderer::new(&theme).render_with_metadata(source, width, Style::new());
+                for offset in rendered
+                    .copy_cells
+                    .iter()
+                    .flatten()
+                    .filter_map(|copy| copy.source_offset)
+                {
+                    assert!(source.is_char_boundary(offset), "{source:?}: {offset}");
+                }
+                assert!(
+                    rendered
+                        .lines
+                        .iter()
+                        .all(|line| !text_of(line).contains('\u{1b}'))
+                );
+                assert_eq!(rendered.lines.len(), rendered.copy_cells.len());
+            }
+        }
+    }
+
+    #[test]
+    fn multiline_inline_code_keeps_each_wrapped_source_position() {
+        let theme = dark_theme();
+        let source = "` first line\nsecond 中文 line\nthird line `";
+        for width in [4, 9, 20] {
+            let rendered =
+                MarkdownRenderer::new(&theme).render_with_metadata(source, width, Style::new());
+            let offsets: Vec<_> = rendered
+                .copy_cells
+                .iter()
+                .flatten()
+                .filter_map(|copy| copy.source_offset)
+                .collect();
+            assert!(offsets.len() > 1);
+            assert!(offsets.windows(2).all(|pair| pair[0] < pair[1]));
+            assert!(
+                offsets
+                    .iter()
+                    .all(|offset| source.is_char_boundary(*offset))
+            );
+            assert!(offsets.last().unwrap() > &source.find("second").unwrap());
         }
     }
 
@@ -1273,8 +1760,11 @@ mod tests {
         for (line, copy) in rendered.lines.iter().zip(&rendered.copy_cells) {
             let text = text_of(line);
             let offset = copy.as_ref().unwrap().source_offset.unwrap();
-            if text.starts_with("FIRST") || text.starts_with("NG_LINE") {
+            if text.starts_with("FIRST") {
                 assert_eq!(offset, source.find("FIRST").unwrap());
+            }
+            if text.starts_with("NG_LINE") {
+                assert_eq!(offset, source.find("NG_LINE").unwrap());
             }
             if text.starts_with("SECOND") {
                 assert_eq!(offset, source.find("SECOND").unwrap());

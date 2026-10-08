@@ -455,6 +455,7 @@ fn prepare_conversation_inner(
             source_range,
             hard_break_after: true,
             decorative,
+            table_fragments: None,
         },
     ));
     live_copy.sort_by_key(|copy| copy.row);
@@ -1253,6 +1254,10 @@ fn section_copy_metadata(
             source_range: copy_ranges_in_source.get(row).cloned().unwrap_or(0..0),
             hard_break_after: hard_break_rows.get(row).copied().unwrap_or(false),
             decorative,
+            table_fragments: rendered_copy_cells
+                .and_then(|rows| rows.get(row))
+                .and_then(Option::as_ref)
+                .and_then(|copy| copy.table_fragments.clone()),
         })
         .collect();
     let source_map = Arc::new(SourceMap {
@@ -1443,8 +1448,8 @@ fn line_copy_text(line: &Line<'_>, mut skip: usize) -> String {
 }
 
 /// Returns only the selected content cells. Decorative rail cells and filled
-/// right padding are absent from `CopyRange.text`; empty boundary rows are
-/// trimmed so section spacers do not become copied newlines.
+/// right padding are excluded by ordinary copy bounds or table-only fragments.
+/// Empty boundary rows are trimmed so section spacers do not become copied newlines.
 pub fn selection_text(
     conversation: &PreparedConversation,
     selection: &ConversationSelection,
@@ -1458,6 +1463,7 @@ pub fn selection_text(
     let end_row = focus.row;
     let mut rows = Vec::new();
     let mut hard_break = false;
+    let mut table_row: Option<SelectedTableRow> = None;
     for row in start.row..=end_row {
         let Some(copy) = conversation.copy_ranges.iter().find(|copy| copy.row == row) else {
             continue;
@@ -1465,6 +1471,53 @@ pub fn selection_text(
         if copy.decorative {
             continue;
         }
+        if let Some(fragments) = copy.table_fragments {
+            let section_start = conversation
+                .sections
+                .at_row(row)
+                .map_or(row, |section| section.rows.start);
+            let start_column = if row == start.row { start.column } else { 0 };
+            let end_column = if row == end_row {
+                focus.column.saturating_add(1)
+            } else {
+                usize::MAX
+            };
+            for fragment in fragments {
+                let start = start_column.max(fragment.columns.start);
+                let end = end_column.min(fragment.columns.end);
+                if start >= end {
+                    continue;
+                }
+                let text = slice_cell_range(
+                    &fragment.text,
+                    start - fragment.columns.start,
+                    end - fragment.columns.start,
+                );
+                if text.is_empty() && !fragment.text.is_empty() {
+                    continue;
+                }
+                let key = (section_start, fragment.row_offset);
+                if table_row
+                    .as_ref()
+                    .is_some_and(|selected| selected.key != key)
+                {
+                    flush_selected_table_row(&mut table_row, &mut rows, &mut hard_break);
+                }
+                let selected = table_row.get_or_insert_with(|| SelectedTableRow {
+                    key,
+                    chunks: Vec::new(),
+                });
+                selected.chunks.push(SelectedTableChunk {
+                    cell_offset: fragment.cell_offset,
+                    cell_index: fragment.cell_index,
+                    chunk_offset: fragment.chunk_offset,
+                    separator_before: fragment.separator_before,
+                    text,
+                });
+            }
+            continue;
+        }
+        flush_selected_table_row(&mut table_row, &mut rows, &mut hard_break);
         let start_column = if row == start.row {
             start.column.saturating_sub(copy.columns.start)
         } else {
@@ -1484,6 +1537,7 @@ pub fn selection_text(
         rows.push(slice_cell_range(copy.text, start_column, end_column));
         hard_break = copy.hard_break_after;
     }
+    flush_selected_table_row(&mut table_row, &mut rows, &mut hard_break);
     while rows.first().is_some_and(|row| row.is_empty()) {
         rows.remove(0);
     }
@@ -1491,6 +1545,52 @@ pub fn selection_text(
         rows.pop();
     }
     rows.concat()
+}
+
+struct SelectedTableRow {
+    // Raw offsets are section-relative. Never merge cells from two sections.
+    key: (usize, usize),
+    chunks: Vec<SelectedTableChunk>,
+}
+
+struct SelectedTableChunk {
+    cell_offset: usize,
+    cell_index: usize,
+    chunk_offset: usize,
+    separator_before: Option<usize>,
+    text: String,
+}
+
+fn flush_selected_table_row(
+    selected: &mut Option<SelectedTableRow>,
+    rows: &mut Vec<String>,
+    hard_break: &mut bool,
+) {
+    let Some(mut selected) = selected.take() else {
+        return;
+    };
+    selected
+        .chunks
+        .sort_by_key(|chunk| (chunk.cell_offset, chunk.cell_index, chunk.chunk_offset));
+    let mut text = String::new();
+    let mut previous_cell = None;
+    for chunk in selected.chunks {
+        let cell = (chunk.cell_offset, chunk.cell_index);
+        if previous_cell.is_some_and(|previous| previous != cell)
+            && chunk.separator_before.is_some()
+        {
+            // This separator was confirmed between parsed source cells, not
+            // guessed from display borders or a min..max raw source interval.
+            text.push('|');
+        }
+        text.push_str(&chunk.text);
+        previous_cell = Some(cell);
+    }
+    if !rows.is_empty() && *hard_break {
+        rows.push("\n".to_owned());
+    }
+    rows.push(text);
+    *hard_break = true;
 }
 
 fn slice_cell_range(text: &str, start: usize, end: usize) -> String {
@@ -2159,25 +2259,15 @@ impl LiveRenderContext<'_> {
         &self,
         out: &mut Vec<Line<'static>>,
         ranges: &mut Option<&mut Vec<SectionRange>>,
+        link_rows: &mut Vec<LinkRow>,
         copy_rows: &mut Vec<CopyRange>,
         text: &str,
         ordinal: u32,
     ) {
-        let base = Style::new().fg(self.theme.text);
-        let wrapped = wrap_plain(text, self.width.saturating_sub(1).max(1), base);
-        let mut cells = vec![Some(crate::markdown::CopyCells::decoration())];
-        cells.extend(wrapped.iter().map(|line| {
-            Some(crate::markdown::CopyCells {
-                columns: 1..1 + UnicodeWidthStr::width(line.to_string().as_str()),
-                decorative: false,
-                source_offset: None,
-            })
-        }));
-        cells.push(Some(crate::markdown::CopyCells::decoration()));
-        let lines = wrapped
-            .into_iter()
-            .map(|line| crate::ui::rail::inset_row(self.width, 1, line))
-            .collect();
+        let rendered = assistant::render_text_section(self.theme, text, self.width, ordinal);
+        let before = out.len();
+        let rendered_len = rendered.lines.len();
+        link_rows.resize(before, Vec::new());
         append_live_section_with_copy(
             out,
             ranges,
@@ -2191,14 +2281,16 @@ impl LiveRenderContext<'_> {
                 tool_call_id: None,
                 history_index: None,
             },
-            layout::vertical_section(lines),
+            rendered.lines,
             self.width,
             false,
             false,
             text,
-            None,
-            Some(&cells),
+            rendered.hard_breaks.as_deref(),
+            rendered.copy_cells.as_deref(),
         );
+        let shared_blank = rendered_len.saturating_sub(out.len().saturating_sub(before));
+        link_rows.extend(rendered.link_cells.into_iter().skip(shared_blank));
     }
 
     fn append_tool(
@@ -2341,7 +2433,7 @@ fn live_section(
                     in_hidden_run = !reasoning_visible;
                 }
                 crate::state::turn::LivePart::Text(text) => {
-                    context.append_text(out, &mut ranges, copy_rows, text, text_ordinal);
+                    context.append_text(out, &mut ranges, link_rows, copy_rows, text, text_ordinal);
                     text_ordinal += 1;
                     in_hidden_run = false;
                 }
@@ -2705,6 +2797,14 @@ pub(crate) fn marker_area(area: Rect, label: &str) -> Rect {
         1,
     )
 }
+
+#[cfg(test)]
+#[path = "live_markdown_tests.rs"]
+mod live_markdown_tests;
+
+#[cfg(test)]
+#[path = "table_copy_tests.rs"]
+mod table_copy_tests;
 
 #[cfg(test)]
 mod source_map_tests {

@@ -295,6 +295,32 @@ fn section_copy_text(prepared: &PreparedConversation, section: &SectionView) -> 
             .end
             .saturating_sub(if live_card { 3 } else { 2 })
     });
+    if prepared
+        .copy_ranges
+        .iter()
+        .any(|copy| section.rows.contains(&copy.row) && copy.table_fragments.is_some())
+    {
+        use crate::state::view::{ConversationSelection, SelectionGranularity, SelectionPoint};
+        let last = timestamp_row.unwrap_or(section.rows.end).saturating_sub(1);
+        let point = |row, column| SelectionPoint {
+            row,
+            column,
+            section_id: Some(section.id.clone()),
+            section_row: row.saturating_sub(section.rows.start),
+        };
+        // Tables own discontinuous cell geometry. Reuse the same source-order
+        // assembly as explicit selection while excluding User timestamps.
+        let selection = ConversationSelection {
+            session_id: section.id.session_id.to_string(),
+            anchor: point(section.rows.start, 0),
+            focus: point(last, prepared.width.saturating_sub(1) as usize),
+            granularity: SelectionGranularity::Character,
+            dragged: true,
+        };
+        return crate::ui::transcript::selection_text(prepared, &selection)
+            .trim_matches('\n')
+            .to_owned();
+    }
     let mut text = String::new();
     for copy in prepared.copy_ranges.iter() {
         if !section.rows.contains(&copy.row) || copy.decorative || timestamp_row == Some(copy.row) {
@@ -486,6 +512,58 @@ mod tests {
         );
         assert_eq!(extract_code_block("no code here", None), None);
         assert_eq!(extract_code_block("```\n```", None), None);
+    }
+
+    #[test]
+    fn table_message_and_last_reply_copy_share_source_fragments() {
+        let source = "Before\n\n| A | B |\n| --- | --- |\n| xxxxxxxxxxxx | y |\n\nAfter";
+        let expected = "Before\n\nA|B\nxxxxxxxxxxxx|y\n\nAfter";
+        for live in [false, true] {
+            for width in [9, 25, 77] {
+                let mut app = copy_app(source, false, live, width);
+                select_copy_row(&mut app, width, "x");
+                match app.plan_section_copy(super::SectionPick::ViewportOrSelection) {
+                    CopyPlan::Text(text) => assert_eq!(text, expected),
+                    CopyPlan::Limitation(text) => panic!("unexpected limitation: {text}"),
+                }
+                if !live {
+                    match app.plan_last_reply_copy() {
+                        CopyPlan::Text(text) => assert_eq!(text, expected),
+                        CopyPlan::Limitation(text) => panic!("unexpected limitation: {text}"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn table_message_copy_still_excludes_user_timestamp() {
+        let source = "| A | B |\n| --- | --- |\n| xxxxxxxxxxxx | y |";
+        let app = crate::ui::testapp::open_with(
+            crate::theme::ThemeKind::Dark,
+            "ses_1",
+            None,
+            "high",
+            vec![crate::ui::testapp::user_entry(0, "loop", source)],
+        );
+        for width in [25, 77] {
+            let prepared = crate::ui::transcript::prepare_conversation(&app, width);
+            let section = prepared
+                .sections
+                .iter()
+                .find(|section| section.id.kind == crate::state::view::SectionKind::User)
+                .unwrap();
+            assert_eq!(
+                section_copy_text(&prepared, &section),
+                "A|B\nxxxxxxxxxxxx|y"
+            );
+            assert!(
+                prepared
+                    .copy_ranges
+                    .iter()
+                    .any(|copy| copy.text == "time unavailable")
+            );
+        }
     }
 
     #[test]
