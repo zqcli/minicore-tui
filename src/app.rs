@@ -1369,6 +1369,7 @@ impl App {
             AppEvent::ShutdownRequested => self.request_shutdown(),
             AppEvent::Tick => {
                 let now = self.instant_now();
+                self.refresh_bash_timers(std::time::SystemTime::now());
                 if self
                     .scrollbar
                     .hide_at
@@ -1702,6 +1703,7 @@ impl App {
             }
         }
         self.sessions.active = next.clone();
+        self.refresh_bash_timers(std::time::SystemTime::now());
         if let Some(id) = next {
             if let Some(view) = self.sessions.known.get_mut(&id) {
                 std::mem::swap(&mut view.composer, &mut self.composer);
@@ -7275,6 +7277,7 @@ impl App {
                         invocation: None,
                         execution: None,
                         command: None,
+                        timing: None,
                     }),
                 );
             }
@@ -7532,6 +7535,7 @@ impl App {
                     invocation: None,
                     execution: None,
                     command: None,
+                    timing: None,
                 }),
             );
         }
@@ -7628,6 +7632,7 @@ impl App {
                 invocation: None,
                 execution: None,
                 command: None,
+                timing: None,
             })
         });
         let state = std::sync::Arc::make_mut(state);
@@ -8060,6 +8065,7 @@ fn install_history_item(
                         invocation: None,
                         execution: None,
                         command: None,
+                        timing: None,
                     })
                 });
                 let state = std::sync::Arc::make_mut(state);

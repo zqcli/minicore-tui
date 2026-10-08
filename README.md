@@ -183,6 +183,10 @@ including card borders or soft-wrap breaks.
 
 Collapsed tool cards retain the action, target, execution status and a short result.
 Loaded historical tool calls retain bounded command/file targets after reopening a session.
+Collapsed Bash cards keep the last five visual rows of the locally available
+output, with an earlier-row hint and explicit partial/unknown facts. Per-tool
+recorded timestamps provide Elapsed while running and Took after completion;
+missing or invalid timestamps do not invent a duration.
 Bash process exit codes remain visible, including a warning for nonzero exits;
 command completion alone does not imply exit zero. Hidden-row counts describe the
 actual display body. Reasoning folds according to its rendered height and completed

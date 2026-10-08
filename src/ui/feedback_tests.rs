@@ -443,7 +443,7 @@ fn folded_and_expanded_tool_cards_have_no_detail_action_overlay() {
                     let visible = buffer_lines(&terminal).join("\n");
                     assert!(!visible.contains("详情"));
                     assert!(visible.contains("bash") && visible.contains("cargo build"));
-                    assert_eq!(visible.contains("BODY MARKER"), expanded, "{visible}");
+                    assert!(visible.contains("BODY MARKER"), "{visible}");
                 }
             }
         }

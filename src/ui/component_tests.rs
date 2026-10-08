@@ -1144,10 +1144,11 @@ fn failed_tool_cards_keep_status_summary_hint_and_error_body() {
         .join("\n");
     assert!(collapsed_text.contains("bash"));
     assert!(collapsed_text.contains("run command"));
-    assert!(!collapsed_text.contains("permission denied"));
-    assert!(collapsed_text.contains("3 lines hidden"));
+    assert!(collapsed_text.contains("permission denied"));
+    assert!(collapsed_text.contains("failed"));
+    assert!(!collapsed_text.contains("lines hidden"));
     assert!(!collapsed_text.contains("ctrl+o expand"));
-    assert!(!collapsed_text.contains("private diagnostic"));
+    assert!(collapsed_text.contains("private diagnostic"));
 
     let expanded = tool::durable_with_display(
         &theme,

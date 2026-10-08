@@ -459,6 +459,14 @@ pub struct ToolFacts {
     pub invocation: Option<Arc<crate::protocol::ToolInvocationWire>>,
     pub execution: Option<Arc<crate::protocol::ToolExecutionWire>>,
     pub command: Option<Arc<crate::protocol::CommandResultWire>>,
+    /// Display timing derived only from recorded per-tool timestamps.
+    pub timing: Option<ToolTiming>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ToolTiming {
+    pub elapsed: std::time::Duration,
+    pub running: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -498,6 +506,7 @@ impl ToolFacts {
             invocation: None,
             execution: None,
             command: None,
+            timing: None,
         }
     }
 
@@ -549,6 +558,31 @@ impl ToolFacts {
             self.accept_command(command);
         }
         self.execution = Some(Arc::new(execution));
+        self.timing = self.bash_timing_at(std::time::SystemTime::now());
+    }
+
+    /// A running clock needs a recorded start; a settled duration needs both
+    /// recorded endpoints. In particular, loading an old result is not a start.
+    pub fn bash_timing_at(&self, now: std::time::SystemTime) -> Option<ToolTiming> {
+        use crate::protocol::ToolExecutionStateWire as State;
+        let execution = self.execution.as_ref()?;
+        if execution.name != "bash" {
+            return None;
+        }
+        let started = crate::state::selection::parse_rfc3339(execution.started_at.as_deref()?)?;
+        let running =
+            !self.is_terminal() && matches!(execution.state, State::Running | State::Cancelling);
+        let ended = if running {
+            now
+        } else if self.is_terminal() || execution.state.is_terminal() {
+            crate::state::selection::parse_rfc3339(execution.finished_at.as_deref()?)?
+        } else {
+            return None;
+        };
+        Some(ToolTiming {
+            elapsed: ended.duration_since(started).ok()?,
+            running,
+        })
     }
 
     pub fn accept_process_chunk(&mut self, chunk: &crate::protocol::ToolProcessChunkWire) {
@@ -850,6 +884,7 @@ impl ToolFacts {
         }
         self.result_truncated |= truncated;
         Arc::make_mut(&mut self.display).truncated |= truncated;
+        self.timing = self.bash_timing_at(std::time::SystemTime::now());
     }
 
     pub fn is_terminal(&self) -> bool {
@@ -883,6 +918,7 @@ impl ToolFacts {
         let execution_bytes = self.execution_bytes();
         if execution_bytes > budget {
             self.execution = None;
+            self.timing = None;
             Arc::make_mut(&mut self.display).truncated = true;
         } else {
             budget -= execution_bytes;
@@ -1005,6 +1041,7 @@ mod tests {
             invocation: None,
             execution: None,
             command: None,
+            timing: None,
         }
     }
 
@@ -1401,5 +1438,110 @@ mod live_line_count_tests {
         assert!(facts.command.is_none());
         assert!(facts.process_count_partial());
         assert!(facts.process_output_partial());
+    }
+}
+
+#[cfg(test)]
+mod bash_timing_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn execution(terminal: bool) -> crate::protocol::ToolExecutionWire {
+        let source = if terminal {
+            include_str!("../../tests/fixtures/agent-v1/tool-read-terminal.json")
+        } else {
+            include_str!("../../tests/fixtures/agent-v1/tool-read-running.json")
+        };
+        let value: serde_json::Value = serde_json::from_str(source).unwrap();
+        serde_json::from_value(value["result"]["execution"].clone()).unwrap()
+    }
+
+    #[test]
+    fn bash_timing_uses_each_tools_recorded_endpoints_and_survives_reopen() {
+        let wire = execution(true);
+        let start =
+            crate::state::selection::parse_rfc3339(wire.started_at.as_deref().unwrap()).unwrap();
+        let mut facts = ToolFacts::new("bash");
+        facts.accept_execution(wire.clone(), true);
+        assert_eq!(
+            facts.timing,
+            Some(ToolTiming {
+                elapsed: Duration::from_millis(2008),
+                running: false
+            })
+        );
+        for seconds in [0, 30, 86_400] {
+            assert_eq!(
+                facts.bash_timing_at(start + Duration::from_secs(seconds)),
+                facts.timing
+            );
+        }
+        let mut reopened = ToolFacts::new("bash");
+        reopened.accept_execution(wire, true);
+        assert_eq!(reopened.timing, facts.timing);
+    }
+
+    #[test]
+    fn bash_running_clock_advances_from_recorded_start_and_stops_at_finish() {
+        let wire = execution(false);
+        let start =
+            crate::state::selection::parse_rfc3339(wire.started_at.as_deref().unwrap()).unwrap();
+        let mut facts = ToolFacts::new("bash");
+        facts.accept_execution(wire.clone(), false);
+        for seconds in [0, 1, 12] {
+            assert_eq!(
+                facts.bash_timing_at(start + Duration::from_secs(seconds)),
+                Some(ToolTiming {
+                    elapsed: Duration::from_secs(seconds),
+                    running: true
+                })
+            );
+        }
+        assert!(
+            facts
+                .bash_timing_at(start - Duration::from_secs(1))
+                .is_none()
+        );
+        facts.accept_finished(crate::protocol::ToolOutcomeWire::Success, None, false);
+        assert!(
+            facts.timing.is_none(),
+            "a finish without its timestamp cannot keep running or invent Took"
+        );
+        facts.accept_execution(execution(true), false);
+        let finished = facts.timing;
+        facts.accept_started("bash");
+        facts.accept_execution(wire, false);
+        assert_eq!(
+            facts.timing, finished,
+            "late running evidence cannot restart the clock"
+        );
+    }
+
+    #[test]
+    fn bash_missing_invalid_or_reversed_times_never_invent_zero_seconds() {
+        for (start, end) in [
+            (None, None),
+            (Some("invalid"), None),
+            (Some("2026-09-18T08:38:25Z"), None),
+            (Some("2026-09-18T08:38:25Z"), Some("invalid")),
+            (Some("2026-09-18T08:38:25Z"), Some("2026-09-18T08:38:24Z")),
+        ] {
+            let mut wire = execution(true);
+            wire.started_at = start.map(str::to_owned);
+            wire.finished_at = end.map(str::to_owned);
+            let mut facts = ToolFacts::new("bash");
+            facts.accept_execution(wire, true);
+            assert!(facts.timing.is_none());
+        }
+        let mut facts = ToolFacts::new("bash");
+        facts.accept_started("bash");
+        assert!(facts.timing.is_none());
+        let mut wire = execution(true);
+        wire.name = "read".into();
+        facts.accept_execution(wire, true);
+        assert!(
+            facts.timing.is_none(),
+            "other tools keep their existing presentation"
+        );
     }
 }

@@ -94,7 +94,7 @@ fn inline_bash_updates_before_finish_autofolds_and_preserves_manual_expansion() 
     chunk(&mut app, &key, Stream::Stdout, 9, &more);
     let (text, folded) = render(&app, 80);
     assert!(folded);
-    assert!(text.contains("22 lines hidden"), "{text}");
+    assert!(text.contains("16 earlier lines"), "{text}");
     chunk(
         &mut app,
         &key,
@@ -102,7 +102,7 @@ fn inline_bash_updates_before_finish_autofolds_and_preserves_manual_expansion() 
         9 + more.len() as u64,
         "\nnext",
     );
-    assert!(render(&app, 80).0.contains("23 lines hidden"));
+    assert!(render(&app, 80).0.contains("17 earlier lines"));
     Arc::make_mut(&mut app.active_session_mut().unwrap().tool_folds)
         .insert(key.clone(), FoldOverride::Expanded);
     chunk(
@@ -265,7 +265,8 @@ fn rendered_frame_has_one_short_command_but_preserves_clipped_and_multiline_inpu
         assert_eq!(text.matches("cargo build").count(), 1);
         Arc::make_mut(&mut app.active_session_mut().unwrap().tool_folds)
             .insert(key, FoldOverride::Collapsed);
-        assert!(render(&app, width).0.contains("2 lines hidden"));
+        assert!(render(&app, width).0.contains("result"));
+        assert!(!render(&app, width).0.contains("lines hidden"));
         for command in [
             "cargo build\n".to_owned(),
             "cargo build\ncargo test".to_owned(),
@@ -368,7 +369,7 @@ fn cached_durable_stream_crosses_fold_threshold_and_reuses_unrelated_history() {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("22 lines hidden"));
+        assert!(text.contains("16 earlier lines"));
         let old = &previous
             .layout
             .sections
@@ -528,4 +529,209 @@ fn late_invocation_and_terminal_execution_refresh_cached_fallback_body() {
             .result
             .is_none()
     );
+}
+
+#[test]
+fn bash_elapsed_tick_updates_only_its_card_without_reset_or_new_output() {
+    for durable in [false, true] {
+        let (mut app, key) = fixture("sleep 3");
+        let wire: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/agent-v1/tool-read-running.json"
+        ))
+        .unwrap();
+        let mut execution: crate::protocol::ToolExecutionWire =
+            serde_json::from_value(wire["result"]["execution"].clone()).unwrap();
+        execution.tool_ref = (&key).into();
+        let start =
+            crate::state::selection::parse_rfc3339(execution.started_at.as_deref().unwrap())
+                .unwrap();
+        app.accept_tool_execution(execution, false);
+        let view = app.active_session_mut().unwrap();
+        view.scroll.follow_tail = false;
+        view.scroll.new_content = false;
+        view.transcript.push_block(TranscriptBlock::User(UserBlock {
+            index: Some(0),
+            loop_id: Some("earlier".into()),
+            kind: crate::protocol::UserMessageKindWire::Prompt,
+            text: "Earlier unrelated history".into(),
+            pending: false,
+        }));
+        if durable {
+            view.transcript.push_block(TranscriptBlock::Tool(ToolBlock {
+                index: Some(1),
+                loop_id: key.loop_id.clone(),
+                request_index: 0,
+                tool_call_id: key.tool_call_id.clone(),
+                name: "bash".into(),
+                result: None,
+                outcome: None,
+                live_status: Some(ToolStatus::Running),
+                progress: None,
+                expanded: false,
+            }));
+        }
+        let facts = Arc::make_mut(
+            Arc::make_mut(&mut view.tool_presentations)
+                .get_mut(&key)
+                .unwrap(),
+        );
+        facts.timing = facts.bash_timing_at(start + Duration::from_millis(1250));
+        let prepared = transcript::prepare_conversation(&app, 80);
+        assert!(
+            prepared
+                .lines()
+                .iter()
+                .any(|line| line.to_string().contains("Elapsed 1.2s"))
+        );
+        let old_durable = prepared.durable.clone().unwrap();
+        app.install_conversation(prepared);
+        let revision = app.active_view().unwrap().transcript.render_revision;
+        app.refresh_bash_timers(start + Duration::from_millis(1750));
+        assert!(
+            app.prepared_conversation.is_some(),
+            "redraws in the same second reuse their preparation"
+        );
+        assert_eq!(
+            app.active_view().unwrap().transcript.render_revision,
+            revision
+        );
+        app.refresh_bash_timers(start + Duration::from_millis(2250));
+        assert!(app.prepared_conversation.is_none());
+        assert_eq!(
+            app.active_view().unwrap().transcript.render_revision != revision,
+            durable
+        );
+        let prepared = transcript::prepare_conversation(&app, 80);
+        assert!(
+            prepared
+                .lines()
+                .iter()
+                .any(|line| line.to_string().contains("Elapsed 2.2s"))
+        );
+        let old_user = &old_durable
+            .layout
+            .sections
+            .iter()
+            .find(|s| s.layout.key.section.kind == SectionKind::User)
+            .unwrap()
+            .layout;
+        let new_user = &prepared
+            .durable
+            .as_ref()
+            .unwrap()
+            .layout
+            .sections
+            .iter()
+            .find(|s| s.layout.key.section.kind == SectionKind::User)
+            .unwrap()
+            .layout;
+        assert!(
+            Arc::ptr_eq(old_user, new_user),
+            "the timer reuses unrelated history"
+        );
+        app.install_conversation(prepared);
+        assert!(!app.active_view().unwrap().scroll.new_content);
+        app.update(AppEvent::Tick);
+        assert!(
+            app.prepared_conversation.is_none(),
+            "the existing busy Tick drives tool timers"
+        );
+        assert!(!app.active_view().unwrap().scroll.new_content);
+
+        let wire: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/agent-v1/tool-read-terminal.json"
+        ))
+        .unwrap();
+        let mut execution: crate::protocol::ToolExecutionWire =
+            serde_json::from_value(wire["result"]["execution"].clone()).unwrap();
+        execution.tool_ref = (&key).into();
+        app.accept_tool_execution(execution, false);
+        let prepared = transcript::prepare_conversation(&app, 80);
+        assert!(
+            prepared
+                .lines()
+                .iter()
+                .any(|line| line.to_string().contains("Took 2.0s"))
+        );
+        app.install_conversation(prepared);
+        app.refresh_bash_timers(start + Duration::from_secs(86_400));
+        assert!(
+            app.prepared_conversation.is_some(),
+            "a completed duration stops ticking"
+        );
+    }
+}
+
+#[test]
+fn collapsed_bash_soft_wrap_copy_and_fold_restore_full_source() {
+    for durable in [false, true] {
+        let (mut app, key) = fixture("printf output");
+        let output = format!("PREFIX\n{}\nEND", "中👨‍👩‍👧e\u{301}".repeat(40));
+        let facts = app.tool_facts_mut(&key, "bash").unwrap();
+        facts.accept_finished(
+            crate::protocol::ToolOutcomeWire::Success,
+            Some(Arc::from(output.as_str())),
+            false,
+        );
+        let view = app.active_session_mut().unwrap();
+        if durable {
+            view.transcript.push_block(TranscriptBlock::Tool(ToolBlock {
+                index: Some(1),
+                loop_id: key.loop_id.clone(),
+                request_index: 0,
+                tool_call_id: key.tool_call_id.clone(),
+                name: "bash".into(),
+                result: Some(Arc::from(output.as_str())),
+                outcome: Some(crate::protocol::ToolOutcomeWire::Success),
+                live_status: None,
+                progress: None,
+                expanded: false,
+            }));
+        }
+        Arc::make_mut(&mut view.tool_folds).insert(key.clone(), FoldOverride::Collapsed);
+        for width in [24, 60, 80, 120] {
+            let prepared = transcript::prepare_conversation(&app, width);
+            let section = prepared
+                .sections
+                .iter()
+                .find(|s| s.id.tool_call_id.as_deref() == Some("build"))
+                .unwrap();
+            let rows: Vec<_> = prepared
+                .copy_ranges
+                .iter()
+                .filter(|copy| {
+                    section.rows.contains(&copy.row)
+                        && !copy.decorative
+                        && copy.columns.start == crate::ui::rail::SURFACE_CONTENT_START + 2
+                })
+                .collect();
+            assert!(rows.len() <= 5);
+            let mut copied = String::new();
+            let mut hard_break = false;
+            for row in &rows {
+                if hard_break {
+                    copied.push('\n');
+                }
+                copied.push_str(row.text);
+                hard_break = row.hard_break_after;
+            }
+            assert!(output.ends_with(&copied), "{copied:?}");
+            assert!(!copied.contains("earlier lines") && !copied.contains("ctrl+o"));
+            assert_eq!(rows[0].source_offset, output.len() - copied.len());
+        }
+        app.update(AppEvent::ToggleTool {
+            session_id: key.session_id.clone(),
+            loop_id: key.loop_id.clone(),
+            request_index: key.request_index,
+            tool_call_id: key.tool_call_id.clone(),
+        });
+        let (text, folded) = render(&app, 80);
+        assert!(!folded && text.contains("PREFIX") && text.contains("END"));
+        assert_eq!(
+            app.active_view().unwrap().tool_presentations[&key]
+                .result
+                .as_deref(),
+            Some(output.as_str())
+        );
+    }
 }
