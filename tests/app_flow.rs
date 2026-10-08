@@ -5851,8 +5851,8 @@ fn failed_tool_survives_live_finished_wait_and_history_with_folded_geometry() {
         .join("\n");
     assert!(collapsed_text.contains("bash"));
     assert!(collapsed_text.contains("$ failing command"));
-    assert!(!collapsed_text.contains("tool execution failed"));
-    assert!(collapsed_text.contains("Lines unknown"));
+    assert!(collapsed_text.contains("tool execution failed"));
+    assert!(!collapsed_text.contains("Lines unknown"));
     assert!(!collapsed_text.contains("ctrl+o expand"));
 
     let prepared = minicore_tui::ui::transcript::prepare_conversation(&driver.app, 100);
@@ -5866,6 +5866,10 @@ fn failed_tool_survives_live_finished_wait_and_history_with_folded_geometry() {
                 && section.id.history_index.is_none()
         })
         .expect("failed live tool section");
+    assert!(
+        tool_section.folded,
+        "short error tail remains a collapsed card"
+    );
     let screen = minicore_tui::ui::layout::screen_layout(
         &driver.app,
         ratatui::layout::Rect::new(0, 0, 100, 24),
@@ -6051,8 +6055,8 @@ fn failed_tool_survives_live_finished_wait_and_history_with_folded_geometry() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(final_collapsed_text.contains("bash"));
-    assert!(!final_collapsed_text.contains("tool failed"));
-    assert!(final_collapsed_text.contains("Lines unknown"));
+    assert!(final_collapsed_text.contains("tool failed"));
+    assert!(!final_collapsed_text.contains("Lines unknown"));
 }
 
 #[test]
