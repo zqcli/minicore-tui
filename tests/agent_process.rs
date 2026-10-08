@@ -169,6 +169,62 @@ fn fake_emit_stdout_flood(out: &mut impl Write) {
     eprintln!("stdout flood complete");
 }
 
+/// Presentation-only stream before the turn.send ACK. These synthetic bytes
+/// never execute a tool or touch the workspace.
+fn fake_argument_previews(out: &mut impl Write, session_id: &str, loop_id: &str) {
+    let turn = fake_turn_ref(session_id, loop_id);
+    let meta = fake_meta(session_id);
+    for value in [
+        json!({"type":"turn_started","data":{"turn":turn,"meta":meta}}),
+        json!({"type":"request_started","data":{"turn":turn,"request_index":0,"config_revision":0,"model":"fake","reasoning":"auto","meta":meta}}),
+    ] {
+        fake_write_line(
+            out,
+            &json!({"jsonrpc":"2.0","method":"agent.event","params":value}),
+        );
+    }
+    let body = (1..=12)
+        .map(|n| format!("generated-line-{n:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for (id, name, revision, state, input) in [
+        ("read-preview", "read", 1, "generating", ""),
+        ("edit-preview", "edit", 1, "generating", ""),
+        ("write-preview", "write", 1, "generating", "first fragment"),
+        ("write-preview", "write", 3, "generating", body.as_str()),
+        ("write-preview", "write", 2, "generating", "stale fragment"),
+        ("write-preview", "write", 4, "generated", body.as_str()),
+    ] {
+        let preview = json!({"type":"tool_arguments_preview","data":{
+            "turn":turn,"request_index":0,"tool_call_id":id,"tool_name":name,"attempt":7,"revision":revision,"state":state,"partial":false,
+            "display":{"detail":"fake.rs:3-5","expanded_input":input},"meta":meta}});
+        fake_write_line(
+            out,
+            &json!({"jsonrpc":"2.0","method":"agent.event","params":preview}),
+        );
+    }
+    let invocation = json!({"type":"tool_invocation","data":{"turn":turn,"meta":meta,"data":{
+        "tool_ref":{"session_id":session_id,"loop_id":loop_id,"request_index":0,"tool_call_id":"write-preview"},"name":"write",
+        "subject":{"kind":"file","path":"fake.rs"},"subject_truncated":false,
+        "input":{"total_bytes":2,"preview":"{}","truncated":false,"encoding":"utf8_json"}}}});
+    fake_write_line(
+        out,
+        &json!({"jsonrpc":"2.0","method":"agent.event","params":invocation}),
+    );
+    let late = json!({"type":"tool_arguments_preview","data":{
+        "turn":turn,"request_index":0,"tool_call_id":"write-preview","tool_name":"write","attempt":7,"revision":5,"state":"generating","partial":false,
+        "display":{"detail":"late-fake.rs","expanded_input":"must never replace real invocation"},"meta":meta}});
+    fake_write_line(
+        out,
+        &json!({"jsonrpc":"2.0","method":"agent.event","params":late}),
+    );
+    let terminal = json!({"type":"turn_finished","data":{"turn":turn,"outcome":{"type":"completed"},"persistence":"persisted","meta":meta}});
+    fake_write_line(
+        out,
+        &json!({"jsonrpc":"2.0","method":"agent.event","params":terminal}),
+    );
+}
+
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let mut config: Option<String> = None;
@@ -338,7 +394,10 @@ fn serve(mode: &str) -> ExitCode {
                     .unwrap_or("ses_fake_1");
                 let loop_id = format!("loop_fake_{turn_counter}");
                 let turn = fake_turn_ref(session_id, &loop_id);
-                if mode == "events_first" {
+                if mode == "arguments_preview" {
+                    fake_argument_previews(&mut out, session_id, &loop_id);
+                    fake_respond(&mut out, &id, json!({"turn": turn}));
+                } else if mode == "events_first" {
                     fake_emit_events(&mut out, session_id, &loop_id);
                     fake_respond(&mut out, &id, json!({"turn": turn}));
                 } else {

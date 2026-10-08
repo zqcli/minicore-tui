@@ -164,6 +164,13 @@ impl App {
         let Some(view) = self.sessions.known.get(&key.session_id) else {
             return Vec::new();
         };
+        if view
+            .tool_presentations
+            .get(&key)
+            .is_some_and(|facts| facts.arguments_preview.is_some())
+        {
+            return Vec::new();
+        }
         let epoch = view.session_epoch;
         self.close_main_detail();
         self.capture_scroll_anchor();
@@ -336,6 +343,12 @@ impl App {
         self.poll_tool_detail()
     }
     pub(super) fn poll_tool_detail(&mut self) -> Vec<AppCommand> {
+        if self
+            .tool_facts()
+            .is_some_and(|facts| facts.arguments_preview.is_some())
+        {
+            return Vec::new();
+        }
         if self.tool_facts().is_some_and(|facts| facts.needs_read) {
             let now = self.instant_now();
             if let MainView::ToolDetail(detail) = &mut self.main_view {
@@ -560,6 +573,7 @@ impl App {
         let name = invocation.name.clone();
         let changed = if let Some(facts) = self.tool_facts_mut(&key, &name) {
             let before = crate::ui::tool::facts_revision(facts);
+            facts.promote_arguments_preview(&name);
             facts.input_available = true;
             facts.invocation = Some(Arc::new(invocation));
             before != crate::ui::tool::facts_revision(facts)
@@ -568,6 +582,7 @@ impl App {
         };
         if changed {
             if let Some(view) = self.sessions.known.get_mut(&key.session_id) {
+                Self::sync_live_arguments_upgrade(view, &key);
                 Self::invalidate_durable_tool(view, &key);
             }
         }
@@ -588,6 +603,7 @@ impl App {
         };
         if changed {
             if let Some(view) = self.sessions.known.get_mut(&key.session_id) {
+                Self::sync_live_arguments_upgrade(view, &key);
                 Self::invalidate_durable_tool(view, &key);
             }
         }

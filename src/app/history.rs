@@ -1378,6 +1378,17 @@ impl App {
 
     pub(crate) fn enforce_tool_budget(&mut self) {
         for view in self.sessions.known.values_mut() {
+            // Speculation is the first owner released under global pressure;
+            // keep bounded tombstones so late snapshots cannot undo eviction.
+            if view
+                .tool_presentations
+                .values()
+                .map(|facts| facts.retained_bytes())
+                .sum::<usize>()
+                > crate::limits::TOOL_TOTAL_BYTES
+            {
+                Self::clear_arguments_previews(view);
+            }
             let presentations = std::sync::Arc::make_mut(&mut view.tool_presentations);
             let mut changed = std::collections::HashSet::new();
             for (key, state) in presentations.iter_mut() {

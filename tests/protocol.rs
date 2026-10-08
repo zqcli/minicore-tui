@@ -246,3 +246,43 @@ fn compaction_origin_is_optional_and_explicit_origin_wins_over_id() {
         );
     }
 }
+
+#[test]
+fn argument_preview_wire_is_additive_and_debug_redacts_content() {
+    use minicore_tui::protocol::{
+        AgentEventWire, REQUIRED_CAPABILITIES, ToolArgumentsPreviewStateWire,
+    };
+    assert!(!REQUIRED_CAPABILITIES.contains(&"tool.arguments.preview"));
+    let frame = serde_json::json!({"jsonrpc":"2.0","method":"agent.event","params":{"type":"tool_arguments_preview","data":{
+        "turn":{"session_id":"session","loop_id":"loop"},"request_index":2,"tool_call_id":"call","tool_name":"write",
+        "attempt":18446744073709551615u64,"revision":18446744073709551615u64,"state":"generated","partial":true,
+        "display":{"detail":"PRIVATE_PATH","expanded_input":"PRIVATE_BODY","body_truncated":true},
+        "meta":{"session_id":"session","loop_id":"loop","dropped_before":3}}}});
+    let decoded = parse_frame(&serde_json::to_vec(&frame).unwrap()).unwrap();
+    let IncomingFrame::Notification(RpcNotification::AgentEvent(
+        AgentEventWire::ToolArgumentsPreview { data },
+    )) = decoded
+    else {
+        panic!("expected preview");
+    };
+    assert_eq!(data.attempt, u64::MAX);
+    assert_eq!(data.revision, u64::MAX);
+    assert_eq!(data.state, ToolArgumentsPreviewStateWire::Generated);
+    assert_eq!(data.request_index, 2);
+    assert!(data.partial && data.display.body_truncated);
+    let debug = format!("{data:?}");
+    assert!(!debug.contains("PRIVATE_PATH"));
+    assert!(!debug.contains("PRIVATE_BODY"));
+    let mut malformed = frame;
+    malformed["params"]["data"]["state"] = serde_json::json!("validated");
+    assert!(parse_frame(&serde_json::to_vec(&malformed).unwrap()).is_err());
+}
+
+#[test]
+fn preview_capability_is_optional_for_old_agent_handshake() {
+    use minicore_tui::protocol::{PingResult, REQUIRED_CAPABILITIES, validate_backend};
+    let mut ping: PingResult = serde_json::from_value(serde_json::json!({"version":"0.6.2","protocol_version":1,"capabilities":REQUIRED_CAPABILITIES})).unwrap();
+    assert_eq!(validate_backend(&ping), Ok(()));
+    ping.capabilities.push("tool.arguments.preview".into());
+    assert_eq!(validate_backend(&ping), Ok(()));
+}

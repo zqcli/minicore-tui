@@ -301,6 +301,7 @@ pub struct SessionView {
     /// COW map whose values remain individually shared. Layout snapshots can
     /// retain the table without cloning large tool result/display strings.
     pub tool_presentations: Arc<HashMap<ToolKey, Arc<ToolFacts>>>,
+    pub arguments_preview_fence: Option<crate::state::tool::ArgumentsPreviewFence>,
     /// Stable per-section fold choices. These are local UI state only.
     pub tool_folds: Arc<HashMap<ToolKey, FoldOverride>>,
     pub reasoning_folds: Arc<HashMap<ReasoningKey, FoldOverride>>,
@@ -382,6 +383,7 @@ impl SessionView {
             gap_revision: 0,
             tools_expanded: false,
             tool_presentations: Arc::new(HashMap::new()),
+            arguments_preview_fence: None,
             tool_folds: Arc::new(HashMap::new()),
             reasoning_folds: Arc::new(HashMap::new()),
             summary_folds: Arc::new(HashMap::new()),

@@ -87,6 +87,9 @@ mod panels_tests;
 pub mod queries;
 pub mod search;
 pub mod session;
+mod tool_preview;
+#[cfg(test)]
+mod tool_preview_tests;
 mod tool_timing;
 pub mod turn;
 pub mod ui_actions;
@@ -1537,6 +1540,7 @@ impl App {
             AppEvent::HistoryItemDecoded(outcome) => self.on_history_item_decoded(*outcome),
             AppEvent::LocalScanFinished(outcome) => self.on_local_scan_finished(*outcome),
         });
+        self.reconcile_arguments_previews();
         self.reconcile_help_return();
         // Remember a confirmed empty beginning in the reducer, not render.
         // Opening the creation form above another session must not mark that
@@ -6842,6 +6846,7 @@ impl App {
             AgentEventWire::RequestUsage { data } => Some(data.meta.session_id.as_str()),
             AgentEventWire::SteerProgress { data } => Some(data.meta.session_id.as_str()),
             AgentEventWire::OutputDelta { data } => Some(data.meta.session_id.as_str()),
+            AgentEventWire::ToolArgumentsPreview { data } => Some(data.meta.session_id.as_str()),
             AgentEventWire::ToolStarted { data } => Some(data.meta.session_id.as_str()),
             AgentEventWire::ToolPresentation { data } => Some(data.meta.session_id.as_str()),
             AgentEventWire::ToolProgress { data } => Some(data.meta.session_id.as_str()),
@@ -6903,6 +6908,9 @@ impl App {
                 (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
             }
             AgentEventWire::OutputDelta { data } => {
+                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
+            }
+            AgentEventWire::ToolArgumentsPreview { data } => {
                 (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
             }
             AgentEventWire::ToolStarted { data } => {
@@ -6988,8 +6996,12 @@ impl App {
             AgentEventWire::SessionClosed { data } => {
                 // This best-effort event is not a completion or persistence
                 // proof; retain live/result state until the lifecycle owner
-                // explicitly reopens the session.
+                // explicitly reopens the session. Speculative arguments may
+                // be discarded without claiming an execution outcome.
                 self.mark_gap(&data.meta);
+                if let Some(view) = self.sessions.known.get_mut(&data.session_id) {
+                    Self::close_arguments_previews(view, data.meta.loop_id.as_deref());
+                }
             }
             AgentEventWire::SessionState { data } => {
                 self.mark_gap(&data.meta);
@@ -7041,6 +7053,10 @@ impl App {
             AgentEventWire::OutputDelta { data } => {
                 self.mark_gap(&data.meta);
                 self.append_delta(&data.turn, data.request_index, &data.channel, &data.delta);
+            }
+            AgentEventWire::ToolArgumentsPreview { data } => {
+                self.mark_gap(&data.meta);
+                self.on_tool_arguments_preview(*data);
             }
             AgentEventWire::ToolStarted { data } => {
                 self.mark_gap(&data.meta);
@@ -7102,6 +7118,9 @@ impl App {
             }
             AgentEventWire::TurnFinished { data } => {
                 self.mark_gap(&data.meta);
+                if let Some(view) = self.sessions.known.get_mut(&data.turn.session_id) {
+                    Self::close_arguments_previews(view, Some(&data.turn.loop_id));
+                }
             }
             AgentEventWire::Unknown => {}
         }
@@ -7150,6 +7169,7 @@ impl App {
         if !Self::bind_live_turn(view, turn) {
             return;
         }
+        Self::advance_arguments_preview_request(view, turn, request_index);
         let live = view.live.as_mut().expect("live turn was bound");
         let current_loop_id = live.reference.as_ref().map(|r| r.loop_id.clone());
         let evidence = {
@@ -7264,6 +7284,7 @@ impl App {
                 presentations.insert(
                     key.clone(),
                     std::sync::Arc::new(ToolPresentationState {
+                        arguments_preview: None,
                         display: Arc::new(ToolDisplayWire {
                             body_truncated: false,
                             detail: tool_name.to_owned(),
@@ -7523,6 +7544,7 @@ impl App {
             presentations.insert(
                 key.clone(),
                 std::sync::Arc::new(ToolPresentationState {
+                    arguments_preview: None,
                     display: Arc::new(ToolDisplayWire {
                         body_truncated: false,
                         detail: fallback_name,
@@ -7624,6 +7646,7 @@ impl App {
         let presentations = std::sync::Arc::make_mut(&mut view.tool_presentations);
         let state = presentations.entry(key).or_insert_with(|| {
             std::sync::Arc::new(ToolPresentationState {
+                arguments_preview: None,
                 display: Arc::clone(&display_owner),
                 result: existing_result
                     .as_ref()
@@ -7650,6 +7673,7 @@ impl App {
             })
         });
         let state = std::sync::Arc::make_mut(state);
+        state.promote_arguments_preview(tool_name);
         state.display = Arc::clone(&display_owner);
         let display_for_live = Arc::clone(&state.display);
         let _ = state;
@@ -7837,10 +7861,15 @@ fn install_history_item(
             return None;
         }
         let key = ToolKey::from(&summary.tool_ref);
+        let was_preview = view
+            .tool_presentations
+            .get(&key)
+            .is_some_and(|facts| facts.arguments_preview.is_some());
         let facts = Arc::make_mut(&mut view.tool_presentations)
-            .entry(key)
+            .entry(key.clone())
             .or_insert_with(|| Arc::new(crate::state::tool::ToolFacts::new(&summary.name)));
         let facts = Arc::make_mut(facts);
+        facts.promote_arguments_preview(&summary.name);
         let display = Arc::make_mut(&mut facts.display);
         if display.expanded_input.is_none() {
             display.detail = summary.display.detail.clone();
@@ -7866,6 +7895,9 @@ fn install_history_item(
             .map(|(input, output)| input.saturating_add(output));
         if facts.inline.is_none() && facts.result.is_none() {
             facts.body_deferred = true;
+        }
+        if was_preview {
+            App::sync_live_arguments_upgrade(view, &key);
         }
     }
 
@@ -7926,6 +7958,22 @@ fn install_history_item(
             Some(owner)
         }
         RuntimeItem::Assistant(assistant) => {
+            let calls: Vec<_> = assistant
+                .content
+                .iter()
+                .filter_map(|part| match part {
+                    RuntimeAssistantPart::ToolCall {
+                        tool_call_id, name, ..
+                    } => Some((tool_call_id.as_str(), name.as_str())),
+                    _ => None,
+                })
+                .collect();
+            App::settle_arguments_previews(
+                view,
+                &assistant.loop_id,
+                assistant.request_index,
+                &calls,
+            );
             // Canonical reads contain arguments, unlike the old display DTO.
             // Retain only the bounded whitelist before discarding those args.
             for part in &assistant.content {
@@ -7947,6 +7995,7 @@ fn install_history_item(
                             .entry(key)
                             .or_insert_with(|| Arc::new(crate::state::tool::ToolFacts::new(name)));
                         let facts = Arc::make_mut(facts);
+                        facts.promote_arguments_preview(name);
                         // Preserve richer live/event metadata when reconciling.
                         if facts.display.detail == *name
                             || facts.display.detail == format!("tool {name}")
@@ -8055,6 +8104,7 @@ fn install_history_item(
                 let presentations = std::sync::Arc::make_mut(&mut view.tool_presentations);
                 let state = presentations.entry(tool_key.clone()).or_insert_with(|| {
                     std::sync::Arc::new(ToolPresentationState {
+                        arguments_preview: None,
                         display: Arc::new(ToolDisplayWire {
                             body_truncated: false,
                             detail: result.tool_name.clone(),

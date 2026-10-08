@@ -794,6 +794,9 @@ impl App {
     /// late authoritative outcome can still be retained; all other responses
     /// are consumed as stale and their read slot is released normally.
     pub(super) fn retire_session_operations(&mut self, session_id: &SessionId) {
+        if let Some(view) = self.sessions.known.get_mut(session_id) {
+            Self::close_arguments_previews(view, None);
+        }
         let stale_ids: Vec<RequestId> = self
             .pending_requests
             .iter()
@@ -2401,6 +2404,12 @@ impl App {
                     .is_some_and(|live| live.local_submission == LocalSubmissionId(u64::MAX))
             {
                 view.live = None;
+            }
+            if matches!(
+                state.status,
+                SessionStatusWire::Idle | SessionStatusWire::Blocked | SessionStatusWire::Finishing
+            ) {
+                Self::close_arguments_previews(view, None);
             }
             view.state = Some(state.clone());
             if source == SessionStateSource::FreshResponse

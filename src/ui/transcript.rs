@@ -2336,7 +2336,12 @@ impl LiveRenderContext<'_> {
             self.width,
             true,
             folded,
-            tool.result.as_deref().unwrap_or(&tool.name),
+            self.view
+                .tool_presentations
+                .get(&key)
+                .filter(|facts| facts.arguments_preview.is_some())
+                .and_then(|facts| facts.display.expanded_input.as_deref())
+                .unwrap_or_else(|| tool.result.as_deref().unwrap_or(&tool.name)),
             Some(&breaks),
             Some(&rendered.copy_cells),
         );

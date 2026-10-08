@@ -30,3 +30,9 @@ These are the explicit 0.3.0 boundaries, not hidden fallback behavior:
 - The durable render cache is an update-installed owner-level cache rather than
   a virtual DOM or full terminal-cell cache. It uses bounded layout/history
   budgets and safe fallback rendering while asynchronous preparation is pending.
+- Optional read/edit/write argument previews are best-effort, unvalidated,
+  bounded snapshots. Generated arguments do not imply execution. Missing or
+  truncated content cannot be recovered by expanding the preview. Older
+  Agents remain usable without this optional feature. This implementation
+  does not calculate speculative edit diffs or introduce execution output
+  streaming for read/edit/write.
