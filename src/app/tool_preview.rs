@@ -79,7 +79,16 @@ impl App {
     }
 
     pub(super) fn close_arguments_previews(view: &mut SessionView, loop_id: Option<&str>) {
-        if let Some(loop_id) = loop_id {
+        // A terminal session-state observation may precede every preview.
+        // Closing the current bound loop must still install a tombstone;
+        // otherwise a delayed first snapshot could recreate a generating card.
+        // Explicit loop identities retain the stale-loop guard below.
+        let bound_loop_id = view
+            .live
+            .as_ref()
+            .and_then(|live| live.reference.as_ref())
+            .map(|turn| turn.loop_id.clone());
+        if let Some(loop_id) = loop_id.or(bound_loop_id.as_deref()) {
             if view
                 .arguments_preview_fence
                 .as_ref()

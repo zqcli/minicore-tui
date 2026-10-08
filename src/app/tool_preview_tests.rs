@@ -718,3 +718,81 @@ fn matching_session_terminal_notices_clear_previews_but_stale_loop_notices_do_no
         );
     }
 }
+
+#[test]
+fn terminal_session_state_before_first_snapshot_closes_the_bound_loop() {
+    for status in ["idle", "blocked", "finishing"] {
+        let (mut app, key) = fixture();
+        let notification = |loop_id: &str| {
+            let active = if status == "finishing" {
+                json!({"loop_id":key.loop_id,"status":"finishing","request_index":0,"config_revision":0,"model":null,"pending_interaction":null})
+            } else {
+                Value::Null
+            };
+            json!({"type":"session_state","data":{
+                "state":{"session_id":key.session_id,"status":status,"active_loop":active,"block_reason":Value::Null},
+                "meta":{"session_id":key.session_id,"loop_id":loop_id,"dropped_before":0}}})
+        };
+        // An explicitly older loop cannot install a terminal fence for this one.
+        notify(&mut app, notification("older-loop"));
+        assert!(app.active_view().unwrap().arguments_preview_fence.is_none());
+        notify(&mut app, notification(&key.loop_id));
+        assert_eq!(
+            app.active_view().unwrap().state.as_ref().unwrap().status,
+            serde_json::from_value::<SessionStatusWire>(json!(status)).unwrap()
+        );
+        let fence = app
+            .active_view()
+            .unwrap()
+            .arguments_preview_fence
+            .as_ref()
+            .unwrap();
+        assert!(fence.closed);
+        assert!(fence.calls.is_empty());
+        assert_eq!(fence.loop_id, key.loop_id);
+        for generation in ["generating", "generated"] {
+            // A new attempt and request number cannot reopen the terminal loop.
+            let later = ToolKey::new(&key.session_id, &key.loop_id, 9, "late-call");
+            preview(
+                &mut app,
+                &later,
+                99,
+                8,
+                generation,
+                "late after terminal state",
+            );
+            assert_eq!(count_tools(&app), 0, "late snapshot survived {status}");
+        }
+    }
+}
+
+#[test]
+fn session_closed_without_loop_before_preview_closes_only_current_bound_loop() {
+    let (mut app, key) = fixture();
+    notify(
+        &mut app,
+        json!({"type":"session_closed","data":{
+        "session_id":key.session_id,"meta":{"session_id":key.session_id,"dropped_before":0}}}),
+    );
+    preview(&mut app, &key, 5, 1, "generated", "late after close");
+    assert_eq!(count_tools(&app), 0);
+    assert!(
+        app.active_view()
+            .unwrap()
+            .arguments_preview_fence
+            .as_ref()
+            .unwrap()
+            .closed
+    );
+    // The gate is scoped to the old bound loop, not a permanent session flag.
+    let next = ToolKey::new(&key.session_id, "new-bound-loop", 0, "new-call");
+    let live = app.active_session_mut().unwrap().live.as_mut().unwrap();
+    live.reference = Some(TurnRef {
+        session_id: next.session_id.clone(),
+        loop_id: next.loop_id.clone(),
+    });
+    live.requests.clear();
+    app.reconcile_arguments_previews();
+    preview(&mut app, &next, 6, 1, "generating", "current live loop");
+    assert_eq!(count_tools(&app), 1);
+}
