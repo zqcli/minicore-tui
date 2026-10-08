@@ -519,6 +519,42 @@ impl App {
         }
     }
 
+    /// Reuse the existing busy tick, at most once per elapsed second. A timer
+    /// change only invalidates its owning card; it is not incoming output.
+    pub(super) fn refresh_bash_timers(&mut self, now: std::time::SystemTime) {
+        let changes: Vec<_> = self.active_view().map_or_else(Vec::new, |view| {
+            view.tool_presentations
+                .iter()
+                .filter_map(|(key, facts)| {
+                    let previous = facts.timing?;
+                    if !previous.running {
+                        return None;
+                    }
+                    let next = facts.bash_timing_at(now);
+                    if next.is_some_and(|next| {
+                        next.running && next.elapsed.as_secs() == previous.elapsed.as_secs()
+                    }) {
+                        return None;
+                    }
+                    Some((key.clone(), next))
+                })
+                .collect()
+        });
+        if changes.is_empty() {
+            return;
+        }
+        self.capture_scroll_anchor();
+        self.prepared_conversation = None;
+        if let Some(view) = self.active_session_mut() {
+            for (key, timing) in changes {
+                if let Some(facts) = Arc::make_mut(&mut view.tool_presentations).get_mut(&key) {
+                    Arc::make_mut(facts).timing = timing;
+                }
+                Self::invalidate_durable_tool(view, &key);
+            }
+        }
+    }
+
     pub(super) fn accept_tool_invocation(&mut self, invocation: ToolInvocationWire) {
         let key = ToolKey::from(&invocation.tool_ref);
         let name = invocation.name.clone();

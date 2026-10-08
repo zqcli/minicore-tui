@@ -18,6 +18,8 @@ use crate::ui::rail::{self, ToolSurfaceState};
 pub struct RenderedTool {
     pub lines: Vec<Line<'static>>,
     pub copy_cells: Vec<Option<CopyCells>>,
+    /// Present for the Bash tail, whose visual wraps must copy without newlines.
+    pub hard_breaks: Vec<bool>,
 }
 
 /// Compatibility entry points for callers without structured execution facts.
@@ -202,6 +204,7 @@ pub fn facts_revision(facts: &crate::state::tool::ToolFacts) -> u64 {
         })
         .hash(&mut hash);
     facts.result_truncated.hash(&mut hash);
+    facts.timing.hash(&mut hash);
     hash.finish()
 }
 
@@ -237,7 +240,7 @@ fn render_card(
         colors.background = theme.page_bg;
     }
     let status = process.map_or(status.clone(), |process| format!("{status} · {process}"));
-    let title = if expanded {
+    let title = if expanded || name == "bash" {
         format!("{} · {status}", clip_summary(name, 18))
     } else {
         name.to_owned()
@@ -287,7 +290,8 @@ fn render_card(
         || input.is_some_and(|(_, partial)| partial)
         || facts
             .is_some_and(|f| f.result_truncated || f.count_partial || f.process_output_partial());
-    let footer_row;
+    let mut decorative_rows = vec![0];
+    let mut preview_rows = Vec::new();
     if expanded {
         // A complete one-line Bash command is already present in its target
         // row. Keep the body when clipping or normalization would lose bytes.
@@ -324,7 +328,7 @@ fn render_card(
                 }
             }
         }
-        footer_row = out.len();
+        decorative_rows.push(out.len());
         let load_error = facts
             .and_then(|f| f.inline.as_ref())
             .and_then(|load| load.error.as_deref());
@@ -361,8 +365,71 @@ fn render_card(
                 Style::new().fg(theme.tool_muted),
             )),
         ));
+    } else if name == "bash" {
+        let preview_width = available.saturating_sub(2).max(1);
+        let mut preview = BashPreview::default();
+        if let Some(result) = result {
+            let (text, offset) = bash_preview_result(result, facts);
+            preview.append(text, preview_width, Some(offset));
+        } else if let Some(streams) = facts.and_then(|f| f.process_output.as_ref()) {
+            // Stream windows are bounded by the existing ToolFacts owner. Keep
+            // its established stdout-then-stderr presentation order.
+            for stream in streams {
+                preview.append(&stream.display_text(), preview_width, None);
+            }
+        }
+        let mut hints = Vec::new();
+        if partial {
+            hints.push("partial".to_owned());
+        }
+        if result.is_none() && preview.rows.is_empty() {
+            hints.push("Output unknown".to_owned());
+        }
+        if preview.skipped > 0 {
+            hints.push(format!("{} earlier lines", preview.skipped));
+        }
+        let hidden_input = input.map_or(0, |(text, _)| text.lines().count().saturating_sub(1));
+        if hidden_input > 0 {
+            hints.push(format!("{hidden_input} command lines hidden"));
+        }
+        if !hints.is_empty() {
+            hints.push("ctrl+o expand".to_owned());
+            decorative_rows.push(out.len());
+            out.push(rail::surface_row(
+                width,
+                colors,
+                rail::SURFACE_CONTENT_START,
+                Line::from(Span::styled(
+                    clip_summary(&hints.join(" · "), available),
+                    Style::new().fg(theme.tool_muted),
+                )),
+            ));
+        }
+        for (text, hard_break, source_offset) in preview.rows {
+            let row = out.len();
+            let columns = rail::SURFACE_CONTENT_START + 2;
+            preview_rows.push((
+                row,
+                columns..columns + column_width(&text),
+                hard_break,
+                source_offset,
+            ));
+            out.push(rail::surface_row(
+                width,
+                colors,
+                rail::SURFACE_CONTENT_START,
+                Line::from(Span::styled(
+                    format!("  {text}"),
+                    Style::new().fg(if failed {
+                        theme.error
+                    } else {
+                        theme.tool_output
+                    }),
+                )),
+            ));
+        }
     } else {
-        footer_row = out.len();
+        decorative_rows.push(out.len());
         let input_count = facts.and_then(|f| f.input_line_count());
         let input_lines = input_count
             .map(|(count, _)| count)
@@ -410,14 +477,123 @@ fn render_card(
             )),
         ));
     }
+    if name == "bash" {
+        if let Some(timing) = facts.and_then(|facts| facts.timing) {
+            decorative_rows.push(out.len());
+            let text = format!(
+                "{} {}",
+                if timing.running { "Elapsed" } else { "Took" },
+                format_bash_duration(timing.elapsed)
+            );
+            out.push(rail::surface_row(
+                width,
+                colors,
+                rail::SURFACE_CONTENT_START,
+                Line::from(Span::styled(
+                    clip_summary(&text, available),
+                    Style::new().fg(theme.tool_muted),
+                )),
+            ));
+        }
+    }
+    decorative_rows.push(out.len());
     out.push(Line::default());
     let mut copy_cells = vec![None; out.len()];
-    copy_cells[0] = Some(CopyCells::decoration());
-    copy_cells[out.len() - 1] = Some(CopyCells::decoration());
-    copy_cells[footer_row] = Some(CopyCells::decoration());
+    let mut hard_breaks = if name == "bash" && !expanded {
+        vec![true; out.len()]
+    } else {
+        Vec::new()
+    };
+    for row in decorative_rows {
+        copy_cells[row] = Some(CopyCells::decoration());
+    }
+    for (row, columns, hard_break, source_offset) in preview_rows {
+        copy_cells[row] = Some(CopyCells {
+            columns,
+            source_offset,
+            decorative: false,
+        });
+        hard_breaks[row] = hard_break;
+    }
     RenderedTool {
         lines: out,
         copy_cells,
+        hard_breaks,
+    }
+}
+
+const BASH_PREVIEW_LINES: usize = 5;
+
+#[derive(Default)]
+struct BashPreview {
+    rows: std::collections::VecDeque<(String, bool, Option<usize>)>,
+    skipped: usize,
+}
+
+impl BashPreview {
+    fn append(&mut self, text: &str, width: usize, source_offset: Option<usize>) {
+        let mut offset = source_offset.map(|offset| offset + text.len() - text.trim_start().len());
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        for line in text.split('\n') {
+            let source_line = offset.filter(|_| visible_tool_line(line) == line);
+            for_each_tool_visual_row(line, width, |text, hard_break, row_offset| {
+                if self.rows.len() == BASH_PREVIEW_LINES {
+                    self.rows.pop_front();
+                    self.skipped += 1;
+                }
+                self.rows.push_back((
+                    text,
+                    hard_break,
+                    source_line.map(|offset| offset + row_offset),
+                ));
+            });
+            offset = offset.map(|offset| offset + line.len() + 1);
+        }
+    }
+}
+
+fn bash_preview_result<'a>(
+    result: &'a str,
+    facts: Option<&crate::state::tool::ToolFacts>,
+) -> (&'a str, usize) {
+    let Some((exit, body)) = result.split_once("\nstdout:\n") else {
+        return (result, 0);
+    };
+    if !exit
+        .strip_prefix("exit_code: ")
+        .is_some_and(|code| code == "unavailable" || code.parse::<i32>().is_ok())
+    {
+        return (result, 0);
+    }
+    let offset = result.len() - body.len();
+    // Only remove an empty stream label when structured facts prove it is a
+    // label. A literal trailing "stderr:" in arbitrary output is still output.
+    if facts
+        .and_then(|f| f.command.as_deref())
+        .is_some_and(|command| command.stderr_observed_end == 0)
+    {
+        (body.strip_suffix("stderr:\n").unwrap_or(body), offset)
+    } else {
+        (body, offset)
+    }
+}
+
+fn format_bash_duration(duration: std::time::Duration) -> String {
+    let seconds = duration.as_secs();
+    if seconds < 60 {
+        format!("{:.1}s", duration.as_secs_f64())
+    } else if seconds < 3600 {
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    } else {
+        format!(
+            "{}h {}m {}s",
+            seconds / 3600,
+            seconds / 60 % 60,
+            seconds % 60
+        )
     }
 }
 
@@ -752,47 +928,44 @@ fn push_wrapped_row(
     indent: &str,
     out: &mut Vec<Line<'static>>,
 ) {
-    let line = visible_tool_line(line);
     let content_width = width
         .saturating_sub(rail::SURFACE_CONTENT_START)
-        .saturating_sub(UnicodeWidthStr::width(indent));
-    let content_width = content_width.max(1);
-    if line.is_empty() {
-        out.push(rail::surface_row(
-            width,
-            colors,
-            rail::SURFACE_CONTENT_START,
-            Line::default(),
-        ));
-        return;
-    }
-    let mut current = String::new();
-    let mut current_w = 0usize;
-    let flush = |out: &mut Vec<Line<'static>>, current: &mut String| {
-        if current.is_empty() {
-            return;
-        }
-        out.push(rail::surface_row(
-            width,
-            colors,
-            rail::SURFACE_CONTENT_START,
+        .saturating_sub(UnicodeWidthStr::width(indent))
+        .max(1);
+    for_each_tool_visual_row(line, content_width, |text, _, _| {
+        let body = if text.is_empty() {
+            Line::default()
+        } else {
             Line::from(Span::styled(
-                format!("{indent}{current}"),
+                format!("{indent}{text}"),
                 Style::new().fg(foreground),
-            )),
+            ))
+        };
+        out.push(rail::surface_row(
+            width,
+            colors,
+            rail::SURFACE_CONTENT_START,
+            body,
         ));
-        current.clear();
-    };
-    for grapheme in line.graphemes(true) {
-        let gw = UnicodeWidthStr::width(grapheme);
-        if current_w + gw > content_width && current_w > 0 {
-            flush(out, &mut current);
-            current_w = 0;
+    });
+}
+
+fn for_each_tool_visual_row(line: &str, width: usize, mut emit: impl FnMut(String, bool, usize)) {
+    let line = visible_tool_line(line);
+    let mut current = String::new();
+    let mut current_width = 0;
+    let mut row_offset = 0;
+    for (offset, grapheme) in line.grapheme_indices(true) {
+        let grapheme_width = UnicodeWidthStr::width(grapheme);
+        if current_width + grapheme_width > width && current_width > 0 {
+            emit(std::mem::take(&mut current), false, row_offset);
+            row_offset = offset;
+            current_width = 0;
         }
         current.push_str(grapheme);
-        current_w += gw;
+        current_width += grapheme_width;
     }
-    flush(out, &mut current);
+    emit(current, true, row_offset);
 }
 
 #[allow(dead_code)]
@@ -934,7 +1107,7 @@ mod tests {
     #[test]
     fn collapsed_cards_have_three_content_rows_without_result_summaries() {
         for theme in [Theme::dark(), Theme::light()] {
-            for name in ["bash", "read", "write", "edit", "apply_patch", "custom"] {
+            for name in ["read", "write", "edit", "apply_patch", "custom"] {
                 for width in [24, 59, 79, 119] {
                     let rows = super::durable_with_display(
                         &theme,
@@ -1326,5 +1499,307 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod bash_preview_tests {
+    use super::*;
+    use crate::protocol::{CommandResultWire, CommandStatusWire};
+    use crate::state::tool::ToolFacts;
+    use std::sync::Arc;
+
+    fn block(result: &str) -> ToolBlock {
+        ToolBlock {
+            index: None,
+            loop_id: "loop".into(),
+            request_index: 0,
+            tool_call_id: "call".into(),
+            name: "bash".into(),
+            result: Some(result.into()),
+            outcome: Some(ToolOutcomeWire::Success),
+            live_status: None,
+            progress: None,
+            expanded: false,
+        }
+    }
+
+    fn command(exit: i32, stdout: usize, stderr: usize) -> CommandResultWire {
+        CommandResultWire {
+            status: CommandStatusWire::Exited,
+            exit_code: Some(exit),
+            signal: None,
+            termination_confirmed: true,
+            stdout_base_offset: 0,
+            stdout_observed_end: stdout as u64,
+            stderr_base_offset: 0,
+            stderr_observed_end: stderr as u64,
+            output_complete: true,
+            output_truncated: false,
+        }
+    }
+
+    fn output_rows(rendered: &RenderedTool) -> Vec<(String, bool, Option<usize>)> {
+        rendered
+            .copy_cells
+            .iter()
+            .enumerate()
+            .filter_map(|(row, copy)| {
+                let copy = copy.as_ref().filter(|copy| !copy.decorative)?;
+                Some((
+                    rendered.lines[row]
+                        .to_string()
+                        .chars()
+                        .skip(copy.columns.start)
+                        .collect::<String>()
+                        .trim_end()
+                        .to_owned(),
+                    rendered.hard_breaks[row],
+                    copy.source_offset,
+                ))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn bash_collapse_retains_exact_last_five_output_rows_and_full_source() {
+        let stdout = (1..=80)
+            .map(|n| format!("LINE {n:03}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let result = format!("exit_code: 0\nstdout:\n{stdout}\nstderr:\n");
+        let block = block(&result);
+        let mut facts = ToolFacts::new("bash");
+        facts.command = Some(Arc::new(command(0, stdout.len(), 0)));
+        facts.result = block.result.clone();
+        let original = block.result.clone();
+        for theme in [Theme::dark(), Theme::light()] {
+            for width in [24, 59, 79, 119] {
+                let rendered = durable_with_metadata(&theme, &block, width, false, Some(&facts));
+                let rows = output_rows(&rendered);
+                assert_eq!(
+                    rows.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(),
+                    ["LINE 076", "LINE 077", "LINE 078", "LINE 079", "LINE 080"]
+                );
+                assert!(
+                    rendered
+                        .lines
+                        .iter()
+                        .any(|line| line.to_string().contains("75 earlier lines"))
+                );
+                assert!(rows.iter().all(|row| row.1));
+                assert_eq!(rows[0].2, result.find("LINE 076"));
+                assert!(
+                    rendered
+                        .lines
+                        .iter()
+                        .all(|line| crate::markdown::line_width(line) <= width)
+                );
+                let expanded = durable_with_metadata(&theme, &block, width, true, Some(&facts));
+                let text = expanded
+                    .lines
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(
+                    text.contains("LINE 001")
+                        && text.contains("LINE 080")
+                        && text.contains("stderr:")
+                );
+            }
+        }
+        assert_eq!(block.result, original);
+        assert!(Arc::ptr_eq(
+            facts.result.as_ref().unwrap(),
+            block.result.as_ref().unwrap()
+        ));
+    }
+
+    #[test]
+    fn bash_preview_counts_visual_rows_and_keeps_unicode_and_soft_breaks() {
+        for width in [2, 4, 8, 20, 55] {
+            let text = format!("{}END", "中👨‍👩‍👧e\u{301}".repeat(40));
+            let mut all = Vec::new();
+            for_each_tool_visual_row(&text, width, |text, hard, offset| {
+                all.push((text, hard, Some(offset)))
+            });
+            let mut preview = BashPreview::default();
+            preview.append(&text, width, Some(0));
+            assert_eq!(preview.skipped, all.len().saturating_sub(5));
+            assert_eq!(
+                preview.rows.into_iter().collect::<Vec<_>>(),
+                all[all.len().saturating_sub(5)..]
+            );
+        }
+        let mut preview = BashPreview::default();
+        preview.append("abcdefghij\n\nend\n", 3, Some(0));
+        assert_eq!(preview.skipped, 1);
+        assert_eq!(
+            preview
+                .rows
+                .iter()
+                .map(|row| (row.0.as_str(), row.1))
+                .collect::<Vec<_>>(),
+            [
+                ("def", false),
+                ("ghi", false),
+                ("j", true),
+                ("", true),
+                ("end", true)
+            ]
+        );
+    }
+
+    #[test]
+    fn bash_tail_sanitizes_controls_and_keeps_partial_unknown_and_nonzero_facts() {
+        let result = "exit_code: 7\nstdout:\n\nstderr:\nERR\t\u{1b}[31m\u{7}";
+        let mut facts = ToolFacts::new("bash");
+        facts.command = Some(Arc::new(command(7, 0, 13)));
+        facts.result_truncated = true;
+        let rendered =
+            durable_with_metadata(&Theme::dark(), &block(result), 79, false, Some(&facts));
+        let text = rendered
+            .lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("exit 7 (nonzero)")
+                && text.contains("partial")
+                && text.contains("ERR\\t")
+        );
+        assert!(!text.contains('\u{1b}') && !text.contains('\u{7}') && !text.contains('\t'));
+        let unknown = ToolBlock {
+            result: None,
+            ..block("")
+        };
+        let rendered = durable_with_metadata(&Theme::dark(), &unknown, 59, false, None);
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .any(|line| line.to_string().contains("Output unknown"))
+        );
+        assert!(output_rows(&rendered).is_empty());
+    }
+
+    #[test]
+    fn bash_empty_and_stderr_label_like_output_are_not_misrepresented() {
+        let mut facts = ToolFacts::new("bash");
+        facts.command = Some(Arc::new(command(0, 0, 0)));
+        let rendered = durable_with_metadata(
+            &Theme::dark(),
+            &block("exit_code: 0\nstdout:\nstderr:\n"),
+            59,
+            false,
+            Some(&facts),
+        );
+        assert!(output_rows(&rendered).is_empty());
+        assert!(
+            !rendered
+                .lines
+                .iter()
+                .any(|line| line.to_string().contains("earlier lines"))
+        );
+        let literal = "exit_code: 0\nstdout:\nstderr:\nstderr:\n";
+        facts.command = Some(Arc::new(command(0, 0, 8)));
+        assert_eq!(
+            bash_preview_result(literal, Some(&facts)).0,
+            "stderr:\nstderr:\n"
+        );
+        assert_eq!(bash_preview_result(literal, None).0, "stderr:\nstderr:\n");
+        assert_eq!(
+            bash_preview_result("literal stderr:\n", None),
+            ("literal stderr:\n", 0)
+        );
+    }
+
+    #[test]
+    fn bash_running_tail_uses_bounded_streams_and_never_promotes_a_result() {
+        use base64::Engine;
+        let mut facts = ToolFacts::new("bash");
+        facts.accept_started("bash");
+        for (stream, text) in [
+            (
+                crate::protocol::ToolDataStreamWire::Stdout,
+                "one\ntwo\nthree\nfour\nfive\nsix\n",
+            ),
+            (crate::protocol::ToolDataStreamWire::Stderr, "warning\n"),
+        ] {
+            facts.accept_process_chunk(&crate::protocol::ToolProcessChunkWire {
+                stream,
+                encoding: "base64".into(),
+                data: base64::engine::general_purpose::STANDARD.encode(text),
+                base_offset: 0,
+                next_offset: text.len() as u64,
+                observed_end: text.len() as u64,
+                dropped: false,
+                expired: false,
+            });
+        }
+        let tool = LiveTool {
+            tool_call_id: "call".into(),
+            name: "bash".into(),
+            status: ToolStatus::Running,
+            progress: None,
+            display: None,
+            result: None,
+            result_truncated: false,
+            expanded: false,
+        };
+        let rendered = live_with_metadata(&Theme::dark(), &tool, 59, Some(&facts));
+        assert_eq!(
+            output_rows(&rendered)
+                .iter()
+                .map(|row| row.0.as_str())
+                .collect::<Vec<_>>(),
+            ["three", "four", "five", "six", "warning"]
+        );
+        assert!(facts.result.is_none());
+        assert!(tool.result.is_none());
+    }
+
+    #[test]
+    fn bash_duration_labels_and_copy_decorations_match_recorded_timing() {
+        use crate::state::tool::ToolTiming;
+        for (seconds, label) in [
+            (0.125, "0.1s"),
+            (59.25, "59.2s"),
+            (61.0, "1m 1s"),
+            (3662.0, "1h 1m 2s"),
+        ] {
+            assert_eq!(
+                format_bash_duration(std::time::Duration::from_secs_f64(seconds)),
+                label
+            );
+        }
+        for running in [true, false] {
+            let mut facts = ToolFacts::new("bash");
+            facts.timing = Some(ToolTiming {
+                elapsed: std::time::Duration::from_millis(1250),
+                running,
+            });
+            for expanded in [true, false] {
+                let rendered =
+                    durable_with_metadata(&Theme::dark(), &block("ok"), 59, expanded, Some(&facts));
+                let expected = if running { "Elapsed 1.2s" } else { "Took 1.2s" };
+                let row = rendered
+                    .lines
+                    .iter()
+                    .position(|line| line.to_string().contains(expected))
+                    .unwrap();
+                assert!(rendered.copy_cells[row].as_ref().unwrap().decorative);
+            }
+        }
+        let rendered = durable_with_metadata(&Theme::dark(), &block("ok"), 59, false, None);
+        assert!(
+            !rendered
+                .lines
+                .iter()
+                .any(|line| line.to_string().contains("Took")
+                    || line.to_string().contains("Elapsed"))
+        );
     }
 }

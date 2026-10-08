@@ -862,7 +862,8 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                         folded,
                         ordinal.saturating_mul(1_000_000) + section_offset,
                         Some(source_hint.as_str()),
-                        None,
+                        (!rendered.hard_breaks.is_empty())
+                            .then_some(rendered.hard_breaks.as_slice()),
                         Some(&rendered.copy_cells),
                     ) {
                         if !push_layout_section(
@@ -978,7 +979,12 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
         let (lines, links, breaks, copies) = match block.as_ref() {
             TranscriptBlock::Tool(tool) => {
                 let rendered = durable_tool_rows(theme, view, tool, width as usize);
-                (rendered.lines, Vec::new(), Vec::new(), rendered.copy_cells)
+                (
+                    rendered.lines,
+                    Vec::new(),
+                    rendered.hard_breaks,
+                    rendered.copy_cells,
+                )
             }
             TranscriptBlock::Summary(summary) => {
                 let (lines, links, breaks) =
@@ -1710,6 +1716,7 @@ fn durable_tool_rows<V: DurableLayoutSource>(
         );
         return tool::RenderedTool {
             copy_cells: vec![Some(crate::markdown::CopyCells::decoration()); lines.len()],
+            hard_breaks: Vec::new(),
             lines,
         };
     }
@@ -2221,9 +2228,13 @@ impl LiveRenderContext<'_> {
             tool,
             self.width,
         );
-        // Tool rows are independent lines, not prose soft wraps. Preserve
-        // their rendered line boundaries while excluding explicit affordances.
-        let breaks = vec![true; rendered.lines.len()];
+        // Bash tails provide their exact soft-wrap boundaries. Other tool
+        // bodies retain their established rendered-line copy behavior.
+        let breaks = if rendered.hard_breaks.is_empty() {
+            vec![true; rendered.lines.len()]
+        } else {
+            rendered.hard_breaks
+        };
         append_live_section_with_copy(
             out,
             ranges,
