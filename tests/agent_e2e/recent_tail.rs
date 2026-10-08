@@ -187,10 +187,33 @@ fn e2e_default_compact_keeps_latest_copy_and_next_request_after_cold_reopen() {
         land_turn(&mut process, &mut app, &id, "after compact").await;
         let requests = env._server.recorded_requests();
         assert_eq!(requests.len(), 8);
-        let body = &requests.last().unwrap().body;
-        assert_eq!(body.matches("LATEST_SHORT_ANSWER").count(), 1);
-        assert!(body.contains("PREFIX_CHECKPOINT"));
-        assert!(!body.contains("ANSWER_0_"));
+        let request = requests.last().unwrap();
+        let input = request.json["input"]
+            .as_array()
+            .expect("Responses input array");
+        let assistant_texts = input
+            .iter()
+            .filter(|item| item["role"] == "assistant")
+            .filter_map(|item| item["content"].as_array())
+            .flatten()
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            assistant_texts
+                .iter()
+                .filter(|text| **text == LATEST)
+                .count(),
+            1,
+            "the complete Unicode latest answer must survive exactly once"
+        );
+        assert_eq!(request.body.matches("LATEST_SHORT_ANSWER").count(), 1);
+        assert!(request.body.contains("PREFIX_CHECKPOINT"));
+        for old in ["ANSWER_0_", "ANSWER_1_"] {
+            assert!(
+                !request.body.contains(old),
+                "summarized prefix leaked into tail"
+            );
+        }
         assert!(
             std::fs::read(&history_path)
                 .unwrap()
