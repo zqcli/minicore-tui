@@ -50,8 +50,13 @@ Help is requested; streaming and pending reads do not block Help.
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo. |
 | `Up` / `Down` | Move within multiline input; at the first/last row, navigate input history. |
 | `Alt+Up` / `Alt+Down` | Previous/next history entry. |
-| `Backspace` / `Delete` / arrows | Standard editing. |
+| `Backspace` / `Delete` / arrows | Delete or move across complete graphemes, including combining marks and joined emoji. |
 | Bracketed paste | Insert the complete paste as one edit, normalize CRLF/CR to LF, and never submit automatically. |
+
+Composer cursor placement and deletion respect complete Unicode graphemes.
+Mouse and vertical cursor positions snap to a grapheme boundary; one deletion
+is one undoable edit. Collapsed paste markers stay atomic, and expand if an
+edit joins a marker edge to an adjacent grapheme. Text is not Unicode-normalized.
 
 `Ctrl+U` and `Ctrl+K` use logical editor lines: soft wraps do not stop deletion.
 Collapsed paste markers remain atomic, including multiline payloads. At the
