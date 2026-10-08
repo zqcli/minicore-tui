@@ -726,6 +726,7 @@ impl App {
             RequestKind::Workspace {
                 generation, kind, ..
             } => self.workspace_send_failed(generation, kind),
+            RequestKind::ToolTiming { .. } => {}
             RequestKind::ToolInline {
                 key, generation, ..
             } => {
@@ -2447,6 +2448,7 @@ impl App {
                 self.restore_unsent_turn(&session_id, local_submission);
                 self.notice(NoticeLevel::Warning, format!("turn send failed: {error}"));
             }
+            RequestKind::ToolTiming { .. } => {}
             RequestKind::ToolInline {
                 key, generation, ..
             } => {

@@ -186,7 +186,9 @@ Loaded historical tool calls retain bounded command/file targets after reopening
 Collapsed Bash cards keep the last five visual rows of the locally available
 output, with an earlier-row hint and explicit partial/unknown facts. Per-tool
 recorded timestamps provide Elapsed while running and Took after completion;
-missing or invalid timestamps do not invent a duration.
+missing or invalid timestamps do not invent a duration. After a real Bash
+process-start event, a single bounded metadata read can recover a missing
+recorded start without fetching tool output.
 Bash process exit codes remain visible, including a warning for nonzero exits;
 command completion alone does not imply exit zero. Hidden-row counts describe the
 actual display body. Reasoning folds according to its rendered height and completed
