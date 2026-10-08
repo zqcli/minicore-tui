@@ -301,10 +301,26 @@ impl SectionLayout {
                     .sum::<usize>()
             })
             .sum::<usize>();
+        let mut table_allocations = HashSet::new();
         let copy = self
             .copy_ranges
             .iter()
-            .map(|range| range.text().len())
+            .map(|range| {
+                range.text().len()
+                    + range.table_fragments.as_ref().map_or(0, |fragments| {
+                        if !table_allocations.insert(Arc::as_ptr(fragments)) {
+                            return 0;
+                        }
+                        // One shared slice allocation, including its Arc
+                        // counters; owned chunk buffers can retain spare capacity.
+                        std::mem::size_of_val(fragments.as_ref())
+                            + 2 * std::mem::size_of::<usize>()
+                            + fragments
+                                .iter()
+                                .map(|fragment| fragment.text.capacity())
+                                .sum::<usize>()
+                    })
+            })
             .sum::<usize>();
         let links = self
             .link_cells
@@ -363,6 +379,8 @@ pub struct CopyRange {
     /// be rendered for spacing or affordances, but they are not transcript
     /// content when a selection is copied.
     pub decorative: bool,
+    /// Renderer-owned discontinuous cell chunks, present only for tables.
+    pub table_fragments: Option<Arc<[crate::markdown::TableCopyFragment]>>,
 }
 
 impl CopyRange {
@@ -571,6 +589,7 @@ pub struct CopyView<'a> {
     pub source_offset: usize,
     pub hard_break_after: bool,
     pub decorative: bool,
+    pub table_fragments: Option<&'a [crate::markdown::TableCopyFragment]>,
 }
 
 impl CopyIndex {
@@ -591,6 +610,7 @@ impl CopyIndex {
                         source_offset: copy.source_offset,
                         hard_break_after: copy.hard_break_after,
                         decorative: copy.decorative,
+                        table_fragments: copy.table_fragments.as_deref(),
                     })
                 })
             });
@@ -601,6 +621,7 @@ impl CopyIndex {
             source_offset: copy.source_offset,
             hard_break_after: copy.hard_break_after,
             decorative: copy.decorative,
+            table_fragments: copy.table_fragments.as_deref(),
         }))
     }
 

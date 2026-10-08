@@ -329,12 +329,18 @@ fn live_delta_reuses_durable_markdown_without_reparsing() {
     );
     assert!(next_prepared.total_rows() > 0);
 
-    // Durable history has 2 blocks of markdown. They MUST NOT be re-parsed!
-    assert_eq!(
-        parse_count(),
-        0,
-        "RED: live delta preparation must reuse durable layout and not re-parse historical markdown"
-    );
+    // Only the updated live section is parsed. The two durable Markdown
+    // blocks retain their immutable layout and must not be re-parsed.
+    assert_eq!(parse_count(), 1, "only live Markdown should be parsed");
+    assert!(std::sync::Arc::ptr_eq(
+        next_prepared.durable.as_ref().unwrap(),
+        app.active_view()
+            .unwrap()
+            .transcript
+            .render_cache
+            .as_ref()
+            .unwrap()
+    ));
 }
 
 #[test]
@@ -650,10 +656,15 @@ fn live_tool_fold_survives_presentation_finish_wait_and_history_replacement() {
     let prepared = prepare_conversation(&app, WIDTH);
     app.update(AppEvent::ConversationPrepared(prepared));
     reset_parse_count();
-    let _prepared = prepare_conversation(&app, WIDTH);
+    let prepared = prepare_conversation(&app, WIDTH);
     assert_eq!(
         parse_count(),
-        0,
+        2,
+        "only the two live text sections are parsed"
+    );
+    assert_eq!(
+        prepared.history_ptr(),
+        app.prepared_conversation(WIDTH).unwrap().history_ptr(),
         "repreparing after live presentation must reuse the cached durable markdown"
     );
 

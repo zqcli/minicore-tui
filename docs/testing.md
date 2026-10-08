@@ -188,7 +188,16 @@ comparison is deterministic and works without a review tool.
   key invalidation, stale preparation rejection, session-local caches, live
   delta isolation, and parse-count cache hits.
 - `src/markdown.rs` tests style-run coalescing, style boundaries, Unicode,
-  CJK, emoji, combining marks, Markdown blocks, and plain streaming wrapping.
+  CJK, emoji, combining marks, Markdown blocks, and plain-text wrapping.
+- `src/ui/live_markdown_tests.rs` covers partial streaming Markdown, narrow
+  Unicode layout, code copying, links, live-to-history geometry and anchors,
+  and typing while scrolled away from live output. Its ignored timing probe
+  reports delta and editor-input preparation/draw costs separately, including
+  the real TestBackend render; it is not terminal-transport latency acceptance.
+- `src/ui/table_copy_tests.rs` covers source-order table copying, partial glyph
+  selection, empty cells, narrow labels, nested offsets, and retained fragment
+  memory accounting. Copy-command tests cover the same table fragments through
+  `/copy message` and `/copy last` without changing User timestamp exclusion.
 
 ## Terminal Tests
 

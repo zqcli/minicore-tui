@@ -177,9 +177,11 @@ an existing wait or replaying execution.
 ### Conversation display
 
 User XML/HTML-like text is shown literally and safely instead of disappearing.
-Markdown replies support tables, with labeled cells at narrow widths. Code copying
-uses source positions, and streamed text selection preserves hard newlines without
-including card borders or soft-wrap breaks.
+Markdown replies render while streaming and support tables, with labeled cells at
+narrow widths. Live and saved replies share selection geometry. Code copying
+preserves hard newlines without including code frames or soft-wrap breaks. Table
+copying keeps cells in source order without grid borders, repeated narrow labels,
+or newlines introduced only by wrapping a cell.
 
 Collapsed tool cards retain the action, target, execution status and a short result.
 Loaded historical tool calls retain bounded command/file targets after reopening a session.

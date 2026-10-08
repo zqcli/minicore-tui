@@ -204,56 +204,7 @@ pub fn render_section(
             }
         }
         SectionKind::AssistantText => {
-            let renderer = MarkdownRenderer::new(theme);
-            let base = Style::new().fg(theme.text);
-            let inner = width.saturating_sub(1).max(1);
-            let rendered = renderer.render_with_metadata(&input.source, inner, base);
-            let links = rendered.link_cells;
-            let breaks = rendered.hard_breaks;
-            let copies = rendered.copy_cells;
-            let lines: Vec<_> = rendered
-                .lines
-                .into_iter()
-                .map(|line| crate::ui::rail::inset_row(width, 1, line))
-                .collect();
-            let link_cells: Vec<Vec<std::ops::Range<usize>>> = links
-                .into_iter()
-                .map(|row| {
-                    row.into_iter()
-                        .map(|range| range.start + 1..range.end + 1)
-                        .collect()
-                })
-                .collect();
-            let vertical = layout::vertical_section(lines);
-            let mut vertical_links = Vec::with_capacity(vertical.len());
-            let mut vertical_breaks = Vec::with_capacity(vertical.len());
-            let mut vertical_copies = Vec::with_capacity(vertical.len());
-            if !vertical.is_empty() {
-                vertical_links.push(Vec::new());
-                vertical_links.extend(link_cells);
-                vertical_links.push(Vec::new());
-                vertical_breaks.push(false);
-                vertical_breaks.extend(breaks);
-                vertical_breaks.push(false);
-                vertical_copies.push(Some(crate::markdown::CopyCells::decoration()));
-                vertical_copies.extend(
-                    copies
-                        .into_iter()
-                        .map(|copy| copy.map(|copy| copy.shifted(1))),
-                );
-                vertical_copies.push(Some(crate::markdown::CopyCells::decoration()));
-            }
-            AssistantSection {
-                lines: vertical,
-                link_cells: vertical_links,
-                kind: input.kind,
-                ordinal: input.ordinal,
-                collapsible: false,
-                folded: false,
-                tool_call: None,
-                hard_breaks: Some(vertical_breaks),
-                copy_cells: Some(vertical_copies),
-            }
+            render_text_section(theme, &input.source, width, input.ordinal)
         }
         SectionKind::Tool | SectionKind::User | SectionKind::Summary | SectionKind::Notice => {
             AssistantSection {
@@ -271,6 +222,66 @@ pub fn render_section(
     }
 }
 
+/// The same width-aware Markdown and interaction geometry is used while text
+/// streams and after it is persisted. No second parse is needed for links/copy.
+pub(super) fn render_text_section(
+    theme: &Theme,
+    text: &str,
+    width: usize,
+    ordinal: u32,
+) -> AssistantSection {
+    let renderer = MarkdownRenderer::new(theme);
+    let base = Style::new().fg(theme.text);
+    let inner = width.saturating_sub(1).max(1);
+    let rendered = renderer.render_with_metadata(text, inner, base);
+    let links = rendered.link_cells;
+    let breaks = rendered.hard_breaks;
+    let copies = rendered.copy_cells;
+    let lines: Vec<_> = rendered
+        .lines
+        .into_iter()
+        .map(|line| crate::ui::rail::inset_row(width, 1, line))
+        .collect();
+    let link_cells: Vec<Vec<std::ops::Range<usize>>> = links
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|range| range.start + 1..range.end + 1)
+                .collect()
+        })
+        .collect();
+    let vertical = layout::vertical_section(lines);
+    let mut vertical_links = Vec::with_capacity(vertical.len());
+    let mut vertical_breaks = Vec::with_capacity(vertical.len());
+    let mut vertical_copies = Vec::with_capacity(vertical.len());
+    if !vertical.is_empty() {
+        vertical_links.push(Vec::new());
+        vertical_links.extend(link_cells);
+        vertical_links.push(Vec::new());
+        vertical_breaks.push(false);
+        vertical_breaks.extend(breaks);
+        vertical_breaks.push(false);
+        vertical_copies.push(Some(crate::markdown::CopyCells::decoration()));
+        vertical_copies.extend(
+            copies
+                .into_iter()
+                .map(|copy| copy.map(|copy| copy.shifted(1))),
+        );
+        vertical_copies.push(Some(crate::markdown::CopyCells::decoration()));
+    }
+    AssistantSection {
+        lines: vertical,
+        link_cells: vertical_links,
+        kind: SectionKind::AssistantText,
+        ordinal,
+        collapsible: false,
+        folded: false,
+        tool_call: None,
+        hard_breaks: Some(vertical_breaks),
+        copy_cells: Some(vertical_copies),
+    }
+}
+
 pub fn sections_with_folds(
     theme: &Theme,
     block: &AssistantBlock,
@@ -279,8 +290,6 @@ pub fn sections_with_folds(
     folds: &HashMap<ReasoningKey, FoldOverride>,
 ) -> Vec<AssistantSection> {
     let mut out = Vec::new();
-    let renderer = MarkdownRenderer::new(theme);
-    let base = Style::new().fg(theme.text);
     let mut in_hidden_run = false;
     let mut index = 0;
     let mut reasoning_ordinal = 0;
@@ -328,42 +337,7 @@ pub fn sections_with_folds(
         index += 1;
         match part {
             AssistantPart::Text(text) => {
-                let inner = width.saturating_sub(1).max(1);
-                let (rendered, links) = renderer.render_with_links(text, inner, base);
-                let lines: Vec<_> = rendered
-                    .into_iter()
-                    .map(|line| crate::ui::rail::inset_row(width, 1, line))
-                    .collect();
-                // The one-cell content inset shifts link cells right by one.
-                let link_cells: Vec<Vec<std::ops::Range<usize>>> = links
-                    .into_iter()
-                    .map(|row| {
-                        row.into_iter()
-                            .map(|range| range.start + 1..range.end + 1)
-                            .collect()
-                    })
-                    .collect();
-                let vertical = layout::vertical_section(lines);
-                let v_links = if vertical.is_empty() {
-                    Vec::new()
-                } else {
-                    let mut v = Vec::with_capacity(vertical.len());
-                    v.push(Vec::new()); // leading blank
-                    v.extend(link_cells);
-                    v.push(Vec::new()); // trailing blank
-                    v
-                };
-                out.push(AssistantSection {
-                    lines: vertical,
-                    link_cells: v_links,
-                    kind: SectionKind::AssistantText,
-                    ordinal: text_ordinal,
-                    collapsible: false,
-                    folded: false,
-                    tool_call: None,
-                    hard_breaks: None,
-                    copy_cells: None,
-                });
+                out.push(render_text_section(theme, text, width, text_ordinal));
                 text_ordinal += 1;
                 in_hidden_run = false;
             }
