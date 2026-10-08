@@ -849,12 +849,11 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                         }
                         continue;
                     }
-                    let source_hint = tool
-                        .result
-                        .as_deref()
-                        .unwrap_or(tool.name.as_str())
-                        .to_owned();
                     let rendered = durable_tool_rows(theme, view, &tool, width as usize);
+                    let source_hint = rendered
+                        .copy_source
+                        .as_deref()
+                        .unwrap_or_else(|| tool.result.as_deref().unwrap_or(&tool.name));
                     if let Some(layout) = make_section_layout(
                         key,
                         rendered.lines,
@@ -862,7 +861,7 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                         true,
                         folded,
                         ordinal.saturating_mul(1_000_000) + section_offset,
-                        Some(source_hint.as_str()),
+                        Some(source_hint),
                         (!rendered.hard_breaks.is_empty())
                             .then_some(rendered.hard_breaks.as_slice()),
                         Some(&rendered.copy_cells),
@@ -977,7 +976,7 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
             }
             continue;
         }
-        let (lines, links, breaks, copies) = match block.as_ref() {
+        let (lines, links, breaks, copies, copy_source) = match block.as_ref() {
             TranscriptBlock::Tool(tool) => {
                 let rendered = durable_tool_rows(theme, view, tool, width as usize);
                 (
@@ -985,12 +984,13 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                     Vec::new(),
                     rendered.hard_breaks,
                     rendered.copy_cells,
+                    rendered.copy_source,
                 )
             }
             TranscriptBlock::Summary(summary) => {
                 let (lines, links, breaks) =
                     compaction_summary_lines(theme, width as usize, &summary.content, folded);
-                (lines, links, breaks, Vec::new())
+                (lines, links, breaks, Vec::new(), None)
             }
             TranscriptBlock::User(user)
                 if user.text.len() <= crate::limits::LAYOUT_SECTION_BYTES =>
@@ -1001,6 +1001,7 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                     rendered.link_cells,
                     rendered.hard_breaks,
                     rendered.copy_cells,
+                    None,
                 )
             }
             _ => (
@@ -1008,6 +1009,7 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
+                None,
             ),
         };
         let collapsible = matches!(
@@ -1021,7 +1023,7 @@ pub(crate) fn build_durable_layout<V: DurableLayoutSource>(
             collapsible,
             folded,
             ordinal.saturating_mul(1_000_000),
-            block_source(block),
+            copy_source.as_deref().or_else(|| block_source(block)),
             (!breaks.is_empty()).then_some(breaks.as_slice()),
             (!copies.is_empty()).then_some(copies.as_slice()),
         ) {
@@ -1817,6 +1819,7 @@ fn durable_tool_rows<V: DurableLayoutSource>(
         return tool::RenderedTool {
             copy_cells: vec![Some(crate::markdown::CopyCells::decoration()); lines.len()],
             hard_breaks: Vec::new(),
+            copy_source: None,
             lines,
         };
     }
@@ -1967,30 +1970,9 @@ fn resolve_tool_expanded_for<V: DurableLayoutSource>(
     name: &str,
     hidden_line_count: Option<usize>,
 ) -> bool {
-    let known_lines = view
-        .tool_presentations()
-        .get(key)
-        .filter(|facts| facts.result.is_none())
-        .and_then(|facts| {
-            let input = facts.input_line_count().map(|(count, _)| count);
-            let output = facts.output_line_count;
-            (input.is_some() || output.is_some())
-                .then(|| input.unwrap_or(0).saturating_add(output.unwrap_or(0)))
-        });
-    let hidden_line_count = match (hidden_line_count, known_lines) {
-        (Some(reported), Some(known)) => Some(reported.max(known)),
-        (reported, known) => reported.or(known),
-    };
     match view.tool_folds().get(key) {
         Some(crate::state::view::FoldOverride::Expanded) => true,
         Some(crate::state::view::FoldOverride::Collapsed) => false,
-        None if view
-            .tool_presentations()
-            .get(key)
-            .is_some_and(|facts| facts.body_deferred) =>
-        {
-            false
-        }
         None => {
             base_expanded
                 || view.tools_expanded()
@@ -2320,7 +2302,7 @@ impl LiveRenderContext<'_> {
             tool,
             self.width,
         );
-        // Bash tails provide their exact soft-wrap boundaries. Other tool
+        // Tool previews provide their exact soft-wrap boundaries. Other tool
         // bodies retain their established rendered-line copy behavior.
         let breaks = if rendered.hard_breaks.is_empty() {
             vec![true; rendered.lines.len()]
@@ -2336,11 +2318,9 @@ impl LiveRenderContext<'_> {
             self.width,
             true,
             folded,
-            self.view
-                .tool_presentations
-                .get(&key)
-                .filter(|facts| facts.arguments_preview.is_some())
-                .and_then(|facts| facts.display.expanded_input.as_deref())
+            rendered
+                .copy_source
+                .as_deref()
                 .unwrap_or_else(|| tool.result.as_deref().unwrap_or(&tool.name)),
             Some(&breaks),
             Some(&rendered.copy_cells),
@@ -3384,5 +3364,307 @@ mod source_map_tests {
             .collect::<String>();
         assert!(text.contains("read"));
         assert!(text.contains("missing-file.txt"));
+    }
+}
+
+#[cfg(test)]
+mod default_fold_tests {
+    use super::*;
+    use crate::event::AppEvent;
+    use crate::protocol::ToolOutcomeWire;
+    use crate::state::tool::{LiveTool, ToolFacts, ToolStatus};
+    use crate::theme::ThemeKind;
+
+    fn block(name: &str, id: &str) -> ToolBlock {
+        ToolBlock {
+            index: Some(0),
+            loop_id: "l".into(),
+            request_index: 0,
+            tool_call_id: id.into(),
+            name: name.into(),
+            result: Some("SHORT PRIVATE BODY".into()),
+            outcome: Some(ToolOutcomeWire::Success),
+            live_status: None,
+            progress: None,
+            expanded: false,
+        }
+    }
+
+    #[test]
+    fn all_statuses_counts_and_deferred_cards_start_folded_and_honor_explicit_overrides() {
+        let mut app = crate::ui::testapp::open_empty(ThemeKind::Dark, "s", None, "medium");
+        let view = app.sessions.known.get_mut("s").unwrap();
+        let key = ToolKey::new("s", "l", 0, "c");
+        for name in [
+            "read",
+            "write",
+            "edit",
+            "apply_patch",
+            "patch",
+            "bash",
+            "custom",
+        ] {
+            let durable = block(name, "c");
+            for count in [None, Some(0), Some(1), Some(19), Some(20), Some(21)] {
+                for deferred in [false, true] {
+                    let mut facts = ToolFacts::new(name);
+                    facts.body_deferred = deferred;
+                    Arc::make_mut(&mut facts.display).hidden_line_count = count;
+                    Arc::make_mut(&mut view.tool_presentations)
+                        .insert(key.clone(), Arc::new(facts));
+                    for status in [
+                        ToolStatus::Pending,
+                        ToolStatus::Running,
+                        ToolStatus::Succeeded,
+                        ToolStatus::Failed,
+                        ToolStatus::Denied,
+                        ToolStatus::Cancelled,
+                    ] {
+                        let live = LiveTool {
+                            tool_call_id: "c".into(),
+                            name: name.into(),
+                            status,
+                            progress: None,
+                            display: None,
+                            result: (status == ToolStatus::Succeeded)
+                                .then(|| Arc::from("SHORT PRIVATE BODY")),
+                            result_truncated: false,
+                            expanded: false,
+                        };
+                        for global in [false, true] {
+                            view.tools_expanded = global;
+                            for override_ in [
+                                None,
+                                Some(FoldOverride::Expanded),
+                                Some(FoldOverride::Collapsed),
+                            ] {
+                                Arc::make_mut(&mut view.tool_folds).clear();
+                                if let Some(override_) = override_ {
+                                    Arc::make_mut(&mut view.tool_folds)
+                                        .insert(key.clone(), override_);
+                                }
+                                let expected = override_.map_or(global, |value| value.expanded());
+                                assert_eq!(
+                                    effective_live_tool_expanded(view, &key, &live),
+                                    expected,
+                                    "{name} {status:?} {count:?} deferred={deferred}"
+                                );
+                                assert_eq!(effective_tool_expanded(view, &durable), expected);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ctrl_o_applies_to_current_and_future_cards_without_count_driven_reopening() {
+        let mut app = crate::ui::testapp::open_empty(ThemeKind::Dark, "s", None, "medium");
+        app.sessions
+            .known
+            .get_mut("s")
+            .unwrap()
+            .transcript
+            .push_block(TranscriptBlock::Tool(block("read", "a")));
+        let text = |app: &App| {
+            all_lines(&Theme::dark(), app, 80)
+                .iter()
+                .map(Line::to_string)
+                .collect::<String>()
+        };
+        assert!(!text(&app).contains("SHORT PRIVATE BODY"));
+        for (index, expanded) in [true, false, true, false].into_iter().enumerate() {
+            app.update(AppEvent::ToggleTools {
+                session_id: "s".into(),
+            });
+            let new = block("custom", &format!("new-{index}"));
+            let view = app.sessions.known.get_mut("s").unwrap();
+            assert_eq!(view.tools_expanded, expanded);
+            assert_eq!(effective_tool_expanded(view, &new), expanded);
+            view.transcript.push_block(TranscriptBlock::Tool(new));
+            assert_eq!(text(&app).contains("SHORT PRIVATE BODY"), expanded);
+        }
+    }
+
+    #[test]
+    fn final_write_preview_source_is_input_for_both_durable_owners_and_live_promotion() {
+        let body = "e\u{301}👩🏽‍💻中 repeated repeated repeated\n\nthird\n";
+        for assistant_owned in [false, true] {
+            let mut app = crate::ui::testapp::open_empty(ThemeKind::Dark, "s", None, "medium");
+            let view = app.sessions.known.get_mut("s").unwrap();
+            let key = ToolKey::new("s", "l", 0, "c");
+            let mut facts = ToolFacts::new("write");
+            Arc::make_mut(&mut facts.display).expanded_input = Some(body.into());
+            Arc::make_mut(&mut facts.display).detail = "a.rs".into();
+            Arc::make_mut(&mut view.tool_presentations).insert(key.clone(), Arc::new(facts));
+            if assistant_owned {
+                view.transcript.push_block(TranscriptBlock::Assistant(
+                    crate::state::transcript::AssistantBlock {
+                        index: 0,
+                        loop_id: "l".into(),
+                        request_index: 0,
+                        model: "test".into(),
+                        reasoning_level: Default::default(),
+                        parts: vec![],
+                        tool_calls: vec![crate::protocol::ToolCallViewWire {
+                            tool_call_id: "c".into(),
+                            name: "write".into(),
+                            call_index: 0,
+                            display: None,
+                        }],
+                        usage: Default::default(),
+                        finish_reason: "tool_calls".into(),
+                        terminal_error: None,
+                    },
+                ));
+            }
+            view.transcript
+                .push_block(TranscriptBlock::Tool(block("write", "c")));
+            for width in [14, 26, 80] {
+                let (layout, _, _) = build_durable_layout(
+                    &Theme::dark(),
+                    ThemeKind::Dark,
+                    view,
+                    width,
+                    true,
+                    None,
+                    0..usize::MAX,
+                    None,
+                    None,
+                )
+                .unwrap();
+                let section = layout
+                    .sections
+                    .iter()
+                    .map(|placement| &placement.layout)
+                    .find(|section| section.key.section.kind == SectionKind::Tool)
+                    .unwrap();
+                assert!(section.folded);
+                assert!(section.source.contains(body.trim_end_matches('\n')));
+                let copied = section
+                    .copy_ranges
+                    .iter()
+                    .filter(|copy| !copy.decorative)
+                    .map(|copy| copy.text())
+                    .collect::<String>();
+                assert!(!copied.contains("SHORT PRIVATE BODY"));
+                assert!(copied.contains("👩🏽‍💻"));
+                assert!(
+                    section
+                        .source_map
+                        .rows
+                        .iter()
+                        .all(|row| row.source_range.end <= section.source.len())
+                );
+            }
+            let live = LiveTool {
+                tool_call_id: "c".into(),
+                name: "write".into(),
+                status: ToolStatus::Succeeded,
+                progress: None,
+                display: None,
+                result: Some("SHORT PRIVATE BODY".into()),
+                result_truncated: false,
+                expanded: false,
+            };
+            let context = LiveRenderContext {
+                theme: &Theme::dark(),
+                view,
+                session_id: "s",
+                loop_id: "l",
+                request_index: 0,
+                width: 24,
+                reasoning_visible: true,
+                durable_tool_keys: None,
+            };
+            let mut rows = Vec::new();
+            let mut ranges = Some(Vec::new());
+            let mut copies = Vec::new();
+            context.append_tool(&mut rows, &mut ranges.as_mut(), &mut copies, &live);
+            assert!(ranges.unwrap()[0].folded);
+            let copied = copies
+                .iter()
+                .filter(|copy| !copy.decorative)
+                .map(|copy| copy.text())
+                .collect::<String>();
+            assert!(copied.contains("👩🏽‍💻"));
+            assert!(!copied.contains("SHORT PRIVATE BODY"));
+        }
+    }
+
+    #[test]
+    fn write_first_and_second_line_anchors_survive_resize_preview_completion_and_expansion() {
+        use crate::state::tool::ArgumentsPreview;
+        use crate::state::view::ScrollAnchor;
+        for body in [
+            "ONE\nTWO\nTHREE",
+            "\nSECOND\nTHIRD",
+            "same 👩🏽‍💻 same\nsame 👩🏽‍💻 same\nend",
+        ] {
+            let mut app = crate::ui::testapp::open_empty(ThemeKind::Dark, "s", None, "medium");
+            let view = app.sessions.known.get_mut("s").unwrap();
+            let key = ToolKey::new("s", "l", 0, "c");
+            let mut facts = ToolFacts::new("write");
+            Arc::make_mut(&mut facts.display).detail =
+                "long-target-that-clips-at-small-width.txt".into();
+            Arc::make_mut(&mut facts.display).expanded_input = Some(body.into());
+            facts.arguments_preview = Some(ArgumentsPreview {
+                attempt: 0,
+                revision: 1,
+                state: crate::protocol::ToolArgumentsPreviewStateWire::Generating,
+                partial: false,
+            });
+            Arc::make_mut(&mut view.tool_presentations).insert(key.clone(), Arc::new(facts));
+            view.transcript
+                .push_block(TranscriptBlock::Tool(block("write", "c")));
+            let prefix = "long-target-that-clips-at-small-width.txt\n".len();
+            for offset in [prefix, prefix + body.split('\n').next().unwrap().len() + 1] {
+                let before = prepare_conversation(&app, 24);
+                let section = before
+                    .sections
+                    .iter()
+                    .find(|section| section.id.kind == SectionKind::Tool)
+                    .unwrap();
+                let anchor = ScrollAnchor {
+                    section_id: section.id.clone(),
+                    source_offset: offset,
+                    screen_row: 0,
+                };
+                for (expanded, preview) in
+                    [(false, true), (false, false), (true, false), (false, false)]
+                {
+                    let view = app.sessions.known.get_mut("s").unwrap();
+                    view.tools_expanded = expanded;
+                    if !preview {
+                        Arc::make_mut(
+                            Arc::make_mut(&mut view.tool_presentations)
+                                .get_mut(&key)
+                                .unwrap(),
+                        )
+                        .arguments_preview = None;
+                    }
+                    view.transcript.invalidate();
+                    for width in [14, 24, 80] {
+                        let prepared = prepare_conversation(&app, width);
+                        let restored = prepared.row_for_scroll_anchor(&anchor).unwrap();
+                        let row = prepared
+                            .copy_ranges
+                            .iter()
+                            .find(|copy| copy.row == restored && !copy.decorative)
+                            .unwrap();
+                        assert_eq!(
+                            row.source_offset, offset,
+                            "{body:?}, expanded={expanded}, preview={preview}, width={width}"
+                        );
+                        assert_eq!(
+                            row.columns.start,
+                            crate::ui::rail::SURFACE_CONTENT_START + 2,
+                            "must restore to input, not title or path"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

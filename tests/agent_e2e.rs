@@ -3289,9 +3289,9 @@ fn e2e_stress_second_tool_expansion_survives_background_generation() {
             .unwrap();
         let second_tool_id = first_calls[1].tool_call_id.clone();
 
-        // Toggle until the per-tool override records Expanded (the read card
-        // may already render expanded by default, so the first press can
-        // collapse it; the second press is the deterministic expand).
+        // Toggle until the explicit per-tool state is Expanded. The first
+        // press opens a default-folded read; a prior explicit global setting
+        // can require the second press.
         for _ in 0..2 {
             dispatch(
                 &mut process,

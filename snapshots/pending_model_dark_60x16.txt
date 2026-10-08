@@ -1,8 +1,8 @@
  ▎thinking hard
 
- ▎ read · running
  ▎ read
- ▎ ctrl+o collapse
+ ▎ read
+ ▎ Lines unknown
 
   more
 

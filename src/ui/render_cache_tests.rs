@@ -584,6 +584,13 @@ fn tool_presentation_refresh_invalidates_already_durable_tool_rows() {
 #[test]
 fn live_tool_fold_survives_presentation_finish_wait_and_history_replacement() {
     let mut app = super::testapp::live_turn(ThemeKind::Dark);
+    // The user explicitly expands this initially folded card before collapsing it.
+    app.update(AppEvent::ToggleTool {
+        session_id: "ses_1".into(),
+        loop_id: "loop_live".into(),
+        request_index: 0,
+        tool_call_id: "c1".into(),
+    });
     for request in &mut app
         .sessions
         .known

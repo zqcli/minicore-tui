@@ -205,6 +205,13 @@ fn stable_history_layout_is_cached_and_tool_projection_uses_the_index() {
 #[test]
 fn live_tool_mouse_click_collapses_the_running_card() {
     let mut app = testapp::live_turn(ThemeKind::Dark);
+    // The user explicitly expands this initially folded card before collapsing it.
+    app.update(AppEvent::ToggleTool {
+        session_id: "ses_1".into(),
+        loop_id: "loop_live".into(),
+        request_index: 0,
+        tool_call_id: "c1".into(),
+    });
     app.update(AppEvent::TerminalSize {
         width: 80,
         height: 24,

@@ -180,8 +180,17 @@ printf 'stderr-final\n' >&2
                 let mut stderr = "stderr-start\n".to_owned();
                 wait_for_preview(&mut process, &mut app, &key, &stdout, &stderr).await;
                 let text = transcript_text(&app);
-                assert!(text.contains("stdout:"), "{text}");
-                assert!(text.contains("stderr:"), "{text}");
+                assert!(!text.contains("stdout:"), "{text}");
+                assert!(!text.contains("stderr:"), "{text}");
+                assert!(
+                    minicore_tui::ui::transcript::prepare_conversation(&app, 100)
+                        .sections
+                        .iter()
+                        .any(
+                            |section| section.id.tool_call_id.as_deref() == Some(CALL_ID)
+                                && section.folded
+                        )
+                );
                 assert!(text.contains("stdout-start"), "{text}");
                 assert!(text.contains("stderr-start"), "{text}");
                 assert!(!text.contains("lines hidden"), "{text}");

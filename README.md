@@ -80,6 +80,15 @@ Use `/new form` or `Ctrl+N` when you want the advanced session setup form.
 A new session's welcome/version block remains at the start of its conversation
 and scrolls naturally above later messages.
 
+Tool cards start folded, including short or still-unknown output. Click a card
+or press `Ctrl+O` to expand it explicitly. Folded Bash keeps its last five visual
+output rows; folded `write` keeps the first ten logical input lines, including
+after completion and when reopening retained history. Other folded success
+cards keep their compact summary. A visible restored write card may make one
+bounded, read-only display request to recover that preview; it does not execute
+the tool or page through output until expanded. The older Rail parity reports'
+20-line automatic-expansion policy is historical and no longer applies.
+
 ### CLI
 
 | Option | Meaning |

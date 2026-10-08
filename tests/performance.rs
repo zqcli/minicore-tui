@@ -764,6 +764,8 @@ fn history_tool_marker_falls_back_to_tool_facts_without_a_live_owner() {
     facts.outcome = Some(minicore_tui::protocol::ToolOutcomeWire::Failed);
     facts.result = Some(Arc::from("facts-fallback-result"));
     Arc::make_mut(&mut view.tool_presentations).insert(key.clone(), Arc::new(facts));
+    // This test exercises the expanded fallback body, not its default fold state.
+    view.tools_expanded = true;
     view.transcript.complete = false;
     view.transcript.invalidate();
 
