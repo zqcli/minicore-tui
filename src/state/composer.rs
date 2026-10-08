@@ -33,12 +33,12 @@ pub struct PasteRange {
     pub char_count: usize,
 }
 
-/// Metadata paired with each native TextArea undo record. The text itself
-/// stays in TextArea; explicit clears also remember the pre-clear cursor.
+/// Metadata paired with each native TextArea undo record. Text stays in
+/// TextArea; cursor snapshots preserve the public grapheme-safe positions.
 struct EditSnapshot {
     pastes: Vec<PasteRange>,
     byte_len: usize,
-    clear_cursor: Option<(usize, usize)>,
+    cursor: (usize, usize),
 }
 
 /// Whether navigating history touches the editor's live draft.
@@ -152,8 +152,9 @@ impl Composer {
     /// `TextArea` remains the cursor authority; callers only provide a
     /// terminal-cell position after passing through `EditorLayout`.
     pub fn move_to(&mut self, line: usize, column: usize) {
-        self.textarea
-            .move_cursor(CursorMove::Jump(line as u16, column as u16));
+        let line = line.min(self.lines().len() - 1);
+        let column = grapheme_column_bounds(&self.lines()[line], column).0;
+        self.move_to_scalar(line, column);
     }
 
     /// Moves from the projected editor coordinates back to the raw buffer.
@@ -173,8 +174,14 @@ impl Composer {
         let Some(raw) = self.textarea.lines().get(line).cloned() else {
             return;
         };
-        let start = start.min(raw.chars().count());
-        let end = end.min(raw.chars().count()).max(start);
+        let requested_start = start.min(raw.chars().count());
+        let requested_end = end.max(requested_start).min(raw.chars().count());
+        let start = grapheme_column_bounds(&raw, requested_start).0;
+        let end = if requested_start == requested_end {
+            start
+        } else {
+            grapheme_column_bounds(&raw, requested_end).1
+        };
         let removed = raw
             .chars()
             .skip(start)
@@ -194,7 +201,13 @@ impl Composer {
         // Deletion and insertion are separate native undo records. Keep the
         // projection snapshot aligned with each, including empty operations.
         self.delete_raw_range(offset, offset + end - start);
-        self.type_text(replacement);
+        // Removing text can join the adjacent scalars into a new grapheme.
+        // Insert at the original replacement boundary before normalizing the
+        // completed edit, so completion never shifts outside its source range.
+        if !replacement.is_empty() {
+            self.move_to_scalar(line, start);
+            self.type_text(replacement);
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -281,11 +294,13 @@ impl Composer {
         if !self.can_insert_bytes(bytes) {
             return false;
         }
+        let cursor = self.cursor();
         let start = self.edit_offset();
         self.textarea.insert_char(c);
-        self.record_edit();
+        self.record_edit(cursor);
         self.byte_len += bytes;
         self.reconcile_pastes(start, start, 1);
+        self.finish_edit(true);
         self.bump_revision();
         true
     }
@@ -304,6 +319,7 @@ impl Composer {
         if !self.can_insert_bytes(text.len()) {
             return false;
         }
+        let cursor = self.cursor();
         let start = if pasted {
             self.cursor_char_offset()
         } else {
@@ -312,7 +328,7 @@ impl Composer {
         if !self.textarea.insert_str(text) {
             return true;
         }
-        self.record_edit();
+        self.record_edit(cursor);
         // TextArea strips one trailing CR from each inserted logical line.
         // Measure the inserted text, not the full draft, to retain the fast path.
         let stripped = text.split('\n').filter(|line| line.ends_with('\r')).count();
@@ -330,6 +346,7 @@ impl Composer {
             });
             self.renumber_pastes();
         }
+        self.finish_edit(true);
         self.bump_revision();
         true
     }
@@ -365,35 +382,41 @@ impl Composer {
         self.type_char('\n')
     }
 
-    /// Backspace; joins lines at word edges exactly as tui-textarea does.
+    /// Backspace deletes a whole extended grapheme or atomic paste marker.
+    /// At a line boundary it joins exactly one newline, as before.
     pub fn backspace(&mut self) {
         let cursor = self.cursor_char_offset();
         if let Some(paste) = self.pastes.iter().find(|paste| paste.end == cursor) {
             self.delete_raw_range(paste.start, paste.end);
+            return;
+        }
+        let (row, column) = self.cursor();
+        let count = if column == 0 {
+            usize::from(row > 0)
         } else {
-            let deleted = self.previous_char_bytes();
-            if self.textarea.delete_char() {
-                self.record_edit();
-                self.byte_len -= deleted;
-                self.reconcile_pastes(cursor - 1, cursor, 0);
-                self.bump_revision();
-            }
+            column - grapheme_column_bounds(&self.lines()[row], column - 1).0
+        };
+        if count > 0 {
+            self.delete_raw_range(cursor - count, cursor);
         }
     }
 
-    /// Delete (forward).
+    /// Delete (forward) uses the same grapheme boundaries as navigation.
     pub fn delete(&mut self) {
         let cursor = self.cursor_char_offset();
         if let Some(paste) = self.pastes.iter().find(|paste| paste.start == cursor) {
             self.delete_raw_range(paste.start, paste.end);
+            return;
+        }
+        let (row, column) = self.cursor();
+        let line = &self.lines()[row];
+        let count = if column == line.chars().count() {
+            usize::from(row + 1 < self.lines().len())
         } else {
-            let deleted = self.next_char_bytes();
-            if self.textarea.delete_next_char() {
-                self.record_edit();
-                self.byte_len -= deleted;
-                self.reconcile_pastes(cursor, cursor + 1, 0);
-                self.bump_revision();
-            }
+            grapheme_column_bounds(line, column + 1).1 - column
+        };
+        if count > 0 {
+            self.delete_raw_range(cursor, cursor + count);
         }
     }
 
@@ -404,39 +427,21 @@ impl Composer {
         if start == end {
             return;
         }
+        let before = self.cursor();
         let cursor = self.cursor_char_offset();
         debug_assert!(start <= cursor && start < end);
         for _ in start..cursor {
             self.textarea.move_cursor(CursorMove::Back);
         }
         if self.textarea.delete_str(end - start) {
-            self.record_edit();
+            self.record_edit(before);
             self.byte_len = self.textarea.lines().iter().map(String::len).sum::<usize>()
                 + self.textarea.lines().len()
                 - 1;
             self.reconcile_pastes(start, end, 0);
+            self.finish_edit(false);
             self.bump_revision();
         }
-    }
-
-    fn previous_char_bytes(&self) -> usize {
-        let (row, column) = self.textarea.cursor();
-        if column > 0 {
-            return self.textarea.lines()[row]
-                .chars()
-                .nth(column - 1)
-                .map_or(0, char::len_utf8);
-        }
-        usize::from(row > 0)
-    }
-
-    fn next_char_bytes(&self) -> usize {
-        let (row, column) = self.textarea.cursor();
-        let line = &self.textarea.lines()[row];
-        if let Some(character) = line.chars().nth(column) {
-            return character.len_utf8();
-        }
-        usize::from(row + 1 < self.textarea.lines().len())
     }
 
     pub fn move_left(&mut self) {
@@ -449,10 +454,12 @@ impl Composer {
 
     pub fn move_up(&mut self) {
         self.textarea.move_cursor(CursorMove::Up);
+        self.snap_cursor(false);
     }
 
     pub fn move_down(&mut self) {
         self.textarea.move_cursor(CursorMove::Down);
+        self.snap_cursor(false);
     }
 
     /// True when the cursor sits on the first row (history recall trigger).
@@ -507,17 +514,16 @@ impl Composer {
     }
 
     pub fn undo(&mut self) {
+        let cursor = self.cursor();
         if self.textarea.undo() {
             // Only advance projection history when the native edit succeeded.
             if let Some(previous) = self.paste_undo.pop() {
                 self.paste_redo.push(EditSnapshot {
                     pastes: std::mem::replace(&mut self.pastes, previous.pastes),
                     byte_len: self.byte_len,
-                    clear_cursor: previous.clear_cursor,
+                    cursor,
                 });
-                if let Some(cursor) = previous.clear_cursor {
-                    self.restore_clear_cursor(cursor);
-                }
+                self.move_to(previous.cursor.0, previous.cursor.1);
             }
             self.byte_len = self.content().len();
             self.bump_revision();
@@ -525,13 +531,15 @@ impl Composer {
     }
 
     pub fn redo(&mut self) {
+        let cursor = self.cursor();
         if self.textarea.redo() {
             if let Some(next) = self.paste_redo.pop() {
                 self.paste_undo.push(EditSnapshot {
                     pastes: std::mem::replace(&mut self.pastes, next.pastes),
                     byte_len: self.byte_len,
-                    clear_cursor: next.clear_cursor,
+                    cursor,
                 });
+                self.move_to(next.cursor.0, next.cursor.1);
             }
             self.byte_len = self.content().len();
             self.bump_revision();
@@ -558,10 +566,7 @@ impl Composer {
         self.textarea.move_cursor(CursorMove::Bottom);
         self.textarea.move_cursor(CursorMove::End);
         if self.textarea.delete_next_char() {
-            self.record_edit();
-            if let Some(snapshot) = self.paste_undo.last_mut() {
-                snapshot.clear_cursor = Some(cursor);
-            }
+            self.record_edit(cursor);
             self.pastes.clear();
             self.byte_len = 0;
             self.history_index = None;
@@ -569,18 +574,74 @@ impl Composer {
         }
     }
 
-    fn restore_clear_cursor(&mut self, (row, column): (usize, usize)) {
-        self.textarea
-            .move_cursor(CursorMove::Jump(row.min(u16::MAX as usize) as u16, 0));
+    /// Native scalar move, bounded to real text, without TextArea's u16
+    /// truncation. End + Back is linear; Forward recounts a long line each time.
+    fn move_to_scalar(&mut self, row: usize, column: usize) {
+        let row = row.min(self.lines().len() - 1);
+        let column = column.min(self.lines()[row].chars().count());
+        self.textarea.move_cursor(CursorMove::Jump(
+            row.min(u16::MAX as usize) as u16,
+            column.min(u16::MAX as usize) as u16,
+        ));
         while self.cursor().0 < row {
             self.textarea.move_cursor(CursorMove::Down);
         }
-        self.textarea.move_cursor(CursorMove::End);
-        // Back is constant-time within a line, unlike Forward, which recounts
-        // the whole line. This also restores columns beyond u16::MAX exactly.
-        while self.cursor().1 > column {
-            self.textarea.move_cursor(CursorMove::Back);
+        if self.cursor().1 != column {
+            self.textarea.move_cursor(CursorMove::End);
+            while self.cursor().1 > column {
+                self.textarea.move_cursor(CursorMove::Back);
+            }
         }
+    }
+
+    fn snap_cursor(&mut self, forward: bool) {
+        let (row, column) = self.cursor();
+        let bounds = grapheme_column_bounds(&self.lines()[row], column);
+        let target = if forward { bounds.1 } else { bounds.0 };
+        if target != column {
+            self.move_to_scalar(row, target);
+        }
+    }
+
+    fn finish_edit(&mut self, forward: bool) {
+        self.snap_cursor(forward);
+        if self.pastes.is_empty() {
+            return;
+        }
+        // Inserting a combining mark / ZWJ / regional indicator can merge a
+        // paste edge with neighboring text. Expand that projection rather than
+        // offer a marker whose atomic deletion would split the new grapheme.
+        let mut edges = self
+            .pastes
+            .iter()
+            .flat_map(|paste| [paste.start, paste.end])
+            .collect::<Vec<_>>();
+        edges.sort_unstable();
+        edges.dedup();
+        let mut valid = Vec::with_capacity(edges.len());
+        let mut index = 0;
+        let mut offset = 0;
+        for line in self.lines() {
+            for grapheme in line.graphemes(true).chain(std::iter::once("\n")) {
+                while edges.get(index).is_some_and(|edge| *edge <= offset) {
+                    if edges[index] == offset {
+                        valid.push(offset);
+                    }
+                    index += 1;
+                }
+                if index == edges.len() {
+                    break;
+                }
+                offset += grapheme.chars().count();
+            }
+            if index == edges.len() {
+                break;
+            }
+        }
+        self.pastes.retain(|paste| {
+            valid.binary_search(&paste.start).is_ok() && valid.binary_search(&paste.end).is_ok()
+        });
+        self.renumber_pastes();
     }
 
     /// Replaces the whole buffer (send-failure recovery, /clear, history)
@@ -591,10 +652,12 @@ impl Composer {
             .replace('\r', "\n")
             .replace('\t', "    ");
         if normalized.len() > MAX_COMPOSER_BYTES {
-            let mut end = MAX_COMPOSER_BYTES;
-            while end > 0 && !normalized.is_char_boundary(end) {
-                end -= 1;
-            }
+            let end = normalized
+                .grapheme_indices(true)
+                .map(|(start, grapheme)| start + grapheme.len())
+                .take_while(|end| *end <= MAX_COMPOSER_BYTES)
+                .last()
+                .unwrap_or(0);
             normalized.truncate(end);
         }
         let lines = normalized
@@ -713,7 +776,7 @@ impl Composer {
     /// Record the projection before reconciling a successful native edit.
     /// Mirror the pinned TextArea history's bounded queue, including eviction
     /// before a branch edit when undo + redo already fill its capacity.
-    fn record_edit(&mut self) {
+    fn record_edit(&mut self, cursor: (usize, usize)) {
         if self.paste_undo.len() + self.paste_redo.len() == self.undo_capacity
             && !self.paste_undo.is_empty()
         {
@@ -722,7 +785,7 @@ impl Composer {
         self.paste_undo.push(EditSnapshot {
             pastes: self.pastes.clone(),
             byte_len: self.byte_len,
-            clear_cursor: None,
+            cursor,
         });
         self.paste_redo.clear();
     }
@@ -752,6 +815,27 @@ impl Composer {
             paste.id = index + 1;
         }
     }
+}
+
+/// Bracketing extended-grapheme boundaries in TextArea scalar coordinates.
+/// Exact boundaries remain exact; out-of-range positions clamp to line end.
+fn grapheme_column_bounds(line: &str, column: usize) -> (usize, usize) {
+    if line.is_ascii() {
+        let column = column.min(line.len());
+        return (column, column);
+    }
+    let mut start = 0;
+    for grapheme in line.graphemes(true) {
+        if column == start {
+            return (start, start);
+        }
+        let end = start + grapheme.chars().count();
+        if column < end {
+            return (start, end);
+        }
+        start = end;
+    }
+    (start, start)
 }
 
 fn shift(value: usize, delta: isize) -> usize {
@@ -1588,3 +1672,7 @@ mod tests {
         assert_eq!(composer.display_content(), "[paste #1 +11 lines]");
     }
 }
+
+#[cfg(test)]
+#[path = "composer/grapheme_tests.rs"]
+mod grapheme_tests;
