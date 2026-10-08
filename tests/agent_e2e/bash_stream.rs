@@ -196,18 +196,19 @@ printf 'stderr-final\n' >&2
                 assert_eq!(facts(&app, &key).output_line_count, Some(21));
                 assert!(!app.sessions.known[&session].tool_folds.contains_key(&key));
                 let folded = transcript_text(&app);
-                assert!(folded.contains("22 lines hidden"), "{folded}");
+                assert!(folded.contains("14 earlier lines"), "{folded}");
                 assert!(!folded.contains("stdout-start"), "{folded}");
-                assert!(!folded.contains("build-17"), "{folded}");
+                assert!(folded.contains("build-17"), "{folded}");
+                assert!(folded.contains("stderr-start"), "{folded}");
 
                 release(&env.workspace_path, GATES[1]);
                 stdout.push_str("build-18\n");
                 wait_for_preview(&mut process, &mut app, &key, &stdout, &stderr).await;
                 assert_eq!(facts(&app, &key).output_line_count, Some(22));
                 let folded = transcript_text(&app);
-                assert!(folded.contains("23 lines hidden"), "{folded}");
-                assert!(!folded.contains("22 lines hidden"), "{folded}");
-                assert!(!folded.contains("build-18"), "{folded}");
+                assert!(folded.contains("15 earlier lines"), "{folded}");
+                assert!(!folded.contains("14 earlier lines"), "{folded}");
+                assert!(folded.contains("build-18"), "{folded}");
 
                 dispatch(
                     &mut process,

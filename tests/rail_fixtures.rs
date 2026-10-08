@@ -813,7 +813,7 @@ fn rust_surface_primitives_match_source_rail_and_content_geometry() {
     );
     let source_title = token_text(source_token(source_row, 2));
     assert!(source_title.starts_with("bash"));
-    assert_eq!(rust_tool[1].spans[2].content.as_ref(), "bash");
+    assert_eq!(rust_tool[1].spans[2].content.as_ref(), "bash · completed");
     assert_eq!(
         rust_tool[1].spans[2].style.fg,
         Some(token_rgb(source_token(source_row, 2), "fg"))
@@ -978,8 +978,8 @@ fn rust_tool_state_colors_and_hidden_count_boundaries_match_source_facts() {
             truncated: false,
         };
         let lines = tool::durable_with_display(&Theme::dark(), &block, 80, false, Some(&display));
-        // The legacy fixture counts a non-rendered input row. The current
-        // count covers the actual expandable logical body, independent of width.
+        // The legacy fixture hid the entire body. Collapsed Bash now keeps
+        // its last five visual output rows and counts only the earlier rows.
         let text = lines
             .iter()
             .map(rust_row_text)
@@ -987,8 +987,11 @@ fn rust_tool_state_colors_and_hidden_count_boundaries_match_source_facts() {
             .join("\n");
         assert!(text.contains("bash"));
         assert!(!text.contains("line 0"));
-        assert!(text.contains(&format!("{result_lines} lines hidden")));
-        assert!(!text.contains("ctrl+o expand"));
+        assert!(text.contains(&format!("{} earlier lines", result_lines - 5)));
+        assert!(text.contains("ctrl+o expand"));
+        for line in result_lines - 5..result_lines {
+            assert!(text.contains(&format!("line {line}")));
+        }
     }
 }
 
