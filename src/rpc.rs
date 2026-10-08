@@ -1906,6 +1906,108 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fake_argument_preview_stream_reaches_cards_before_ack_without_tool_io() {
+        use crate::command::AppCommand;
+        use crate::event::AppEvent;
+        use crate::protocol::AgentEventWire;
+        use crate::state::tool::ToolKey;
+        use crate::ui::{testapp, transcript};
+        let mut process = spawn_fake("arguments_preview");
+        let mut app = testapp::open_empty(crate::theme::ThemeKind::Dark, "ses_1", None, "auto");
+        let send = testapp::take_requests(app.update(AppEvent::SubmitTurn {
+            session_id: "ses_1".into(),
+            text: "synthetic preview".into(),
+        }));
+        assert_eq!(send.len(), 1);
+        let send_id = send[0].id;
+        process
+            .send(send.into_iter().next().unwrap())
+            .await
+            .unwrap();
+        let key = ToolKey::new("ses_1", "loop_fake_1", 0, "write-preview");
+        let mut saw_generated = false;
+        let mut saw_upgraded = false;
+        let mut saw_terminal = false;
+        let mut previews = 0;
+        loop {
+            let event = next_process_event(&mut process).await;
+            let is_ack = matches!(&event, RpcEvent::Frame(IncomingFrame::Response(response)) if response.id == send_id);
+            let is_preview = matches!(
+                &event,
+                RpcEvent::Frame(IncomingFrame::Notification(RpcNotification::AgentEvent(
+                    AgentEventWire::ToolArgumentsPreview { .. }
+                )))
+            );
+            let is_invocation = matches!(
+                &event,
+                RpcEvent::Frame(IncomingFrame::Notification(RpcNotification::AgentEvent(
+                    AgentEventWire::ToolInvocation { .. }
+                )))
+            );
+            let is_terminal = matches!(
+                &event,
+                RpcEvent::Frame(IncomingFrame::Notification(RpcNotification::AgentEvent(
+                    AgentEventWire::TurnFinished { .. }
+                )))
+            );
+            let commands = app.update(AppEvent::Rpc(event));
+            for command in commands {
+                if let AppCommand::Rpc(request) = command {
+                    assert!(!matches!(request.method, "tool.read" | "tool.output"));
+                }
+            }
+            let rendered = transcript::prepare_conversation(&app, 80)
+                .lines()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            if is_preview {
+                previews += 1;
+                if previews == 4 || previews == 5 {
+                    assert!(rendered.contains("generated-line-01"));
+                    assert!(rendered.contains("generated-line-10"));
+                    assert!(!rendered.contains("generated-line-11"));
+                    assert!(!rendered.contains("stale fragment"));
+                }
+                if previews == 6 {
+                    assert!(rendered.contains("Arguments generated"));
+                    assert!(
+                        app.active_view().unwrap().tool_presentations[&key]
+                            .invocation
+                            .is_none()
+                    );
+                    saw_generated = true;
+                }
+            }
+            if is_invocation {
+                let facts = &app.active_view().unwrap().tool_presentations[&key];
+                assert!(facts.arguments_preview.is_none());
+                assert!(facts.display.expanded_input.is_none());
+                assert!(facts.invocation.is_some());
+                saw_upgraded = true;
+            }
+            assert!(!rendered.contains("must never replace real invocation"));
+            if is_terminal {
+                assert!(
+                    app.active_view()
+                        .unwrap()
+                        .tool_presentations
+                        .values()
+                        .all(|facts| facts.arguments_preview.is_none())
+                );
+                saw_terminal = true;
+            }
+            if is_ack {
+                break;
+            }
+        }
+        assert_eq!(previews, 7);
+        assert!(saw_generated && saw_upgraded && saw_terminal);
+        process.terminate().await;
+    }
+
+    #[tokio::test]
     async fn fake_serve_mode_speaks_the_full_contract() {
         let mut process = spawn_fake("serve");
         for (id, method) in [

@@ -441,6 +441,8 @@ impl InlineToolLoad {
 /// running.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolFacts {
+    /// Unvalidated model-argument presentation, cleared by any real tool fact.
+    pub arguments_preview: Option<ArgumentsPreview>,
     pub display: Arc<ToolDisplayWire>,
     pub result: Option<Arc<str>>,
     pub result_truncated: bool,
@@ -477,6 +479,26 @@ pub struct ToolConflict {
     pub observed_outcome: crate::protocol::ToolOutcomeWire,
 }
 
+/// Tiny presentation marker. The display payload remains owned by ToolFacts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ArgumentsPreview {
+    pub attempt: u64,
+    pub revision: u64,
+    pub state: crate::protocol::ToolArgumentsPreviewStateWire,
+    pub partial: bool,
+}
+
+/// At most one model request and 16 call watermarks per session. A newer
+/// attempt retires the entire previous attempt, even when call ids differ.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArgumentsPreviewFence {
+    pub loop_id: String,
+    pub request_index: u32,
+    pub attempt: u64,
+    pub closed: bool,
+    pub calls: std::collections::HashMap<String, ArgumentsPreview>,
+}
+
 /// Compatibility name retained for existing render/source APIs. The map in
 /// `SessionView` is now explicitly a `ToolKey -> ToolFacts` owner.
 pub type ToolPresentationState = ToolFacts;
@@ -484,6 +506,7 @@ pub type ToolPresentationState = ToolFacts;
 impl ToolFacts {
     pub fn new(name: &str) -> Self {
         Self {
+            arguments_preview: None,
             display: Arc::new(ToolDisplayWire {
                 body_truncated: false,
                 detail: name.to_owned(),
@@ -513,11 +536,20 @@ impl ToolFacts {
         }
     }
 
+    /// A real fact is an execution boundary, never a confirmation of a
+    /// speculative body. Drop that body rather than mixing it with real input.
+    pub fn promote_arguments_preview(&mut self, name: &str) {
+        if self.arguments_preview.take().is_some() {
+            self.display = Self::new(name).display;
+        }
+    }
+
     pub fn accept_execution(
         &mut self,
         mut execution: crate::protocol::ToolExecutionWire,
         authoritative: bool,
     ) {
+        self.promote_arguments_preview(&execution.name);
         if self.is_terminal() && !execution.state.is_terminal() {
             return;
         }
@@ -824,6 +856,7 @@ impl ToolFacts {
     }
 
     pub fn accept_started(&mut self, name: &str) {
+        self.promote_arguments_preview(name);
         if self.is_terminal() {
             return;
         }
@@ -837,6 +870,7 @@ impl ToolFacts {
         result: Option<Arc<str>>,
         truncated: bool,
     ) {
+        self.promote_arguments_preview("tool");
         if self.is_terminal() && self.outcome != Some(outcome) {
             self.needs_read = true;
             self.conflict = Some(ToolConflict {
@@ -1020,6 +1054,7 @@ mod tests {
 
     fn facts() -> ToolFacts {
         ToolFacts {
+            arguments_preview: None,
             display: Arc::new(ToolDisplayWire {
                 body_truncated: false,
                 detail: "tool".to_owned(),

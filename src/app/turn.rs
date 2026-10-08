@@ -2723,6 +2723,7 @@ impl App {
             AgentEventWire::TurnStarted { data } => Some(data.turn.clone()),
             AgentEventWire::RequestStarted { data } => Some(data.turn.clone()),
             AgentEventWire::OutputDelta { data } => Some(data.turn.clone()),
+            AgentEventWire::ToolArgumentsPreview { data } => Some(data.turn.clone()),
             AgentEventWire::ToolStarted { data } => Some(data.turn.clone()),
             AgentEventWire::ToolPresentation { data } => Some(data.turn.clone()),
             AgentEventWire::ToolProgress { data } => Some(data.turn.clone()),

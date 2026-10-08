@@ -289,3 +289,42 @@ store-file parser, shell executor, approval transport, event replay, or
 automatic reconnect in this frontend.
 
 [`minicore-agent`]: https://github.com/zqcli/minicore-agent
+
+## Optional Tool Argument Previews
+
+An Agent advertising optional `tool.arguments.preview` may send
+`tool_arguments_preview` notifications. This capability is deliberately absent
+from the TUI's required list; older Agents work unchanged, and older TUI
+versions ignore the unknown event. The additive data shape is:
+
+- `turn: {session_id, loop_id}`, `request_index: u32`, `tool_call_id`, `tool_name`
+- `attempt: u64` (monotonic for each Model.start), `revision: u64` per call
+- `state: generating | generated | discarded`, `partial: bool`
+- `display: ToolDisplayWire`, `meta: EventMetaWire`
+
+Each notification replaces the complete previous snapshot. Revisions prevent
+late/duplicate updates; a newer attempt retires every older provisional card
+for that request, even when retries use different call IDs. Only one current
+request and at most 16 bounded call watermarks are retained per session. A
+missing start or lost intermediate event needs no argument-delta replay.
+
+These are unvalidated model-argument presentations. `generated` means only
+that argument generation ended, never that parsing, validation, policy, file
+I/O, or execution succeeded. Only read/edit/write are rendered. Read shows its
+path/range, edit its path, and write the first 10 retained logical content lines
+by default. Expansion shows only retained content; truncated previews remain
+explicit. There is no speculative edit diff, Bash output surface, process
+clock, or `tool.read`/`tool.output` request while a card is provisional.
+
+Real invocation, started, execution, presentation, and durable history facts
+replace the provisional state under the same complete ToolKey. The preview
+body is released on upgrade. Discard, cancel, terminal/error cleanup, session
+switch, newer request/loop, durable replacement, and budget eviction remove
+or retire speculative cards. Late snapshots cannot overwrite a real tool.
+The TUI additionally caps retained preview display bytes to 128 KiB per call
+and 512 KiB overall, 16 calls per request attempt, with 1 KiB identity limits.
+These bounds do not alter executable arguments or Agent execution semantics.
+
+Coverage is in `src/app/tool_preview_tests.rs`, the `arguments_preview` mode of
+`tests/agent_process.rs`, its production `RpcProcess` test in `src/rpc.rs`, and
+`tests/protocol.rs`. The synthetic process never executes a model or tool.

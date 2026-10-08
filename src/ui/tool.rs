@@ -145,6 +145,7 @@ pub fn live_with_metadata(
 pub fn facts_revision(facts: &crate::state::tool::ToolFacts) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
+    facts.arguments_preview.hash(&mut hash);
     std::mem::discriminant(&facts.status).hash(&mut hash);
     facts
         .outcome
@@ -220,6 +221,9 @@ fn render_card(
     state: ToolSurfaceState,
     status: String,
 ) -> RenderedTool {
+    if let Some(facts) = facts.filter(|facts| facts.arguments_preview.is_some()) {
+        return render_arguments_preview(theme, name, facts, width, expanded);
+    }
     let mut colors = rail::tool_colors(theme, state);
     let mut detail = target(name, display, facts);
     if matches!(name, "apply_patch" | "patch")
@@ -515,6 +519,116 @@ fn render_card(
         lines: out,
         copy_cells,
         hard_breaks,
+    }
+}
+
+/// Model input is still being generated. In particular there is no result,
+/// successful execution color, process timer, or speculative edit diff.
+fn render_arguments_preview(
+    theme: &Theme,
+    name: &str,
+    facts: &crate::state::tool::ToolFacts,
+    width: usize,
+    expanded: bool,
+) -> RenderedTool {
+    let preview = facts.arguments_preview.expect("argument preview");
+    let colors = rail::tool_colors(theme, ToolSurfaceState::Pending);
+    let available = width.saturating_sub(rail::SURFACE_CONTENT_START);
+    let state = match preview.state {
+        crate::protocol::ToolArgumentsPreviewStateWire::Generating => "Generating arguments",
+        crate::protocol::ToolArgumentsPreviewStateWire::Generated => "Arguments generated",
+        crate::protocol::ToolArgumentsPreviewStateWire::Discarded => "Arguments discarded",
+    };
+    let mut out = vec![Line::default()];
+    let mut copies = vec![Some(CopyCells::decoration())];
+    let mut breaks = vec![true];
+    for (text, color, decorative) in [
+        (format!("{name} · {state}"), theme.tool_title, true),
+        (
+            clip_target(&facts.display.detail, available),
+            theme.tool_output,
+            false,
+        ),
+    ] {
+        out.push(rail::surface_row(
+            width,
+            colors,
+            rail::SURFACE_CONTENT_START,
+            Line::from(Span::styled(
+                clip_summary(&text, available),
+                Style::new().fg(color),
+            )),
+        ));
+        copies.push(decorative.then(CopyCells::decoration));
+        breaks.push(true);
+    }
+    let body = (name == "write")
+        .then(|| facts.display.expanded_input.as_deref())
+        .flatten()
+        .unwrap_or_default();
+    let total = if body.is_empty() {
+        0
+    } else {
+        body.split('\n').count()
+    };
+    let shown = if expanded { total } else { total.min(10) };
+    let mut source_offset = 0;
+    for line in body.split('\n').take(shown) {
+        let exact = (visible_tool_line(line) == line).then_some(source_offset);
+        for_each_tool_visual_row(
+            line,
+            available.saturating_sub(2).max(1),
+            |text, hard_break, offset| {
+                let columns = rail::SURFACE_CONTENT_START + 2;
+                copies.push(Some(CopyCells::content(
+                    columns..columns + column_width(&text),
+                    exact.map(|base| base + offset),
+                )));
+                breaks.push(hard_break);
+                out.push(rail::surface_row(
+                    width,
+                    colors,
+                    rail::SURFACE_CONTENT_START,
+                    Line::from(Span::styled(
+                        format!("  {text}"),
+                        Style::new().fg(theme.tool_output),
+                    )),
+                ));
+            },
+        );
+        source_offset += line.len() + 1;
+    }
+    let mut hints = Vec::new();
+    if facts.display.body_truncated || facts.display.truncated {
+        hints.push("preview truncated".to_owned());
+    } else if preview.partial {
+        hints.push("partial preview".to_owned());
+    }
+    if total > shown {
+        hints.push(format!("{} more lines · ctrl+o expand", total - shown));
+    } else if expanded && total > 10 {
+        hints.push("ctrl+o collapse".to_owned());
+    }
+    if !hints.is_empty() {
+        out.push(rail::surface_row(
+            width,
+            colors,
+            rail::SURFACE_CONTENT_START,
+            Line::from(Span::styled(
+                clip_summary(&hints.join(" · "), available),
+                Style::new().fg(theme.tool_muted),
+            )),
+        ));
+        copies.push(Some(CopyCells::decoration()));
+        breaks.push(true);
+    }
+    out.push(Line::default());
+    copies.push(Some(CopyCells::decoration()));
+    breaks.push(true);
+    RenderedTool {
+        lines: out,
+        copy_cells: copies,
+        hard_breaks: breaks,
     }
 }
 

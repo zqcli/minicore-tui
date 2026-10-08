@@ -60,7 +60,7 @@ impl App {
             else {
                 continue;
             };
-            if !facts.body_deferred {
+            if facts.arguments_preview.is_some() || !facts.body_deferred {
                 continue;
             }
             // Live cards already carrying both display and result need no recovery read.

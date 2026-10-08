@@ -553,6 +553,9 @@ pub enum AgentEventWire {
     OutputDelta {
         data: OutputDeltaDataWire,
     },
+    ToolArgumentsPreview {
+        data: Box<ToolArgumentsPreviewDataWire>,
+    },
     ToolStarted {
         data: ToolStartedDataWire,
     },
@@ -651,6 +654,29 @@ pub struct OutputDeltaDataWire {
     pub delta: String,
     pub meta: EventMetaWire,
 }
+/// Optional, replace-only presentation snapshot. Never a validated invocation.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ToolArgumentsPreviewDataWire {
+    pub turn: TurnRef,
+    pub request_index: u32,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub attempt: u64,
+    pub revision: u64,
+    pub state: ToolArgumentsPreviewStateWire,
+    pub partial: bool,
+    pub display: ToolDisplayWire,
+    pub meta: EventMetaWire,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolArgumentsPreviewStateWire {
+    Generating,
+    Generated,
+    Discarded,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct ToolStartedDataWire {
     pub turn: TurnRef,
