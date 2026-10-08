@@ -18,7 +18,10 @@ use crate::ui::rail::{self, ToolSurfaceState};
 pub struct RenderedTool {
     pub lines: Vec<Line<'static>>,
     pub copy_cells: Vec<Option<CopyCells>>,
-    /// Present for the Bash tail, whose visual wraps must copy without newlines.
+    /// A preview may combine a copyable target with input instead of result.
+    /// Its explicit row offsets are relative to this renderer-owned source.
+    pub copy_source: Option<String>,
+    /// Present for previews, whose visual wraps must copy without newlines.
     pub hard_breaks: Vec<bool>,
 }
 
@@ -296,6 +299,7 @@ fn render_card(
             .is_some_and(|f| f.result_truncated || f.count_partial || f.process_output_partial());
     let mut decorative_rows = vec![0];
     let mut preview_rows = Vec::new();
+    let mut copy_source = None;
     if expanded {
         // A complete one-line Bash command is already present in its target
         // row. Keep the body when clipping or normalization would lose bytes.
@@ -304,9 +308,47 @@ fn render_card(
                 || text.contains('\n')
                 || visible_tool_line(text) != clip_target(&detail, available)
         });
-        append_body(
-            theme, width, colors, name, body_input, result, failed, &mut out,
-        );
+        if let Some(body) = body_input.filter(|_| name == "write") {
+            let mut source = write_preview_source(&detail, body);
+            let prefix_bytes = source.len() - body.len();
+            decorative_rows.push(1);
+            if !body.is_empty() {
+                append_mapped_body(
+                    body,
+                    usize::MAX,
+                    prefix_bytes,
+                    theme.success,
+                    width,
+                    colors,
+                    &mut out,
+                    &mut preview_rows,
+                );
+            }
+            if let Some(result) = result.filter(|text| !text.is_empty()) {
+                source.push('\n');
+                let result_offset = source.len();
+                source.push_str(result);
+                append_mapped_body(
+                    result,
+                    usize::MAX,
+                    result_offset,
+                    if failed {
+                        theme.error
+                    } else {
+                        theme.tool_output
+                    },
+                    width,
+                    colors,
+                    &mut out,
+                    &mut preview_rows,
+                );
+            }
+            copy_source = Some(source);
+        } else {
+            append_body(
+                theme, width, colors, name, body_input, result, failed, &mut out,
+            );
+        }
         if result.is_none() {
             if let Some(streams) = facts.and_then(|f| f.process_output.as_ref()) {
                 for (stream, label) in streams.iter().zip(["stdout:", "stderr:"]) {
@@ -432,6 +474,50 @@ fn render_card(
                 )),
             ));
         }
+    } else if let Some((body, input_partial)) = input.filter(|_| name == "write") {
+        // Pi keeps the write call's first ten logical lines visible even after
+        // execution. The success receipt is not the body that was written.
+        let source = write_preview_source(&detail, body);
+        let prefix_bytes = source.len() - body.len();
+        copy_source = Some(source);
+        decorative_rows.push(1); // Tool title is framing; the target remains copyable.
+        let body = body.trim_end_matches('\n');
+        let total = if body.is_empty() {
+            0
+        } else {
+            body.split('\n').count()
+        };
+        let shown = total.min(10);
+        append_mapped_body(
+            body,
+            shown,
+            prefix_bytes,
+            theme.tool_output,
+            width,
+            colors,
+            &mut out,
+            &mut preview_rows,
+        );
+        let mut hints = Vec::new();
+        if input_partial {
+            hints.push("partial input".to_owned());
+        }
+        if total > shown {
+            hints.push(format!("{} more lines", total - shown));
+        }
+        if !hints.is_empty() {
+            hints.push("ctrl+o expand".to_owned());
+            decorative_rows.push(out.len());
+            out.push(rail::surface_row(
+                width,
+                colors,
+                rail::SURFACE_CONTENT_START,
+                Line::from(Span::styled(
+                    clip_summary(&hints.join(" · "), available),
+                    Style::new().fg(theme.tool_muted),
+                )),
+            ));
+        }
     } else {
         decorative_rows.push(out.len());
         let input_count = facts.and_then(|f| f.input_line_count());
@@ -503,7 +589,7 @@ fn render_card(
     decorative_rows.push(out.len());
     out.push(Line::default());
     let mut copy_cells = vec![None; out.len()];
-    let mut hard_breaks = if name == "bash" && !expanded {
+    let mut hard_breaks = if (name == "bash" && !expanded) || copy_source.is_some() {
         vec![true; out.len()]
     } else {
         Vec::new()
@@ -518,8 +604,52 @@ fn render_card(
     RenderedTool {
         lines: out,
         copy_cells,
+        copy_source,
         hard_breaks,
     }
+}
+
+type PreviewRow = (usize, std::ops::Range<usize>, bool, Option<usize>);
+
+#[allow(clippy::too_many_arguments)]
+fn append_mapped_body(
+    body: &str,
+    limit: usize,
+    mut source_offset: usize,
+    color: ratatui::style::Color,
+    width: usize,
+    colors: rail::SurfaceColors,
+    out: &mut Vec<Line<'static>>,
+    rows: &mut Vec<PreviewRow>,
+) {
+    let available = width.saturating_sub(rail::SURFACE_CONTENT_START);
+    for line in body.split('\n').take(limit) {
+        let exact = (visible_tool_line(line) == line).then_some(source_offset);
+        for_each_tool_visual_row(
+            line,
+            available.saturating_sub(2).max(1),
+            |text, hard_break, offset| {
+                let columns = rail::SURFACE_CONTENT_START + 2;
+                rows.push((
+                    out.len(),
+                    columns..columns + column_width(&text),
+                    hard_break,
+                    exact.map(|base| base + offset),
+                ));
+                out.push(rail::surface_row(
+                    width,
+                    colors,
+                    rail::SURFACE_CONTENT_START,
+                    Line::from(Span::styled(format!("  {text}"), Style::new().fg(color))),
+                ));
+            },
+        );
+        source_offset += line.len() + 1;
+    }
+}
+
+fn write_preview_source(detail: &str, body: &str) -> String {
+    format!("{}\n{body}", detail.lines().next().unwrap_or_default())
 }
 
 /// Model input is still being generated. In particular there is no result,
@@ -572,7 +702,10 @@ fn render_arguments_preview(
         body.split('\n').count()
     };
     let shown = if expanded { total } else { total.min(10) };
-    let mut source_offset = 0;
+    let copy_source = (name == "write").then(|| write_preview_source(&facts.display.detail, body));
+    let mut source_offset = copy_source
+        .as_ref()
+        .map_or(0, |source| source.len() - body.len());
     for line in body.split('\n').take(shown) {
         let exact = (visible_tool_line(line) == line).then_some(source_offset);
         for_each_tool_visual_row(
@@ -628,6 +761,7 @@ fn render_arguments_preview(
     RenderedTool {
         lines: out,
         copy_cells: copies,
+        copy_source,
         hard_breaks: breaks,
     }
 }
@@ -915,14 +1049,10 @@ fn diff_line_color(theme: &Theme, line: &str, in_hunk: &mut bool) -> ratatui::st
     theme.tool_output
 }
 
-/// Returns the Rail default for a tool when no manual fold override exists.
-/// `write` is always compact; every other tool uses the source estimator's
-/// 20-row boundary. The caller supplies the Agent's bounded hidden-row count.
-pub fn default_expanded(name: &str, hidden_line_count: Option<usize>) -> bool {
-    if name == "write" {
-        return false;
-    }
-    hidden_line_count.is_none_or(|hidden| hidden < 20)
+/// All tools start folded. Preview rows and source counts never imply an
+/// explicit expansion; callers retain manual card and session overrides.
+pub fn default_expanded(_name: &str, _hidden_line_count: Option<usize>) -> bool {
+    false
 }
 
 fn durable_summary(block: &ToolBlock) -> String {
@@ -1092,15 +1222,28 @@ mod tests {
     use unicode_segmentation::UnicodeSegmentation;
 
     #[test]
-    fn default_expansion_only_forces_write_and_uses_generic_boundary() {
-        assert!(default_expanded("read", Some(1)));
-        assert!(!default_expanded("write", Some(1)));
-        assert!(default_expanded("apply_patch", Some(1)));
-        assert!(default_expanded("bash", None));
-        assert!(default_expanded("edit", Some(19)));
-        assert!(default_expanded("custom_tool", Some(19)));
-        assert!(!default_expanded("custom_tool", Some(20)));
-        assert!(!default_expanded("custom_tool", Some(21)));
+    fn every_tool_defaults_folded_regardless_of_count() {
+        for name in [
+            "read",
+            "write",
+            "edit",
+            "apply_patch",
+            "patch",
+            "bash",
+            "custom_tool",
+        ] {
+            for count in [
+                None,
+                Some(0),
+                Some(1),
+                Some(19),
+                Some(20),
+                Some(21),
+                Some(usize::MAX),
+            ] {
+                assert!(!default_expanded(name, count), "{name}: {count:?}");
+            }
+        }
     }
 
     #[test]
@@ -1217,7 +1360,7 @@ mod tests {
     #[test]
     fn collapsed_cards_have_three_content_rows_without_result_summaries() {
         for theme in [Theme::dark(), Theme::light()] {
-            for name in ["read", "write", "edit", "apply_patch", "custom"] {
+            for name in ["read", "edit", "apply_patch", "custom"] {
                 for width in [24, 59, 79, 119] {
                     let rows = super::durable_with_display(
                         &theme,
@@ -1262,7 +1405,7 @@ mod tests {
 
     #[test]
     fn hidden_logical_lines_are_width_independent_and_do_not_count_target() {
-        let block = card("write", &format!("{}\n\nend\n", "中文内容".repeat(30)));
+        let block = card("edit", &format!("{}\n\nend\n", "中文内容".repeat(30)));
         let display = display("target", Some("a\n\n"));
         for width in [20, 59, 79] {
             let rows =
@@ -1911,5 +2054,120 @@ mod bash_preview_tests {
                 .any(|line| line.to_string().contains("Took")
                     || line.to_string().contains("Elapsed"))
         );
+    }
+}
+
+#[cfg(test)]
+mod write_preview_tests {
+    use super::*;
+    use crate::state::tool::ToolFacts;
+    use std::sync::Arc;
+
+    fn render(body: Option<&str>, partial: bool, width: usize) -> RenderedTool {
+        let mut facts = ToolFacts::new("write");
+        Arc::make_mut(&mut facts.display).detail = "a.rs".into();
+        Arc::make_mut(&mut facts.display).expanded_input = body.map(str::to_owned);
+        Arc::make_mut(&mut facts.display).body_truncated = partial;
+        let block = ToolBlock {
+            index: None,
+            loop_id: "l".into(),
+            request_index: 0,
+            tool_call_id: "c".into(),
+            name: "write".into(),
+            result: Some("SUCCESS RECEIPT".into()),
+            outcome: Some(ToolOutcomeWire::Success),
+            live_status: None,
+            progress: None,
+            expanded: false,
+        };
+        durable_with_metadata(&Theme::dark(), &block, width, false, Some(&facts))
+    }
+
+    #[test]
+    fn write_preview_uses_first_ten_logical_lines_and_trims_only_trailing_empty_lines() {
+        for count in [0, 1, 10, 11, 12] {
+            let body = (1..=count)
+                .map(|i| format!("payload-{i:02}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n\n";
+            for width in [14, 40, 80] {
+                let rendered = render(Some(&body), false, width);
+                let visible = rendered
+                    .lines
+                    .iter()
+                    .map(Line::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(!visible.contains("SUCCESS RECEIPT"));
+                let mut copied = String::new();
+                for (row, copy) in rendered.copy_cells.iter().enumerate() {
+                    if let Some(copy) = copy.as_ref().filter(|copy| !copy.decorative) {
+                        let offset =
+                            copy.source_offset.expect("exact body offset") - "a.rs\n".len();
+                        let text = rendered.lines[row]
+                            .to_string()
+                            .chars()
+                            .skip(copy.columns.start)
+                            .collect::<String>();
+                        let text = text.trim_end();
+                        assert!(body[offset..].starts_with(text));
+                        copied.push_str(text);
+                        if rendered.hard_breaks[row] {
+                            copied.push('\n');
+                        }
+                    }
+                }
+                let expected = (1..=count.min(10))
+                    .map(|i| format!("payload-{i:02}\n"))
+                    .collect::<String>();
+                assert_eq!(copied, expected, "{count} lines at {width}");
+                if count > 10 && width >= 40 {
+                    assert!(visible.contains(&format!("{} more lines", count - 10)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn write_preview_preserves_internal_blanks_unicode_and_soft_wrap_offsets() {
+        let body = "e\u{301}👩🏽‍💻中 repeated repeated repeated\n\nlast\n";
+        for width in [12, 23, 80] {
+            let rendered = render(Some(body), false, width);
+            let rows: Vec<_> = rendered
+                .copy_cells
+                .iter()
+                .enumerate()
+                .filter_map(|(row, copy)| {
+                    copy.as_ref()
+                        .filter(|copy| !copy.decorative)
+                        .map(|copy| (row, copy))
+                })
+                .collect();
+            assert_eq!(
+                rows.iter()
+                    .filter(|(row, _)| rendered.hard_breaks[*row])
+                    .count(),
+                3
+            );
+            for (row, copy) in rows {
+                let offset = copy.source_offset.unwrap() - "a.rs\n".len();
+                assert!(body.is_char_boundary(offset));
+                assert!(crate::markdown::line_width(&rendered.lines[row]) <= width);
+            }
+        }
+        let partial = render(Some("line"), true, 80)
+            .lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<String>();
+        assert!(partial.contains("partial input"));
+        let missing = render(None, false, 80)
+            .lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<String>();
+        assert!(missing.contains("Lines unknown"));
+        assert!(!missing.contains("SUCCESS RECEIPT"));
     }
 }

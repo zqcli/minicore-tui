@@ -32,21 +32,21 @@ impl App {
             .filter_map(|row| {
                 prepared.sections.at_row(row).filter(|section| {
                     section.id.kind == crate::state::view::SectionKind::Tool
-                        && !section.folded
                         && row == section.rows.start.max(position.offset)
                 })
             })
             .filter_map(|section| {
-                Some(ToolKey::new(
+                let key = ToolKey::new(
                     &view.info.session_id,
                     section.id.loop_id.as_deref()?,
                     section.id.request_index?,
                     section.id.tool_call_id.as_deref()?,
-                ))
+                );
+                Some((key, section.folded))
             })
             .collect();
         let mut commands = Vec::new();
-        for key in keys {
+        for (key, folded) in keys {
             if self.deferred_pending() + self.queries.in_flight_len()
                 >= super::MAX_DEFERRED_REQUESTS
             {
@@ -61,6 +61,27 @@ impl App {
                 continue;
             };
             if facts.arguments_preview.is_some() || !facts.body_deferred {
+                continue;
+            }
+            // A folded write may recover only its bounded input preview. Once
+            // attempted, missing/expired display is not a reason to poll again.
+            // Explicit expansion can resume the ordinary output pagination.
+            if folded
+                && (facts.input_text().is_some()
+                    || facts
+                        .inline
+                        .as_ref()
+                        .is_some_and(|load| load.epoch == epoch && load.read))
+            {
+                continue;
+            }
+            if folded
+                && !self
+                    .sessions
+                    .known
+                    .get(&key.session_id)
+                    .is_some_and(|view| is_write_card(view, &key))
+            {
                 continue;
             }
             // Live cards already carrying both display and result need no recovery read.
@@ -261,6 +282,58 @@ impl App {
     }
 }
 
+// Use the actual call identity, not a display/path heuristic. History-only
+// assistant calls can own a card before a separate Tool result is available.
+fn is_write_card(view: &crate::state::session::SessionView, key: &ToolKey) -> bool {
+    use crate::state::transcript::TranscriptBlock;
+    if let Some(name) = view
+        .transcript
+        .blocks
+        .iter()
+        .find_map(|block| match block.as_ref() {
+            TranscriptBlock::Tool(tool)
+                if tool.loop_id == key.loop_id
+                    && tool.request_index == key.request_index
+                    && tool.tool_call_id == key.tool_call_id =>
+            {
+                Some(tool.name.as_str())
+            }
+            TranscriptBlock::Assistant(assistant)
+                if assistant.loop_id == key.loop_id
+                    && assistant.request_index == key.request_index =>
+            {
+                assistant
+                    .tool_calls
+                    .iter()
+                    .find(|call| call.tool_call_id == key.tool_call_id)
+                    .map(|call| call.name.as_str())
+            }
+            _ => None,
+        })
+    {
+        return name == "write";
+    }
+    view.live
+        .as_ref()
+        .filter(|live| {
+            live.reference
+                .as_ref()
+                .is_some_and(|reference| reference.loop_id == key.loop_id)
+        })
+        .and_then(|live| {
+            live.requests
+                .iter()
+                .find(|request| request.request_index == key.request_index)
+        })
+        .and_then(|request| {
+            request
+                .tools
+                .iter()
+                .find(|tool| tool.tool_call_id == key.tool_call_id)
+        })
+        .is_some_and(|tool| tool.name == "write")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,15 +400,13 @@ mod tests {
     }
 
     #[test]
-    fn summary_is_folded_until_clicked_then_loads_once_and_reuses_empty_eof() {
+    fn folded_write_recovers_input_once_then_expansion_loads_output_and_reuses_empty_eof() {
         let (mut app, key) = fixture();
-        assert!(app.poll_inline_tools().is_empty());
         assert!(
             app.sessions.known["ses_1"].tool_presentations[&key]
                 .result
                 .is_none()
         );
-        toggle(&mut app, &key);
         let requests = take_requests(app.poll_inline_tools());
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].method, "tool.read");
@@ -343,6 +414,11 @@ mod tests {
         assert!(app.poll_inline_tools().is_empty());
         respond(&mut app, &requests[0], read(&key));
         prepare(&mut app);
+        assert!(
+            app.poll_inline_tools().is_empty(),
+            "folded write must not fetch output"
+        );
+        toggle(&mut app, &key);
         let output = take_requests(app.poll_inline_tools());
         assert_eq!(output.len(), 1);
         assert_eq!(output[0].method, "tool.output");
@@ -583,5 +659,86 @@ mod tests {
                 .error
                 .is_none()
         );
+    }
+
+    #[test]
+    fn folded_write_missing_or_expired_display_is_attempted_once_without_output() {
+        for availability in ["available", "expired", "unavailable"] {
+            let (mut app, key) = fixture();
+            let requests = take_requests(app.poll_inline_tools());
+            assert_eq!(requests.len(), 1);
+            let mut response = read(&key);
+            response["display"] = Value::Null;
+            response["execution"]["input_availability"] = json!(availability);
+            respond(&mut app, &requests[0], response);
+            for _ in 0..5 {
+                prepare(&mut app);
+                assert!(app.poll_inline_tools().is_empty());
+            }
+            assert!(
+                app.sessions.known["ses_1"].tool_presentations[&key]
+                    .inline
+                    .as_ref()
+                    .unwrap()
+                    .read
+            );
+            toggle(&mut app, &key);
+            let requests = take_requests(app.poll_inline_tools());
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].method, "tool.output");
+        }
+    }
+
+    #[test]
+    fn folded_write_metadata_error_requires_explicit_retry() {
+        let (mut app, key) = fixture();
+        let requests = take_requests(app.poll_inline_tools());
+        crate::ui::testapp::respond_rpc_error(&mut app, &requests[0], -32000, "metadata error");
+        for _ in 0..5 {
+            prepare(&mut app);
+            assert!(app.poll_inline_tools().is_empty());
+        }
+        toggle(&mut app, &key);
+        let requests = take_requests(app.poll_inline_tools());
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "tool.read");
+    }
+
+    #[test]
+    fn folded_other_tools_existing_input_and_offscreen_write_do_not_prefetch() {
+        for name in ["read", "edit", "bash", "custom"] {
+            let (mut app, key) = fixture();
+            for block in app
+                .sessions
+                .known
+                .get_mut("ses_1")
+                .unwrap()
+                .transcript
+                .blocks_mut()
+            {
+                if let crate::state::transcript::TranscriptBlock::Tool(tool) = Arc::make_mut(block)
+                {
+                    tool.name = name.into();
+                }
+            }
+            prepare(&mut app);
+            assert!(app.poll_inline_tools().is_empty(), "{name}");
+            toggle(&mut app, &key);
+            assert_eq!(
+                take_requests(app.poll_inline_tools())[0].method,
+                "tool.read"
+            );
+        }
+        let (mut app, key) = fixture();
+        Arc::make_mut(&mut app.tool_facts_mut(&key, "write").unwrap().display).expanded_input =
+            Some("loaded".into());
+        prepare(&mut app);
+        assert!(app.poll_inline_tools().is_empty());
+        let (mut app, _) = fixture();
+        app.viewport.1 = 0;
+        assert!(app.poll_inline_tools().is_empty());
+        let (mut app, _) = fixture();
+        app.sessions.active = None;
+        assert!(app.poll_inline_tools().is_empty());
     }
 }

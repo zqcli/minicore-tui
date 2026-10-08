@@ -74,7 +74,7 @@ fn render(app: &App, width: u16) -> (String, bool) {
 }
 
 #[test]
-fn inline_bash_updates_before_finish_autofolds_and_preserves_manual_expansion() {
+fn inline_bash_updates_while_default_folded_and_preserves_manual_expansion() {
     let (mut app, key) = fixture("cargo build");
     app.active_session_mut().unwrap().scroll.follow_tail = false;
     chunk(&mut app, &key, Stream::Stdout, 0, "Compiling");
@@ -87,9 +87,9 @@ fn inline_bash_updates_before_finish_autofolds_and_preserves_manual_expansion() 
     );
     assert!(app.active_view().unwrap().scroll.new_content);
     let (text, folded) = render(&app, 80);
-    assert!(!folded);
-    assert!(text.contains("stdout:") && text.contains("Compiling"));
-    assert!(text.contains("stderr:") && text.contains("warning"));
+    assert!(folded);
+    assert!(text.contains("Compiling") && text.contains("warning"));
+    assert!(!text.contains("stdout:") && !text.contains("stderr:"));
     let more = "\nline".repeat(19);
     chunk(&mut app, &key, Stream::Stdout, 9, &more);
     let (text, folded) = render(&app, 80);
@@ -161,7 +161,7 @@ fn process_preview_does_not_leak_to_another_complete_tool_identity() {
 }
 
 #[test]
-fn durable_running_projection_uses_the_same_streaming_fold_threshold() {
+fn durable_running_projection_uses_the_same_default_fold_and_stream_preview() {
     let (mut app, key) = fixture("cargo build");
     chunk(&mut app, &key, Stream::Stdout, 0, &"line\n".repeat(20));
     let view = app.active_session_mut().unwrap();
@@ -272,7 +272,9 @@ fn rendered_frame_has_one_short_command_but_preserves_clipped_and_multiline_inpu
             "cargo build\ncargo test".to_owned(),
             format!("cargo build {}", "--verbose ".repeat(30)),
         ] {
-            let (app, _) = fixture(&command);
+            let (mut app, key) = fixture(&command);
+            Arc::make_mut(&mut app.active_session_mut().unwrap().tool_folds)
+                .insert(key, FoldOverride::Expanded);
             let prepared = transcript::prepare_conversation(&app, width);
             let section = prepared
                 .sections
@@ -299,7 +301,7 @@ fn rendered_frame_has_one_short_command_but_preserves_clipped_and_multiline_inpu
 }
 
 #[test]
-fn cached_durable_stream_crosses_fold_threshold_and_reuses_unrelated_history() {
+fn cached_durable_stream_stays_folded_and_reuses_unrelated_history() {
     for fallback in [false, true] {
         let (mut app, key) = fixture("cargo build");
         chunk(&mut app, &key, Stream::Stdout, 0, "initial");
@@ -348,7 +350,7 @@ fn cached_durable_stream_crosses_fold_threshold_and_reuses_unrelated_history() {
                 expanded: false,
             }));
         }
-        assert!(!render(&app, 80).1);
+        assert!(render(&app, 80).1);
         let prepared = transcript::prepare_conversation(&app, 80);
         let previous = prepared.durable.as_ref().unwrap().clone();
         app.install_conversation(prepared);
@@ -451,6 +453,8 @@ fn live_preview_eviction_preserves_cached_history_and_count() {
 #[test]
 fn late_invocation_and_terminal_execution_refresh_cached_fallback_body() {
     let (mut app, key) = fixture("build");
+    Arc::make_mut(&mut app.active_session_mut().unwrap().tool_folds)
+        .insert(key.clone(), FoldOverride::Expanded);
     let view = app.active_session_mut().unwrap();
     let request = &mut view.live.as_mut().unwrap().requests[0];
     request.parts.clear();

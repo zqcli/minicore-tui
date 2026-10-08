@@ -400,7 +400,8 @@ impl ToolKey {
     }
 }
 
-/// Allocated only after an inline card is expanded. Completed text is moved to
+/// Allocated for expanded cards or a visible folded write input preview.
+/// Completed output text is moved to
 /// the existing result owner; the page window then releases its byte chunks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InlineToolLoad {
