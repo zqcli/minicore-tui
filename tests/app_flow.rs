@@ -2003,6 +2003,51 @@ fn session_opened_event_initializes_unknown_view_and_reads_running_state() {
 }
 
 #[test]
+fn session_opened_records_gap_after_creating_view_and_then_reconciles() {
+    let mut driver = Driver::new();
+    bootstrap(&mut driver);
+    driver.step(agent_event(json!({
+        "type":"session_opened", "data":{
+            "session":session("ses_gap"),
+            "meta":{"session_id":"ses_gap", "loop_id":null, "dropped_before":7}
+        }
+    })));
+    let view = &driver.app.sessions.known["ses_gap"];
+    assert!(view.event_gap);
+    assert_eq!(view.gap_revision, 1, "mark exactly once after view exists");
+    for method in ["session.state", "session.context", "session.read"] {
+        assert!(
+            driver.queue.iter().any(
+                |request| request.method == method && request.params["session_id"] == "ses_gap"
+            ),
+            "missing gap recovery {method}"
+        );
+    }
+}
+
+#[test]
+fn session_opened_filters_both_envelope_and_payload_pending_deletion() {
+    for (envelope, payload) in [("deleted", "new-session"), ("new-session", "deleted")] {
+        let mut driver = Driver::new();
+        bootstrap(&mut driver);
+        driver.app.sessions.pending_deletes.insert("deleted".into());
+        let before = driver.queue.len();
+        driver.step(agent_event(json!({
+            "type":"session_opened", "data":{
+                "session":session(payload),
+                "meta":{"session_id":envelope, "loop_id":null, "dropped_before":7}
+            }
+        })));
+        assert!(!driver.app.sessions.known.contains_key(payload));
+        assert_eq!(
+            driver.queue.len(),
+            before,
+            "filtered events must not reconcile"
+        );
+    }
+}
+
+#[test]
 fn send_response_registers_direct_wait_and_durable_history_replaces_live() {
     let mut driver = Driver::new();
     bootstrap(&mut driver);

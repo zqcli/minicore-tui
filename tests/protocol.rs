@@ -286,3 +286,95 @@ fn preview_capability_is_optional_for_old_agent_handshake() {
     ping.capabilities.push("tool.arguments.preview".into());
     assert_eq!(validate_backend(&ping), Ok(()));
 }
+
+#[test]
+fn every_known_event_exposes_its_own_meta_and_unknown_has_none() {
+    use minicore_tui::protocol::{AgentEventWire, EventMetaWire};
+    use serde_json::json;
+
+    let session = response("session-create.json")
+        .parse_session()
+        .unwrap()
+        .session;
+    // Shared surplus fields are ignored by the DTOs. Envelope identifiers
+    // deliberately differ from the turn/session payload to pin the accessor.
+    let data = json!({
+        "session": session, "session_id": "payload-session",
+        "state": {"session_id":"payload-session", "status":"idle", "active_loop":null, "block_reason":null},
+        "turn": {"session_id":"payload-session", "loop_id":"payload-loop"},
+        "request_index":2, "config_revision":3, "model":"fixture", "reasoning":"auto",
+        "usage":{}, "applied_count":4, "channel":"reasoning", "delta":"delta",
+        "tool_call_id":"call", "tool_name":"write", "attempt":5, "revision":6, "partial":false,
+        "display":{"detail":"file.rs"}, "progress":{"message":null,"completed":null,"total":null},
+        "result":{"outcome":"success","content":"ok","content_bytes":2,"content_truncated":false},
+        "interaction":{"interaction_id":"interaction", "tool_call_id":"call", "tool_name":"write", "kind":{}},
+        "interaction_id":"interaction", "outcome":{"type":"completed"}, "persistence":"persisted"
+    });
+    for (index, kind) in [
+        "session_opened",
+        "session_closed",
+        "session_state",
+        "turn_started",
+        "request_started",
+        "request_usage",
+        "steer_progress",
+        "output_delta",
+        "tool_arguments_preview",
+        "tool_started",
+        "tool_presentation",
+        "tool_progress",
+        "tool_invocation",
+        "tool_execution",
+        "tool_process",
+        "tool_finished",
+        "interaction_requested",
+        "interaction_resolved",
+        "turn_finished",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut data = data.clone();
+        if kind == "tool_arguments_preview" {
+            data["state"] = json!("generating");
+        }
+        if matches!(kind, "tool_invocation" | "tool_execution" | "tool_process") {
+            let path = format!(
+                "{}/tests/fixtures/agent-v1/event-{}.json",
+                env!("CARGO_MANIFEST_DIR"),
+                kind.replace('_', "-")
+            );
+            let fact: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            data["data"] = fact["notification"]["data"]["data"].clone();
+        }
+        let expected = EventMetaWire {
+            session_id: format!("meta-session-{index}"),
+            loop_id: (index % 2 == 0).then(|| format!("meta-loop-{index}")),
+            dropped_before: index as u64 + 1,
+        };
+        data["meta"] = serde_json::to_value(&expected).unwrap();
+        let frame =
+            json!({"jsonrpc":"2.0","method":"agent.event","params":{"type":kind,"data":data}});
+        let IncomingFrame::Notification(RpcNotification::AgentEvent(event)) =
+            parse_frame(&serde_json::to_vec(&frame).unwrap()).unwrap_or_else(|_| {
+                panic!(
+                    "invalid {kind} fixture: {:?}",
+                    serde_json::from_value::<AgentEventWire>(frame["params"].clone()).unwrap_err()
+                )
+            })
+        else {
+            panic!("not an agent event: {kind}");
+        };
+        assert_eq!(event.meta(), Some(&expected), "{kind}");
+        assert!(
+            std::ptr::eq(event.meta().unwrap(), event.meta().unwrap()),
+            "borrowed metadata"
+        );
+    }
+    let unknown: AgentEventWire = serde_json::from_value(json!({
+        "type":"future_event", "data":{"meta":{"session_id":"ignored", "dropped_before":99}}
+    }))
+    .unwrap();
+    assert_eq!(unknown.meta(), None);
+}

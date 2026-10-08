@@ -588,9 +588,31 @@ fn render_card(
     }
     decorative_rows.push(out.len());
     out.push(Line::default());
-    let mut copy_cells = vec![None; out.len()];
-    let mut hard_breaks = if (name == "bash" && !expanded) || copy_source.is_some() {
-        vec![true; out.len()]
+    let (copy_cells, hard_breaks) = tool_copy_metadata(
+        out.len(),
+        decorative_rows,
+        preview_rows,
+        (name == "bash" && !expanded) || copy_source.is_some(),
+    );
+    RenderedTool {
+        lines: out,
+        copy_cells,
+        copy_source,
+        hard_breaks,
+    }
+}
+
+type PreviewRow = (usize, std::ops::Range<usize>, bool, Option<usize>);
+
+fn tool_copy_metadata(
+    line_count: usize,
+    decorative_rows: Vec<usize>,
+    preview_rows: Vec<PreviewRow>,
+    with_hard_breaks: bool,
+) -> (Vec<Option<CopyCells>>, Vec<bool>) {
+    let mut copy_cells = vec![None; line_count];
+    let mut hard_breaks = if with_hard_breaks {
+        vec![true; line_count]
     } else {
         Vec::new()
     };
@@ -601,15 +623,8 @@ fn render_card(
         copy_cells[row] = Some(CopyCells::content(columns, source_offset));
         hard_breaks[row] = hard_break;
     }
-    RenderedTool {
-        lines: out,
-        copy_cells,
-        copy_source,
-        hard_breaks,
-    }
+    (copy_cells, hard_breaks)
 }
-
-type PreviewRow = (usize, std::ops::Range<usize>, bool, Option<usize>);
 
 #[allow(clippy::too_many_arguments)]
 fn append_mapped_body(
@@ -670,8 +685,8 @@ fn render_arguments_preview(
         crate::protocol::ToolArgumentsPreviewStateWire::Discarded => "Arguments discarded",
     };
     let mut out = vec![Line::default()];
-    let mut copies = vec![Some(CopyCells::decoration())];
-    let mut breaks = vec![true];
+    let mut decorative_rows = vec![0];
+    let mut preview_rows = Vec::new();
     for (text, color, decorative) in [
         (format!("{name} · {state}"), theme.tool_title, true),
         (
@@ -680,6 +695,9 @@ fn render_arguments_preview(
             false,
         ),
     ] {
+        if decorative {
+            decorative_rows.push(out.len());
+        }
         out.push(rail::surface_row(
             width,
             colors,
@@ -689,8 +707,6 @@ fn render_arguments_preview(
                 Style::new().fg(color),
             )),
         ));
-        copies.push(decorative.then(CopyCells::decoration));
-        breaks.push(true);
     }
     let body = (name == "write")
         .then(|| facts.display.expanded_input.as_deref())
@@ -703,34 +719,19 @@ fn render_arguments_preview(
     };
     let shown = if expanded { total } else { total.min(10) };
     let copy_source = (name == "write").then(|| write_preview_source(&facts.display.detail, body));
-    let mut source_offset = copy_source
+    let source_offset = copy_source
         .as_ref()
         .map_or(0, |source| source.len() - body.len());
-    for line in body.split('\n').take(shown) {
-        let exact = (visible_tool_line(line) == line).then_some(source_offset);
-        for_each_tool_visual_row(
-            line,
-            available.saturating_sub(2).max(1),
-            |text, hard_break, offset| {
-                let columns = rail::SURFACE_CONTENT_START + 2;
-                copies.push(Some(CopyCells::content(
-                    columns..columns + column_width(&text),
-                    exact.map(|base| base + offset),
-                )));
-                breaks.push(hard_break);
-                out.push(rail::surface_row(
-                    width,
-                    colors,
-                    rail::SURFACE_CONTENT_START,
-                    Line::from(Span::styled(
-                        format!("  {text}"),
-                        Style::new().fg(theme.tool_output),
-                    )),
-                ));
-            },
-        );
-        source_offset += line.len() + 1;
-    }
+    append_mapped_body(
+        body,
+        shown,
+        source_offset,
+        theme.tool_output,
+        width,
+        colors,
+        &mut out,
+        &mut preview_rows,
+    );
     let mut hints = Vec::new();
     if facts.display.body_truncated || facts.display.truncated {
         hints.push("preview truncated".to_owned());
@@ -743,6 +744,7 @@ fn render_arguments_preview(
         hints.push("ctrl+o collapse".to_owned());
     }
     if !hints.is_empty() {
+        decorative_rows.push(out.len());
         out.push(rail::surface_row(
             width,
             colors,
@@ -752,17 +754,16 @@ fn render_arguments_preview(
                 Style::new().fg(theme.tool_muted),
             )),
         ));
-        copies.push(Some(CopyCells::decoration()));
-        breaks.push(true);
     }
+    decorative_rows.push(out.len());
     out.push(Line::default());
-    copies.push(Some(CopyCells::decoration()));
-    breaks.push(true);
+    let (copy_cells, hard_breaks) =
+        tool_copy_metadata(out.len(), decorative_rows, preview_rows, true);
     RenderedTool {
         lines: out,
-        copy_cells: copies,
+        copy_cells,
         copy_source,
-        hard_breaks: breaks,
+        hard_breaks,
     }
 }
 
@@ -2060,6 +2061,8 @@ mod bash_preview_tests {
 #[cfg(test)]
 mod write_preview_tests {
     use super::*;
+    use crate::protocol::ToolArgumentsPreviewStateWire as PreviewState;
+    use crate::state::tool::ArgumentsPreview;
     use crate::state::tool::ToolFacts;
     use std::sync::Arc;
 
@@ -2169,5 +2172,132 @@ mod write_preview_tests {
             .collect::<String>();
         assert!(missing.contains("Lines unknown"));
         assert!(!missing.contains("SUCCESS RECEIPT"));
+    }
+
+    fn preview_facts(name: &str, body: &str, state: PreviewState) -> ToolFacts {
+        let mut facts = ToolFacts::new(name);
+        facts.arguments_preview = Some(ArgumentsPreview {
+            attempt: 1,
+            revision: 1,
+            state,
+            partial: false,
+        });
+        let display = Arc::make_mut(&mut facts.display);
+        display.detail = "a.rs".into();
+        display.expanded_input = Some(body.into());
+        facts
+    }
+
+    fn mapped_rows(
+        rendered: &RenderedTool,
+    ) -> Vec<(String, std::ops::Range<usize>, Option<usize>, bool)> {
+        rendered
+            .copy_cells
+            .iter()
+            .enumerate()
+            .filter_map(|(row, copy)| {
+                copy.as_ref().filter(|copy| !copy.decorative).map(|copy| {
+                    (
+                        rendered.lines[row].to_string(),
+                        copy.columns.clone(),
+                        copy.source_offset,
+                        rendered.hard_breaks[row],
+                    )
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn generating_and_completed_write_share_plain_body_mapping() {
+        let body = format!(
+            "{}\n\n# literal markdown\n```rust\n\tcontrol\u{1b}[31m\n{}",
+            "中👩🏽‍💻e\u{301} long line ".repeat(8),
+            (6..=12).map(|n| format!("line-{n}\n")).collect::<String>()
+        );
+        for theme in [Theme::dark(), Theme::light()] {
+            for width in [12, 23, 80] {
+                let completed = render(Some(&body), false, width);
+                for state in [PreviewState::Generating, PreviewState::Generated] {
+                    let facts = preview_facts("write", &body, state);
+                    let preview = render_arguments_preview(&theme, "write", &facts, width, false);
+                    assert_eq!(mapped_rows(&preview), mapped_rows(&completed));
+                    assert_eq!(preview.copy_source, completed.copy_source);
+                    assert_eq!(preview.copy_cells.len(), preview.lines.len());
+                    assert_eq!(preview.hard_breaks.len(), preview.lines.len());
+                    let rows = mapped_rows(&preview);
+                    assert_eq!(rows.iter().filter(|row| row.3).count(), 10);
+                    assert!(rows.iter().any(|row| row.2.is_none()), "sanitized controls");
+                    assert!(rows.iter().any(|row| !row.3), "soft wraps");
+                    for (row, copy) in preview.copy_cells.iter().enumerate() {
+                        if row == 2 {
+                            assert!(copy.is_none(), "target stays copyable");
+                        } else if row < 2 || row >= preview.lines.len() - 2 {
+                            assert!(copy.as_ref().unwrap().decorative, "framing and hints");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn argument_previews_keep_their_own_trailing_empty_line_contract() {
+        for (body, logical_lines) in [("", 0), ("\n", 2), ("line\n\n", 3)] {
+            for expanded in [false, true] {
+                let facts = preview_facts("write", body, PreviewState::Generating);
+                let preview =
+                    render_arguments_preview(&Theme::dark(), "write", &facts, 40, expanded);
+                assert_eq!(mapped_rows(&preview).len(), logical_lines);
+                assert!(mapped_rows(&preview).iter().all(|row| row.3));
+                assert_eq!(
+                    preview.copy_source.as_deref(),
+                    Some(format!("a.rs\n{body}").as_str())
+                );
+            }
+            let completed = render(Some(body), false, 40);
+            assert_eq!(
+                mapped_rows(&completed).len(),
+                usize::from(body.starts_with("line"))
+            );
+        }
+    }
+
+    #[test]
+    fn copy_metadata_keeps_preview_and_ordinary_card_break_contracts_separate() {
+        for name in ["read", "edit", "bash"] {
+            for expanded in [false, true] {
+                let mut facts =
+                    preview_facts(name, "must not become a file body", PreviewState::Generated);
+                facts.arguments_preview.as_mut().unwrap().partial = true;
+                let preview = render_arguments_preview(&Theme::light(), name, &facts, 80, expanded);
+                assert_eq!(preview.hard_breaks, vec![true; preview.lines.len()]);
+                assert!(preview.copy_source.is_none());
+                assert!(mapped_rows(&preview).is_empty());
+                assert!(
+                    !preview
+                        .lines
+                        .iter()
+                        .any(|line| line.to_string().contains("must not"))
+                );
+                assert!(preview.copy_cells[1].as_ref().unwrap().decorative);
+                assert!(preview.copy_cells[2].is_none());
+                assert!(preview.copy_cells[3].as_ref().unwrap().decorative);
+            }
+        }
+        for expanded in [false, true] {
+            let ordinary = render_card(
+                &Theme::dark(),
+                "read",
+                Some("result"),
+                None,
+                None,
+                80,
+                expanded,
+                ToolSurfaceState::Success,
+                "completed".into(),
+            );
+            assert!(ordinary.hard_breaks.is_empty());
+        }
     }
 }

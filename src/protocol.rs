@@ -590,6 +590,34 @@ pub enum AgentEventWire {
     Unknown,
 }
 
+impl AgentEventWire {
+    /// Shared routing and loss metadata; future, unknown events have no known envelope.
+    pub fn meta(&self) -> Option<&EventMetaWire> {
+        match self {
+            Self::SessionOpened { data } => Some(&data.meta),
+            Self::SessionClosed { data } => Some(&data.meta),
+            Self::SessionState { data } => Some(&data.meta),
+            Self::TurnStarted { data } => Some(&data.meta),
+            Self::RequestStarted { data } => Some(&data.meta),
+            Self::RequestUsage { data } => Some(&data.meta),
+            Self::SteerProgress { data } => Some(&data.meta),
+            Self::OutputDelta { data } => Some(&data.meta),
+            Self::ToolArgumentsPreview { data } => Some(&data.meta),
+            Self::ToolStarted { data } => Some(&data.meta),
+            Self::ToolPresentation { data } => Some(&data.meta),
+            Self::ToolProgress { data } => Some(&data.meta),
+            Self::ToolInvocation { data } => Some(&data.meta),
+            Self::ToolExecution { data } => Some(&data.meta),
+            Self::ToolProcess { data } => Some(&data.meta),
+            Self::ToolFinished { data } => Some(&data.meta),
+            Self::InteractionRequested { data } => Some(&data.meta),
+            Self::InteractionResolved { data } => Some(&data.meta),
+            Self::TurnFinished { data } => Some(&data.meta),
+            Self::Unknown => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct EventMetaWire {
     pub session_id: String,

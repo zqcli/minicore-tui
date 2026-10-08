@@ -6837,28 +6837,7 @@ impl App {
     }
 
     fn on_agent_event(&mut self, event: AgentEventWire) -> Vec<AppCommand> {
-        let event_session_id = match &event {
-            AgentEventWire::SessionOpened { data } => Some(data.meta.session_id.as_str()),
-            AgentEventWire::SessionClosed { data } => Some(data.meta.session_id.as_str()),
-            AgentEventWire::SessionState { data } => Some(data.meta.session_id.as_str()),
-            AgentEventWire::TurnStarted { data } => Some(data.meta.session_id.as_str()),
-            AgentEventWire::RequestStarted { data } => Some(data.meta.session_id.as_str()),
-            AgentEventWire::RequestUsage { data } => Some(data.meta.session_id.as_str()),
-            AgentEventWire::SteerProgress { data } => Some(data.meta.session_id.as_str()),
-            AgentEventWire::OutputDelta { data } => Some(data.meta.session_id.as_str()),
-            AgentEventWire::ToolArgumentsPreview { data } => Some(data.meta.session_id.as_str()),
-            AgentEventWire::ToolStarted { data } => Some(data.meta.session_id.as_str()),
-            AgentEventWire::ToolPresentation { data } => Some(data.meta.session_id.as_str()),
-            AgentEventWire::ToolProgress { data } => Some(data.meta.session_id.as_str()),
-            AgentEventWire::ToolInvocation { data } => Some(data.meta.session_id.as_str()),
-            AgentEventWire::ToolExecution { data } => Some(data.meta.session_id.as_str()),
-            AgentEventWire::ToolProcess { data } => Some(data.meta.session_id.as_str()),
-            AgentEventWire::ToolFinished { data } => Some(data.meta.session_id.as_str()),
-            AgentEventWire::InteractionRequested { data } => Some(data.meta.session_id.as_str()),
-            AgentEventWire::InteractionResolved { data } => Some(data.meta.session_id.as_str()),
-            AgentEventWire::TurnFinished { data } => Some(data.meta.session_id.as_str()),
-            AgentEventWire::Unknown => None,
-        };
+        let event_session_id = event.meta().map(|meta| meta.session_id.as_str());
         if event_session_id.is_some_and(|session_id| {
             self.session_pending_deletion(session_id)
                 || self.sessions.pending_deletes.contains(session_id)
@@ -6885,66 +6864,10 @@ impl App {
                         .is_some_and(|live| live.reference.is_none())
                 })
         });
-        let gap_session = match &event {
-            AgentEventWire::SessionOpened { data } => {
-                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
-            }
-            AgentEventWire::SessionClosed { data } => {
-                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
-            }
-            AgentEventWire::SessionState { data } => {
-                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
-            }
-            AgentEventWire::TurnStarted { data } => {
-                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
-            }
-            AgentEventWire::RequestStarted { data } => {
-                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
-            }
-            AgentEventWire::RequestUsage { data } => {
-                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
-            }
-            AgentEventWire::SteerProgress { data } => {
-                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
-            }
-            AgentEventWire::OutputDelta { data } => {
-                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
-            }
-            AgentEventWire::ToolArgumentsPreview { data } => {
-                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
-            }
-            AgentEventWire::ToolStarted { data } => {
-                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
-            }
-            AgentEventWire::ToolPresentation { data } => {
-                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
-            }
-            AgentEventWire::ToolProgress { data } => {
-                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
-            }
-            AgentEventWire::ToolInvocation { data } => {
-                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
-            }
-            AgentEventWire::ToolExecution { data } => {
-                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
-            }
-            AgentEventWire::ToolProcess { data } => {
-                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
-            }
-            AgentEventWire::ToolFinished { data } => {
-                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
-            }
-            AgentEventWire::InteractionRequested { data } => {
-                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
-            }
-            AgentEventWire::InteractionResolved { data } => {
-                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
-            }
-            AgentEventWire::TurnFinished { data } => {
-                (data.meta.dropped_before > 0).then(|| data.meta.session_id.clone())
-            }
-            AgentEventWire::Unknown => None,
-        };
+        let gap_session = event
+            .meta()
+            .filter(|meta| meta.dropped_before > 0)
+            .map(|meta| meta.session_id.clone());
         let mut commands = Vec::new();
         match event {
             AgentEventWire::SessionOpened { data } => {
