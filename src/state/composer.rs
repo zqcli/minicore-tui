@@ -38,7 +38,8 @@ pub struct PasteRange {
 struct EditSnapshot {
     pastes: Vec<PasteRange>,
     byte_len: usize,
-    cursor: (usize, usize),
+    cursor_before: (usize, usize),
+    cursor_after: (usize, usize),
 }
 
 /// Whether navigating history touches the editor's live draft.
@@ -514,16 +515,16 @@ impl Composer {
     }
 
     pub fn undo(&mut self) {
-        let cursor = self.cursor();
         if self.textarea.undo() {
             // Only advance projection history when the native edit succeeded.
             if let Some(previous) = self.paste_undo.pop() {
                 self.paste_redo.push(EditSnapshot {
                     pastes: std::mem::replace(&mut self.pastes, previous.pastes),
                     byte_len: self.byte_len,
-                    cursor,
+                    cursor_before: previous.cursor_before,
+                    cursor_after: previous.cursor_after,
                 });
-                self.move_to(previous.cursor.0, previous.cursor.1);
+                self.move_to(previous.cursor_before.0, previous.cursor_before.1);
             }
             self.byte_len = self.content().len();
             self.bump_revision();
@@ -531,15 +532,15 @@ impl Composer {
     }
 
     pub fn redo(&mut self) {
-        let cursor = self.cursor();
         if self.textarea.redo() {
             if let Some(next) = self.paste_redo.pop() {
                 self.paste_undo.push(EditSnapshot {
                     pastes: std::mem::replace(&mut self.pastes, next.pastes),
                     byte_len: self.byte_len,
-                    cursor,
+                    cursor_before: next.cursor_before,
+                    cursor_after: next.cursor_after,
                 });
-                self.move_to(next.cursor.0, next.cursor.1);
+                self.move_to(next.cursor_after.0, next.cursor_after.1);
             }
             self.byte_len = self.content().len();
             self.bump_revision();
@@ -605,6 +606,10 @@ impl Composer {
 
     fn finish_edit(&mut self, forward: bool) {
         self.snap_cursor(forward);
+        let cursor = self.cursor();
+        if let Some(snapshot) = self.paste_undo.last_mut() {
+            snapshot.cursor_after = cursor;
+        }
         if self.pastes.is_empty() {
             return;
         }
@@ -622,6 +627,18 @@ impl Composer {
         let mut index = 0;
         let mut offset = 0;
         for line in self.lines() {
+            if line.is_ascii() {
+                let end = offset + line.len();
+                while edges.get(index).is_some_and(|edge| *edge <= end) {
+                    valid.push(edges[index]);
+                    index += 1;
+                }
+                offset = end + 1;
+                if index == edges.len() {
+                    break;
+                }
+                continue;
+            }
             for grapheme in line.graphemes(true).chain(std::iter::once("\n")) {
                 while edges.get(index).is_some_and(|edge| *edge <= offset) {
                     if edges[index] == offset {
@@ -785,7 +802,8 @@ impl Composer {
         self.paste_undo.push(EditSnapshot {
             pastes: self.pastes.clone(),
             byte_len: self.byte_len,
-            cursor,
+            cursor_before: cursor,
+            cursor_after: self.cursor(),
         });
         self.paste_redo.clear();
     }

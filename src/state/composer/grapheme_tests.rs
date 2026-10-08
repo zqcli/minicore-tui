@@ -266,3 +266,55 @@ fn budget_truncation_keeps_only_complete_graphemes() {
     assert_eq!(composer.content(), prefix);
     assert_valid(&composer);
 }
+
+#[test]
+fn navigation_between_undo_and_redo_does_not_rewrite_edit_cursor_endpoints() {
+    let mut composer = Composer::new();
+    composer.set_text("A👩💻B");
+    composer.move_to(0, 2);
+    composer.type_char('\u{200d}');
+    assert_eq!(composer.content(), "A👩‍💻B");
+    assert_eq!(composer.cursor(), (0, 4));
+    composer.line_start();
+    composer.undo();
+    assert_eq!(composer.cursor(), (0, 2));
+    composer.line_end();
+    composer.redo();
+    assert_eq!(composer.cursor(), (0, 4));
+    composer.line_start();
+    composer.undo();
+    assert_eq!(composer.cursor(), (0, 2));
+    assert_eq!(composer.content(), "A👩💻B");
+    composer.redo();
+
+    // A forward delete must retain its own pre-edit position, even after
+    // navigating on both sides of each history operation.
+    composer.move_to(0, 1);
+    composer.delete();
+    assert_eq!(composer.content(), "AB");
+    composer.line_end();
+    composer.undo();
+    assert_eq!(composer.cursor(), (0, 1));
+    composer.line_end();
+    composer.redo();
+    assert_eq!(composer.cursor(), (0, 1));
+    composer.line_start();
+    composer.undo();
+    assert_eq!(composer.cursor(), (0, 1));
+    assert_valid(&composer);
+}
+
+#[test]
+fn ascii_redo_restores_edit_endpoint_after_intervening_navigation() {
+    let mut composer = Composer::new();
+    composer.set_text("abc");
+    composer.type_char('x');
+    composer.move_to(0, 0);
+    composer.undo();
+    composer.redo();
+    assert_eq!(composer.content(), "abcx");
+    assert_eq!(composer.cursor(), (0, 4));
+    composer.move_to(0, 0);
+    composer.undo();
+    assert_eq!(composer.cursor(), (0, 3));
+}
