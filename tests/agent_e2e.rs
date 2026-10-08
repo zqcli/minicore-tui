@@ -40,6 +40,8 @@ use serde_json::json;
 mod bash_stream_e2e;
 #[path = "agent_e2e/changes.rs"]
 mod changes_e2e;
+#[path = "agent_e2e/recent_tail.rs"]
+mod recent_tail_e2e;
 #[path = "agent_e2e/workspace.rs"]
 mod workspace_e2e;
 
@@ -4268,16 +4270,14 @@ fn e2e_manual_compact_without_history_is_a_noop() {
     });
 }
 
-/// Manual compaction over real persisted history performs one summary utility
-/// call and reports `compacted`.
+/// A short persisted conversation fits the default recent-tail allowance;
+/// manual compaction is a real Noop and performs no summary model call.
 #[test]
 #[ignore = "requires MINICORE_AGENT_BIN; runs against self-contained loopback mock HTTP server"]
-fn e2e_manual_compact_summarizes_history() {
+fn e2e_manual_compact_short_history_is_a_noop() {
     let agent_bin = require_agent_bin();
     let (env, _) = E2eEnvironment::setup();
     env._server.enqueue_sse(sse_text_response("first answer"));
-    env._server
-        .enqueue_sse(sse_text_response("history summary"));
 
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async move {
@@ -4325,7 +4325,7 @@ fn e2e_manual_compact_summarizes_history() {
             .await
             .unwrap();
         pump_until(&mut process, &mut app, |a| {
-            compact_status(a, &session_id) == Some(CompactStatusWire::Compacted)
+            compact_status(a, &session_id) == Some(CompactStatusWire::Noop)
                 && !a.sessions.known[&session_id].is_preparing()
         })
         .await
@@ -4333,15 +4333,15 @@ fn e2e_manual_compact_summarizes_history() {
 
         assert_eq!(
             compact_status(&app, &session_id),
-            Some(CompactStatusWire::Compacted),
-            "real history is summarized"
+            Some(CompactStatusWire::Noop),
+            "short history remains as the retained tail"
         );
         assert!(!app.sessions.known[&session_id].is_preparing());
         let requests = env._server.recorded_requests();
-        assert!(
-            requests.len() >= 2,
-            "compaction adds one summary provider call, got {}",
-            requests.len()
+        assert_eq!(
+            requests.len(),
+            1,
+            "short-history Noop must not call the utility"
         );
         assert!(
             app.sessions.known[&session_id].transcript.complete,
@@ -4363,7 +4363,8 @@ fn e2e_manual_compact_deferred_cancel() {
     let agent_bin = require_agent_bin();
     let (env, _) = E2eEnvironment::setup();
     let gate = Arc::new(AtomicBool::new(false));
-    env._server.enqueue_sse(sse_text_response("first answer"));
+    recent_tail_e2e::widen_manual_window(&env);
+    recent_tail_e2e::enqueue_recent_history(&env);
     env._server
         .enqueue_gated(sse_text_response("late summary"), gate.clone(), None);
 
@@ -4387,41 +4388,22 @@ fn e2e_manual_compact_deferred_cancel() {
         )
         .await;
 
-        dispatch(
-            &mut process,
-            &mut app,
-            AppEvent::SubmitTurn {
-                session_id: session_id.clone(),
-                text: "Say hello before cancelling".to_owned(),
-            },
-        )
-        .await
-        .unwrap();
-        pump_until(&mut process, &mut app, |a| {
-            a.sessions
-                .known
-                .get(&session_id)
-                .is_some_and(|view| view.live.is_none() && view.transcript.complete)
-        })
-        .await
-        .unwrap();
-
-        wait_post_turn_noop(&mut process, &mut app, &session_id)
-            .await
-            .unwrap();
+        recent_tail_e2e::land_recent_history(&mut process, &mut app, &session_id).await;
+        let before_requests = env._server.recorded_requests().len();
         submit_slash_command(&mut process, &mut app, "/compact")
             .await
             .unwrap();
         // Wait until the summary provider call is in flight (recorded and
         // gated), then cancel by the locally known operation id.
         let deadline = Instant::now() + TIMEOUT;
-        while env._server.recorded_requests().len() < 2 && Instant::now() < deadline {
+        while env._server.recorded_requests().len() <= before_requests && Instant::now() < deadline
+        {
             pump_step(&mut process, &mut app)
                 .await
                 .expect("pump while waiting for the summary call");
         }
         assert!(
-            env._server.recorded_requests().len() >= 2,
+            env._server.recorded_requests().len() == before_requests + 1,
             "the summary provider call never arrived"
         );
         assert!(
@@ -4468,6 +4450,14 @@ fn e2e_post_turn_compaction_is_independent_observable_and_cancellable() {
     let agent_bin = require_agent_bin();
     let (env, _) = E2eEnvironment::setup();
     let gate = Arc::new(AtomicBool::new(false));
+    // Retain the large latest loop while summarizing two older complete
+    // loops. A lone oversized loop deliberately has no safe v1 cut point.
+    for index in 0..2 {
+        env._server.enqueue_sse(sse_text_response(&format!(
+            "older prefix {index}: {}",
+            "p".repeat(12_000)
+        )));
+    }
     // Native-usage threshold fixture: 28,000 exceeds the 27,504 trigger.
     // Synthetic source size does not assert a tokenizer correspondence.
     env._server.enqueue_sse(sse_text_response_with_usage(
@@ -4499,6 +4489,12 @@ fn e2e_post_turn_compaction_is_independent_observable_and_cancellable() {
         )
         .await;
 
+        for index in 0..2 {
+            recent_tail_e2e::land_turn(
+                &mut process, &mut app, &session_id,
+                &format!("older prefix question {index}"),
+            ).await;
+        }
         dispatch(
             &mut process,
             &mut app,
@@ -4524,13 +4520,13 @@ fn e2e_post_turn_compaction_is_independent_observable_and_cancellable() {
         assert_eq!(completed.persistence, Some(TurnPersistenceWire::Persisted));
         assert!(!gate.load(Ordering::Relaxed));
         let deadline = Instant::now() + TIMEOUT;
-        while env._server.recorded_requests().len() < 2 && Instant::now() < deadline {
+        while env._server.recorded_requests().len() < 4 && Instant::now() < deadline {
             pump_step(&mut process, &mut app)
                 .await
                 .expect("pump while the post-turn summary is in flight");
         }
         assert!(
-            env._server.recorded_requests().len() == 2,
+            env._server.recorded_requests().len() == 4,
             "post-turn compaction must start without a second submit"
         );
 
@@ -4579,7 +4575,7 @@ fn e2e_post_turn_compaction_is_independent_observable_and_cancellable() {
                     .is_some_and(|operation| operation.operation_id == observed.operation_id)
         }).await.unwrap();
         assert_eq!(app.sessions.known[&session_id].last_result.as_ref(), Some(&completed));
-        assert_eq!(env._server.recorded_requests().len(), 2, "busy must not resend the prompt");
+        assert_eq!(env._server.recorded_requests().len(), 4, "busy must not resend the prompt");
 
         // Panel close must not release the operation owner. Cancel through
         // the existing exact-ID Context action, not the completed turn.
@@ -4615,7 +4611,7 @@ fn e2e_post_turn_compaction_is_independent_observable_and_cancellable() {
         assert_eq!(result.failure_kind.as_deref(), Some("cancelled"));
         assert_eq!(app.composer.content(), "next draft");
         assert_eq!(app.sessions.known[&session_id].last_result.as_ref(), Some(&completed));
-        assert_eq!(env._server.recorded_requests().len(), 2);
+        assert_eq!(env._server.recorded_requests().len(), 4);
 
         let report = drain_shutdown_strict(&mut process, &mut app).await.unwrap();
         assert!(report.shutdown_ok && report.seen_eof && report.seen_exit);
