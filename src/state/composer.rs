@@ -33,6 +33,14 @@ pub struct PasteRange {
     pub char_count: usize,
 }
 
+/// Metadata paired with each native TextArea undo record. The text itself
+/// stays in TextArea; explicit clears also remember the pre-clear cursor.
+struct EditSnapshot {
+    pastes: Vec<PasteRange>,
+    byte_len: usize,
+    clear_cursor: Option<(usize, usize)>,
+}
+
 /// Whether navigating history touches the editor's live draft.
 ///
 /// Debug is manual: it reports sizes and the cursor only, never draft text.
@@ -51,8 +59,8 @@ pub struct Composer {
     /// Display-only ranges for large paste payloads. The payload remains in
     /// the TextArea and is what `content()` returns.
     pastes: Vec<PasteRange>,
-    paste_undo: Vec<Vec<PasteRange>>,
-    paste_redo: Vec<Vec<PasteRange>>,
+    paste_undo: Vec<EditSnapshot>,
+    paste_redo: Vec<EditSnapshot>,
     /// Current editor undo capacity; trimming it frees the oldest records.
     undo_capacity: usize,
     /// Ephemeral source mapping for the last explicit path insertion, not an attachment.
@@ -217,8 +225,17 @@ impl Composer {
             .min(UNDO_SNAPSHOT_ESTIMATE)
             .saturating_add(self.paste_undo.len().min(UNDO_SNAPSHOT_ESTIMATE))
             .saturating_add(self.paste_redo.len().min(UNDO_SNAPSHOT_ESTIMATE));
-        let undo = self
-            .byte_len
+        // A cleared draft still lives in native undo history. Charge its
+        // retained size even when the visible buffer is now empty.
+        let snapshot_bytes = self
+            .paste_undo
+            .iter()
+            .chain(&self.paste_redo)
+            .map(|snapshot| snapshot.byte_len)
+            .max()
+            .unwrap_or(0)
+            .max(self.byte_len);
+        let undo = snapshot_bytes
             .saturating_mul(snapshots)
             .min(MAX_COMPOSER_BYTES.saturating_mul(3 * UNDO_SNAPSHOT_ESTIMATE));
         let pastes = self
@@ -493,8 +510,14 @@ impl Composer {
         if self.textarea.undo() {
             // Only advance projection history when the native edit succeeded.
             if let Some(previous) = self.paste_undo.pop() {
-                self.paste_redo
-                    .push(std::mem::replace(&mut self.pastes, previous));
+                self.paste_redo.push(EditSnapshot {
+                    pastes: std::mem::replace(&mut self.pastes, previous.pastes),
+                    byte_len: self.byte_len,
+                    clear_cursor: previous.clear_cursor,
+                });
+                if let Some(cursor) = previous.clear_cursor {
+                    self.restore_clear_cursor(cursor);
+                }
             }
             self.byte_len = self.content().len();
             self.bump_revision();
@@ -504,8 +527,11 @@ impl Composer {
     pub fn redo(&mut self) {
         if self.textarea.redo() {
             if let Some(next) = self.paste_redo.pop() {
-                self.paste_undo
-                    .push(std::mem::replace(&mut self.pastes, next));
+                self.paste_undo.push(EditSnapshot {
+                    pastes: std::mem::replace(&mut self.pastes, next.pastes),
+                    byte_len: self.byte_len,
+                    clear_cursor: next.clear_cursor,
+                });
             }
             self.byte_len = self.content().len();
             self.bump_revision();
@@ -516,6 +542,45 @@ impl Composer {
     pub fn clear(&mut self) {
         self.set_text("");
         self.history_index = None;
+    }
+
+    /// User-requested Ctrl+C clear, as one native undoable edit. Submission,
+    /// history replacement and protocol recovery keep using `clear`/`set_text`.
+    pub fn clear_undoable(&mut self) {
+        if self.byte_len == 0 {
+            return;
+        }
+        let cursor = self.cursor();
+        // TextArea::select_all uses a u16 Jump, which truncates large pastes.
+        // Select with unbounded movements and delete without a second yank copy.
+        self.textarea.move_cursor(CursorMove::Jump(0, 0));
+        self.textarea.start_selection();
+        self.textarea.move_cursor(CursorMove::Bottom);
+        self.textarea.move_cursor(CursorMove::End);
+        if self.textarea.delete_next_char() {
+            self.record_edit();
+            if let Some(snapshot) = self.paste_undo.last_mut() {
+                snapshot.clear_cursor = Some(cursor);
+            }
+            self.pastes.clear();
+            self.byte_len = 0;
+            self.history_index = None;
+            self.bump_revision();
+        }
+    }
+
+    fn restore_clear_cursor(&mut self, (row, column): (usize, usize)) {
+        self.textarea
+            .move_cursor(CursorMove::Jump(row.min(u16::MAX as usize) as u16, 0));
+        while self.cursor().0 < row {
+            self.textarea.move_cursor(CursorMove::Down);
+        }
+        self.textarea.move_cursor(CursorMove::End);
+        // Back is constant-time within a line, unlike Forward, which recounts
+        // the whole line. This also restores columns beyond u16::MAX exactly.
+        while self.cursor().1 > column {
+            self.textarea.move_cursor(CursorMove::Back);
+        }
     }
 
     /// Replaces the whole buffer (send-failure recovery, /clear, history)
@@ -654,7 +719,11 @@ impl Composer {
         {
             self.paste_undo.remove(0);
         }
-        self.paste_undo.push(self.pastes.clone());
+        self.paste_undo.push(EditSnapshot {
+            pastes: self.pastes.clone(),
+            byte_len: self.byte_len,
+            clear_cursor: None,
+        });
         self.paste_redo.clear();
     }
 
@@ -1020,6 +1089,94 @@ mod tests {
         composer.submit_pushed("same");
         composer.submit_pushed("same");
         assert_eq!(composer.history_len(), 1);
+    }
+
+    #[test]
+    fn explicit_clear_restores_unicode_text_paste_projection_and_cursor_in_one_undo() {
+        let mut composer = Composer::new();
+        composer.type_text("中文🙂\ne\u{301} draft\n");
+        composer.insert_paste(&"长粘贴🙂\n".repeat(20));
+        composer.type_text("尾巴");
+        composer.move_to(1, 2);
+        let original = composer.content();
+        let projected = composer.display_content();
+        let pastes = composer.paste_ranges().to_vec();
+        let cursor = composer.cursor();
+        let revision = composer.editor_revision();
+        composer.clear_undoable();
+        assert_eq!(composer.content(), "");
+        assert_eq!(composer.cursor(), (0, 0));
+        assert!(composer.paste_ranges().is_empty());
+        assert_eq!(composer.editor_revision(), revision + 1);
+        composer.undo();
+        assert_eq!(composer.content(), original);
+        assert_eq!(composer.display_content(), projected);
+        assert_eq!(composer.paste_ranges(), pastes);
+        assert_eq!(composer.cursor(), cursor);
+        assert_eq!(composer.byte_len(), original.len());
+        composer.redo();
+        assert_eq!(composer.content(), "");
+        assert!(composer.paste_ranges().is_empty());
+        composer.undo();
+        assert_eq!(composer.content(), original);
+        assert_eq!(composer.cursor(), cursor);
+        composer.undo(); // The pre-clear edit history is still available.
+        assert!(!composer.content().ends_with("尾巴"));
+    }
+
+    #[test]
+    fn explicit_clear_covers_large_columns_rows_and_budgeted_undo() {
+        for multiline in [false, true] {
+            let mut composer = Composer::new();
+            let original = if multiline {
+                "x\n".repeat(70_000)
+            } else {
+                "x".repeat(MAX_COMPOSER_BYTES)
+            };
+            composer.insert_paste(&original);
+            // These native cursor positions deliberately exceed u16::MAX.
+            composer.textarea.move_cursor(CursorMove::Back);
+            let cursor = composer.cursor();
+            let pastes = composer.paste_ranges().to_vec();
+            composer.clear_undoable();
+            assert_eq!(composer.content(), "");
+            assert!(composer.retained_bytes() >= original.len());
+            composer.undo();
+            assert_eq!(composer.content(), original);
+            assert_eq!(composer.cursor(), cursor);
+            assert_eq!(composer.paste_ranges(), pastes);
+            composer.redo();
+            composer.set_undo_capacity(1);
+            assert_eq!(composer.retained_bytes(), 0);
+            composer.undo();
+            assert_eq!(composer.content(), "");
+        }
+    }
+
+    #[test]
+    fn explicit_clear_preserves_native_branch_eviction_and_replacement_boundaries() {
+        let mut composer = Composer::new();
+        composer.set_undo_capacity(2);
+        composer.insert_paste(&"x".repeat(1_001));
+        composer.clear_undoable();
+        composer.undo();
+        composer.type_char('y');
+        composer.redo();
+        assert!(composer.content().ends_with('y'));
+        composer.undo();
+        assert_eq!(composer.display_content(), "[paste #1 1001 chars]");
+        composer.undo(); // The oldest insertion was evicted on branch edit.
+        assert_eq!(composer.display_content(), "[paste #1 1001 chars]");
+        composer.clear(); // Submission/session replacement keeps resetting undo.
+        composer.undo();
+        assert_eq!(composer.content(), "");
+        let revision = composer.editor_revision();
+        composer.clear_undoable();
+        composer.undo();
+        assert_eq!(composer.editor_revision(), revision);
+        composer.set_text("replacement");
+        composer.undo();
+        assert_eq!(composer.content(), "replacement");
     }
 
     /// Spec §25.1: after a 256 KiB paste, ordinary typing must not join the

@@ -11,7 +11,7 @@ Editor restores the existing editing and command behavior.
 
 | Key | Behavior |
 |---|---|
-| `Ctrl+C` | If the composer has text, clear it. If empty, show a hint; press again within 1 second to request shutdown. |
+| `Ctrl+C` | If the composer has text, clear it as one undoable edit (`Ctrl+Z` restores it). If empty, show a hint; press again within 1 second to request shutdown. |
 | `Ctrl+D` | Request shutdown only when the composer is empty and the active session is idle. |
 | `F1` | Open Help; `F1` or `Esc` returns to the previous panel with its input intact. |
 | `Ctrl+R` | Open the session selector. |

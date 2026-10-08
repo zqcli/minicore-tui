@@ -4693,7 +4693,7 @@ impl App {
     /// press warns and a second press within 1s quits (spec 22.1, 43.7).
     fn ctrl_c(&mut self) -> Vec<AppCommand> {
         if !self.composer.is_empty() {
-            self.composer.clear();
+            self.composer.clear_undoable();
             self.ctrl_c_at = None;
             Vec::new()
         } else if self.ctrl_c_at.is_some_and(|pressed| {
@@ -13694,6 +13694,55 @@ mod composer_line_edit_tests {
                 assert_eq!(app.pending_requests.len(), pending);
             }
         }
+    }
+
+    #[test]
+    fn ctrl_c_clear_undo_redo_stays_local_while_idle_pending_or_running() {
+        for lifecycle in 0..3 {
+            let mut app = if lifecycle == 2 {
+                testapp::live_turn(crate::theme::ThemeKind::Dark)
+            } else {
+                testapp::open_empty(crate::theme::ThemeKind::Dark, "ses_1", None, "high")
+            };
+            if lifecycle == 1 {
+                let commands = app.update(AppEvent::SubmitTurn {
+                    session_id: "ses_1".into(),
+                    text: "already submitted".into(),
+                });
+                assert_eq!(testapp::take_requests(commands).len(), 1);
+            }
+            let pending = app.pending_requests.len();
+            let draft = "保留🙂\ne\u{301} draft\n最后一行";
+            app.composer.set_text(draft);
+            app.composer.move_to(1, 2);
+            for (key, expected) in [('c', ""), ('z', draft), ('y', ""), ('z', draft)] {
+                assert!(ctrl(&mut app, key).is_empty(), "no send/cancel/shutdown");
+                assert_eq!(app.composer.content(), expected);
+                assert_eq!(app.pending_requests.len(), pending);
+                assert!(app.ctrl_c_at.is_none());
+            }
+            assert_eq!(app.composer.cursor(), (1, 2));
+        }
+    }
+
+    #[test]
+    fn cleared_draft_undo_remains_with_its_session() {
+        let mut app = testapp::open_empty(crate::theme::ThemeKind::Dark, "ses_1", None, "high");
+        app.composer.insert_paste(&"一行🙂\n".repeat(20));
+        let draft = app.composer.content();
+        let display = app.composer.display_content();
+        assert!(ctrl(&mut app, 'c').is_empty());
+        app.set_active_session(None);
+        app.composer.set_text("scratch draft");
+        assert!(ctrl(&mut app, 'z').is_empty());
+        assert_eq!(app.composer.content(), "scratch draft");
+        app.set_active_session(Some("ses_1".into()));
+        assert_eq!(app.composer.content(), "");
+        assert!(ctrl(&mut app, 'z').is_empty());
+        assert_eq!(app.composer.content(), draft);
+        assert_eq!(app.composer.display_content(), display);
+        app.set_active_session(None);
+        assert_eq!(app.composer.content(), "scratch draft");
     }
 
     #[test]
