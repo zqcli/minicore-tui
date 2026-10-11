@@ -80,6 +80,8 @@ pub mod history;
 mod history_navigation_tests;
 mod inline_tools;
 #[cfg(test)]
+mod native_tool_boundary_tests;
+#[cfg(test)]
 mod panel_input_tests;
 pub mod panels;
 #[cfg(test)]
@@ -4928,7 +4930,8 @@ impl App {
     /// Observe semantic content at the RPC seam, independently of rendered height.
     /// Source lengths make appended deltas cheap to compare without hashing the
     /// accumulated text on every token. Historical page hydration and tool-detail
-    /// refreshes are excluded; only the total durable extent and live output count.
+    /// refreshes are excluded; only the total durable extent, live output count,
+    /// and accepted argument-preview revisions participate.
     fn incoming_content_stamp(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut stamp = std::collections::hash_map::DefaultHasher::new();
@@ -4953,18 +4956,22 @@ impl App {
                         std::mem::discriminant(&tool.status).hash(&mut stamp);
                         tool.progress.hash(&mut stamp);
                         tool.result.as_ref().map(|text| text.len()).hash(&mut stamp);
-                        if let Some(streams) = view
-                            .tool_presentations
-                            .get(&crate::state::tool::ToolKey::new(
-                                &view.info.session_id,
-                                live.reference.as_ref().map_or("", |turn| &turn.loop_id),
-                                request.request_index,
-                                &tool.tool_call_id,
-                            ))
-                            .and_then(|facts| facts.process_output.as_ref())
+                        if let Some(facts) =
+                            view.tool_presentations
+                                .get(&crate::state::tool::ToolKey::new(
+                                    &view.info.session_id,
+                                    live.reference.as_ref().map_or("", |turn| &turn.loop_id),
+                                    request.request_index,
+                                    &tool.tool_call_id,
+                                ))
                         {
-                            for stream in streams {
-                                stream.observed_end.hash(&mut stamp);
+                            if let Some(preview) = &facts.arguments_preview {
+                                preview.hash(&mut stamp);
+                            }
+                            if let Some(streams) = &facts.process_output {
+                                for stream in streams {
+                                    stream.observed_end.hash(&mut stamp);
+                                }
                             }
                         }
                     }

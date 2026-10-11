@@ -25,8 +25,15 @@ impl App {
             return Vec::new();
         }
         let now = self.instant_now();
-        let position =
-            crate::ui::transcript::scroll_position(self, prepared.total_rows(), self.viewport.1);
+        // viewport.1 already excludes the marker; use the renderer's raw height
+        // so scroll_position reserves that row exactly once.
+        let height = crate::ui::layout::screen_layout(
+            self,
+            ratatui::layout::Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1),
+        )
+        .transcript
+        .height as usize;
+        let position = crate::ui::transcript::scroll_position(self, prepared.total_rows(), height);
         let epoch = view.session_epoch;
         let keys: Vec<_> = (position.offset..position.offset + position.visible_rows)
             .filter_map(|row| {

@@ -3761,6 +3761,14 @@ impl App {
                     TranscriptBlock::Assistant(assistant) => {
                         let mut ordinal = 0;
                         for part in &assistant.parts {
+                            if let AssistantPart::ToolCall(call) = part {
+                                tool_keys.insert(ToolKey::new(
+                                    &view.info.session_id,
+                                    &assistant.loop_id,
+                                    assistant.request_index,
+                                    &call.tool_call_id,
+                                ));
+                            }
                             if matches!(part, AssistantPart::Reasoning(_)) {
                                 reasoning_keys.insert(crate::state::view::ReasoningKey::new(
                                     &assistant.loop_id,

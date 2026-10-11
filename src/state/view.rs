@@ -847,10 +847,20 @@ impl PreparedConversation {
                     .find(|section| section.id.kind == SectionKind::User)
             })
             .or_else(|| sections.first())?;
+        let retained = stable(selected);
         self.copy_ranges
             .iter()
             .filter(|copy| selected.rows.contains(&copy.row) && !copy.decorative)
-            .min_by_key(|copy| copy.source_offset.abs_diff(anchor.source_offset))
+            .min_by_key(|copy| {
+                // Source offsets are raw logical boundaries; rendered Markdown
+                // byte lengths cannot define their ends. Retained anchors use
+                // the latest preceding boundary (exact empty rows still win).
+                // Before the first boundary or in an unloaded section, use nearest.
+                (
+                    retained && copy.source_offset > anchor.source_offset,
+                    copy.source_offset.abs_diff(anchor.source_offset),
+                )
+            })
             .map(|copy| copy.row)
             .or(Some(selected.rows.start))
     }
@@ -859,5 +869,303 @@ impl PreparedConversation {
         self.sections
             .iter()
             .find(|section| section.contains_row(row) && section.content_columns.contains(&column))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::UserMessageKindWire;
+    use crate::state::transcript::{TranscriptBlock, UserBlock};
+    use crate::theme::ThemeKind;
+    use crate::ui::{layout, testapp, transcript};
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn scroll_anchor_keeps_interior_utf8_text_visible_after_widening() {
+        const ANCHORED_TEXT: &str = "案，也不要在第一次失败后停止。";
+        // At 89 terminal columns the anchor starts the final soft-wrapped
+        // row. At 120 it lies late inside a row, nearer the paragraph gap's
+        // source offset than the containing row's start.
+        let source = format!(
+            "{}请给出完整方{ANCHORED_TEXT}\n\n重点保证：JSONL 流式读取、中文与组合字符。",
+            "先实现并验证".repeat(13),
+        );
+        let mut app = testapp::open_empty(ThemeKind::Dark, "ses_1", None, "high");
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        for (index, text) in [
+            "前一个用户 section。",
+            source.as_str(),
+            "后一个用户 section。",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            view.transcript.push_block(TranscriptBlock::User(UserBlock {
+                index: Some(index),
+                loop_id: Some(format!("resize-{index}")),
+                kind: UserMessageKindWire::Prompt,
+                text: text.into(),
+                pending: false,
+            }));
+        }
+        let prepare = |columns| {
+            let area = layout::screen_layout(&app, Rect::new(0, 0, columns, 24)).transcript;
+            transcript::prepare_conversation(&app, area.width)
+        };
+        let before = prepare(89);
+        let after = prepare(120);
+        let section = before
+            .sections
+            .iter()
+            .find(|section| section.id.history_index == Some(1))
+            .unwrap();
+        let first_visible = before
+            .copy_ranges
+            .iter()
+            .find(|copy| {
+                section.rows.contains(&copy.row)
+                    && !copy.decorative
+                    && copy.text.starts_with(ANCHORED_TEXT)
+            })
+            .expect("the narrow viewport must start on the paragraph's soft-wrapped tail");
+        assert!(
+            !before
+                .copy_row(first_visible.row - 1)
+                .unwrap()
+                .hard_break_after
+        );
+        let anchor = ScrollAnchor {
+            section_id: section.id.clone(),
+            source_offset: first_visible.source_offset,
+            screen_row: 0,
+        };
+        assert_eq!(anchor.source_offset, source.find(ANCHORED_TEXT).unwrap());
+        assert!(source.is_char_boundary(anchor.source_offset));
+        assert_eq!(
+            before.row_for_scroll_anchor(&anchor),
+            Some(first_visible.row)
+        );
+
+        let widened = after
+            .durable
+            .as_ref()
+            .unwrap()
+            .layout
+            .sections
+            .iter()
+            .find(|placement| placement.layout.key.section == anchor.section_id)
+            .unwrap();
+        let containing = widened
+            .layout
+            .source_map
+            .rows
+            .iter()
+            .find(|row| !row.decorative && row.source_range.contains(&anchor.source_offset))
+            .expect("real reflow source metadata must still contain the UTF-8 anchor");
+        assert!(containing.source_range.start < anchor.source_offset);
+        assert!(source[containing.source_range.clone()].contains(ANCHORED_TEXT));
+        assert!(after.has_scroll_anchor_section(&anchor));
+
+        let restored = after.row_for_scroll_anchor(&anchor).unwrap();
+        assert_eq!(
+            after.sections.at_row(restored).unwrap().id,
+            anchor.section_id,
+            "surrounding section boundaries must not steal the anchor",
+        );
+        let visible = after
+            .window(restored.saturating_sub(anchor.screen_row), 8)
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            visible.contains(ANCHORED_TEXT),
+            "widening must keep the previously anchored logical text visible, not scroll past it to the paragraph gap:\n{visible}",
+        );
+    }
+
+    #[test]
+    fn scroll_anchor_keeps_parsed_markdown_text_visible_after_widening() {
+        let source = format!("{}TAIL\n\nnext", "**a** ".repeat(45));
+        let mut app = testapp::open_empty(ThemeKind::Dark, "ses_1", None, "high");
+        let view = app.sessions.known.get_mut("ses_1").unwrap();
+        for (index, text) in ["previous section", source.as_str(), "next section"]
+            .into_iter()
+            .enumerate()
+        {
+            view.transcript.push_block(TranscriptBlock::User(UserBlock {
+                index: Some(index),
+                loop_id: Some(format!("markdown-resize-{index}")),
+                kind: UserMessageKindWire::Prompt,
+                text: text.into(),
+                pending: false,
+            }));
+        }
+        let prepare = |columns| {
+            let area = layout::screen_layout(&app, Rect::new(0, 0, columns, 24)).transcript;
+            transcript::prepare_conversation(&app, area.width)
+        };
+        let before = prepare(89);
+        let after = prepare(120);
+        let section = before
+            .sections
+            .iter()
+            .find(|section| section.id.history_index == Some(1))
+            .unwrap();
+        let first_visible = before
+            .copy_ranges
+            .iter()
+            .find(|copy| section.rows.contains(&copy.row) && copy.text.contains("TAIL"))
+            .unwrap();
+        let anchor = ScrollAnchor {
+            section_id: section.id.clone(),
+            source_offset: first_visible.source_offset,
+            screen_row: 0,
+        };
+        // The narrow row containing TAIL begins at a raw Markdown offset,
+        // not at an offset into the rendered "a a ... TAIL" copy text.
+        assert_eq!(anchor.source_offset, 254);
+        assert_eq!(source.find("TAIL"), Some(270));
+        assert_eq!(
+            before.row_for_scroll_anchor(&anchor),
+            Some(first_visible.row)
+        );
+        let widened_section = after
+            .sections
+            .iter()
+            .find(|section| section.id == anchor.section_id)
+            .unwrap();
+        let containing = after
+            .copy_ranges
+            .iter()
+            .find(|copy| widened_section.rows.contains(&copy.row) && copy.text.contains("TAIL"))
+            .unwrap();
+        assert_eq!(containing.source_offset, 2);
+        assert!(
+            !containing.text.contains("**"),
+            "must exercise parsed Markdown"
+        );
+        assert!(
+            containing.source_offset + containing.text.len() < anchor.source_offset,
+            "rendered byte length must not be mistaken for a raw source boundary",
+        );
+        let restored = after.row_for_scroll_anchor(&anchor).unwrap();
+        assert_eq!(
+            after.sections.at_row(restored).unwrap().id,
+            anchor.section_id
+        );
+        let visible = after
+            .window(restored.saturating_sub(anchor.screen_row), 8)
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            visible.contains("TAIL"),
+            "widening parsed Markdown must keep the previously anchored logical text visible:\n{visible}",
+        );
+    }
+
+    #[test]
+    fn scroll_anchor_preserves_copy_offset_boundaries_and_fallbacks() {
+        let id = SectionId {
+            session_id: "ses_1".into(),
+            loop_id: Some("fold-target".into()),
+            request_index: Some(0),
+            kind: SectionKind::Tool,
+            ordinal: 0,
+            tool_call_id: Some("call-target".into()),
+            history_index: Some(7),
+        };
+        let rows = [
+            ("fold hint", 86, true),
+            ("中文句", 80, false),
+            ("", 89, false),
+            ("尾", 100, false),
+            ("", 103, true),
+            ("neighbor", 86, false),
+        ];
+        let mut prepared = PreparedConversation {
+            header: vec![Line::default(); 10],
+            live: rows.iter().map(|(text, _, _)| Line::from(*text)).collect(),
+            sections: SectionIndex {
+                live: Arc::new(vec![
+                    SectionRange {
+                        id: id.clone(),
+                        rows: 10..15,
+                        content_columns: 0..80,
+                        collapsible: true,
+                        folded: true,
+                    },
+                    SectionRange {
+                        id: SectionId {
+                            loop_id: Some("neighbor".into()),
+                            request_index: None,
+                            kind: SectionKind::User,
+                            tool_call_id: None,
+                            history_index: Some(8),
+                            ..id.clone()
+                        },
+                        rows: 15..16,
+                        content_columns: 0..80,
+                        collapsible: false,
+                        folded: false,
+                    },
+                ]),
+                ..SectionIndex::default()
+            },
+            copy_ranges: CopyIndex {
+                live_base: 10,
+                live: Arc::new(
+                    rows.iter()
+                        .enumerate()
+                        .map(|(row, (text, source_offset, decorative))| CopyRange {
+                            row,
+                            columns: 0..80,
+                            source: Arc::from(*text),
+                            // Copy buffers need not use the logical source offsets.
+                            source_range: 0..text.len(),
+                            source_offset: *source_offset,
+                            hard_break_after: true,
+                            decorative: *decorative,
+                            table_fragments: None,
+                        })
+                        .collect(),
+                ),
+                ..CopyIndex::default()
+            },
+            ..PreparedConversation::default()
+        };
+        let mut anchor = ScrollAnchor {
+            section_id: id,
+            source_offset: 86,
+            screen_row: 3,
+        };
+        // For a retained source, 98 is between boundaries 89 and 100. Stay
+        // at its predecessor, even if a rendered copy buffer is empty/short.
+        for (offset, expected_row) in [
+            (0, 11),
+            (80, 11),
+            (86, 11),
+            (89, 12),
+            (98, 12),
+            (100, 13),
+            (103, 13),
+        ] {
+            anchor.source_offset = offset;
+            assert_eq!(prepared.row_for_scroll_anchor(&anchor), Some(expected_row));
+        }
+        // Unloaded anchors keep the old nearest-row fallback; offsets into
+        // the replacement section do not identify the original source text.
+        anchor.section_id.loop_id = Some("unloaded".into());
+        anchor.source_offset = 86;
+        assert!(!prepared.has_scroll_anchor_section(&anchor));
+        assert_eq!(prepared.row_for_scroll_anchor(&anchor), Some(12));
+        anchor.source_offset = 98;
+        assert_eq!(prepared.row_for_scroll_anchor(&anchor), Some(13));
+        anchor.section_id.loop_id = Some("fold-target".into());
+        Arc::make_mut(&mut prepared.copy_ranges.live).clear();
+        assert_eq!(prepared.row_for_scroll_anchor(&anchor), Some(10));
     }
 }

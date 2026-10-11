@@ -2156,20 +2156,30 @@ impl App {
 }
 
 fn all_tool_keys(view: &SessionView) -> Vec<ToolKey> {
-    let mut keys: Vec<_> = view
-        .transcript
-        .blocks
-        .iter()
-        .filter_map(|block| match block.as_ref() {
-            TranscriptBlock::Tool(tool) => Some(ToolKey::new(
+    let mut keys = Vec::new();
+    for block in view.transcript.blocks.iter() {
+        match block.as_ref() {
+            TranscriptBlock::Tool(tool) => keys.push(ToolKey::new(
                 &view.info.session_id,
                 &tool.loop_id,
                 tool.request_index,
                 &tool.tool_call_id,
             )),
-            _ => None,
-        })
-        .collect();
+            TranscriptBlock::Assistant(assistant) => {
+                for part in &assistant.parts {
+                    if let crate::state::transcript::AssistantPart::ToolCall(call) = part {
+                        keys.push(ToolKey::new(
+                            &view.info.session_id,
+                            &assistant.loop_id,
+                            assistant.request_index,
+                            &call.tool_call_id,
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
     if let Some(live) = &view.live {
         if let Some(reference) = &live.reference {
             for request in &live.requests {
@@ -2515,15 +2525,26 @@ pub(super) fn toggle_tool(
     let Some(current) = current_tool_expanded(view, &key) else {
         return;
     };
-    let has_durable_tool = view.transcript.blocks.iter().any(|block| {
-        matches!(
-            block.as_ref(),
-            TranscriptBlock::Tool(tool)
-                if tool.loop_id == loop_id
+    let has_durable_card = view
+        .transcript
+        .blocks
+        .iter()
+        .any(|block| match block.as_ref() {
+            TranscriptBlock::Tool(tool) => {
+                tool.loop_id == loop_id
                     && tool.request_index == request_index
                     && tool.tool_call_id == tool_call_id
-        )
-    });
+            }
+            TranscriptBlock::Assistant(assistant) => {
+                assistant.loop_id == loop_id
+                    && assistant.request_index == request_index
+                    && assistant.parts.iter().any(|part| {
+                        matches!(part, crate::state::transcript::AssistantPart::ToolCall(call)
+                        if call.tool_call_id == tool_call_id)
+                    })
+            }
+            _ => false,
+        });
     let expanded = !current;
     if expanded {
         if let Some(facts) = Arc::make_mut(&mut view.tool_presentations).get_mut(&key) {
@@ -2575,7 +2596,7 @@ pub(super) fn toggle_tool(
             FoldOverride::Collapsed
         },
     );
-    if has_durable_tool {
+    if has_durable_card {
         view.transcript.invalidate();
     } else {
         app.prepared_conversation = None;
@@ -2604,21 +2625,61 @@ fn current_tool_expanded(view: &SessionView, key: &ToolKey) -> Option<bool> {
         return Some(expanded);
     }
 
-    let live = view.live.as_ref()?;
-    let reference = live.reference.as_ref()?;
-    if reference.session_id != key.session_id || reference.loop_id != key.loop_id {
-        return None;
+    if let Some(expanded) = view.live.as_ref().and_then(|live| {
+        let reference = live.reference.as_ref()?;
+        if reference.session_id != key.session_id || reference.loop_id != key.loop_id {
+            return None;
+        }
+        live.requests
+            .iter()
+            .find(|request| request.request_index == key.request_index)
+            .and_then(|request| {
+                request
+                    .tools
+                    .iter()
+                    .find(|tool| tool.tool_call_id == key.tool_call_id)
+            })
+            .map(|tool| crate::ui::transcript::effective_live_tool_expanded(view, key, tool))
+    }) {
+        return Some(expanded);
     }
-    live.requests
+
+    // Match the renderer's assistant fallback only after real tool owners.
+    let call = view
+        .transcript
+        .blocks
         .iter()
-        .find(|request| request.request_index == key.request_index)
-        .and_then(|request| {
-            request
-                .tools
-                .iter()
-                .find(|tool| tool.tool_call_id == key.tool_call_id)
+        .find_map(|block| match block.as_ref() {
+            TranscriptBlock::Assistant(assistant)
+                if assistant.loop_id == key.loop_id
+                    && assistant.request_index == key.request_index =>
+            {
+                assistant.parts.iter().find_map(|part| match part {
+                    crate::state::transcript::AssistantPart::ToolCall(call)
+                        if call.tool_call_id == key.tool_call_id =>
+                    {
+                        Some(call)
+                    }
+                    _ => None,
+                })
+            }
+            _ => None,
+        })?;
+    let hidden_line_count = view.tool_presentations.get(key).and_then(|facts| {
+        facts.display.hidden_line_count.or_else(|| {
+            facts
+                .result
+                .as_deref()
+                .map(|result| crate::ui::tool::result_line_count(Some(result)))
         })
-        .map(|tool| crate::ui::transcript::effective_live_tool_expanded(view, key, tool))
+    });
+    Some(crate::ui::transcript::resolve_tool_expanded(
+        view,
+        key,
+        false,
+        &call.name,
+        hidden_line_count,
+    ))
 }
 
 pub(super) fn toggle_reasoning_section(
