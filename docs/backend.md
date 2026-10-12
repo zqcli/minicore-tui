@@ -14,7 +14,7 @@ through `--agent-bin`; its config and data directory belong to the Agent.
 | Component | Repository | Revision | Package |
 |---|---|---|---|
 | TUI | `zqcli/minicore-tui` | Current checkout; historical [closeout provenance](verification/v03-closeout/README.md) | `0.3.0` |
-| Agent | `zqcli/minicore-agent` | `cd642d90ec202c002e67c94c87647b68ef512d2f` | `0.6.2` |
+| Agent | `zqcli/minicore-agent` | `deae007fbf5c955a0849fd3064afabdc99eb609a` | `0.6.2` |
 | Runtime | `zqcli/minicore-runtime` | `666d5a15ac08c614ce75dd90337f95f10ec29f80` | `0.6.1` |
 
 The Agent and Runtime revisions are fixed inputs for the 0.3.0 release line;
