@@ -241,9 +241,7 @@ impl ToolCall {
     pub fn folded_rows(&self) -> usize {
         if self.is_patch() {
             8
-        } else if self.state == ToolState::Failed {
-            3
-        } else if self.name == "read" {
+        } else if self.state == ToolState::Failed || self.name == "read" {
             3
         } else {
             4

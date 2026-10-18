@@ -161,13 +161,10 @@ pub fn sheet(app: &App) -> Option<Sheet> {
             },
         },
         Overlay::Interaction => {
-            let Some(interaction) = app
+            let interaction = app
                 .session
                 .as_ref()
-                .and_then(|session| session.interaction.as_ref())
-            else {
-                return None;
-            };
+                .and_then(|session| session.interaction.as_ref())?;
             let mut rows: Vec<Row> = Vec::new();
             if let Some(detail) = &interaction.detail {
                 rows.push(Row::new(detail.clone(), String::new()));
