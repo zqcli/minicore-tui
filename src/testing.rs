@@ -250,10 +250,7 @@ impl FakeAgent {
     /// to the plain script. Paged reads need this: the probe and the page ask
     /// the same method with different cursors.
     pub fn script_sequence(&self, method: &str, results: Vec<Value>) {
-        let queue: Replies = results
-            .into_iter()
-            .map(|result| Reply::result(result))
-            .collect();
+        let queue: Replies = results.into_iter().map(Reply::result).collect();
         self.sequences
             .lock()
             .unwrap()
