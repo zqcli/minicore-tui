@@ -595,7 +595,8 @@ impl App {
         self.tool_view.scroll_by(delta * 3, rows);
     }
 
-    fn reasoning_levels(&self) -> Vec<crate::protocol::Reasoning> {
+    /// The reasoning levels this session's model supports, in Agent order.
+    pub fn reasoning_levels(&self) -> Vec<crate::protocol::Reasoning> {
         let levels = self
             .session
             .as_ref()

@@ -12,13 +12,13 @@ use super::panel::{Row, Sheet, Tone, body_lines};
 /// The sheet for a pending interaction: an approval with two rows, or a
 /// choice list. A text answer is not offered because the Agent's tool-input
 /// interactions are choices; the composer stays available when one appears.
-pub fn interaction_sheet<'a>(
-    prompt: &'a str,
-    detail: Option<&'a str>,
+pub fn interaction_sheet(
+    prompt: &str,
+    detail: Option<&str>,
     options: &[String],
     selected: usize,
     palette: &Palette,
-) -> Sheet<'a> {
+) -> Sheet {
     let mut body = body_lines(prompt, 72, Style::default().fg(palette.text));
     if let Some(detail) = detail {
         body.push(Line::from(""));

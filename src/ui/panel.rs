@@ -49,31 +49,31 @@ impl Row {
     }
 }
 
-/// Everything a sheet draws. Callers own the content; this module owns the
-/// geometry and the visual system.
-pub struct Sheet<'a> {
-    pub title: &'a str,
+/// Everything a sheet draws. The sheet owns its text, so a picker can build one
+/// from freshly formatted rows every frame without borrowing app state.
+pub struct Sheet {
+    pub title: String,
     /// Filter text shown after the title, or a status such as `3 of 12`.
     pub subtitle: Option<String>,
     /// Non-selectable lines between the title and the list (prompt text,
     /// an interaction question, a confirmation).
-    pub body: Vec<Line<'a>>,
+    pub body: Vec<Line<'static>>,
     pub rows: Vec<Row>,
     pub selected: Option<usize>,
     pub offset: usize,
-    pub hint: &'a str,
+    pub hint: String,
 }
 
-impl<'a> Sheet<'a> {
-    pub fn new(title: &'a str, hint: &'a str) -> Self {
+impl Sheet {
+    pub fn new(title: impl Into<String>, hint: impl Into<String>) -> Self {
         Self {
-            title,
+            title: title.into(),
             subtitle: None,
             body: Vec::new(),
             rows: Vec::new(),
             selected: None,
             offset: 0,
-            hint,
+            hint: hint.into(),
         }
     }
 
@@ -97,7 +97,7 @@ impl<'a> Sheet<'a> {
         self
     }
 
-    pub fn body(mut self, body: Vec<Line<'a>>) -> Self {
+    pub fn body(mut self, body: Vec<Line<'static>>) -> Self {
         self.body = body;
         self
     }
@@ -165,7 +165,7 @@ pub fn render(frame: &mut Frame, area: Rect, palette: &Palette, sheet: &Sheet) {
             y,
             palette,
             Line::from(Span::styled(
-                clean(sheet.hint),
+                clean(&sheet.hint),
                 Style::default().fg(palette.faint),
             )),
         );
@@ -174,7 +174,7 @@ pub fn render(frame: &mut Frame, area: Rect, palette: &Palette, sheet: &Sheet) {
 
 fn render_title(frame: &mut Frame, area: Rect, palette: &Palette, sheet: &Sheet) {
     let mut spans = vec![Span::styled(
-        clean(sheet.title),
+        clean(&sheet.title),
         Style::default()
             .fg(palette.accent)
             .add_modifier(Modifier::BOLD),

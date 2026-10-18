@@ -4,6 +4,7 @@
 pub mod files;
 pub mod panel;
 pub mod picker;
+pub mod screens;
 pub mod selection;
 pub mod sheets;
 pub mod views;
