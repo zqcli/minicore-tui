@@ -1,1 +1,0 @@
-{"jsonrpc":"2.0","id":5,"result":{"session_id":"ses_6f3c1a","status":"running","active_loop":{"loop_id":"loop_77aa","status":"running_model","request_index":0,"config_revision":0,"model":"gpt-4o","pending_interaction":null},"block_reason":null}}

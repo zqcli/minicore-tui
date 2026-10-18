@@ -1,33 +1,18 @@
-//! minicore-tui: a pi-style coding agent TUI frontend for minicore-agent.
+//! minicore-tui: a pi-style coding-agent TUI for minicore-agent over stdio
+//! JSON-RPC.
 //!
-//! This crate owns terminal lifecycle, themes, the RPC client, and rendering.
-//! It talks to the agent exclusively over stdio JSON-RPC (see
-//! `docs/rpc-contract.md`) and never depends on the agent or runtime crates.
-//!
-//! The implementation includes the fullscreen terminal lifecycle, pinned
-//! stdio JSON-RPC process adapter, single-writer App state machine, durable
-//! transcript reconciliation, selectors, multiline composer, fixed keymap,
-//! Pi-style rendering, and update-installed durable transcript line caches.
-//! Markdown is wrapped by a small pulldown-cmark adapter; live streaming stays
-//! plain and never enters the durable cache. All app state is mutated only
-//! through `App::update`, never from tasks or render code.
+//! Module direction: `protocol` ← `rpc` ← `app` → `transcript` → `ui`.
 
 pub mod app;
-pub mod args;
+pub mod cli;
 pub mod clipboard;
-pub mod command;
 pub mod config;
-pub mod error;
-pub mod event;
-pub mod jobs;
-pub mod keymap;
-pub mod limits;
-pub mod markdown;
-pub mod perf;
+pub mod editor;
 pub mod protocol;
 pub mod rpc;
-pub mod safe_text;
-pub mod state;
 pub mod terminal;
 pub mod theme;
+pub mod transcript;
 pub mod ui;
+
+pub use app::App;
