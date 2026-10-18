@@ -2,8 +2,8 @@
 //! the find bar. Both are built here from app state so the reducer and the
 //! renderer agree on rows, hints and key handling.
 
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::style::Style;
+use ratatui::text::Line;
 
 use crate::theme::Palette;
 
@@ -119,70 +119,7 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-/// The turn-end line: `── completed in 3m07s · 12 requests · 11 tools · 3 files
-/// changed (+40 −7) ──`.
-pub struct TurnEnd<'a> {
-    pub outcome: crate::protocol::LoopOutcome,
-    pub duration: Option<std::time::Duration>,
-    pub requests: u32,
-    pub tool_rounds: u64,
-    pub changes: Option<crate::transcript::ChangeSummary>,
-    pub reason: Option<&'a str>,
-}
-
-impl TurnEnd<'_> {
-    pub fn line(&self, palette: &Palette) -> Line<'static> {
-        use crate::protocol::LoopOutcome;
-        let (label, color) = match self.outcome {
-            LoopOutcome::Completed => ("completed", palette.dim),
-            LoopOutcome::Cancelled { .. } => ("interrupted", palette.warning),
-            LoopOutcome::Failed { .. } => ("failed", palette.failure),
-            LoopOutcome::Unknown => ("ended", palette.failure),
-        };
-        let reason = self.reason.filter(|reason| !reason.trim().is_empty());
-        let mut parts = vec![
-            match self.duration {
-                Some(duration) => format!("{label} in {}", duration_label(duration)),
-                None => label.to_owned(),
-            },
-            plural(self.requests as u64, "request", "requests"),
-            plural(self.tool_rounds, "tool", "tools"),
-        ];
-        if let Some(changes) = self.changes
-            && !changes.is_empty()
-        {
-            parts.push(format!(
-                "{} changed (+{} −{})",
-                plural(changes.files as u64, "file", "files"),
-                changes.added,
-                changes.removed
-            ));
-        }
-        let mut spans = vec![Span::styled("── ".to_owned(), Style::default().fg(color))];
-        spans.push(Span::styled(
-            parts.join(" · "),
-            Style::default().fg(color).add_modifier(Modifier::DIM),
-        ));
-        if let Some(reason) = reason {
-            spans.push(Span::styled(
-                format!(" · {reason}"),
-                Style::default().fg(palette.failure),
-            ));
-        }
-        spans.push(Span::styled(" ──".to_owned(), Style::default().fg(color)));
-        Line::from(spans)
-    }
-}
-
-fn plural(count: u64, one: &str, many: &str) -> String {
-    if count == 1 {
-        format!("1 {one}")
-    } else {
-        format!("{count} {many}")
-    }
-}
-
-/// `3m07s`, `1h02m`, `12s`.
+/// `3m07s`, `1h02m`, `12s`. The status line and the turn-end line share this.
 pub fn duration_label(duration: std::time::Duration) -> String {
     let seconds = duration.as_secs();
     match seconds {
@@ -296,101 +233,10 @@ mod tests {
     }
 
     #[test]
-    fn turn_end_lines_name_the_outcome_and_the_work() {
-        let palette = Palette::dark();
-        let changes = crate::transcript::ChangeSummary {
-            files: 3,
-            added: 40,
-            removed: 7,
-        };
-        let line = TurnEnd {
-            outcome: LoopOutcome::Completed,
-            duration: Some(std::time::Duration::from_secs(187)),
-            requests: 12,
-            tool_rounds: 11,
-            changes: Some(changes),
-            reason: None,
-        }
-        .line(&palette);
-        let text: String = line
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect();
-        assert_eq!(
-            text,
-            "── completed in 3m07s · 12 requests · 11 tools · 3 files changed (+40 −7) ──"
-        );
-    }
-
-    #[test]
-    fn a_cancelled_turn_is_yellow_and_failed_is_red() {
-        let palette = Palette::dark();
-        let cancelled = TurnEnd {
-            outcome: LoopOutcome::Cancelled {
-                reason: crate::protocol::CancelReason::User,
-            },
-            duration: Some(std::time::Duration::from_secs(5)),
-            requests: 1,
-            tool_rounds: 0,
-            changes: None,
-            reason: None,
-        }
-        .line(&palette);
-        assert_eq!(cancelled.spans[1].style.fg, Some(palette.warning));
-        let failed = TurnEnd {
-            outcome: LoopOutcome::Failed {
-                kind: "provider".into(),
-                model_error: None,
-            },
-            duration: None,
-            requests: 1,
-            tool_rounds: 0,
-            changes: None,
-            reason: Some("provider error"),
-        }
-        .line(&palette);
-        assert_eq!(failed.spans[1].style.fg, Some(palette.failure));
-        let text: String = failed
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect();
-        assert!(text.contains("provider error"), "{text}");
-    }
-
-    #[test]
     fn durations_switch_units_at_a_minute_and_an_hour() {
         use std::time::Duration;
         assert_eq!(duration_label(Duration::from_secs(12)), "12s");
         assert_eq!(duration_label(Duration::from_secs(187)), "3m07s");
         assert_eq!(duration_label(Duration::from_secs(3720)), "1h02m");
-    }
-
-    #[test]
-    fn counts_are_pluralized() {
-        let palette = Palette::dark();
-        let line = TurnEnd {
-            outcome: LoopOutcome::Completed,
-            duration: None,
-            requests: 1,
-            tool_rounds: 1,
-            changes: Some(crate::transcript::ChangeSummary {
-                files: 1,
-                added: 1,
-                removed: 0,
-            }),
-            reason: None,
-        }
-        .line(&palette);
-        let text: String = line
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect();
-        assert!(
-            text.contains("1 request · 1 tool · 1 file changed"),
-            "{text}"
-        );
     }
 }

@@ -101,6 +101,12 @@ pub fn find_matches(blocks: &[Block], query: &str) -> Vec<FindMatch> {
     matches
 }
 
+/// Matches in a block slice; the same as [`find_matches`] for callers that
+/// already hold the blocks and cannot re-borrow the session.
+pub fn find_matches_in(blocks: &[Block], query: &str) -> Vec<FindMatch> {
+    find_matches(blocks, query)
+}
+
 /// Advance through the matches, wrapping at either end.
 pub fn step_match(current: usize, total: usize, forward: bool) -> usize {
     if total == 0 {

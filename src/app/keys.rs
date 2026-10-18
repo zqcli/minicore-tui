@@ -3,7 +3,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-use super::{Action, App, Overlay};
+use super::{Action, App, Overlay, features};
 use crate::app::commands::{self, Executed};
 
 /// What one input event resolved to.
@@ -33,9 +33,15 @@ impl App {
     }
 
     fn on_overlay_key(&mut self, key: KeyEvent) -> Input {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => {
+                self.delete_pending = None;
                 self.overlay = Overlay::None;
+                Input::Consumed
+            }
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.find_step(false);
                 Input::Consumed
             }
             KeyCode::Enter => self.on_overlay_accept(),
@@ -43,19 +49,115 @@ impl App {
                 self.overlay_move(-1);
                 Input::Consumed
             }
-            KeyCode::Down | KeyCode::Tab => {
+            KeyCode::Tab if matches!(self.overlay, Overlay::Diff { .. }) => {
+                self.diff_cycle_scope();
+                Input::Consumed
+            }
+            KeyCode::Tab => {
                 self.overlay_move(1);
+                Input::Consumed
+            }
+            KeyCode::Down => {
+                self.overlay_move(1);
+                Input::Consumed
+            }
+            KeyCode::Char('c') if ctrl => self.copy_view(),
+            KeyCode::PageUp => {
+                self.overlay_move(-10);
+                Input::Consumed
+            }
+            KeyCode::PageDown => {
+                self.overlay_move(10);
                 Input::Consumed
             }
             KeyCode::Backspace => {
                 self.overlay_filter_push(None);
                 Input::Consumed
             }
-            KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('d') if ctrl => {
+                self.delete_confirm();
+                Input::Consumed
+            }
+            KeyCode::Char('y') if matches!(self.overlay, Overlay::Interaction) => {
+                self.interaction_choice = 0;
+                self.on_overlay_accept()
+            }
+            KeyCode::Char('n') if matches!(self.overlay, Overlay::Interaction) => {
+                self.interaction_choice = 1;
+                self.on_overlay_accept()
+            }
+            KeyCode::Char(character) if !ctrl => {
                 self.overlay_filter_push(Some(character));
                 Input::Consumed
             }
             _ => Input::Ignored,
+        }
+    }
+
+    /// Ctrl+D in the sessions picker: the first press arms the delete, the
+    /// second deletes the selected session.
+    fn delete_confirm(&mut self) {
+        let Overlay::Sessions { selected, .. } = &self.overlay else {
+            return;
+        };
+        let Some(info) = self.session_rows.get(*selected) else {
+            return;
+        };
+        let id = info.session_id.clone();
+        let resident = self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.info.session_id == id);
+        if resident {
+            self.notice(
+                crate::transcript::block::NoticeLevel::Error,
+                "Open another session before deleting this one",
+            );
+            return;
+        }
+        if self.delete_pending.as_deref() == Some(id.as_str()) {
+            self.delete_pending = None;
+            self.on_action(Action::DeleteSession(id));
+        } else {
+            self.delete_pending = Some(id);
+            self.notice(
+                crate::transcript::block::NoticeLevel::Info,
+                "Press Ctrl+D again to delete",
+            );
+        }
+    }
+
+    /// Enter / Shift+Enter in the find bar: jump to the next or previous match.
+    fn find_step(&mut self, forward: bool) {
+        let mut matches = Vec::new();
+        let mut current = 0usize;
+        if let Overlay::Find {
+            matches: found,
+            current: at,
+            ..
+        } = &self.overlay
+        {
+            matches = found.clone();
+            current = *at;
+        }
+        if matches.is_empty() {
+            return;
+        }
+        let next = super::features::step_match(current, matches.len(), forward);
+        if let Some(anchor) = matches.get(next) {
+            self.scroll = super::Scroll::Anchor {
+                block: anchor.block,
+                offset: 0,
+            };
+        }
+        if let Overlay::Find {
+            current: at,
+            matches: found,
+            ..
+        } = &mut self.overlay
+        {
+            *at = next;
+            found.clone_from(&matches);
         }
     }
 
@@ -68,9 +170,12 @@ impl App {
             let next = selected as isize + delta;
             next.clamp(0, len as isize - 1) as usize
         };
-        let sessions = self.sessions.len();
         let models = self.models.len();
         let reasoning = self.reasoning_levels().len();
+        let sessions = match &self.overlay {
+            Overlay::Sessions { filter, .. } => self.filtered_sessions(filter).len(),
+            _ => self.session_rows.len(),
+        };
         match &mut self.overlay {
             Overlay::Palette { selected, filter } => {
                 let len = commands::filter(filter).len();
@@ -82,6 +187,19 @@ impl App {
             Overlay::Files { selected, filter } => {
                 let len = crate::ui::files::filter_count(filter);
                 *selected = step(*selected, len);
+            }
+            Overlay::Diff { file, scroll, .. } => {
+                if *scroll == 0 {
+                    *file = step(*file, self.diff.files.len());
+                }
+            }
+            Overlay::Help => {
+                self.help_scroll = self.help_scroll.saturating_add_signed(delta * 3);
+            }
+            Overlay::Find {
+                current, matches, ..
+            } => {
+                *current = super::features::step_match(*current, matches.len(), delta > 0);
             }
             Overlay::Interaction => {
                 let options = self
@@ -96,6 +214,26 @@ impl App {
     }
 
     fn overlay_filter_push(&mut self, character: Option<char>) {
+        if let Overlay::Find { query, .. } = &mut self.overlay {
+            match character {
+                Some(character) => query.push(character),
+                None => {
+                    query.pop();
+                }
+            }
+            let trimmed = query.trim().to_owned();
+            // Recompute outside the overlay borrow: the blocks live in the
+            // session, which `self` still owns.
+            let found = features::find_matches(self.transcript_blocks(), &trimmed);
+            if let Overlay::Find {
+                matches, current, ..
+            } = &mut self.overlay
+            {
+                *matches = found;
+                *current = 0;
+            }
+            return;
+        }
         match &mut self.overlay {
             Overlay::Palette { filter, selected } => {
                 if let Some(character) = character {
@@ -115,6 +253,7 @@ impl App {
                 }
                 *selected = 0;
             }
+            Overlay::Find { .. } => {}
             Overlay::Files { filter, selected } => {
                 if let Some(character) = character {
                     filter.push(character);
@@ -145,12 +284,20 @@ impl App {
                     _ => Input::Consumed,
                 }
             }
-            Overlay::Sessions { selected, .. } => {
-                let Some(info) = self.sessions.get(selected) else {
+            Overlay::Sessions {
+                selected, filter, ..
+            } => {
+                let rows = self.filtered_sessions(&filter);
+                let Some(info) = rows.get(selected) else {
                     return Input::Consumed;
                 };
                 let id = info.session_id.clone();
                 Input::Action(Action::OpenSession(id))
+            }
+            Overlay::Find { .. } => {
+                // Enter is "next match"; the bar stays open.
+                self.find_step(true);
+                Input::Consumed
             }
             Overlay::Models { selected } => {
                 let Some(model) = self.models.get(selected) else {
@@ -365,31 +512,82 @@ impl App {
         Input::Consumed
     }
 
-    /// Mouse: wheel scrolling, card toggling and selection drag.
+    /// Mouse: wheel scrolling, click-to-open, and drag selection that copies on
+    /// release.
     pub fn on_mouse(&mut self, mouse: MouseEvent) -> Input {
         match mouse.kind {
             MouseEventKind::ScrollUp => {
-                self.scroll_by(-3);
+                if matches!(self.overlay, Overlay::Diff { .. }) {
+                    self.scroll_diff(-3);
+                } else if matches!(self.overlay, Overlay::Tool(_)) {
+                    self.scroll_tool(-3);
+                } else {
+                    self.scroll_by(-3);
+                }
                 Input::Consumed
             }
             MouseEventKind::ScrollDown => {
-                self.scroll_by(3);
+                if matches!(self.overlay, Overlay::Diff { .. }) {
+                    self.scroll_diff(3);
+                } else if matches!(self.overlay, Overlay::Tool(_)) {
+                    self.scroll_tool(3);
+                } else {
+                    self.scroll_by(3);
+                }
                 Input::Consumed
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 self.selection_start = Some((mouse.column, mouse.row));
+                self.selection_end = None;
                 Input::Consumed
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                self.selection_end = Some((mouse.column, mouse.row));
+                if self.selection_start.is_some() {
+                    self.selection_end = Some((mouse.column, mouse.row));
+                }
                 Input::Consumed
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.selection_end = Some((mouse.column, mouse.row));
+                self.copy_selection();
                 Input::Consumed
             }
             _ => Input::Ignored,
         }
+    }
+
+    /// Copies the drag that just ended, if it covered more than one cell.
+    fn copy_selection(&mut self) {
+        let (Some(from), Some(to)) = (self.selection_start, self.selection_end) else {
+            self.selection_start = None;
+            self.selection_end = None;
+            return;
+        };
+        self.selection_start = None;
+        self.selection_end = None;
+        let drag = crate::ui::selection::Drag { from, to };
+        if drag.is_click() {
+            return;
+        }
+        let Some(text) = self.selected_text(drag) else {
+            return;
+        };
+        if !text.trim().is_empty() {
+            self.copy(text);
+        }
+    }
+
+    fn scroll_diff(&mut self, delta: isize) {
+        let rows = self.transcript_rows();
+        self.diff.scroll_by(delta * 3, rows);
+        if let Overlay::Diff { scroll, .. } = &mut self.overlay {
+            *scroll = self.diff.scroll.min(u16::MAX as usize) as u16;
+        }
+    }
+
+    fn scroll_tool(&mut self, delta: isize) {
+        let rows = self.transcript_rows();
+        self.tool_view.scroll_by(delta * 3, rows);
     }
 
     fn reasoning_levels(&self) -> Vec<crate::protocol::Reasoning> {

@@ -325,6 +325,18 @@ fn render_hunks(frame: &mut Frame, area: Rect, palette: &Palette, view: &DiffVie
     }
 }
 
+/// Human label of a tool card state, shared by the view and the card.
+pub fn tool_state_label(state: crate::transcript::ToolState) -> &'static str {
+    match state {
+        crate::transcript::ToolState::Pending => "requested",
+        crate::transcript::ToolState::Running => "running",
+        crate::transcript::ToolState::Succeeded => "succeeded",
+        crate::transcript::ToolState::Failed => "failed",
+        crate::transcript::ToolState::Denied => "denied",
+        crate::transcript::ToolState::Cancelled => "cancelled",
+    }
+}
+
 /// The tool output view: the call's input on top, then the paged output.
 #[derive(Clone, Debug)]
 pub struct ToolView {

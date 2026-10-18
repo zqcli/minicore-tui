@@ -524,6 +524,81 @@ pub fn load_changes(client: Arc<Client>, tx: Tx, session_id: String, loop_id: St
     });
 }
 
+/// Lists the change records for one scope and, for the first file, its hunks.
+/// The diff view gets files first, then hunks, so a huge workspace never blocks
+/// the panel from opening.
+pub fn list_changes(
+    client: Arc<Client>,
+    tx: Tx,
+    session_id: String,
+    scope: crate::app::DiffScope,
+) {
+    tokio::spawn(async move {
+        let params = json!({
+            "session_id": session_id,
+            "scope": match scope {
+                crate::app::DiffScope::Turn => json!("session"),
+                crate::app::DiffScope::Session => json!("session"),
+                crate::app::DiffScope::Workspace => json!("workspace"),
+            },
+            "limit": 200,
+            "max_bytes": 262_144,
+        });
+        let result: Result<ChangeList, _> = client
+            .call::<Value, ChangeList>(protocol::METHOD_CHANGES_LIST, &params, false)
+            .await;
+        post(
+            &tx,
+            Some(&session_id),
+            OpKind::ChangeFiles(scope, result.map(|list| list.records)),
+        );
+    });
+}
+
+/// Pages the hunks of one change record for the diff view.
+pub fn load_diff(
+    client: Arc<Client>,
+    tx: Tx,
+    session_id: String,
+    change_ref: String,
+    path: String,
+) {
+    tokio::spawn(async move {
+        let mut hunks = Vec::new();
+        let mut cursor: Option<Value> = None;
+        let page = loop {
+            let params = json!({
+                "session_id": session_id,
+                "change_ref": change_ref,
+                "cursor": cursor,
+                "max_bytes": 262_144,
+            });
+            let next: Result<protocol::changes::DiffPage, _> = client
+                .call::<Value, protocol::changes::DiffPage>(
+                    protocol::METHOD_CHANGES_DIFF,
+                    &params,
+                    false,
+                )
+                .await;
+            match next {
+                Ok(mut result) => {
+                    cursor.clone_from(&result.next_cursor);
+                    hunks.append(&mut result.hunks);
+                    if cursor.is_none() {
+                        result.hunks = std::mem::take(&mut hunks);
+                        break result;
+                    }
+                }
+                Err(error) => {
+                    post(&tx, Some(&session_id), OpKind::DiffFile(path, Err(error)));
+                    return;
+                }
+            }
+        };
+        post(&tx, Some(&session_id), OpKind::DiffFile(path, Ok(page)));
+    });
+}
+
 pub fn read_tool(client: Arc<Client>, tx: Tx, key: ToolRef) {
     tokio::spawn(async move {
         let params = json!({
