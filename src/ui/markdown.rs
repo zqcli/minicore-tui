@@ -133,7 +133,8 @@ impl Builder<'_> {
                 self.flush();
                 self.blank();
                 let rule = "─".repeat(self.width);
-                self.out.push(Line::from(Span::styled(rule, self.styles.subtle())));
+                self.out
+                    .push(Line::from(Span::styled(rule, self.styles.subtle())));
             }
             Event::Html(html) | Event::InlineHtml(html) => {
                 let text = strip_tags(&html);
@@ -304,10 +305,7 @@ impl Builder<'_> {
         }
         let style = match self.heading {
             Some(level) if level <= HeadingLevel::H2 => self.styles.heading(),
-            Some(_) => self
-                .styles
-                .heading()
-                .remove_modifier(Modifier::BOLD),
+            Some(_) => self.styles.heading().remove_modifier(Modifier::BOLD),
             None => self.base,
         };
         let style = self.decorate(style);
@@ -378,8 +376,10 @@ impl Builder<'_> {
         let border = self.styles.code_border();
         let content = self.styles.code();
         if code.lang.is_empty() {
-            self.out
-                .push(Line::from(Span::styled(format!("╭{}╮", "─".repeat(inner)), border)));
+            self.out.push(Line::from(Span::styled(
+                format!("╭{}╮", "─".repeat(inner)),
+                border,
+            )));
         } else {
             let label = format!(" {} ", code.lang);
             let rest = inner.saturating_sub(wrap::width(&label) + 1);
@@ -402,8 +402,10 @@ impl Builder<'_> {
                 ]));
             }
         }
-        self.out
-            .push(Line::from(Span::styled(format!("╰{}╯", "─".repeat(inner)), border)));
+        self.out.push(Line::from(Span::styled(
+            format!("╰{}╯", "─".repeat(inner)),
+            border,
+        )));
     }
 
     fn table_block(&mut self, table: &Table) {
@@ -434,7 +436,8 @@ impl Builder<'_> {
                 } else {
                     format!("{label}: {value}")
                 };
-                for (line_index, line) in wrap::wrap(&text, self.width.max(1)).into_iter().enumerate()
+                for (line_index, line) in
+                    wrap::wrap(&text, self.width.max(1)).into_iter().enumerate()
                 {
                     let style = if line_index == 0 {
                         self.styles.bold()
@@ -495,7 +498,8 @@ impl Builder<'_> {
                     .map(|width| "─".repeat(*width))
                     .collect::<Vec<_>>()
                     .join("─┼─");
-                self.out.push(Line::from(Span::styled(rule, self.styles.subtle())));
+                self.out
+                    .push(Line::from(Span::styled(rule, self.styles.subtle())));
             }
         }
     }
@@ -662,7 +666,10 @@ impl Scan {
         if content.trim().is_empty() {
             // The cut goes before the blank line, so the blank line always
             // belongs to the re-rendered tail and separators are never doubled.
-            if matches!(self.open, BlockKind::List | BlockKind::Quote | BlockKind::Table) {
+            if matches!(
+                self.open,
+                BlockKind::List | BlockKind::Quote | BlockKind::Table
+            ) {
                 self.blank = Some(start);
             } else {
                 self.commit(start);
@@ -677,13 +684,9 @@ impl Scan {
             }
         }
         let indent = content.len() - trimmed.len();
-        if indent < 4 && is_heading(trimmed) {
-            self.commit(end);
-            self.open = BlockKind::None;
-        } else if indent < 4 && is_setext_underline(content) {
-            self.commit(end);
-            self.open = BlockKind::None;
-        } else if indent < 4 && is_rule(content) {
+        let standalone =
+            indent < 4 && (is_heading(trimmed) || is_setext_underline(content) || is_rule(content));
+        if standalone {
             self.commit(end);
             self.open = BlockKind::None;
         } else if is_list_marker(trimmed) {
@@ -729,11 +732,16 @@ fn is_heading(trimmed: &str) -> bool {
 
 fn is_setext_underline(content: &str) -> bool {
     let bytes = content.as_bytes();
-    bytes.len() >= 2 && (bytes[0] == b'=' || bytes[0] == b'-') && bytes.iter().all(|b| *b == bytes[0])
+    bytes.len() >= 2
+        && (bytes[0] == b'=' || bytes[0] == b'-')
+        && bytes.iter().all(|b| *b == bytes[0])
 }
 
 fn is_rule(content: &str) -> bool {
-    let compact: Vec<u8> = content.bytes().filter(|byte| !byte.is_ascii_whitespace()).collect();
+    let compact: Vec<u8> = content
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect();
     compact.len() >= 3
         && matches!(compact[0], b'-' | b'*' | b'_')
         && compact.iter().all(|byte| *byte == compact[0])
@@ -790,7 +798,10 @@ mod tests {
 
     #[test]
     fn renders_code_spans_and_fences() {
-        assert_eq!(plain("Use `cargo test` now.", 40), ["Use `cargo test` now."]);
+        assert_eq!(
+            plain("Use `cargo test` now.", 40),
+            ["Use `cargo test` now."]
+        );
         let fenced = plain("```rust\nlet x = 1;\n```", 40);
         assert!(fenced[0].starts_with("╭─ rust"), "{fenced:?}");
         assert!(fenced.iter().any(|line| line.contains("let x = 1;")));
@@ -876,7 +887,10 @@ mod tests {
 
     #[test]
     fn separates_top_level_blocks_with_one_blank_line() {
-        assert_eq!(plain("first\n\nsecond\n\nthird", 40), ["first", "", "second", "", "third"]);
+        assert_eq!(
+            plain("first\n\nsecond\n\nthird", 40),
+            ["first", "", "second", "", "third"]
+        );
         assert_eq!(plain("para\n\n- item", 40), ["para", "", "• item"]);
         assert_eq!(plain("- item\n\npara", 40), ["• item", "", "para"]);
         let fenced = plain("# head\n\ntext\n\n```\ncode\n```", 20);
@@ -896,7 +910,16 @@ mod tests {
         let lines = plain("- [x] done\n- [ ] todo", 40);
         assert_eq!(lines, ["• [x] done", "• [ ] todo"]);
         let rule = plain("a\n\n---\n\nb", 10);
-        assert_eq!(rule, ["a".to_owned(), String::new(), "─".repeat(10), String::new(), "b".to_owned()]);
+        assert_eq!(
+            rule,
+            [
+                "a".to_owned(),
+                String::new(),
+                "─".repeat(10),
+                String::new(),
+                "b".to_owned()
+            ]
+        );
     }
 
     #[test]
@@ -924,7 +947,11 @@ mod tests {
                 }
                 let mut renderer = StreamRenderer::new(width, Style::default());
                 renderer.push(&text[..end]);
-                let got: Vec<String> = renderer.lines(&styles).iter().map(Line::to_string).collect();
+                let got: Vec<String> = renderer
+                    .lines(&styles)
+                    .iter()
+                    .map(Line::to_string)
+                    .collect();
                 let want: Vec<String> = render(&text[..end], width, &styles, Style::default())
                     .iter()
                     .map(Line::to_string)
@@ -944,7 +971,11 @@ mod tests {
                 continue;
             }
             renderer.push(&text[index..index + 1]);
-            let got: Vec<String> = renderer.lines(&styles).iter().map(Line::to_string).collect();
+            let got: Vec<String> = renderer
+                .lines(&styles)
+                .iter()
+                .map(Line::to_string)
+                .collect();
             let want: Vec<String> = render(&text[..=index], 30, &styles, Style::default())
                 .iter()
                 .map(Line::to_string)
@@ -962,7 +993,11 @@ mod tests {
         assert_eq!(stable_of("```\ncode\n```\n"), 13);
         assert_eq!(stable_of("# head\n"), 7);
         assert_eq!(stable_of("1. a\n"), 0);
-        assert_eq!(stable_of("1. a\n\n1. b\n"), 0, "an ordered list can continue");
+        assert_eq!(
+            stable_of("1. a\n\n1. b\n"),
+            0,
+            "an ordered list can continue"
+        );
         assert_eq!(stable_of("1. a\n\nparagraph\n"), 5);
         assert_eq!(stable_of("1. a\n    cont\n"), 0);
     }
@@ -984,7 +1019,10 @@ mod tests {
             assert!(cut >= last, "{cut} < {last} at {end}");
             last = cut;
         }
-        assert_eq!(last, 5, "the closed paragraph prefix; the rest stays in the tail");
+        assert_eq!(
+            last, 5,
+            "the closed paragraph prefix; the rest stays in the tail"
+        );
     }
 
     #[test]
@@ -995,7 +1033,12 @@ mod tests {
         assert_eq!(renderer.lines(&styles).len(), 3);
         renderer.set_width(10);
         let narrow = renderer.lines(&styles);
-        assert_eq!(narrow.len(), 5, "{:?}", narrow.iter().map(Line::to_string).collect::<Vec<_>>());
+        assert_eq!(
+            narrow.len(),
+            5,
+            "{:?}",
+            narrow.iter().map(Line::to_string).collect::<Vec<_>>()
+        );
         assert_eq!(narrow[0].to_string(), "first");
         assert_eq!(narrow[1].to_string(), "paragraph");
         assert_eq!(narrow[2].to_string(), "");
@@ -1023,12 +1066,16 @@ mod tests {
         renderer.push("first\n\n");
         assert_eq!(renderer.lines(&styles).len(), 1);
         renderer.push("\n");
-        assert_eq!(renderer.lines(&styles).len(), 1, "trailing blanks add no rows");
+        assert_eq!(
+            renderer.lines(&styles).len(),
+            1,
+            "trailing blanks add no rows"
+        );
         renderer.push("second\n\n");
         let lines = renderer.lines(&styles);
-        assert_eq!(lines.iter().map(Line::to_string).collect::<Vec<_>>(), [
-            "first", "", "second"
-        ]);
+        assert_eq!(
+            lines.iter().map(Line::to_string).collect::<Vec<_>>(),
+            ["first", "", "second"]
+        );
     }
 }
-

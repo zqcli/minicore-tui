@@ -1,1011 +1,996 @@
-//! The composer as a Rail editor surface. The existing `Composer` remains the
-//! editable text authority; this module only maps its wrapped rows into the
-//! fixed blue-rail surface and positions the hardware cursor.
+//! The composer: a grapheme-safe text buffer with a cursor, undo history,
+//! prompt history and paste tokens.
+//!
+//! The buffer stores the real text, including paste payloads. What the user
+//! sees is a projection in which each large paste is one `[pasted 120 lines]`
+//! token, and a paste is atomic there: the cursor can sit before or after it,
+//! never inside it. [`Projection`] is the only place that converts between the
+//! two coordinate systems.
+//!
+//! A cursor is a byte offset at a grapheme boundary, so edits never split a
+//! grapheme or a paste.
 
-use ratatui::Frame;
-use ratatui::layout::Rect;
-use ratatui::style::Style;
-use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
-use unicode_width::UnicodeWidthStr;
+use std::collections::VecDeque;
+use std::ops::Range;
 
-use crate::app::App;
-use crate::theme::Theme;
-use crate::ui::editor_layout::EditorLayout;
-use crate::ui::rail;
+use unicode_segmentation::UnicodeSegmentation;
 
-pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
-    let completion_rows =
-        crate::ui::layout::composer_completion_rows_for_height(app, frame.area().height)
-            .min(area.height.saturating_sub(1));
-    let editor_height = area.height.saturating_sub(completion_rows);
-    let editor_area = Rect {
-        x: area.x,
-        y: area.y,
-        width: area.width,
-        height: editor_height,
-    };
-    if editor_height > 0 {
-        render_editor(frame, editor_area, app, theme);
-    }
-    if completion_rows > 0 {
-        render_completion(
-            frame,
-            Rect {
-                x: area.x,
-                y: area.y + editor_height,
-                width: area.width,
-                height: completion_rows,
-            },
-            app,
-            theme,
-        );
-    }
+use super::wrap;
+
+/// Multi-line pastes longer than this many lines become a token, as do single
+/// lines above [`TOKEN_BYTES`].
+const TOKEN_LINES: usize = 3;
+const TOKEN_BYTES: usize = 400;
+/// Undo steps kept before the oldest is dropped.
+const UNDO_STEPS: usize = 200;
+/// Submitted prompts kept for recall.
+const HISTORY_STEPS: usize = 100;
+
+/// A paste displayed as one token.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Paste {
+    /// Byte range of the payload in the buffer.
+    pub range: Range<usize>,
+    pub lines: usize,
 }
 
-fn render_editor(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
-    let view = app.active_view();
-    let waiting = view.is_some_and(|view| {
-        view.live.as_ref().is_some_and(|live| live.waiting)
-            || view.state.as_ref().is_some_and(|state| {
-                state.status == crate::protocol::SessionStatusWire::WaitingForInput
-            })
-    });
-    let finishing = view.is_some_and(|view| {
-        view.state
-            .as_ref()
-            .is_some_and(|state| state.status == crate::protocol::SessionStatusWire::Finishing)
-    });
-    let running = view.is_some_and(|view| view.is_running());
-    let width = rail::content_width(area.width as usize, rail::RAIL_WIDTH);
-    let height = area.height as usize;
-    let display_content = app.composer.display_content();
-    let display_lines = display_content
-        .split('\n')
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    let paste_markers = app.composer.display_paste_markers();
-    let editor_layout = EditorLayout::new_with_atomic_ranges(
-        &display_lines,
-        width,
-        height,
-        app.composer.display_cursor(),
-        &paste_markers,
-    );
-    let contents = compose_lines(app, theme, &editor_layout, running, waiting, finishing);
-    let colors = rail::editor_colors(theme);
-    let padded = editor_layout
-        .visible_rows()
-        .into_iter()
-        .map(|source| {
-            let line = source
-                .and_then(|index| contents.get(index).cloned())
-                .unwrap_or_default();
-            rail::surface_row(area.width as usize, colors, rail::RAIL_WIDTH, line)
-        })
-        .collect::<Vec<_>>();
-    frame.render_widget(Paragraph::new(padded), area);
-
-    // Block cursor + hardware cursor at the (row, column) cell, so IME
-    // composition and multi-line editing land on the right cell. The cursor
-    // column can sit exactly at the wrap boundary (== width), which has no
-    // cell: clamp drawing into the inner area while the helper keeps the
-    // true boundary column for logic.
-    let (cell_row, cell_col) = editor_layout.screen_cursor();
-    let content_w = width;
-    let draw_col = cell_col.min(content_w.saturating_sub(1));
-    let x = area.x + rail::RAIL_WIDTH as u16 + draw_col as u16;
-    let y = area.y + cell_row as u16;
-    if app.focused_region() == crate::state::panels::Focus::Editor
-        && x < area.x + area.width
-        && y < area.y + area.height
-        && content_w > 0
-        && area.height > 0
-    {
-        if let Some(cell) = frame.buffer_mut().cell_mut((x, y)) {
-            cell.set_bg(theme.user_message_bg);
-            cell.set_style(Style::default().add_modifier(ratatui::style::Modifier::REVERSED));
-        }
-        frame.set_cursor_position((x, y));
-    }
-}
-
-fn render_completion(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
-    let Some(completion) = app.slash_completion.as_ref() else {
-        return;
-    };
-    let geometry =
-        crate::ui::layout::slash_completion_geometry(completion, area.height, frame.area().height);
-    let content_width = area.width.saturating_sub(rail::RAIL_WIDTH as u16) as usize;
-    let colors = rail::editor_colors(theme);
-    let row = |text: String, selected: bool| {
-        rail::surface_row(
-            area.width as usize,
-            colors,
-            rail::RAIL_WIDTH,
-            Line::from(Span::styled(
-                rail::clip_cells(&text, content_width),
-                Style::new().fg(if selected {
-                    theme.rail_editor
-                } else {
-                    theme.text
-                }),
-            )),
-        )
-    };
-    let mut lines = Vec::new();
-    if geometry.show_header {
-        lines.push(row(completion_title(app, completion), false));
-    }
-    let choices = completion.popup.is_some();
-    for index in geometry.start..geometry.end {
-        let item = &completion.items[index];
-        let selected = index == completion.selected;
-        let text = if choices {
-            choice_row(app, item, selected, content_width)
+impl Paste {
+    pub fn label(&self) -> String {
+        if self.lines <= 1 {
+            format!("[pasted {} chars]", self.range.len())
         } else {
-            object_row(app, item, selected, content_width)
-        };
-        lines.push(row(text, selected));
-    }
-    if geometry.show_parameter {
-        if let Some(hint) = completion.parameter_hint() {
-            lines.push(row(format!("  {hint}"), false));
+            format!("[pasted {} lines]", self.lines)
         }
     }
-    if completion.items.is_empty() {
-        lines.push(row(
-            completion_empty_message(app, completion).to_owned(),
-            false,
-        ));
-    }
-    if geometry.show_hint {
-        let hint = completion_hint(app, completion, content_width);
-        lines.push(row(hint, false));
-    }
-    lines.truncate(area.height as usize);
-    frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// Explain why a chooser is empty rather than suggesting a different filter
-/// when there is no catalog to filter in the first place.
-fn completion_empty_message(
-    app: &App,
-    completion: &crate::app::SlashCompletionState,
-) -> &'static str {
-    if completion.popup.is_none() {
-        return "No matching commands";
+/// Maps between buffer offsets and projected display offsets.
+pub struct Projection<'a> {
+    text: &'a str,
+    pastes: &'a [Paste],
+}
+
+impl<'a> Projection<'a> {
+    fn new(text: &'a str, pastes: &'a [Paste]) -> Self {
+        Self { text, pastes }
     }
-    if matches!(completion.argument_command, Some("model" | "reasoning")) {
-        if matches!(app.connection, crate::app::ConnectionState::Starting) {
-            return "Loading model catalog…";
+
+    /// The displayed text: payloads replaced by their tokens.
+    pub fn text(&self) -> String {
+        let mut out = String::with_capacity(self.text.len());
+        let mut at = 0;
+        for paste in self.pastes {
+            out.push_str(&self.text[at..paste.range.start]);
+            out.push_str(&paste.label());
+            at = paste.range.end;
         }
-        if app.catalogs.models.is_empty() {
-            return "No models available; check /logs or /reload";
-        }
-        if completion.argument_command == Some("reasoning")
-            && crate::state::selection::supported_reasoning(
-                &app.catalogs.models,
-                app.effective_settings_model(),
-            )
-            .is_empty()
-        {
-            return "No supported reasoning for this model";
-        }
+        out.push_str(&self.text[at..]);
+        out
     }
-    "No matching choices"
-}
 
-/// Select a complete hint that fits. Essential confirm/back keys come first;
-/// optional navigation and counters never push Escape off a narrow terminal.
-fn completion_hint(
-    app: &App,
-    completion: &crate::app::SlashCompletionState,
-    width: usize,
-) -> String {
-    let popup = completion.popup.is_some();
-    let enter = if popup {
-        match completion
-            .items
-            .get(completion.selected)
-            .map(|item| item.kind)
-        {
-            Some(crate::command::MenuKind::Command("theme")) => "choose",
-            Some(crate::command::MenuKind::Command("tool")) => "edit",
-            _ => "confirm",
-        }
-    } else if completion.opens_choices_on_enter(&app.composer.content()) {
-        "choose"
-    } else {
-        "run typed"
-    };
-    let escape = if popup && !completion.filter.is_empty() {
-        "clear"
-    } else if popup {
-        "back"
-    } else {
-        "close"
-    };
-    let position = format!(
-        "{}/{}",
-        if completion.items.is_empty() {
-            0
-        } else {
-            completion.selected + 1
-        },
-        completion.items.len()
-    );
-    let core = format!("Enter {enter} · Esc {escape}");
-    let extra = if popup {
-        "↑↓ / PgUp PgDn · type filter"
-    } else {
-        "↑↓ · Ctrl+Space choices"
-    };
-    [
-        format!("{core} · Tab fill · {extra} · {position}"),
-        format!(
-            "{core} · Tab fill · {} · {position}",
-            if popup { "type filter" } else { "↑↓" }
-        ),
-        format!("{core} · Tab fill · ↑↓ · {position}"),
-        format!("{core} · Tab · {position}"),
-        format!("Enter · Esc · Tab · {position}"),
-        "Enter · Esc · Tab".to_owned(),
-        "Enter · Esc".to_owned(),
-    ]
-    .into_iter()
-    .find(|hint| UnicodeWidthStr::width(hint.as_str()) <= width)
-    .unwrap_or_else(|| rail::clip_cells("Enter Esc", width))
-}
-
-/// Current values come only from acknowledged settings or new-session defaults,
-/// never from the highlighted menu candidate.
-fn current_value(app: &App, name: &str) -> Option<String> {
-    match name {
-        "model" => Some(
-            app.new_session()
-                .map(|draft| draft.model.as_str())
-                .or_else(|| app.active_view().map(|view| view.info.model.as_str()))
-                .or(app.catalogs.next_model.as_deref())
-                .unwrap_or("default")
-                .to_owned(),
-        ),
-        "reasoning" => Some(
-            crate::state::selection::reasoning_label(
-                app.new_session()
-                    .map(|draft| draft.reasoning)
-                    .or_else(|| app.active_view().map(|view| view.info.reasoning))
-                    .or(app.catalogs.next_reasoning)
-                    .unwrap_or(crate::protocol::Reasoning::Auto),
-            )
-            .to_owned(),
-        ),
-        _ => None,
-    }
-}
-
-fn entry_value(app: &App, item: &crate::command::MenuEntry) -> String {
-    match item.kind {
-        crate::command::MenuKind::Command(name)
-        | crate::command::MenuKind::ArgumentChoice(name) => {
-            current_value(app, name).unwrap_or_else(|| item.action_name().to_owned())
-        }
-        crate::command::MenuKind::Group(_) => item.action_name().to_owned(),
-    }
-}
-
-fn completion_title(app: &App, completion: &crate::app::SlashCompletionState) -> String {
-    let title = if let Some(popup) = completion.popup.as_ref() {
-        if let Some(name) = completion.argument_command {
-            current_value(app, name).map_or_else(
-                || format!("{} · {name} choices", popup.target.object_name()),
-                |value| format!("{} [{value}]", popup.target.object_name()),
-            )
-        } else {
-            format!("{} actions", popup.target.object_name())
-        }
-    } else {
-        "Commands".to_owned()
-    };
-    if completion.popup.is_some() || !completion.filter.is_empty() {
-        format!("{title} · filter: {}", completion.filter)
-    } else {
-        title
-    }
-}
-
-/// Keep the object identity and its actionable value visible before spending
-/// room on supplementary usage text. The right-aligned bracket is the control.
-fn object_row(app: &App, item: &crate::command::MenuEntry, selected: bool, width: usize) -> String {
-    let prefix = if selected { "→ " } else { "  " };
-    let name = item.object_name();
-    let left = format!("{prefix}{name}");
-    let left_width = UnicodeWidthStr::width(left.as_str());
-    let value_width = width.saturating_sub(left_width + 5);
-    let value = rail::clip_cells(&entry_value(app, item), value_width);
-    let control = format!("[{value} ▾]");
-    let control_width = UnicodeWidthStr::width(control.as_str());
-    let middle_width = width.saturating_sub(left_width + control_width);
-    let hint = item
-        .argument_hint()
-        .filter(|hint| hint.len() <= 28)
-        .unwrap_or("");
-    let detail = if !hint.is_empty() {
-        hint
-    } else if width >= 76 {
-        item.summary
-    } else {
-        ""
-    };
-    let detail = rail::clip_cells(detail, middle_width.saturating_sub(4));
-    let detail = if detail.is_empty() {
-        String::new()
-    } else {
-        format!("  {detail}")
-    };
-    let padding = middle_width.saturating_sub(UnicodeWidthStr::width(detail.as_str()));
-    format!("{left}{detail}{}{control}", " ".repeat(padding))
-}
-
-fn choice_row(app: &App, item: &crate::command::MenuEntry, selected: bool, width: usize) -> String {
-    let prefix = if selected { "→ " } else { "  " };
-    let label = item.choice_label();
-    let current = match item.kind {
-        crate::command::MenuKind::ArgumentChoice(name) => {
-            current_value(app, name).is_some_and(|value| value == label)
-        }
-        _ => false,
-    };
-    let suffix = if current { "  current" } else { "" };
-    let hint = if matches!(item.kind, crate::command::MenuKind::ArgumentChoice(_)) {
-        ""
-    } else {
-        item.argument_hint().unwrap_or("")
-    };
-    let mut text = format!("{prefix}{label}{suffix}");
-    if !hint.is_empty() {
-        text.push_str("  ");
-        text.push_str(hint);
-    } else if width >= 76
-        && !matches!(item.kind, crate::command::MenuKind::ArgumentChoice(_))
-        && !item.summary.is_empty()
-    {
-        text.push_str("  ");
-        text.push_str(item.summary);
-    }
-    text
-}
-
-/// The wrapped composer rows, styled as plain text. Empty input deliberately
-/// has no instructional paragraph; mode/error state is carried by status.
-fn compose_lines(
-    app: &App,
-    theme: &Theme,
-    layout: &EditorLayout,
-    running: bool,
-    waiting: bool,
-    finishing: bool,
-) -> Vec<Line<'static>> {
-    let style = Style::new().fg(theme.text);
-    let selection = app.composer_selection_range();
-    if app.composer.is_empty() {
-        let blocked = app.active_view().is_some_and(|view| {
-            view.state
-                .as_ref()
-                .is_some_and(|state| state.status == crate::protocol::SessionStatusWire::Blocked)
-        });
-        let placeholder = if blocked {
-            "Session blocked"
-        } else if running {
-            ""
-        } else if waiting {
-            "Unsupported interaction — Esc to cancel"
-        } else if finishing {
-            "Saving turn…"
-        } else {
-            ""
-        };
-        return vec![Line::styled(placeholder, Style::new().fg(theme.muted))];
-    }
-    layout
-        .rows
-        .iter()
-        .map(|row| {
-            let start = display_row_start(layout, row);
-            marker_line(
-                &row.text,
-                start,
-                &app.composer.display_paste_markers(),
-                selection.as_ref(),
-                style,
-                theme,
-            )
-        })
-        .collect()
-}
-
-fn display_row_start(layout: &EditorLayout, row: &crate::ui::editor_layout::VisualLine) -> usize {
-    let mut offset = 0;
-    for logical in 0..row.logical_line {
-        offset += layout
-            .rows
-            .iter()
-            .filter(|candidate| candidate.logical_line == logical)
-            .map(|candidate| candidate.text.chars().count())
-            .sum::<usize>();
-        offset += 1;
-    }
-    offset + row.start_char
-}
-
-fn marker_line(
-    text: &str,
-    global_start: usize,
-    markers: &[std::ops::Range<usize>],
-    selection: Option<&std::ops::Range<usize>>,
-    normal: Style,
-    theme: &Theme,
-) -> Line<'static> {
-    let mut spans = Vec::new();
-    let mut current = String::new();
-    let marker_style = normal
-        .fg(theme.rail_editor)
-        .bg(theme.selection_bg)
-        .add_modifier(ratatui::style::Modifier::BOLD);
-    let selection_style = normal.fg(theme.selection_fg).bg(theme.selection_bg);
-    for (global, character) in (global_start..).zip(text.chars()) {
-        let marker = markers.iter().any(|range| range.contains(&global));
-        let selected = selection.is_some_and(|range| range.contains(&global));
-        if marker || selected {
-            if !current.is_empty() {
-                spans.push(Span::styled(std::mem::take(&mut current), normal));
+    /// Display offset of a buffer offset. Offsets inside a payload snap to the
+    /// start of its token.
+    pub fn display(&self, raw: usize) -> usize {
+        let mut shown = 0;
+        let mut at = 0;
+        for paste in self.pastes {
+            if raw <= paste.range.start {
+                return shown + raw - at;
             }
-            let style = if selected {
-                selection_style
-            } else {
-                marker_style
-            };
-            spans.push(Span::styled(character.to_string(), style));
-        } else {
-            current.push(character);
+            shown += paste.range.start - at + paste.label().len();
+            at = paste.range.end;
+        }
+        shown + raw.saturating_sub(at)
+    }
+
+    /// Buffer offset of a display offset. Offsets inside a token snap to the
+    /// start of its payload.
+    pub fn raw(&self, display: usize) -> usize {
+        let mut shown = 0;
+        let mut at = 0;
+        for paste in self.pastes {
+            let head = paste.range.start - at;
+            if display <= shown + head {
+                return at + display.saturating_sub(shown);
+            }
+            shown += head;
+            let token = paste.label().len();
+            if display <= shown + token {
+                return paste.range.start;
+            }
+            shown += token;
+            at = paste.range.end;
+        }
+        at + display.saturating_sub(shown)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Snapshot {
+    text: String,
+    cursor: usize,
+    pastes: Vec<Paste>,
+}
+
+#[derive(Default)]
+pub struct Composer {
+    text: String,
+    /// Cursor byte offset, at a grapheme boundary and outside every payload.
+    cursor: usize,
+    /// Display column to keep while moving between lines.
+    column: Option<usize>,
+    pastes: Vec<Paste>,
+    undo: Vec<Snapshot>,
+    redo: Vec<Snapshot>,
+    /// The buffer before the current typing gesture, committed when it ends.
+    gesture: Option<Snapshot>,
+    history: VecDeque<String>,
+    /// Position in `history` while recalling; `None` means the live draft.
+    recall: Option<usize>,
+    draft: String,
+}
+
+impl Composer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The full draft, including paste payloads.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    pub fn pastes(&self) -> &[Paste] {
+        &self.pastes
+    }
+
+    pub fn projection(&self) -> Projection<'_> {
+        Projection::new(&self.text, &self.pastes)
+    }
+
+    /// The draft as displayed, with paste tokens.
+    pub fn display(&self) -> String {
+        self.projection().text()
+    }
+
+    /// Cursor offset in the displayed text.
+    pub fn display_cursor(&self) -> usize {
+        self.projection().display(self.cursor)
+    }
+
+    /// Line and cell column of the cursor in the displayed text.
+    pub fn cursor_position(&self) -> (usize, usize) {
+        let display = self.display();
+        let cursor = self.display_cursor();
+        let line = display[..cursor].matches('\n').count();
+        let start = display[..cursor].rfind('\n').map_or(0, |at| at + 1);
+        (line, wrap::width(&display[start..cursor]))
+    }
+
+    // ---- draft lifecycle ----------------------------------------------
+
+    /// Replaces the draft, dropping tokens and history.
+    pub fn set_text(&mut self, text: &str) {
+        self.text.clear();
+        self.text.push_str(text);
+        self.cursor = self.text.len();
+        self.pastes.clear();
+        self.undo.clear();
+        self.redo.clear();
+        self.gesture = None;
+        self.column = None;
+        self.recall = None;
+    }
+
+    pub fn clear(&mut self) {
+        if self.text.is_empty() {
+            return;
+        }
+        self.snapshot();
+        self.set_text("");
+        self.commit();
+    }
+
+    /// Ends the current typing gesture so the next edit starts a new undo step.
+    pub fn end_gesture(&mut self) {
+        self.commit();
+        self.column = None;
+    }
+
+    /// Records a submitted prompt and starts a fresh draft.
+    pub fn submit(&mut self) -> String {
+        self.commit();
+        let text = std::mem::take(&mut self.text);
+        self.cursor = 0;
+        self.pastes.clear();
+        self.column = None;
+        self.recall = None;
+        self.draft.clear();
+        if !text.trim().is_empty() {
+            self.history.push_back(text.clone());
+            if self.history.len() > HISTORY_STEPS {
+                self.history.pop_front();
+            }
+        }
+        text
+    }
+
+    // ---- undo ---------------------------------------------------------
+
+    fn snapshot(&mut self) {
+        self.gesture.get_or_insert_with(|| Snapshot {
+            text: self.text.clone(),
+            cursor: self.cursor,
+            pastes: self.pastes.clone(),
+        });
+    }
+
+    fn commit(&mut self) {
+        self.recall = None;
+        let Some(snapshot) = self.gesture.take() else {
+            return;
+        };
+        if snapshot.text == self.text {
+            return;
+        }
+        self.undo.push(snapshot);
+        if self.undo.len() > UNDO_STEPS {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+    }
+
+    fn current(&self) -> Snapshot {
+        Snapshot {
+            text: self.text.clone(),
+            cursor: self.cursor,
+            pastes: self.pastes.clone(),
         }
     }
-    if !current.is_empty() {
-        spans.push(Span::styled(current, normal));
+
+    fn restore(&mut self, snapshot: Snapshot) {
+        self.text = snapshot.text;
+        self.cursor = snapshot.cursor;
+        self.pastes = snapshot.pastes;
+        self.column = None;
     }
-    Line::from(spans)
+
+    pub fn undo(&mut self) -> bool {
+        self.commit();
+        let Some(snapshot) = self.undo.pop() else {
+            return false;
+        };
+        self.redo.push(self.current());
+        self.restore(snapshot);
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let Some(snapshot) = self.redo.pop() else {
+            return false;
+        };
+        self.undo.push(self.current());
+        self.restore(snapshot);
+        true
+    }
+
+    // ---- editing ------------------------------------------------------
+
+    pub fn insert(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.snapshot();
+        let start = self.cursor;
+        self.text.insert_str(start, text);
+        self.cursor = start + text.len();
+        self.shift(start, text.len());
+        let lines = text.lines().count().max(1);
+        if lines > TOKEN_LINES || text.len() > TOKEN_BYTES {
+            self.pastes.push(Paste {
+                range: start..self.cursor,
+                lines,
+            });
+            self.pastes.sort_by_key(|paste| paste.range.start);
+        }
+        self.column = None;
+        self.commit();
+    }
+
+    /// Types one character; consecutive calls form a single undo step.
+    pub fn type_char(&mut self, ch: char) {
+        if ch == '\n' || ch == '\r' {
+            self.newline();
+            return;
+        }
+        self.snapshot();
+        let mut buf = [0u8; 4];
+        let text = ch.encode_utf8(&mut buf);
+        let start = self.cursor;
+        self.text.insert_str(start, text);
+        self.cursor = start + text.len();
+        self.shift(start, text.len());
+        self.column = None;
+    }
+
+    pub fn newline(&mut self) {
+        self.snapshot();
+        let start = self.cursor;
+        self.text.insert(start, '\n');
+        self.cursor = start + 1;
+        self.shift(start, 1);
+        self.column = None;
+        self.commit();
+    }
+
+    fn shift(&mut self, at: usize, len: usize) {
+        for paste in &mut self.pastes {
+            if at <= paste.range.start {
+                paste.range.start += len;
+                paste.range.end += len;
+            } else if at < paste.range.end {
+                paste.range.end += len;
+            }
+        }
+    }
+
+    fn paste_starting_at(&self, cursor: usize) -> Option<&Paste> {
+        self.pastes.iter().find(|paste| paste.range.start == cursor)
+    }
+
+    fn paste_ending_at(&self, cursor: usize) -> Option<&Paste> {
+        self.pastes.iter().find(|paste| paste.range.end == cursor)
+    }
+
+    // ---- movement -----------------------------------------------------
+
+    pub fn move_left(&mut self) {
+        self.cursor = match self.paste_ending_at(self.cursor) {
+            Some(paste) => paste.range.start,
+            None => prev_grapheme(&self.text, self.cursor),
+        };
+        self.column = None;
+    }
+
+    pub fn move_right(&mut self) {
+        self.cursor = match self.paste_starting_at(self.cursor) {
+            Some(paste) => paste.range.end,
+            None => next_grapheme(&self.text, self.cursor),
+        };
+        self.column = None;
+    }
+
+    pub fn move_document_start(&mut self) {
+        self.cursor = 0;
+        self.column = None;
+    }
+
+    pub fn move_document_end(&mut self) {
+        self.cursor = self.text.len();
+        self.column = None;
+    }
+
+    pub fn move_home(&mut self) {
+        self.cursor = self.line_start(self.cursor_position().0);
+        self.column = None;
+    }
+
+    pub fn move_end(&mut self) {
+        self.cursor = self.line_end(self.cursor_position().0);
+        self.column = None;
+    }
+
+    /// Moves one logical line up. False on the first line, where the caller
+    /// may switch to prompt recall.
+    pub fn move_up(&mut self) -> bool {
+        let line = self.cursor_position().0;
+        if line == 0 {
+            return false;
+        }
+        let column = self.column.unwrap_or_else(|| self.cursor_position().1);
+        self.cursor = self.offset_at_column(line - 1, column);
+        self.column = Some(column);
+        true
+    }
+
+    /// Moves one logical line down. False on the last line.
+    pub fn move_down(&mut self) -> bool {
+        let line = self.cursor_position().0;
+        if line + 1 >= self.display().split('\n').count() {
+            return false;
+        }
+        let column = self.column.unwrap_or_else(|| self.cursor_position().1);
+        self.cursor = self.offset_at_column(line + 1, column);
+        self.column = Some(column);
+        true
+    }
+
+    pub fn move_word_left(&mut self) {
+        if let Some(paste) = self.paste_ending_at(self.cursor) {
+            self.cursor = paste.range.start;
+            self.column = None;
+            return;
+        }
+        let mut at = self.cursor;
+        while at > 0 {
+            let prev = prev_grapheme(&self.text, at);
+            if !self.text[prev..at].chars().all(char::is_whitespace) {
+                break;
+            }
+            at = prev;
+        }
+        while at > 0 {
+            if let Some(paste) = self.paste_ending_at(at) {
+                at = paste.range.start;
+                break;
+            }
+            let prev = prev_grapheme(&self.text, at);
+            if self.text[prev..at].chars().all(char::is_whitespace) {
+                break;
+            }
+            at = prev;
+        }
+        self.cursor = at;
+        self.column = None;
+    }
+
+    pub fn move_word_right(&mut self) {
+        let mut at = self.cursor;
+        if let Some(paste) = self.paste_starting_at(at) {
+            at = paste.range.end;
+        } else {
+            while at < self.text.len() {
+                let next = next_grapheme(&self.text, at);
+                if self.paste_starting_at(next).is_some()
+                    || self.text[at..next].chars().all(char::is_whitespace)
+                {
+                    break;
+                }
+                at = next;
+            }
+        }
+        while at < self.text.len() {
+            let next = next_grapheme(&self.text, at);
+            if !self.text[at..next].chars().all(char::is_whitespace) {
+                break;
+            }
+            at = next;
+        }
+        self.cursor = at;
+        self.column = None;
+    }
+
+    // ---- deletion -----------------------------------------------------
+
+    pub fn backspace(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        self.snapshot();
+        let start = match self.paste_ending_at(self.cursor) {
+            Some(paste) => paste.range.start,
+            None => prev_grapheme(&self.text, self.cursor),
+        };
+        self.delete_range(start..self.cursor, false);
+        self.cursor = start;
+    }
+
+    pub fn delete(&mut self) {
+        if self.cursor >= self.text.len() {
+            return;
+        }
+        let start = self.cursor;
+        let end = match self.paste_starting_at(self.cursor) {
+            Some(paste) => paste.range.end,
+            None => next_grapheme(&self.text, self.cursor),
+        };
+        self.delete_range(start..end, false);
+        self.cursor = start;
+    }
+
+    pub fn delete_word_left(&mut self) {
+        let end = self.cursor;
+        self.move_word_left();
+        let start = self.cursor;
+        self.cursor = end;
+        self.delete_range(start..end, true);
+    }
+
+    pub fn delete_to_line_start(&mut self) {
+        let end = self.cursor;
+        let start = self.line_start(self.cursor_position().0);
+        self.cursor = end;
+        self.delete_range(start..end, true);
+    }
+
+    pub fn delete_to_line_end(&mut self) {
+        let start = self.cursor;
+        let end = self.line_end(self.cursor_position().0);
+        self.cursor = start;
+        self.delete_range(start..end, true);
+    }
+
+    /// Removes `range`, extending it over any paste it only partly covers, so
+    /// a token is never left half-deleted.
+    fn delete_range(&mut self, range: Range<usize>, snapshot: bool) {
+        if range.is_empty() {
+            return;
+        }
+        if snapshot {
+            self.snapshot();
+        }
+        let mut start = range.start;
+        let mut end = range.end;
+        for paste in &self.pastes {
+            if paste.range.start < end && paste.range.end > start {
+                start = start.min(paste.range.start);
+                end = end.max(paste.range.end);
+            }
+        }
+        let len = end - start;
+        self.text.replace_range(start..end, "");
+        self.pastes
+            .retain(|paste| paste.range.end <= start || paste.range.start >= end);
+        for paste in &mut self.pastes {
+            if paste.range.start >= end {
+                paste.range.start -= len;
+                paste.range.end -= len;
+            }
+        }
+        self.cursor = self.cursor.min(start);
+        self.column = None;
+        self.commit();
+    }
+
+    // ---- prompt history -----------------------------------------------
+
+    /// Recalls an older prompt, keeping the live draft for the way back.
+    pub fn history_prev(&mut self) -> bool {
+        if self.history.is_empty() {
+            return false;
+        }
+        let index = match self.recall {
+            None => {
+                self.draft = std::mem::take(&mut self.text);
+                self.history.len() - 1
+            }
+            Some(0) => return false,
+            Some(index) => index - 1,
+        };
+        self.recall = Some(index);
+        self.load(self.history[index].clone());
+        true
+    }
+
+    pub fn history_next(&mut self) -> bool {
+        let Some(index) = self.recall else {
+            return false;
+        };
+        if index + 1 < self.history.len() {
+            self.recall = Some(index + 1);
+            self.load(self.history[index + 1].clone());
+            return true;
+        }
+        self.recall = None;
+        let draft = std::mem::take(&mut self.draft);
+        self.load(draft);
+        true
+    }
+
+    fn load(&mut self, text: String) {
+        self.text = text;
+        self.cursor = self.text.len();
+        self.pastes.clear();
+        self.column = None;
+    }
+
+    // ---- line geometry ------------------------------------------------
+
+    /// Buffer offset where the display line `line` starts.
+    fn line_start(&self, line: usize) -> usize {
+        let display = self.display();
+        let offset: usize = display
+            .split('\n')
+            .take(line)
+            .map(|part| part.len() + 1)
+            .sum();
+        self.projection().raw(offset.min(display.len()))
+    }
+
+    /// Buffer offset where the display line `line` ends.
+    fn line_end(&self, line: usize) -> usize {
+        let display = self.display();
+        let offset: usize = display
+            .split('\n')
+            .take(line)
+            .map(|part| part.len() + 1)
+            .sum();
+        let end = display[offset..]
+            .find('\n')
+            .map_or(display.len(), |at| offset + at);
+        self.projection().raw(end)
+    }
+
+    /// The buffer offset on display line `line` closest to `column` cells.
+    fn offset_at_column(&self, line: usize, column: usize) -> usize {
+        let display = self.display();
+        let start: usize = display
+            .split('\n')
+            .take(line)
+            .map(|part| part.len() + 1)
+            .sum();
+        let row = display[start..].split('\n').next().unwrap_or_default();
+        let mut used = 0;
+        for (at, grapheme) in row.grapheme_indices(true) {
+            let cells = wrap::width(grapheme);
+            if used + cells > column {
+                return self.projection().raw(start + at);
+            }
+            used += cells;
+        }
+        self.projection().raw(start + row.len())
+    }
 }
 
-/// The visual (row, col) of the block cursor in wrapped-cell space.
-/// `Composer::cursor()` is (row, **char index**, as tui-textarea reports);
-/// this converts to display columns through the same `EditorLayout` used by
-/// the renderer and height estimator.
-#[cfg(test)]
-fn cursor_cell(app: &App, width: usize) -> (usize, usize) {
-    let width = width.max(1);
-    let rows = EditorLayout::row_count(app.composer.lines(), width);
-    EditorLayout::new(
-        app.composer.lines(),
-        width,
-        rows.max(1),
-        app.composer.cursor(),
-    )
-    .screen_cursor()
+fn prev_grapheme(text: &str, cursor: usize) -> usize {
+    text[..cursor]
+        .grapheme_indices(true)
+        .next_back()
+        .map_or(0, |(at, _)| at)
 }
 
-#[cfg(test)]
-fn cursor_wrap_pos(line: &str, cursor_col: usize, width: usize) -> (usize, usize) {
-    let lines = vec![line.to_owned()];
-    let rows = EditorLayout::row_count(&lines, width.max(1));
-    EditorLayout::new(&lines, width.max(1), rows.max(1), (0, cursor_col)).screen_cursor()
+fn next_grapheme(text: &str, cursor: usize) -> usize {
+    text[cursor..]
+        .grapheme_indices(true)
+        .next()
+        .map_or(text.len(), |(_, grapheme)| cursor + grapheme.len())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::App;
-    use crate::event::AppEvent;
-    use crate::theme::ThemeKind;
-    use ratatui::Terminal;
-    use ratatui::backend::{Backend, TestBackend};
 
-    fn app_with(text: &str) -> App {
-        let mut app = App::new(std::path::PathBuf::from("/ws"));
-        app.update(AppEvent::SetTheme(ThemeKind::Dark));
-        // Paste is a single bounded edit through App::update.
-        if !text.is_empty() {
-            app.update(AppEvent::Terminal(crossterm::event::Event::Paste(
-                text.to_owned(),
-            )));
+    fn composer(text: &str) -> Composer {
+        let mut composer = Composer::new();
+        composer.set_text(text);
+        composer
+    }
+
+    fn big_paste(lines: usize) -> String {
+        (0..lines).map(|i| format!("line {i}\n")).collect()
+    }
+
+    #[test]
+    fn typing_and_deleting_respect_graphemes() {
+        let mut c = Composer::new();
+        c.type_char('a');
+        c.type_char('中');
+        c.type_char('😀');
+        c.end_gesture();
+        assert_eq!(c.text(), "a中😀");
+        c.backspace();
+        assert_eq!(c.text(), "a中");
+        c.backspace();
+        assert_eq!(c.text(), "a");
+        c.end_gesture();
+        c.move_home();
+        c.delete();
+        assert_eq!(c.text(), "");
+    }
+
+    #[test]
+    fn multi_codepoint_graphemes_are_one_step() {
+        let family = "👨‍👩‍👧‍👦";
+        let mut c = composer(family);
+        c.move_home();
+        c.move_right();
+        assert_eq!(c.cursor(), family.len());
+        c.move_left();
+        assert_eq!(c.cursor(), 0);
+        c.delete();
+        assert_eq!(c.text(), "");
+    }
+
+    #[test]
+    fn home_and_end_stay_on_the_current_line() {
+        let mut c = composer("one\ntwo");
+        assert_eq!(c.cursor(), 7);
+        c.move_home();
+        assert_eq!(c.cursor(), 4);
+        c.move_end();
+        assert_eq!(c.cursor(), 7);
+        assert!(c.move_up());
+        assert_eq!(c.cursor(), 3);
+        c.move_home();
+        assert_eq!(c.cursor(), 0);
+        assert!(c.move_down());
+        assert_eq!(c.cursor(), 4);
+    }
+
+    #[test]
+    fn vertical_movement_keeps_the_display_column() {
+        let mut c = composer("abcdef\nxyz\nabcdef");
+        c.move_document_start();
+        c.move_right();
+        c.move_right();
+        assert_eq!(c.cursor(), 2);
+        assert!(c.move_down());
+        assert_eq!(c.cursor(), 9);
+        assert!(c.move_down());
+        assert_eq!(c.cursor(), 13);
+        assert!(c.move_up());
+        assert_eq!(c.cursor(), 9);
+    }
+
+    #[test]
+    fn vertical_movement_clamps_to_short_lines_and_remembers_the_column() {
+        let mut c = composer("abcdef\nxy\nabcdef");
+        c.move_document_start();
+        c.move_right();
+        c.move_right();
+        c.move_right();
+        assert_eq!(c.cursor_position().1, 3);
+        assert!(c.move_down());
+        assert_eq!(c.cursor(), 9, "the short line ends at column 2");
+        assert!(c.move_down());
+        assert_eq!(c.cursor(), 13, "the preferred column is still 3");
+    }
+
+    #[test]
+    fn vertical_movement_reports_the_edges() {
+        let mut c = composer("one\ntwo");
+        assert!(!c.move_down());
+        c.move_up();
+        assert!(!c.move_up());
+    }
+
+    #[test]
+    fn word_motions_stop_at_word_boundaries() {
+        let mut c = composer("alpha beta gamma");
+        c.move_document_start();
+        c.move_word_right();
+        assert_eq!(c.cursor(), 6);
+        c.move_word_right();
+        assert_eq!(c.cursor(), 11);
+        c.move_word_right();
+        assert_eq!(c.cursor(), 16);
+        c.move_word_right();
+        assert_eq!(c.cursor(), 16, "the end of the draft is a stop");
+        c.move_word_left();
+        assert_eq!(c.cursor(), 11);
+        c.move_word_left();
+        assert_eq!(c.cursor(), 6);
+        c.move_word_left();
+        assert_eq!(c.cursor(), 0);
+    }
+
+    #[test]
+    fn word_deletion_stops_at_the_previous_word_start() {
+        let mut c = composer("alpha beta gamma");
+        c.delete_word_left();
+        assert_eq!(c.text(), "alpha beta ");
+        c.delete_word_left();
+        assert_eq!(c.text(), "alpha ");
+        c.delete_word_left();
+        assert_eq!(c.text(), "");
+    }
+
+    #[test]
+    fn line_deletion_is_bounded_by_the_line() {
+        let mut c = composer("one\ntwo three");
+        c.delete_to_line_start();
+        assert_eq!(c.text(), "one\n");
+        let mut c = composer("one\ntwo three");
+        c.move_home();
+        c.move_right();
+        c.delete_to_line_end();
+        assert_eq!(c.text(), "one\nt");
+    }
+
+    #[test]
+    fn undo_and_redo_restore_text_and_cursor() {
+        let mut c = Composer::new();
+        c.insert("hello");
+        c.insert(" world");
+        assert_eq!(c.text(), "hello world");
+        assert!(c.undo());
+        assert_eq!(c.text(), "hello");
+        assert!(c.undo());
+        assert_eq!(c.text(), "");
+        assert!(!c.undo());
+        assert!(c.redo());
+        assert_eq!(c.text(), "hello");
+        assert!(c.redo());
+        assert_eq!(c.text(), "hello world");
+        assert!(!c.redo());
+    }
+
+    #[test]
+    fn one_typing_gesture_is_one_undo_step() {
+        let mut c = Composer::new();
+        for ch in "typed".chars() {
+            c.type_char(ch);
         }
-        app
+        c.end_gesture();
+        assert!(c.undo());
+        assert_eq!(c.text(), "");
     }
 
     #[test]
-    fn cursor_wrap_pos_matches_the_greedy_rule() {
-        // ASCII at the end of a soft-wrapped line moves to the next visual
-        // row, matching Pi's word-wrap cursor map.
-        assert_eq!(cursor_wrap_pos("abcdef", 6, 3), (1, 3));
-        assert_eq!(cursor_wrap_pos("abcdef", 5, 3), (1, 2));
-        assert_eq!(
-            cursor_wrap_pos("abcdef", 3, 3),
-            (1, 0),
-            "soft-wrap boundary belongs to the next row"
-        );
-        // CJK counts 2 columns each.
-        assert_eq!(cursor_wrap_pos("你好世界", 4, 4), (1, 4));
-        assert_eq!(cursor_wrap_pos("你好", 2, 4), (0, 4));
-        // Emoji + combining marks use display widths.
-        assert_eq!(cursor_wrap_pos("😀a\u{301}", 3, 4), (0, 3));
-        // width 1 and 0 are defensive.
-        assert_eq!(cursor_wrap_pos("ab", 2, 1), (1, 1));
-        assert_eq!(cursor_wrap_pos("ab", 2, 0), (1, 1));
-        // Multi logical lines: cursor_row counts whole previous lines.
-        // A trailing cursor past the end lands at the end.
-        assert_eq!(cursor_wrap_pos("hello world", 11, 4), (3, 1));
+    fn large_paste_becomes_a_token_and_keeps_the_payload() {
+        let payload = big_paste(40);
+        let mut c = Composer::new();
+        c.insert(&payload);
+        assert_eq!(c.pastes().len(), 1);
+        assert_eq!(c.display(), "[pasted 40 lines]");
+        assert_eq!(c.text(), payload);
+        assert_eq!(c.display_cursor(), c.display().len());
     }
 
     #[test]
-    fn cursor_cell_is_the_visual_wrapped_position() {
-        let app = app_with("abcdef\nghijkl");
-        // cursor() col is a char index from tui-textarea.
-        let (row, col) = app.composer.cursor();
-        assert_eq!((row, col), (1, 6));
-        assert_eq!(
-            cursor_cell(&app, 3),
-            (1 + 2, 3),
-            "row 0 wraps to 2 rows then row 1 ends at col 3"
-        );
+    fn backspace_removes_a_whole_paste_token() {
+        let payload = big_paste(40);
+        let mut c = Composer::new();
+        c.insert("before ");
+        c.insert(&payload);
+        assert_eq!(c.text(), format!("before {payload}"));
+        c.end_gesture();
+        c.backspace();
+        assert_eq!(c.text(), "before ");
+        assert!(c.pastes().is_empty());
     }
 
     #[test]
-    fn long_wrapped_line_cursor_is_visible_with_correct_hardware_position() {
-        let mut app = app_with("x".repeat(70).as_str());
-        // Move the cursor to the very end (char index 70) — row 0, col 70.
-        // The fixed page columns (gutter1 + body77 + gap1 + track1 at 80
-        // cols) leave the composer an inner width of 76 once the rail cell is
-        // removed, so 0..  ok here does not wrap. Now use a 79-char line
-        // so it wraps into two visual rows inside the 76-column inner area.
-        let long = "a".repeat(79);
-        app.composer.set_text(&long);
-        let (row, col) = app.composer.cursor();
-        assert_eq!((row, col), (0, 79));
-        let (cursor_row, cursor_col) = cursor_cell(&app, 76);
-        assert_eq!(
-            (cursor_row, cursor_col),
-            (1, 3),
-            "76 cols on row 0, cursor at 79th char starts row 1 col 3"
-        );
-
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        terminal
-            .draw(|frame| crate::ui::render(frame, &app))
-            .unwrap();
-        let pos = terminal.backend_mut().get_cursor_position().unwrap();
-        // Rail composer: dock = footer(1) + composer(4) => composer at
-        // y=19..23. Two wrapped rows are vertically centered, so row 1 is
-        // y=21; the gutter plus rail injects two cells before the content, so
-        // the third content column lands at x=5.
-        assert_eq!((pos.x, pos.y), (5, 21));
+    fn deletion_never_leaves_half_a_paste() {
+        let payload = big_paste(40);
+        let mut c = Composer::new();
+        c.insert(&payload);
+        c.insert("tail");
+        c.end_gesture();
+        c.delete_word_left();
+        assert!(c.pastes().is_empty());
+        assert_eq!(c.text(), "");
     }
 
     #[test]
-    fn cjk_cursor_hardware_position_uses_display_columns() {
-        let mut app = app_with("你好abc");
-        assert_eq!(app.composer.cursor(), (0, 5));
-        assert_eq!(
-            cursor_cell(&app, 78),
-            (0, 7),
-            "prefix 你好abc is 7 display columns"
-        );
-        app.update(AppEvent::Terminal(crossterm::event::Event::Key(
-            crossterm::event::KeyEvent::new(
-                crossterm::event::KeyCode::Left,
-                crossterm::event::KeyModifiers::empty(),
-            ),
-        )));
-        assert_eq!(app.composer.cursor(), (0, 4));
-        assert_eq!(
-            cursor_cell(&app, 78),
-            (0, 6),
-            "col 4 = prefix 你好ab, 6 display columns"
-        );
+    fn the_cursor_steps_over_a_paste_token() {
+        let payload = big_paste(40);
+        let mut c = Composer::new();
+        c.insert(&payload);
+        let end = c.text().len();
+        assert_eq!(c.cursor(), end, "the cursor sits after the inserted token");
+        c.end_gesture();
+        c.move_left();
+        assert_eq!(c.cursor(), 0);
+        c.move_right();
+        assert_eq!(c.cursor(), end);
     }
-    fn type_keys(app: &mut App, text: &str) {
-        for c in text.chars() {
-            app.update(AppEvent::Terminal(crossterm::event::Event::Key(
-                crossterm::event::KeyEvent::new(
-                    crossterm::event::KeyCode::Char(c),
-                    crossterm::event::KeyModifiers::NONE,
-                ),
-            )));
+
+    #[test]
+    fn word_motion_steps_over_a_paste_token() {
+        let payload = big_paste(40);
+        let mut c = Composer::new();
+        c.insert(&payload);
+        let end = c.text().len();
+        c.move_word_right();
+        assert_eq!(c.cursor(), end);
+        c.end_gesture();
+        c.move_word_left();
+        assert_eq!(c.cursor(), 0);
+    }
+
+    #[test]
+    fn small_pastes_stay_plain_text() {
+        let mut c = Composer::new();
+        c.insert("a short paste");
+        assert!(c.pastes().is_empty());
+        assert_eq!(c.display(), "a short paste");
+    }
+
+    #[test]
+    fn display_cursor_accounts_for_tokens() {
+        let mut c = Composer::new();
+        c.insert(&big_paste(40));
+        c.insert("tail");
+        assert_eq!(c.display(), "[pasted 40 lines]tail");
+        assert_eq!(c.display_cursor(), c.display().len());
+        c.end_gesture();
+        c.move_home();
+        assert_eq!(c.display_cursor(), 0);
+        c.move_right();
+        assert_eq!(c.display_cursor(), "[pasted 40 lines]".len());
+    }
+
+    #[test]
+    fn text_edits_shift_paste_ranges() {
+        let payload = big_paste(40);
+        let mut c = Composer::new();
+        c.insert(&payload);
+        let before = c.pastes()[0].range.clone();
+        c.end_gesture();
+        c.move_document_start();
+        c.insert("> ");
+        assert_eq!(c.pastes()[0].range.start, before.start + 2);
+        assert_eq!(c.text(), format!("> {payload}"));
+    }
+
+    #[test]
+    fn tokens_render_as_single_lines_for_movement() {
+        let payload = big_paste(40);
+        let mut c = composer("head\n");
+        c.insert(&payload);
+        c.insert("tail");
+        assert_eq!(c.display(), "head\n[pasted 40 lines]tail");
+        c.move_home();
+        assert_eq!(c.cursor(), 5);
+        assert!(!c.move_down(), "the token line is the last line");
+        assert!(c.move_up());
+        assert_eq!(c.cursor(), 0);
+    }
+
+    #[test]
+    fn clear_discards_the_draft_and_history() {
+        let mut c = composer("draft");
+        c.clear();
+        assert!(c.is_empty());
+        assert!(!c.undo());
+    }
+
+    #[test]
+    fn submitted_prompts_are_recalled_newest_first() {
+        let mut c = Composer::new();
+        for prompt in ["first", "second"] {
+            c.insert(prompt);
+            assert_eq!(c.submit(), prompt);
         }
-    }
-
-    fn press_enter(app: &mut App) -> Vec<crate::command::AppCommand> {
-        app.update(AppEvent::Terminal(crossterm::event::Event::Key(
-            crossterm::event::KeyEvent::new(
-                crossterm::event::KeyCode::Enter,
-                crossterm::event::KeyModifiers::NONE,
-            ),
-        )))
-    }
-
-    fn press_key(
-        app: &mut App,
-        code: crossterm::event::KeyCode,
-        modifiers: crossterm::event::KeyModifiers,
-    ) -> Vec<crate::command::AppCommand> {
-        app.update(AppEvent::Terminal(crossterm::event::Event::Key(
-            crossterm::event::KeyEvent::new(code, modifiers),
-        )))
-    }
-
-    fn open_choices(app: &mut App) {
-        assert!(
-            press_key(
-                app,
-                crossterm::event::KeyCode::Char(' '),
-                crossterm::event::KeyModifiers::CONTROL
-            )
-            .is_empty()
-        );
-        assert!(app.slash_completion.as_ref().unwrap().popup.is_some());
-    }
-
-    fn capture(app: &App, width: u16, height: u16) -> (ratatui::buffer::Buffer, Vec<String>) {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal
-            .draw(|frame| crate::ui::render(frame, app))
-            .unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        let rows = buffer
-            .content
-            .chunks(width as usize)
-            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
-            .collect::<Vec<_>>();
-        (buffer, rows)
+        assert!(c.is_empty());
+        assert!(c.history_prev());
+        assert_eq!(c.text(), "second");
+        assert!(c.history_prev());
+        assert_eq!(c.text(), "first");
+        assert!(!c.history_prev());
+        assert!(c.history_next());
+        assert_eq!(c.text(), "second");
+        assert!(c.history_next());
+        assert_eq!(c.text(), "");
+        assert!(!c.history_next());
     }
 
     #[test]
-    fn narrow_completion_hints_keep_confirm_and_back_visible() {
-        let mut app = app_with("");
-        type_keys(&mut app, "/session");
-        open_choices(&mut app);
-        for width in [20, 24, 32, 40, 60, 80, 120] {
-            let completion = app.slash_completion.as_ref().unwrap();
-            let hint = completion_hint(&app, completion, width);
-            assert!(
-                hint.contains("Enter") && hint.contains("Esc"),
-                "{width}: {hint}"
-            );
-            assert!(UnicodeWidthStr::width(hint.as_str()) <= width);
-            // Below 60 terminal columns the full UI intentionally shows its
-            // minimum-size notice; the helper is still checked defensively.
-            if width + rail::RAIL_WIDTH >= 60 {
-                let (_, rows) = capture(&app, width as u16 + rail::RAIL_WIDTH as u16, 16);
-                assert!(
-                    rows.iter()
-                        .any(|row| row.contains("Enter") && row.contains("Esc")),
-                    "{rows:?}"
-                );
-            }
-        }
+    fn recall_restores_the_live_draft() {
+        let mut c = Composer::new();
+        c.insert("submitted");
+        c.submit();
+        c.insert("work in progress");
+        assert!(c.history_prev());
+        assert_eq!(c.text(), "submitted");
+        assert!(c.history_next());
+        assert_eq!(c.text(), "work in progress");
     }
 
     #[test]
-    fn empty_catalog_and_filtered_choices_have_distinct_messages() {
-        let mut app = app_with("");
-        type_keys(&mut app, "/model");
-        open_choices(&mut app);
-        app.catalogs.models.clear();
-        app.connection = crate::app::ConnectionState::Starting;
-        let completion = app.slash_completion.as_ref().unwrap();
-        assert_eq!(
-            completion_empty_message(&app, completion),
-            "Loading model catalog…"
-        );
-        app.connection = crate::app::ConnectionState::Ready;
-        let completion = app.slash_completion.as_ref().unwrap();
-        assert_eq!(
-            completion_empty_message(&app, completion),
-            "No models available; check /logs or /reload"
-        );
-        let (models, profiles, sessions) = crate::ui::testapp::standard_catalog();
-        let mut app =
-            crate::ui::testapp::ready_catalog(ThemeKind::Dark, models, profiles, sessions);
-        type_keys(&mut app, "/reasoning");
-        open_choices(&mut app);
-        for model in &mut app.catalogs.models {
-            model.supported_reasoning.clear();
-        }
-        let completion = app.slash_completion.as_ref().unwrap();
-        assert_eq!(
-            completion_empty_message(&app, completion),
-            "No supported reasoning for this model"
-        );
-        let mut app = app_with("");
-        type_keys(&mut app, "/session");
-        open_choices(&mut app);
-        type_keys(&mut app, "zzzzzzzz");
-        let completion = app.slash_completion.as_ref().unwrap();
-        assert!(completion.items.is_empty());
-        assert_eq!(
-            completion_empty_message(&app, completion),
-            "No matching choices"
-        );
+    fn cursor_position_reports_line_and_cell_column() {
+        let mut c = composer("ab\nc中");
+        assert_eq!(c.cursor_position(), (1, 3));
+        c.move_up();
+        assert_eq!(c.cursor_position(), (0, 2));
+        c.move_home();
+        assert_eq!(c.cursor_position(), (0, 0));
     }
 
     #[test]
-    fn theme_choice_enter_applies_without_an_extra_submit() {
-        let mut app = app_with("");
-        type_keys(&mut app, "/theme");
-        open_choices(&mut app);
-        assert_eq!(app.composer.content(), "/theme");
-        press_key(
-            &mut app,
-            crossterm::event::KeyCode::Down,
-            crossterm::event::KeyModifiers::NONE,
-        );
-        assert!(press_enter(&mut app).is_empty());
-        assert_eq!(app.theme, ThemeKind::Light);
-        assert!(app.composer.content().is_empty());
-    }
-
-    #[test]
-    fn required_arguments_remain_visible_in_the_compact_object_row() {
-        let mut app = app_with("");
-        type_keys(&mut app, "/tool");
-        assert!(
-            press_key(
-                &mut app,
-                crossterm::event::KeyCode::Tab,
-                crossterm::event::KeyModifiers::NONE
-            )
-            .is_empty()
-        );
-        assert_eq!(app.composer.content(), "/tool ");
-        let completion = app.slash_completion.as_ref().unwrap();
-        assert!(completion.popup.is_none());
-        assert_eq!(completion.items.len(), 1);
-        let (_, rows) = capture(&app, 60, 16);
-        assert!(rows.iter().any(|row| row.contains("<tool_call_id>")));
-        assert!(rows.iter().any(|row| row.contains("[tool ▾]")));
-    }
-
-    #[test]
-    fn root_objects_scroll_in_five_rows_or_three_on_a_tiny_terminal() {
-        let mut app = app_with("");
-        type_keys(&mut app, "/");
-        for (width, height, count) in [(160, 48, 5), (80, 24, 5), (60, 16, 3)] {
-            let area = Rect::new(0, 0, width, height);
-            let screen = crate::ui::layout::screen_layout(&app, area);
-            let (_, rows) = capture(&app, width, height);
-            assert_eq!(
-                crate::ui::layout::composer_completion_rows_for_height(&app, height),
-                count + 2
-            );
-            assert_eq!(
-                rows.iter().filter(|row| row.contains("▾]")).count(),
-                count as usize
-            );
-            assert!(rows.iter().any(|row| row.contains("→ Model")));
-            assert!(rows.iter().any(|row| row.contains("[default ▾]")));
-            let hint = &rows[screen.panel.bottom() as usize - 1];
-            assert!(hint.contains("Tab") && hint.contains("Esc") && hint.contains("1/6"));
-            assert!(
-                screen.transcript.height >= 6,
-                "menu leaves conversation visible at {width}×{height}"
-            );
-            assert_eq!(screen.footer.y, screen.panel.bottom());
-        }
-        app.slash_completion.as_mut().unwrap().selected = 5;
-        for (width, height) in [(80, 24), (60, 16)] {
-            let (_, rows) = capture(&app, width, height);
-            assert!(
-                rows.iter()
-                    .any(|row| row.contains("→ App") && row.contains("[settings ▾]"))
-            );
-            assert!(rows.iter().any(|row| row.contains("6/6")));
-            assert_eq!(rows.iter().filter(|row| row.contains("→ ")).count(), 1);
-        }
-    }
-
-    fn contrast_ratio(foreground: ratatui::style::Color, background: ratatui::style::Color) -> f64 {
-        let luminance = |color| {
-            let ratatui::style::Color::Rgb(red, green, blue) = color else {
-                panic!("completion surface colors must be explicit RGB values");
-            };
-            let linear = |channel: u8| {
-                let value = f64::from(channel) / 255.0;
-                if value <= 0.04045 {
-                    value / 12.92
-                } else {
-                    ((value + 0.055) / 1.055).powf(2.4)
-                }
-            };
-            0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
-        };
-        let foreground = luminance(foreground);
-        let background = luminance(background);
-        (foreground.max(background) + 0.05) / (foreground.min(background) + 0.05)
-    }
-
-    #[test]
-    fn compact_commands_and_readable_controls_fit_every_supported_size_and_theme() {
-        for kind in [ThemeKind::Dark, ThemeKind::Light] {
-            let theme = Theme::for_kind(kind);
-            for (width, height) in [(160, 48), (80, 24), (60, 16)] {
-                for spec in crate::command::COMMANDS {
-                    let mut app = app_with("");
-                    app.update(AppEvent::SetTheme(kind));
-                    type_keys(&mut app, &format!("/{}", spec.name));
-                    let completion = app.slash_completion.as_ref().unwrap();
-                    let entry = &completion.items[completion.selected];
-                    let screen =
-                        crate::ui::layout::screen_layout(&app, Rect::new(0, 0, width, height));
-                    let (buffer, rows) = capture(&app, width, height);
-                    let selected_rows = rows
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, row)| row.contains("→ "))
-                        .collect::<Vec<_>>();
-                    assert_eq!(selected_rows.len(), 1, "only one selected object");
-                    let (selected_y, selected_row) = selected_rows[0];
-                    assert!(
-                        selected_row.contains(&format!("→ {}", entry.object_name())),
-                        "{selected_row}"
-                    );
-                    assert!(
-                        selected_row.contains("[") && selected_row.contains("▾]"),
-                        "{selected_row}"
-                    );
-                    let selected_cell = buffer
-                        .cell((screen.panel.x + rail::RAIL_WIDTH as u16, selected_y as u16))
-                        .unwrap();
-                    assert_eq!(selected_cell.fg, theme.rail_editor);
-                    assert_eq!(selected_cell.bg, theme.user_message_bg);
-                    let hint_y = screen.panel.bottom() - 1;
-                    let hint = &rows[hint_y as usize];
-                    assert!(
-                        hint.contains("Tab") && hint.contains("Enter") && hint.contains("Esc"),
-                        "{hint}"
-                    );
-                    assert!(hint.contains(&format!("1/{}", completion.items.len())));
-                    assert_eq!(screen.footer.y, hint_y + 1);
-                    for x in screen.panel.x + rail::RAIL_WIDTH as u16..screen.panel.right() {
-                        let cell = buffer.cell((x, hint_y)).unwrap();
-                        if cell.symbol().trim().is_empty() {
-                            continue;
-                        }
-                        assert_eq!(cell.fg, theme.text);
-                        assert_eq!(cell.bg, theme.user_message_bg);
-                        assert!(contrast_ratio(cell.fg, cell.bg) >= 4.5);
-                        assert!(!cell.modifier.contains(ratatui::style::Modifier::DIM));
-                    }
-                    assert!(
-                        rows.iter()
-                            .all(|row| UnicodeWidthStr::width(row.as_str()) <= width as usize)
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn one_session_row_is_replaced_by_a_scoped_bounded_dropdown() {
-        for kind in [ThemeKind::Dark, ThemeKind::Light] {
-            for (width, height, limit) in [(160, 48, 5), (80, 24, 5), (60, 16, 3)] {
-                let mut app = app_with("");
-                app.update(AppEvent::SetTheme(kind));
-                type_keys(&mut app, "/session");
-                assert_eq!(
-                    crate::ui::layout::composer_completion_rows_for_height(&app, height),
-                    2
-                );
-                let (_, rows) = capture(&app, width, height);
-                assert_eq!(rows.iter().filter(|row| row.contains("▾]")).count(), 1);
-                assert!(
-                    rows.iter()
-                        .any(|row| row.contains("Session") && row.contains("[list ▾]"))
-                );
-                open_choices(&mut app);
-                assert_eq!(app.composer.content(), "/session");
-                let completion = app.slash_completion.as_ref().unwrap();
-                assert!(completion.items.len() > limit);
-                assert_eq!(
-                    crate::ui::layout::composer_completion_rows_for_height(&app, height),
-                    limit as u16 + 2
-                );
-                let (_, rows) = capture(&app, width, height);
-                assert!(
-                    rows.iter()
-                        .any(|row| row.contains("Session actions · filter:"))
-                );
-                assert!(
-                    !rows.iter().any(|row| row.contains("▾]")),
-                    "dropdown replaces root controls"
-                );
-                assert!(
-                    rows.iter()
-                        .any(|row| row.contains("Enter confirm") && row.contains("Tab"))
-                );
-                type_keys(&mut app, "rename");
-                assert_eq!(app.composer.content(), "/session");
-                let (_, rows) = capture(&app, width, height);
-                assert!(rows.iter().any(|row| row.contains("filter: rename")));
-                assert!(rows.iter().any(|row| row.contains("→ rename")));
-                assert!(rows.iter().any(|row| row.contains("Esc clear")));
-            }
-        }
-    }
-
-    #[test]
-    fn candidate_highlight_never_masquerades_as_current_model_or_reasoning() {
-        let mut app = crate::ui::testapp::chat(ThemeKind::Dark);
-        app.catalogs.next_model = Some("next-session-model".into());
-        app.catalogs.next_reasoning = Some(crate::protocol::Reasoning::Low);
-        let active_model = app.active_view().unwrap().info.model.clone();
-        let active_reasoning =
-            crate::state::selection::reasoning_label(app.active_view().unwrap().info.reasoning);
-        let model = crate::command::MenuEntry::command("model", "/model Other/Model".into());
-        let reasoning = crate::command::MenuEntry::command("reasoning", "/reasoning ultra".into());
-        for selected in [false, true] {
-            let model_row = object_row(&app, &model, selected, 78);
-            assert!(model_row.contains(&format!("[{active_model} ▾]")));
-            assert!(
-                !model_row.contains("Other/Model") && !model_row.contains("next-session-model")
-            );
-            let reasoning_row = object_row(&app, &reasoning, selected, 78);
-            assert!(reasoning_row.contains(&format!("[{active_reasoning} ▾]")));
-        }
-    }
-
-    #[test]
-    fn compact_dropdown_preserves_notice_help_and_multiline_drafts() {
-        use crossterm::event::{Event, KeyCode, KeyModifiers};
-        for kind in [ThemeKind::Dark, ThemeKind::Light] {
-            for (width, height) in [(60, 16), (80, 24), (160, 48)] {
-                let mut app = app_with("");
-                app.update(AppEvent::SetTheme(kind));
-                app.notice(crate::app::NoticeLevel::Info, "Preserved notice");
-                type_keys(&mut app, "/session");
-                open_choices(&mut app);
-                let screen = crate::ui::layout::screen_layout(&app, Rect::new(0, 0, width, height));
-                let (_, rows) = capture(&app, width, height);
-                assert!(rows.iter().any(|row| row.contains("Preserved notice")));
-                assert!(screen.notice.unwrap().bottom() <= screen.panel.y);
-                assert_eq!(screen.panel.bottom(), screen.footer.y);
-                assert!(screen.transcript.height > 0);
-                press_key(&mut app, KeyCode::F(1), KeyModifiers::NONE);
-                assert!(matches!(app.dock, crate::state::selection::Dock::Help));
-                assert_eq!(app.composer.content(), "/session");
-                assert!(app.slash_completion.is_none());
-                let (_, rows) = capture(&app, width, height);
-                assert!(!rows.iter().any(|row| row.contains("Session actions")));
-                press_key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
-                app.composer.clear();
-                let draft = "first draft line\nsecond draft line\nlast draft line";
-                app.update(AppEvent::Terminal(Event::Paste(draft.into())));
-                assert_eq!(app.composer.content(), draft);
-                assert!(app.slash_completion.is_none());
-                let (_, rows) = capture(&app, width, height);
-                assert!(rows.iter().any(|row| row.contains("last draft line")));
-                assert!(!rows.iter().any(|row| row.contains("▾]")));
-            }
-        }
-    }
-
-    #[test]
-    fn long_unicode_values_keep_the_object_and_control_visible() {
-        let mut app = app_with("");
-        app.catalogs.next_model = Some("模型/😀".repeat(30));
-        let item = crate::command::MenuEntry::command("model", "/model".into());
-        for width in [20, 38, 58, 78, 158] {
-            let row = object_row(&app, &item, true, width);
-            assert!(row.starts_with("→ Model"));
-            assert!(row.ends_with("▾]"));
-            assert!(UnicodeWidthStr::width(row.as_str()) <= width);
-        }
+    fn empty_submissions_are_not_recorded_in_history() {
+        let mut c = Composer::new();
+        c.insert("   ");
+        c.submit();
+        assert!(!c.history_prev());
     }
 }

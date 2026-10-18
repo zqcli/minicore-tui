@@ -56,11 +56,11 @@ pub fn char_breaks(line: &str, cell_limit: usize) -> Vec<Range<usize>> {
 pub fn breaks(line: &str, cell_limit: usize) -> Vec<Range<usize>> {
     let limit = cell_limit.max(1);
     if line.is_empty() {
-        return vec![0..0];
+        return std::iter::once(0..0).collect();
     }
     let units = units(line, limit);
     if units.is_empty() {
-        return vec![0..line.len()];
+        return std::iter::once(0..line.len()).collect();
     }
     let mut out = Vec::new();
     let mut start = 0;
@@ -286,29 +286,23 @@ mod tests {
         assert_eq!(wrap("the quick brown fox", 10), ["the quick", "brown fox"]);
         assert_eq!(wrap("aaa bbb", 3), ["aaa", "bbb"]);
         assert_eq!(wrap("exactly ten", 11), ["exactly ten"]);
-        assert_eq!(wrap("a very long sentence wraps here", 12), [
-            "a very long",
-            "sentence",
-            "wraps here"
-        ]);
+        assert_eq!(
+            wrap("a very long sentence wraps here", 12),
+            ["a very long", "sentence", "wraps here"]
+        );
     }
 
     #[test]
     fn hard_breaks_overlong_tokens() {
         assert_eq!(wrap("abcdefghijkl", 5), ["abcde", "fghij", "kl"]);
-        assert_eq!(wrap("https://example.com/some/long/path", 8), [
-            "https://",
-            "example.",
-            "com/some",
-            "/long/pa",
-            "th"
-        ]);
-        assert_eq!(wrap("a /very/long/path/file.rs b", 10), [
-            "a",
-            "/very/long",
-            "/path/file",
-            ".rs b"
-        ]);
+        assert_eq!(
+            wrap("https://example.com/some/long/path", 8),
+            ["https://", "example.", "com/some", "/long/pa", "th"]
+        );
+        assert_eq!(
+            wrap("a /very/long/path/file.rs b", 10),
+            ["a", "/very/long", "/path/file", ".rs b"]
+        );
     }
 
     #[test]
@@ -370,7 +364,10 @@ mod tests {
     #[test]
     fn char_breaks_chunk_code_lines() {
         assert_eq!(char_breaks("0123456789", 4), vec![0..4, 4..8, 8..10]);
-        assert_eq!(char_breaks("", 4), vec![0..0]);
+        assert_eq!(
+            char_breaks("", 4),
+            std::iter::once(0..0).collect::<Vec<_>>()
+        );
         assert_eq!(char_breaks("中文", 2), vec![0..3, 3..6]);
     }
 

@@ -174,7 +174,8 @@ impl Styles {
     }
 
     pub fn link(&self) -> Style {
-        self.paint(self.theme.link).add_modifier(Modifier::UNDERLINED)
+        self.paint(self.theme.link)
+            .add_modifier(Modifier::UNDERLINED)
     }
 
     pub fn heading(&self) -> Style {
@@ -190,7 +191,8 @@ impl Styles {
     }
 
     pub fn strikethrough(&self) -> Style {
-        self.paint(self.theme.dim).add_modifier(Modifier::CROSSED_OUT)
+        self.paint(self.theme.dim)
+            .add_modifier(Modifier::CROSSED_OUT)
     }
 
     pub fn user_rail(&self) -> Style {
