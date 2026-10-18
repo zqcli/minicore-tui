@@ -115,6 +115,11 @@ impl App {
                 self.overlay_move(10);
                 Input::Consumed
             }
+            KeyCode::Backspace if matches!(self.overlay, Overlay::Palette { .. }) => {
+                self.composer.pop();
+                self.refresh_palette();
+                Input::Edited
+            }
             KeyCode::Backspace => {
                 self.overlay_filter_push(None);
                 Input::Consumed
@@ -130,6 +135,15 @@ impl App {
             KeyCode::Char('n') if matches!(self.overlay, Overlay::Interaction) => {
                 self.interaction_choice = 1;
                 self.on_overlay_accept()
+            }
+            // The palette is driven by the composer line, so its arguments
+            // (`/rename <title>`, `/export <path>`) stay typable.
+            KeyCode::Char(character)
+                if !ctrl && matches!(self.overlay, Overlay::Palette { .. }) =>
+            {
+                self.composer.push(character);
+                self.refresh_palette();
+                Input::Edited
             }
             KeyCode::Char(character) if !ctrl => {
                 self.overlay_filter_push(Some(character));
@@ -331,16 +345,37 @@ impl App {
         }
     }
 
+    /// Re-filters the command palette from the composer line and keeps the
+    /// selection on the top row.
+    fn refresh_palette(&mut self) {
+        let Some((name, _)) = commands::parse(&self.composer) else {
+            self.overlay = Overlay::None;
+            return;
+        };
+        let Overlay::Palette { filter, selected } = &mut self.overlay else {
+            return;
+        };
+        *filter = name.to_owned();
+        *selected = 0;
+    }
+
     fn on_overlay_accept(&mut self) -> Input {
         let overlay = std::mem::replace(&mut self.overlay, Overlay::None);
         match overlay {
             Overlay::Palette { selected, filter } => {
                 let matches = commands::filter(&filter);
                 let Some(command) = matches.get(selected).or_else(|| matches.first()) else {
+                    self.composer.clear();
                     return Input::Consumed;
                 };
+                // The composer holds the whole command line, so an argument
+                // typed after the name reaches the command.
+                let arg = commands::parse(&self.composer)
+                    .filter(|(name, _)| *name == command.name)
+                    .map_or("", |(_, arg)| arg)
+                    .to_owned();
                 self.composer.clear();
-                match commands::execute(command.name, "") {
+                match commands::execute(command.name, &arg) {
                     Some(Executed::Action(action)) => Input::Action(action),
                     Some(Executed::Panel(panel)) => {
                         self.open_panel(panel);
@@ -411,6 +446,9 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        if !matches!(key.code, KeyCode::Char('c') if ctrl) {
+            self.quit_armed = false;
+        }
         match key.code {
             KeyCode::Enter if alt => Input::Action(Action::QueueFollowUp),
             KeyCode::Enter if shift => {
@@ -430,10 +468,19 @@ impl App {
                 }
             }
             KeyCode::Char('c') if ctrl => {
-                if self.composer.is_empty() {
+                if !self.composer.is_empty() {
+                    self.composer.clear();
+                    self.quit_armed = false;
+                    return Input::Edited;
+                }
+                if self.quit_armed {
                     Input::Action(Action::Quit)
                 } else {
-                    self.composer.clear();
+                    self.quit_armed = true;
+                    self.notice(
+                        crate::transcript::block::NoticeLevel::Info,
+                        "Press Ctrl+C again to quit",
+                    );
                     Input::Edited
                 }
             }

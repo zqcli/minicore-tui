@@ -425,6 +425,8 @@ pub struct App {
     pub tools_expanded: bool,
     pub show_reasoning: bool,
     pub quit: bool,
+    /// Ctrl+C armed the quit; a second press on an empty composer leaves.
+    pub quit_armed: bool,
     pub ready: bool,
     pub fatal: Option<Fatal>,
     pub last_error: Option<String>,
@@ -499,6 +501,7 @@ impl App {
             tools_expanded: false,
             show_reasoning: false,
             quit: false,
+            quit_armed: false,
             ready: false,
             fatal: None,
             last_error: None,

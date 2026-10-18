@@ -620,6 +620,68 @@ async fn scrolling_leaves_follow_mode_and_returns_to_it() {
 }
 
 #[tokio::test]
+async fn ctrl_c_clears_a_draft_then_needs_two_presses_on_an_empty_composer() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+    let typed = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+    app.on_key(typed);
+    assert_eq!(app.composer, "x");
+    app.on_key(ctrl_c);
+    assert_eq!(app.composer, "", "the draft is cleared first");
+    assert!(!app.quit, "clearing a draft must not quit");
+
+    assert_eq!(app.on_key(ctrl_c), crate::app::keys::Input::Edited);
+    assert!(!app.quit, "the first empty press only arms the quit");
+    assert!(app.quit_armed);
+    assert_eq!(
+        app.notices.back().map(|notice| notice.text.as_str()),
+        Some("Press Ctrl+C again to quit")
+    );
+
+    app.on_key(typed);
+    assert!(!app.quit_armed, "typing disarms the quit");
+    app.on_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+    assert_eq!(app.on_key(ctrl_c), crate::app::keys::Input::Edited);
+    assert_eq!(
+        app.on_key(ctrl_c),
+        crate::app::keys::Input::Action(Action::Quit),
+        "a second empty press quits"
+    );
+}
+
+#[tokio::test]
+async fn palette_arguments_reach_the_command() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    for character in "/rename a better title".chars() {
+        app.on_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+    }
+    assert_eq!(app.composer, "/rename a better title");
+    let input = app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(
+        input,
+        crate::app::keys::Input::Action(Action::Rename("a better title".into()))
+    );
+    assert!(app.composer.is_empty());
+    assert_eq!(app.overlay, Overlay::None);
+}
+
+#[tokio::test]
 async fn an_op_for_another_session_is_ignored() {
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let (_fake, mut app) = FakeAgent::start(tx);
