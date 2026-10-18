@@ -496,6 +496,7 @@ impl Composer {
     }
 
     pub fn delete(&mut self) {
+        self.commit();
         if self.cursor >= self.text.len() {
             return;
         }
@@ -509,6 +510,7 @@ impl Composer {
     }
 
     pub fn delete_word_left(&mut self) {
+        self.commit();
         let end = self.cursor;
         self.move_word_left();
         let start = self.cursor;
@@ -517,6 +519,7 @@ impl Composer {
     }
 
     pub fn delete_to_line_start(&mut self) {
+        self.commit();
         let end = self.cursor;
         let start = self.line_start(self.cursor_position().0);
         self.cursor = end;
@@ -524,6 +527,7 @@ impl Composer {
     }
 
     pub fn delete_to_line_end(&mut self) {
+        self.commit();
         let start = self.cursor;
         let end = self.line_end(self.cursor_position().0);
         self.cursor = start;
@@ -1177,6 +1181,30 @@ mod tests {
             "",
             "the pre-recall typing stays its own step, ending where it began"
         );
+    }
+
+    #[test]
+    fn a_kill_does_not_swallow_the_typing_before_it() {
+        let mut c = Composer::new();
+        c.end_gesture();
+        for ch in "alpha beta".chars() {
+            c.type_char(ch);
+        }
+        c.delete_word_left();
+        assert_eq!(c.text(), "alpha ");
+        // First undo restores only the killed word; the typing stays put.
+        assert!(c.undo());
+        assert_eq!(c.text(), "alpha beta");
+    }
+
+    #[test]
+    fn a_word_delete_is_one_undoable_step() {
+        let mut c = composer("alpha beta gamma");
+        c.end_gesture();
+        c.delete_word_left();
+        assert_eq!(c.text(), "alpha beta ");
+        assert!(c.undo());
+        assert_eq!(c.text(), "alpha beta gamma");
     }
 
     #[test]
