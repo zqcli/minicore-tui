@@ -87,11 +87,14 @@ pub enum OpKind {
     Deleted(String, Result<(), RpcError>),
     History(Result<tasks::History, RpcError>),
     Older(Result<tasks::History, RpcError>),
+    Canonical(Result<tasks::History, RpcError>),
     TurnItems(Result<Vec<(usize, crate::protocol::read::RawHistoryItem)>, RpcError>),
     State(Result<SessionState, RpcError>),
     Presentation(Result<SessionPresentation, RpcError>),
     Context(Result<SessionContext, RpcError>),
-    Sent(Result<TurnRef, RpcError>),
+    /// The send response, with the text that was sent so a refusal can hand it
+    /// back instead of losing it.
+    Sent(String, Result<TurnRef, RpcError>),
     Waited(Box<Result<crate::protocol::TurnWaitResult, RpcError>>),
     Steered(Result<u64, RpcError>),
     Cancelled(Result<(), RpcError>),
@@ -863,12 +866,18 @@ impl App {
             return;
         }
         session.loading_older = true;
-        tasks::load_older(
-            self.client.clone(),
-            self.tx.clone(),
-            session.info.session_id.clone(),
-            session.loaded_from,
-        );
+        // Below the display floor the transcript continues in the canonical
+        // history, behind the compaction summary. That is a different read with
+        // its own boundary, so it must not be asked for as a display page.
+        let below_floor = session.loaded_from <= session.first_item;
+        let before = session.loaded_from;
+        let session_id = session.info.session_id.clone();
+        if below_floor {
+            session.reached_floor = true;
+            tasks::load_canonical(self.client.clone(), self.tx.clone(), session_id, before);
+        } else {
+            tasks::load_older(self.client.clone(), self.tx.clone(), session_id, before);
+        }
     }
 
     fn recall_queued(&mut self) {
@@ -969,7 +978,7 @@ impl App {
                     return false;
                 }
                 // A result produced before this session was reopened is stale.
-                if epoch != resident.epoch && matches!(kind, OpKind::Waited(_) | OpKind::Sent(_)) {
+                if epoch != resident.epoch && matches!(kind, OpKind::Waited(_) | OpKind::Sent(..)) {
                     return false;
                 }
                 return self.on_session_op(&kind);
@@ -982,12 +991,13 @@ impl App {
         match kind {
             OpKind::History(result) => self.on_history(result),
             OpKind::Older(result) => self.on_older(result),
+            OpKind::Canonical(result) => self.on_canonical(result),
             OpKind::TurnItems(result) => self.on_turn_items(result),
             OpKind::State(result) => self.on_state(result),
             OpKind::IdleCheck(result) => self.on_idle_check(result),
             OpKind::Presentation(result) => self.on_presentation(result),
             OpKind::Context(result) => self.on_context(result),
-            OpKind::Sent(result) => self.on_sent(result),
+            OpKind::Sent(text, result) => self.on_sent(text, result),
             OpKind::Waited(result) => self.on_waited(result),
             OpKind::Steered(result) => self.on_steered(result),
             OpKind::Cancelled(result) => self.on_cancelled(result),
@@ -1057,7 +1067,13 @@ impl App {
         self.waiting_for_compaction = false;
         self.merge_session_info_into_list();
         tasks::load_tail(self.client.clone(), self.tx.clone(), session_id.clone());
-        tasks::presentation(self.client.clone(), self.tx.clone(), session_id, epoch);
+        tasks::presentation(
+            self.client.clone(),
+            self.tx.clone(),
+            session_id.clone(),
+            epoch,
+        );
+        tasks::context(self.client.clone(), self.tx.clone(), session_id);
         // A new session already carries its settings; an opened one needs them
         // applied, because the flags describe how to run this session now.
         let (model, reasoning) = (self.launch.model.clone(), self.launch.reasoning);
@@ -1155,7 +1171,10 @@ impl App {
         }
         session.loaded_from = page.from;
         session.hidden_items = page.from;
-        if page.has_more {
+        // A page reaching the display floor leaves the reader at the compaction
+        // summary with more history behind it; otherwise the label just states
+        // how much older history remains unloaded.
+        if page.has_more || session.loaded_from <= session.first_item {
             session.transcript.insert(
                 0,
                 Block::EarlierHistory {
@@ -1163,6 +1182,46 @@ impl App {
                 },
             );
         }
+        true
+    }
+
+    /// Prepends a canonical page read from below the display floor. The page is
+    /// raw history the display projection collapsed away, so the summary
+    /// placeholder stays and the items go below it.
+    fn on_canonical(&mut self, result: &Result<tasks::History, RpcError>) -> bool {
+        let page = match result {
+            Ok(page) => page,
+            Err(error) => {
+                if let Some(session) = self.session.as_mut() {
+                    session.loading_older = false;
+                }
+                self.error(error);
+                return true;
+            }
+        };
+        let Some(session) = self.session.as_mut() else {
+            return false;
+        };
+        session.loading_older = false;
+        let mut blocks = Vec::new();
+        install_items_into(&mut blocks, &page.items);
+        let added = blocks.len();
+        if added == 0 {
+            // Nothing older than this page: stop asking.
+            session.loaded_from = 0;
+            return true;
+        }
+        for block in blocks.into_iter().rev() {
+            session.transcript.insert(0, block);
+        }
+        if let Scroll::Anchor { block, offset } = self.scroll {
+            self.scroll = Scroll::Anchor {
+                block: block + added,
+                offset,
+            };
+        }
+        session.loaded_from = page.from;
+        session.hidden_items = page.from;
         true
     }
 
@@ -1256,6 +1315,18 @@ impl App {
                     } else if session.compaction.is_some() {
                         session.compaction = None;
                     }
+                    // An automatic compaction has no response of its own: the
+                    // context view is where it is reported. Recording it here
+                    // makes it appear once, whether it was seen live or on open.
+                    if let Some(result) = &context.last_result {
+                        let operation_id = match &result.origin {
+                            Some(origin) if origin == "auto" => {
+                                format!("auto-{}", result.operation_id)
+                            }
+                            _ => result.operation_id.clone(),
+                        };
+                        session.push_compaction(&operation_id, result);
+                    }
                 }
                 true
             }
@@ -1266,7 +1337,7 @@ impl App {
         }
     }
 
-    fn on_sent(&mut self, result: &Result<TurnRef, RpcError>) -> bool {
+    fn on_sent(&mut self, text: &str, result: &Result<TurnRef, RpcError>) -> bool {
         match result {
             Ok(turn) => {
                 if let Some(session) = self.session.as_mut()
@@ -1281,13 +1352,24 @@ impl App {
                 true
             }
             Err(error) if error.is_busy() => {
-                // Post-turn compaction still owns the session. Keep the draft
-                // and poll until the Agent is idle again; never resend blindly.
+                // Post-turn compaction still owns the session, so this turn was
+                // refused, not sent. Take back the optimistic prompt and queue
+                // the text: it must neither look sent nor be lost. Poll until
+                // the Agent is idle; never resend blindly.
                 self.waiting_for_compaction = true;
+                if let Some(session) = self.session.as_mut() {
+                    session.unsend_prompt(text);
+                    session.push_follow_up(text.to_owned());
+                }
                 self.retry_when_idle();
                 true
             }
             Err(error) => {
+                // Any other refusal never reached the Agent.
+                if let Some(session) = self.session.as_mut() {
+                    session.unsend_prompt(text);
+                }
+                self.composer = text.to_owned();
                 self.error(error);
                 true
             }
@@ -1426,7 +1508,7 @@ impl App {
                         // summary is a new snapshot beside the history, so the
                         // blocks on screen stay: a reload would erase them.
                         if let Some(session) = self.session.as_mut() {
-                            session.push_compaction_result(result);
+                            session.push_compaction(&result.operation_id.clone(), result);
                         }
                         if let Some(session) = self.session.as_ref() {
                             tasks::presentation(
@@ -1517,7 +1599,7 @@ impl App {
                         call.name = invocation.name.clone();
                     }
                     if let Some(execution) = &read.execution {
-                        call.state = ToolState::from_execution(execution.state);
+                        call.set_state(ToolState::from_execution(execution.state));
                         call.truncated = execution.result_truncated;
                         if let Some(command) = &execution.command {
                             call.exit_code = command.exit_code;
@@ -1752,7 +1834,7 @@ impl App {
                 let state = ToolState::from_execution(execution.state);
                 let mut terminal = false;
                 if let Some(call) = session.transcript.find_tool_mut(&key) {
-                    call.state = state;
+                    call.set_state(state);
                     if let Some(count) = execution.output_line_count {
                         call.output_lines = Some(count);
                     }
@@ -1798,13 +1880,14 @@ impl App {
                 let key = identity.key();
                 session.finish_tool(&key);
                 if let Some(call) = session.transcript.find_tool_mut(&key) {
-                    call.state = match outcome {
+                    let state = match outcome {
                         ToolOutcome::Success => ToolState::Succeeded,
                         ToolOutcome::Failed => ToolState::Failed,
                         ToolOutcome::Denied => ToolState::Denied,
                         ToolOutcome::Cancelled => ToolState::Cancelled,
                         _ => call.state,
                     };
+                    call.set_state(state);
                     call.truncated |= content_truncated;
                     if call.output.is_empty()
                         && let Some(content) = content

@@ -32,6 +32,8 @@ pub enum Block {
         changes: Option<ChangeSummary>,
     },
     Compaction {
+        /// The Agent's operation id, so a duplicate report is recognised.
+        operation_id: String,
         before: Option<u64>,
         after: Option<u64>,
         summary: Option<String>,
@@ -173,6 +175,15 @@ impl ToolCall {
         }
     }
 
+    /// Advances the state. A tool that already reached a terminal state stays
+    /// there: late or replayed non-terminal updates must not reopen it.
+    pub fn set_state(&mut self, state: ToolState) {
+        if self.state.is_terminal() && !state.is_terminal() {
+            return;
+        }
+        self.state = state;
+    }
+
     /// Stores the paged full output of one stream for the tool view.
     pub fn set_full_output(&mut self, stream: &str, text: String) {
         self.full_output = Some((stream.to_owned(), text));
@@ -257,14 +268,31 @@ impl ToolCall {
         Some(text)
     }
 
-    /// Appends a process-output chunk, keeping only the tail.
+    /// Appends a process-output chunk, keeping only the tail. Lines are the
+    /// primary bound, but one line can be megabytes long, so the tail is also
+    /// capped by bytes: a card is a preview, and the full text stays available
+    /// through the tool view.
     pub fn push_output(&mut self, text: &str) {
         for line in text.split('\n') {
-            self.output.push(line.to_owned());
+            let capped = cap_line(line);
+            self.truncated |= capped.len() != line.len();
+            self.output.push(capped);
         }
         if self.output.len() > OUTPUT_TAIL_LINES {
             let excess = self.output.len() - OUTPUT_TAIL_LINES;
             self.output.drain(..excess);
+            self.truncated = true;
+        }
+        // Drop from the front until the tail fits the byte budget, always
+        // keeping the newest line so a card never goes blank.
+        let mut bytes = self.output.iter().map(|line| line.len() + 1).sum::<usize>();
+        let mut drop = 0;
+        while bytes > OUTPUT_TAIL_BYTES && drop + 1 < self.output.len() {
+            bytes -= self.output[drop].len() + 1;
+            drop += 1;
+        }
+        if drop > 0 {
+            self.output.drain(..drop);
             self.truncated = true;
         }
     }
@@ -272,6 +300,20 @@ impl ToolCall {
 
 /// Lines of process output kept per card. The tool view pages the rest.
 pub const OUTPUT_TAIL_LINES: usize = 400;
+/// Byte cap for a card's stored output tail.
+pub const OUTPUT_TAIL_BYTES: usize = 64 * 1024;
+
+/// Keeps one line's head; the tool view has the whole text.
+fn cap_line(line: &str) -> String {
+    if line.len() <= OUTPUT_TAIL_BYTES {
+        return line.to_owned();
+    }
+    let mut end = OUTPUT_TAIL_BYTES;
+    while end > 0 && !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &line[..end])
+}
 
 /// Ordered blocks with a revision per block. The revision is bumped on every
 /// mutation and is the layout cache key, so the cache never guesses from
@@ -513,6 +555,7 @@ pub fn append_history_item(
         }
         RuntimeItem::Summary(summary) => {
             transcript.push(Block::Compaction {
+                operation_id: String::new(),
                 before: None,
                 after: None,
                 summary: Some(summary.content.clone()),
@@ -590,6 +633,52 @@ mod tests {
             request_index: 1,
             tool_call_id: call.into(),
         }
+    }
+
+    #[test]
+    fn a_finished_tool_never_goes_back_to_running() {
+        let mut call = ToolCall::new(key("c"), "bash");
+        call.set_state(ToolState::Succeeded);
+        call.set_state(ToolState::Running);
+        assert_eq!(call.state, ToolState::Succeeded);
+        // A later terminal state is still allowed: the outcome is corrected,
+        // for example a cancelled run finishing as failed.
+        call.set_state(ToolState::Failed);
+        assert_eq!(call.state, ToolState::Failed);
+    }
+
+    #[test]
+    fn a_pending_tool_still_advances_to_running() {
+        let mut call = ToolCall::new(key("c"), "bash");
+        call.set_state(ToolState::Pending);
+        call.set_state(ToolState::Running);
+        assert_eq!(call.state, ToolState::Running);
+    }
+
+    #[test]
+    fn a_single_huge_line_cannot_bloat_a_card() {
+        let mut call = ToolCall::new(key("c"), "bash");
+        call.push_output(&"x".repeat(OUTPUT_TAIL_BYTES * 3));
+        assert_eq!(call.output.len(), 1);
+        assert!(
+            call.output[0].len() <= OUTPUT_TAIL_BYTES + 4,
+            "{}",
+            call.output[0].len()
+        );
+        assert!(call.output[0].ends_with('…'));
+        assert!(call.truncated);
+    }
+
+    #[test]
+    fn the_output_tail_is_bounded_by_bytes_as_well_as_lines() {
+        let mut call = ToolCall::new(key("c"), "bash");
+        let line = "y".repeat(1024);
+        for _ in 0..200 {
+            call.push_output(&line);
+        }
+        let bytes: usize = call.output.iter().map(|line| line.len() + 1).sum();
+        assert!(bytes <= OUTPUT_TAIL_BYTES, "{bytes} bytes kept");
+        assert!(call.truncated);
     }
 
     #[test]

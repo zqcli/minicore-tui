@@ -47,6 +47,7 @@ pub fn render(block: &Block, palette: Palette, width: u16, fold: Fold) -> Vec<Li
             },
         )],
         Block::Compaction {
+            operation_id: _,
             before,
             after,
             summary: _,
@@ -387,6 +388,7 @@ mod tests {
     #[test]
     fn a_compaction_marker_shows_before_and_after() {
         let block = Block::Compaction {
+            operation_id: "tui-1".into(),
             before: Some(32_200),
             after: Some(2_700),
             summary: None,

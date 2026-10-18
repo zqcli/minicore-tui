@@ -349,11 +349,82 @@ async fn older_pages_prepend_and_keep_the_anchor_block() {
             .is_some_and(|session| session.loaded_from == 0)
     })
     .await;
+    // Reaching the display floor labels the boundary: the page below it is the
+    // canonical history behind the compaction summary, reached with its own
+    // read rather than another display page.
     let session = app.session.as_ref().unwrap();
-    assert!(!matches!(
-        session.transcript.blocks().first(),
-        Some(Block::EarlierHistory { .. })
-    ));
+    assert_eq!(session.loaded_from, 0);
+    assert!(session.reached_floor);
+}
+
+#[tokio::test]
+async fn reading_below_the_display_floor_uses_a_canonical_read() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    // The display view starts at item 10: everything below it was collapsed
+    // into a compaction summary and is only reachable in the canonical view.
+    fake.script("session.read", display_read(30, 10));
+
+    open(&mut app, &mut rx, &fake, &tx).await;
+    let session = app.session.as_ref().unwrap();
+    assert_eq!(session.first_item, 10);
+    assert_eq!(session.loaded_from, 10);
+    assert_eq!(
+        session.transcript.len(),
+        0,
+        "the display tail is empty here"
+    );
+
+    let canonical = crate::testing::chunk(
+        9,
+        json!({"type": "user", "data": {"loop_id": "l0", "kind": "prompt",
+                                        "input": {"text": "collapsed question"}}}),
+    );
+    fake.script_sequence(
+        "session.read",
+        vec![
+            // The canonical probe learns the raw boundary.
+            json!({
+                "session": session_info("s1"), "items": [], "next_cursor": null,
+                "total": 12, "history_revision": "h2", "captured_end": 1,
+                "projection": {"revision": "p2", "first_item": 0, "covered_item_count": 0},
+            }),
+            json!({
+                "session": session_info("s1"),
+                "items": [canonical], "next_cursor": null, "total": 12,
+                "history_revision": "h2", "captured_end": 1,
+                "projection": {"revision": "p2", "first_item": 0, "covered_item_count": 0},
+            }),
+        ],
+    );
+    app.on_action(Action::LoadOlder);
+    settle(&mut app, &mut rx).await;
+
+    let reads = fake.calls("session.read");
+    assert!(
+        app.session
+            .as_ref()
+            .is_some_and(|session| session.reached_floor),
+        "the display floor was passed"
+    );
+    assert!(
+        reads
+            .iter()
+            .any(|params| params["view"] == json!("canonical")),
+        "a page below the floor is read in the canonical view: {reads:?}"
+    );
+    let session = app.session.as_ref().unwrap();
+    assert!(
+        session
+            .transcript
+            .blocks()
+            .iter()
+            .any(|block| matches!(block, Block::User { text, .. } if text == "collapsed question")),
+        "{:?}",
+        session.transcript.blocks()
+    );
 }
 
 #[tokio::test]
@@ -1013,4 +1084,128 @@ async fn reconciling_a_gapped_turn_keeps_the_history_loaded_before_it() {
         matches!(last, Block::TurnEnd { loop_id, .. } if loop_id == "l1"),
         "the turn ends last: {last:?}"
     );
+}
+
+#[tokio::test]
+async fn one_compaction_is_reported_once_however_often_it_is_seen() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    let auto = json!({
+        "session_id": "s1",
+        "last_result": {"origin": "auto", "operation_id": "lup_1",
+                        "status": "compacted", "before_tokens": 41000,
+                        "after_tokens": 12000},
+        "budget": {"estimated_history_tokens": 12000},
+    });
+    fake.script("session.context", auto.clone());
+    fake.script(
+        "session.compact",
+        json!({
+            "origin": "manual", "operation_id": "tui-1", "status": "compacted",
+            "before_tokens": 12000, "after_tokens": 4000,
+        }),
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.on_action(Action::Compact);
+    settle(&mut app, &mut rx).await;
+    // A later refresh reports the same automatic compaction again.
+    app.on_msg(Msg::Op(Box::new(OpDone {
+        session: Some("s1".into()),
+        epoch: app.session.as_ref().unwrap().epoch,
+        kind: OpKind::Context(Ok(serde_json::from_value(auto).unwrap())),
+    })));
+
+    let markers: Vec<String> = app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::Compaction { operation_id, .. } => Some(operation_id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        markers,
+        vec!["auto-lup_1".to_owned(), "tui-1".to_owned()],
+        "one marker per compaction, manual before automatic on the same open"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_send_takes_back_its_prompt_and_queues_the_text() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    // Post-turn compaction still owns the session when the send arrives.
+    fake.script_error("turn.send", -32003, "session busy", "session_busy");
+    fake.script(
+        "session.state",
+        json!({"session_id": "s1", "status": "busy"}),
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.composer = "next thing".into();
+    app.on_action(Action::Submit);
+    settle(&mut app, &mut rx).await;
+
+    let session = app.session.as_ref().unwrap();
+    assert!(
+        !session
+            .transcript
+            .blocks()
+            .iter()
+            .any(|block| matches!(block, Block::User { .. })),
+        "a refused send must not stay in the transcript: {:?}",
+        session.transcript.blocks()
+    );
+    assert_eq!(
+        session
+            .queue
+            .iter()
+            .map(|queued| queued.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["next thing"],
+        "the text is queued rather than lost"
+    );
+    assert!(app.waiting_for_compaction);
+}
+
+#[tokio::test]
+async fn a_send_refused_for_another_reason_returns_the_text_to_the_composer() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script_error(
+        "turn.send",
+        -32015,
+        "history too large",
+        "history_too_large",
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.composer = "too much".into();
+    app.on_action(Action::Submit);
+    settle(&mut app, &mut rx).await;
+
+    assert_eq!(app.composer, "too much", "the draft comes back");
+    let session = app.session.as_ref().unwrap();
+    assert!(
+        !session
+            .transcript
+            .blocks()
+            .iter()
+            .any(|block| matches!(block, Block::User { .. }))
+    );
+    assert_eq!(app.last_error.as_deref(), Some("history too large"));
 }

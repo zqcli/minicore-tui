@@ -30,6 +30,9 @@ pub struct Session {
     /// Items that exist between the projection boundary and `loaded_from`.
     pub hidden_items: usize,
     pub loading_older: bool,
+    /// Set once the display floor was passed, so paging switches to the
+    /// canonical history behind the compaction summary.
+    pub reached_floor: bool,
     pub applied_steers: u64,
     /// Where the finished turn's streamed blocks start, kept after `live` is
     /// cleared so the durable items can replace exactly that region.
@@ -197,6 +200,7 @@ impl Session {
             loaded_from: 0,
             hidden_items: 0,
             loading_older: false,
+            reached_floor: false,
             applied_steers: 0,
             reconcile_from: None,
             next_turn_start: None,
@@ -220,6 +224,20 @@ impl Session {
 
     pub fn model<'a>(&self, models: &'a [ModelInfo]) -> Option<&'a ModelInfo> {
         models.iter().find(|model| model.id == self.info.model)
+    }
+
+    /// Removes the optimistic prompt block a refused send left behind, so the
+    /// transcript does not claim a turn the Agent never accepted.
+    pub fn unsend_prompt(&mut self, text: &str) {
+        if let Some(index) = self
+            .transcript
+            .blocks()
+            .iter()
+            .rposition(|block| matches!(block, Block::User { text: sent, .. } if sent == text))
+        {
+            self.transcript.remove(index);
+        }
+        self.next_turn_start = None;
     }
 
     pub fn push_follow_up(&mut self, text: String) {
@@ -389,23 +407,26 @@ impl Session {
     }
 
     /// Adds the one-line compaction marker. Loaded blocks are never removed.
-    pub fn push_compaction(
-        &mut self,
-        before: Option<u64>,
-        after: Option<u64>,
-        summary: Option<String>,
-    ) {
-        self.transcript.push(Block::Compaction {
-            before,
-            after,
-            summary,
-        });
-    }
-
-    pub fn push_compaction_result(&mut self, result: &CompactionResult) {
-        if result.status == CompactStatus::Compacted {
-            self.push_compaction(result.before_tokens, result.after_tokens, None);
+    /// Adds the one-line compaction marker. Loaded blocks are never removed,
+    /// and one operation is reported once: the manual response, the auto
+    /// report and a state refresh can all describe the same compaction.
+    pub fn push_compaction(&mut self, operation_id: &str, result: &CompactionResult) {
+        if result.status != CompactStatus::Compacted {
+            return;
         }
+        let known = self.transcript.blocks().iter().any(|block| {
+            matches!(block, Block::Compaction { operation_id: id, .. }
+                if !id.is_empty() && id == operation_id)
+        });
+        if known {
+            return;
+        }
+        self.transcript.push(Block::Compaction {
+            operation_id: operation_id.to_owned(),
+            before: result.before_tokens,
+            after: result.after_tokens,
+            summary: None,
+        });
     }
 }
 

@@ -225,6 +225,7 @@ pub fn update_session(client: Arc<Client>, tx: Tx, params: Value, session_id: St
 pub fn send_turn(client: Arc<Client>, tx: Tx, session_id: String, text: String, epoch: u64) {
     tokio::spawn(async move {
         let params = json!({"session_id": session_id, "text": text});
+        let sent_text = text;
         let result: Result<TurnSendResult, _> = client
             .call::<Value, TurnSendResult>(protocol::METHOD_TURN_SEND, &params, false)
             .await;
@@ -234,7 +235,7 @@ pub fn send_turn(client: Arc<Client>, tx: Tx, session_id: String, text: String, 
                 let _ = tx.send(Msg::Op(Box::new(OpDone {
                     session: Some(session_id),
                     epoch,
-                    kind: OpKind::Sent(Ok(turn.clone())),
+                    kind: OpKind::Sent(sent_text.clone(), Ok(turn.clone())),
                 })));
                 wait(client, tx, turn, epoch);
             }
@@ -242,7 +243,7 @@ pub fn send_turn(client: Arc<Client>, tx: Tx, session_id: String, text: String, 
                 let _ = tx.send(Msg::Op(Box::new(OpDone {
                     session: Some(session_id),
                     epoch,
-                    kind: OpKind::Sent(Err(error)),
+                    kind: OpKind::Sent(sent_text, Err(error)),
                 })));
             }
         }
@@ -319,13 +320,13 @@ pub fn compact(client: Arc<Client>, tx: Tx, session_id: String, operation_id: St
 /// so a pin is never cached across operations.
 pub fn load_tail(client: Arc<Client>, tx: Tx, session_id: String) {
     tokio::spawn(async move {
-        let result = match probe(client.as_ref(), &session_id).await {
+        let result = match probe(client.as_ref(), &session_id, "display").await {
             Ok(probe) => {
                 let total = probe.total;
                 let start = total
                     .saturating_sub(protocol::TAIL_ITEMS)
                     .max(probe.first_item);
-                read_window(client.as_ref(), &session_id, probe, start, total).await
+                read_window(client.as_ref(), &session_id, "display", probe, start, total).await
             }
             Err(error) => Err(error),
         };
@@ -336,16 +337,49 @@ pub fn load_tail(client: Arc<Client>, tx: Tx, session_id: String) {
 /// Reads the page immediately older than `before`.
 pub fn load_older(client: Arc<Client>, tx: Tx, session_id: String, before: usize) {
     tokio::spawn(async move {
-        let result = match probe(client.as_ref(), &session_id).await {
+        let result = match probe(client.as_ref(), &session_id, "display").await {
             Ok(probe) => {
                 let start = before
                     .saturating_sub(protocol::PAGE_LIMIT)
                     .max(probe.first_item);
-                read_window(client.as_ref(), &session_id, probe, start, before).await
+                read_window(
+                    client.as_ref(),
+                    &session_id,
+                    "display",
+                    probe,
+                    start,
+                    before,
+                )
+                .await
             }
             Err(error) => Err(error),
         };
         post(&tx, Some(&session_id), OpKind::Older(result));
+    });
+}
+
+/// Reads the page immediately older than `before` in the canonical view: the
+/// items the display projection collapsed into the compaction summary. A fresh
+/// pin with its own boundary is required, because the canonical history has
+/// items below the display `first_item`.
+pub fn load_canonical(client: Arc<Client>, tx: Tx, session_id: String, before: usize) {
+    tokio::spawn(async move {
+        let result = match probe(client.as_ref(), &session_id, "canonical").await {
+            Ok(probe) => {
+                let start = before.saturating_sub(protocol::PAGE_LIMIT);
+                read_window(
+                    client.as_ref(),
+                    &session_id,
+                    "canonical",
+                    probe,
+                    start,
+                    before,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        };
+        post(&tx, Some(&session_id), OpKind::Canonical(result));
     });
 }
 
@@ -357,12 +391,12 @@ struct Probe {
     first_item: usize,
 }
 
-async fn probe(client: &Client, session_id: &str) -> Result<Probe, protocol::RpcError> {
+async fn probe(client: &Client, session_id: &str, view: &str) -> Result<Probe, protocol::RpcError> {
     let params = json!({
         "session_id": session_id,
         "limit": protocol::PROBE_LIMIT,
         "max_bytes": protocol::PROBE_MAX_BYTES,
-        "view": "display",
+        "view": view,
     });
     let page: ReadSessionResult = client
         .call::<Value, ReadSessionResult>(protocol::METHOD_SESSION_READ, &params, true)
@@ -379,6 +413,7 @@ async fn probe(client: &Client, session_id: &str) -> Result<Probe, protocol::Rpc
 async fn read_window(
     client: &Client,
     session_id: &str,
+    view: &str,
     probe: Probe,
     start: usize,
     end: usize,
@@ -397,7 +432,7 @@ async fn read_window(
             "session_id": session_id,
             "limit": protocol::PAGE_LIMIT,
             "max_bytes": protocol::PAGE_MAX_BYTES,
-            "view": "display",
+            "view": view,
             "cursor": position.value(),
             "captured_end": probe.pin.captured_end,
             "history_revision": probe.pin.history_revision,
