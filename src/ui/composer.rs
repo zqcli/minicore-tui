@@ -300,6 +300,17 @@ impl Composer {
         if text.is_empty() {
             return;
         }
+        // A paste is not typing: it may carry CRLF or control bytes from
+        // whatever it was copied out of, and those would reach the Agent as
+        // literal characters. Normalize the way the native editor does.
+        let mut text = text.replace("\r\n", "\n").replace('\r', "\n");
+        if text.contains('\t') {
+            text = text.replace('\t', "    ");
+        }
+        if text.chars().any(|ch| ch != '\n' && ch < ' ') {
+            text.retain(|ch| ch == '\n' || ch >= ' ');
+        }
+        let text = text.as_str();
         self.snapshot();
         let start = self.cursor;
         self.text.insert_str(start, text);
@@ -779,6 +790,22 @@ mod tests {
 
     fn big_paste(lines: usize) -> String {
         (0..lines).map(|i| format!("line {i}\n")).collect()
+    }
+
+    #[test]
+    fn pasted_text_is_normalized_before_it_reaches_the_agent() {
+        let mut c = Composer::new();
+        c.insert("one\r\ntwo\rthree\tfour\u{7}five");
+        assert_eq!(c.text(), "one\ntwo\nthree    fourfive");
+        assert!(!c.text().contains('\r'));
+    }
+
+    #[test]
+    fn paste_token_counts_follow_the_normalized_text() {
+        let mut c = Composer::new();
+        c.insert(&"line\r\n".repeat(TOKEN_LINES + 1));
+        assert_eq!(c.pastes.len(), 1, "a long paste becomes one token");
+        assert_eq!(c.text().matches('\n').count(), TOKEN_LINES + 1);
     }
 
     #[test]
