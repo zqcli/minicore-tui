@@ -124,11 +124,11 @@ pub fn context(app: &App, styles: Styles, width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let used = usage
         .tokens
-        .map(crate::app::format_tokens)
+        .map(crate::ui::tokens)
         .unwrap_or_else(|| "unknown".into());
     let budget = usage
         .budget
-        .map(crate::app::format_tokens)
+        .map(crate::ui::tokens)
         .unwrap_or_else(|| "unknown".into());
     let percent = usage
         .percent
@@ -146,7 +146,7 @@ pub fn context(app: &App, styles: Styles, width: u16) -> Vec<Line<'static>> {
         lines.push(Line::styled(
             format!(
                 "Estimated history: {} (an estimate, not a count)",
-                crate::app::format_tokens(estimate)
+                crate::ui::tokens(estimate)
             ),
             styles.dim(),
         ));

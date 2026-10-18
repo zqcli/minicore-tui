@@ -181,8 +181,8 @@ fn footer(app: &App, styles: Styles) -> Line<'static> {
         spans.push(Span::styled(
             format!(
                 "   ↑{} ↓{} · ctx {context}",
-                crate::app::format_tokens(usage.input),
-                crate::app::format_tokens(usage.output),
+                crate::ui::tokens(usage.input),
+                crate::ui::tokens(usage.output),
             ),
             styles.subtle(),
         ));

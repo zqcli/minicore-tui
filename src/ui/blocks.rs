@@ -279,8 +279,8 @@ fn compaction(
     let text = match (before, after) {
         (Some(before), Some(after)) => format!(
             "─ Context compacted · {} → {} tokens ─",
-            crate::app::format_tokens(before),
-            crate::app::format_tokens(after)
+            crate::ui::tokens(before),
+            crate::ui::tokens(after)
         ),
         _ => "─ Context compacted ─".to_owned(),
     };

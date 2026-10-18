@@ -68,6 +68,21 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
+/// A token count for the UI: `950`, `12.3k`, `200k`, `1.8M`. Whole thousands and
+/// millions drop the `.0` so a budget reads as `200k`, not `200.0k`.
+pub fn tokens(value: u64) -> String {
+    fn scaled(value: f64, suffix: &str) -> String {
+        let text = format!("{value:.1}");
+        let text = text.strip_suffix(".0").unwrap_or(&text);
+        format!("{text}{suffix}")
+    }
+    match value {
+        value if value < 1_000 => value.to_string(),
+        value if value < 1_000_000 => scaled(value as f64 / 1_000.0, "k"),
+        value => scaled(value as f64 / 1_000_000.0, "M"),
+    }
+}
+
 /// Rows the composer, status line, notices and footer need at `width`. The
 /// composer wraps, so the band's height depends on the terminal width.
 pub fn bottom_height(app: &App, width: u16) -> u16 {
@@ -142,4 +157,17 @@ fn draw_fatal(frame: &mut Frame, area: Rect, styles: Styles, fatal: &crate::app:
     lines.push(Line::raw(""));
     lines.push(Line::styled("Press q to quit", styles.dim()));
     frame.render_widget(ratatui::widgets::Paragraph::new(lines), area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tokens;
+
+    #[test]
+    fn token_counts_drop_a_trailing_zero() {
+        assert_eq!(tokens(950), "950");
+        assert_eq!(tokens(12_300), "12.3k");
+        assert_eq!(tokens(200_000), "200k");
+        assert_eq!(tokens(1_800_000), "1.8M");
+    }
 }
