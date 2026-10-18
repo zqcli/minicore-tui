@@ -190,22 +190,29 @@ async fn run() -> i32 {
             dirty = true;
         }
 
-        // An open session request from the CLI is applied once, after bootstrap.
-        if app.ready && (open_selection.0.is_some() || open_selection.1) && app.session.is_none() {
-            if let Some(id) = open_selection.0.take() {
-                app.on_action(minicore_tui::app::Action::OpenSession(id));
-            } else {
-                open_selection.1 = false;
-                if let Some(session) = pick_recent(&app.sessions, &workspace) {
-                    app.on_action(minicore_tui::app::Action::OpenSession(session.clone()));
+        // The CLI's session request is filed once, after bootstrap. Opening is
+        // asynchronous, so the loop must remember it asked, or it would see an
+        // empty app and start a new session over the one being opened.
+        if app.ready && !app.session_loading() {
+            if open_selection.0.is_some() || open_selection.1 {
+                if let Some(id) = open_selection.0.take() {
+                    app.on_action(minicore_tui::app::Action::OpenSession(id));
                 } else {
-                    app.on_action(minicore_tui::app::Action::NewSession);
+                    open_selection.1 = false;
+                    match pick_recent(&app.sessions, &workspace) {
+                        Some(session) => {
+                            app.on_action(minicore_tui::app::Action::OpenSession(session.clone()));
+                        }
+                        None => {
+                            app.on_action(minicore_tui::app::Action::NewSession);
+                        }
+                    }
                 }
+                dirty = true;
+            } else if app.session.is_none() {
+                app.on_action(minicore_tui::app::Action::NewSession);
+                dirty = true;
             }
-            dirty = true;
-        } else if app.ready && app.session.is_none() && !open_selection.1 {
-            app.on_action(minicore_tui::app::Action::NewSession);
-            dirty = true;
         }
 
         if dirty && guard.is_active() && tokio::time::Instant::now() >= next_frame {

@@ -305,11 +305,10 @@ impl Session {
     }
 
     pub fn apply_state(&mut self, state: &SessionState) {
+        // `compaction` presence, not `status`, is how the Agent reports a
+        // compaction: it publishes `idle` while one still owns the session, so
+        // the reported progress must be taken as it comes.
         self.compaction = state.compaction.clone();
-        if state.status == crate::protocol::SessionStatus::Idle {
-            // A settled session that reports no compaction is free again.
-            self.compaction = None;
-        }
     }
 
     /// Records terminal facts for a tool card.

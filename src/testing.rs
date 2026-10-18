@@ -249,12 +249,52 @@ impl FakeAgent {
     /// Answers `method` with each result in turn, one per call, then falls back
     /// to the plain script. Paged reads need this: the probe and the page ask
     /// the same method with different cursors.
+    /// A value carrying an `error` object is used as the whole reply, so a
+    /// sequence can mix results and refusals.
     pub fn script_sequence(&self, method: &str, results: Vec<Value>) {
-        let queue: Replies = results.into_iter().map(Reply::result).collect();
+        let queue: Replies = results
+            .into_iter()
+            .map(|value| {
+                if value.get("error").is_some() {
+                    Reply {
+                        frame: value,
+                        delay: Duration::ZERO,
+                        hold: None,
+                    }
+                } else {
+                    Reply::result(value)
+                }
+            })
+            .collect();
         self.sequences
             .lock()
             .unwrap()
             .insert(method.to_owned(), queue);
+    }
+
+    /// Answers `method` with a JSON-RPC error on the first call, then with
+    /// `result`: the shape of a refusal that a retry overcomes.
+    pub fn script_error_then(
+        &self,
+        method: &str,
+        code: i64,
+        message: &str,
+        kind: &str,
+        result: Value,
+    ) {
+        let error = json!({"error": {"code": code, "message": message, "data": {"kind": kind}}});
+        self.sequences.lock().unwrap().insert(
+            method.to_owned(),
+            vec![
+                Reply {
+                    frame: error,
+                    delay: Duration::ZERO,
+                    hold: None,
+                },
+                Reply::result(result),
+            ]
+            .into(),
+        );
     }
 
     pub fn script_later(&self, method: &str, result: Value, delay: Duration) {
