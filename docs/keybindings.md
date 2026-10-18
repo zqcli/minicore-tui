@@ -99,7 +99,7 @@ inserts the selected path into the draft.
 |---|---|
 | Diff | `Tab` cycles turn / session / workspace scope; `↑`/`↓` select a file; `PageUp`/`PageDown` scroll the diff; `c` copies the diff. |
 | Tool output | `PageUp`/`PageDown` scroll; `Esc` returns. |
-| Context | `Esc` returns; it re-reads the context each time it opens. |
+| Context | `r` re-reads the context; `Esc` returns. It also re-reads each time it opens. |
 | Help | `Esc` or `q` returns. |
 
 ## Interaction Prompts
