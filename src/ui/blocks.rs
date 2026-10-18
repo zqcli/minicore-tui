@@ -185,15 +185,22 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
         styles,
         band,
     )];
-    let limit = if expanded { 200 } else { 4 };
+    // Folded bodies follow §5.5: a few lines of what the tool actually did, so
+    // the reader can judge it without opening anything.
+    let limit = if expanded { 200 } else { call.folded_rows() };
     let body: Vec<&str> = call.body_preview(limit);
     for line in &body {
+        let style = if call.is_patch() {
+            styles.patch(line)
+        } else {
+            styles.subtle()
+        };
         lines.push(card_row(
             &format!(
                 "  {}",
                 wrap::truncate(&wrap::sanitize(line), width.saturating_sub(INSET + 2))
             ),
-            styles.subtle(),
+            style,
             styles,
             band,
         ));
@@ -204,8 +211,13 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
         lines.push(card_row(
             &wrap::truncate(
                 &format!(
-                    "  … {} earlier lines · enter for full output",
-                    total - body.len()
+                    "  … {} earlier lines · {}",
+                    total - body.len(),
+                    if expanded {
+                        "enter for full output"
+                    } else {
+                        "ctrl+o to expand"
+                    }
                 ),
                 width.saturating_sub(INSET),
             ),

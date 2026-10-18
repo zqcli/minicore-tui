@@ -72,7 +72,7 @@ impl Theme {
 }
 
 /// The styles the UI asks for by role, so no renderer names a raw color.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Styles {
     pub theme: Theme,
     /// False under `NO_COLOR`: keep layout and attributes, drop color.

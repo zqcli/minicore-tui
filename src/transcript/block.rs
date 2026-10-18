@@ -192,6 +192,11 @@ impl ToolCall {
         }
     }
 
+    /// Whether the card's body is a patch, so its lines get diff colors.
+    pub fn is_patch(&self) -> bool {
+        self.expanded_input.is_some() && call_is_patch(&self.name)
+    }
+
     pub fn apply_display(&mut self, display: &ToolDisplay) {
         if !display.detail.is_empty() {
             self.detail = display.detail.clone();
@@ -228,6 +233,26 @@ impl ToolCall {
             self.truncated = true;
         }
     }
+}
+
+impl ToolCall {
+    /// Rows of body a folded card shows. Patches get the start of the diff so
+    /// the change is recognizable; commands get their output tail.
+    pub fn folded_rows(&self) -> usize {
+        if self.is_patch() {
+            8
+        } else if self.state == ToolState::Failed {
+            3
+        } else if self.name == "read" {
+            3
+        } else {
+            4
+        }
+    }
+}
+
+fn call_is_patch(name: &str) -> bool {
+    matches!(name, "edit" | "write" | "apply_patch" | "patch")
 }
 
 /// Lines of process output kept per card. The tool view pages the rest.

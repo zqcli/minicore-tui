@@ -22,6 +22,8 @@ pub struct RenderState {
     streams: HashMap<usize, Stream>,
     width: usize,
     fold: Option<Fold>,
+    /// The theme the cached streams were rendered with.
+    styles: Option<Styles>,
 }
 
 struct Stream {
@@ -32,10 +34,11 @@ struct Stream {
 impl RenderState {
     /// Refreshes the per-block state before a frame: drops renderers whose block
     /// stopped streaming and resets on a width or fold change.
-    pub fn prepare(&mut self, width: u16, fold: Fold, blocks: &[Block]) {
-        if self.width != width as usize || self.fold != Some(fold) {
+    pub fn prepare(&mut self, width: u16, fold: Fold, blocks: &[Block], styles: Styles) {
+        if self.width != width as usize || self.fold != Some(fold) || self.styles != Some(styles) {
             self.width = width as usize;
             self.fold = Some(fold);
+            self.styles = Some(styles);
             self.streams.clear();
         }
         self.streams
@@ -50,6 +53,7 @@ impl RenderState {
             expanded_tools: false,
             show_reasoning: false,
         });
+        self.styles = Some(styles);
         let Block::Assistant {
             reasoning,
             text,
@@ -80,14 +84,21 @@ impl RenderState {
     }
 }
 
+/// The live reasoning tail: the last few source lines, wrapped. Long reasoning
+/// must not push the answer off screen while it is being produced.
 fn reasoning_lines(
     reasoning: &mut StreamRenderer,
     styles: Styles,
     fold: Fold,
 ) -> Vec<Line<'static>> {
     let lines = reasoning.lines(&styles);
-    let keep = if fold.show_reasoning { usize::MAX } else { 3 };
-    let skip = lines.len().saturating_sub(keep);
+    if fold.show_reasoning {
+        return lines
+            .iter()
+            .map(|line| rails::reasoning_rail(line.clone(), styles))
+            .collect();
+    }
+    let skip = lines.len().saturating_sub(3);
     lines[skip..]
         .iter()
         .map(|line| rails::reasoning_rail(line.clone(), styles))

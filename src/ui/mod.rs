@@ -41,7 +41,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_fatal(frame, area, styles, fatal);
         return;
     }
-    let bottom = bottom_height(app).min(area.height.saturating_sub(1));
+    let bottom = bottom_height(app, area.width).min(area.height.saturating_sub(1));
     let [transcript, bottom] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(bottom)]).areas(area);
     draw_transcript(frame, transcript, app, styles);
@@ -53,9 +53,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
-/// Rows the composer, status line, notices and footer need.
-pub fn bottom_height(app: &App) -> u16 {
-    (status::lines(app, Styles::of(app.palette), 80).len() as u16).max(1)
+/// Rows the composer, status line, notices and footer need at `width`. The
+/// composer wraps, so the band's height depends on the terminal width.
+pub fn bottom_height(app: &App, width: u16) -> u16 {
+    (status::lines(app, Styles::of(app.palette), width).len() as u16).max(1)
 }
 
 fn draw_transcript(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
@@ -78,7 +79,7 @@ fn draw_transcript(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles)
         show_reasoning: app.show_reasoning,
     };
     let blocks = session.transcript.blocks();
-    app.layout.cache.state.prepare(width, fold, blocks);
+    app.layout.cache.state.prepare(width, fold, blocks, styles);
     let transcript = self::transcript::Transcript {
         blocks,
         revisions: session.transcript.revisions(),
