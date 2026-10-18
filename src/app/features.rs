@@ -135,6 +135,31 @@ pub fn interaction_options(kind: &InteractionKind) -> Vec<String> {
     }
 }
 
+/// What Ctrl+D in the sessions picker should do, decided from the row and the
+/// armed session so the key handler stays a thin shell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeleteStep {
+    /// Do nothing; there is no row.
+    Ignore,
+    /// The session is the one running in this TUI.
+    Resident,
+    /// First press: remember the id and ask again.
+    Arm,
+    /// Second press on the same id: delete it.
+    Delete,
+}
+
+pub fn delete_step(armed: Option<&str>, target: &str, resident: bool) -> DeleteStep {
+    if resident {
+        return DeleteStep::Resident;
+    }
+    if armed == Some(target) {
+        DeleteStep::Delete
+    } else {
+        DeleteStep::Arm
+    }
+}
+
 /// The default `/export` path: `./minicore-<session>-<date>.md`, in the current
 /// directory so the file lands where the user is working.
 pub fn export_path(session_id: &str) -> String {
@@ -274,6 +299,19 @@ mod tests {
         let path = export_path("ses_abc123");
         assert!(path.starts_with("minicore-abc123-"), "{path}");
         assert!(path.ends_with(".md"), "{path}");
+    }
+
+    #[test]
+    fn deleting_a_session_takes_two_presses_and_never_the_resident_one() {
+        assert_eq!(delete_step(None, "a", true), DeleteStep::Resident);
+        assert_eq!(
+            delete_step(Some("a"), "a", true),
+            DeleteStep::Resident,
+            "a second press must not delete the running session"
+        );
+        assert_eq!(delete_step(None, "a", false), DeleteStep::Arm);
+        assert_eq!(delete_step(Some("b"), "a", false), DeleteStep::Arm);
+        assert_eq!(delete_step(Some("a"), "a", false), DeleteStep::Delete);
     }
 
     #[test]

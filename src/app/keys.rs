@@ -108,30 +108,27 @@ impl App {
             .session
             .as_ref()
             .is_some_and(|session| session.info.session_id == id);
-        if resident {
-            self.notice(
+        match features::delete_step(self.delete_pending.as_deref(), &id, resident) {
+            features::DeleteStep::Ignore => {}
+            features::DeleteStep::Resident => self.notice(
                 crate::transcript::block::NoticeLevel::Error,
                 "Open another session before deleting this one",
-            );
-            return;
-        }
-        if self.delete_pending.as_deref() == Some(id.as_str()) {
-            self.delete_pending = None;
-            self.notice(
-                crate::transcript::block::NoticeLevel::Info,
-                "Deleting the session",
-            );
-            self.on_action(Action::DeleteSession(id));
-        } else {
-            let label = info
-                .title
-                .clone()
-                .unwrap_or_else(|| "this session".to_owned());
-            self.delete_pending = Some(id);
-            self.notice(
-                crate::transcript::block::NoticeLevel::Info,
-                format!("Press Ctrl+D again to delete \"{label}\" permanently"),
-            );
+            ),
+            features::DeleteStep::Arm => {
+                let label = info
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| "this session".to_owned());
+                self.delete_pending = Some(id);
+                self.notice(
+                    crate::transcript::block::NoticeLevel::Info,
+                    format!("Press Ctrl+D again to delete \"{label}\" permanently"),
+                );
+            }
+            features::DeleteStep::Delete => {
+                self.delete_pending = None;
+                self.on_action(Action::DeleteSession(id));
+            }
         }
     }
 
