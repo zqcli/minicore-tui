@@ -1674,6 +1674,7 @@ impl App {
             }
             AgentEvent::ToolArgumentsPreview {
                 call: identity,
+                tool_name,
                 generated,
                 discarded,
                 display,
@@ -1686,7 +1687,14 @@ impl App {
                 if let Some(call) = session.transcript.find_tool_mut(&key) {
                     call.apply_display(&display);
                 } else if !generated && !discarded {
-                    let mut call = ToolCall::new(key, "tool");
+                    // The preview may arrive before `tool_started`; the card is
+                    // created here so streaming arguments show as they generate.
+                    let name = if tool_name.is_empty() {
+                        "tool".to_owned()
+                    } else {
+                        tool_name
+                    };
+                    let mut call = ToolCall::new(key, name);
                     call.apply_display(&display);
                     session.transcript.push(Block::Tool(Box::new(call)));
                 }
@@ -1740,7 +1748,9 @@ impl App {
                     chunk.data.clone().into_bytes()
                 };
                 let text = String::from_utf8_lossy(&bytes).into_owned();
-                if let Some(call) = session.transcript.find_tool_mut(&data.tool_ref) {
+                if let Some(call) = session.transcript.find_tool_mut(&data.tool_ref)
+                    && let Some(text) = call.accept_chunk(chunk.stream, chunk, text)
+                {
                     call.push_output(&text);
                 }
                 true

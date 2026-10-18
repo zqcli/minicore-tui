@@ -77,6 +77,7 @@ pub enum AgentEvent {
         call: EventToolCall,
         attempt: u64,
         revision: u64,
+        tool_name: String,
         generated: bool,
         discarded: bool,
         display: ToolDisplay,
@@ -347,6 +348,8 @@ struct ToolPreviewData {
     request_index: u32,
     tool_call_id: String,
     #[serde(default)]
+    tool_name: String,
+    #[serde(default)]
     attempt: u64,
     #[serde(default)]
     revision: u64,
@@ -475,6 +478,7 @@ impl AgentEvent {
                 display: data.display,
             },
             Wire::ToolArgumentsPreview { data } => Self::ToolArgumentsPreview {
+                tool_name: data.tool_name,
                 meta: data.meta,
                 call: EventToolCall {
                     turn: data.turn,

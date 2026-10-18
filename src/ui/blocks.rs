@@ -319,6 +319,7 @@ mod tests {
             output: vec!["OK".into()],
             output_lines: Some(12),
             truncated: false,
+            stream_offsets: [None, None],
             full_output: None,
         };
         let block = Block::Tool(Box::new(call));
