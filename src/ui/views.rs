@@ -147,10 +147,10 @@ pub fn hunk_lines(page: &DiffPage, palette: &Palette) -> Vec<Line<'static>> {
                 LineKind::Removed => ("-", Style::default().fg(palette.removed)),
                 LineKind::Context | LineKind::Unknown => (" ", Style::default().fg(palette.dim)),
             };
-            lines.push(Line::from(Span::styled(
-                format!("{sign}{}", clean(&line.text)),
-                style,
-            )));
+            // Diff text carries the original line terminator; the row already
+            // ends, so only the trailing newline is dropped.
+            let text = clean(line.text.trim_end_matches(['\n', '\r']));
+            lines.push(Line::from(Span::styled(format!("{sign}{text}"), style)));
         }
     }
     if !page.complete {
@@ -895,6 +895,33 @@ mod tests {
         assert_eq!(lines[0].spans[0].style.fg, Some(palette.hunk));
         assert_eq!(lines[2].spans[0].style.fg, Some(palette.removed));
         assert_eq!(lines[3].spans[0].style.fg, Some(palette.added));
+    }
+
+    #[test]
+    fn diff_text_never_leaks_the_original_line_terminator() {
+        let palette = Palette::dark();
+        let page: DiffPage = serde_json::from_value(json!({
+            "change_ref": "tool:abc", "path": "a.rs", "complete": true,
+            "hunks": [{"old_start": 1, "old_count": 0, "new_start": 1, "new_count": 2,
+                       "lines": [
+                         {"kind": "added", "text": "added();\n", "line_complete": true},
+                         {"kind": "removed", "text": "gone();\r\n", "line_complete": true},
+                       ]}]
+        }))
+        .unwrap();
+        let lines = hunk_lines(&page, &palette);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(text[1], "+added();");
+        assert_eq!(text[2], "-gone();");
+        assert!(!text[1].contains('\n'), "{text:?}");
     }
 
     #[test]

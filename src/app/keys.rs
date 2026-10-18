@@ -3,7 +3,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-use super::{Action, App, Overlay, features};
+use super::{Action, App, Overlay, features, tasks};
 use crate::app::commands::{self, Executed};
 
 /// What one input event resolved to.
@@ -239,8 +239,23 @@ impl App {
                 *selected = step(*selected, len);
             }
             Overlay::Diff { file, scroll, .. } => {
-                if *scroll == 0 {
-                    *file = step(*file, self.diff.files.len());
+                let next = step(*file, self.diff.files.len());
+                if next != *file {
+                    *file = next;
+                    *scroll = 0;
+                    self.diff.select(next);
+                    // The hunks of the newly selected file are paged in.
+                    if let Some(record) = self.diff_records.get(next).cloned()
+                        && let Some(session) = self.session.as_ref()
+                    {
+                        tasks::load_diff(
+                            self.client.clone(),
+                            self.tx.clone(),
+                            session.info.session_id.clone(),
+                            record.change_ref,
+                            record.path,
+                        );
+                    }
                 }
             }
             Overlay::Help => {
