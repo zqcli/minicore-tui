@@ -724,6 +724,7 @@ pub fn load_diff(
             next_cursor: None,
             complete: true,
             binary: false,
+            truncated: false,
             availability: None,
             stale: false,
             truncated: false,

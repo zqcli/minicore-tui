@@ -1678,3 +1678,107 @@ async fn a_compaction_reported_while_idle_keeps_its_progress() {
     assert_eq!(progress.phase, crate::protocol::CompactionPhase::Merging);
     assert_eq!(app.status_label(), Some("Compacting context"));
 }
+
+#[tokio::test]
+async fn recalling_a_queued_message_never_overwrites_the_draft() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    fake.script_held("turn.wait", json!({"turn": turn("l1")}));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.composer.set_text("first");
+    app.on_action(Action::Submit);
+    pump(&mut app, &mut rx, |app| app.is_busy()).await;
+
+    // Queue one message, then start a fresh draft.
+    app.composer.set_text("queued");
+    app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+    app.on_action(Action::QueueFollowUp);
+    app.composer.set_text("half-typed thought");
+
+    app.on_action(Action::RecallQueued);
+
+    assert_eq!(
+        app.composer.text(),
+        "half-typed thought",
+        "the draft is what the user is writing, not what the queue holds"
+    );
+    assert_eq!(
+        app.session.as_ref().unwrap().queue.len(),
+        1,
+        "the message stays queued for when there is room"
+    );
+    assert!(
+        app.notices
+            .iter()
+            .any(|notice| notice.text.contains("Clear the draft")),
+        "the refusal says why: {:?}",
+        app.notices
+    );
+}
+
+#[tokio::test]
+async fn a_busy_send_behind_a_queued_follow_up_keeps_fifo_and_sends_each_text_once() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    // Every send is refused as busy while a compaction owns the session: the
+    // refused prompt is queued, never dropped and never duplicated.
+    let busy = json!({"error": {"code": -32003, "message": "session is busy",
+                                 "data": {"kind": "busy"}}});
+    fake.script_sequence("turn.send", vec![busy.clone(), busy]);
+    fake.script_held("turn.wait", json!({"turn": turn("l1")}));
+
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    // Queue a follow-up while busy, then submit another message that is refused.
+    app.composer.set_text("queued first");
+    app.on_action(Action::QueueFollowUp);
+    app.composer.set_text("typed second");
+    app.on_action(Action::Submit);
+    step_until(&mut app, &mut rx, |app| !app.is_busy()).await;
+
+    // Both texts reach the Agent exactly once, oldest first.
+    let sends: Vec<String> = fake
+        .calls("turn.send")
+        .iter()
+        .filter_map(|call| call["text"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(
+        sends,
+        ["queued first", "typed second"],
+        "the older message goes first, each exactly once"
+    );
+
+    // A refused send never leaves a prompt behind, so the transcript cannot
+    // claim a turn the Agent did not accept.
+    let prompts: Vec<&str> = app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        prompts.is_empty(),
+        "no phantom prompts for refused sends: {prompts:?}"
+    );
+    assert!(
+        app.composer.is_empty(),
+        "nothing is left in the draft: {:?}",
+        app.composer.text()
+    );
+}

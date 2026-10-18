@@ -439,8 +439,6 @@ pub struct App {
     /// `session.update`, so a flag is never silently dropped.
     pub launch: LaunchSettings,
     pub composer: crate::ui::composer::Composer,
-    pub draft_history: VecDeque<String>,
-    pub draft_cursor: Option<usize>,
     pub notices: VecDeque<Notice>,
     pub scroll: Scroll,
     pub tools_expanded: bool,
@@ -518,8 +516,6 @@ impl App {
             profiles: Vec::new(),
             launch: LaunchSettings::default(),
             composer: crate::ui::composer::Composer::new(),
-            draft_history: VecDeque::new(),
-            draft_cursor: None,
             notices: VecDeque::new(),
             scroll: Scroll::Follow,
             tools_expanded: false,
@@ -605,7 +601,7 @@ impl App {
             }
             Msg::DraftEdited(draft) => {
                 // An empty file is a deliberate blank draft, not a cancel.
-                self.composer.set_text(draft.as_deref().unwrap_or_default());
+                self.composer.set_text(&draft.unwrap_or_default());
                 true
             }
             Msg::Quit => {
@@ -824,7 +820,6 @@ impl App {
         if text.trim().is_empty() {
             return true;
         }
-        self.remember_draft(&text);
         if self.is_busy() {
             self.steer(text);
         } else {
@@ -839,7 +834,6 @@ impl App {
         if text.trim().is_empty() {
             return true;
         }
-        self.remember_draft(&text);
         if self.is_busy() {
             if let Some(session) = self.session.as_mut() {
                 session.push_follow_up(text);
@@ -869,16 +863,6 @@ impl App {
                 .and_then(|session| session.presentation.as_ref()),
             &self.palette,
         );
-    }
-
-    fn remember_draft(&mut self, text: &str) {
-        if self.draft_history.back().map(String::as_str) != Some(text) {
-            self.draft_history.push_back(text.to_owned());
-            while self.draft_history.len() > 100 {
-                self.draft_history.pop_front();
-            }
-        }
-        self.draft_cursor = None;
     }
 
     fn send(&mut self, text: String) {
@@ -1122,7 +1106,17 @@ impl App {
         }
     }
 
+    /// Puts the oldest queued follow-up back in the composer. A draft already
+    /// in the composer is never overwritten: the queue item stays where it is
+    /// until there is room for it.
     fn recall_queued(&mut self) {
+        if !self.composer.is_empty() {
+            self.notice(
+                NoticeLevel::Info,
+                "Clear the draft before recalling a queued message",
+            );
+            return;
+        }
         let Some(session) = self.session.as_mut() else {
             return;
         };
