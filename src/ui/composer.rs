@@ -120,6 +120,20 @@ struct Snapshot {
     pastes: Vec<Paste>,
 }
 
+/// Text from a paste, an editor or a file is not typing: CRLF and lone CR
+/// become line breaks, tabs become four spaces and other control bytes are
+/// dropped, so nothing but real newlines reaches the Agent.
+fn normalize(text: &str) -> String {
+    let mut text = text.replace("\r\n", "\n").replace('\r', "\n");
+    if text.contains('\t') {
+        text = text.replace('\t', "    ");
+    }
+    if text.chars().any(|ch| ch != '\n' && ch < ' ') {
+        text.retain(|ch| ch == '\n' || ch >= ' ');
+    }
+    text
+}
+
 #[derive(Default)]
 pub struct Composer {
     text: String,
@@ -187,8 +201,11 @@ impl Composer {
 
     /// Replaces the draft, dropping tokens and history.
     pub fn set_text(&mut self, text: &str) {
+        // Text also arrives from outside the keyboard — the external editor and
+        // a draft file. A CRLF there would reach the Agent as a literal CR.
+        let text = normalize(text);
         self.text.clear();
-        self.text.push_str(text);
+        self.text.push_str(&text);
         self.cursor = self.text.len();
         self.pastes.clear();
         self.undo.clear();
@@ -300,16 +317,7 @@ impl Composer {
         if text.is_empty() {
             return;
         }
-        // A paste is not typing: it may carry CRLF or control bytes from
-        // whatever it was copied out of, and those would reach the Agent as
-        // literal characters. Normalize the way the native editor does.
-        let mut text = text.replace("\r\n", "\n").replace('\r', "\n");
-        if text.contains('\t') {
-            text = text.replace('\t', "    ");
-        }
-        if text.chars().any(|ch| ch != '\n' && ch < ' ') {
-            text.retain(|ch| ch == '\n' || ch >= ' ');
-        }
+        let text = normalize(text);
         let text = text.as_str();
         self.snapshot();
         let start = self.cursor;
@@ -798,6 +806,16 @@ mod tests {
         c.insert("one\r\ntwo\rthree\tfour\u{7}five");
         assert_eq!(c.text(), "one\ntwo\nthree    fourfive");
         assert!(!c.text().contains('\r'));
+    }
+
+    #[test]
+    fn text_from_the_editor_is_normalized_too() {
+        // An editor that saves CRLF must not hand the Agent a literal CR.
+        let mut c = Composer::new();
+        c.set_text("alpha\r\nbeta\rgamma");
+        assert_eq!(c.text(), "alpha\nbeta\ngamma");
+        assert!(!c.text().contains('\r'));
+        assert_eq!(c.cursor, c.text().len(), "the cursor sits at the end");
     }
 
     #[test]
