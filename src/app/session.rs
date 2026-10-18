@@ -405,7 +405,6 @@ impl Session {
         });
     }
 
-    /// Adds the one-line compaction marker. Loaded blocks are never removed.
     /// Adds the one-line compaction marker. Loaded blocks are never removed,
     /// and one operation is reported once: the manual response, the auto
     /// report and a state refresh can all describe the same compaction.
@@ -424,6 +423,7 @@ impl Session {
             operation_id: operation_id.to_owned(),
             before: result.before_tokens,
             after: result.after_tokens,
+            coverage: result.covered_item_count.zip(result.retained_item_count),
             summary: None,
         });
     }

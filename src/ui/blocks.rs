@@ -56,8 +56,17 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
             operation_id: _,
             before,
             after,
+            coverage,
             summary,
-        } => compaction(*before, *after, summary.as_deref(), styles, width, fold),
+        } => compaction(
+            *before,
+            *after,
+            *coverage,
+            summary.as_deref(),
+            styles,
+            width,
+            fold,
+        ),
         Block::Notice { level, text } => {
             let style = match level {
                 NoticeLevel::Error => styles.error(),
@@ -269,6 +278,7 @@ fn turn_end(
 fn compaction(
     before: Option<u64>,
     after: Option<u64>,
+    coverage: Option<(usize, usize)>,
     summary: Option<&str>,
     styles: Styles,
     width: usize,
@@ -280,7 +290,14 @@ fn compaction(
             crate::ui::tokens(before),
             crate::ui::tokens(after)
         ),
-        _ => "─ Context compacted ─".to_owned(),
+        // An automatic compaction usually reports no token figures; the item
+        // counts say what it did instead of leaving a bare marker.
+        _ => match coverage {
+            Some((covered, kept)) => {
+                format!("─ Context compacted · {covered} items · {kept} kept ─")
+            }
+            None => "─ Context compacted ─".to_owned(),
+        },
     };
     let mut lines = vec![Line::styled(wrap::truncate(&text, width), styles.dim())];
     if fold.show_reasoning
@@ -487,10 +504,27 @@ mod tests {
             operation_id: "tui-1".into(),
             before: Some(32_200),
             after: Some(2_700),
+            coverage: None,
             summary: None,
         };
         let body = text(&render(&block, styles(), 80, fold()));
         assert!(body[0].contains("32.2k → 2.7k"), "{body:?}");
+    }
+
+    /// An automatic compaction reports no token figures, so the marker says what
+    /// it covered instead of degenerating to a bare line.
+    #[test]
+    fn a_compaction_without_token_figures_reports_its_coverage() {
+        let block = Block::Compaction {
+            operation_id: "auto-lup_1".into(),
+            before: None,
+            after: None,
+            coverage: Some((177, 0)),
+            summary: None,
+        };
+        let body = text(&render(&block, styles(), 80, fold()));
+        assert!(body[0].contains("177 items"), "{body:?}");
+        assert!(body[0].contains("0 kept"), "{body:?}");
     }
 
     #[test]
