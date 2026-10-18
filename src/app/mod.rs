@@ -9,6 +9,8 @@
 pub mod actions;
 pub mod commands;
 pub mod keys;
+#[cfg(test)]
+mod lifecycle_tests;
 pub mod session;
 pub mod tasks;
 
@@ -261,9 +263,10 @@ pub struct App {
     /// Mouse selection: the cell the drag started at and where it is now.
     pub selection_start: Option<(u16, u16)>,
     pub selection_end: Option<(u16, u16)>,
-    /// The transcript's line cache. Owned by the renderer; the reducer only
-    /// invalidates it through block revisions.
+    /// The transcript's line cache and viewport height. Owned by the renderer;
+    /// the reducer only invalidates it through block revisions.
     pub layout: crate::transcript::layout::Layout,
+    pub viewport: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -307,6 +310,7 @@ impl App {
             selection_start: None,
             selection_end: None,
             layout: crate::transcript::layout::Layout::default(),
+            viewport: 1,
         }
     }
 
@@ -853,29 +857,34 @@ impl App {
     }
 
     /// Moves the transcript view by `delta` rows, switching to an anchored
-    /// position so new output cannot move what is being read.
-    pub fn scroll_by(&mut self, delta: isize) {
-        let Some(session) = self.session.as_ref() else {
-            return;
-        };
-        let total = session.transcript.len();
-        if total == 0 {
+    /// position so new output cannot move what is being read. `viewport` is
+    /// the number of rows the transcript occupies on screen.
+    pub fn scroll_by(&mut self, delta: isize, viewport: usize) {
+        if self.session.is_none() {
             return;
         }
-        // Row addressing is the UI layer's job; a signed block step keeps the
-        // reducer dependency-free and is exact enough for wheel and PgUp.
-        let (block, offset) = match self.scroll {
-            Scroll::Follow => (total.saturating_sub(1), 0),
-            Scroll::Anchor { block, offset } => (block, offset as isize),
+        let total = self.layout.total_rows();
+        let viewport = viewport.max(1);
+        if total <= viewport {
+            return;
+        }
+        let max_top = total - viewport;
+        let current = match self.scroll {
+            Scroll::Follow => max_top,
+            Scroll::Anchor { block, offset } => self.layout.anchor_row(block, offset).min(max_top),
         };
-        let next = block as isize + delta;
-        if next >= total as isize - 1 && delta > 0 {
+        let next = (current as isize + delta).clamp(0, max_top as isize) as usize;
+        if next == max_top {
             self.scroll = Scroll::Follow;
             return;
         }
-        let block = next.clamp(0, total as isize - 1) as usize;
-        let offset = if next <= 0 { 0 } else { offset.max(0) as u16 };
+        let (block, offset) = self.layout.anchor(next);
         self.scroll = Scroll::Anchor { block, offset };
+    }
+
+    /// Rows the transcript occupies, as the last frame saw it.
+    pub fn viewport_rows(&self) -> usize {
+        self.viewport.max(1)
     }
 
     fn next_epoch(&mut self) -> u64 {
@@ -1095,8 +1104,16 @@ impl App {
             Some(Block::EarlierHistory { .. })
         ));
         session.transcript.remove_front(skip);
+        let added = blocks.len();
         for block in blocks.into_iter().rev() {
             session.transcript.insert(0, block);
+        }
+        // Prepending must not move what the user is reading: the anchor block
+        // keeps its identity, so its index shifts by what was inserted (minus
+        // the placeholder that was replaced).
+        if let Scroll::Anchor { block, offset } = self.scroll {
+            let block = block + added;
+            self.scroll = Scroll::Anchor { block, offset };
         }
         session.loaded_from = page.from;
         session.hidden_items = page.from;
@@ -1376,16 +1393,18 @@ impl App {
                 use crate::protocol::CompactStatus;
                 match result.status {
                     CompactStatus::Compacted => {
+                        // The marker is added to what is already loaded. The
+                        // summary is a new snapshot beside the history, so the
+                        // blocks on screen stay: a reload would erase them.
                         if let Some(session) = self.session.as_mut() {
                             session.push_compaction_result(result);
                         }
-                        // The projection changed: reload the tail so the summary
-                        // and the retained window are consistent.
                         if let Some(session) = self.session.as_ref() {
-                            tasks::load_tail(
+                            tasks::presentation(
                                 self.client.clone(),
                                 self.tx.clone(),
                                 session.info.session_id.clone(),
+                                session.epoch,
                             );
                         }
                     }

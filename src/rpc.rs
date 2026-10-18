@@ -49,6 +49,7 @@ pub struct Client {
     queries: Arc<Semaphore>,
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
     closed: Arc<Mutex<Option<String>>>,
+    incoming: mpsc::Sender<Incoming>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
@@ -85,11 +86,34 @@ impl Client {
             .take()
             .ok_or_else(|| RpcError::closed("agent stderr is unavailable"))?;
 
+        let client = Self::start(stdin, stdout, stderr, incoming);
+        let waiter = tokio::spawn(waiter_task(
+            child,
+            client.closed.clone(),
+            client.pending.clone(),
+            client.incoming.clone(),
+        ));
+        client.tasks.lock().unwrap().push(waiter);
+        Ok(client)
+    }
+
+    /// Wires a client to already-open pipes. The child-process launcher and the
+    /// tests that drive a scripted Agent both go through here.
+    pub fn start<W, R, E>(
+        stdin: W,
+        stdout: R,
+        stderr: E,
+        incoming: mpsc::Sender<Incoming>,
+    ) -> Arc<Self>
+    where
+        W: AsyncWrite + Unpin + Send + 'static,
+        R: AsyncRead + Unpin + Send + 'static,
+        E: AsyncRead + Unpin + Send + 'static,
+    {
         let (outbound, outbound_rx) = mpsc::channel::<Vec<u8>>(OUTBOUND_CAPACITY);
         let pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>> = Arc::default();
         let stderr_tail: Arc<Mutex<VecDeque<String>>> = Arc::default();
         let closed: Arc<Mutex<Option<String>>> = Arc::default();
-
         let writer = tokio::spawn(writer_task(stdin, outbound_rx));
         let reader = tokio::spawn(reader_task(
             stdout,
@@ -98,22 +122,16 @@ impl Client {
             closed.clone(),
         ));
         let stderr_reader = tokio::spawn(stderr_task(stderr, stderr_tail.clone()));
-        let waiter = tokio::spawn(waiter_task(
-            child,
-            closed.clone(),
-            pending.clone(),
-            incoming,
-        ));
-
-        Ok(Arc::new(Self {
+        Arc::new(Self {
             outbound,
             pending,
             next_id: AtomicU64::new(1),
             queries: Arc::new(Semaphore::new(QUERY_PERMITS)),
             stderr_tail,
             closed,
-            tasks: Mutex::new(vec![writer, reader, stderr_reader, waiter]),
-        }))
+            incoming,
+            tasks: Mutex::new(vec![writer, reader, stderr_reader]),
+        })
     }
 
     /// Sends one request and awaits its response. Query methods take one of

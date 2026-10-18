@@ -393,7 +393,10 @@ impl App {
     }
 
     fn scroll_pages(&mut self, direction: isize) -> Input {
-        self.scroll_by(direction * 10);
+        self.scroll_by(
+            direction * self.viewport_rows() as isize,
+            self.viewport_rows(),
+        );
         Input::Consumed
     }
 
@@ -414,11 +417,11 @@ impl App {
     pub fn on_mouse(&mut self, mouse: MouseEvent) -> Input {
         match mouse.kind {
             MouseEventKind::ScrollUp => {
-                self.scroll_by(-3);
+                self.scroll_by(-3, self.viewport_rows());
                 Input::Consumed
             }
             MouseEventKind::ScrollDown => {
-                self.scroll_by(3);
+                self.scroll_by(3, self.viewport_rows());
                 Input::Consumed
             }
             MouseEventKind::Down(MouseButton::Left) => {
