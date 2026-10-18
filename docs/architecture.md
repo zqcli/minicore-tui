@@ -142,12 +142,13 @@ small semaphore covers query methods, and the few call sites that can hit
 backoff.
 
 The handshake calls `agent.ping` and requires `protocol_version == 1` plus the
-capabilities actually used: `session.read`, `session.read.display`,
+twelve capabilities actually used: `session.read`, `session.read.display`,
 `tool.read`, `tool.read.display`, `tool.output`, `turn.result`,
-`session.context`, `session.presentation`, `workspace.status`,
-`workspace.files`, `workspace.search`, `changes.list`, `changes.diff`. Every
-one is an entry in the Agent's advertised capability list, so this is a check
-of capability, not of method name. Shutdown sends `agent.shutdown`, waits up to
+`session.context`, `workspace.status`, `workspace.files`, `workspace.search`,
+`changes.list`, `changes.diff`. Every one is an entry in the Agent's advertised
+capability list, so this is a check of capability, not of method name.
+`session.presentation` is a method with no capability string, so it is called
+unconditionally rather than gated. Shutdown sends `agent.shutdown`, waits up to
 3 s, then kills a child that did not exit.
 
 ## Domain model
