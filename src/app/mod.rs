@@ -118,8 +118,11 @@ pub enum OpKind {
         DiffScope,
         Result<Vec<crate::protocol::ChangeRecord>, RpcError>,
     ),
-    /// The hunks of one change record.
-    DiffFile(String, Result<crate::protocol::changes::DiffPage, RpcError>),
+    /// The hunks of one changed path, read for one scope.
+    DiffFile(
+        DiffQuery,
+        Result<crate::protocol::changes::DiffPage, RpcError>,
+    ),
     /// Workspace paths for the `@` picker.
     Files(Result<Vec<String>, RpcError>),
 }
@@ -181,6 +184,14 @@ pub enum DiffScope {
     Workspace,
 }
 
+/// Which path's hunks a diff read is for, and which scope asked. An answer is
+/// only allowed to paint the pane when it matches the diff that is open.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiffQuery {
+    pub scope: DiffScope,
+    pub path: String,
+}
+
 /// A picker or view a command or key opens.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Panel {
@@ -230,14 +241,7 @@ impl App {
                 }
             }
             Panel::Context => {
-                if let Some(session) = self.session.as_ref() {
-                    // A fresh report: the view must not show a stale ledger.
-                    tasks::context(
-                        self.client.clone(),
-                        self.tx.clone(),
-                        session.info.session_id.clone(),
-                    );
-                }
+                self.refresh_context();
                 Overlay::Context
             }
             Panel::Help => {
@@ -347,6 +351,7 @@ impl App {
             DiffScope::Workspace => "Diff · workspace",
         };
         let mut view = crate::ui::views::DiffView::new(title);
+        view.scope = scope;
         if let Some(loop_id) = latest_loop(session) {
             let files = collect_changed_files(&session.transcript, &loop_id);
             view.set_files(files);
@@ -477,6 +482,11 @@ pub struct App {
     pub session_rows: Vec<crate::protocol::SessionInfo>,
     /// Confirm a delete with a second Ctrl+D before it runs.
     pub delete_pending: Option<String>,
+    /// Change records of each diff row that still needs its line counts, so a
+    /// row is measured once and a revisited row is not re-read.
+    pub diff_pending: Vec<(crate::app::DiffQuery, Vec<String>)>,
+    /// The one diff read in flight; a row is never read twice at once.
+    pub diff_in_flight: Option<crate::app::DiffQuery>,
     /// Where the transcript was drawn last frame, for mouse hit-testing.
     pub transcript_area: Option<ratatui::layout::Rect>,
     /// The rows the last frame drew, so selection copies what is on screen.
@@ -549,6 +559,8 @@ impl App {
             help_scroll: 0,
             session_rows: Vec::new(),
             delete_pending: None,
+            diff_pending: Vec::new(),
+            diff_in_flight: None,
             transcript_area: None,
             rendered: crate::ui::selection::Screen::default(),
             edit_request: None,
@@ -601,7 +613,7 @@ impl App {
             }
             Msg::DraftEdited(draft) => {
                 // An empty file is a deliberate blank draft, not a cancel.
-                self.composer.set_text(&draft.unwrap_or_default());
+                self.composer.set_text(draft.as_deref().unwrap_or_default());
                 true
             }
             Msg::Quit => {
@@ -1109,6 +1121,18 @@ impl App {
     /// Puts the oldest queued follow-up back in the composer. A draft already
     /// in the composer is never overwritten: the queue item stays where it is
     /// until there is room for it.
+    /// Asks for a fresh context ledger: the view must never show a stale one.
+    pub fn refresh_context(&mut self) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        tasks::context(
+            self.client.clone(),
+            self.tx.clone(),
+            session.info.session_id.clone(),
+        );
+    }
+
     fn recall_queued(&mut self) {
         if !self.composer.is_empty() {
             self.notice(
@@ -1117,11 +1141,23 @@ impl App {
             );
             return;
         }
-        let Some(session) = self.session.as_mut() else {
+        let Some(text) = self
+            .session
+            .as_mut()
+            .and_then(|session| session.take_follow_up())
+        else {
             return;
         };
-        if let Some(text) = session.take_follow_up() {
-            self.composer.set_text(&text);
+        self.composer.set_text(&text);
+    }
+
+    /// Returns submitted text to the composer: appended to a draft the user
+    /// typed meanwhile rather than replacing it, and one undo step either way.
+    fn restore_draft(&mut self, text: &str) {
+        if self.composer.is_empty() {
+            self.composer.set_text(text);
+        } else {
+            self.composer.insert(text);
         }
     }
 
@@ -1155,6 +1191,12 @@ impl App {
         let total = layout.total_rows();
         let height = layout.viewport.height.max(viewport).max(1);
         if total <= height {
+            // Nothing to scroll, but the head of the loaded window may still
+            // be reachable: a short display page is exactly when the older
+            // history is worth asking for.
+            if delta < 0 {
+                self.load_older();
+            }
             return;
         }
         let max_top = total - height;
@@ -1334,7 +1376,7 @@ impl App {
                 }
             },
             OpKind::Files(result) => self.on_files(result),
-            OpKind::ChangeFiles(_, result) => self.on_change_files(result),
+            OpKind::ChangeFiles(scope, result) => self.on_change_files(*scope, result),
             OpKind::DiffFile(path, result) => self.on_diff_file(path, result),
             OpKind::Copied(_)
             | OpKind::Created(_)
@@ -1431,7 +1473,11 @@ impl App {
         session.loaded_from = page.from;
         session.hidden_items = page.from;
         install_items(session, &page.items);
-        if page.has_more {
+        // `from` is what is actually behind this window. `has_more` only speaks
+        // for the display projection, and an automatic compaction can cover
+        // every item, leaving a transcript that would otherwise claim there is
+        // nothing to read while the history is still there.
+        if page.from > 0 {
             session.transcript.insert(
                 0,
                 Block::EarlierHistory {
@@ -1449,14 +1495,13 @@ impl App {
             Ok(page) => page,
             Err(error) => {
                 if error.code == crate::protocol::INVALID_STATE {
-                    // The prefix changed (a new compaction); reload the tail.
-                    if let Some(session) = self.session.as_ref() {
-                        tasks::load_tail(
-                            self.client.clone(),
-                            self.tx.clone(),
-                            session.info.session_id.clone(),
-                        );
-                    }
+                    // The task already retried once against a fresh pin, so the
+                    // prefix is beyond repair right now; keep what is loaded
+                    // instead of dropping the reader's view.
+                    self.notice(
+                        NoticeLevel::Info,
+                        "Could not load older history yet; try again in a moment",
+                    );
                 } else {
                     self.error(error);
                 }
@@ -1478,11 +1523,18 @@ impl App {
             session.transcript.blocks().first(),
             Some(Block::EarlierHistory { .. })
         ));
+        if blocks.is_empty() && skip == 0 {
+            // Nothing came back and nothing was replaced: the reader is at the
+            // boundary, so stop asking rather than looping on the same request.
+            session.loaded_from = 0;
+            return true;
+        }
         session.transcript.remove_front(skip);
         let added = blocks.len();
         for block in blocks.into_iter().rev() {
             session.transcript.insert(0, block);
         }
+        let mut prefix = added.saturating_sub(skip);
         // Prepending must not move what the user is reading: the anchor block
         // keeps its identity, so its index shifts by what was inserted (minus
         // the placeholder that was replaced).
@@ -1490,9 +1542,15 @@ impl App {
             let block = block + added;
             self.scroll = Scroll::Anchor { block, offset };
         }
-        session.loaded_from = page.from;
+        // A compaction can raise the floor above where the reader is. The rows on
+        // screen still reach down to what was loaded, so the read position stays
+        // there: moving it to the new floor would skip the items in between once
+        // the next below-floor read asks the canonical view.
+        // Rows on screen reach down to what was already loaded, so the read
+        // position never moves up past it.
+        session.loaded_from = page.from.min(session.loaded_from);
         session.first_item = page.floor;
-        session.hidden_items = page.from;
+        session.hidden_items = session.loaded_from;
         // A page reaching the display floor leaves the reader at the compaction
         // summary with more history behind it; otherwise the label just states
         // how much older history remains unloaded.
@@ -1503,7 +1561,9 @@ impl App {
                     hidden_items: page.from,
                 },
             );
+            prefix += 1;
         }
+        session.rebase_after_prepend(prefix);
         // Blocks built from a page carry an empty session id; the tool views
         // read it back when a card is opened.
         session.sync_session_id_into_tools();
@@ -1520,7 +1580,16 @@ impl App {
                 if let Some(session) = self.session.as_mut() {
                     session.loading_older = false;
                 }
-                self.error(error);
+                if error.code == crate::protocol::INVALID_STATE {
+                    // Retried already; the prefix is beyond repair for now, so
+                    // keep what is loaded instead of dropping the reader's view.
+                    self.notice(
+                        NoticeLevel::Info,
+                        "Could not load older history yet; try again in a moment",
+                    );
+                } else {
+                    self.error(error);
+                }
                 return true;
             }
         };
@@ -1545,6 +1614,7 @@ impl App {
                 offset,
             };
         }
+        session.rebase_after_prepend(added);
         session.loaded_from = page.from;
         session.hidden_items = page.from;
         session.sync_session_id_into_tools();
@@ -1744,11 +1814,12 @@ impl App {
                 true
             }
             Err(error) => {
-                // Any other refusal never reached the Agent.
+                // Any other refusal never reached the Agent. The text goes back
+                // without erasing anything typed while the send was in flight.
                 if let Some(session) = self.session.as_mut() {
                     session.unsend_prompt(text);
                 }
-                self.composer.set_text(text);
+                self.restore_draft(text);
                 self.error(error);
                 true
             }
@@ -2000,6 +2071,7 @@ impl App {
     /// hunks.
     fn on_change_files(
         &mut self,
+        scope: DiffScope,
         result: &Result<Vec<crate::protocol::ChangeRecord>, RpcError>,
     ) -> bool {
         let records = match result {
@@ -2010,18 +2082,27 @@ impl App {
             }
         };
         // One row per path: a turn can change the same file several times, and
-        // repeating the row would misreport how many files changed.
+        // repeating the row would misreport how many files changed. A row keeps
+        // its measurement only while its records are the same set: a new record
+        // on the same path changes the diff, so the old count would be stale.
+        let previous = std::mem::take(&mut self.diff.files);
         let mut files: Vec<crate::ui::views::DiffFile> = Vec::new();
         for record in &records {
             match files.iter_mut().find(|file| file.path == record.path) {
                 Some(file) => file.change_refs.push(record.change_ref.clone()),
-                None => files.push(crate::ui::views::DiffFile {
-                    path: record.path.clone(),
-                    kind: record.kind,
-                    added: 0,
-                    removed: 0,
-                    change_refs: vec![record.change_ref.clone()],
-                }),
+                None => {
+                    let measured = previous
+                        .iter()
+                        .find(|file| file.path == record.path)
+                        .filter(|file| file.change_refs == [record.change_ref.clone()]);
+                    files.push(crate::ui::views::DiffFile {
+                        path: record.path.clone(),
+                        kind: record.kind,
+                        lines: measured.and_then(|file| file.lines),
+                        failed: measured.is_some_and(|file| file.failed),
+                        change_refs: vec![record.change_ref.clone()],
+                    });
+                }
             }
         }
         self.diff.set_files(files);
@@ -2030,57 +2111,138 @@ impl App {
             return true;
         }
         self.diff.status.clear();
-        self.load_selected_diff();
+        // A row that has never been read says so in its line column, so the
+        // list would carry unknowns until each is visited. Measure them all
+        // once; a row that comes back is not read again. The selected row is
+        // first in the queue, so its read paints the pane too.
+        self.diff_pending.clear();
+        self.diff_in_flight = None;
+        let needs_counts: Vec<(DiffQuery, Vec<String>)> = self
+            .diff
+            .files
+            .iter()
+            .filter(|file| file.lines.is_none() && !file.failed && !file.change_refs.is_empty())
+            .map(|file| {
+                (
+                    DiffQuery {
+                        scope,
+                        path: file.path.clone(),
+                    },
+                    file.change_refs.clone(),
+                )
+            })
+            .collect();
+        self.diff_pending = needs_counts;
+        self.measure_next_diff_row();
+        if self.diff_in_flight.is_none() {
+            // Every row was already measured: try to paint the selected one.
+            self.load_selected_diff();
+        }
         true
     }
 
-    /// Loads the selected file's records. Every record of that path is paged
-    /// in and merged, so the diff reflects the whole turn or session.
-    fn load_selected_diff(&mut self) {
-        let Some(session) = self.session.as_ref() else {
+    /// Starts the next unmeasured row's read, one at a time so the Agent's
+    /// query allowance is not spent all at once.
+    fn measure_next_diff_row(&mut self) {
+        if self.diff_in_flight.is_some() {
+            return;
+        }
+        let Some((query, refs)) = self.diff_pending.first().cloned() else {
             return;
         };
+        self.diff_pending.remove(0);
+        self.start_diff_read(query, refs);
+    }
+
+    /// Loads the selected file's records. Every record of that path is paged
+    /// in and merged, so the diff reflects the whole turn or session. When the
+    /// row still needs measuring, this read is its measurement too.
+    fn load_selected_diff(&mut self) {
         let Some(file) = self.diff.files.get(self.diff.selected) else {
             return;
         };
         if file.change_refs.is_empty() {
             return;
         }
+        let query = DiffQuery {
+            scope: self.diff.scope,
+            path: file.path.clone(),
+        };
+        if self.diff_in_flight.as_ref() == Some(&query) {
+            return;
+        }
+        let refs = file.change_refs.clone();
+        self.diff_pending.retain(|(pending, _)| *pending != query);
+        self.start_diff_read(query, refs);
+    }
+
+    /// Posts one diff read and remembers it, so nothing reads the same row on
+    /// top of itself.
+    fn start_diff_read(&mut self, query: DiffQuery, refs: Vec<String>) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        self.diff_in_flight = Some(query.clone());
         tasks::load_diff(
             self.client.clone(),
             self.tx.clone(),
             session.info.session_id.clone(),
-            file.path.clone(),
-            file.change_refs.clone(),
+            query,
+            refs,
         );
     }
 
     fn on_diff_file(
         &mut self,
-        _path: &str,
+        query: &DiffQuery,
         result: &Result<crate::protocol::changes::DiffPage, RpcError>,
     ) -> bool {
+        let shown = self.diff.scope == query.scope
+            && self
+                .diff
+                .current()
+                .is_some_and(|file| file.path == query.path);
+        let file = self
+            .diff
+            .files
+            .iter_mut()
+            .find(|file| file.path == query.path);
         match result {
             Ok(page) => {
                 let lines = crate::ui::views::hunk_lines(page, &self.palette);
                 let (added, removed) = count_hunks(&lines);
-                self.diff.hunks = lines;
-                self.diff.scroll = 0;
-                // A record whose before and after content match has no hunks
-                // at all: say that, instead of implying there is a diff.
-                self.diff.status = if page.hunks.is_empty() && !page.binary {
-                    "No line changes in these records (content unchanged).".into()
-                } else {
-                    String::new()
-                };
-                if let Some(file) = self.diff.files.get_mut(self.diff.selected) {
-                    file.added = added;
-                    file.removed = removed;
+                if let Some(file) = file {
+                    file.lines = Some((added, removed));
+                    file.failed = false;
+                }
+                if self.diff_in_flight.as_ref() == Some(query) {
+                    self.diff_in_flight = None;
+                }
+                self.measure_next_diff_row();
+                if shown {
+                    self.diff.hunks = lines;
+                    self.diff.scroll = 0;
+                    // A record whose before and after content match has no
+                    // hunks at all: say that instead of implying a diff.
+                    self.diff.status = if page.hunks.is_empty() && !page.binary {
+                        "No line changes in these records (content unchanged).".into()
+                    } else {
+                        String::new()
+                    };
                 }
             }
             Err(error) => {
-                self.diff.hunks.clear();
-                self.diff.status = error.message.clone();
+                if let Some(file) = file {
+                    file.failed = true;
+                }
+                if self.diff_in_flight.as_ref() == Some(query) {
+                    self.diff_in_flight = None;
+                }
+                self.measure_next_diff_row();
+                if shown {
+                    self.diff.hunks.clear();
+                    self.diff.status = error.message.clone();
+                }
             }
         }
         true
@@ -2734,8 +2896,8 @@ fn collect_changed_files(
         files.push(crate::ui::views::DiffFile {
             path: path.to_owned(),
             kind: crate::protocol::ChangeKind::Modified,
-            added: 0,
-            removed: 0,
+            lines: None,
+            failed: false,
             change_refs: Vec::new(),
         });
     }
@@ -2768,8 +2930,21 @@ fn count_hunks(lines: &[ratatui::text::Line<'static>]) -> (usize, usize) {
 fn session_label(info: &SessionInfo) -> String {
     match info.title.as_deref() {
         Some(title) if !title.trim().is_empty() => title.to_owned(),
-        _ => info.session_id.clone(),
+        // Untitled sessions get their short id, never the 32-hex one: a closed
+        // session cannot be read, so there is no first prompt to borrow.
+        _ => short_session_id(&info.session_id).to_owned(),
     }
+}
+
+/// `ses_8ca3c4cf...` → `ses_8ca3c4`, enough to tell sessions apart in a row.
+pub fn short_session_id(session_id: &str) -> &str {
+    let body = session_id.strip_prefix("ses_").unwrap_or(session_id);
+    let cut = body
+        .char_indices()
+        .nth(6)
+        .map_or(body.len(), |(index, _)| index);
+    let start = session_id.len() - body.len();
+    &session_id[..start + cut]
 }
 
 /// Rendered lines back to text, for `/copy` in a view.

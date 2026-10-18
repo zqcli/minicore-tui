@@ -342,6 +342,26 @@ impl Session {
         self.transcript.truncate(start);
     }
 
+    /// Moves the boundaries stated as transcript indices when blocks were put in
+    /// front of them. A page can arrive at any point around a send: the turn's
+    /// region may be recorded but not yet streaming, so every boundary that is an
+    /// index moves, not only the live one. Left alone it would point into the
+    /// freshly loaded history and delete it when the turn reconciles.
+    pub fn rebase_after_prepend(&mut self, delta: usize) {
+        if delta == 0 {
+            return;
+        }
+        if let Some(live) = self.live.as_mut() {
+            live.start += delta;
+        }
+        if let Some(start) = self.next_turn_start.as_mut() {
+            *start += delta;
+        }
+        if let Some((_, start)) = self.reconcile_from.as_mut() {
+            *start += delta;
+        }
+    }
+
     /// Replaces the region a finished turn streamed into with its durable
     /// items. The turn-end line stays last, so it is lifted out first and put
     /// back after the items. Returns whether a turn was waiting to reconcile.
@@ -405,7 +425,6 @@ impl Session {
         });
     }
 
-    /// Adds the one-line compaction marker. Loaded blocks are never removed.
     /// Adds the one-line compaction marker. Loaded blocks are never removed,
     /// and one operation is reported once: the manual response, the auto
     /// report and a state refresh can all describe the same compaction.
@@ -424,6 +443,7 @@ impl Session {
             operation_id: operation_id.to_owned(),
             before: result.before_tokens,
             after: result.after_tokens,
+            coverage: result.covered_item_count.zip(result.retained_item_count),
             summary: None,
         });
     }

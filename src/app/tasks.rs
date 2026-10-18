@@ -360,25 +360,37 @@ async fn read_tail(client: &Client, session_id: &str) -> Result<History, protoco
 /// Reads the page immediately older than `before`.
 pub fn load_older(client: Arc<Client>, tx: Tx, session_id: String, before: usize) {
     tokio::spawn(async move {
-        let result = match probe(client.as_ref(), &session_id, "display").await {
-            Ok(probe) => {
-                let start = before
-                    .saturating_sub(protocol::PAGE_LIMIT)
-                    .max(probe.first_item);
-                read_window(
-                    client.as_ref(),
-                    &session_id,
-                    "display",
-                    probe,
-                    start,
-                    before,
-                )
-                .await
-            }
-            Err(error) => Err(error),
-        };
+        let result = older(client.as_ref(), &session_id, before).await;
         post(&tx, Some(&session_id), OpKind::Older(result));
     });
+}
+
+/// An older page, retried once with a fresh pin: a turn appending while the page
+/// is read moves the captured end, and a refused pin is the documented signal to
+/// probe again rather than to give up on what is already loaded.
+async fn older(
+    client: &Client,
+    session_id: &str,
+    before: usize,
+) -> Result<History, protocol::RpcError> {
+    match read_older(client, session_id, before).await {
+        Err(error) if error.code == protocol::INVALID_STATE => {
+            read_older(client, session_id, before).await
+        }
+        result => result,
+    }
+}
+
+async fn read_older(
+    client: &Client,
+    session_id: &str,
+    before: usize,
+) -> Result<History, protocol::RpcError> {
+    let probe = probe(client, session_id, "display").await?;
+    let start = before
+        .saturating_sub(protocol::PAGE_LIMIT)
+        .max(probe.first_item);
+    read_window(client, session_id, "display", probe, start, before).await
 }
 
 /// Reads the page immediately older than `before` in the canonical view: the
@@ -387,23 +399,34 @@ pub fn load_older(client: Arc<Client>, tx: Tx, session_id: String, before: usize
 /// items below the display `first_item`.
 pub fn load_canonical(client: Arc<Client>, tx: Tx, session_id: String, before: usize) {
     tokio::spawn(async move {
-        let result = match probe(client.as_ref(), &session_id, "canonical").await {
-            Ok(probe) => {
-                let start = before.saturating_sub(protocol::PAGE_LIMIT);
-                read_window(
-                    client.as_ref(),
-                    &session_id,
-                    "canonical",
-                    probe,
-                    start,
-                    before,
-                )
-                .await
-            }
-            Err(error) => Err(error),
-        };
+        let result = canonical(client.as_ref(), &session_id, before).await;
         post(&tx, Some(&session_id), OpKind::Canonical(result));
     });
+}
+
+/// A page below the display floor, retried once with a fresh pin like the
+/// display pages: the same stale-pin race applies to the canonical view.
+async fn canonical(
+    client: &Client,
+    session_id: &str,
+    before: usize,
+) -> Result<History, protocol::RpcError> {
+    match read_canonical(client, session_id, before).await {
+        Err(error) if error.code == protocol::INVALID_STATE => {
+            read_canonical(client, session_id, before).await
+        }
+        result => result,
+    }
+}
+
+async fn read_canonical(
+    client: &Client,
+    session_id: &str,
+    before: usize,
+) -> Result<History, protocol::RpcError> {
+    let probe = probe(client, session_id, "canonical").await?;
+    let start = before.saturating_sub(protocol::PAGE_LIMIT);
+    read_window(client, session_id, "canonical", probe, start, before).await
 }
 
 /// Result of the one-item probe that establishes a pin and the window bounds.
@@ -695,7 +718,7 @@ pub fn load_diff(
     client: Arc<Client>,
     tx: Tx,
     session_id: String,
-    path: String,
+    query: crate::app::DiffQuery,
     change_refs: Vec<String>,
 ) {
     tokio::spawn(async move {
@@ -704,7 +727,11 @@ pub fn load_diff(
             let page = match page_diff(&client, &session_id, change_ref).await {
                 Ok(page) => page,
                 Err(error) => {
-                    post(&tx, Some(&session_id), OpKind::DiffFile(path, Err(error)));
+                    post(
+                        &tx,
+                        Some(&session_id),
+                        OpKind::DiffFile(query.clone(), Err(error)),
+                    );
                     return;
                 }
             };
@@ -719,7 +746,7 @@ pub fn load_diff(
         }
         let page = merged.unwrap_or_else(|| protocol::changes::DiffPage {
             change_ref: String::new(),
-            path: path.clone(),
+            path: query.path.clone(),
             hunks: Vec::new(),
             next_cursor: None,
             complete: true,
@@ -728,7 +755,7 @@ pub fn load_diff(
             availability: None,
             stale: false,
         });
-        post(&tx, Some(&session_id), OpKind::DiffFile(path, Ok(page)));
+        post(&tx, Some(&session_id), OpKind::DiffFile(query, Ok(page)));
     });
 }
 

@@ -131,6 +131,10 @@ impl App {
                 self.delete_confirm();
                 Input::Consumed
             }
+            KeyCode::Char('r') if matches!(self.overlay, Overlay::Context) => {
+                self.refresh_context();
+                Input::Consumed
+            }
             KeyCode::Char('y') if matches!(self.overlay, Overlay::Interaction) => {
                 self.interaction_choice = 0;
                 self.on_overlay_accept()
@@ -196,36 +200,19 @@ impl App {
 
     /// Enter / Shift+Enter in the find bar: jump to the next or previous match.
     fn find_step(&mut self, forward: bool) {
-        let mut matches = Vec::new();
-        let mut current = 0usize;
-        if let Overlay::Find {
-            matches: found,
-            current: at,
-            ..
-        } = &self.overlay
-        {
-            matches = found.clone();
-            current = *at;
-        }
+        let Overlay::Find {
+            matches, current, ..
+        } = &mut self.overlay
+        else {
+            return;
+        };
         if matches.is_empty() {
             return;
         }
-        let next = super::features::step_match(current, matches.len(), forward);
-        if let Some(anchor) = matches.get(next) {
-            self.scroll = super::Scroll::Anchor {
-                block: anchor.block,
-                offset: 0,
-            };
-        }
-        if let Overlay::Find {
-            current: at,
-            matches: found,
-            ..
-        } = &mut self.overlay
-        {
-            *at = next;
-            found.clone_from(&matches);
-        }
+        let next = super::features::step_match(*current, matches.len(), forward);
+        *current = next;
+        let block = matches[next].block;
+        self.scroll = super::Scroll::Anchor { block, offset: 0 };
     }
 
     /// Moves the selected row of the active overlay by `delta`.
@@ -674,6 +661,9 @@ impl App {
             block: 0,
             offset: 0,
         };
+        // The top of the loaded window is also where the next page begins, so
+        // the same request that a scroll to the edge makes belongs here.
+        self.on_action(super::Action::LoadOlder);
         Input::Consumed
     }
 

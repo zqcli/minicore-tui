@@ -120,6 +120,20 @@ struct Snapshot {
     pastes: Vec<Paste>,
 }
 
+/// Text from a paste, an editor or a file is not typing: CRLF and lone CR
+/// become line breaks, tabs become four spaces and other control bytes are
+/// dropped, so nothing but real newlines reaches the Agent.
+fn normalize(text: &str) -> String {
+    let mut text = text.replace("\r\n", "\n").replace('\r', "\n");
+    if text.contains('\t') {
+        text = text.replace('\t', "    ");
+    }
+    if text.chars().any(|ch| ch != '\n' && ch < ' ') {
+        text.retain(|ch| ch == '\n' || ch >= ' ');
+    }
+    text
+}
+
 #[derive(Default)]
 pub struct Composer {
     text: String,
@@ -187,8 +201,11 @@ impl Composer {
 
     /// Replaces the draft, dropping tokens and history.
     pub fn set_text(&mut self, text: &str) {
+        // Text also arrives from outside the keyboard — the external editor and
+        // a draft file. A CRLF there would reach the Agent as a literal CR.
+        let text = normalize(text);
         self.text.clear();
-        self.text.push_str(text);
+        self.text.push_str(&text);
         self.cursor = self.text.len();
         self.pastes.clear();
         self.undo.clear();
@@ -238,6 +255,12 @@ impl Composer {
     // ---- undo ---------------------------------------------------------
 
     fn snapshot(&mut self) {
+        // A new edit leaves the redo branch behind, so it is dropped here
+        // rather than at commit: otherwise typing between undo and redo would
+        // keep the abandoned text reachable and Ctrl+Y would mix it back in.
+        if self.gesture.is_none() {
+            self.redo.clear();
+        }
         self.gesture.get_or_insert_with(|| Snapshot {
             text: self.text.clone(),
             cursor: self.cursor,
@@ -300,16 +323,7 @@ impl Composer {
         if text.is_empty() {
             return;
         }
-        // A paste is not typing: it may carry CRLF or control bytes from
-        // whatever it was copied out of, and those would reach the Agent as
-        // literal characters. Normalize the way the native editor does.
-        let mut text = text.replace("\r\n", "\n").replace('\r', "\n");
-        if text.contains('\t') {
-            text = text.replace('\t', "    ");
-        }
-        if text.chars().any(|ch| ch != '\n' && ch < ' ') {
-            text.retain(|ch| ch == '\n' || ch >= ' ');
-        }
+        let text = normalize(text);
         let text = text.as_str();
         self.snapshot();
         let start = self.cursor;
@@ -798,6 +812,16 @@ mod tests {
         c.insert("one\r\ntwo\rthree\tfour\u{7}five");
         assert_eq!(c.text(), "one\ntwo\nthree    fourfive");
         assert!(!c.text().contains('\r'));
+    }
+
+    #[test]
+    fn text_from_the_editor_is_normalized_too() {
+        // An editor that saves CRLF must not hand the Agent a literal CR.
+        let mut c = Composer::new();
+        c.set_text("alpha\r\nbeta\rgamma");
+        assert_eq!(c.text(), "alpha\nbeta\ngamma");
+        assert!(!c.text().contains('\r'));
+        assert_eq!(c.cursor, c.text().len(), "the cursor sits at the end");
     }
 
     #[test]
@@ -1294,5 +1318,96 @@ mod tests {
         c.insert("   ");
         c.submit();
         assert!(!c.history_prev());
+    }
+}
+
+#[cfg(test)]
+mod undo_gesture_tests {
+    use super::*;
+
+    /// Typing, then undo, then redo: the ordinary editing loop must work
+    /// without the caller having to close the gesture first.
+    #[test]
+    fn type_undo_redo_is_one_round_trip() {
+        let mut c = Composer::new();
+        for ch in "word".chars() {
+            c.type_char(ch);
+        }
+        assert!(c.undo(), "undo after typing must do something");
+        assert_eq!(c.text(), "");
+        assert!(c.redo());
+        assert_eq!(c.text(), "word");
+    }
+
+    /// An undo that closes a live gesture must not also swallow the earlier
+    /// step: one Ctrl+Z after two separate words removes the second word.
+    #[test]
+    fn undo_closes_the_gesture_and_takes_one_step() {
+        let mut c = Composer::new();
+        for ch in "one ".chars() {
+            c.type_char(ch);
+        }
+        c.end_gesture();
+        for ch in "two".chars() {
+            c.type_char(ch);
+        }
+        assert!(c.undo());
+        assert_eq!(c.text(), "one ");
+        assert!(c.undo());
+        assert_eq!(c.text(), "");
+        assert!(c.redo());
+        assert_eq!(c.text(), "one ");
+    }
+
+    #[test]
+    fn undo_after_a_paste_removes_the_whole_paste() {
+        let mut c = Composer::new();
+        c.type_char('a');
+        c.end_gesture();
+        c.insert("pasted");
+        assert!(c.undo());
+        assert_eq!(c.text(), "a");
+        assert!(c.redo());
+        assert_eq!(c.text(), "apasted");
+    }
+
+    #[test]
+    fn undo_after_a_kill_restores_the_killed_text() {
+        let mut c = Composer::new();
+        for ch in "keep this".chars() {
+            c.type_char(ch);
+        }
+        c.end_gesture();
+        c.delete_word_left();
+        assert_eq!(c.text(), "keep ");
+        assert!(c.undo());
+        assert_eq!(c.text(), "keep this");
+    }
+
+    #[test]
+    fn undo_after_a_clear_restores_the_draft() {
+        let mut c = Composer::new();
+        for ch in "draft".chars() {
+            c.type_char(ch);
+        }
+        c.end_gesture();
+        c.clear();
+        assert_eq!(c.text(), "");
+        assert!(c.undo());
+        assert_eq!(c.text(), "draft");
+    }
+
+    /// Redo must not resurrect a typing gesture either: after undo + new
+    /// typing, the old redo branch is gone.
+    #[test]
+    fn typing_after_undo_drops_the_redo_branch() {
+        let mut c = Composer::new();
+        for ch in "ab".chars() {
+            c.type_char(ch);
+        }
+        assert!(c.undo());
+        c.type_char('c');
+        assert!(!c.redo(), "the abandoned branch is not reachable");
+        assert_eq!(c.text(), "c");
     }
 }

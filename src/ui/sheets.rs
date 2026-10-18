@@ -69,7 +69,8 @@ pub fn session_row(info: &crate::protocol::SessionInfo, resident: bool, now_seco
     let title = info
         .title
         .clone()
-        .unwrap_or_else(|| info.session_id.clone());
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or_else(|| crate::app::short_session_id(&info.session_id).to_owned());
     let label = format!("{}{}", if resident { "● " } else { "  " }, title);
     let age = age_label(&info.updated_at, now_seconds);
     let detail = format!("{} · {age}", info.model);
@@ -137,7 +138,8 @@ mod tests {
 
     fn info() -> SessionInfo {
         serde_json::from_value(json!({
-            "session_id": "ses_1", "title": "Fix the parser", "model": "gpt-6-luna",
+            "session_id": "ses_1acdef0123456789abcdef", "title": "Fix the parser",
+            "model": "gpt-6-luna",
             "updated_at": "2026-01-02T03:04:05.006Z"
         }))
         .unwrap()
@@ -207,11 +209,16 @@ mod tests {
     }
 
     #[test]
-    fn an_untitled_session_falls_back_to_its_id() {
+    fn an_untitled_session_falls_back_to_its_short_id() {
         let mut info = info();
         info.title = None;
         let row = session_row(&info, false, now());
-        assert!(row.label.contains("ses_1"), "{:?}", row.label);
+        assert_eq!(row.label, "  ses_1acdef", "{:?}", row.label);
+        assert!(
+            !row.label.contains("0123456789"),
+            "a 32-hex id is unreadable as a row label: {:?}",
+            row.label
+        );
     }
 
     #[test]
