@@ -375,13 +375,13 @@ impl Builder<'_> {
         let inner = self.width.saturating_sub(2).max(1);
         let border = self.styles.code_border();
         let content = self.styles.code();
-        if code.lang.is_empty() {
+        let label = format!(" {} ", code.lang);
+        if code.lang.is_empty() || wrap::width(&label) + 3 > inner {
             self.out.push(Line::from(Span::styled(
                 format!("╭{}╮", "─".repeat(inner)),
                 border,
             )));
         } else {
-            let label = format!(" {} ", code.lang);
             let rest = inner.saturating_sub(wrap::width(&label) + 1);
             self.out.push(Line::from(vec![
                 Span::styled("╭─", border),
@@ -548,12 +548,27 @@ impl StreamRenderer {
         }
     }
 
+    /// Appends a delta. The scan and the prefix cache survive, so only the tail
+    /// is parsed again on the next render.
     pub fn push(&mut self, delta: &str) {
         self.text.push_str(delta);
     }
 
-    pub fn text(&self) -> &str {
-        &self.text
+    /// Points the renderer at the block's authoritative text. The text only
+    /// ever grows, so the cached prefix stays valid.
+    pub fn reset(&mut self, text: &str) {
+        if self.text != text {
+            self.text.clear();
+            self.text.push_str(text);
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    pub fn width(&self) -> usize {
+        self.width
     }
 
     pub fn set_width(&mut self, width: usize) {
@@ -677,11 +692,11 @@ impl Scan {
             }
             return;
         }
-        if let Some(blank) = self.blank.take() {
-            if !self.continues(content, trimmed) {
-                self.commit(blank);
-                self.open = BlockKind::None;
-            }
+        if let Some(blank) = self.blank.take()
+            && !self.continues(content, trimmed)
+        {
+            self.commit(blank);
+            self.open = BlockKind::None;
         }
         let indent = content.len() - trimmed.len();
         let standalone =
@@ -763,10 +778,10 @@ fn is_list_marker(trimmed: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::theme::{Palette, Styles};
+    use crate::theme::{Palette, ThemeKind};
 
     fn styles() -> Styles {
-        Styles::new(Palette::Dark, false)
+        Styles::new(Palette::for_kind(ThemeKind::Dark), false)
     }
 
     fn plain(text: &str, width: usize) -> Vec<String> {
@@ -792,7 +807,7 @@ mod tests {
             rendered[0].spans[0]
                 .style
                 .fg
-                .is_some_and(|color| color == crate::ui::theme::DARK.heading)
+                .is_some_and(|color| color == styles().theme.heading)
         );
     }
 

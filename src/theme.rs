@@ -1,247 +1,207 @@
-//! Color themes: the built-in dark and light palettes from the development
-//! spec. No external theme files; themes are selected by CLI flag only.
+//! Two flat palettes. Colors stay close to the reference screenshot: a dark
+//! page, a slightly lifted composer band, a purple thinking rail and a blue
+//! user rail. `NO_COLOR` keeps attributes but drops color.
 
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier, Style};
 
-use crate::protocol::Reasoning;
-
-/// Selects one of the built-in color palettes.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ThemeKind {
     #[default]
     Dark,
     Light,
 }
 
-/// The complete color set used by the TUI renderers, per the v0.2 spec:
-/// base palette, borders, message and tool cards, markdown, and the
-/// per-reasoning-level thinking colors.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Theme {
-    pub page_bg: Color,
-    pub text: Color,
-    pub muted: Color,
-    pub dim: Color,
-    pub accent: Color,
-    pub border: Color,
-    pub border_accent: Color,
-    pub border_muted: Color,
-    pub success: Color,
-    pub warning: Color,
-    pub error: Color,
-    pub selected_bg: Color,
-    pub user_message_bg: Color,
-    pub rail_editor: Color,
-    pub scrollbar_track: Color,
-    pub scrollbar_thumb: Color,
-    pub rail_thinking: Color,
-    pub selection_fg: Color,
-    pub selection_bg: Color,
-    /// Card surfaces for summaries, notices, and neutral tool cards.
-    pub card_bg: Color,
-    pub tool_title: Color,
-    pub tool_output: Color,
-    pub tool_muted: Color,
-    pub tool_pending_bg: Color,
-    pub tool_pending_rail: Color,
-    pub tool_success_bg: Color,
-    pub tool_success_rail: Color,
-    pub tool_error_bg: Color,
-    pub tool_error_rail: Color,
-    pub tool_cancelled_bg: Color,
-    pub tool_cancelled_rail: Color,
-    pub bash_execution_bg: Color,
-    pub bash_execution_rail: Color,
-    pub command_output_rail: Color,
-    pub resource_status_rail: Color,
-    pub footer_sky: Color,
-    pub footer_mint: Color,
-    pub footer_amber: Color,
-    pub footer_lilac: Color,
-    pub footer_text: Color,
-    pub footer_muted: Color,
-    pub md_heading: Color,
-    pub md_link: Color,
-    pub md_link_url: Color,
-    pub md_code: Color,
-    pub md_code_block: Color,
-    pub md_code_border: Color,
-    pub md_quote: Color,
-    pub md_list_bullet: Color,
-    pub thinking_disabled: Color,
-    pub thinking_auto: Color,
-    pub thinking_low: Color,
-    pub thinking_medium: Color,
-    pub thinking_high: Color,
-    pub thinking_xhigh: Color,
-    pub thinking_max: Color,
-    pub thinking_ultra: Color,
-}
-
 impl ThemeKind {
-    pub fn theme(self) -> Theme {
-        Theme::for_kind(self)
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "dark" => Some(Self::Dark),
+            "light" => Some(Self::Light),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Dark => "dark",
+            Self::Light => "light",
+        }
     }
 }
 
-impl Theme {
+/// One resolved set of UI colors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Palette {
+    /// Ordinary text.
+    pub text: Color,
+    /// Secondary text: hints, durations, metadata.
+    pub dim: Color,
+    /// Faint text inside cards and markers.
+    pub faint: Color,
+    pub accent: Color,
+    pub user_rail: Color,
+    pub thinking_rail: Color,
+    pub composer_bg: Color,
+    pub selection_bg: Color,
+    pub success: Color,
+    pub failure: Color,
+    pub warning: Color,
+    pub added: Color,
+    pub removed: Color,
+    pub hunk: Color,
+    pub no_color: bool,
+}
+
+pub const DARK_BG: Color = Color::Reset;
+
+impl Palette {
+    pub fn dark() -> Self {
+        Self {
+            text: Color::Rgb(0xdc, 0xdf, 0xe4),
+            dim: Color::Rgb(0x9a, 0x9f, 0xab),
+            faint: Color::Rgb(0x6b, 0x70, 0x7b),
+            accent: Color::Rgb(0x7a, 0xa2, 0xf7),
+            user_rail: Color::Rgb(0x4f, 0x8a, 0xe8),
+            thinking_rail: Color::Rgb(0xa7, 0x8b, 0xe8),
+            composer_bg: Color::Rgb(0x40, 0x42, 0x56),
+            selection_bg: Color::Rgb(0x3a, 0x45, 0x66),
+            success: Color::Rgb(0x7a, 0xc0, 0x8a),
+            failure: Color::Rgb(0xe0, 0x6c, 0x75),
+            warning: Color::Rgb(0xe0, 0xb1, 0x62),
+            added: Color::Rgb(0x7a, 0xc0, 0x8a),
+            removed: Color::Rgb(0xe0, 0x6c, 0x75),
+            hunk: Color::Rgb(0x8a, 0x90, 0xa0),
+            no_color: false,
+        }
+    }
+
+    pub fn light() -> Self {
+        Self {
+            text: Color::Rgb(0x2b, 0x2f, 0x38),
+            dim: Color::Rgb(0x5c, 0x63, 0x70),
+            faint: Color::Rgb(0x8a, 0x91, 0x9e),
+            accent: Color::Rgb(0x2f, 0x5d, 0xb8),
+            user_rail: Color::Rgb(0x2f, 0x5d, 0xb8),
+            thinking_rail: Color::Rgb(0x6f, 0x4f, 0xb8),
+            composer_bg: Color::Rgb(0xe4, 0xe6, 0xee),
+            selection_bg: Color::Rgb(0xd0, 0xda, 0xf0),
+            success: Color::Rgb(0x1f, 0x7a, 0x3a),
+            failure: Color::Rgb(0xb8, 0x2a, 0x35),
+            warning: Color::Rgb(0x9a, 0x6a, 0x00),
+            added: Color::Rgb(0x1f, 0x7a, 0x3a),
+            removed: Color::Rgb(0xb8, 0x2a, 0x35),
+            hunk: Color::Rgb(0x6b, 0x72, 0x80),
+            no_color: false,
+        }
+    }
+
+    /// A palette that keeps attributes but drops color, per `NO_COLOR`.
+    pub fn plain() -> Self {
+        let mut palette = Self::dark();
+        palette.no_color = true;
+        for color in [
+            &mut palette.text,
+            &mut palette.dim,
+            &mut palette.faint,
+            &mut palette.accent,
+            &mut palette.user_rail,
+            &mut palette.thinking_rail,
+            &mut palette.composer_bg,
+            &mut palette.selection_bg,
+            &mut palette.success,
+            &mut palette.failure,
+            &mut palette.warning,
+            &mut palette.added,
+            &mut palette.removed,
+            &mut palette.hunk,
+        ] {
+            *color = Color::Reset;
+        }
+        palette
+    }
+
     pub fn for_kind(kind: ThemeKind) -> Self {
+        if std::env::var_os("NO_COLOR").is_some() {
+            return Self::plain();
+        }
         match kind {
             ThemeKind::Dark => Self::dark(),
             ThemeKind::Light => Self::light(),
         }
     }
 
-    /// The spec dark palette. Border fields map to the spec grays: `border`
-    /// is gray, `border_muted` is dimGray, `border_accent` is accent, and
-    /// `thinking_disabled` is darkGray.
-    pub fn dark() -> Self {
-        Self {
-            page_bg: Color::Reset,
-            text: rgb(0xd4, 0xd4, 0xd4),
-            muted: rgb(0x80, 0x80, 0x80),
-            dim: rgb(0x66, 0x66, 0x66),
-            accent: rgb(0x8a, 0xbe, 0xb7),
-            border: rgb(0x80, 0x80, 0x80),
-            border_accent: rgb(0x8a, 0xbe, 0xb7),
-            border_muted: rgb(0x66, 0x66, 0x66),
-            success: rgb(0xb5, 0xbd, 0x68),
-            warning: rgb(0xff, 0xff, 0x00),
-            error: rgb(0xcc, 0x66, 0x66),
-            selected_bg: rgb(0x3a, 0x3a, 0x4a),
-            user_message_bg: rgb(0x31, 0x32, 0x44),
-            rail_editor: rgb(0x89, 0xb4, 0xfa),
-            scrollbar_track: rgb(0x50, 0x50, 0x50),
-            scrollbar_thumb: rgb(0xd4, 0xd4, 0xd4),
-            rail_thinking: rgb(0xcb, 0xa6, 0xf7),
-            selection_fg: rgb(0xf5, 0xf5, 0xfa),
-            selection_bg: rgb(0x45, 0x47, 0x5a),
-            card_bg: rgb(0x1e, 0x1e, 0x24),
-            tool_title: rgb(0xcd, 0xd6, 0xf4),
-            tool_output: rgb(0xa6, 0xad, 0xc8),
-            tool_muted: rgb(0x7f, 0x84, 0x9c),
-            tool_pending_bg: rgb(0x28, 0x2b, 0x3d),
-            tool_pending_rail: rgb(0x89, 0xb4, 0xfa),
-            tool_success_bg: rgb(0x29, 0x31, 0x2e),
-            tool_success_rail: rgb(0x7b, 0x9f, 0x88),
-            tool_error_bg: rgb(0x34, 0x2b, 0x2f),
-            tool_error_rail: rgb(0xbc, 0x78, 0x88),
-            tool_cancelled_bg: rgb(0x29, 0x2a, 0x35),
-            tool_cancelled_rail: rgb(0x7f, 0x84, 0x9c),
-            bash_execution_bg: rgb(0x18, 0x18, 0x25),
-            bash_execution_rail: rgb(0xf9, 0xe2, 0xaf),
-            command_output_rail: rgb(0x94, 0xe2, 0xd5),
-            resource_status_rail: rgb(0xfa, 0xb3, 0x87),
-            footer_sky: rgb(0x89, 0xb4, 0xfa),
-            footer_mint: rgb(0xa6, 0xe3, 0xa1),
-            footer_amber: rgb(0xf9, 0xe2, 0xaf),
-            footer_lilac: rgb(0xcb, 0xa6, 0xf7),
-            footer_text: rgb(0xcd, 0xd6, 0xf4),
-            footer_muted: rgb(0x7f, 0x84, 0x9c),
-            md_heading: rgb(0xf0, 0xc6, 0x74),
-            md_link: rgb(0x81, 0xa2, 0xbe),
-            md_link_url: rgb(0x66, 0x66, 0x66),
-            md_code: rgb(0x8a, 0xbe, 0xb7),
-            md_code_block: rgb(0xb5, 0xbd, 0x68),
-            md_code_border: rgb(0x80, 0x80, 0x80),
-            md_quote: rgb(0x80, 0x80, 0x80),
-            md_list_bullet: rgb(0x8a, 0xbe, 0xb7),
-            thinking_disabled: rgb(0x50, 0x50, 0x50),
-            thinking_auto: rgb(0x8a, 0xbe, 0xb7),
-            thinking_low: rgb(0x5f, 0x87, 0xaf),
-            thinking_medium: rgb(0x81, 0xa2, 0xbe),
-            thinking_high: rgb(0xb2, 0x94, 0xbb),
-            thinking_xhigh: rgb(0xc4, 0xa4, 0xd0),
-            thinking_max: rgb(0xd4, 0xb4, 0xe0),
-            thinking_ultra: rgb(0xe4, 0xc8, 0xf0),
+    fn paint(self, color: Color) -> Style {
+        if self.no_color {
+            Style::default()
+        } else {
+            Style::default().fg(color)
         }
     }
 
-    /// The spec light base palette. The accent-border, markdown, and thinking
-    /// fields are not specified for light; they are derived from the defined
-    /// light colors (accent, border, warning, success, muted, dim) instead.
-    pub fn light() -> Self {
-        Self {
-            page_bg: rgb(0xf8, 0xf8, 0xf8),
-            text: rgb(0x1f, 0x23, 0x28),
-            muted: rgb(0x6c, 0x6c, 0x6c),
-            dim: rgb(0x76, 0x76, 0x76),
-            accent: rgb(0x5a, 0x80, 0x80),
-            border: rgb(0x54, 0x7d, 0xa7),
-            border_accent: rgb(0x5a, 0x80, 0x80),
-            border_muted: rgb(0xb0, 0xb0, 0xb0),
-            success: rgb(0x58, 0x84, 0x58),
-            warning: rgb(0x9a, 0x73, 0x26),
-            error: rgb(0xaa, 0x55, 0x55),
-            selected_bg: rgb(0xd0, 0xd0, 0xe0),
-            user_message_bg: rgb(0xe8, 0xe8, 0xe8),
-            rail_editor: rgb(0x54, 0x7d, 0xa7),
-            scrollbar_track: rgb(0xb0, 0xb0, 0xb0),
-            scrollbar_thumb: rgb(0x1f, 0x23, 0x28),
-            rail_thinking: rgb(0x8a, 0x6d, 0xa8),
-            selection_fg: rgb(0x1f, 0x23, 0x28),
-            selection_bg: rgb(0xd0, 0xd0, 0xe0),
-            // card and markdown-surface colors are documented derivations of
-            // the defined light colors (spec 16.3): white card surface,
-            // dim for link URLs, borderMuted for code borders, accent for
-            // list bullets.
-            card_bg: rgb(0xff, 0xff, 0xff),
-            tool_title: rgb(0x1f, 0x23, 0x28),
-            tool_output: rgb(0x4f, 0x56, 0x63),
-            tool_muted: rgb(0x76, 0x76, 0x76),
-            tool_pending_bg: rgb(0xe8, 0xe8, 0xf0),
-            tool_pending_rail: rgb(0x54, 0x7d, 0xa7),
-            tool_success_bg: rgb(0xe8, 0xf0, 0xe8),
-            tool_success_rail: rgb(0x58, 0x84, 0x58),
-            tool_error_bg: rgb(0xf0, 0xe8, 0xe8),
-            tool_error_rail: rgb(0xaa, 0x55, 0x55),
-            tool_cancelled_bg: rgb(0xee, 0xee, 0xee),
-            tool_cancelled_rail: rgb(0x76, 0x76, 0x76),
-            bash_execution_bg: rgb(0xf0, 0xe8, 0xd8),
-            bash_execution_rail: rgb(0x9a, 0x73, 0x26),
-            command_output_rail: rgb(0x3a, 0x66, 0x66),
-            resource_status_rail: rgb(0x9a, 0x73, 0x26),
-            footer_sky: rgb(0x54, 0x7d, 0xa7),
-            footer_mint: rgb(0x58, 0x84, 0x58),
-            footer_amber: rgb(0x9a, 0x73, 0x26),
-            footer_lilac: rgb(0x8a, 0x6d, 0xa8),
-            footer_text: rgb(0x1f, 0x23, 0x28),
-            footer_muted: rgb(0x76, 0x76, 0x76),
-            md_heading: rgb(0x9a, 0x73, 0x26),
-            md_link: rgb(0x54, 0x7d, 0xa7),
-            md_link_url: rgb(0x76, 0x76, 0x76),
-            md_code: rgb(0x3a, 0x66, 0x66),
-            md_code_block: rgb(0x58, 0x84, 0x58),
-            md_code_border: rgb(0xb0, 0xb0, 0xb0),
-            md_quote: rgb(0x6c, 0x6c, 0x6c),
-            md_list_bullet: rgb(0x5a, 0x80, 0x80),
-            thinking_disabled: rgb(0x76, 0x76, 0x76),
-            thinking_auto: rgb(0x5a, 0x80, 0x80),
-            thinking_low: rgb(0x4a, 0x74, 0x9c),
-            thinking_medium: rgb(0x5f, 0x80, 0x99),
-            thinking_high: rgb(0x8a, 0x6d, 0xa8),
-            thinking_xhigh: rgb(0x9a, 0x7c, 0xb8),
-            thinking_max: rgb(0xa8, 0x88, 0xc8),
-            thinking_ultra: rgb(0xb8, 0x96, 0xd8),
-        }
+    pub fn text(self) -> Style {
+        self.paint(self.text)
     }
-    /// The dot-composed thinking color for a reasoning level (spec 15.7).
-    pub fn reasoning_color(&self, reasoning: Reasoning) -> Color {
-        match reasoning {
-            Reasoning::Disabled => self.thinking_disabled,
-            Reasoning::Auto => self.thinking_auto,
-            Reasoning::Low => self.thinking_low,
-            Reasoning::Medium => self.thinking_medium,
-            Reasoning::High => self.thinking_high,
-            Reasoning::XHigh => self.thinking_xhigh,
-            Reasoning::Max => self.thinking_max,
-            Reasoning::Ultra => self.thinking_ultra,
-        }
-    }
-}
 
-fn rgb(red: u8, green: u8, blue: u8) -> Color {
-    Color::Rgb(red, green, blue)
+    pub fn dim(self) -> Style {
+        self.paint(self.dim)
+    }
+
+    pub fn faint(self) -> Style {
+        self.paint(self.faint)
+    }
+
+    pub fn accent(self) -> Style {
+        self.paint(self.accent)
+    }
+
+    pub fn success(self) -> Style {
+        self.paint(self.success)
+    }
+
+    pub fn failure(self) -> Style {
+        self.paint(self.failure)
+    }
+
+    pub fn warning(self) -> Style {
+        self.paint(self.warning)
+    }
+
+    pub fn added(self) -> Style {
+        self.paint(self.added)
+    }
+
+    pub fn removed(self) -> Style {
+        self.paint(self.removed)
+    }
+
+    pub fn hunk(self) -> Style {
+        self.paint(self.hunk)
+    }
+
+    pub fn italic_dim(self) -> Style {
+        self.dim().add_modifier(Modifier::ITALIC)
+    }
+
+    pub fn bold(self) -> Style {
+        self.text().add_modifier(Modifier::BOLD)
+    }
+
+    pub fn selected(self) -> Style {
+        let style = Style::default().add_modifier(Modifier::BOLD);
+        if self.no_color {
+            style
+        } else {
+            style.fg(self.text).bg(self.selection_bg)
+        }
+    }
+
+    pub fn composer(self) -> Style {
+        if self.no_color {
+            Style::default()
+        } else {
+            Style::default().fg(self.text).bg(self.composer_bg)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -249,102 +209,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_kind_is_dark_and_for_kind_roundtrips() {
-        assert_eq!(ThemeKind::default(), ThemeKind::Dark);
-        assert_eq!(Theme::for_kind(ThemeKind::Dark), Theme::dark());
-        assert_eq!(Theme::for_kind(ThemeKind::Light), Theme::light());
+    fn theme_kinds_roundtrip_through_their_config_names() {
+        for kind in [ThemeKind::Dark, ThemeKind::Light] {
+            assert_eq!(ThemeKind::parse(kind.label()), Some(kind));
+        }
+        assert_eq!(ThemeKind::parse("sepia"), None);
     }
 
     #[test]
-    fn dark_palette_matches_spec() {
-        let theme = Theme::dark();
-        assert_eq!(theme.page_bg, Color::Reset);
-        assert_eq!(theme.text, rgb(0xd4, 0xd4, 0xd4));
-        assert_eq!(theme.muted, rgb(0x80, 0x80, 0x80));
-        assert_eq!(theme.dim, rgb(0x66, 0x66, 0x66));
-        assert_eq!(theme.accent, rgb(0x8a, 0xbe, 0xb7));
-        assert_eq!(theme.border, rgb(0x80, 0x80, 0x80));
-        assert_eq!(theme.border_accent, rgb(0x8a, 0xbe, 0xb7));
-        assert_eq!(theme.border_muted, rgb(0x66, 0x66, 0x66));
-        assert_eq!(theme.success, rgb(0xb5, 0xbd, 0x68));
-        assert_eq!(theme.warning, rgb(0xff, 0xff, 0x00));
-        assert_eq!(theme.error, rgb(0xcc, 0x66, 0x66));
-        assert_eq!(theme.selected_bg, rgb(0x3a, 0x3a, 0x4a));
-        assert_eq!(theme.user_message_bg, rgb(0x31, 0x32, 0x44));
-        assert_eq!(theme.rail_editor, rgb(0x89, 0xb4, 0xfa));
-        assert_eq!(theme.rail_thinking, rgb(0xcb, 0xa6, 0xf7));
-        assert_eq!(theme.selection_bg, rgb(0x45, 0x47, 0x5a));
-        assert_eq!(theme.card_bg, rgb(0x1e, 0x1e, 0x24));
-        assert_eq!(theme.tool_pending_bg, rgb(0x28, 0x2b, 0x3d));
-        assert_eq!(theme.tool_success_bg, rgb(0x29, 0x31, 0x2e));
-        assert_eq!(theme.tool_error_bg, rgb(0x34, 0x2b, 0x2f));
-        assert_eq!(theme.md_heading, rgb(0xf0, 0xc6, 0x74));
-        assert_eq!(theme.md_link, rgb(0x81, 0xa2, 0xbe));
-        assert_eq!(theme.md_link_url, rgb(0x66, 0x66, 0x66));
-        assert_eq!(theme.md_code, rgb(0x8a, 0xbe, 0xb7));
-        assert_eq!(theme.md_code_block, rgb(0xb5, 0xbd, 0x68));
-        assert_eq!(theme.md_code_border, rgb(0x80, 0x80, 0x80));
-        assert_eq!(theme.md_quote, rgb(0x80, 0x80, 0x80));
-        assert_eq!(theme.md_list_bullet, rgb(0x8a, 0xbe, 0xb7));
-        assert_eq!(theme.thinking_disabled, rgb(0x50, 0x50, 0x50));
-        assert_eq!(theme.thinking_auto, rgb(0x8a, 0xbe, 0xb7));
-        assert_eq!(theme.thinking_low, rgb(0x5f, 0x87, 0xaf));
-        assert_eq!(theme.thinking_medium, rgb(0x81, 0xa2, 0xbe));
-        assert_eq!(theme.thinking_high, rgb(0xb2, 0x94, 0xbb));
-    }
-
-    #[test]
-    fn light_base_palette_matches_spec() {
-        let theme = Theme::light();
-        assert_eq!(theme.page_bg, rgb(0xf8, 0xf8, 0xf8));
-        assert_eq!(theme.text, rgb(0x1f, 0x23, 0x28));
-        assert_eq!(theme.muted, rgb(0x6c, 0x6c, 0x6c));
-        assert_eq!(theme.dim, rgb(0x76, 0x76, 0x76));
-        assert_eq!(theme.accent, rgb(0x5a, 0x80, 0x80));
-        assert_eq!(theme.border, rgb(0x54, 0x7d, 0xa7));
-        assert_eq!(theme.border_muted, rgb(0xb0, 0xb0, 0xb0));
-        assert_eq!(theme.success, rgb(0x58, 0x84, 0x58));
-        assert_eq!(theme.error, rgb(0xaa, 0x55, 0x55));
-        assert_eq!(theme.warning, rgb(0x9a, 0x73, 0x26));
-        assert_eq!(theme.selected_bg, rgb(0xd0, 0xd0, 0xe0));
-        assert_eq!(theme.user_message_bg, rgb(0xe8, 0xe8, 0xe8));
-        assert_eq!(theme.card_bg, rgb(0xff, 0xff, 0xff));
-        assert_eq!(theme.tool_pending_bg, rgb(0xe8, 0xe8, 0xf0));
-        assert_eq!(theme.tool_success_bg, rgb(0xe8, 0xf0, 0xe8));
-        assert_eq!(theme.tool_error_bg, rgb(0xf0, 0xe8, 0xe8));
-        assert_eq!(theme.md_link_url, rgb(0x76, 0x76, 0x76));
-        assert_eq!(theme.md_code_border, rgb(0xb0, 0xb0, 0xb0));
-        assert_eq!(theme.md_list_bullet, rgb(0x5a, 0x80, 0x80));
-    }
-
-    #[test]
-    fn reasoning_color_maps_to_the_level_palette() {
-        let theme = Theme::dark();
-        assert_eq!(
-            theme.reasoning_color(Reasoning::Disabled),
-            rgb(0x50, 0x50, 0x50)
-        );
-        assert_eq!(
-            theme.reasoning_color(Reasoning::Auto),
-            rgb(0x8a, 0xbe, 0xb7)
-        );
-        assert_eq!(theme.reasoning_color(Reasoning::Low), rgb(0x5f, 0x87, 0xaf));
-        assert_eq!(
-            theme.reasoning_color(Reasoning::Medium),
-            rgb(0x81, 0xa2, 0xbe)
-        );
-        assert_eq!(
-            theme.reasoning_color(Reasoning::High),
-            rgb(0xb2, 0x94, 0xbb)
-        );
-        assert_eq!(
-            theme.reasoning_color(Reasoning::XHigh),
-            rgb(0xc4, 0xa4, 0xd0)
-        );
-        assert_eq!(theme.reasoning_color(Reasoning::Max), rgb(0xd4, 0xb4, 0xe0));
-        assert_eq!(
-            theme.reasoning_color(Reasoning::Ultra),
-            rgb(0xe4, 0xc8, 0xf0)
-        );
+    fn the_plain_palette_drops_color_but_keeps_emphasis() {
+        let palette = Palette::plain();
+        assert!(palette.no_color);
+        assert_eq!(palette.text(), Style::default());
+        assert!(palette.bold().add_modifier.contains(Modifier::BOLD));
     }
 }

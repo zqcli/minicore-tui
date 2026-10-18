@@ -1,2310 +1,472 @@
-//! The minicore-agent stdio RPC process: child lifecycle, one stdin writer,
-//! one stdout reader, one stderr reader, and a bounded event channel
-//! (development spec 10). Background tasks only emit `RpcEvent`s; they never
-//! touch app state.
+//! The agent child process and its JSON-RPC client.
+//!
+//! Four background tasks own the pipes: one writer, one stdout reader, one
+//! stderr reader (bounded tail) and one child waiter. Requests are routed by id
+//! to a `oneshot`; events and child loss are posted to the app channel.
 
-use std::collections::VecDeque;
-use std::io;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::Notify;
-use tokio::sync::mpsc;
+use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use crate::event::RpcEvent;
-use crate::protocol::{FrameError, FrameErrorKind, OutgoingRequest, parse_frame};
+use crate::protocol::{
+    AgentEvent, IncomingFrame, OutgoingRequest, RequestId, RpcError, RpcResponse,
+};
 
-/// Upper bound for one incoming RPC frame, excluding the trailing newline
-/// (spec 10.7). The reader enforces the bound before any byte is appended, so
-/// a malicious or corrupted line can never grow unbounded in memory.
-pub const MAX_RPC_FRAME_BYTES: usize = 32 * 1024 * 1024;
-/// Upper bound for one captured agent stderr line (spec 10.8).
-pub const MAX_AGENT_LOG_LINE_BYTES: usize = 4096;
-/// The agent contract bounds one request line at 1 MiB including the
-/// terminating newline (docs/rpc-contract.md). `RpcProcess::send` enforces it
-/// on the serialized bytes and rejects oversized requests locally with
-/// `RpcError::RequestTooLarge`, so the agent never answers them with a
-/// null-id parse error and the connection never turns fatal for them.
-pub const MAX_REQUEST_LINE_BYTES: usize = 1024 * 1024;
-/// Total outbound FIFO capacity. The single writer drains it strictly in
-/// admission order; control requests cannot jump an already-queued request.
-/// The capacity is *reserved*, not reordered (spec §5.2).
-pub const OUTBOUND_QUEUE_CAPACITY: usize = 32;
-/// Slots an ordinary request may occupy. The remaining four are reserved for
-/// cancel/close/shutdown so a saturated UI can still stop work.
-pub const OUTBOUND_NORMAL_CAPACITY: usize = 28;
-/// Unconsumed inbound frame budget (spec §5.4): bytes of frames that were
-/// decoded but not yet consumed by the app. The reader waits here instead of
-/// buffering unbounded frames behind a 128-event channel. This is an encoded
-/// wire budget, not an RSS guarantee.
-pub const MAX_WIRE_BUDGET_BYTES: usize = 64 * 1024 * 1024;
-
-/// Which admission class a request uses (spec §5.2). Ordinary requests stop
-/// at [`OUTBOUND_NORMAL_CAPACITY`]; control requests may occupy the reserved
-/// tail of the FIFO. Admission never reorders an already-queued request.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SendClass {
-    Normal,
-    Control,
-}
-
-/// A local admission failure. Every variant means the request was **not**
-/// written to the child, so the caller can safely keep its input and retry
-/// the exact same request later (spec §5.2). Once [`RpcProcess::try_send`]
-/// returns `Ok`, a later write failure is a connection event, never a
-/// resendable local error.
-#[derive(Debug, thiserror::Error)]
-pub enum SendError {
-    #[error("the RPC process is closed")]
-    Closed,
-    #[error("the outbound queue is full for this admission class")]
-    QueueFull(SendClass),
-    #[error("failed to serialize the request: {0}")]
-    Serialize(#[from] serde_json::Error),
-    #[error(
-        "request line of {actual_bytes} bytes (including the newline) exceeds the {max_bytes} byte limit"
-    )]
-    RequestTooLarge {
-        actual_bytes: usize,
-        max_bytes: usize,
+/// One incoming frame from the child, in arrival order.
+pub enum Incoming {
+    Event(Box<AgentEvent>),
+    /// The child is gone: no further frames will arrive.
+    Closed {
+        status: Option<String>,
     },
 }
 
-/// The single FIFO writer's queue. Admission is synchronous and bounded; the
-/// writer awaits the shared notification instead of the UI awaiting capacity.
-#[derive(Debug, Default)]
-struct Outbound {
-    lines: VecDeque<Vec<u8>>,
-    closed: bool,
-    notify: Arc<Notify>,
+/// Upper bound for one inbound line. The Agent states no limit of its own.
+const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
+/// The Agent terminates the process on an oversized request line, so the
+/// client must refuse to send one.
+const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+const STDERR_TAIL_LINES: usize = 200;
+const OUTBOUND_CAPACITY: usize = 64;
+/// The Agent admits 4 concurrent read queries; the rest are retried on
+/// `-32019`, which is worse than pacing them here.
+const QUERY_PERMITS: usize = 3;
+
+pub struct Client {
+    outbound: mpsc::Sender<Vec<u8>>,
+    pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>>,
+    next_id: AtomicU64,
+    queries: Arc<Semaphore>,
+    stderr_tail: Arc<Mutex<VecDeque<String>>>,
+    closed: Arc<Mutex<Option<String>>>,
+    tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
-/// Outstanding inbound frame bytes that were decoded but not yet consumed by
-/// the app (spec §5.4). `charge` waits until there is room; `release` runs
-/// when the app takes ownership of the frame.
-#[derive(Debug)]
-struct WireBudget {
-    limit: usize,
-    used: Mutex<usize>,
-    notify: Notify,
-}
-
-impl WireBudget {
-    fn new(limit: usize) -> Self {
-        Self {
-            limit,
-            used: Mutex::new(0),
-            notify: Notify::new(),
-        }
-    }
-
-    async fn charge(&self, bytes: usize) {
-        loop {
-            let notified = self.notify.notified();
-            {
-                let mut used = self.used.lock().unwrap_or_else(|error| error.into_inner());
-                if *used + bytes <= self.limit {
-                    *used += bytes;
-                    return;
-                }
-            }
-            notified.await;
-        }
-    }
-
-    fn release(&self, bytes: usize) {
-        let mut used = self.used.lock().unwrap_or_else(|error| error.into_inner());
-        *used = used.saturating_sub(bytes);
-        drop(used);
-        self.notify.notify_one();
-    }
-
-    #[cfg(test)]
-    fn used(&self) -> usize {
-        *self.used.lock().unwrap_or_else(|error| error.into_inner())
-    }
-}
-
-const EVENTS_CHANNEL_CAPACITY: usize = 128;
-const READ_CHUNK_BYTES: usize = 8192;
-const KILL_CHANNEL_CAPACITY: usize = 1;
-/// Bounded wait after a kill request for the waiter task to reap the child.
-pub const TERMINATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-
-/// Owns the agent child and its stdio tasks.
-///
-/// The child is owned by a dedicated waiter task. `send` enforces the
-/// outbound request-line bound and hands the serialized line to the single
-/// writer task; `recv` yields events from the reader tasks. Dropping the
-/// process aborts the background tasks and lets Tokio's `kill_on_drop` child
-/// fallback terminate the agent. Drop cannot synchronously reap an
-/// asynchronous child; normal success and error paths must call
-/// [`RpcProcess::terminate`] before terminal restoration. Must be created
-/// inside a Tokio runtime.
-///
-/// Request ids are chosen by the caller (the app state in `App::update`);
-/// this type only forwards already-numbered requests.
-#[derive(Debug)]
-pub struct RpcProcess {
-    outbound: Arc<Mutex<Outbound>>,
-    events: mpsc::Receiver<RpcEvent>,
-    /// Wire bytes of each decoded frame already in `events` but not yet
-    /// consumed, in arrival order. Released in `recv`/`try_recv`.
-    frame_bytes: Arc<Mutex<VecDeque<usize>>>,
-    wire: Arc<WireBudget>,
-    kill: mpsc::Sender<()>,
-    tasks: Vec<JoinHandle<()>>,
-    /// Latched when an `Exited` event was consumed; the waiter task reaped
-    /// the child by then, so `terminate` has nothing left to wait for.
-    seen_exit: bool,
-}
-
-impl RpcProcess {
-    /// Spawns `agent_bin --config <agent_config> --stdio` and starts the four
-    /// background tasks. All fallible steps run before any task is started,
-    /// so a spawn failure leaves nothing behind to clean up.
-    pub fn spawn(agent_bin: &Path, agent_config: &Path) -> Result<Self, RpcError> {
-        Self::spawn_with_env(agent_bin, agent_config, &[])
-    }
-
-    /// Spawns the agent process with optional additional environment variables.
-    pub fn spawn_with_env(
+impl Client {
+    /// Spawns the agent and starts its pipe tasks. `incoming` receives events
+    /// and the terminal close notice.
+    pub fn spawn(
         agent_bin: &Path,
         agent_config: &Path,
-        envs: &[(&str, &str)],
-    ) -> Result<Self, RpcError> {
-        if !agent_config.is_file() {
-            return Err(RpcError::ConfigMissing(agent_config.to_path_buf()));
-        }
-        let mut command = Self::spawn_command(agent_bin, agent_config);
-        for &(key, val) in envs {
-            command.env(key, val);
-        }
-        let child = command.spawn().map_err(RpcError::Spawn)?;
-        Self::from_child(child)
-    }
-
-    /// The exact production launch shape (spec 10.5): the agent is always
-    /// started as `agent --config <path> --stdio` with piped stdio. Test
-    /// harnesses never route through this — they drive
-    /// [`RpcProcess::from_child`] directly so production assembly stays
-    /// untouched.
-    fn spawn_command(agent_bin: &Path, agent_config: &Path) -> Command {
-        let mut command = Command::new(agent_bin);
-        command
+        incoming: mpsc::Sender<Incoming>,
+    ) -> Result<Arc<Self>, RpcError> {
+        let mut child = Command::new(agent_bin)
             .arg("--config")
             .arg(agent_config)
             .arg("--stdio")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        command
-    }
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|error| {
+                RpcError::closed(format!("could not start {}: {error}", agent_bin.display()))
+            })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| RpcError::closed("agent stdin is unavailable"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| RpcError::closed("agent stdout is unavailable"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| RpcError::closed("agent stderr is unavailable"))?;
 
-    /// Wires the four background tasks around an already-spawned child.
-    /// All fallible steps run before any task is started. Unit tests drive
-    /// the full production stdin/stdout/stderr/waiter pipeline through this
-    /// with a fake-agent child (see the `tests` module).
-    fn from_child(mut child: Child) -> Result<Self, RpcError> {
-        let stdin = child.stdin.take().expect("agent stdin is piped");
-        let stdout = child.stdout.take().expect("agent stdout is piped");
-        let stderr = child.stderr.take().expect("agent stderr is piped");
+        let (outbound, outbound_rx) = mpsc::channel::<Vec<u8>>(OUTBOUND_CAPACITY);
+        let pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>> = Arc::default();
+        let stderr_tail: Arc<Mutex<VecDeque<String>>> = Arc::default();
+        let closed: Arc<Mutex<Option<String>>> = Arc::default();
 
-        let outbound = Arc::new(Mutex::new(Outbound::default()));
-        let frame_bytes: Arc<Mutex<VecDeque<usize>>> = Arc::new(Mutex::new(VecDeque::new()));
-        let wire = Arc::new(WireBudget::new(MAX_WIRE_BUDGET_BYTES));
-        let (events_tx, events_rx) = mpsc::channel(EVENTS_CHANNEL_CAPACITY);
-        let (kill_tx, kill_rx) = mpsc::channel(KILL_CHANNEL_CAPACITY);
+        let writer = tokio::spawn(writer_task(stdin, outbound_rx));
+        let reader = tokio::spawn(reader_task(
+            stdout,
+            pending.clone(),
+            incoming.clone(),
+            closed.clone(),
+        ));
+        let stderr_reader = tokio::spawn(stderr_task(stderr, stderr_tail.clone()));
+        let waiter = tokio::spawn(waiter_task(
+            child,
+            closed.clone(),
+            pending.clone(),
+            incoming,
+        ));
 
-        let tasks = vec![
-            tokio::spawn(stdin_writer(
-                stdin,
-                Arc::clone(&outbound),
-                events_tx.clone(),
-            )),
-            tokio::spawn(stdout_reader(
-                stdout,
-                events_tx.clone(),
-                Arc::clone(&wire),
-                Arc::clone(&frame_bytes),
-            )),
-            tokio::spawn(stderr_reader(stderr, events_tx.clone())),
-            tokio::spawn(child_waiter(child, kill_rx, events_tx)),
-        ];
-
-        Ok(Self {
+        Ok(Arc::new(Self {
             outbound,
-            events: events_rx,
-            frame_bytes,
-            wire,
-            kill: kill_tx,
-            tasks,
-            seen_exit: false,
-        })
+            pending,
+            next_id: AtomicU64::new(1),
+            queries: Arc::new(Semaphore::new(QUERY_PERMITS)),
+            stderr_tail,
+            closed,
+            tasks: Mutex::new(vec![writer, reader, stderr_reader, waiter]),
+        }))
     }
 
-    /// Synchronous, non-blocking admission for the UI path (spec §5.2). The
-    /// id was allocated by the caller and must already be registered in its
-    /// pending map before the command executes, so a response can never beat
-    /// the registration. Returning `Ok(())` means the request is in the
-    /// single FIFO writer's queue; a later write failure is a connection
-    /// event, not an error the caller may retry.
-    ///
-    /// The serialized line (including the trailing newline) must fit the
-    /// agent's 1 MiB request bound; oversized requests fail locally and are
-    /// never written. `QueueFull` means the request was not accepted and was
-    /// not written; the caller keeps its input and may retry the exact
-    /// request when space is available.
-    pub fn try_send(&self, request: OutgoingRequest, class: SendClass) -> Result<(), SendError> {
-        let bytes = serialize_bounded(&request)?;
-        self.push_bytes(bytes, class)
-    }
-
-    fn push_bytes(&self, bytes: Vec<u8>, class: SendClass) -> Result<(), SendError> {
-        let mut outbound = self
-            .outbound
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if outbound.closed {
-            return Err(SendError::Closed);
-        }
-        let capacity = match class {
-            SendClass::Normal => OUTBOUND_NORMAL_CAPACITY,
-            SendClass::Control => OUTBOUND_QUEUE_CAPACITY,
-        };
-        if outbound.lines.len() >= capacity {
-            return Err(SendError::QueueFull(class));
-        }
-        outbound.lines.push_back(bytes);
-        outbound.notify.notify_one();
-        Ok(())
-    }
-
-    /// Waits for queue space and sends one request. Kept for transport tests
-    /// and non-UI callers; the UI path uses [`RpcProcess::try_send`].
-    pub async fn send(&self, request: OutgoingRequest) -> Result<(), RpcError> {
-        let bytes = serialize_bounded(&request).map_err(RpcError::from)?;
-        loop {
-            let notify = {
-                let outbound = self
-                    .outbound
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner());
-                if outbound.closed {
-                    return Err(RpcError::Closed);
-                }
-                if outbound.lines.len() < OUTBOUND_NORMAL_CAPACITY {
-                    break;
-                }
-                // Clone the handle and drop the guard before awaiting: a
-                // `MutexGuard` must never cross an await point.
-                Arc::clone(&outbound.notify)
-            };
-            notify.notified().await;
-        }
-        self.push_bytes(bytes, SendClass::Normal)
-            .map_err(RpcError::from)
-    }
-
-    /// The next event from the agent; `None` once every background task has
-    /// ended. Events originate from four tasks concurrently: no total order
-    /// is promised across `Frame`, `ConnectionClosed`, `Exited`, and
-    /// `ProtocolError` (see `crate::event`).
-    pub async fn recv(&mut self) -> Option<RpcEvent> {
-        let event = self.events.recv().await;
-        if let Some(event) = &event {
-            self.observe_consumed(event);
-        }
-        event
-    }
-
-    /// Releases one frame's wire-budget charge as soon as the app owns the
-    /// decoded frame, and latches a consumed exit (spec §5.4). Non-frame
-    /// events carry no charge.
-    fn observe_consumed(&mut self, event: &RpcEvent) {
-        if matches!(event, RpcEvent::Frame(_)) {
-            let bytes = self
-                .frame_bytes
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .pop_front();
-            if let Some(bytes) = bytes {
-                self.wire.release(bytes);
-            }
-        }
-        if matches!(event, RpcEvent::Exited(_)) {
-            self.mark_exit_seen();
-        }
-    }
-
-    /// Yields an event only if one is already buffered; `Ok(None)` means the
-    /// channel is still open but empty, while `Err(Closed)` means every
-    /// producer has ended. The distinction lets the main loop disable its RPC
-    /// select arm instead of busy-looping after channel closure.
-    pub fn try_recv(&mut self) -> Result<Option<RpcEvent>, RpcError> {
-        let event = match self.events.try_recv() {
-            Ok(event) => Some(event),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => None,
-            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                return Err(RpcError::Closed);
-            }
-        };
-        if let Some(event) = &event {
-            self.observe_consumed(event);
-        }
-        Ok(event)
-    }
-
-    /// Stops the stdin writer after the child has exited. Without this, the
-    /// writer would wait forever on its still-owned request sender and the
-    /// event channel could never become fully closed.
-    fn mark_exit_seen(&mut self) {
-        if self.seen_exit {
-            return;
-        }
-        self.seen_exit = true;
-        let outbound = self
-            .outbound
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        // The writer task owns the Mutex for its whole send; cloning a `bool`
-        // and notifying is done under the same lock, so no wakeup is lost.
-        let mut outbound = outbound;
-        outbound.closed = true;
-        outbound.notify.notify_one();
-    }
-
-    /// Requests the waiter task to kill the agent child; the
-    /// `RpcEvent::Exited` event follows. This is the control path for the
-    /// future shutdown sequence: send `agent.shutdown`, wait for its
-    /// response, then wait a bounded time for the child and call this when
-    /// the deadline passes.
-    pub fn kill_child(&self) {
-        let _ = self.kill.try_send(());
-    }
-
-    /// Requests the waiter to kill the child and waits (bounded) for the
-    /// `Exited` event, so the child is reaped before this returns. Idempotent:
-    /// after a natural exit the waiter has already ended and the kill channel
-    /// is closed, so this returns almost immediately. Safe to call on every
-    /// shutdown path, including a clean one.
-    pub async fn terminate(&mut self) {
-        // The waiter already reaped the child (a clean exit, or a caller
-        // consumed `Exited`); do not wait out the full timeout.
-        if self.seen_exit {
-            return;
-        }
-        self.kill_child();
-        let _ = tokio::time::timeout(TERMINATE_TIMEOUT, async {
-            while let Some(event) = self.recv().await {
-                if matches!(event, RpcEvent::Exited(_)) {
-                    break;
-                }
-            }
-        })
-        .await;
-    }
-
-    /// Kills the child, observes the exit, and then drains the independent
-    /// stdout/stderr readers until the event channel closes or a bounded
-    /// deadline expires. Unlike [`RpcProcess::terminate`], this deliberately
-    /// continues after `Exited`, so final stderr lines and buffered frames are
-    /// not discarded. The observer must not issue new RPCs from the returned
-    /// app commands.
-    pub async fn terminate_with_observer<F>(&mut self, mut observe: F)
-    where
-        F: FnMut(RpcEvent),
-    {
-        if !self.seen_exit {
-            self.kill_child();
-        }
-        self.terminate_observing(&mut observe).await;
-        if self.drain_events(&mut observe).await {
-            self.join_tasks().await;
+    /// Sends one request and awaits its response. Query methods take one of
+    /// the Agent's read-query slots; everything else is always admitted.
+    pub async fn call<P: serde::Serialize, R: DeserializeOwned>(
+        &self,
+        method: &'static str,
+        params: &P,
+        query: bool,
+    ) -> Result<R, RpcError> {
+        let _permit = if query {
+            Some(self.queries.acquire().await.map_err(|_| closed())?)
         } else {
-            // A broken reader must not make shutdown unbounded. Preserve the
-            // events already queued, then abort only tasks that failed to
-            // finish inside the explicit drain deadline.
-            while let Ok(Some(event)) = self.try_recv() {
-                observe(event);
-            }
-            for task in &self.tasks {
-                task.abort();
-            }
-            self.join_tasks().await;
-        }
+            None
+        };
+        let response = self.call_raw(method, params).await?;
+        response.decode()
     }
 
-    /// The observer version of the ordinary terminate wait. It retains the
-    /// existing bounded wait and exit condition while ensuring events consumed
-    /// on the way to `Exited` are delivered to the caller.
-    async fn terminate_observing<F>(&mut self, observe: &mut F)
-    where
-        F: FnMut(RpcEvent),
-    {
-        // The waiter already reaped the child (a clean exit, or a caller
-        // consumed `Exited`); do not wait out the full timeout.
-        if self.seen_exit {
-            return;
+    pub async fn call_raw<P: serde::Serialize>(
+        &self,
+        method: &'static str,
+        params: &P,
+    ) -> Result<RpcResponse, RpcError> {
+        if let Some(reason) = self.closed.lock().unwrap().clone() {
+            return Err(RpcError::closed(reason));
         }
-        self.kill_child();
-        let _ = tokio::time::timeout(TERMINATE_TIMEOUT, async {
-            while let Some(event) = self.recv().await {
-                let exited = matches!(event, RpcEvent::Exited(_));
-                observe(event);
-                if exited {
-                    break;
-                }
+        let id = RequestId(self.next_id.fetch_add(1, Ordering::Relaxed));
+        let mut params = serde_json::to_value(params)
+            .map_err(|error| RpcError::new(-32602, "invalid_params", error.to_string()))?;
+        // The Agent accepts omitted params or an object, never JSON null.
+        if params.is_null() {
+            params = Value::Object(Default::default());
+        }
+        let line = encode_request(OutgoingRequest::new(id, method, params))?;
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().unwrap().insert(id, tx);
+        match self.outbound.send(line).await {
+            Ok(()) => {}
+            Err(_) => {
+                self.pending.lock().unwrap().remove(&id);
+                return Err(RpcError::closed("agent is not accepting requests"));
             }
+        }
+        rx.await.map_err(|_| {
+            self.pending.lock().unwrap().remove(&id);
+            RpcError::closed("agent closed before answering")
         })
+    }
+
+    /// Whether the child process is still answering. `None` is a live agent.
+    pub fn closed_reason(&self) -> Option<String> {
+        self.closed.lock().unwrap().clone()
+    }
+
+    pub fn stderr_tail(&self) -> Vec<String> {
+        self.stderr_tail.lock().unwrap().iter().cloned().collect()
+    }
+
+    /// Sends `agent.shutdown` and gives the child a bounded moment to exit
+    /// before it is killed. Safe to call more than once.
+    pub async fn shutdown(&self) {
+        let _ = tokio::time::timeout(
+            Duration::from_secs(3),
+            self.call_raw("agent.shutdown", &Value::Null),
+        )
         .await;
-    }
-
-    /// Drains all events after the child exit, including final stderr output.
-    /// `None` proves every event producer has ended; the timeout keeps a
-    /// malfunctioning reader from blocking terminal restoration forever.
-    async fn drain_events<F>(&mut self, observe: &mut F) -> bool
-    where
-        F: FnMut(RpcEvent),
-    {
-        let deadline = tokio::time::Instant::now() + TERMINATE_TIMEOUT;
-        loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                return false;
-            }
-            match tokio::time::timeout(remaining, self.recv()).await {
-                Ok(Some(event)) => observe(event),
-                Ok(None) => return true,
-                Err(_) => return false,
-            }
-        }
-    }
-
-    /// All senders have been dropped when the event channel closes, so the
-    /// task handles are already complete. Joining them makes that fact
-    /// explicit without extending the bounded drain.
-    async fn join_tasks(&mut self) {
-        while let Some(task) = self.tasks.pop() {
-            let _ = task.await;
-        }
-    }
-
-    /// Whether an `Exited` event was consumed; the child was reaped.
-    pub fn child_reaped(&self) -> bool {
-        self.seen_exit
-    }
-}
-
-impl Drop for RpcProcess {
-    fn drop(&mut self) {
-        for task in &self.tasks {
+        for task in self.tasks.lock().unwrap().drain(..) {
             task.abort();
         }
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum RpcError {
-    #[error("agent config file does not exist: {0}")]
-    ConfigMissing(PathBuf),
-    #[error("failed to spawn agent executable: {0}")]
-    Spawn(io::Error),
-    #[error("the RPC process is closed")]
-    Closed,
-    #[error("failed to serialize the request: {0}")]
-    Serialize(#[from] serde_json::Error),
-    #[error(
-        "request line of {actual_bytes} bytes (including the newline) exceeds the {max_bytes} byte limit"
-    )]
-    RequestTooLarge {
-        actual_bytes: usize,
-        max_bytes: usize,
-    },
+fn closed() -> RpcError {
+    RpcError::closed("rpc client is shutting down")
 }
 
-impl From<SendError> for RpcError {
-    fn from(error: SendError) -> Self {
-        match error {
-            SendError::Closed => Self::Closed,
-            // `send` only reports this after a close raced the waiting loop;
-            // the process is unusable either way.
-            SendError::QueueFull(_) => Self::Closed,
-            SendError::Serialize(error) => Self::Serialize(error),
-            SendError::RequestTooLarge {
-                actual_bytes,
-                max_bytes,
-            } => Self::RequestTooLarge {
-                actual_bytes,
-                max_bytes,
-            },
+fn encode_request(request: OutgoingRequest) -> Result<Vec<u8>, RpcError> {
+    let mut line = serde_json::to_vec(&request)
+        .map_err(|error| RpcError::new(-32602, "invalid_params", error.to_string()))?;
+    if line.len() + 1 > MAX_REQUEST_BYTES {
+        return Err(RpcError::new(
+            -32602,
+            "request_too_large",
+            format!(
+                "request of {} bytes exceeds the {MAX_REQUEST_BYTES} byte limit",
+                line.len() + 1
+            ),
+        ));
+    }
+    line.push(b'\n');
+    Ok(line)
+}
+
+async fn writer_task<W: AsyncWrite + Unpin>(mut stdin: W, mut outbound: mpsc::Receiver<Vec<u8>>) {
+    while let Some(line) = outbound.recv().await {
+        if stdin.write_all(&line).await.is_err() {
+            break;
+        }
+        if stdin.flush().await.is_err() {
+            break;
         }
     }
 }
 
-/// Serializes one request and enforces the agent's 1 MiB line bound before
-/// any byte is queued. The reported error carries only byte counts.
-fn serialize_bounded(request: &OutgoingRequest) -> Result<Vec<u8>, SendError> {
-    let bytes = serde_json::to_vec(request)?;
-    let line_bytes = bytes.len() + 1;
-    if line_bytes > MAX_REQUEST_LINE_BYTES {
-        return Err(SendError::RequestTooLarge {
-            actual_bytes: line_bytes,
-            max_bytes: MAX_REQUEST_LINE_BYTES,
-        });
-    }
-    Ok(bytes)
-}
-
-/// Writes one NDJSON request line and flushes it (spec 10.5).
-async fn write_ndjson_line<W>(writer: &mut W, line: &[u8]) -> io::Result<()>
-where
-    W: AsyncWrite + Unpin,
-{
-    writer.write_all(line).await?;
-    writer.write_all(b"\n").await?;
-    writer.flush().await
-}
-
-/// The only task that writes to the agent's stdin. Lines arrive already
-/// serialized and bound-checked by `RpcProcess::try_send`/`send`; the writer
-/// drains them strictly FIFO — control admission owns reserved capacity, it
-/// never reorders an already-queued request (spec §5.2).
-async fn stdin_writer<W>(
-    mut stdin: W,
-    outbound: Arc<Mutex<Outbound>>,
-    events: mpsc::Sender<RpcEvent>,
-) where
-    W: AsyncWrite + Unpin,
-{
-    loop {
-        let line = {
-            let mut queue = outbound.lock().unwrap_or_else(|error| error.into_inner());
-            queue.lines.pop_front()
-        };
-        let line = match line {
-            Some(line) => Some(line),
-            None => {
-                let (closed, notify) = {
-                    let queue = outbound.lock().unwrap_or_else(|error| error.into_inner());
-                    (queue.closed, Arc::clone(&queue.notify))
-                };
-                if closed {
-                    None
-                } else {
-                    // Nothing queued: wait for the next admission, then retry.
-                    notify.notified().await;
-                    continue;
-                }
-            }
-        };
-        let Some(line) = line else {
-            return;
-        };
-        if let Err(error) = write_ndjson_line(&mut stdin, &line).await {
-            emit(
-                &events,
-                RpcEvent::ProtocolError(FrameError::new(
-                    FrameErrorKind::Io,
-                    format!("stdin write failed: {error}"),
-                )),
-            )
-            .await;
-            return;
-        }
-    }
-}
-
-/// The only task that reads the agent's stdout. One line at a time, with a
-/// hard bound enforced before any byte is buffered; malformed or oversized
-/// frames are fatal and reading stops (spec 10.6, 10.7).
-///
-/// Every decoded frame is charged against the shared wire budget before it is
-/// queued, so a fast producer cannot buffer unbounded decoded frames behind
-/// the bounded event channel (spec §5.4). The charge is released by the app
-/// when it consumes the frame.
-async fn stdout_reader<R>(
-    mut stdout: R,
-    events: mpsc::Sender<RpcEvent>,
-    wire: Arc<WireBudget>,
-    frame_bytes: Arc<Mutex<VecDeque<usize>>>,
-) where
-    R: AsyncRead + Unpin,
-{
-    let mut chunk = [0u8; READ_CHUNK_BYTES];
-    let mut line = Vec::new();
-    loop {
-        let read = match stdout.read(&mut chunk).await {
-            Ok(0) => break,
-            Ok(read) => read,
-            Err(error) => {
-                emit(
-                    &events,
-                    RpcEvent::ProtocolError(FrameError::new(
-                        FrameErrorKind::Io,
-                        format!("stdout read failed: {error}"),
-                    )),
-                )
-                .await;
-                return;
-            }
-        };
-        for &byte in &chunk[..read] {
-            if byte == b'\n' {
-                let line = std::mem::take(&mut line);
-                match parse_frame(&line) {
-                    Ok(frame) => {
-                        wire.charge(line.len()).await;
-                        frame_bytes
-                            .lock()
-                            .unwrap_or_else(|error| error.into_inner())
-                            .push_back(line.len());
-                        emit(&events, RpcEvent::Frame(frame)).await;
-                    }
-                    Err(error) => {
-                        emit(&events, RpcEvent::ProtocolError(error)).await;
-                        return;
-                    }
-                }
-            } else if line.len() == MAX_RPC_FRAME_BYTES {
-                emit(
-                    &events,
-                    RpcEvent::ProtocolError(FrameError::new(
-                        FrameErrorKind::TooLarge,
-                        format!("frame exceeds the {MAX_RPC_FRAME_BYTES} byte limit"),
-                    )),
-                )
-                .await;
-                return;
-            } else {
-                line.push(byte);
-            }
-        }
-    }
-    if !line.is_empty() {
-        emit(
-            &events,
-            RpcEvent::ProtocolError(FrameError::new(
-                FrameErrorKind::PartialFrame,
-                "stdout closed mid-frame",
-            )),
-        )
-        .await;
-    }
-    emit(&events, RpcEvent::ConnectionClosed).await;
-}
-
-/// The only task that reads the agent's stderr. Lines are capped at
-/// `MAX_AGENT_LOG_LINE_BYTES` on a UTF-8 boundary; the agent's exit is
-/// reported by the waiter task, so stderr errors end this task silently.
-async fn stderr_reader<R>(mut stderr: R, events: mpsc::Sender<RpcEvent>)
-where
-    R: AsyncRead + Unpin,
-{
-    let mut chunk = [0u8; READ_CHUNK_BYTES];
-    let mut line = Vec::new();
-    let mut dropped = 0usize;
-    loop {
-        let read = match stderr.read(&mut chunk).await {
-            Ok(0) => break,
-            Ok(read) => read,
-            Err(_) => break,
-        };
-        for &byte in &chunk[..read] {
-            if byte == b'\n' {
-                let text = agent_log_line(&line);
-                emit_stderr(&events, text.len(), &mut dropped);
-                line.clear();
-            } else if line.len() < MAX_AGENT_LOG_LINE_BYTES {
-                line.push(byte);
-            }
-            // Bytes beyond the cap are dropped; memory stays bounded.
-        }
-    }
-    if !line.is_empty() {
-        let text = agent_log_line(&line);
-        emit_stderr(&events, text.len(), &mut dropped);
-    }
-}
-
-/// Stderr never blocks the reader and never squeezes out a response: a full
-/// event channel drops the notice and counts it (spec §5.4). Only the byte
-/// length travels app-side, so no stderr content is retained (spec §19).
-///
-/// The dropped count is folded into the next notice that does fit, so the
-/// total is bounded without ever dropping silently.
-fn emit_stderr(events: &mpsc::Sender<RpcEvent>, bytes: usize, dropped: &mut usize) {
-    match events.try_send(RpcEvent::AgentStderr {
-        bytes,
-        dropped: *dropped,
-    }) {
-        Ok(()) => *dropped = 0,
-        Err(_) => *dropped = dropped.saturating_add(1),
-    }
-}
-
-/// The owner of the child process. A kill request interrupts the wait,
-/// terminates the child and reaps it before the exit event is emitted.
-async fn child_waiter(
-    mut child: Child,
-    mut kill: mpsc::Receiver<()>,
-    events: mpsc::Sender<RpcEvent>,
+async fn reader_task<R: AsyncRead + Unpin>(
+    stdout: R,
+    pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>>,
+    incoming: mpsc::Sender<Incoming>,
+    closed: Arc<Mutex<Option<String>>>,
 ) {
-    let wait = tokio::select! {
-        status = child.wait() => Some(status),
-        _ = kill.recv() => None,
-    };
-    let status = match wait {
-        Some(Ok(status)) => Some(status),
-        _ => {
-            let _ = child.start_kill();
-            child.wait().await.ok()
-        }
-    };
-    emit(&events, RpcEvent::Exited(status)).await;
-}
-
-/// Bounded stderr line conversion (spec 10.8): caps the bytes, never splits a
-/// code point at the cap, and replaces remaining invalid bytes lossily.
-fn agent_log_line(bytes: &[u8]) -> String {
-    let capped = &bytes[..bytes.len().min(MAX_AGENT_LOG_LINE_BYTES)];
-    let slice = match std::str::from_utf8(capped) {
-        Ok(_) => capped,
-        Err(error) => {
-            let tail = &capped[error.valid_up_to()..];
-            if partial_utf8_tail(tail) {
-                &capped[..error.valid_up_to()]
-            } else {
-                capped
+    let mut reader = BufReader::with_capacity(64 * 1024, stdout);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match read_line(&mut reader, &mut line).await {
+            Ok(0) => {
+                fail(&closed, &pending, &incoming, "agent closed its stdout");
+                return;
+            }
+            Ok(_) => {}
+            Err(reason) => {
+                fail(&closed, &pending, &incoming, &reason);
+                return;
             }
         }
-    };
-    String::from_utf8_lossy(slice).into_owned()
-}
-
-/// True when `tail` is an incomplete multi-byte sequence at the end of a
-/// line: continuation bytes whose lead was cut, or a lead byte whose
-/// continuations were cut off by the cap.
-fn partial_utf8_tail(tail: &[u8]) -> bool {
-    let Some(lead) = tail.first() else {
-        return false;
-    };
-    match lead_sequence_len(*lead) {
-        None => tail.iter().all(|byte| byte & 0xC0 == 0x80),
-        Some(total) => tail.len() < total && tail[1..].iter().all(|byte| byte & 0xC0 == 0x80),
+        if line.last() == Some(&b'\n') {
+            line.pop();
+        }
+        match crate::protocol::parse_frame(&line) {
+            Ok(IncomingFrame::Response(response)) => {
+                let target = pending.lock().unwrap().remove(&response.id);
+                if let Some(target) = target {
+                    let _ = target.send(response);
+                }
+            }
+            Ok(IncomingFrame::Event(event)) => {
+                if incoming
+                    .send(Incoming::Event(Box::new(event)))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+            Ok(IncomingFrame::UnknownNotification(_)) => {}
+            Err(error) => {
+                // A malformed frame means the stream cannot be trusted; the
+                // child is stopped rather than decoded around.
+                fail(
+                    &closed,
+                    &pending,
+                    &incoming,
+                    &format!("agent sent an unreadable frame: {error}"),
+                );
+                return;
+            }
+        }
     }
 }
 
-/// Expected total sequence length for a UTF-8 lead byte.
-fn lead_sequence_len(byte: u8) -> Option<usize> {
-    match byte {
-        0xC2..=0xDF => Some(2),
-        0xE0..=0xEF => Some(3),
-        0xF0..=0xF4 => Some(4),
-        _ => None,
+/// Reads one LF-terminated line with a hard size bound.
+async fn read_line<R: AsyncBufReadExt + Unpin>(
+    reader: &mut R,
+    line: &mut Vec<u8>,
+) -> Result<usize, String> {
+    loop {
+        let available = match reader.fill_buf().await {
+            Ok(available) => available,
+            Err(error) => return Err(format!("agent stdout read failed: {error}")),
+        };
+        if available.is_empty() {
+            return Ok(line.len());
+        }
+        match available.iter().position(|byte| *byte == b'\n') {
+            Some(end) => {
+                line.extend_from_slice(&available[..=end]);
+                reader.consume(end + 1);
+                return Ok(line.len());
+            }
+            None => {
+                line.extend_from_slice(available);
+                let consumed = available.len();
+                reader.consume(consumed);
+                if line.len() > MAX_FRAME_BYTES {
+                    return Err(format!(
+                        "agent frame exceeded the {MAX_FRAME_BYTES} byte limit"
+                    ));
+                }
+            }
+        }
     }
 }
 
-async fn emit(events: &mpsc::Sender<RpcEvent>, event: RpcEvent) {
-    let _ = events.send(event).await;
+async fn stderr_task<R: AsyncRead + Unpin>(stderr: R, tail: Arc<Mutex<VecDeque<String>>>) {
+    let mut reader = BufReader::new(stderr);
+    let mut buffer = String::new();
+    loop {
+        buffer.clear();
+        match reader.read_line(&mut buffer).await {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {}
+        }
+        let line = buffer.trim_end();
+        if line.is_empty() {
+            continue;
+        }
+        let mut tail = tail.lock().unwrap();
+        if tail.len() == STDERR_TAIL_LINES {
+            tail.pop_front();
+        }
+        tail.push_back(line.to_owned());
+    }
+}
+
+async fn waiter_task(
+    mut child: Child,
+    closed: Arc<Mutex<Option<String>>>,
+    pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>>,
+    incoming: mpsc::Sender<Incoming>,
+) {
+    let status = match child.wait().await {
+        Ok(status) => format!("{}", status),
+        Err(error) => format!("wait failed: {error}"),
+    };
+    fail(
+        &closed,
+        &pending,
+        &incoming,
+        &format!("agent exited ({status})"),
+    );
+}
+
+fn fail(
+    closed: &Arc<Mutex<Option<String>>>,
+    pending: &Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>>,
+    incoming: &mpsc::Sender<Incoming>,
+    reason: &str,
+) {
+    let first = {
+        let mut slot = closed.lock().unwrap();
+        if slot.is_some() {
+            false
+        } else {
+            *slot = Some(reason.to_owned());
+            true
+        }
+    };
+    if !first {
+        return;
+    }
+    pending.lock().unwrap().clear();
+    let _ = incoming.try_send(Incoming::Closed {
+        status: Some(reason.to_owned()),
+    });
+}
+
+/// Default agent binary name resolved through `PATH`.
+pub fn default_agent_bin() -> PathBuf {
+    PathBuf::from("minicore-agent")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{IncomingFrame, RequestId, RpcNotification};
-    use serde_json::{Value, json};
-    use std::time::Instant;
-    use tokio::io::{DuplexStream, duplex};
-    use tokio::time::{Duration, timeout};
+    use serde_json::json;
 
-    const TEST_TIMEOUT: Duration = Duration::from_secs(5);
-
-    async fn next_event(events: &mut mpsc::Receiver<RpcEvent>) -> RpcEvent {
-        timeout(TEST_TIMEOUT, events.recv())
-            .await
-            .expect("timed out waiting for an RPC event")
-            .expect("RPC event channel closed")
-    }
-
-    /// Asserts that the reader produced no trailing event: either the channel
-    /// stays silent or closes because the reader task ended (both mean the
-    /// connection terminated). Only an actual event fails the assertion.
-    async fn assert_no_further_events(events: &mut mpsc::Receiver<RpcEvent>) {
-        if let Ok(Some(event)) = timeout(Duration::from_millis(200), events.recv()).await {
-            panic!("unexpected trailing event: {event:?}");
-        }
-    }
-
-    fn request(id: u64, method: &'static str) -> OutgoingRequest {
-        OutgoingRequest::new(RequestId(id), method, json!({}))
-    }
-
-    fn request_with_params(id: u64, params: Value) -> OutgoingRequest {
-        OutgoingRequest::new(RequestId(id), "agent.ping", params)
-    }
-
-    /// Builds a process whose writer task is fed from the returned server
-    /// half, so tests can observe exactly what would reach the child's stdin.
-    fn test_process() -> (RpcProcess, DuplexStream) {
-        let (client, server) = duplex(2 * 1024 * 1024);
-        let (events_tx, events_rx) = mpsc::channel(8);
-        let (kill_tx, _kill_rx) = mpsc::channel(1);
-        let outbound = Arc::new(Mutex::new(Outbound::default()));
-        let process = RpcProcess {
-            outbound: Arc::clone(&outbound),
-            events: events_rx,
-            frame_bytes: Arc::new(Mutex::new(VecDeque::new())),
-            wire: Arc::new(WireBudget::new(MAX_WIRE_BUDGET_BYTES)),
-            kill: kill_tx,
-            tasks: vec![tokio::spawn(stdin_writer(client, outbound, events_tx))],
-            seen_exit: false,
-        };
-        (process, server)
-    }
-
-    fn test_frame_bytes() -> Arc<Mutex<VecDeque<usize>>> {
-        Arc::new(Mutex::new(VecDeque::new()))
-    }
-
-    fn test_wire() -> Arc<WireBudget> {
-        Arc::new(WireBudget::new(MAX_WIRE_BUDGET_BYTES))
-    }
-
-    /// Pushes one already-serialized line into the shared writer queue and
-    /// wakes the writer, exactly as synchronous admission does.
-    fn push_line(outbound: &Arc<Mutex<Outbound>>, bytes: Vec<u8>) {
-        let mut queue = outbound.lock().unwrap_or_else(|error| error.into_inner());
-        queue.lines.push_back(bytes);
-        queue.notify.notify_one();
-    }
-
-    /// Builds a `params` value whose full request line (including the
-    /// trailing newline) is exactly `target` bytes when serialized with
-    /// request id 1.
-    fn params_with_line_bytes(target: usize) -> Value {
-        let mut fill = String::new();
-        loop {
-            let params = json!({ "x": fill.clone() });
-            let line_bytes = serde_json::to_vec(&OutgoingRequest::new(
-                RequestId(1),
-                "agent.ping",
-                params.clone(),
-            ))
-            .unwrap()
-            .len()
-                + 1;
-            match line_bytes.cmp(&target) {
-                std::cmp::Ordering::Equal => return params,
-                std::cmp::Ordering::Less => fill.push_str(&"a".repeat(target - line_bytes)),
-                std::cmp::Ordering::Greater => panic!("target below the fixed header size"),
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn writer_emits_one_flushed_ndjson_line_per_request() {
-        let (client, mut server) = duplex(1024);
-        let (events_tx, _events_rx) = mpsc::channel(4);
-        let outbound = Arc::new(Mutex::new(Outbound::default()));
-        tokio::spawn(stdin_writer(client, Arc::clone(&outbound), events_tx));
-
-        push_line(
-            &outbound,
-            serde_json::to_vec(&request(1, "agent.ping")).unwrap(),
-        );
-        push_line(
-            &outbound,
-            serde_json::to_vec(&request(2, "model.list")).unwrap(),
-        );
-        {
-            let mut queue = outbound.lock().unwrap_or_else(|error| error.into_inner());
-            queue.closed = true;
-            queue.notify.notify_one();
-        }
-
-        let mut expected = serde_json::to_vec(&request(1, "agent.ping")).unwrap();
-        expected.push(b'\n');
-        expected.extend_from_slice(&serde_json::to_vec(&request(2, "model.list")).unwrap());
-        expected.push(b'\n');
-
-        let mut all = Vec::new();
-        timeout(TEST_TIMEOUT, server.read_to_end(&mut all))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(all, expected);
-    }
-
-    #[tokio::test]
-    async fn reader_emits_frames_in_arrival_order_with_preserved_ids() {
-        let (mut client, server) = duplex(16 * 1024);
-        let (events_tx, mut events_rx) = mpsc::channel(16);
-        tokio::spawn(stdout_reader(
-            server,
-            events_tx,
-            test_wire(),
-            test_frame_bytes(),
-        ));
-
-        let event = r#"{"jsonrpc":"2.0","method":"agent.event","params":{"type":"output_delta","data":{"turn":{"session_id":"ses_1","loop_id":"loop_1"},"request_index":0,"channel":"text","delta":"hi","meta":{"session_id":"ses_1","dropped_before":0}}}}"#;
-        let response =
-            |id: u64| format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{{"version":"0.3.0"}}}}"#);
-        // Interleaved frames, with response ids arriving out of order. The
-        // transport never reorders or correlates: each frame is emitted as
-        // its bytes arrive and ids are preserved for the app to correlate
-        // (spec 10.6); no ordering promise exists across the writer, readers,
-        // and waiter tasks either.
-        let payload = format!("{event}\n{}\n{}\n{event}\n", response(2), response(1));
-        client.write_all(payload.as_bytes()).await.unwrap();
-
-        let first = next_event(&mut events_rx).await;
-        assert!(matches!(
-            first,
-            RpcEvent::Frame(IncomingFrame::Notification(RpcNotification::AgentEvent(_)))
-        ));
-        let second = next_event(&mut events_rx).await;
-        match second {
-            RpcEvent::Frame(IncomingFrame::Response(response)) => {
-                assert_eq!(response.id, RequestId(2));
-            }
-            _ => panic!("expected response with id 2"),
-        }
-        let third = next_event(&mut events_rx).await;
-        match third {
-            RpcEvent::Frame(IncomingFrame::Response(response)) => {
-                assert_eq!(response.id, RequestId(1));
-            }
-            _ => panic!("expected response with id 1"),
-        }
-        let fourth = next_event(&mut events_rx).await;
-        assert!(matches!(
-            fourth,
-            RpcEvent::Frame(IncomingFrame::Notification(RpcNotification::AgentEvent(_)))
-        ));
-
-        drop(client);
-        match next_event(&mut events_rx).await {
-            RpcEvent::ConnectionClosed => {}
-            _ => panic!("expected clean connection close"),
-        }
-    }
-
-    #[tokio::test]
-    async fn tool_detail_late_response_through_fragmented_transport_releases_only_its_slot() {
-        use crate::event::AppEvent;
-        use crate::state::tool::ToolKey;
-        use crate::ui::testapp::{open_empty, take_requests};
-        let mut app = open_empty(crate::theme::ThemeKind::Dark, "ses_1", None, "high");
-        let a = ToolKey::new("ses_1", "loop_a", 0, "same_call");
-        let b = ToolKey::new("ses_1", "loop_b", 0, "same_call");
-        let request_a = take_requests(app.open_tool_detail(a.clone())).remove(0);
-        let request_b = take_requests(app.open_tool_detail(b.clone())).remove(0);
-        assert_eq!(app.queries.in_flight_len(), 2);
-        let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../tests/fixtures/agent-v1/tool-read-terminal.json"
+    #[test]
+    fn oversized_requests_are_refused_before_writing() {
+        let big = "x".repeat(MAX_REQUEST_BYTES);
+        let error = encode_request(OutgoingRequest::new(
+            RequestId(1),
+            "turn.send",
+            json!({"text": big}),
         ))
-        .unwrap();
-        let mut result = fixture["result"].clone();
-        result["execution"]["tool_ref"] =
-            serde_json::to_value(crate::protocol::ToolRefWire::from(&a)).unwrap();
-        result["invocation"]["tool_ref"] = result["execution"]["tool_ref"].clone();
-        let payload = format!(
-            "{}\n",
-            json!({"jsonrpc":"2.0","id":request_a.id,"result":result})
-        );
-        let (mut client, server) = duplex(16 * 1024);
-        let (events_tx, mut events_rx) = mpsc::channel(4);
-        tokio::spawn(stdout_reader(
-            server,
-            events_tx,
-            test_wire(),
-            test_frame_bytes(),
-        ));
-        for part in payload.as_bytes().chunks(7) {
-            client.write_all(part).await.unwrap();
-        }
-        let commands = app.update(AppEvent::Rpc(next_event(&mut events_rx).await));
-        assert!(commands.is_empty());
-        assert_eq!(app.queries.in_flight_len(), 1);
-        assert!(app.pending_requests.contains_key(&request_b.id));
-        assert_eq!(app.tool_detail().unwrap().key, b);
-        assert!(
-            !app.active_view()
-                .unwrap()
-                .tool_presentations
-                .contains_key(&a)
-        );
-    }
-
-    #[tokio::test]
-    async fn reader_accepts_exactly_max_size_frames() {
-        let (mut client, server) = duplex(8192);
-        let (events_tx, mut events_rx) = mpsc::channel(8);
-        tokio::spawn(stdout_reader(
-            server,
-            events_tx,
-            test_wire(),
-            test_frame_bytes(),
-        ));
-
-        // A JSON string payload of exactly MAX_RPC_FRAME_BYTES in total
-        // (quotes, filler, newline) is within the bound and fails only
-        // envelope validation.
-        let mut boundary = vec![b'a'; MAX_RPC_FRAME_BYTES];
-        boundary[0] = b'"';
-        boundary[MAX_RPC_FRAME_BYTES - 2] = b'"';
-        boundary[MAX_RPC_FRAME_BYTES - 1] = b'\n';
-        client.write_all(&boundary).await.unwrap();
-        match next_event(&mut events_rx).await {
-            RpcEvent::ProtocolError(error) if error.kind == FrameErrorKind::InvalidEnvelope => {}
-            other => panic!("expected an envelope error, got: {other:?}"),
-        }
-
-        // The envelope error is fatal: the reader stopped and never parses
-        // the valid frame written afterwards (the write may or may not
-        // succeed depending on pipe state).
-        let _ = client
-            .write_all(br#"{"jsonrpc":"2.0","id":1,"result":{}}"#)
-            .await;
-        assert_no_further_events(&mut events_rx).await;
-    }
-
-    #[tokio::test]
-    async fn reader_rejects_the_first_byte_beyond_the_max() {
-        let (mut client, server) = duplex(8192);
-        let (events_tx, mut events_rx) = mpsc::channel(8);
-        tokio::spawn(stdout_reader(
-            server,
-            events_tx,
-            test_wire(),
-            test_frame_bytes(),
-        ));
-
-        let mut oversized = vec![b'x'; MAX_RPC_FRAME_BYTES + 1];
-        oversized.push(b'\n');
-        client.write_all(&oversized).await.unwrap();
-        match next_event(&mut events_rx).await {
-            RpcEvent::ProtocolError(error) if error.kind == FrameErrorKind::TooLarge => {}
-            other => panic!("expected a size error, got: {other:?}"),
-        }
-        // The reader terminated before EOF: no close event follows.
-        assert_no_further_events(&mut events_rx).await;
-    }
-
-    #[tokio::test]
-    async fn reader_treats_malformed_frames_as_fatal_and_stops() {
-        let (mut client, server) = duplex(4096);
-        let (events_tx, mut events_rx) = mpsc::channel(8);
-        tokio::spawn(stdout_reader(
-            server,
-            events_tx,
-            test_wire(),
-            test_frame_bytes(),
-        ));
-
-        client.write_all(b"not json\n").await.unwrap();
-        match next_event(&mut events_rx).await {
-            RpcEvent::ProtocolError(error) if error.kind == FrameErrorKind::InvalidJson => {}
-            _ => panic!("expected an invalid JSON error"),
-        }
-        // A valid frame written afterwards is never read: no recovery. The
-        // reader already dropped its half, so the write may fail.
-        let _ = client
-            .write_all(br#"{"jsonrpc":"2.0","id":1,"result":{}}"#)
-            .await;
-        assert_no_further_events(&mut events_rx).await;
-    }
-
-    #[tokio::test]
-    async fn reader_reports_clean_eof_and_partial_frames() {
-        let (mut client, server) = duplex(4096);
-        let (events_tx, mut events_rx) = mpsc::channel(8);
-        tokio::spawn(stdout_reader(
-            server,
-            events_tx,
-            test_wire(),
-            test_frame_bytes(),
-        ));
-
-        client
-            .write_all(br#"{"jsonrpc":"2.0","id":1,"result":{}}{"#)
-            .await
-            .unwrap();
-        drop(client);
-        match next_event(&mut events_rx).await {
-            RpcEvent::ProtocolError(error) if error.kind == FrameErrorKind::PartialFrame => {}
-            _ => panic!("expected a partial frame error"),
-        }
-        match next_event(&mut events_rx).await {
-            RpcEvent::ConnectionClosed => {}
-            _ => panic!("expected the connection close after EOF"),
-        }
-    }
-
-    #[tokio::test]
-    async fn stderr_reader_emits_bounded_utf8_safe_lines() {
-        let (mut client, server) = duplex(16 * 1024);
-        let (events_tx, mut events_rx) = mpsc::channel(8);
-        tokio::spawn(stderr_reader(server, events_tx));
-
-        // A short line, a line beyond the cap, and a line where the cap cuts
-        // inside a three-byte CJK code point.
-        client.write_all(b"short line\n").await.unwrap();
-        let mut long = vec![b'a'; MAX_AGENT_LOG_LINE_BYTES + 500];
-        long.push(b'\n');
-        let mut split = vec![b'b'; MAX_AGENT_LOG_LINE_BYTES - 1];
-        split.extend_from_slice("你".as_bytes());
-        split.push(b'\n');
-        client.write_all(&long).await.unwrap();
-        client.write_all(&split).await.unwrap();
-
-        match next_event(&mut events_rx).await {
-            RpcEvent::AgentStderr { bytes, dropped } => {
-                assert_eq!((bytes, dropped), ("short line".len(), 0));
-            }
-            _ => panic!("expected a stderr notice"),
-        }
-        let long_line = match next_event(&mut events_rx).await {
-            RpcEvent::AgentStderr { bytes, .. } => bytes,
-            _ => panic!("expected a stderr notice"),
-        };
-        assert_eq!(long_line, MAX_AGENT_LOG_LINE_BYTES);
-        let split_line = match next_event(&mut events_rx).await {
-            RpcEvent::AgentStderr { bytes, .. } => bytes,
-            _ => panic!("expected a stderr notice"),
-        };
-        assert_eq!(split_line, MAX_AGENT_LOG_LINE_BYTES - 1);
-    }
-
-    #[test]
-    fn stderr_line_replaces_interior_invalid_bytes_lossily() {
-        let mut bytes = b"ab".to_vec();
-        bytes.push(0xFF);
-        bytes.extend_from_slice(b"cd");
-        assert_eq!(agent_log_line(&bytes), "ab\u{FFFD}cd");
-
-        // A lead byte with a non-continuation neighbour is not a partial tail.
-        let mut bytes = b"ab".to_vec();
-        bytes.push(0xE4);
-        bytes.push(b'A');
-        assert_eq!(agent_log_line(&bytes), "ab\u{FFFD}A");
-    }
-
-    #[tokio::test]
-    async fn send_forwards_pre_numbered_requests_without_touching_ids() {
-        let (process, mut server) = test_process();
-
-        // Ids come from the caller and pass through untouched.
-        process.send(request(7, "agent.ping")).await.unwrap();
-        process.send(request(8, "model.list")).await.unwrap();
-
-        let mut lines = Vec::new();
-        timeout(TEST_TIMEOUT, read_lines(&mut server, &mut lines, 2))
-            .await
-            .unwrap();
-        assert_eq!(lines.len(), 2);
-        let first: Value = serde_json::from_slice(&lines[0]).unwrap();
-        let second: Value = serde_json::from_slice(&lines[1]).unwrap();
-        assert_eq!(first["id"], json!(7));
-        assert_eq!(second["id"], json!(8));
-        assert_eq!(second["method"], "model.list");
-
-        // The kill control path is idempotent from the caller's side.
-        process.kill_child();
-        process.kill_child();
-        drop(process);
-    }
-
-    #[tokio::test]
-    async fn send_accepts_request_lines_up_to_one_megabyte() {
-        let (process, _server) = test_process();
-        // Exactly 1 MiB including the terminating newline is accepted.
-        let params = params_with_line_bytes(MAX_REQUEST_LINE_BYTES);
-        process.send(request_with_params(1, params)).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn send_rejects_oversized_lines_without_writing_them() {
-        let (process, mut server) = test_process();
-        // One byte over the bound: rejected with the typed error.
-        let params = params_with_line_bytes(MAX_REQUEST_LINE_BYTES + 1);
-        let error = process
-            .send(request_with_params(1, params))
-            .await
-            .unwrap_err();
-        match error {
-            RpcError::RequestTooLarge {
-                actual_bytes,
-                max_bytes,
-            } => {
-                assert_eq!(actual_bytes, MAX_REQUEST_LINE_BYTES + 1);
-                assert_eq!(max_bytes, MAX_REQUEST_LINE_BYTES);
-            }
-            other => panic!("expected a size error, got: {other:?}"),
-        }
-        assert!(error.to_string().contains("byte limit"));
-        assert!(!error.to_string().contains("aaaa"));
-
-        // Nothing reached the writer: the agent never sees the oversized line.
-        let mut buf = [0u8; 64];
-        assert!(
-            timeout(Duration::from_millis(200), server.read(&mut buf))
-                .await
-                .is_err()
-        );
-
-        // UTF-8 counts in bytes, not characters: 400k three-byte CJK chars
-        // exceed the bound despite a small character count.
-        let (process, _server) = test_process();
-        let error = process
-            .send(request_with_params(1, json!({ "x": "你".repeat(400_000) })))
-            .await
-            .unwrap_err();
-        match error {
-            RpcError::RequestTooLarge { actual_bytes, .. } => {
-                assert!(actual_bytes > MAX_REQUEST_LINE_BYTES);
-            }
-            other => panic!("expected a size error, got: {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn try_send_admits_28_normal_then_reserves_four_control_slots() {
-        let (process, _server) = test_process();
-        for id in 0..OUTBOUND_NORMAL_CAPACITY as u64 {
-            process
-                .try_send(request(id + 1, "turn.send"), SendClass::Normal)
-                .expect("a normal slot is free");
-        }
-        assert!(matches!(
-            process.try_send(request(100, "turn.send"), SendClass::Normal),
-            Err(SendError::QueueFull(SendClass::Normal))
-        ));
-        for id in 0..(OUTBOUND_QUEUE_CAPACITY - OUTBOUND_NORMAL_CAPACITY) as u64 {
-            process
-                .try_send(request(200 + id, "turn.cancel"), SendClass::Control)
-                .expect("a reserved control slot is free");
-        }
-        assert!(matches!(
-            process.try_send(request(300, "turn.cancel"), SendClass::Control),
-            Err(SendError::QueueFull(SendClass::Control))
-        ));
-    }
-
-    #[tokio::test]
-    async fn try_send_enforces_the_1_mib_line_bound_without_writing() {
-        let (process, mut server) = test_process();
-        let params = params_with_line_bytes(MAX_REQUEST_LINE_BYTES + 1);
-        match process.try_send(request_with_params(1, params), SendClass::Normal) {
-            Err(SendError::RequestTooLarge {
-                actual_bytes,
-                max_bytes,
-            }) => {
-                assert_eq!(actual_bytes, MAX_REQUEST_LINE_BYTES + 1);
-                assert_eq!(max_bytes, MAX_REQUEST_LINE_BYTES);
-            }
-            other => panic!("expected a local size rejection, got: {other:?}"),
-        }
-        let mut buf = [0u8; 64];
-        assert!(
-            timeout(Duration::from_millis(200), server.read(&mut buf))
-                .await
-                .is_err(),
-            "a refused request must never reach the child"
-        );
-    }
-
-    #[tokio::test]
-    async fn wire_budget_releases_charge_when_the_app_owns_the_frame() {
-        let budget = WireBudget::new(10);
-        budget.charge(8).await;
-        assert_eq!(budget.used(), 8);
-        // Over the limit: the second charge must wait, not overrun.
-        assert!(
-            timeout(Duration::from_millis(50), budget.charge(8))
-                .await
-                .is_err()
-        );
-        budget.release(8);
-        timeout(TEST_TIMEOUT, budget.charge(8))
-            .await
-            .expect("the released charge lets the next frame in");
-        assert_eq!(budget.used(), 8);
-    }
-
-    #[tokio::test]
-    async fn recv_ends_when_all_sender_tasks_are_gone() {
-        let (client, _server) = duplex(1024);
-        let (events_tx, events_rx) = mpsc::channel(4);
-        let (kill_tx, _kill_rx) = mpsc::channel(1);
-        // The writer is the only holder of the events sender. It exits when
-        // the shared queue is closed and empty, which the test does below.
-        let outbound = Arc::new(Mutex::new(Outbound::default()));
-        let writer = tokio::spawn(stdin_writer(client, Arc::clone(&outbound), events_tx));
-        let mut process = RpcProcess {
-            outbound,
-            events: events_rx,
-            frame_bytes: test_frame_bytes(),
-            wire: Arc::new(WireBudget::new(MAX_WIRE_BUDGET_BYTES)),
-            kill: kill_tx,
-            tasks: vec![writer],
-            seen_exit: false,
-        };
-        {
-            let mut queue = process
-                .outbound
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            queue.closed = true;
-            queue.notify.notify_one();
-        }
-        assert!(
-            timeout(TEST_TIMEOUT, process.recv())
-                .await
-                .unwrap()
-                .is_none()
-        );
-        drop(process);
-    }
-
-    #[tokio::test]
-    async fn consumed_frames_release_their_wire_charge() {
-        let (mut client, server) = duplex(4096);
-        let (events_tx, events_rx) = mpsc::channel(4);
-        let wire = Arc::new(WireBudget::new(4096));
-        let frame_bytes = test_frame_bytes();
-        tokio::spawn(stdout_reader(
-            server,
-            events_tx,
-            Arc::clone(&wire),
-            Arc::clone(&frame_bytes),
-        ));
-        let (kill_tx, _kill_rx) = mpsc::channel(1);
-        let mut process = RpcProcess {
-            outbound: Arc::new(Mutex::new(Outbound::default())),
-            events: events_rx,
-            frame_bytes: Arc::clone(&frame_bytes),
-            wire: Arc::clone(&wire),
-            kill: kill_tx,
-            tasks: Vec::new(),
-            seen_exit: false,
-        };
-        let payload = serde_json::to_vec(&json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "result": {}
-        }))
-        .unwrap();
-        client.write_all(&payload).await.unwrap();
-        client.write_all(b"\n").await.unwrap();
-        let event = timeout(TEST_TIMEOUT, process.recv())
-            .await
-            .unwrap()
-            .expect("a decoded frame");
-        assert!(matches!(event, RpcEvent::Frame(_)));
-        // Receiving the frame hands ownership to the app, which releases the
-        // producer's charge instead of holding the whole read budget.
-        assert_eq!(wire.used(), 0);
-        assert!(
-            frame_bytes
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .is_empty()
-        );
-        drop(client);
-    }
-
-    #[tokio::test]
-    async fn try_recv_drains_all_buffered_events_before_reporting_closed() {
-        let (events_tx, events_rx) = mpsc::channel(EVENTS_CHANNEL_CAPACITY);
-        for index in 0..EVENTS_CHANNEL_CAPACITY {
-            events_tx
-                .send(RpcEvent::AgentStderr {
-                    bytes: index,
-                    dropped: 0,
-                })
-                .await
-                .unwrap();
-        }
-        drop(events_tx);
-        let (kill_tx, _kill_rx) = mpsc::channel(1);
-        let mut process = RpcProcess {
-            outbound: Arc::new(Mutex::new(Outbound::default())),
-            events: events_rx,
-            frame_bytes: test_frame_bytes(),
-            wire: Arc::new(WireBudget::new(MAX_WIRE_BUDGET_BYTES)),
-            kill: kill_tx,
-            tasks: Vec::new(),
-            seen_exit: false,
-        };
-
-        let mut received = 0;
-        while let Ok(Some(RpcEvent::AgentStderr { .. })) = process.try_recv() {
-            received += 1;
-        }
-        assert_eq!(received, EVENTS_CHANNEL_CAPACITY);
-        assert!(matches!(process.try_recv(), Err(RpcError::Closed)));
-    }
-
-    #[tokio::test]
-    async fn writer_failure_emits_a_protocol_error() {
-        let (client, server) = duplex(1024);
-        // The agent side is gone before the write: the writer must report a
-        // typed pipe failure instead of silently losing the request.
-        drop(server);
-        let (events_tx, mut events_rx) = mpsc::channel(4);
-        let outbound = Arc::new(Mutex::new(Outbound::default()));
-        tokio::spawn(stdin_writer(client, Arc::clone(&outbound), events_tx));
-        push_line(
-            &outbound,
-            serde_json::to_vec(&request(1, "agent.ping")).unwrap(),
-        );
-        match next_event(&mut events_rx).await {
-            RpcEvent::ProtocolError(error) => assert_eq!(error.kind, FrameErrorKind::Io),
-            other => panic!("expected an io protocol error, got: {other:?}"),
-        }
-    }
-
-    /// Spawns this test binary restricted to one helper test via libtest's
-    /// `--exact` switch, with stdio detached. The helpers live in this module
-    /// and their full names are part of the invocation.
-    fn spawn_helper(exact_test: &str) -> Child {
-        let mut command = Command::new(std::env::current_exe().expect("test executable"));
-        command
-            .arg("--exact")
-            .arg(exact_test)
-            .arg("--nocapture")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-        command
-            .spawn()
-            .expect("failed to spawn the helper test binary")
-    }
-
-    #[test]
-    fn helper_quiet_exit() {
-        // Spawned by `child_waiter_reports_natural_exit`; exits 0 at once.
-    }
-
-    #[test]
-    fn helper_hangs() {
-        // Sleeps only when spawned with libtest's `--exact` flag, so the
-        // regular suite run returns immediately while the killed worker gets
-        // a chance to hang.
-        if std::env::args().any(|arg| arg == "--exact") {
-            std::thread::sleep(Duration::from_secs(30));
-        }
-    }
-
-    #[tokio::test]
-    async fn child_waiter_reports_natural_exit() {
-        let child = spawn_helper("rpc::tests::helper_quiet_exit");
-        // Keep the kill sender alive: the waiter must only react to an
-        // actual kill request.
-        let (_kill_tx, kill_rx) = mpsc::channel(1);
-        let (events_tx, mut events_rx) = mpsc::channel(4);
-        let waiter = tokio::spawn(child_waiter(child, kill_rx, events_tx));
-
-        match next_event(&mut events_rx).await {
-            RpcEvent::Exited(Some(status)) => {
-                assert!(status.success(), "the helper should exit 0");
-            }
-            other => panic!("expected a natural exit event, got: {other:?}"),
-        }
-        waiter.await.expect("child waiter task finished");
-    }
-
-    #[tokio::test]
-    async fn child_waiter_kills_and_reaps_a_hanging_child() {
-        let child = spawn_helper("rpc::tests::helper_hangs");
-        let (kill_tx, kill_rx) = mpsc::channel(1);
-        let (events_tx, mut events_rx) = mpsc::channel(4);
-        let waiter = tokio::spawn(child_waiter(child, kill_rx, events_tx));
-
-        // Give the helper a moment to start up, then kill it through the
-        // control channel; the waiter must terminate and reap the process.
-        tokio::time::sleep(Duration::from_millis(150)).await;
-        kill_tx.send(()).await.expect("kill channel open");
-
-        match next_event(&mut events_rx).await {
-            RpcEvent::Exited(Some(status)) => {
-                assert!(!status.success(), "a killed child must not report success");
-            }
-            other => panic!("expected a killed exit event, got: {other:?}"),
-        }
-        waiter.await.expect("child waiter task finished");
-    }
-
-    async fn read_lines<R>(reader: &mut R, out: &mut Vec<Vec<u8>>, count: usize)
-    where
-        R: AsyncRead + Unpin,
-    {
-        let mut buf = [0u8; 4096];
-        let mut line = Vec::new();
-        while out.len() < count {
-            let read = reader.read(&mut buf).await.unwrap();
-            assert_ne!(read, 0, "unexpected EOF while reading lines");
-            for &byte in &buf[..read] {
-                if byte == b'\n' {
-                    out.push(std::mem::take(&mut line));
-                } else {
-                    line.push(byte);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn spawn_rejects_missing_config_before_spawning() {
-        let error = RpcProcess::spawn(
-            Path::new("minicore-agent"),
-            Path::new("/nonexistent/agent.toml"),
-        )
         .unwrap_err();
-        assert!(matches!(error, RpcError::ConfigMissing(_)));
-        assert!(error.to_string().contains("/nonexistent/agent.toml"));
-    }
-
-    #[tokio::test]
-    async fn spawn_reports_an_unusable_agent_binary() {
-        let config = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
-        let error =
-            RpcProcess::spawn(Path::new("/nonexistent/minicore-agent-bin"), &config).unwrap_err();
-        assert!(matches!(error, RpcError::Spawn(_)));
-        assert!(error.to_string().contains("failed to spawn"));
-    }
-    // ---- fake-agent harness ------------------------------------------
-    //
-    // The full OS pipe/lifecycle pipeline is exercised through the PRODUCTION
-    // `RpcProcess::spawn` against a scripted agent built as a non-installable
-    // `harness = false` test target (`tests/agent_process.rs`, so it never ships
-    // as a `[[bin]]`). Production exclusively assembles `agent --config
-    // <path> --stdio`; the config file content selects the fake's behavior.
-    // The same piped stdin/stdout/stderr/waiter pipeline is used as with a
-    // real agent; libtest output is never on the child's stdout because the
-    // fake is a plain `main`, not a `#[test]`.
-
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    /// RAII scratch config file for the fake agent; removed on drop,
-    /// including panic unwinds. Kept beside its process for the test's
-    /// lifetime so the child can read the mode file at startup.
-    struct TempConfigFile {
-        path: PathBuf,
-    }
-
-    impl TempConfigFile {
-        fn new(mode: &str) -> Self {
-            static SEQ: AtomicU64 = AtomicU64::new(0);
-            let dir = loop {
-                let candidate = std::env::temp_dir().join(format!(
-                    "mct-rpc-{}-{}",
-                    std::process::id(),
-                    SEQ.fetch_add(1, Ordering::Relaxed)
-                ));
-                match std::fs::create_dir(&candidate) {
-                    Ok(()) => break candidate,
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                    Err(error) => panic!("create fake config directory: {error}"),
-                }
-            };
-            let path = dir.join("agent.toml");
-            std::fs::write(&path, mode).expect("write fake config");
-            Self { path }
-        }
-    }
-
-    impl Drop for TempConfigFile {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.path);
-            let _ = std::fs::remove_dir(self.path.parent().expect("temp dir path"));
-        }
+        assert_eq!(error.kind, "request_too_large");
     }
 
     #[test]
-    fn fake_configs_have_independently_owned_directories() {
-        let first = TempConfigFile::new("first");
-        let second = TempConfigFile::new("second");
-        assert_ne!(first.path.parent(), second.path.parent());
-        drop(first);
-        assert_eq!(std::fs::read_to_string(&second.path).unwrap(), "second");
-    }
-
-    /// Locates the harness=false `agent_process` test target binary. Cargo may
-    /// expose it through `CARGO_BIN_EXE_agent_process` or place a hashed
-    /// executable beside this test binary; both paths are supported on Unix
-    /// and Windows.
-    fn agent_process_bin() -> PathBuf {
-        if let Some(path) = std::env::var_os("CARGO_BIN_EXE_agent_process").map(PathBuf::from) {
-            if is_regular_executable(&path) {
-                return path;
-            }
-        }
-        // `current_exe` may be relative; canonicalize so the deps directory
-        // is always an absolute path.
-        let executable = std::env::current_exe()
-            .expect("test executable")
-            .canonicalize()
-            .unwrap_or_else(|_| std::env::current_exe().expect("test executable"));
-        let dir = executable.parent().expect("deps directory").to_path_buf();
-        let candidates = std::fs::read_dir(&dir)
-            .expect("read the deps directory")
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| agent_process_name_candidate(name, cfg!(windows)))
-                    && is_regular_executable(path)
-            })
-            .collect::<Vec<_>>();
-        candidates
-            .into_iter()
-            .max_by_key(|path| {
-                std::fs::metadata(path)
-                    .and_then(|meta| meta.modified())
-                    .ok()
-            })
-            .expect("the agent_process test target must be built (cargo test --all-targets)")
-    }
-
-    /// Pure name filter used by the filesystem scan. Dep-info, pdb, rmeta,
-    /// and other companion files are rejected by their actual executable
-    /// metadata in `agent_process_bin`; this function only recognizes Cargo's
-    /// base/hashed target name with the Windows `.exe` suffix allowed.
-    fn agent_process_name_candidate(name: &str, windows: bool) -> bool {
-        let name = if windows {
-            let Some((stem, extension)) = name.rsplit_once('.') else {
-                return false;
-            };
-            if !extension.eq_ignore_ascii_case("exe") {
-                return false;
-            }
-            stem
-        } else {
-            if name.contains('.') {
-                return false;
-            }
-            name
-        };
-        name == "agent_process"
-            || name.strip_prefix("agent_process-").is_some_and(|suffix| {
-                !suffix.is_empty()
-                    && suffix
-                        .chars()
-                        .all(|character| character.is_ascii_hexdigit())
-            })
-    }
-
-    fn is_regular_executable(path: &Path) -> bool {
-        let Ok(metadata) = std::fs::metadata(path) else {
-            return false;
-        };
-        if !metadata.is_file() {
-            return false;
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            metadata.permissions().mode() & 0o111 != 0
-        }
-        #[cfg(windows)]
-        {
-            path.extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
-        }
-        #[cfg(not(any(unix, windows)))]
-        {
-            true
-        }
-    }
-
-    #[test]
-    fn agent_process_name_selection_accepts_windows_executables_only() {
-        assert!(agent_process_name_candidate("agent_process-abc", false));
-        assert!(agent_process_name_candidate("agent_process-abc.exe", true));
-        assert!(agent_process_name_candidate("agent_process.exe", true));
-        assert!(!agent_process_name_candidate(
-            "agent_process-abc.exe.d",
-            true
-        ));
-        assert!(!agent_process_name_candidate("agent_process-abc.pdb", true));
-        assert!(!agent_process_name_candidate(
-            "agent_process-abc.rmeta",
-            true
-        ));
-        assert!(!agent_process_name_candidate(
-            "agent_process-abc.d.exe",
-            true
-        ));
-        assert!(!agent_process_name_candidate(
-            "agent_process-not-a-hash.exe",
-            true
-        ));
-        assert!(!agent_process_name_candidate("agent_process-abc", true));
-        assert!(!agent_process_name_candidate(
-            "agent_process-abc.exe",
-            false
-        ));
-        assert!(!agent_process_name_candidate(
-            "not_agent_process-abc.exe",
-            true
-        ));
-    }
-
-    #[test]
-    fn agent_process_bare_run_is_quiet_and_successful() {
-        let output = std::process::Command::new(agent_process_bin())
-            .output()
-            .expect("spawn the bare harness target");
-        assert!(output.status.success());
-        assert!(output.stdout.is_empty(), "bare harness wrote RPC stdout");
-        assert!(output.stderr.is_empty(), "bare harness wrote stderr");
-    }
-
-    /// A live fake agent plus its scratch config, kept alive for the test's
-    /// lifetime; derefs to the `RpcProcess`.
-    struct FakeAgent {
-        process: RpcProcess,
-        _config: TempConfigFile,
-    }
-
-    impl std::ops::Deref for FakeAgent {
-        type Target = RpcProcess;
-        fn deref(&self) -> &RpcProcess {
-            &self.process
-        }
-    }
-
-    impl std::ops::DerefMut for FakeAgent {
-        fn deref_mut(&mut self) -> &mut RpcProcess {
-            &mut self.process
-        }
-    }
-
-    fn spawn_fake(mode: &str) -> FakeAgent {
-        let config = TempConfigFile::new(mode);
-        let binary = agent_process_bin();
-        let process = RpcProcess::spawn(&binary, &config.path)
-            .unwrap_or_else(|error| panic!("spawn agent_process ({mode}): {error}"));
-        FakeAgent {
-            process,
-            _config: config,
-        }
-    }
-
-    /// The fake-agent tests read events from a whole `RpcProcess` (unlike
-    /// the duplex unit helpers, which read a bare channel).
-    async fn next_process_event(process: &mut RpcProcess) -> RpcEvent {
-        timeout(TEST_TIMEOUT, process.recv())
-            .await
-            .expect("timed out waiting for an RPC event")
-            .expect("RPC event channel closed")
+    fn a_failure_keeps_the_first_honest_reason() {
+        let closed: Arc<Mutex<Option<String>>> = Arc::default();
+        let pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>> = Arc::default();
+        let (tx, mut rx) = mpsc::channel(4);
+        fail(&closed, &pending, &tx, "agent exited (0)");
+        fail(&closed, &pending, &tx, "agent closed its stdout");
+        assert_eq!(closed.lock().unwrap().as_deref(), Some("agent exited (0)"));
+        assert!(matches!(rx.try_recv(), Ok(Incoming::Closed { .. })));
     }
 
     #[tokio::test]
-    async fn fake_ping_then_clean_shutdown_reaps_the_child() {
-        let mut process = spawn_fake("serve");
-        process
-            .send(OutgoingRequest::ping(RequestId(1)))
-            .await
-            .expect("ping sends");
-        match next_process_event(&mut process).await {
-            RpcEvent::Frame(IncomingFrame::Response(response)) => {
-                assert_eq!(response.id, RequestId(1));
-            }
-            other => panic!("expected a ping response, got {other:?}"),
-        }
+    async fn reader_routes_responses_by_id_and_forwards_events() {
+        let (client_side, mut agent_side) = tokio::io::duplex(64 * 1024);
+        let pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>> = Arc::default();
+        let closed: Arc<Mutex<Option<String>>> = Arc::default();
+        let (events, mut event_rx) = mpsc::channel(8);
+        let reader = tokio::spawn(reader_task(
+            client_side,
+            pending.clone(),
+            events,
+            closed.clone(),
+        ));
 
-        process
-            .send(OutgoingRequest::shutdown(RequestId(2)))
-            .await
-            .expect("shutdown sends");
-        loop {
-            match next_process_event(&mut process).await {
-                RpcEvent::Frame(IncomingFrame::Response(response)) => {
-                    assert_eq!(response.id, RequestId(2));
-                    assert!(response.parse_shutdown().expect("ok").ok);
-                }
-                RpcEvent::ConnectionClosed => {}
-                RpcEvent::Exited(Some(status)) => {
-                    assert!(status.success(), "a clean shutdown exits 0");
-                    break;
-                }
-                other => panic!("unexpected event: {other:?}"),
-            }
-        }
-        assert!(process.child_reaped(), "the exit was consumed and reaped");
-        let start = Instant::now();
-        process.terminate().await;
-        assert!(
-            start.elapsed() < Duration::from_secs(1),
-            "terminate is a fast no-op after a clean exit"
-        );
-    }
-
-    #[tokio::test]
-    async fn fake_responses_are_out_of_order_but_ids_never_reorder() {
-        let mut process = spawn_fake("out_of_order");
-        process
-            .send(OutgoingRequest::ping(RequestId(7)))
-            .await
-            .expect("ping sends");
-        process
-            .send(OutgoingRequest::list_models(RequestId(8)))
-            .await
-            .expect("model.list sends");
-
-        let first = match next_process_event(&mut process).await {
-            RpcEvent::Frame(IncomingFrame::Response(response)) => response.id,
-            other => panic!("expected a response, got {other:?}"),
-        };
-        let second = match next_process_event(&mut process).await {
-            RpcEvent::Frame(IncomingFrame::Response(response)) => response.id,
-            other => panic!("expected a response, got {other:?}"),
-        };
-        assert_eq!(
-            first,
-            RequestId(8),
-            "model.list answered first in reverse mode"
-        );
-        assert_eq!(second, RequestId(7), "ping answered second");
-    }
-
-    #[tokio::test]
-    async fn fake_events_arrive_before_the_send_response() {
-        let mut process = spawn_fake("events_first");
-        process
-            .send(OutgoingRequest::send_turn(RequestId(3), "ses_1", "hello"))
-            .await
-            .expect("turn.send sends");
-        for _ in 0..4 {
-            let event = next_process_event(&mut process).await;
-            assert!(
-                matches!(
-                    event,
-                    RpcEvent::Frame(IncomingFrame::Notification(RpcNotification::AgentEvent(_)))
-                ),
-                "expected an agent event, got {event:?}"
-            );
-        }
-        match next_process_event(&mut process).await {
-            RpcEvent::Frame(IncomingFrame::Response(response)) => {
-                assert_eq!(response.id, RequestId(3));
-            }
-            other => panic!("expected the send response, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn fake_argument_preview_stream_reaches_cards_before_ack_without_tool_io() {
-        use crate::command::AppCommand;
-        use crate::event::AppEvent;
-        use crate::protocol::AgentEventWire;
-        use crate::state::tool::ToolKey;
-        use crate::ui::{testapp, transcript};
-        let mut process = spawn_fake("arguments_preview");
-        let mut app = testapp::open_empty(crate::theme::ThemeKind::Dark, "ses_1", None, "auto");
-        let send = testapp::take_requests(app.update(AppEvent::SubmitTurn {
-            session_id: "ses_1".into(),
-            text: "synthetic preview".into(),
-        }));
-        assert_eq!(send.len(), 1);
-        let send_id = send[0].id;
-        process
-            .send(send.into_iter().next().unwrap())
+        let (tx, rx) = oneshot::channel();
+        pending.lock().unwrap().insert(RequestId(7), tx);
+        let reply = json!({"jsonrpc": "2.0", "id": 7, "result": {"ok": true}});
+        let event = json!({"jsonrpc": "2.0", "method": "agent.event", "params": {
+            "type": "session_closed",
+            "data": {"session_id": "s", "meta": {"session_id": "s", "dropped_before": 0}}
+        }});
+        agent_side
+            .write_all(format!("{reply}\n{event}\n").as_bytes())
             .await
             .unwrap();
-        let key = ToolKey::new("ses_1", "loop_fake_1", 0, "write-preview");
-        let mut saw_generated = false;
-        let mut saw_upgraded = false;
-        let mut saw_terminal = false;
-        let mut previews = 0;
-        loop {
-            let event = next_process_event(&mut process).await;
-            let is_ack = matches!(&event, RpcEvent::Frame(IncomingFrame::Response(response)) if response.id == send_id);
-            let is_preview = matches!(
-                &event,
-                RpcEvent::Frame(IncomingFrame::Notification(RpcNotification::AgentEvent(
-                    AgentEventWire::ToolArgumentsPreview { .. }
-                )))
-            );
-            let is_invocation = matches!(
-                &event,
-                RpcEvent::Frame(IncomingFrame::Notification(RpcNotification::AgentEvent(
-                    AgentEventWire::ToolInvocation { .. }
-                )))
-            );
-            let is_terminal = matches!(
-                &event,
-                RpcEvent::Frame(IncomingFrame::Notification(RpcNotification::AgentEvent(
-                    AgentEventWire::TurnFinished { .. }
-                )))
-            );
-            let commands = app.update(AppEvent::Rpc(event));
-            for command in commands {
-                if let AppCommand::Rpc(request) = command {
-                    assert!(!matches!(request.method, "tool.read" | "tool.output"));
-                }
-            }
-            let rendered = transcript::prepare_conversation(&app, 80)
-                .lines()
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("\n");
-            if is_preview {
-                previews += 1;
-                if previews == 4 || previews == 5 {
-                    assert!(rendered.contains("generated-line-01"));
-                    assert!(rendered.contains("generated-line-10"));
-                    assert!(!rendered.contains("generated-line-11"));
-                    assert!(!rendered.contains("stale fragment"));
-                }
-                if previews == 6 {
-                    assert!(rendered.contains("Arguments generated"));
-                    assert!(
-                        app.active_view().unwrap().tool_presentations[&key]
-                            .invocation
-                            .is_none()
-                    );
-                    saw_generated = true;
-                }
-            }
-            if is_invocation {
-                let facts = &app.active_view().unwrap().tool_presentations[&key];
-                assert!(facts.arguments_preview.is_none());
-                assert!(facts.display.expanded_input.is_none());
-                assert!(facts.invocation.is_some());
-                saw_upgraded = true;
-            }
-            assert!(!rendered.contains("must never replace real invocation"));
-            if is_terminal {
-                assert!(
-                    app.active_view()
-                        .unwrap()
-                        .tool_presentations
-                        .values()
-                        .all(|facts| facts.arguments_preview.is_none())
-                );
-                saw_terminal = true;
-            }
-            if is_ack {
-                break;
-            }
-        }
-        assert_eq!(previews, 7);
-        assert!(saw_generated && saw_upgraded && saw_terminal);
-        process.terminate().await;
+        agent_side.flush().await.unwrap();
+
+        let response = rx.await.unwrap();
+        assert_eq!(response.id, RequestId(7));
+        let Some(Incoming::Event(event)) = event_rx.recv().await else {
+            panic!("expected an event");
+        };
+        assert!(matches!(*event, AgentEvent::SessionClosed { .. }));
+
+        // EOF closes the client with a visible reason and wakes the waiter.
+        let (waiting, _waiting_rx) = oneshot::channel();
+        pending.lock().unwrap().insert(RequestId(8), waiting);
+        drop(agent_side);
+        reader.await.unwrap();
+        assert!(closed.lock().unwrap().is_some());
+        assert!(pending.lock().unwrap().is_empty());
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(Incoming::Closed { .. })
+        ));
     }
 
     #[tokio::test]
-    async fn fake_serve_mode_speaks_the_full_contract() {
-        let mut process = spawn_fake("serve");
-        for (id, method) in [
-            (RequestId(1), "agent.ping"),
-            (RequestId(2), "model.list"),
-            (RequestId(3), "profile.list"),
-            (RequestId(4), "session.list"),
-        ] {
-            let request = OutgoingRequest::new(id, method, json!({}));
-            process.send(request).await.expect("request sends");
-            match next_process_event(&mut process).await {
-                RpcEvent::Frame(IncomingFrame::Response(response)) => {
-                    assert_eq!(response.id, id, "{method} answered with its id");
-                }
-                other => panic!("{method} expected a response, got {other:?}"),
-            }
-        }
-
-        process
-            .send(OutgoingRequest::reload(RequestId(5)))
-            .await
-            .expect("agent.reload sends");
-        match next_process_event(&mut process).await {
-            RpcEvent::Frame(IncomingFrame::Response(response)) => {
-                assert_eq!(response.id, RequestId(5));
-                assert_eq!(response.result, Some(json!({"ok": true})));
-            }
-            other => panic!("expected agent.reload, got {other:?}"),
-        }
-
-        process
-            .send(OutgoingRequest::session_create(
-                RequestId(6),
-                "/ws/fake",
-                None,
-                None,
-                None,
-                None,
-            ))
-            .await
-            .expect("session.create sends");
-        match next_process_event(&mut process).await {
-            RpcEvent::Frame(IncomingFrame::Response(response)) => {
-                assert_eq!(response.id, RequestId(6));
-            }
-            other => panic!("expected session.create, got {other:?}"),
-        }
-
-        process
-            .send(OutgoingRequest::send_turn(RequestId(7), "ses_fake_1", "hi"))
-            .await
-            .expect("turn.send sends");
-        match next_process_event(&mut process).await {
-            RpcEvent::Frame(IncomingFrame::Response(response)) => {
-                assert_eq!(response.id, RequestId(7));
-            }
-            other => panic!("expected turn.send, got {other:?}"),
-        }
-        for _ in 0..4 {
-            let event = next_process_event(&mut process).await;
-            assert!(matches!(
-                event,
-                RpcEvent::Frame(IncomingFrame::Notification(RpcNotification::AgentEvent(_)))
-            ));
-        }
-
-        process
-            .send(OutgoingRequest::shutdown(RequestId(9)))
-            .await
-            .expect("shutdown sends");
-        loop {
-            match next_process_event(&mut process).await {
-                RpcEvent::Frame(IncomingFrame::Response(response)) => {
-                    assert_eq!(response.id, RequestId(9));
-                }
-                RpcEvent::ConnectionClosed => {}
-                RpcEvent::Exited(Some(status)) => {
-                    assert!(status.success());
-                    break;
-                }
-                other => panic!("unexpected trailing event: {other:?}"),
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn fake_unknown_method_reports_a_top_level_jsonrpc_error() {
-        let mut process = spawn_fake("serve");
-        process
-            .send(OutgoingRequest::new(
-                RequestId(9),
-                "no.such.method",
-                json!({}),
-            ))
-            .await
-            .expect("unknown method sends");
-        match next_process_event(&mut process).await {
-            RpcEvent::Frame(IncomingFrame::Response(response)) => {
-                assert_eq!(response.id, RequestId(9));
-                let error = response
-                    .error
-                    .as_ref()
-                    .expect("the error sits at the top level, never inside result");
-                assert_eq!(error.code, -32601);
-                assert!(response.result.is_none());
-            }
-            other => panic!("expected a top-level error response, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn fake_crashing_agent_reports_termination_and_a_failed_exit() {
-        let mut process = spawn_fake("crash");
-        process
-            .send(OutgoingRequest::ping(RequestId(1)))
-            .await
-            .expect("ping sends");
-        let mut saw_closed = false;
-        let mut saw_exit = false;
-        while !(saw_closed && saw_exit) {
-            match next_process_event(&mut process).await {
-                RpcEvent::ConnectionClosed => saw_closed = true,
-                RpcEvent::Exited(Some(status)) => {
-                    assert!(!status.success(), "the crashed child must not succeed");
-                    saw_exit = true;
-                }
-                other => panic!("unexpected event after crash: {other:?}"),
-            }
-        }
-        // stdout EOF and the waiter exit are emitted by independent tasks;
-        // their relative order is intentionally not part of the contract.
-        assert!(saw_closed && saw_exit);
-    }
-
-    #[tokio::test]
-    async fn fake_terminate_kills_and_reaps_a_hanging_agent() {
-        let mut process = spawn_fake("hang");
-        process
-            .send(OutgoingRequest::ping(RequestId(1)))
-            .await
-            .expect("ping sends");
-        match next_process_event(&mut process).await {
-            RpcEvent::Frame(IncomingFrame::Response(response)) => {
-                assert_eq!(response.id, RequestId(1));
-            }
-            other => panic!("expected a ping response, got {other:?}"),
-        }
-        let start = Instant::now();
-        process.terminate().await;
+    async fn a_malformed_frame_stops_the_stream() {
+        let (client_side, mut agent_side) = tokio::io::duplex(4096);
+        let pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<RpcResponse>>>> = Arc::default();
+        let closed: Arc<Mutex<Option<String>>> = Arc::default();
+        let (events, _event_rx) = mpsc::channel(8);
+        let reader = tokio::spawn(reader_task(client_side, pending, events, closed.clone()));
+        agent_side.write_all(b"not json\n").await.unwrap();
+        agent_side.flush().await.unwrap();
+        reader.await.unwrap();
         assert!(
-            start.elapsed() < Duration::from_secs(3),
-            "terminate must force-kill a child that ignores shutdown"
+            closed
+                .lock()
+                .unwrap()
+                .as_deref()
+                .unwrap()
+                .contains("unreadable frame")
         );
-        assert!(process.child_reaped(), "the killed child must be reaped");
-        let start = Instant::now();
-        process.terminate().await;
-        assert!(start.elapsed() < Duration::from_secs(1));
-    }
-
-    #[tokio::test]
-    async fn fake_hanging_agent_stderr_survives_until_kill_and_reap() {
-        let mut process = spawn_fake("hang_stderr");
-        process
-            .send(OutgoingRequest::ping(RequestId(1)))
-            .await
-            .expect("ping sends");
-        let mut saw_log = false;
-        let mut saw_ping = false;
-        while !(saw_log && saw_ping) {
-            match next_process_event(&mut process).await {
-                RpcEvent::AgentStderr { bytes, .. } => {
-                    assert_eq!(bytes, "fake agent stderr before forced termination".len());
-                    saw_log = true;
-                }
-                RpcEvent::Frame(IncomingFrame::Response(response)) => {
-                    assert_eq!(response.id, RequestId(1));
-                    saw_ping = true;
-                }
-                other => panic!("unexpected event before forced termination: {other:?}"),
-            }
-        }
-        process.kill_child();
-        process.terminate().await;
-        assert!(process.child_reaped(), "the forced child must be reaped");
-    }
-
-    /// A real harness child stops consuming stdin while continuously writing
-    /// valid, roughly-1 MiB stdout frames. The production OS pipes must keep
-    /// the decoded frame budget below 64 MiB, normal admission must remain
-    /// synchronous at 28 slots with four reserved control slots, and the
-    /// child must resume FIFO stdin processing after the parent drains stdout.
-    #[tokio::test]
-    #[ignore = "remote OS-child backpressure and fairness acceptance"]
-    async fn real_child_stdout_flood_keeps_control_admission_and_cleanup_bounded() {
-        let mut process = spawn_fake("stdout_flood");
-        process
-            .send(OutgoingRequest::ping(RequestId(1)))
-            .await
-            .expect("flood ping sends");
-        match next_process_event(&mut process).await {
-            RpcEvent::Frame(IncomingFrame::Response(response)) => {
-                assert_eq!(response.id, RequestId(1));
-            }
-            other => panic!("expected flood ping response, got {other:?}"),
-        }
-
-        let started = Instant::now();
-        for id in 0..OUTBOUND_NORMAL_CAPACITY as u64 {
-            process
-                .try_send(request(100 + id, "agent.reload"), SendClass::Normal)
-                .expect("normal request admission stays synchronous");
-        }
-        for id in 0..(OUTBOUND_QUEUE_CAPACITY - OUTBOUND_NORMAL_CAPACITY) as u64 {
-            process
-                .try_send(request(200 + id, "turn.cancel"), SendClass::Control)
-                .expect("control request admission stays synchronous");
-        }
-        assert!(
-            started.elapsed() < Duration::from_millis(100),
-            "try_send must not wait for the paused child or stdout consumer"
-        );
-
-        let wire_threshold = MAX_WIRE_BUDGET_BYTES - 2 * 1024 * 1024;
-        timeout(Duration::from_secs(3), async {
-            while process.wire.used() < wire_threshold {
-                assert!(
-                    process.wire.used() <= MAX_WIRE_BUDGET_BYTES,
-                    "decoded stdout exceeded the 64 MiB wire budget"
-                );
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the real child must reach the bounded stdout budget");
-
-        let mut max_wire = process.wire.used();
-        let mut frame_count = 0usize;
-        let mut responses = Vec::new();
-        while responses.len() < OUTBOUND_QUEUE_CAPACITY {
-            let event = timeout(Duration::from_secs(5), process.recv())
-                .await
-                .expect("stdout flood must remain live")
-                .expect("flood process event channel must stay open");
-            match event {
-                RpcEvent::Frame(IncomingFrame::Response(response))
-                    if response.id.0 >= 100 && response.id.0 < 300 =>
-                {
-                    responses.push(response.id.0);
-                }
-                RpcEvent::Frame(_) => frame_count += 1,
-                _ => {}
-            }
-            max_wire = max_wire.max(process.wire.used());
-            assert!(
-                process.wire.used() <= MAX_WIRE_BUDGET_BYTES,
-                "wire budget must remain bounded while draining stdout"
-            );
-        }
-        let expected: Vec<u64> = (100..128).chain(200..204).collect();
-        assert_eq!(responses, expected, "normal and control requests stay FIFO");
-        assert!(frame_count >= 60, "the child must produce sustained stdout");
-        assert!(
-            max_wire >= wire_threshold,
-            "the budget gate was not exercised"
-        );
-
-        process
-            .send(OutgoingRequest::shutdown(RequestId(300)))
-            .await
-            .expect("shutdown joins the resumed FIFO after the flood");
-        timeout(Duration::from_secs(5), async {
-            loop {
-                match process.recv().await {
-                    Some(RpcEvent::Frame(IncomingFrame::Response(response)))
-                        if response.id == RequestId(300) => {}
-                    Some(RpcEvent::Exited(Some(status))) => {
-                        assert!(status.success(), "flood child shutdown must be clean");
-                        break;
-                    }
-                    Some(_) => {}
-                    None => panic!("flood child closed before its exit event"),
-                }
-            }
-        })
-        .await
-        .expect("flood child must be fully reaped after FIFO cleanup");
-        assert!(process.child_reaped());
-    }
-
-    #[tokio::test]
-    async fn fake_oversized_request_lines_are_rejected_without_writing() {
-        let process = spawn_fake("serve");
-        let params = json!({ "x": "a".repeat(1024 * 1024) });
-        let error = process
-            .send(OutgoingRequest::new(RequestId(1), "agent.ping", params))
-            .await
-            .expect_err("oversized lines never reach the agent");
-        assert!(matches!(error, RpcError::RequestTooLarge { .. }));
     }
 }

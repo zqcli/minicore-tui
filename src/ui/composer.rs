@@ -13,9 +13,14 @@
 use std::collections::VecDeque;
 use std::ops::Range;
 
+use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
 
+use super::theme::Styles;
 use super::wrap;
+
+/// Rows a draft needs at `width`, capped at [`COMPOSER_ROWS`].
+pub const COMPOSER_ROWS: usize = 10;
 
 /// Multi-line pastes longer than this many lines become a token, as do single
 /// lines above [`TOKEN_BYTES`].
@@ -637,6 +642,80 @@ impl Composer {
             used += cells;
         }
         self.projection().raw(start + row.len())
+    }
+}
+
+/// Renders the composer band: a rail plus the wrapped draft. Returns the rows
+/// and the cursor position relative to the first row.
+///
+/// The rail is two cells wide, so the draft wraps to `width - 2`.
+pub fn render(
+    text: &str,
+    cursor: Option<usize>,
+    styles: Styles,
+    width: u16,
+) -> (Vec<Line<'static>>, (u16, u16)) {
+    let total = width.max(3) as usize;
+    let content = total - 2;
+    let empty = text.is_empty();
+    let shown = if empty {
+        "Ask anything · / commands · @ files"
+    } else {
+        text
+    };
+    let caret = cursor.unwrap_or(shown.len()).min(shown.len());
+    let body = if empty {
+        styles.subtle()
+    } else {
+        styles.text()
+    };
+
+    let mut rows: Vec<Line<'static>> = Vec::new();
+    let mut caret_row = 0usize;
+    let mut caret_column = 2usize;
+    let mut offset = 0usize;
+    for line in shown.split('\n') {
+        let pieces = wrap::wrap(line, content);
+        if (offset..=offset + line.len()).contains(&caret) {
+            let prefix = &line[..caret.saturating_sub(offset).min(line.len())];
+            let prefix_rows = wrap::wrap(prefix, content);
+            caret_row = rows.len() + prefix_rows.len() - 1;
+            caret_column = 2 + wrap::width(prefix_rows.last().map_or("", String::as_str));
+        }
+        for piece in pieces {
+            rows.push(rail_row(&piece, body, styles));
+        }
+        offset += line.len() + 1;
+    }
+    if rows.is_empty() {
+        rows.push(rail_row("", body, styles));
+    }
+
+    let start = if rows.len() > COMPOSER_ROWS {
+        caret_row
+            .saturating_sub(COMPOSER_ROWS / 2)
+            .min(rows.len() - COMPOSER_ROWS)
+    } else {
+        0
+    };
+    let rows: Vec<Line<'static>> = rows.into_iter().skip(start).take(COMPOSER_ROWS).collect();
+    (
+        rows,
+        (
+            (caret_row - start) as u16,
+            caret_column.min(total - 1) as u16,
+        ),
+    )
+}
+
+/// One composer row: accent rail, then the draft cell.
+fn rail_row(text: &str, style: ratatui::style::Style, styles: Styles) -> Line<'static> {
+    let mut spans = vec![Span::styled("▎ ", styles.accent())];
+    spans.push(Span::styled(text.to_owned(), style));
+    Line {
+        style: styles.composer(),
+        spans,
+        alignment: None,
     }
 }
 

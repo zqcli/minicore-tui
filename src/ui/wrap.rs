@@ -276,6 +276,44 @@ fn push_picture(out: &mut String, ch: char) {
     }
 }
 
+/// Clips `text` to `width` cells, right-aligning `suffix` when both fit.
+pub fn clip(text: &str, suffix: &str, width: usize) -> String {
+    let text = sanitize(text);
+    let suffix_width = self::width(suffix);
+    if suffix.is_empty() {
+        return truncate(&text, width);
+    }
+    if suffix_width + 2 >= width {
+        return truncate(&text, width);
+    }
+    let available = width - suffix_width - 1;
+    let head = truncate(&text, available);
+    let padding = width - self::width(&head) - suffix_width;
+    format!("{head}{}{suffix}", " ".repeat(padding))
+}
+
+/// Truncates to at most `width` cells, adding an ellipsis when cut.
+pub fn truncate(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    if self::width(text) <= width {
+        return text.to_owned();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for grapheme in text.graphemes(true) {
+        let grapheme_width = UnicodeWidthStr::width(grapheme);
+        if used + grapheme_width > width.saturating_sub(1) {
+            break;
+        }
+        out.push_str(grapheme);
+        used += grapheme_width;
+    }
+    out.push('…');
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

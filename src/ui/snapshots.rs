@@ -1,737 +1,369 @@
-//! Stable text snapshots of the fullscreen renderer (an insta-equivalent
-//! built into the crate: offline, no external tool). Fixtures are always
-//! built through `App::update`; the artifacts live in `snapshots/*.txt`.
-//! Regenerate with `MCT_UPDATE_SNAPSHOTS=1 cargo test --locked`.
+//! Full-screen render tests. Each one builds an `App`, draws it into a
+//! `TestBackend` and compares the text of the frame against a checked-in
+//! snapshot, so a visual regression shows up as a diff instead of a screenshot.
+
+use std::path::PathBuf;
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use tokio::sync::mpsc;
 
-use crate::app::App;
-use crate::event::AppEvent;
-use crate::theme::ThemeKind;
-use crate::ui::{render, testapp};
+use crate::app::keys::Input;
+use crate::app::{App, Msg, Overlay, Scroll, Session};
+use crate::protocol::read::UserKind;
+use crate::protocol::{LoopOutcome, Reasoning, SessionInfo, ToolRef, TurnRef};
+use crate::theme::{Palette, ThemeKind};
+use crate::transcript::block::{ToolState, Transcript};
+use crate::transcript::{Block, ChangeSummary, RequestKey, ToolCall};
 
-fn capture(app: &App, width: u16, height: u16) -> String {
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal.draw(|frame| render(frame, app)).unwrap();
-    let buffer = terminal.backend().buffer();
-    let width = buffer.area.width as usize;
-    let rows: Vec<String> = buffer
-        .content()
-        .chunks(width)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol())
-                .collect::<String>()
-                .trim_end()
-                .to_owned()
+/// A render fixture. The client needs a child process to exist, so it points at
+/// `/bin/sleep`: the child exits at once with an argument error, which a render
+/// never observes. Nothing is written, so parallel tests cannot race.
+struct Fixture {
+    app: App,
+    _runtime: tokio::runtime::Runtime,
+}
+
+impl std::ops::Deref for Fixture {
+    type Target = App;
+
+    fn deref(&self) -> &App {
+        &self.app
+    }
+}
+
+impl std::ops::DerefMut for Fixture {
+    fn deref_mut(&mut self) -> &mut App {
+        &mut self.app
+    }
+}
+
+fn app() -> Fixture {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (tx, _rx) = mpsc::unbounded_channel::<Msg>();
+    let (incoming_tx, _incoming_rx) = mpsc::channel(4);
+    let client = runtime
+        .block_on(async {
+            crate::rpc::Client::spawn(
+                std::path::Path::new("/bin/sleep"),
+                std::path::Path::new("/dev/null"),
+                incoming_tx,
+            )
         })
-        .collect();
-    rows.join("\n") + "\n"
-}
-
-/// Snapshot rows keep the renderer's line breaks and `wrap_plain` may cut
-/// inside a word at a display-cell boundary, so a sentence spanning a wrapped
-/// page row cannot be matched with a plain `contains`. Strip all layout
-/// whitespace from both the capture and the expected text so the exact
-/// character and punctuation order must still appear.
-fn unspaced(text: &str) -> String {
-    text.chars().filter(|c| !c.is_whitespace()).collect()
-}
-
-fn snapshot(app: &App, name: &str, width: u16, height: u16) {
-    let actual = capture(app, width, height);
-    let dir = format!("{}/snapshots", env!("CARGO_MANIFEST_DIR"));
-    let path = format!("{dir}/{name}.txt");
-    if std::env::var_os("MCT_UPDATE_SNAPSHOTS").is_some() {
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(&path, &actual).unwrap();
-        return;
+        .expect("client");
+    let mut app = App::new(client, tx, PathBuf::from("/work/minicore-tui"));
+    app.palette = Palette::for_kind(ThemeKind::Dark);
+    app.ready = true;
+    let mut session = Session::new(info());
+    session.transcript = Transcript::default();
+    app.session = Some(session);
+    Fixture {
+        app,
+        _runtime: runtime,
     }
-    let expected = std::fs::read_to_string(&path).unwrap_or_else(|_| "<missing>".to_owned());
+}
+
+fn info() -> SessionInfo {
+    SessionInfo {
+        session_id: "ses_0123456789abcdef".into(),
+        title: Some("Cache the parser".into()),
+        profile: "coding".into(),
+        workspace: "/work/minicore-tui".into(),
+        model: "gpt-6-luna".into(),
+        reasoning: Reasoning::Max,
+        loaded: true,
+        created_at: String::new(),
+        updated_at: String::new(),
+    }
+}
+
+fn tool() -> ToolCall {
+    let mut call = ToolCall::new(
+        ToolRef {
+            session_id: "ses_0123456789abcdef".into(),
+            loop_id: "loop_1".into(),
+            request_index: 1,
+            tool_call_id: "call_1".into(),
+        },
+        "bash",
+    );
+    call.detail = "$ cargo test --lib".into();
+    call.state = ToolState::Succeeded;
+    call.duration = Some(std::time::Duration::from_millis(4200));
+    call.exit_code = Some(0);
+    call.output = vec!["running 131 tests".into(), "test result: ok".into()];
+    call.output_lines = Some(16);
+    call
+}
+
+fn conversation(app: &mut App) {
+    let session = app.session.as_mut().expect("session");
+    let transcript = &mut session.transcript;
+    transcript.push(Block::User {
+        text: "Why does the parser re-parse the whole message on every delta?".into(),
+        kind: UserKind::Prompt,
+    });
+    transcript.push(Block::Assistant {
+        key: RequestKey {
+            loop_id: "loop_1".into(),
+            request_index: 0,
+        },
+        reasoning: "The layout cache only keyed on the block revision...".into(),
+        text: "It does not any more. The **streaming renderer** keeps the stable prefix and\nre-renders only the tail, so a delta costs one small parse.".into(),
+        streaming: false,
+    });
+    transcript.push(Block::Tool(Box::new(tool())));
+    transcript.push(Block::TurnEnd {
+        loop_id: "loop_1".into(),
+        outcome: LoopOutcome::Completed,
+        duration: Some(std::time::Duration::from_secs(12)),
+        requests: 2,
+        tool_rounds: 1,
+        usage: Default::default(),
+        changes: Some(ChangeSummary {
+            files: 2,
+            added: 40,
+            removed: 7,
+        }),
+    });
+}
+
+fn render(app: &mut App, width: u16, height: u16) -> String {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| crate::ui::draw(frame, app))
+        .expect("draw");
+    let buffer = terminal.backend().buffer().clone();
+    let mut out = String::new();
+    for row in 0..buffer.area.height {
+        let mut line = String::new();
+        for column in 0..buffer.area.width {
+            line.push_str(buffer[(column, row)].symbol());
+        }
+        out.push_str(line.trim_end_matches(' '));
+        out.push('\n');
+    }
+    out
+}
+
+/// The checked-in frame. Snapshots live in the source so the expected output is
+/// reviewed with the code that produces it; `cargo test` diffs against it.
+const IDLE: &str = include_str!("../../tests/snapshots/idle.txt");
+const STREAMING: &str = include_str!("../../tests/snapshots/streaming.txt");
+
+fn snapshot(path: &str, expected: &str, rendered: String) {
+    let _ = path;
+    assert_eq!(expected, rendered, "frame differs from {path}");
+}
+
+#[test]
+fn idle_screen_shows_the_rail_composer_and_footer() {
+    let mut app = app();
+    conversation(&mut app);
+    snapshot("tests/snapshots/idle.txt", IDLE, render(&mut app, 70, 20));
+}
+
+#[test]
+fn the_screen_shows_earlier_content_while_streaming() {
+    let mut app = app();
+    conversation(&mut app);
+    let session = app.session.as_mut().expect("session");
+    session.transcript.push(Block::User {
+        text: "Now stream a longer answer.".into(),
+        kind: UserKind::Prompt,
+    });
+    session.transcript.push(Block::Assistant {
+        key: RequestKey {
+            loop_id: "loop_2".into(),
+            request_index: 0,
+        },
+        reasoning: "I should explain the anchor rule first, then show it.".into(),
+        text: "An anchored view keeps its block and row, so\nnew output below never moves the text you\nare reading. Only scrolling to the end returns\nto following.".into(),
+        streaming: true,
+    });
+    snapshot(
+        "tests/snapshots/streaming.txt",
+        STREAMING,
+        render(&mut app, 70, 20),
+    );
+}
+
+#[test]
+fn an_anchored_view_does_not_move_when_content_grows() {
+    let mut app = app();
+    conversation(&mut app);
+    // Scroll up: the anchor is the first user block.
+    app.scroll = Scroll::Anchor {
+        block: 0,
+        offset: 0,
+    };
+    let before = render(&mut app, 70, 20);
+    let session = app.session.as_mut().expect("session");
+    session.transcript.push(Block::Assistant {
+        key: RequestKey {
+            loop_id: "loop_3".into(),
+            request_index: 0,
+        },
+        reasoning: String::new(),
+        text: (0..60)
+            .map(|index| format!("appended line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        streaming: true,
+    });
+    let after = render(&mut app, 70, 20);
+    let kept: Vec<&str> = before.lines().take(10).collect();
+    assert!(
+        kept.iter()
+            .all(|line| after.lines().any(|new| new == *line)),
+        "the anchored top must not be replaced:\n{before}\n---\n{after}"
+    );
+    assert!(
+        after.contains("↓ new output"),
+        "the pill marks content below an anchored view:\n{after}"
+    );
+}
+
+#[test]
+fn the_composer_grows_with_its_content_and_caps_at_ten_rows() {
+    let mut app = app();
+    app.composer = (0..20)
+        .map(|index| format!("line {index} of a long draft"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let rendered = render(&mut app, 60, 30);
+    let composer_rows = rendered
+        .lines()
+        .filter(|line| line.starts_with('▎'))
+        .count();
     assert_eq!(
-        expected, actual,
-        "\n--- snapshot `{name}` differs ---\nACTUAL:\n{actual}\n--- EXPECTED:\n{expected}\n"
+        composer_rows, 10,
+        "the composer caps at ten rows:\n{rendered}"
     );
 }
 
 #[test]
-fn empty_dark_80x24() {
-    snapshot(&testapp::fresh(ThemeKind::Dark), "empty_dark_80x24", 80, 24);
+fn the_footer_reports_the_state_and_context() {
+    let mut app = app();
+    app.composer = "hello".into();
+    let rendered = render(&mut app, 80, 12);
+    let footer = rendered.lines().last().unwrap_or_default();
+    assert!(footer.contains("minicore-tui@-"), "{footer}");
+    assert!(footer.contains("gpt-6-luna"), "{footer}");
+    assert!(footer.contains("max"), "{footer}");
+    assert!(footer.contains("● ready"), "{footer}");
 }
 
 #[test]
-fn workspace_e2_panels() {
-    use crate::state::workspace::{BrowserKind, FileLayout, ReturnTarget};
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-    let fixture = |name: &str| -> serde_json::Value {
-        serde_json::from_str::<serde_json::Value>(
-            &std::fs::read_to_string(format!("tests/fixtures/agent-v1/{name}.json")).unwrap(),
-        )
-        .unwrap()["result"]
-            .clone()
-    };
-    for (theme, width, height, name) in [
-        (ThemeKind::Dark, 60, 16, "e2_file_dark_60x16"),
-        (ThemeKind::Light, 80, 24, "e2_file_light_80x24"),
-    ] {
-        let mut app = testapp::open_empty(theme, "ses_1", None, "high");
-        app.update(AppEvent::TerminalSize { width, height });
-        app.composer_mut().type_text("preserved draft");
-        let request = testapp::take_requests(app.open_file_preview(
-            "src/main.rs".into(),
-            None,
-            ReturnTarget::Conversation,
-        ))
-        .remove(0);
-        testapp::respond(&mut app, &request, fixture("workspace-read-ok"));
-        let request = app
-            .file_layout_request(app.main_body_area().width.saturating_sub(8).max(1))
-            .unwrap();
-        app.mark_file_layout_pending(request.identity.clone());
-        app.update(AppEvent::FileLayoutPrepared(
-            FileLayout::build(request).unwrap(),
-        ));
-        snapshot(&app, name, width, height);
-    }
-    for (kind, width, height, name, source) in [
-        (
-            BrowserKind::Files,
-            80,
-            24,
-            "e2_files_dark_80x24",
-            "workspace-files",
-        ),
-        (
-            BrowserKind::Grep,
-            120,
-            40,
-            "e2_grep_dark_120x40",
-            "workspace-search",
-        ),
-    ] {
-        let mut app = testapp::open_empty(ThemeKind::Dark, "ses_1", None, "high");
-        app.update(AppEvent::TerminalSize { width, height });
-        app.open_workspace_browser(
-            kind,
-            if kind == BrowserKind::Grep {
-                "needle".into()
-            } else {
-                String::new()
-            },
-            false,
+fn a_fatal_error_shows_the_stderr_tail() {
+    let mut app = app();
+    app.fatal = Some(crate::app::Fatal {
+        reason: "agent exited (1)".into(),
+        stderr_tail: vec![
+            "error: could not read config".into(),
+            "error: giving up".into(),
+        ],
+    });
+    let rendered = render(&mut app, 60, 14);
+    assert!(rendered.contains("Fatal error"), "{rendered}");
+    assert!(rendered.contains("agent exited (1)"), "{rendered}");
+    assert!(rendered.contains("could not read config"), "{rendered}");
+    assert!(
+        rendered.to_lowercase().contains("press q"),
+        "the fatal screen says how to quit:\n{rendered}"
+    );
+}
+
+#[test]
+fn no_color_renders_the_same_layout_without_color() {
+    let mut app = app();
+    conversation(&mut app);
+    let colored = render(&mut app, 70, 20);
+    app.palette = Palette::plain();
+    let plain = render(&mut app, 70, 20);
+    assert_eq!(colored, plain, "NO_COLOR changes colors, never layout");
+}
+
+#[test]
+fn a_narrow_terminal_keeps_every_row_within_the_width() {
+    let mut app = app();
+    conversation(&mut app);
+    let rendered = render(&mut app, 30, 24);
+    for line in rendered.lines() {
+        assert!(
+            crate::ui::wrap::width(line) <= 30,
+            "a row exceeds the terminal width: {line:?}"
         );
-        let request = testapp::take_requests(app.update(AppEvent::Terminal(Event::Key(
-            KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE),
-        ))))
-        .remove(0);
-        testapp::respond(&mut app, &request, fixture(source));
-        snapshot(&app, name, width, height);
     }
 }
 
 #[test]
-fn review_e3_panels_at_three_sizes() {
-    use crate::{protocol::changes::ChangeScope, state::changes::DiffLayout};
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-    let fixture = |name: &str| -> serde_json::Value {
-        serde_json::from_str::<serde_json::Value>(
-            &std::fs::read_to_string(format!("tests/fixtures/agent-v1/{name}.json")).unwrap(),
-        )
-        .unwrap()["result"]
-            .clone()
-    };
-    for (theme, width, height, label) in [
-        (ThemeKind::Dark, 60, 16, "dark"),
-        (ThemeKind::Light, 80, 24, "light"),
-        (ThemeKind::Dark, 120, 40, "dark"),
-    ] {
-        let mut app = testapp::open_empty(theme, "ses_1", None, "high");
-        app.update(AppEvent::TerminalSize { width, height });
-        app.composer_mut().type_text("preserved draft");
-        let requests = testapp::take_requests(app.open_changes(ChangeScope::Workspace));
-        for r in &requests {
-            let mut value = fixture(if r.method == "workspace.status" {
-                "workspace-status"
-            } else {
-                "changes-list-workspace"
-            });
-            if r.method == "changes.list" {
-                value["session_id"] = "ses_1".into();
-            }
-            testapp::respond(&mut app, r, value);
-        }
-        snapshot(
-            &app,
-            &format!("e3_changes_{label}_{width}x{height}"),
-            width,
-            height,
+fn typing_keeps_the_draft_visible_and_marked_with_the_rail() {
+    let mut app = app();
+    for character in "hello".chars() {
+        assert_eq!(
+            app.on_key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(character),
+                crossterm::event::KeyModifiers::NONE,
+            )),
+            Input::Edited
         );
-        let request = testapp::take_requests(app.update(AppEvent::Terminal(Event::Key(
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-        ))))
-        .remove(0);
-        let mut value = fixture("changes-diff-workspace");
-        value["comparison"] = request.params["comparison"].clone();
-        testapp::respond(&mut app, &request, value);
-        let request = app
-            .diff_layout_request(app.main_body_area().width.saturating_sub(16).max(1))
-            .unwrap();
-        app.mark_diff_layout_pending(request.identity.clone());
-        app.update(AppEvent::DiffLayoutPrepared(
-            DiffLayout::build(request).unwrap(),
-        ));
-        snapshot(
-            &app,
-            &format!("e3_diff_{label}_{width}x{height}"),
-            width,
-            height,
-        );
-        let request = testapp::take_requests(app.open_context()).remove(0);
-        let mut value = fixture("session-context-after-compact");
-        value["session_id"] = "ses_1".into();
-        testapp::respond(&mut app, &request, value);
-        snapshot(
-            &app,
-            &format!("e3_context_{label}_{width}x{height}"),
-            width,
-            height,
-        );
-        let text = unspaced(&capture(&app, width, height));
-        assert!(text.contains("historytailtokens:0bytes:0items:0"));
-        assert!(text.contains("historytailexcludessummary"));
-        let projection_row = crate::ui::context::rows(&app)
-            .iter()
-            .position(|line| line.contains("compaction projection"))
-            .unwrap();
-        if let crate::state::panels::MainView::Context(context) = &mut app.main_view {
-            context.offset = projection_row;
-        }
-        let text = unspaced(&capture(&app, width, height));
-        assert!(text.contains("compactionprojection(notlatestrequest)"));
-        assert!(text.contains("≈before:3571after:458"));
     }
-}
-
-#[test]
-fn empty_light_80x24() {
-    snapshot(
-        &testapp::fresh(ThemeKind::Light),
-        "empty_light_80x24",
-        80,
-        24,
-    );
-}
-
-#[test]
-fn chat_dark_80x24() {
-    snapshot(&testapp::chat(ThemeKind::Dark), "chat_dark_80x24", 80, 24);
-}
-
-#[test]
-fn chat_light_80x24() {
-    snapshot(&testapp::chat(ThemeKind::Light), "chat_light_80x24", 80, 24);
-}
-
-#[test]
-fn reasoning_hidden_80x24() {
-    let mut app = testapp::chat_with_reasoning(ThemeKind::Dark);
-    app.update(AppEvent::ToggleReasoning);
-    snapshot(&app, "reasoning_hidden_80x24", 80, 24);
-}
-
-#[test]
-fn tools_80x24() {
-    snapshot(&testapp::tools(ThemeKind::Dark), "tools_80x24", 80, 24);
-}
-
-#[test]
-fn running_gap_80x24() {
-    snapshot(
-        &testapp::live_turn(ThemeKind::Dark),
-        "running_gap_80x24",
-        80,
-        24,
-    );
-}
-
-#[test]
-fn scroll_top_80x24() {
-    snapshot(
-        &testapp::scrolled(ThemeKind::Dark),
-        "scroll_top_80x24",
-        80,
-        24,
-    );
-}
-
-#[test]
-fn cjk_80x24() {
-    snapshot(&testapp::cjk(ThemeKind::Dark), "cjk_80x24", 80, 24);
-}
-
-#[test]
-fn wide_120x40() {
-    snapshot(&testapp::chat(ThemeKind::Dark), "wide_120x40", 120, 40);
-}
-
-#[test]
-fn small_50x10() {
-    snapshot(&testapp::chat(ThemeKind::Dark), "small_50x10", 50, 10);
-}
-
-#[test]
-fn new_session_dark_80x24() {
-    snapshot(
-        &testapp::new_session(ThemeKind::Dark),
-        "new_session_dark_80x24",
-        80,
-        24,
-    );
-}
-
-#[test]
-fn new_session_light_120x40() {
-    snapshot(
-        &testapp::new_session(ThemeKind::Light),
-        "new_session_light_120x40",
-        120,
-        40,
-    );
-}
-
-#[test]
-fn model_selector_dark_80x24() {
-    snapshot(
-        &testapp::model_selector(ThemeKind::Dark),
-        "model_selector_dark_80x24",
-        80,
-        24,
-    );
-}
-
-#[test]
-fn model_selector_light_120x40() {
-    snapshot(
-        &testapp::model_selector(ThemeKind::Light),
-        "model_selector_light_120x40",
-        120,
-        40,
-    );
-}
-
-#[test]
-fn reasoning_selector_dark_80x24() {
-    snapshot(
-        &testapp::reasoning_selector(ThemeKind::Dark),
-        "reasoning_selector_dark_80x24",
-        80,
-        24,
-    );
-}
-
-#[test]
-fn session_selector_dark_80x24() {
-    snapshot(
-        &testapp::session_selector_all(ThemeKind::Dark),
-        "session_selector_dark_80x24",
-        80,
-        24,
-    );
-}
-
-#[test]
-fn session_selector_light_120x40() {
-    snapshot(
-        &testapp::session_selector(ThemeKind::Light),
-        "session_selector_light_120x40",
-        120,
-        40,
-    );
-}
-
-#[test]
-fn profile_selector_dark_80x24() {
-    snapshot(
-        &testapp::profile_selector(ThemeKind::Dark),
-        "profile_selector_dark_80x24",
-        80,
-        24,
-    );
-}
-
-#[test]
-fn empty_model_search_dark_80x24() {
-    snapshot(
-        &testapp::empty_model_search(ThemeKind::Dark),
-        "empty_model_search_dark_80x24",
-        80,
-        24,
-    );
-}
-
-#[test]
-fn narrow_model_selector_dark_60x16() {
-    snapshot(
-        &testapp::narrow_selector(ThemeKind::Dark),
-        "narrow_model_selector_dark_60x16",
-        60,
-        16,
-    );
-}
-
-#[test]
-fn help_dark_60x16() {
-    snapshot(&testapp::help(ThemeKind::Dark), "help_dark_60x16", 60, 16);
-}
-
-#[test]
-fn help_dark_80x24() {
-    snapshot(&testapp::help(ThemeKind::Dark), "help_dark_80x24", 80, 24);
-}
-
-#[test]
-fn help_light_120x40() {
-    snapshot(
-        &testapp::help(ThemeKind::Light),
-        "help_light_120x40",
-        120,
-        40,
-    );
-}
-
-#[test]
-fn logs_dark_80x24() {
-    snapshot(&testapp::logs(ThemeKind::Dark), "logs_dark_80x24", 80, 24);
-}
-
-#[test]
-fn multiline_composer_dark_80x24() {
-    snapshot(
-        &testapp::multiline_composer(ThemeKind::Dark),
-        "multiline_composer_dark_80x24",
-        80,
-        24,
-    );
-}
-
-#[test]
-fn search_query_dark_80x24() {
-    snapshot(
-        &testapp::search_query(ThemeKind::Dark),
-        "search_query_dark_80x24",
-        80,
-        24,
-    );
-}
-
-#[test]
-fn new_output_marker_dark_80x24() {
-    snapshot(
-        &testapp::new_output_marker(ThemeKind::Dark),
-        "new_output_marker_dark_80x24",
-        80,
-        24,
-    );
-}
-
-#[test]
-fn unsaved_gap_dark_80x24() {
-    let app = testapp::unsaved_gap(ThemeKind::Dark);
-    let cap = capture(&app, 80, 24);
-    assert!(cap.contains("UNSAVED TURN"));
-    assert!(cap.contains("This turn finished, but the Agent did not confirm saving it."));
-    assert!(cap.contains("The session is blocked. Tool side effects may already exist."));
-    // `wrap_plain` breaks rows at display-cell boundaries and may cut inside a
-    // word, so compare the visible text and the complete warning with all
-    // layout whitespace removed; every character and punctuation mark must
-    // still appear in order, and a truncated or scrolled-away sentence cannot
-    // match.
-    let warning = "This turn finished, but the Agent did not confirm saving it. \
-                   The session is blocked. Tool side effects may already exist. \
-                   Closing releases this result; reopening reads whatever the Store can recover.";
+    let rendered = render(&mut app, 40, 10);
+    assert!(rendered.contains("▎ hello"), "{rendered}");
     assert!(
-        unspaced(&cap).contains(&unspaced(warning)),
-        "the complete unsaved-turn warning must stay visible across soft wraps"
+        !rendered.contains("Ask anything"),
+        "the placeholder is gone once there is a draft:\n{rendered}"
     );
-    assert!(cap.contains("Some live output may be missing."));
-    snapshot(&app, "unsaved_gap_dark_80x24", 80, 24);
 }
 
 #[test]
-fn unsaved_gap_light_120x40() {
-    let app = testapp::unsaved_gap(ThemeKind::Light);
-    let cap = capture(&app, 120, 40);
-    assert!(cap.contains("UNSAVED TURN"));
-    assert!(cap.contains("This turn finished, but the Agent did not confirm saving it."));
-    snapshot(&app, "unsaved_gap_light_120x40", 120, 40);
-}
-
-#[test]
-fn unsaved_gap_dark_60x16() {
-    let app = testapp::unsaved_gap(ThemeKind::Dark);
-    let cap = capture(&app, 60, 16);
-    assert!(cap.contains("UNSAVED TURN"));
-    assert!(cap.contains("This turn finished"));
-    snapshot(&app, "unsaved_gap_dark_60x16", 60, 16);
-}
-
-#[test]
-fn unsaved_gap_dark_160x50() {
-    let app = testapp::unsaved_gap(ThemeKind::Dark);
-    let cap = capture(&app, 160, 50);
-    assert!(cap.contains("UNSAVED TURN"));
-    assert!(cap.contains("This turn finished, but the Agent did not confirm saving it."));
-    snapshot(&app, "unsaved_gap_dark_160x50", 160, 50);
-}
-
-#[test]
-fn steering_dark_80x24() {
-    let app = testapp::steering(ThemeKind::Dark);
-    let cap = capture(&app, 80, 24);
-    // 0.2.4: a receipt-proven applied steer renders as the real Steering
-    // user card (pending steers live as a gray dock queue instead).
-    assert!(cap.contains("↪ Focus on memory safety instead"));
-    assert!(cap.contains("⠸ applied"));
-    snapshot(&app, "steering_dark_80x24", 80, 24);
-}
-
-#[test]
-fn steering_light_120x40() {
-    let app = testapp::steering(ThemeKind::Light);
-    let cap = capture(&app, 120, 40);
-    assert!(cap.contains("↪ Focus on memory safety instead"));
-    assert!(cap.contains("⠸ applied"));
-    snapshot(&app, "steering_light_120x40", 120, 40);
-}
-
-#[test]
-fn steering_dark_60x16() {
-    let app = testapp::steering(ThemeKind::Dark);
-    let cap = capture(&app, 60, 16);
-    assert!(cap.contains("↪ Focus on memory safety instead"));
-    assert!(cap.contains("⠸ applied"));
-    snapshot(&app, "steering_dark_60x16", 60, 16);
-}
-
-#[test]
-fn steering_dark_160x50() {
-    let app = testapp::steering(ThemeKind::Dark);
-    let cap = capture(&app, 160, 50);
-    assert!(cap.contains("↪ Focus on memory safety instead"));
-    assert!(cap.contains("⠸ applied"));
-    snapshot(&app, "steering_dark_160x50", 160, 50);
-}
-
-#[test]
-fn pending_model_dark_80x24() {
-    let app = testapp::pending_model(ThemeKind::Dark);
-    let cap = capture(&app, 80, 24);
-    assert!(cap.contains("claude-3-7-sonnet") || cap.contains("applies at next"));
-    snapshot(&app, "pending_model_dark_80x24", 80, 24);
-}
-
-#[test]
-fn pending_model_light_120x40() {
-    let app = testapp::pending_model(ThemeKind::Light);
-    let cap = capture(&app, 120, 40);
-    assert!(cap.contains("claude-3-7-sonnet") || cap.contains("applies at next"));
-    snapshot(&app, "pending_model_light_120x40", 120, 40);
-}
-
-#[test]
-fn pending_model_dark_60x16() {
-    let app = testapp::pending_model(ThemeKind::Dark);
-    let cap = capture(&app, 60, 16);
-    assert!(cap.contains("claude-3-7-sonnet") || cap.contains("applies at next"));
-    snapshot(&app, "pending_model_dark_60x16", 60, 16);
-}
-
-#[test]
-fn finishing_dark_80x24() {
-    let app = testapp::finishing(ThemeKind::Dark);
-    let cap = capture(&app, 80, 24);
-    assert!(cap.contains("Saving turn…") || cap.contains("finishing") || cap.contains("Finishing"));
-    snapshot(&app, "finishing_dark_80x24", 80, 24);
-}
-
-#[test]
-fn finishing_light_120x40() {
-    let app = testapp::finishing(ThemeKind::Light);
-    let cap = capture(&app, 120, 40);
-    assert!(cap.contains("Saving turn…") || cap.contains("finishing") || cap.contains("Finishing"));
-    snapshot(&app, "finishing_light_120x40", 120, 40);
-}
-
-#[test]
-fn close_user_dark_80x24() {
-    let app = testapp::close_user(ThemeKind::Dark);
-    let cap = capture(&app, 80, 24);
-    assert!(cap.contains("/close confirm"));
-    assert!(cap.contains("cancelled (user)"));
-    assert!(cap.contains("persisted"));
-    snapshot(&app, "close_user_dark_80x24", 80, 24);
-}
-
-#[test]
-fn close_user_light_120x40() {
-    let app = testapp::close_user(ThemeKind::Light);
-    let cap = capture(&app, 120, 40);
-    assert!(cap.contains("/close confirm"));
-    assert!(cap.contains("cancelled (user)"));
-    assert!(cap.contains("persisted"));
-    snapshot(&app, "close_user_light_120x40", 120, 40);
-}
-
-#[test]
-fn unknown_cancel_result_dark_80x24() {
-    let app = testapp::unknown_cancel_result(ThemeKind::Dark);
-    let cap = capture(&app, 80, 24);
-    assert!(cap.contains("cancelled (sandbox_evicted)"));
-    assert!(cap.contains("persisted"));
-    // The result notice is one cell wider than the fixed body, so it must
-    // wrap instead of truncating. `unspaced` ignores the soft wrap so a
-    // dropped trailing `0` cannot hide behind a line break; every character
-    // of the statistic must still be present.
+fn an_open_overlay_is_not_drawn_over_the_composer() {
+    let mut app = app();
+    app.composer = "draft".into();
+    app.overlay = Overlay::Help;
+    let rendered = render(&mut app, 40, 10);
     assert!(
-        unspaced(&cap).contains(&unspaced(
-            "⊘ Last turn cancelled (sandbox_evicted) · persisted · requests: 1 · tool rounds: 0"
-        )),
-        "complete result statistics must stay visible at 80x24:\n{cap}"
-    );
-    snapshot(&app, "unknown_cancel_result_dark_80x24", 80, 24);
-}
-
-#[test]
-fn unknown_cancel_result_keeps_statistics_at_narrow_width() {
-    let app = testapp::unknown_cancel_result(ThemeKind::Dark);
-    let cap = capture(&app, 60, 24);
-    assert!(cap.contains("cancelled (sandbox_evicted)"));
-    assert!(cap.contains("persisted"));
-    assert!(
-        unspaced(&cap).contains("requests:1") && unspaced(&cap).contains("toolrounds:0"),
-        "narrow result statistics must stay visible at 60x24:\n{cap}"
+        rendered.contains("▎ draft"),
+        "the composer stays visible under a view:\n{rendered}"
     );
 }
 
 #[test]
-fn last_result_keeps_full_u64_and_request_digits_visible() {
-    // Regression: the fixed body width is narrower than the native 79-column
-    // body, so a longer notice must still surface every statistic character
-    // (reason, persistence, requests and a full u64 tool-rounds count).
-    for (width, height) in [(80, 24), (60, 24)] {
-        let mut app = testapp::unknown_cancel_result(ThemeKind::Dark);
-        let requests = u32::MAX;
-        let tool_rounds = u64::MAX;
-        let view = app.sessions.known.get_mut("ses_1").expect("session view");
-        view.last_result = Some(crate::protocol::TurnResultViewWire {
-            turn: crate::protocol::TurnRef {
-                session_id: "ses_1".to_owned(),
-                loop_id: "loop_big".to_owned(),
-            },
-            outcome: crate::protocol::LoopOutcomeWire::Cancelled {
-                reason: crate::protocol::CancelReasonWire::Unknown("sandbox_evicted".to_owned()),
-            },
-            usage: None,
-            requests: Some(requests),
-            tool_rounds: Some(tool_rounds),
-            final_config_revision: Some(0),
-            persistence: Some(crate::protocol::TurnPersistenceWire::Persisted),
-            accepted_at: None,
-            completed_at: None,
+fn a_queued_steer_is_shown_above_the_composer() {
+    let mut app = app();
+    app.session
+        .as_mut()
+        .expect("session")
+        .queue
+        .push(crate::app::Queued {
+            text: "focus on the parser first".into(),
+            kind: crate::app::QueuedKind::Steer,
         });
-        let cap = capture(&app, width, height);
-        let flat = unspaced(&cap);
-        assert!(
-            flat.contains("cancelled(sandbox_evicted)") && flat.contains("persisted"),
-            "reason and persistence must stay visible at {width}x{height}:\n{cap}"
-        );
-        assert!(
-            flat.contains(&format!("requests:{requests}")),
-            "request digits must stay visible at {width}x{height}:\n{cap}"
-        );
-        assert!(
-            flat.contains(&format!("toolrounds:{tool_rounds}")),
-            "u64 tool-rounds digits must stay visible at {width}x{height}:\n{cap}"
-        );
-    }
+    let rendered = render(&mut app, 60, 12);
+    assert!(
+        rendered.contains("↳ steer · focus on the parser first"),
+        "{rendered}"
+    );
 }
 
 #[test]
-fn shutdown_cancel_result_dark_80x24() {
-    let app = testapp::shutdown_cancel_result(ThemeKind::Dark);
-    let cap = capture(&app, 80, 24);
-    assert!(cap.contains("cancelled (shutdown)"));
-    assert!(cap.contains("persisted"));
-    snapshot(&app, "shutdown_cancel_result_dark_80x24", 80, 24);
-}
-
-#[test]
-fn store_error_dark_80x24() {
-    let app = testapp::store_error(ThemeKind::Dark);
-    let cap = capture(&app, 80, 24);
-    assert!(cap.contains("Unable to open this session") || cap.contains("unsupported format"));
-    snapshot(&app, "store_error_dark_80x24", 80, 24);
-}
-
-#[test]
-fn store_error_light_120x40() {
-    let app = testapp::store_error(ThemeKind::Light);
-    let cap = capture(&app, 120, 40);
-    assert!(cap.contains("Unable to open this session") || cap.contains("unsupported format"));
-    snapshot(&app, "store_error_light_120x40", 120, 40);
-}
-
-#[test]
-fn store_error_dark_60x16() {
-    let app = testapp::store_error(ThemeKind::Dark);
-    let cap = capture(&app, 60, 16);
-    assert!(cap.contains("Unable to open") || cap.contains("unsupported"));
-    snapshot(&app, "store_error_dark_60x16", 60, 16);
-}
-
-#[test]
-fn extended_slash_menu_has_purpose_selection_and_controls_at_supported_sizes() {
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-    for (width, height, selected, name) in [
-        (80, 24, 0, "slash_menu_dark_80x24"),
-        (60, 16, 5, "slash_menu_dark_60x16"),
-    ] {
-        let mut app = testapp::fresh(ThemeKind::Dark);
-        app.update(AppEvent::Terminal(Event::Key(KeyEvent::new(
-            KeyCode::Char('/'),
-            KeyModifiers::NONE,
-        ))));
-        app.slash_completion.as_mut().unwrap().selected = selected;
-        snapshot(&app, name, width, height);
-    }
-}
-
-#[test]
-fn compact_slash_object_and_replacing_dropdown_at_supported_sizes() {
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-    for (theme, width, height, suffix) in [
-        (ThemeKind::Dark, 60, 16, "dark_60x16"),
-        (ThemeKind::Light, 80, 24, "light_80x24"),
-    ] {
-        let mut app = testapp::fresh(theme);
-        app.update(AppEvent::TerminalSize { width, height });
-        for character in "/session".chars() {
-            app.update(AppEvent::Terminal(Event::Key(KeyEvent::new(
-                KeyCode::Char(character),
-                KeyModifiers::NONE,
-            ))));
-        }
-        snapshot(&app, &format!("compact_session_{suffix}"), width, height);
-        app.update(AppEvent::Terminal(Event::Key(KeyEvent::new(
-            KeyCode::Char(' '),
-            KeyModifiers::CONTROL,
-        ))));
-        snapshot(
-            &app,
-            &format!("compact_session_actions_{suffix}"),
-            width,
-            height,
-        );
-    }
+fn a_running_turn_shows_the_status_line_with_elapsed_time() {
+    let mut app = app();
+    let session = app.session.as_mut().expect("session");
+    session.live = Some(crate::app::LiveTurn::new(
+        TurnRef {
+            session_id: "ses_0123456789abcdef".into(),
+            loop_id: "loop_9".into(),
+        },
+        0,
+    ));
+    let rendered = render(&mut app, 70, 12);
+    assert!(rendered.contains("Thinking"), "{rendered}");
+    assert!(rendered.contains("esc to interrupt"), "{rendered}");
+    assert!(rendered.contains("● working"), "{rendered}");
 }
