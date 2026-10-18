@@ -1857,3 +1857,34 @@ async fn a_busy_send_behind_a_queued_follow_up_keeps_fifo_and_sends_each_text_on
         "at most the one accepted send is a prompt: {prompts:?}"
     );
 }
+
+/// The earlier-history marker claims `home` loads the missing page, so the key
+/// path itself must request it - not just the action the reducer handles.
+#[tokio::test]
+async fn ctrl_home_loads_the_earlier_page_the_marker_promises() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(80, 0));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    assert_eq!(app.session.as_ref().unwrap().loaded_from, 20, "tail loaded");
+    let reads = fake.calls("session.read").len();
+
+    // No layout rows exist for a one-screen display page, which is exactly the
+    // case where the older items were unreachable.
+    app.on_key(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL));
+    pump(&mut app, &mut rx, |app| {
+        !app.session.as_ref().unwrap().loading_older
+    })
+    .await;
+
+    assert!(
+        fake.calls("session.read").len() > reads,
+        "the key asks for the page instead of only moving the view: {:?}",
+        fake.methods()
+    );
+}

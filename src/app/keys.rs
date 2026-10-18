@@ -674,6 +674,9 @@ impl App {
             block: 0,
             offset: 0,
         };
+        // The top of the loaded window is also where the next page begins, so
+        // the same request that a scroll to the edge makes belongs here.
+        self.on_action(super::Action::LoadOlder);
         Input::Consumed
     }
 

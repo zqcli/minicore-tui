@@ -1155,6 +1155,12 @@ impl App {
         let total = layout.total_rows();
         let height = layout.viewport.height.max(viewport).max(1);
         if total <= height {
+            // Nothing to scroll, but the head of the loaded window may still
+            // be reachable: a short display page is exactly when the older
+            // history is worth asking for.
+            if delta < 0 {
+                self.load_older();
+            }
             return;
         }
         let max_top = total - height;
