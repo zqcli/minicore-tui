@@ -6,6 +6,7 @@ pub mod blocks;
 pub mod composer;
 pub mod files;
 pub mod markdown;
+pub mod panel;
 pub mod rails;
 pub mod render;
 #[cfg(test)]
@@ -41,11 +42,20 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_fatal(frame, area, styles, fatal);
         return;
     }
-    let bottom = bottom_height(app, area.width).min(area.height.saturating_sub(1));
+    let sheet = panel::sheet(app);
+    let sheet_rows = sheet
+        .as_ref()
+        .map_or(0, |sheet| panel::rows(sheet, styles, area.width).len());
+    let bottom =
+        (bottom_height(app, area.width) + sheet_rows as u16).min(area.height.saturating_sub(1));
     let [transcript, bottom] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(bottom)]).areas(area);
     draw_transcript(frame, transcript, app, styles);
-    let rows = status::lines(app, styles, bottom.width);
+    let mut rows = Vec::with_capacity(bottom.height as usize);
+    if let Some(sheet) = sheet {
+        rows.extend(panel::rows(&sheet, styles, bottom.width));
+    }
+    rows.extend(status::lines(app, styles, bottom.width));
     frame.render_widget(ratatui::widgets::Paragraph::new(rows), bottom);
     if app.overlay.is_none() && !app.has_interaction() && app.fatal.is_none() {
         let (row, column) = status::cursor(app, styles, bottom.width);
