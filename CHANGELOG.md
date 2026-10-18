@@ -15,8 +15,9 @@ config file, keys and commands are intentional.
 - A `session_busy` answer from `turn.send` (post-turn compaction still running)
   queues the message as a follow-up and sends it when the session is idle. The
   draft is never dropped.
-- After a turn with a gap or a non-completed outcome, the durable turn result
-  replaces the live blocks so the transcript matches the store.
+- After a turn with a gap or a non-completed outcome, the durable turn result is
+  reconciled into the transcript's block model, so what is shown matches the
+  store without a second render path.
 - Steering and follow-ups share one queue shown above the composer.
   `Alt+Enter` queues a follow-up and `Alt+Up` takes one back.
 - Late deltas after a turn ends are ignored instead of extending the turn.
@@ -91,6 +92,7 @@ config file, keys and commands are intentional.
 - Dependencies move to ratatui 0.30, crossterm 0.29 and pulldown-cmark 0.13;
   the runtime dependencies `tui-textarea`, `icu_segmenter`, `time` and
   `tempfile` are gone.
+- Rust 1.88 or newer is required (edition 2024).
 - The package version is 0.4.0.
 
 ### Removed

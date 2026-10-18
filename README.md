@@ -13,7 +13,7 @@ reading. The UI is English-only with one visual system for every surface.
 
 ## Requirements
 
-- a Rust toolchain that satisfies `rust-version` in `Cargo.toml`;
+- Rust 1.88 or newer (edition 2024; `rust-version` in `Cargo.toml`);
 - a `minicore-agent` 0.7.0 executable (or `--agent <path>`) with an Agent TOML
   configuration;
 - a terminal with an alternate screen, raw mode and bracketed paste.
