@@ -131,6 +131,10 @@ impl App {
                 self.delete_confirm();
                 Input::Consumed
             }
+            KeyCode::Char('r') if matches!(self.overlay, Overlay::Context) => {
+                self.refresh_context();
+                Input::Consumed
+            }
             KeyCode::Char('y') if matches!(self.overlay, Overlay::Interaction) => {
                 self.interaction_choice = 0;
                 self.on_overlay_accept()

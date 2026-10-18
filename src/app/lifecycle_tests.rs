@@ -1963,3 +1963,35 @@ async fn a_busy_send_behind_a_queued_follow_up_keeps_fifo_and_sends_each_text_on
         app.composer.text()
     );
 }
+
+/// The context view advertises `r refresh`; the key must actually ask again.
+#[tokio::test]
+async fn r_in_the_context_view_asks_for_a_fresh_ledger() {
+    use crate::app::keys::Input;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script("session.context", json!({"session_id": "s1"}));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.open_panel(crate::app::Panel::Context);
+    settle(&mut app, &mut rx).await;
+    let before = fake.calls("session.context").len();
+
+    let input = app.on_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+    assert_eq!(input, Input::Consumed, "the key belongs to the view");
+    settle(&mut app, &mut rx).await;
+
+    assert_eq!(
+        fake.calls("session.context").len(),
+        before + 1,
+        "the advertised key asks the Agent again"
+    );
+    assert!(
+        matches!(app.overlay, Overlay::Context),
+        "the view stays open"
+    );
+}

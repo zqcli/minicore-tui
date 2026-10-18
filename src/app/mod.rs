@@ -241,14 +241,7 @@ impl App {
                 }
             }
             Panel::Context => {
-                if let Some(session) = self.session.as_ref() {
-                    // A fresh report: the view must not show a stale ledger.
-                    tasks::context(
-                        self.client.clone(),
-                        self.tx.clone(),
-                        session.info.session_id.clone(),
-                    );
-                }
+                self.refresh_context();
                 Overlay::Context
             }
             Panel::Help => {
@@ -1128,6 +1121,18 @@ impl App {
     /// Puts the oldest queued follow-up back in the composer. A draft already
     /// in the composer is never overwritten: the queue item stays where it is
     /// until there is room for it.
+    /// Asks for a fresh context ledger: the view must never show a stale one.
+    pub fn refresh_context(&mut self) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        tasks::context(
+            self.client.clone(),
+            self.tx.clone(),
+            session.info.session_id.clone(),
+        );
+    }
+
     fn recall_queued(&mut self) {
         if !self.composer.is_empty() {
             self.notice(
@@ -2878,8 +2883,21 @@ fn count_hunks(lines: &[ratatui::text::Line<'static>]) -> (usize, usize) {
 fn session_label(info: &SessionInfo) -> String {
     match info.title.as_deref() {
         Some(title) if !title.trim().is_empty() => title.to_owned(),
-        _ => info.session_id.clone(),
+        // Untitled sessions get their short id, never the 32-hex one: a closed
+        // session cannot be read, so there is no first prompt to borrow.
+        _ => short_session_id(&info.session_id).to_owned(),
     }
+}
+
+/// `ses_8ca3c4cf...` → `ses_8ca3c4`, enough to tell sessions apart in a row.
+pub fn short_session_id(session_id: &str) -> &str {
+    let body = session_id.strip_prefix("ses_").unwrap_or(session_id);
+    let cut = body
+        .char_indices()
+        .nth(6)
+        .map_or(body.len(), |(index, _)| index);
+    let start = session_id.len() - body.len();
+    &session_id[..start + cut]
 }
 
 /// Rendered lines back to text, for `/copy` in a view.
