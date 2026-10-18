@@ -193,7 +193,7 @@ fn tool(call: &ToolCall, palette: Palette, width: usize, expanded: bool) -> Vec<
     let mut lines = vec![Line::styled(
         format!(
             "▎ {}",
-            crate::ui::panel::truncate(&format!("{header} {meta}"), width.saturating_sub(2) as usize)
+            crate::ui::panel::truncate(&format!("{header} {meta}"), width.saturating_sub(2))
         ),
         style,
     )];
