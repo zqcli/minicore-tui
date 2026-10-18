@@ -1,4 +1,0 @@
-cwd=/root/minicore-followups.6Dpa6e/reload-refresh/source/minicore-tui
-command=rustup run stable cargo fmt --all -- --check 
-
-exit=0

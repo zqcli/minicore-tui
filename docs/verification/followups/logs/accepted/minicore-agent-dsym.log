@@ -1,4 +1,0 @@
-cwd=/root/minicore-followups.6Dpa6e/accepted/source/minicore-agent
-command=dsymutil /root/minicore-followups.6Dpa6e/accepted/artifacts/minicore-agent-debug -o /root/minicore-followups.6Dpa6e/accepted/artifacts/minicore-agent-debug.dSYM 
-
-exit=0
