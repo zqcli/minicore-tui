@@ -132,7 +132,7 @@ pub fn duration_label(duration: std::time::Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{LoopOutcome, SessionInfo};
+    use crate::protocol::SessionInfo;
     use serde_json::json;
 
     fn info() -> SessionInfo {

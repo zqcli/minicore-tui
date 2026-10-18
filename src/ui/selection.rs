@@ -158,12 +158,14 @@ mod tests {
             from: (3, 1),
             to: (1, 0),
         };
-        assert_eq!(text(&screen, area(), forwards), text(&screen, area(), backwards));
+        assert_eq!(
+            text(&screen, area(), forwards),
+            text(&screen, area(), backwards)
+        );
     }
 
     #[test]
     fn a_click_selects_nothing() {
-        let screen = screen(&["hello"]);
         let drag = Drag {
             from: (2, 0),
             to: (2, 0),

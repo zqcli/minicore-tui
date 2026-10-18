@@ -527,12 +527,7 @@ pub fn load_changes(client: Arc<Client>, tx: Tx, session_id: String, loop_id: St
 /// Lists the change records for one scope and, for the first file, its hunks.
 /// The diff view gets files first, then hunks, so a huge workspace never blocks
 /// the panel from opening.
-pub fn list_changes(
-    client: Arc<Client>,
-    tx: Tx,
-    session_id: String,
-    scope: crate::app::DiffScope,
-) {
+pub fn list_changes(client: Arc<Client>, tx: Tx, session_id: String, scope: crate::app::DiffScope) {
     tokio::spawn(async move {
         let params = json!({
             "session_id": session_id,

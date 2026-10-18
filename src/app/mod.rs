@@ -96,7 +96,10 @@ pub enum OpKind {
     /// `session.state` poll while waiting for post-turn compaction.
     IdleCheck(Result<bool, RpcError>),
     /// The change records of one diff scope.
-    ChangeFiles(DiffScope, Result<Vec<crate::protocol::ChangeRecord>, RpcError>),
+    ChangeFiles(
+        DiffScope,
+        Result<Vec<crate::protocol::ChangeRecord>, RpcError>,
+    ),
     /// The hunks of one change record.
     DiffFile(String, Result<crate::protocol::changes::DiffPage, RpcError>),
 }
@@ -243,13 +246,18 @@ impl App {
         if !features::needs_auto_title(&session.info) {
             return;
         }
-        let Some(prompt) = session.transcript.blocks().iter().find_map(|block| match block {
-            Block::User {
-                text,
-                kind: crate::protocol::read::UserKind::Prompt,
-            } => Some(text.as_str()),
-            _ => None,
-        }) else {
+        let Some(prompt) = session
+            .transcript
+            .blocks()
+            .iter()
+            .find_map(|block| match block {
+                Block::User {
+                    text,
+                    kind: crate::protocol::read::UserKind::Prompt,
+                } => Some(text.as_str()),
+                _ => None,
+            })
+        else {
             return;
         };
         let Some(title) = features::auto_title(prompt) else {
@@ -265,8 +273,7 @@ impl App {
         self.session_rows
             .iter()
             .filter(|info| {
-                filter.is_empty()
-                    || crate::ui::picker::fuzzy_match(&session_label(info), filter)
+                filter.is_empty() || crate::ui::picker::fuzzy_match(&session_label(info), filter)
             })
             .cloned()
             .collect()
@@ -690,8 +697,8 @@ impl App {
             }
             Action::Export(path) => {
                 if let Some(session) = self.session.as_ref() {
-                    let path = path
-                        .or_else(|| Some(features::export_path(&session.info.session_id)));
+                    let path =
+                        path.or_else(|| Some(features::export_path(&session.info.session_id)));
                     tasks::export(
                         self.client.clone(),
                         self.tx.clone(),
@@ -1124,7 +1131,12 @@ impl App {
 
     /// Tab in the diff view: turn -> session -> workspace -> turn.
     pub fn diff_cycle_scope(&mut self) {
-        let Overlay::Diff { scope, file, scroll } = &mut self.overlay else {
+        let Overlay::Diff {
+            scope,
+            file,
+            scroll,
+        } = &mut self.overlay
+        else {
             return;
         };
         *scope = match scope {
@@ -1159,9 +1171,7 @@ impl App {
         // Results that are not tied to the resident session apply directly.
         match kind {
             OpKind::Copied(result) => match result {
-                Ok(crate::clipboard::Copied::Native) => {
-                    self.notice(NoticeLevel::Info, "Copied")
-                }
+                Ok(crate::clipboard::Copied::Native) => self.notice(NoticeLevel::Info, "Copied"),
                 Ok(crate::clipboard::Copied::Osc52) => {
                     self.notice(NoticeLevel::Info, "Copied with OSC 52")
                 }
@@ -2290,10 +2300,15 @@ impl App {
 
 /// The loop id of the newest finished turn, for a turn-scoped diff.
 fn latest_loop(session: &Session) -> Option<String> {
-    session.transcript.blocks().iter().rev().find_map(|block| match block {
-        Block::TurnEnd { loop_id, .. } => Some(loop_id.clone()),
-        _ => None,
-    })
+    session
+        .transcript
+        .blocks()
+        .iter()
+        .rev()
+        .find_map(|block| match block {
+            Block::TurnEnd { loop_id, .. } => Some(loop_id.clone()),
+            _ => None,
+        })
 }
 
 /// Files a turn touched, from the write/edit cards it holds, so the diff view
