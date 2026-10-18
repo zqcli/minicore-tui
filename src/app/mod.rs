@@ -448,8 +448,8 @@ pub struct App {
     pub diff: crate::ui::views::DiffView,
     /// The composed context view, refreshed from `session.context`.
     pub context_view: crate::ui::views::ContextView,
-    /// The change record whose hunks the diff view is waiting for.
-    pub diff_pending: Option<crate::protocol::ChangeRecord>,
+    /// Change records of the open diff, in the same order as its file rows.
+    pub diff_records: Vec<crate::protocol::ChangeRecord>,
     /// The tool-output view, rebuilt from the selected card.
     pub tool_view: crate::ui::views::ToolView,
     /// Scroll offset of the help view.
@@ -514,7 +514,7 @@ impl App {
             last_answer: None,
             diff: crate::ui::views::DiffView::new("Diff"),
             context_view: crate::ui::views::ContextView::default(),
-            diff_pending: None,
+            diff_records: Vec::new(),
             tool_view: crate::ui::views::ToolView {
                 title: String::new(),
                 detail: String::new(),
@@ -1832,12 +1832,12 @@ impl App {
             })
             .collect();
         self.diff.set_files(files);
+        self.diff_records = records.clone();
         if self.diff.files.is_empty() {
             self.diff.status = "No file changes are recorded for this scope.".into();
-            self.diff_pending = None;
+            self.diff_records.clear();
             return true;
         }
-        self.diff_pending = records.first().cloned();
         if let (Some(record), Some(session)) = (records.first(), self.session.as_ref()) {
             tasks::load_diff(
                 self.client.clone(),
