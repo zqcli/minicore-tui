@@ -1,60 +1,99 @@
 # Changelog
 
-## Unreleased — Conversation usability
+## 0.4.0 — Rewrite
 
-- Preserve literal XML/HTML-like message content and source-aware fenced-code selection.
-- Preserve streamed copy hard breaks without copying soft wraps or card decoration.
-- Show tool targets, lifecycle, short outcomes and nonzero Bash exits while collapsed;
-  count actual hidden display rows and keep clipping explicit. Recover bounded
-  command/file targets from loaded history when reopening a session.
-- Fold reasoning by rendered height, support keyboard expansion, and distinguish
-  hidden completed reasoning from active thinking.
-- Render Markdown tables with a narrow-terminal fallback and support strikethrough.
-- Keep local fold/resize changes separate from incoming-output notifications.
+A full rewrite of the frontend against `minicore-agent` 0.7.0 and
+`minicore-runtime` 0.7.0 over Protocol v1. Breaking changes to the CLI, the
+config file, keys and commands are intentional.
 
-## 0.3.0 — Protocol v1 refactor
+### Turn lifecycle
 
-The 0.3.0 package targets the fixed `minicore-agent` 0.5.0 and
-`minicore-runtime` 0.4.1 revisions over Protocol v1.
+- A turn now ends exactly when `turn.wait` resolves. Agent events are display
+  hints and can no longer leave a completed turn stuck as incomplete; the
+  post-compaction "completed but incomplete / Unsupported interaction" state
+  and the inability to clear it with `Esc` are gone.
+- A `session_busy` answer from `turn.send` (post-turn compaction still running)
+  queues the message as a follow-up and sends it when the session is idle. The
+  draft is never dropped.
+- After a turn with a gap or a non-completed outcome, the durable turn result
+  replaces the live blocks so the transcript matches the store.
+- Steering and follow-ups share one queue shown above the composer.
+  `Alt+Enter` queues a follow-up and `Alt+Up` takes one back.
+- Late deltas after a turn ends are ignored instead of extending the turn.
 
-- Make paged `session.read` the sole application history path; retain
-  `session.history` only for compatibility/diagnostics.
-- Add bounded chunk assembly, byte-accurate cursors, pinned history windows,
-  exact turn-result recovery, lifecycle generations, and explicit incomplete or
-  oversized-history states.
-- Add bounded Tool detail, workspace file/search/preview, Changes/Diff, and
-  Context views with query-slot, epoch, cursor, and raw-byte validation.
-- Add bounded full-session search, copy, and export workflows with explicit
-  partial/uncertain labels, atomic no-clobber commits, and cancellation that
-  waits for the owned writer outcome.
-- Add local TOML settings, CLI-over-config precedence, settings persistence,
-  and a direct external-editor workflow that suspends only terminal input and
-  drawing while RPC, reducer, and background work continue.
-- Keep provider credentials/catalogs and Agent data outside TUI settings and
-  outside logs; Agent path changes apply on the next startup.
-- Keep query ownership separate from queued intent across close/reopen/delete;
-  coalesce reopened Tool details, reclaim `turn.result` retry slots, and retire
-  never-written session retries at lifecycle boundaries.
-- Add offline-capable Rust 1.85/stable CI coverage on Ubuntu, macOS, and
-  Windows, plus a separately pinned Agent/Runtime build and loopback E2E job.
+### History and sessions
 
-Current acceptance remains conservative: the current source/test tree is
-`9e399d9`, after F-review remediation `daa944a`; `0aa64c5e4d9211351123db059547beddb15c2cce`
-is historical core-baseline provenance. Remote Rust 1.85/stable checks each
-passed **830 tests, 0 failed, 53 ignored**; the isolated fixed-backend job
-passed 34/34 loopback E2Es on both toolchains; and the current Release
-performance set passed 9/9 on both. Linux kernel-PTY lifecycle, same-slave
-negative raw-mode, input/resize/shutdown, idle, and real clipboard-child
-checks passed. Hosted CI, native/manual iTerm2/IME use, exact allocator/RSS
-accounting, provider access, and oversized real-Agent items remain unrun where
-the environment cannot verify them. Phase F once violated the original
-remote-only Rust/Cargo requirement; the older local rustc 1.98.0 record is
-retained as excluded provenance, not current acceptance evidence.
-See [`docs/refactor-acceptance.md`](docs/refactor-acceptance.md) and
-[`docs/verification/v03-f/README.md`](docs/verification/v03-f/README.md).
+- History is loaded in display view from a fresh probe on every operation.
+  Cached pins are gone, which removes the `invalid_state` failure when
+  reopening a session.
+- Older pages load as you scroll to the top; below the compaction boundary the
+  summary and an "earlier messages" row lead to the canonical view.
+- A stale pin is retried once with a new probe rather than reported as
+  malformed history.
+- Returning to a session reloads it from the Agent; only the active session is
+  resident.
 
-## Historical releases
+### Transcript and rendering
 
-The `0.2.x` entries and verification records remain in git history and under
-`docs/release-0.2.*`. They describe the earlier Agent 0.3 protocol line and
-are not the backend contract for 0.3.0.
+- New per-block layout cache with prefix heights and a viewport-only render
+  path. Rendering cost no longer grows with history length, selection
+  hit-testing is limited to the visible window, and tool card bodies are
+  bounded.
+- Incremental Markdown rendering for streaming: the stable prefix is cached and
+  only the tail is re-rendered per delta. Streaming no longer re-parses the
+  whole message each frame.
+- Real word wrapping with CJK-aware break opportunities, preserved list
+  indentation, and hard breaks for overlong tokens. Prose no longer breaks
+  inside words.
+- Scrolling is anchored to content: `PageUp` and `Ctrl+Home` hold the view
+  while output streams, and a `↓ new output` pill marks appended content.
+- One blank line between blocks, one rail style per block kind, tool cards
+  folded by default with duration, exit code and change counts.
+- Reasoning folds to one line when a turn finishes and expands with `Ctrl+T`.
+
+### Compaction
+
+- Compaction is shown as a status-line phase and leaves a one-line marker with
+  before and after token counts. Loaded content is never removed from the
+  transcript, so the answer being read survives a post-turn compaction.
+- `/compact` runs manual compaction and reports its result the same way.
+
+### UI
+
+- One visual system: a single bottom-sheet style for every picker and prompt,
+  full-screen views for diff, tool output, context and help, and one footer.
+  English copy throughout, human labels instead of raw enum names.
+- Command palette with descriptions, `@` file picker, session picker with
+  delete, model and reasoning pickers, find-in-transcript, mouse selection with
+  copy, `/copy`, `/export`, `/theme`, and the external editor.
+- Approval and other interactions are answered inline and no longer reported as
+  unsupported.
+- The fatal screen shows the Agent stderr tail instead of byte counts.
+- The composer is a purpose-built editing model (grapheme-safe movement,
+  undo/redo, bracketed paste projection) and no longer depends on
+  `tui-textarea`.
+
+### Backend and protocol
+
+- Targets Agent 0.7.0: workspace file and search cursors are opaque values
+  passed back verbatim, `tool_process` chunks are decoded and bounded, and
+  `turn.result` is assembled through the shared chunk reader.
+- Handshake requires Protocol v1 and the capabilities actually used.
+- The Agent child is spawned before the alternate screen, and shutdown drains
+  the child with a bounded wait.
+
+### CLI and configuration
+
+- New CLI: `--agent`, `--config`, `--workspace`, `--session`, `--continue`,
+  `--profile`, `--model`, `--reasoning`, `--theme`, `-h`, `-V`.
+- The TUI config is `~/.config/minicore-tui/config.toml` (or
+  `$MINICORE_TUI_CONFIG`) with `agent`, `agent_config`, `theme` and `editor`.
+- Dependencies move to ratatui 0.30, crossterm 0.29 and pulldown-cmark 0.13;
+  `tui-textarea`, `icu_segmenter`, `time` and `tempfile` are gone.
+- The package version is 0.4.0.
+
+### Removed
+
+- The v0.3 state machines, request-kind registry and generation counters, the
+  old test suites, snapshots, scripts, tools and historical specification
+  documents.
