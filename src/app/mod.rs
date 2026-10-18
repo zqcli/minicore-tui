@@ -1487,11 +1487,18 @@ impl App {
             session.transcript.blocks().first(),
             Some(Block::EarlierHistory { .. })
         ));
+        if blocks.is_empty() && skip == 0 {
+            // Nothing came back and nothing was replaced: the reader is at the
+            // boundary, so stop asking rather than looping on the same request.
+            session.loaded_from = 0;
+            return true;
+        }
         session.transcript.remove_front(skip);
         let added = blocks.len();
         for block in blocks.into_iter().rev() {
             session.transcript.insert(0, block);
         }
+        let mut prefix = added.saturating_sub(skip);
         // Prepending must not move what the user is reading: the anchor block
         // keeps its identity, so its index shifts by what was inserted (minus
         // the placeholder that was replaced).
@@ -1499,9 +1506,15 @@ impl App {
             let block = block + added;
             self.scroll = Scroll::Anchor { block, offset };
         }
-        session.loaded_from = page.from;
+        // A compaction can raise the floor above where the reader is. The rows on
+        // screen still reach down to what was loaded, so the read position stays
+        // there: moving it to the new floor would skip the items in between once
+        // the next below-floor read asks the canonical view.
+        // Rows on screen reach down to what was already loaded, so the read
+        // position never moves up past it.
+        session.loaded_from = page.from.min(session.loaded_from);
         session.first_item = page.floor;
-        session.hidden_items = page.from;
+        session.hidden_items = session.loaded_from;
         // A page reaching the display floor leaves the reader at the compaction
         // summary with more history behind it; otherwise the label just states
         // how much older history remains unloaded.
@@ -1512,7 +1525,9 @@ impl App {
                     hidden_items: page.from,
                 },
             );
+            prefix += 1;
         }
+        session.rebase_after_prepend(prefix);
         // Blocks built from a page carry an empty session id; the tool views
         // read it back when a card is opened.
         session.sync_session_id_into_tools();
@@ -1529,7 +1544,16 @@ impl App {
                 if let Some(session) = self.session.as_mut() {
                     session.loading_older = false;
                 }
-                self.error(error);
+                if error.code == crate::protocol::INVALID_STATE {
+                    // Retried already; the prefix is beyond repair for now, so
+                    // keep what is loaded instead of dropping the reader's view.
+                    self.notice(
+                        NoticeLevel::Info,
+                        "Could not load older history yet; try again in a moment",
+                    );
+                } else {
+                    self.error(error);
+                }
                 return true;
             }
         };
@@ -1554,6 +1578,7 @@ impl App {
                 offset,
             };
         }
+        session.rebase_after_prepend(added);
         session.loaded_from = page.from;
         session.hidden_items = page.from;
         session.sync_session_id_into_tools();

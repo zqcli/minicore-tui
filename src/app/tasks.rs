@@ -399,23 +399,34 @@ async fn read_older(
 /// items below the display `first_item`.
 pub fn load_canonical(client: Arc<Client>, tx: Tx, session_id: String, before: usize) {
     tokio::spawn(async move {
-        let result = match probe(client.as_ref(), &session_id, "canonical").await {
-            Ok(probe) => {
-                let start = before.saturating_sub(protocol::PAGE_LIMIT);
-                read_window(
-                    client.as_ref(),
-                    &session_id,
-                    "canonical",
-                    probe,
-                    start,
-                    before,
-                )
-                .await
-            }
-            Err(error) => Err(error),
-        };
+        let result = canonical(client.as_ref(), &session_id, before).await;
         post(&tx, Some(&session_id), OpKind::Canonical(result));
     });
+}
+
+/// A page below the display floor, retried once with a fresh pin like the
+/// display pages: the same stale-pin race applies to the canonical view.
+async fn canonical(
+    client: &Client,
+    session_id: &str,
+    before: usize,
+) -> Result<History, protocol::RpcError> {
+    match read_canonical(client, session_id, before).await {
+        Err(error) if error.code == protocol::INVALID_STATE => {
+            read_canonical(client, session_id, before).await
+        }
+        result => result,
+    }
+}
+
+async fn read_canonical(
+    client: &Client,
+    session_id: &str,
+    before: usize,
+) -> Result<History, protocol::RpcError> {
+    let probe = probe(client, session_id, "canonical").await?;
+    let start = before.saturating_sub(protocol::PAGE_LIMIT);
+    read_window(client, session_id, "canonical", probe, start, before).await
 }
 
 /// Result of the one-item probe that establishes a pin and the window bounds.
