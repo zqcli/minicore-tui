@@ -89,7 +89,8 @@ config file, keys and commands are intentional.
 - The TUI config is `~/.config/minicore-tui/config.toml` (or
   `$MINICORE_TUI_CONFIG`) with `agent`, `agent_config`, `theme` and `editor`.
 - Dependencies move to ratatui 0.30, crossterm 0.29 and pulldown-cmark 0.13;
-  `tui-textarea`, `icu_segmenter`, `time` and `tempfile` are gone.
+  the runtime dependencies `tui-textarea`, `icu_segmenter`, `time` and
+  `tempfile` are gone.
 - The package version is 0.4.0.
 
 ### Removed
