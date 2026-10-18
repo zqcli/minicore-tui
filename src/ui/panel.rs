@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 
 use crate::theme::Palette;
 
-use super::wrap::{sanitize, width, wrap_line};
+use super::wrap::{sanitize, width, wrap};
 
 /// A sheet never covers more than this many list rows; the rest scroll.
 pub const MAX_ROWS: usize = 12;
@@ -165,7 +165,7 @@ pub fn render(frame: &mut Frame, area: Rect, palette: &Palette, sheet: &Sheet) {
             y,
             palette,
             Line::from(Span::styled(
-                sanitize(sheet.hint).into_owned(),
+                clean(sheet.hint),
                 Style::default().fg(palette.faint),
             )),
         );
@@ -174,7 +174,7 @@ pub fn render(frame: &mut Frame, area: Rect, palette: &Palette, sheet: &Sheet) {
 
 fn render_title(frame: &mut Frame, area: Rect, palette: &Palette, sheet: &Sheet) {
     let mut spans = vec![Span::styled(
-        sanitize(sheet.title).into_owned(),
+        clean(sheet.title),
         Style::default()
             .fg(palette.accent)
             .add_modifier(Modifier::BOLD),
@@ -182,7 +182,7 @@ fn render_title(frame: &mut Frame, area: Rect, palette: &Palette, sheet: &Sheet)
     if let Some(subtitle) = &sheet.subtitle {
         spans.push(Span::styled("  ", Style::default()));
         spans.push(Span::styled(
-            sanitize(subtitle).into_owned(),
+            clean(subtitle),
             Style::default().fg(palette.dim),
         ));
     }
@@ -206,7 +206,7 @@ fn render_row(frame: &mut Frame, area: Rect, palette: &Palette, row: &Row, highl
             .set_style(area, Style::default().bg(background));
     }
 
-    let detail = sanitize(&row.detail);
+    let detail = clean(&row.detail);
     let content = area.width.saturating_sub(2 * PAD) as usize;
     let detail_width = width(&detail);
     let label = truncate(&row.label, content.saturating_sub(detail_width + 2));
@@ -225,7 +225,7 @@ fn render_row(frame: &mut Frame, area: Rect, palette: &Palette, row: &Row, highl
         Span::styled(" ".repeat(PAD as usize), Style::default()),
         Span::styled(label, label_style),
         Span::styled(" ".repeat(gap), Style::default()),
-        Span::styled(detail.into_owned(), detail_style),
+        Span::styled(detail, detail_style),
     ]);
     draw_line(frame, area, area.y, palette, line);
 }
@@ -235,11 +235,16 @@ fn draw_line(frame: &mut Frame, area: Rect, y: u16, _palette: &Palette, line: Li
     frame.buffer_mut().set_line(area.x, y, &line, area.width);
 }
 
+/// Terminal-safe text, borrowing from either `sanitize` signature.
+fn clean(text: &str) -> String {
+    sanitize(text).to_string()
+}
+
 /// Shortens `text` to `cells`, ending with `…` when it was cut.
 pub fn truncate(text: &str, cells: usize) -> String {
-    let text = sanitize(text);
+    let text = clean(text);
     if width(&text) <= cells {
-        return text.into_owned();
+        return text;
     }
     if cells == 0 {
         return String::new();
@@ -275,7 +280,7 @@ pub fn row_at(area: Rect, sheet: &Sheet, column: u16, row: u16) -> Option<usize>
 /// Wraps one message into sheet body lines, so a long approval prompt still
 /// fits the sheet instead of being cut.
 pub fn body_lines(text: &str, cells: usize, style: Style) -> Vec<Line<'static>> {
-    wrap_line(&sanitize(text), cells)
+    wrap(&clean(text), cells)
         .into_iter()
         .map(|line| Line::from(Span::styled(line, style)))
         .collect()

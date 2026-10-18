@@ -13,7 +13,7 @@ use crate::protocol::{ChangeKind, SessionContext, SessionPresentation};
 use crate::theme::Palette;
 
 use super::panel::truncate;
-use super::wrap::{sanitize, width, wrap_line};
+use super::wrap::{sanitize, width, wrap};
 
 /// File-list column width, as a fraction of the view when the terminal is wide
 /// enough for a side-by-side layout.
@@ -148,7 +148,7 @@ pub fn hunk_lines(page: &DiffPage, palette: &Palette) -> Vec<Line<'static>> {
                 LineKind::Context | LineKind::Unknown => (" ", Style::default().fg(palette.dim)),
             };
             lines.push(Line::from(Span::styled(
-                format!("{sign}{}", sanitize(&line.text)),
+                format!("{sign}{}", clean(&line.text)),
                 style,
             )));
         }
@@ -157,6 +157,11 @@ pub fn hunk_lines(page: &DiffPage, palette: &Palette) -> Vec<Line<'static>> {
         lines.push(dim("… the diff continues", palette));
     }
     lines
+}
+
+/// Terminal-safe text, borrowing from either `sanitize` signature.
+fn clean(text: &str) -> String {
+    sanitize(text).to_string()
 }
 
 fn dim(text: &str, palette: &Palette) -> Line<'static> {
@@ -308,10 +313,7 @@ fn render_hunks(frame: &mut Frame, area: Rect, palette: &Palette, view: &DiffVie
             .map(|span| span.style)
             .unwrap_or_default();
         let y = area.y + row as u16;
-        for (index, chunk) in wrap_line(&text, area.width as usize)
-            .into_iter()
-            .enumerate()
-        {
+        for (index, chunk) in wrap(&text, area.width as usize).into_iter().enumerate() {
             if area.y + row as u16 + index as u16 >= area.bottom() {
                 return;
             }
@@ -387,11 +389,7 @@ pub fn render_tool(frame: &mut Frame, area: Rect, palette: &Palette, view: &Tool
         frame.buffer_mut().set_line(
             area.x,
             y,
-            &Span::styled(
-                sanitize(&view.detail).into_owned(),
-                Style::default().fg(palette.dim),
-            )
-            .into(),
+            &Span::styled(clean(&view.detail), Style::default().fg(palette.dim)).into(),
             area.width,
         );
         y += 1;
@@ -633,7 +631,7 @@ pub fn render_context(frame: &mut Frame, area: Rect, palette: &Palette, view: &C
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
-        for chunk in wrap_line(&text, area.width as usize) {
+        for chunk in wrap(&text, area.width as usize) {
             if y >= bottom {
                 return;
             }
