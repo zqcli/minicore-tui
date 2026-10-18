@@ -33,6 +33,10 @@ pub struct History {
     pub items: Vec<(usize, protocol::read::RawHistoryItem)>,
     pub from: usize,
     pub to: usize,
+    /// The display projection's `first_item`: the boundary the Agent itself
+    /// reports, which is where the visible history starts. It is not the same
+    /// as `from`, the first item this page happens to contain.
+    pub floor: usize,
     pub has_more: bool,
 }
 
@@ -250,6 +254,11 @@ pub fn send_turn(client: Arc<Client>, tx: Tx, session_id: String, text: String, 
     });
 }
 
+/// Registers a `turn.wait` for a loop that was adopted rather than sent.
+pub fn wait_turn(client: Arc<Client>, tx: Tx, turn: TurnRef, epoch: u64) {
+    wait(client, tx, turn, epoch);
+}
+
 fn wait(client: Arc<Client>, tx: Tx, turn: TurnRef, epoch: u64) {
     tokio::spawn(async move {
         let session_id = turn.session_id.clone();
@@ -320,18 +329,28 @@ pub fn compact(client: Arc<Client>, tx: Tx, session_id: String, operation_id: St
 /// so a pin is never cached across operations.
 pub fn load_tail(client: Arc<Client>, tx: Tx, session_id: String) {
     tokio::spawn(async move {
-        let result = match probe(client.as_ref(), &session_id, "display").await {
-            Ok(probe) => {
-                let total = probe.total;
-                let start = total
-                    .saturating_sub(protocol::TAIL_ITEMS)
-                    .max(probe.first_item);
-                read_window(client.as_ref(), &session_id, "display", probe, start, total).await
-            }
-            Err(error) => Err(error),
-        };
+        let result = tail(client.as_ref(), &session_id).await;
         post(&tx, Some(&session_id), OpKind::History(result));
     });
+}
+
+/// The tail window, retried once with a fresh pin: a page continuation can be
+/// refused with a stale pin while the Agent is appending, and restarting with
+/// a new probe is the documented recovery.
+async fn tail(client: &Client, session_id: &str) -> Result<History, protocol::RpcError> {
+    match read_tail(client, session_id).await {
+        Err(error) if error.code == protocol::INVALID_STATE => read_tail(client, session_id).await,
+        result => result,
+    }
+}
+
+async fn read_tail(client: &Client, session_id: &str) -> Result<History, protocol::RpcError> {
+    let probe = probe(client, session_id, "display").await?;
+    let total = probe.total;
+    let start = total
+        .saturating_sub(protocol::TAIL_ITEMS)
+        .max(probe.first_item);
+    read_window(client, session_id, "display", probe, start, total).await
 }
 
 /// Reads the page immediately older than `before`.
@@ -473,6 +492,7 @@ async fn read_window(
     Ok(History {
         from: start,
         to: end,
+        floor: probe.first_item,
         has_more: start > probe.first_item,
         items,
     })

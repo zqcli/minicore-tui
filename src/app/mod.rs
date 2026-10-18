@@ -290,6 +290,9 @@ pub struct App {
     /// A draft waiting for the main loop to run the external editor on it; the
     /// terminal belongs to the loop, not to the reducer.
     pub edit_request: Option<String>,
+    /// An open or create request is in flight, so "no session yet" means
+    /// "waiting" rather than "start one".
+    pub loading_session: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -336,6 +339,7 @@ impl App {
             layout: crate::transcript::layout::Layout::default(),
             viewport: 1,
             edit_request: None,
+            loading_session: false,
         }
     }
 
@@ -488,9 +492,8 @@ impl App {
             }
             Action::Interrupt => self.interrupt(),
             Action::OpenSession(id) => {
-                let epoch = self.next_epoch();
+                self.loading_session = true;
                 tasks::open_session(self.client.clone(), self.tx.clone(), id);
-                let _ = epoch;
                 true
             }
             Action::NewSession => {
@@ -711,6 +714,7 @@ impl App {
     }
 
     fn create_session(&mut self) {
+        self.loading_session = true;
         // An absent profile means "the Agent's configured default". Choosing
         // one here would override it with whatever sorts first.
         let mut params = serde_json::json!({ "workspace": self.workspace });
@@ -911,10 +915,7 @@ impl App {
         }
         let total = self.layout.total_rows();
         let viewport = viewport.max(1);
-        if total <= viewport {
-            return;
-        }
-        let max_top = total - viewport;
+        let max_top = total.saturating_sub(viewport);
         let current = match self.scroll {
             Scroll::Follow => max_top,
             Scroll::Anchor { block, offset } => self.layout.anchor_row(block, offset).min(max_top),
@@ -926,21 +927,16 @@ impl App {
         }
         let (block, offset) = self.layout.anchor(next);
         self.scroll = Scroll::Anchor { block, offset };
+        // Reaching the first block asks for the next page; the request is
+        // skipped while one is in flight, so holding the key is harmless.
+        if delta < 0 && block <= 1 {
+            self.load_older();
+        }
     }
 
     /// Rows the transcript occupies, as the last frame saw it.
     pub fn viewport_rows(&self) -> usize {
         self.viewport.max(1)
-    }
-
-    fn next_epoch(&mut self) -> u64 {
-        match self.session.as_mut() {
-            Some(session) => {
-                session.epoch += 1;
-                session.epoch
-            }
-            None => 0,
-        }
     }
 
     // ----- operations ----------------------------------------------------
@@ -1038,19 +1034,31 @@ impl App {
     fn on_opened(&mut self, result: Result<SessionInfo, RpcError>) {
         match result {
             Ok(info) => self.adopt(info, None),
-            Err(error) => self.error(error),
+            Err(error) => {
+                self.loading_session = false;
+                self.error(error);
+            }
         }
     }
 
     fn on_created(&mut self, result: Result<SessionInfo, RpcError>) {
         match result {
             Ok(info) => self.adopt(info, Some(())),
-            Err(error) => self.error(error),
+            Err(error) => {
+                self.loading_session = false;
+                self.error(error);
+            }
         }
+    }
+
+    /// Whether a session request is still in flight.
+    pub fn session_loading(&self) -> bool {
+        self.loading_session
     }
 
     /// Makes `info` the resident session and loads its tail.
     fn adopt(&mut self, info: SessionInfo, created: Option<()>) {
+        self.loading_session = false;
         let mut session = Session::new(info);
         session.epoch = self.session.as_ref().map_or(0, |old| old.epoch) + 1;
         let epoch = session.epoch;
@@ -1106,7 +1114,7 @@ impl App {
             return false;
         };
         session.transcript.clear();
-        session.first_item = page.from;
+        session.first_item = page.floor;
         session.loaded_from = page.from;
         session.hidden_items = page.from;
         install_items(session, &page.items);
@@ -1170,6 +1178,7 @@ impl App {
             self.scroll = Scroll::Anchor { block, offset };
         }
         session.loaded_from = page.from;
+        session.first_item = page.floor;
         session.hidden_items = page.from;
         // A page reaching the display floor leaves the reader at the compaction
         // summary with more history behind it; otherwise the label just states
@@ -1182,6 +1191,9 @@ impl App {
                 },
             );
         }
+        // Blocks built from a page carry an empty session id; the tool views
+        // read it back when a card is opened.
+        session.sync_session_id_into_tools();
         true
     }
 
@@ -1222,6 +1234,7 @@ impl App {
         }
         session.loaded_from = page.from;
         session.hidden_items = page.from;
+        session.sync_session_id_into_tools();
         true
     }
 
@@ -1254,13 +1267,56 @@ impl App {
             }
         };
         let idle = state.accepts_turn();
+        let active_loop = state.active_loop.clone();
         if let Some(session) = self.session.as_mut() {
             session.apply_state(state);
         }
         if idle {
-            self.flush_queue();
+            self.waiting_for_compaction = false;
+            if self
+                .session
+                .as_ref()
+                .is_some_and(|session| !session.queue.is_empty())
+            {
+                self.flush_queue();
+            }
+        } else if self.waiting_for_compaction {
+            // Post-turn compaction still owns the session: keep asking until it
+            // settles, then the queue flushes. A single poll would latch the UI.
+            self.retry_when_idle();
+        }
+        // A loop this process did not start has no `turn.wait` of its own.
+        if let Some(loop_id) = active_loop.map(|state| state.loop_id)
+            && let Some(session) = self.session.as_ref()
+            && !session
+                .live
+                .as_ref()
+                .is_some_and(|live| live.turn.loop_id == loop_id)
+        {
+            self.adopt_loop(session.info.session_id.clone(), loop_id);
         }
         true
+    }
+
+    /// Attaches to a loop that is already running, so its events and its end
+    /// are observed through the same `turn.wait` path as one this app started.
+    fn adopt_loop(&mut self, session_id: String, loop_id: String) {
+        let epoch = self.session.as_ref().map_or(0, |session| session.epoch);
+        let turn = TurnRef {
+            session_id,
+            loop_id,
+        };
+        if let Some(session) = self.session.as_mut()
+            && session.live.is_none()
+        {
+            let start = session
+                .next_turn_start
+                .take()
+                .unwrap_or_else(|| session.transcript.len());
+            session.live = Some(LiveTurn::new(turn.clone(), start));
+        }
+        self.scroll = Scroll::Follow;
+        tasks::wait_turn(self.client.clone(), self.tx.clone(), turn, epoch);
     }
 
     fn on_idle_check(&mut self, result: &Result<bool, RpcError>) -> bool {
@@ -1393,6 +1449,27 @@ impl App {
     fn on_waited(&mut self, result: &Result<crate::protocol::TurnWaitResult, RpcError>) -> bool {
         let wait = match result {
             Ok(wait) => wait,
+            // The deferred-slot and busy refusals are conditions, not verdicts:
+            // the turn is still running, so register the wait again shortly
+            // instead of leaving a live turn nothing will ever close.
+            Err(error) if error.is_capacity() || error.is_busy() => {
+                let Some((turn, epoch)) = self.session.as_ref().and_then(|session| {
+                    session
+                        .live
+                        .as_ref()
+                        .map(|live| (live.turn.clone(), session.epoch))
+                }) else {
+                    self.error(error);
+                    return true;
+                };
+                let client = self.client.clone();
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(BUSY_RETRY).await;
+                    tasks::wait_turn(client, tx, turn, epoch);
+                });
+                return true;
+            }
             Err(error) => {
                 self.error(error);
                 return true;
@@ -1660,7 +1737,12 @@ impl App {
                         .next_turn_start
                         .take()
                         .unwrap_or_else(|| session.transcript.len());
-                    session.live = Some(LiveTurn::new(turn, start));
+                    session.live = Some(LiveTurn::new(turn.clone(), start));
+                    // The event may describe a loop this app never sent, for
+                    // example after opening a running session. `turn.wait` is
+                    // the only thing that ends a turn, so register one.
+                    let epoch = session.epoch;
+                    tasks::wait_turn(self.client.clone(), self.tx.clone(), turn, epoch);
                 }
                 true
             }
