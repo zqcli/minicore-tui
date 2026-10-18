@@ -161,7 +161,7 @@ async fn a_turn_streams_through_to_its_turn_end_line() {
     pump(&mut app, &mut rx, |app| app.session.is_some()).await;
     settle(&mut app, &mut rx).await;
 
-    app.composer = "fix the greeting".into();
+    app.composer.set_text("fix the greeting");
     app.on_action(Action::Submit);
     pump(&mut app, &mut rx, |app| app.is_busy()).await;
 
@@ -255,7 +255,7 @@ async fn a_busy_send_keeps_the_text_and_retries_when_idle() {
 
     open(&mut app, &mut rx, &fake, &tx).await;
 
-    app.composer = "hello".into();
+    app.composer.set_text("hello");
     app.on_action(Action::Submit);
     // The send was refused: the text is queued, not lost, and the app retries.
     pump(&mut app, &mut rx, |app| {
@@ -311,7 +311,7 @@ async fn a_gapped_turn_reconciles_against_turn_result() {
 
     open(&mut app, &mut rx, &fake, &tx).await;
 
-    app.composer = "canonical prompt".into();
+    app.composer.set_text("canonical prompt");
     app.on_action(Action::Submit);
     // The turn is durable-only here: it may resolve before the frame is drawn.
     settle(&mut app, &mut rx).await;
@@ -541,12 +541,12 @@ async fn steering_only_leaves_the_queue_when_the_agent_applies_it() {
 
     open(&mut app, &mut rx, &fake, &tx).await;
 
-    app.composer = "start".into();
+    app.composer.set_text("start");
     app.on_action(Action::Submit);
     pump(&mut app, &mut rx, |app| app.is_busy()).await;
 
     // While running, the next prompt becomes a steer.
-    app.composer = "also the tests".into();
+    app.composer.set_text("also the tests");
     app.on_action(Action::Submit);
     let session = app.session.as_ref().unwrap();
     assert!(
@@ -608,7 +608,7 @@ async fn an_approval_prompt_is_answered_over_the_wire() {
     );
 
     open(&mut app, &mut rx, &fake, &tx).await;
-    app.composer = "write a file".into();
+    app.composer.set_text("write a file");
     app.on_action(Action::Submit);
     pump(&mut app, &mut rx, |app| app.is_busy()).await;
 
@@ -633,6 +633,142 @@ async fn an_approval_prompt_is_answered_over_the_wire() {
     assert_eq!(answered[0]["interaction_id"], json!("i1"));
     assert_eq!(answered[0]["answer"]["decision"], json!("allow_once"));
     assert!(!app.has_interaction());
+}
+
+#[tokio::test]
+async fn a_pending_approval_swallows_typing_paste_and_stray_keys() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (mut fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    fake.script("interaction.answer", json!({}));
+    fake.script_held("turn.wait", json!({"turn": turn("l1")}));
+
+    open(&mut app, &mut rx, &fake, &tx).await;
+    app.composer.set_text("keep me");
+    app.on_action(Action::Submit);
+    pump(&mut app, &mut rx, |app| app.is_busy()).await;
+
+    fake.emit(json!({
+        "type": "interaction_requested",
+        "data": {"turn": turn("l1"),
+                 "interaction": {"interaction_id": "i1", "tool_call_id": "c1",
+                                 "tool_name": "bash",
+                                 "kind": {"type": "approval", "data": {"prompt": "Allow bash?"}}},
+                 "meta": {"session_id": "s1", "dropped_before": 0}}
+    }))
+    .await;
+    pump(&mut app, &mut rx, |app| app.has_interaction()).await;
+
+    // Text, newlines and paste aimed at the prompt must not become a draft.
+    for character in "oops".chars() {
+        app.on_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+    }
+    app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+    app.on_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
+    app.on_paste("a whole pasted prompt");
+    assert_eq!(
+        app.composer.text(),
+        "",
+        "the draft behind the sheet stays empty"
+    );
+
+    // The prompt itself still answers: Enter allows option zero.
+    let input = app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(
+        input,
+        crate::app::keys::Input::Action(Action::Answer(crate::app::Answer::Allow))
+    );
+}
+
+#[tokio::test]
+async fn the_composer_model_keeps_the_draft_across_a_queued_turn() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    fake.script_held("turn.wait", json!({"turn": turn("l1")}));
+
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    // A multi-line draft survives a steer, and Undo walks the real edits.
+    app.composer.set_text("first line");
+    app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+    app.on_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    assert_eq!(app.composer.text(), "first line\nxy");
+
+    app.on_action(Action::Submit);
+    pump(&mut app, &mut rx, |app| app.is_busy()).await;
+    assert_eq!(app.composer.text(), "", "submitting empties the draft");
+
+    // A new draft typed while the turn runs is untouched by queueing.
+    app.composer.set_text("queued next");
+    let input = app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+    assert_eq!(
+        input,
+        crate::app::keys::Input::Action(Action::QueueFollowUp)
+    );
+    app.on_action(Action::QueueFollowUp);
+    assert_eq!(app.composer.text(), "");
+    let queue = &app.session.as_ref().unwrap().queue;
+    assert_eq!(
+        queue.last().map(|queued| queued.text.as_str()),
+        Some("queued next")
+    );
+}
+
+#[tokio::test]
+async fn the_diff_view_lists_one_row_per_path_and_merges_its_records() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script(
+        "changes.list",
+        json!({"records": [
+            {"change_ref": "r1", "path": "app.py", "kind": "modified", "details_available": true},
+            {"change_ref": "r2", "path": "app.py", "kind": "modified", "details_available": true},
+            {"change_ref": "r3", "path": "notes.txt", "kind": "added", "details_available": true}
+        ]}),
+    );
+    fake.script(
+        "changes.diff",
+        json!({"change_ref": "r1", "path": "app.py", "hunks": [], "complete": true}),
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.open_panel(crate::app::Panel::Diff(crate::app::DiffScope::Session));
+    pump(&mut app, &mut rx, |app| !app.diff.files.is_empty()).await;
+    settle(&mut app, &mut rx).await;
+
+    let paths: Vec<&str> = app
+        .diff
+        .files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect();
+    assert_eq!(paths, ["app.py", "notes.txt"], "one row per changed path");
+    assert_eq!(
+        app.diff.files[0].change_refs,
+        ["r1", "r2"],
+        "both records of app.py drive its diff"
+    );
+    assert_eq!(app.diff.files[1].change_refs, ["r3"]);
+    assert!(
+        app.diff.status.contains("content unchanged"),
+        "an empty record explains itself instead of implying a diff: {:?}",
+        app.diff.status
+    );
 }
 
 #[tokio::test]
@@ -720,6 +856,68 @@ async fn scrolling_leaves_follow_mode_and_returns_to_it() {
 }
 
 #[tokio::test]
+async fn ctrl_c_clears_a_draft_then_needs_two_presses_on_an_empty_composer() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+    let typed = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+    app.on_key(typed);
+    assert_eq!(app.composer.text(), "x");
+    app.on_key(ctrl_c);
+    assert_eq!(app.composer.text(), "", "the draft is cleared first");
+    assert!(!app.quit, "clearing a draft must not quit");
+
+    assert_eq!(app.on_key(ctrl_c), crate::app::keys::Input::Edited);
+    assert!(!app.quit, "the first empty press only arms the quit");
+    assert!(app.quit_armed);
+    assert_eq!(
+        app.notices.back().map(|notice| notice.text.as_str()),
+        Some("Press Ctrl+C again to quit")
+    );
+
+    app.on_key(typed);
+    assert!(!app.quit_armed, "typing disarms the quit");
+    app.on_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+    assert_eq!(app.on_key(ctrl_c), crate::app::keys::Input::Edited);
+    assert_eq!(
+        app.on_key(ctrl_c),
+        crate::app::keys::Input::Action(Action::Quit),
+        "a second empty press quits"
+    );
+}
+
+#[tokio::test]
+async fn palette_arguments_reach_the_command() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    for character in "/rename a better title".chars() {
+        app.on_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+    }
+    assert_eq!(app.composer.text(), "/rename a better title");
+    let input = app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(
+        input,
+        crate::app::keys::Input::Action(Action::Rename("a better title".into()))
+    );
+    assert!(app.composer.is_empty());
+    assert_eq!(app.overlay, Overlay::None);
+}
+
+#[tokio::test]
 async fn an_op_for_another_session_is_ignored() {
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let (_fake, mut app) = FakeAgent::start(tx);
@@ -786,7 +984,7 @@ async fn the_turn_end_line_counts_real_added_and_removed_lines() {
     fake.script("changes.diff", diff_with(40, 7));
     open(&mut app, &mut rx, &fake, &tx).await;
 
-    app.composer = "change it".into();
+    app.composer.set_text("change it");
     app.on_action(Action::Submit);
     settle(&mut app, &mut rx).await;
 
@@ -838,7 +1036,7 @@ async fn an_unknown_line_count_is_reported_rather_than_as_zero() {
     );
     open(&mut app, &mut rx, &fake, &tx).await;
 
-    app.composer = "change it".into();
+    app.composer.set_text("change it");
     app.on_action(Action::Submit);
     settle(&mut app, &mut rx).await;
 
@@ -898,7 +1096,7 @@ async fn three_tool_calls_on_one_file_report_one_file_and_summed_lines() {
     fake.script("changes.diff", diff_with(2, 1));
     open(&mut app, &mut rx, &fake, &tx).await;
 
-    app.composer = "change it".into();
+    app.composer.set_text("change it");
     app.on_action(Action::Submit);
     settle(&mut app, &mut rx).await;
 
@@ -1076,7 +1274,7 @@ async fn reconciling_a_gapped_turn_keeps_the_history_loaded_before_it() {
         json!({"records": [], "total": 0, "complete": true}),
     );
     open(&mut app, &mut rx, &fake, &tx).await;
-    app.composer = "gapped prompt".into();
+    app.composer.set_text("gapped prompt");
     app.on_action(Action::Submit);
     settle(&mut app, &mut rx).await;
 
@@ -1180,7 +1378,7 @@ async fn a_refused_send_takes_back_its_prompt_and_queues_the_text() {
     );
     open(&mut app, &mut rx, &fake, &tx).await;
 
-    app.composer = "next thing".into();
+    app.composer.set_text("next thing");
     app.on_action(Action::Submit);
     settle(&mut app, &mut rx).await;
 
@@ -1221,11 +1419,11 @@ async fn a_send_refused_for_another_reason_returns_the_text_to_the_composer() {
     );
     open(&mut app, &mut rx, &fake, &tx).await;
 
-    app.composer = "too much".into();
+    app.composer.set_text("too much");
     app.on_action(Action::Submit);
     settle(&mut app, &mut rx).await;
 
-    assert_eq!(app.composer, "too much", "the draft comes back");
+    assert_eq!(app.composer.text(), "too much", "the draft comes back");
     let session = app.session.as_ref().unwrap();
     assert!(
         !session
@@ -1270,7 +1468,7 @@ async fn a_busy_then_busy_then_idle_session_retries_until_it_sends_once() {
 
     // The first send is refused: post-turn compaction still runs.
     fake.script_error("turn.send", -32003, "session busy", "session_busy");
-    app.composer = "the important text".into();
+    app.composer.set_text("the important text");
     app.on_action(Action::Submit);
     settle(&mut app, &mut rx).await;
     assert!(app.waiting_for_compaction, "the retry loop is running");
@@ -1383,7 +1581,7 @@ async fn a_capacity_refusal_on_turn_wait_is_retried() {
     );
     open(&mut app, &mut rx, &fake, &tx).await;
 
-    app.composer = "retry the wait".into();
+    app.composer.set_text("retry the wait");
     app.on_action(Action::Submit);
     // The refusal is a condition, not a verdict: the retry registers the wait
     // again and the turn then ends normally.
@@ -1479,4 +1677,108 @@ async fn a_compaction_reported_while_idle_keeps_its_progress() {
     let progress = session.compaction.as_ref().expect("the progress is kept");
     assert_eq!(progress.phase, crate::protocol::CompactionPhase::Merging);
     assert_eq!(app.status_label(), Some("Compacting context"));
+}
+
+#[tokio::test]
+async fn recalling_a_queued_message_never_overwrites_the_draft() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    fake.script_held("turn.wait", json!({"turn": turn("l1")}));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.composer.set_text("first");
+    app.on_action(Action::Submit);
+    pump(&mut app, &mut rx, |app| app.is_busy()).await;
+
+    // Queue one message, then start a fresh draft.
+    app.composer.set_text("queued");
+    app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+    app.on_action(Action::QueueFollowUp);
+    app.composer.set_text("half-typed thought");
+
+    app.on_action(Action::RecallQueued);
+
+    assert_eq!(
+        app.composer.text(),
+        "half-typed thought",
+        "the draft is what the user is writing, not what the queue holds"
+    );
+    assert_eq!(
+        app.session.as_ref().unwrap().queue.len(),
+        1,
+        "the message stays queued for when there is room"
+    );
+    assert!(
+        app.notices
+            .iter()
+            .any(|notice| notice.text.contains("Clear the draft")),
+        "the refusal says why: {:?}",
+        app.notices
+    );
+}
+
+#[tokio::test]
+async fn a_busy_send_behind_a_queued_follow_up_keeps_fifo_and_sends_each_text_once() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    // Every send is refused as busy while a compaction owns the session: the
+    // refused prompt is queued, never dropped and never duplicated.
+    let busy = json!({"error": {"code": -32003, "message": "session is busy",
+                                 "data": {"kind": "busy"}}});
+    fake.script_sequence("turn.send", vec![busy.clone(), busy]);
+    fake.script_held("turn.wait", json!({"turn": turn("l1")}));
+
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    // Queue a follow-up while busy, then submit another message that is refused.
+    app.composer.set_text("queued first");
+    app.on_action(Action::QueueFollowUp);
+    app.composer.set_text("typed second");
+    app.on_action(Action::Submit);
+    step_until(&mut app, &mut rx, |app| !app.is_busy()).await;
+
+    // Both texts reach the Agent exactly once, oldest first.
+    let sends: Vec<String> = fake
+        .calls("turn.send")
+        .iter()
+        .filter_map(|call| call["text"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(
+        sends,
+        ["queued first", "typed second"],
+        "the older message goes first, each exactly once"
+    );
+
+    // A refused send never leaves a prompt behind, so the transcript cannot
+    // claim a turn the Agent did not accept.
+    let prompts: Vec<&str> = app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        prompts.is_empty(),
+        "no phantom prompts for refused sends: {prompts:?}"
+    );
+    assert!(
+        app.composer.is_empty(),
+        "nothing is left in the draft: {:?}",
+        app.composer.text()
+    );
 }

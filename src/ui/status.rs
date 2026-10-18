@@ -54,7 +54,12 @@ pub fn lines(app: &App, styles: Styles, width: u16) -> Vec<Line<'static>> {
         };
         rows.push(Line::styled(notice.text.clone(), style));
     }
-    let (draft, _) = composer::render(&app.composer, None, styles, width);
+    let (draft, _) = composer::render(
+        app.composer.text(),
+        Some(app.composer.display_cursor()),
+        styles,
+        width,
+    );
     rows.extend(draft);
     rows.push(footer(app, styles));
     rows
@@ -63,7 +68,12 @@ pub fn lines(app: &App, styles: Styles, width: u16) -> Vec<Line<'static>> {
 /// Where the terminal cursor sits: absolute rows from the top of the band.
 pub fn cursor(app: &App, styles: Styles, width: u16) -> (u16, u16) {
     let prefix = lines_before_composer(app);
-    let (_, cursor) = composer::render(&app.composer, None, styles, width);
+    let (_, cursor) = composer::render(
+        app.composer.text(),
+        Some(app.composer.display_cursor()),
+        styles,
+        width,
+    );
     (prefix + cursor.0, cursor.1)
 }
 

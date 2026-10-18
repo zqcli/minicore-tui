@@ -123,12 +123,29 @@ impl Builder<'_> {
             Event::End(tag) => self.end(tag),
             Event::Text(text) => self.text(&text),
             Event::Code(text) => {
-                let style = self.styles.code().bg(self.styles.theme.code_bg);
-                let style = self.decorate(style);
-                self.spans.push(Span::styled(format!("`{text}`"), style));
+                if self.table_cell().is_some() {
+                    // Tables are plain text cells: the code look has no cell
+                    // geometry, so keep the content and drop the styling.
+                    self.text(&text);
+                } else {
+                    let style = self.decorate(self.styles.inline_code());
+                    self.spans.push(Span::styled(format!("`{text}`"), style));
+                }
             }
-            Event::SoftBreak => self.spans.push(Span::raw(" ".to_owned())),
-            Event::HardBreak => self.flush(),
+            Event::SoftBreak => {
+                if self.table_cell().is_some() {
+                    self.text(" ");
+                } else {
+                    self.spans.push(Span::raw(" ".to_owned()));
+                }
+            }
+            Event::HardBreak => {
+                if self.table_cell().is_some() {
+                    self.text(" ");
+                } else {
+                    self.flush();
+                }
+            }
             Event::Rule => {
                 self.flush();
                 self.blank();
@@ -292,15 +309,22 @@ impl Builder<'_> {
         style
     }
 
+    /// The cell inline events should append to, when a table row is open.
+    fn table_cell(&mut self) -> Option<&mut String> {
+        let table = self.table.as_mut()?;
+        if table.rows.is_empty() {
+            return None;
+        }
+        table.rows.last_mut()?.last_mut()
+    }
+
     fn text(&mut self, text: &str) {
         if let Some(code) = self.code.as_mut() {
             code.text.push_str(text);
             return;
         }
-        if let Some(row) = self.table.as_mut().and_then(|table| table.rows.last_mut()) {
-            if let Some(cell) = row.last_mut() {
-                cell.push_str(text);
-            }
+        if let Some(cell) = self.table_cell() {
+            cell.push_str(text);
             return;
         }
         let style = match self.heading {
@@ -534,7 +558,10 @@ pub struct StreamRenderer {
     width: usize,
     base: Style,
     scan: Scan,
-    prefix: Vec<Line<'static>>,
+    /// Committed lines, shared so a tail-only update does not copy them.
+    prefix: Arc<[Line<'static>]>,
+    /// The last frame's result, reused while nothing changed at all.
+    current: Option<Arc<[Line<'static>]>>,
 }
 
 impl StreamRenderer {
@@ -544,14 +571,18 @@ impl StreamRenderer {
             width,
             base,
             scan: Scan::default(),
-            prefix: Vec::new(),
+            prefix: Arc::from(Vec::new()),
+            current: None,
         }
     }
 
     /// Appends a delta. The scan and the prefix cache survive, so only the tail
     /// is parsed again on the next render.
     pub fn push(&mut self, delta: &str) {
-        self.text.push_str(delta);
+        if !delta.is_empty() {
+            self.text.push_str(delta);
+            self.current = None;
+        }
     }
 
     /// Points the renderer at the block's authoritative text. The text only
@@ -560,7 +591,15 @@ impl StreamRenderer {
         if self.text != text {
             self.text.clear();
             self.text.push_str(text);
+            self.current = None;
         }
+    }
+
+    /// Bytes already rendered into the cached prefix; used by tests to prove a
+    /// tail-only update does not re-parse the stable part.
+    #[cfg(test)]
+    pub fn stable_bytes(&self) -> usize {
+        self.scan.cached
     }
 
     pub fn is_empty(&self) -> bool {
@@ -574,13 +613,17 @@ impl StreamRenderer {
     pub fn set_width(&mut self, width: usize) {
         if width != self.width {
             self.width = width;
-            self.prefix.clear();
+            self.prefix = Arc::from(Vec::new());
+            self.current = None;
             self.scan.cached = 0;
         }
     }
 
     /// Renders the current text, re-rendering only what changed.
     pub fn lines(&mut self, styles: &Styles) -> Arc<[Line<'static>]> {
+        if let Some(current) = &self.current {
+            return current.clone();
+        }
         let stable = self.scan.advance(&self.text);
         if stable > self.scan.cached {
             let fresh = render(
@@ -590,10 +633,13 @@ impl StreamRenderer {
                 self.base,
             );
             if !fresh.is_empty() {
-                if !self.prefix.is_empty() {
-                    self.prefix.push(Line::default());
+                let mut prefix = Vec::with_capacity(self.prefix.len() + fresh.len() + 1);
+                prefix.extend_from_slice(&self.prefix);
+                if !prefix.is_empty() {
+                    prefix.push(Line::default());
                 }
-                self.prefix.extend(fresh);
+                prefix.extend(fresh);
+                self.prefix = Arc::from(prefix);
             }
             self.scan.cached = stable;
         }
@@ -603,15 +649,19 @@ impl StreamRenderer {
             styles,
             self.base,
         );
-        if tail.is_empty() {
-            return Arc::from(self.prefix.clone());
-        }
-        let mut lines = self.prefix.clone();
-        if !lines.is_empty() {
-            lines.push(Line::default());
-        }
-        lines.extend(tail);
-        Arc::from(lines)
+        let lines: Arc<[Line<'static>]> = if tail.is_empty() {
+            self.prefix.clone()
+        } else {
+            let mut lines = Vec::with_capacity(self.prefix.len() + tail.len() + 1);
+            lines.extend_from_slice(&self.prefix);
+            if !lines.is_empty() {
+                lines.push(Line::default());
+            }
+            lines.extend(tail);
+            Arc::from(lines)
+        };
+        self.current = Some(lines.clone());
+        lines
     }
 }
 
@@ -663,9 +713,14 @@ impl Scan {
     fn line(&mut self, line: &str, start: usize, end: usize) {
         let content = line.trim_end();
         let trimmed = content.trim_start();
+        // Fences and their closers share one indentation rule (up to three
+        // spaces, as CommonMark allows), so a fence nested in a list closes on
+        // a nested line and the cut advances instead of stalling.
+        let indent = content.len() - trimmed.len();
         if let Some((marker, len)) = self.fence {
-            let closed = content.bytes().take_while(|byte| *byte == marker).count() >= len
-                && content.bytes().all(|byte| byte == marker);
+            let closed = indent <= 3
+                && trimmed.bytes().take_while(|byte| *byte == marker).count() >= len
+                && trimmed.bytes().all(|byte| byte == marker);
             if closed {
                 self.fence = None;
                 self.blank = None;
@@ -673,7 +728,9 @@ impl Scan {
             }
             return;
         }
-        if let Some(open) = fence_open(trimmed) {
+        if indent <= 3
+            && let Some(open) = fence_open(trimmed)
+        {
             self.fence = Some(open);
             self.blank = None;
             return;
@@ -698,7 +755,6 @@ impl Scan {
             self.commit(blank);
             self.open = BlockKind::None;
         }
-        let indent = content.len() - trimmed.len();
         let standalone =
             indent < 4 && (is_heading(trimmed) || is_setext_underline(content) || is_rule(content));
         if standalone {
@@ -789,6 +845,31 @@ mod tests {
             .iter()
             .map(|line| line.to_string())
             .collect()
+    }
+
+    #[test]
+    fn table_cells_take_inline_code_html_and_breaks() {
+        let source = "| A | B |\n|---|---|\n| `code` | x<br>y |\n\nAfter.";
+        let text = plain(source, 40);
+        let table_rows: Vec<&String> = text.iter().filter(|line| line.contains('│')).collect();
+        assert!(
+            table_rows.iter().any(|row| row.contains("code")),
+            "inline code belongs inside the cell: {text:?}"
+        );
+        assert!(
+            table_rows
+                .iter()
+                .any(|row| row.contains("x y") || row.contains("xy")),
+            "a hard break stays in the cell: {text:?}"
+        );
+        assert!(
+            text.iter().any(|line| line == "After."),
+            "the paragraph after the table is not folded into it: {text:?}"
+        );
+        assert!(
+            text.iter().all(|line| !line.contains('`')),
+            "cell text drops the code delimiter: {text:?}"
+        );
     }
 
     #[test]
@@ -1017,6 +1098,51 @@ mod tests {
         assert_eq!(stable_of("1. a\n    cont\n"), 0);
     }
 
+    #[test]
+    fn a_list_indented_fence_commits_its_cut() {
+        // Opening and closing fences are both indented like the list item, so
+        // the scan must treat them the same way or the cut never advances.
+        let text = "- item\n\n  ```\n  code\n  ```\n\nafter\n";
+        let cut = stable_of(text);
+        assert!(cut > 0, "the closed fence lets the cut advance past - item");
+        assert!(
+            cut <= text.len(),
+            "the cut never runs past the scanned text ({cut})"
+        );
+        let styles = styles();
+        let mut renderer = StreamRenderer::new(40, Style::default());
+        for index in 0..text.len() {
+            if !text.is_char_boundary(index + 1) {
+                continue;
+            }
+            renderer.push(&text[index..index + 1]);
+            let got: Vec<String> = renderer
+                .lines(&styles)
+                .iter()
+                .map(Line::to_string)
+                .collect();
+            let want: Vec<String> = render(&text[..=index], 40, &styles, Style::default())
+                .iter()
+                .map(Line::to_string)
+                .collect();
+            assert_eq!(got, want, "after byte {index}");
+        }
+    }
+
+    #[test]
+    fn an_indented_code_block_is_not_a_fence() {
+        // Four spaces is an indented code block, not a fence opener, so the
+        // scan must not swallow the rest of the text waiting for a closer.
+        let text = "para\n\n    ```\n    not a fence\n\nafter\n";
+        let cut = stable_of(text);
+        assert!(cut > 0, "the paragraph behind the block is committed");
+        let lines = plain(text, 40);
+        assert!(
+            lines.iter().any(|line| line.contains("after")),
+            "text after an indented block still renders: {lines:?}"
+        );
+    }
+
     fn stable_of(text: &str) -> usize {
         Scan::default().advance(text)
     }
@@ -1037,6 +1163,38 @@ mod tests {
         assert_eq!(
             last, 5,
             "the closed paragraph prefix; the rest stays in the tail"
+        );
+    }
+
+    #[test]
+    fn a_tail_update_reuses_the_prefix_and_skips_reparsing() {
+        let styles = styles();
+        let mut renderer = StreamRenderer::new(40, Style::default());
+        // A closed paragraph is stable, so the prefix is committed.
+        renderer.push("stable paragraph\n\n");
+        let first = renderer.lines(&styles);
+        let committed = renderer.stable_bytes();
+        assert!(committed > 0, "the closed paragraph is cached");
+
+        // Growing the tail must not re-render the stable part.
+        renderer.push("grow");
+        let second = renderer.lines(&styles);
+        assert_eq!(
+            renderer.stable_bytes(),
+            committed,
+            "the stable cut did not move, so nothing before it is re-parsed"
+        );
+        assert_eq!(
+            &second[..first.len()],
+            &first[..],
+            "the cached prefix lines are reused verbatim"
+        );
+
+        // An unchanged frame returns the very same allocation.
+        let third = renderer.lines(&styles);
+        assert!(
+            Arc::ptr_eq(&second, &third),
+            "an idle frame allocates nothing"
         );
     }
 

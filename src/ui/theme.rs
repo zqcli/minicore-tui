@@ -92,6 +92,16 @@ impl Styles {
         Self::new(palette, false)
     }
 
+    /// A tinted role: the text color on a background band, both dropped when
+    /// the terminal asks for no color.
+    fn tint(&self, background: Color, foreground: Color) -> Style {
+        if self.color {
+            Style::new().bg(background).fg(foreground)
+        } else {
+            Style::new()
+        }
+    }
+
     fn paint(&self, color: Color) -> Style {
         if self.color {
             Style::new().fg(color)
@@ -171,7 +181,13 @@ impl Styles {
     }
 
     pub fn code(&self) -> Style {
-        self.paint(self.theme.text)
+        self.tint(self.theme.code_bg, self.theme.text)
+    }
+
+    /// An inline code span: the same role, so a NO_COLOR terminal keeps the
+    /// code delimiter and drops only the tint.
+    pub fn inline_code(&self) -> Style {
+        self.code()
     }
 
     pub fn code_border(&self) -> Style {
@@ -253,6 +269,8 @@ mod tests {
             styles.composer(),
             styles.selection(),
             styles.diff_add(),
+            styles.code(),
+            styles.inline_code(),
         ] {
             assert_eq!(style.fg, None, "{style:?}");
             assert_eq!(style.bg, None, "{style:?}");

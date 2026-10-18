@@ -100,7 +100,10 @@ impl<'a> Projection<'a> {
             }
             shown += head;
             let token = paste.label().len();
-            if display <= shown + token {
+            // Strictly inside the token snaps to its payload; the cell right
+            // after it is the position after the token, so typing there does
+            // not land inside the payload.
+            if display < shown + token {
                 return paste.range.start;
             }
             shown += token;
@@ -195,12 +198,16 @@ impl Composer {
         self.recall = None;
     }
 
+    /// Clears the draft the way an edit would, so Ctrl+Z brings it back.
     pub fn clear(&mut self) {
         if self.text.is_empty() {
             return;
         }
         self.snapshot();
-        self.set_text("");
+        self.text.clear();
+        self.cursor = 0;
+        self.pastes.clear();
+        self.column = None;
         self.commit();
     }
 
@@ -489,6 +496,7 @@ impl Composer {
     }
 
     pub fn delete(&mut self) {
+        self.commit();
         if self.cursor >= self.text.len() {
             return;
         }
@@ -502,6 +510,7 @@ impl Composer {
     }
 
     pub fn delete_word_left(&mut self) {
+        self.commit();
         let end = self.cursor;
         self.move_word_left();
         let start = self.cursor;
@@ -510,6 +519,7 @@ impl Composer {
     }
 
     pub fn delete_to_line_start(&mut self) {
+        self.commit();
         let end = self.cursor;
         let start = self.line_start(self.cursor_position().0);
         self.cursor = end;
@@ -517,6 +527,7 @@ impl Composer {
     }
 
     pub fn delete_to_line_end(&mut self) {
+        self.commit();
         let start = self.cursor;
         let end = self.line_end(self.cursor_position().0);
         self.cursor = start;
@@ -570,8 +581,8 @@ impl Composer {
             Some(0) => return false,
             Some(index) => index - 1,
         };
-        self.recall = Some(index);
         self.load(self.history[index].clone());
+        self.recall = Some(index);
         true
     }
 
@@ -580,17 +591,22 @@ impl Composer {
             return false;
         };
         if index + 1 < self.history.len() {
-            self.recall = Some(index + 1);
             self.load(self.history[index + 1].clone());
+            self.recall = Some(index + 1);
             return true;
         }
-        self.recall = None;
         let draft = std::mem::take(&mut self.draft);
         self.load(draft);
+        self.recall = None;
         true
     }
 
+    /// Swaps in a recalled draft. The recalled text is not an edit step of its
+    /// own, but the typing before it must not merge with what follows, so the
+    /// live gesture is committed first.
     fn load(&mut self, text: String) {
+        self.commit();
+        self.gesture = None;
         self.text = text;
         self.cursor = self.text.len();
         self.pastes.clear();
@@ -658,16 +674,19 @@ pub fn render(
     let total = width.max(3) as usize;
     let content = total - 2;
     let empty = text.is_empty();
-    let shown = if empty {
-        "Ask anything · / commands · @ files"
-    } else {
-        text
-    };
-    let caret = cursor.unwrap_or(shown.len()).min(shown.len());
     let body = if empty {
         styles.subtle()
     } else {
         styles.text()
+    };
+    // Escapes and control characters would drive the terminal, so the draft is
+    // drawn from a sanitized copy; `caret` is mapped into it so the cursor
+    // keeps pointing at the same character it edits.
+    let (shown, caret) = if empty {
+        ("Ask anything · / commands · @ files".to_owned(), 0)
+    } else {
+        let caret = cursor.unwrap_or(text.len()).min(text.len());
+        sanitize_to_caret(text, caret)
     };
 
     let mut rows: Vec<Line<'static>> = Vec::new();
@@ -679,8 +698,13 @@ pub fn render(
         if (offset..=offset + line.len()).contains(&caret) {
             let prefix = &line[..caret.saturating_sub(offset).min(line.len())];
             let prefix_rows = wrap::wrap(prefix, content);
-            caret_row = rows.len() + prefix_rows.len() - 1;
-            caret_column = 2 + wrap::width(prefix_rows.last().map_or("", String::as_str));
+            // Wrapped rows drop their trailing blanks, but the caret still sits
+            // after them, so add back the width the row lost.
+            let tail = prefix.len() - prefix.trim_end().len();
+            let width = wrap::width(prefix_rows.last().map_or("", String::as_str))
+                + wrap::width(&prefix[prefix.len() - tail..]);
+            caret_row = rows.len() + prefix_rows.len() - 1 + width / content;
+            caret_column = 2 + width % content;
         }
         for piece in pieces {
             rows.push(rail_row(&piece, body, styles));
@@ -706,6 +730,16 @@ pub fn render(
             caret_column.min(total - 1) as u16,
         ),
     )
+}
+
+/// Sanitizes the draft and maps `caret` into the sanitized text. Sanitizing
+/// the prefix on its own keeps multi-character sequences (`ESC [ 31 m`) whole,
+/// which a per-character pass would break; a caret inside such a sequence maps
+/// to the cell before it.
+fn sanitize_to_caret(text: &str, caret: usize) -> (String, usize) {
+    let head = wrap::sanitize(&text[..caret]);
+    let shown = wrap::sanitize(text).into_owned();
+    (shown, head.len())
 }
 
 /// One composer row: accent rail, then the draft cell.
@@ -1001,6 +1035,59 @@ mod tests {
         assert_eq!(c.text(), format!("> {payload}"));
     }
 
+    fn styles() -> super::super::theme::Styles {
+        super::super::theme::Styles::of(crate::theme::Palette::dark())
+    }
+
+    fn drawn(text: &str, cursor: Option<usize>, width: u16) -> (Vec<String>, (u16, u16)) {
+        let (lines, caret) = render(text, cursor, styles(), width);
+        (lines.iter().map(|line| line.to_string()).collect(), caret)
+    }
+
+    #[test]
+    fn an_escape_sequence_is_shown_as_text_and_never_reaches_the_terminal() {
+        let text = "safe\u{1b}[31mred";
+        let (rows, _) = drawn(text, None, 40);
+        let joined = rows.join("\n");
+        assert!(
+            !joined.contains('\u{1b}'),
+            "no escape survives into the frame: {joined:?}"
+        );
+        assert!(joined.contains("safe"), "{joined:?}");
+        assert!(joined.contains("red"), "{joined:?}");
+    }
+
+    #[test]
+    fn the_cursor_keeps_its_cell_after_sanitizing() {
+        // A tab shows as four cells, so the caret after it moves by four.
+        let (_, plain) = drawn("ab", Some(2), 40);
+        assert_eq!(plain, (0, 4), "rail (2) plus two cells");
+
+        let (_, tabbed) = drawn("ab\tc", Some(3), 40);
+        assert_eq!(
+            tabbed,
+            (0, 8),
+            "ab plus the tab's four cells, plus the two rail cells"
+        );
+
+        // An escape sequence collapses to one picture glyph; the caret after it
+        // counts the visible cell, not the eight source bytes.
+        let (rows, escaped) = drawn("a\u{1b}[31mb", Some(7), 40);
+        assert_eq!(
+            escaped,
+            (0, 4),
+            "the escape collapses to one cell, then the rail"
+        );
+        assert_eq!(rows.join(""), "▎ ab", "the escape is dropped, not painted");
+    }
+
+    #[test]
+    fn a_control_character_becomes_a_picture() {
+        let (rows, _) = drawn("a\u{7}b", None, 40);
+        let joined = rows.join("\n");
+        assert!(joined.contains('\u{2407}'), "{joined:?}");
+    }
+
     #[test]
     fn tokens_render_as_single_lines_for_movement() {
         let payload = big_paste(40);
@@ -1015,12 +1102,121 @@ mod tests {
         assert_eq!(c.cursor(), 0);
     }
 
+    /// One long payload line, so a display offset equals a buffer offset in
+    /// the head and only the token shifts the tail.
+    fn pasted() -> Composer {
+        let mut c = Composer::new();
+        c.insert("before ");
+        c.insert(&"x".repeat(TOKEN_BYTES + 1));
+        c.insert("after");
+        c
+    }
+
+    fn token_end(c: &Composer) -> usize {
+        let token = c.pastes()[0].label();
+        let shown = c.projection().text();
+        shown.find(&token).expect("the paste shows as its token") + token.len()
+    }
+
     #[test]
-    fn clear_discards_the_draft_and_history() {
+    fn the_cell_after_a_token_maps_past_the_payload() {
+        let c = pasted();
+        assert_eq!(
+            &c.text()[c.projection().raw(token_end(&c))..],
+            "after",
+            "the trailing edge is the position after the paste, not inside it"
+        );
+    }
+
+    #[test]
+    fn move_end_and_typing_stay_after_the_trailing_text() {
+        let mut c = pasted();
+        c.move_end();
+        let end = c.cursor();
+        assert_eq!(end, c.text().len());
+        c.type_char('!');
+        assert!(c.text().ends_with("after!"), "{:?}", c.text());
+        assert_eq!(c.pastes().len(), 1, "the payload stays one token");
+    }
+
+    #[test]
+    fn ctrl_e_and_end_keep_the_cursor_out_of_a_payload() {
+        let mut c = pasted();
+        c.move_home();
+        assert_eq!(c.cursor(), 0);
+        c.move_down();
+        assert!(
+            c.pastes()
+                .iter()
+                .all(|paste| !paste.range.contains(&c.cursor())),
+            "the cursor never lands inside a payload"
+        );
+        c.move_end();
+        assert_eq!(c.cursor(), c.text().len());
+    }
+
+    #[test]
+    fn a_recall_ends_the_typing_gesture() {
+        let mut c = Composer::new();
+        c.insert("first");
+        assert_eq!(c.submit(), "first");
+        c.type_char('d');
+        c.type_char('r');
+        c.type_char('a');
+        c.type_char('f');
+        c.type_char('t');
+        assert!(c.history_prev(), "recall the submitted prompt");
+        assert_eq!(c.text(), "first");
+        c.type_char('!');
+        assert_eq!(c.text(), "first!");
+        assert!(c.undo(), "the edit after the recall is undoable");
+        assert_eq!(
+            c.text(),
+            "first",
+            "undo stops at the recalled draft, not the pre-recall typing"
+        );
+        assert!(c.undo());
+        assert_eq!(
+            c.text(),
+            "",
+            "the pre-recall typing stays its own step, ending where it began"
+        );
+    }
+
+    #[test]
+    fn a_kill_does_not_swallow_the_typing_before_it() {
+        let mut c = Composer::new();
+        c.end_gesture();
+        for ch in "alpha beta".chars() {
+            c.type_char(ch);
+        }
+        c.delete_word_left();
+        assert_eq!(c.text(), "alpha ");
+        // First undo restores only the killed word; the typing stays put.
+        assert!(c.undo());
+        assert_eq!(c.text(), "alpha beta");
+    }
+
+    #[test]
+    fn a_word_delete_is_one_undoable_step() {
+        let mut c = composer("alpha beta gamma");
+        c.end_gesture();
+        c.delete_word_left();
+        assert_eq!(c.text(), "alpha beta ");
+        assert!(c.undo());
+        assert_eq!(c.text(), "alpha beta gamma");
+    }
+
+    #[test]
+    fn clear_is_undoable_and_keeps_earlier_undo_steps() {
         let mut c = composer("draft");
+        c.insert(" more");
         c.clear();
         assert!(c.is_empty());
-        assert!(!c.undo());
+        assert!(c.undo(), "clearing the draft is itself an undo step");
+        assert_eq!(c.text(), "draft more");
+        assert!(c.undo(), "the typing before the clear is still undoable");
+        assert_eq!(c.text(), "draft");
     }
 
     #[test]

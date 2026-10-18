@@ -28,6 +28,9 @@ pub struct DiffFile {
     pub kind: ChangeKind,
     pub added: usize,
     pub removed: usize,
+    /// Change records that touched this path, oldest first. One row per path,
+    /// because a turn can change the same file several times.
+    pub change_refs: Vec<String>,
 }
 
 impl DiffFile {
@@ -949,12 +952,14 @@ mod tests {
                 kind: ChangeKind::Modified,
                 added: 3,
                 removed: 1,
+                change_refs: Vec::new(),
             },
             DiffFile {
                 path: "b.rs".into(),
                 kind: ChangeKind::Added,
                 added: 9,
                 removed: 0,
+                change_refs: Vec::new(),
             },
         ]);
         view
