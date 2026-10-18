@@ -689,47 +689,77 @@ pub fn list_changes(client: Arc<Client>, tx: Tx, session_id: String, scope: crat
 }
 
 /// Pages the hunks of one change record for the diff view.
+/// Pages every change record of one path and merges the hunks, so a file that
+/// a turn changed several times shows one combined diff.
 pub fn load_diff(
     client: Arc<Client>,
     tx: Tx,
     session_id: String,
-    change_ref: String,
     path: String,
+    change_refs: Vec<String>,
 ) {
     tokio::spawn(async move {
-        let mut hunks = Vec::new();
-        let mut cursor: Option<Value> = None;
-        let page = loop {
-            let params = json!({
-                "session_id": session_id,
-                "change_ref": change_ref,
-                "cursor": cursor,
-                "max_bytes": 262_144,
-            });
-            let next: Result<protocol::changes::DiffPage, _> = client
-                .call::<Value, protocol::changes::DiffPage>(
-                    protocol::METHOD_CHANGES_DIFF,
-                    &params,
-                    false,
-                )
-                .await;
-            match next {
-                Ok(mut result) => {
-                    cursor.clone_from(&result.next_cursor);
-                    hunks.append(&mut result.hunks);
-                    if cursor.is_none() {
-                        result.hunks = std::mem::take(&mut hunks);
-                        break result;
-                    }
-                }
+        let mut merged: Option<protocol::changes::DiffPage> = None;
+        for change_ref in change_refs {
+            let page = match page_diff(&client, &session_id, change_ref).await {
+                Ok(page) => page,
                 Err(error) => {
                     post(&tx, Some(&session_id), OpKind::DiffFile(path, Err(error)));
                     return;
                 }
+            };
+            match merged.as_mut() {
+                Some(merged) => {
+                    merged.hunks.extend(page.hunks);
+                    merged.binary |= page.binary;
+                    merged.complete &= page.complete;
+                }
+                None => merged = Some(page),
             }
-        };
+        }
+        let page = merged.unwrap_or_else(|| protocol::changes::DiffPage {
+            change_ref: String::new(),
+            path: path.clone(),
+            hunks: Vec::new(),
+            next_cursor: None,
+            complete: true,
+            binary: false,
+            availability: None,
+            stale: false,
+        });
         post(&tx, Some(&session_id), OpKind::DiffFile(path, Ok(page)));
     });
+}
+
+/// One record's hunks, following `next_cursor` to the end.
+async fn page_diff(
+    client: &Client,
+    session_id: &str,
+    change_ref: String,
+) -> Result<protocol::changes::DiffPage, protocol::RpcError> {
+    let mut hunks = Vec::new();
+    let mut cursor: Option<Value> = None;
+    loop {
+        let params = json!({
+            "session_id": session_id,
+            "change_ref": change_ref,
+            "cursor": cursor,
+            "max_bytes": 262_144,
+        });
+        let mut page: protocol::changes::DiffPage = client
+            .call::<Value, protocol::changes::DiffPage>(
+                protocol::METHOD_CHANGES_DIFF,
+                &params,
+                false,
+            )
+            .await?;
+        cursor.clone_from(&page.next_cursor);
+        hunks.append(&mut page.hunks);
+        if cursor.is_none() {
+            page.hunks = hunks;
+            return Ok(page);
+        }
+    }
 }
 
 /// Fetches workspace paths for the `@` picker: one recursive `workspace.files`

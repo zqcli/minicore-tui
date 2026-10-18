@@ -438,7 +438,7 @@ pub struct App {
     /// with exactly these; opening an existing one applies them through
     /// `session.update`, so a flag is never silently dropped.
     pub launch: LaunchSettings,
-    pub composer: String,
+    pub composer: crate::ui::composer::Composer,
     pub draft_history: VecDeque<String>,
     pub draft_cursor: Option<usize>,
     pub notices: VecDeque<Notice>,
@@ -446,6 +446,8 @@ pub struct App {
     pub tools_expanded: bool,
     pub show_reasoning: bool,
     pub quit: bool,
+    /// Ctrl+C armed the quit; a second press on an empty composer leaves.
+    pub quit_armed: bool,
     pub ready: bool,
     pub fatal: Option<Fatal>,
     pub last_error: Option<String>,
@@ -469,8 +471,6 @@ pub struct App {
     pub diff: crate::ui::views::DiffView,
     /// The composed context view, refreshed from `session.context`.
     pub context_view: crate::ui::views::ContextView,
-    /// Change records of the open diff, in the same order as its file rows.
-    pub diff_records: Vec<crate::protocol::ChangeRecord>,
     /// The tool-output view, rebuilt from the selected card.
     pub tool_view: crate::ui::views::ToolView,
     /// Scroll offset of the help view.
@@ -517,7 +517,7 @@ impl App {
             models: Vec::new(),
             profiles: Vec::new(),
             launch: LaunchSettings::default(),
-            composer: String::new(),
+            composer: crate::ui::composer::Composer::new(),
             draft_history: VecDeque::new(),
             draft_cursor: None,
             notices: VecDeque::new(),
@@ -525,6 +525,7 @@ impl App {
             tools_expanded: false,
             show_reasoning: false,
             quit: false,
+            quit_armed: false,
             ready: false,
             fatal: None,
             last_error: None,
@@ -540,7 +541,6 @@ impl App {
             last_answer: None,
             diff: crate::ui::views::DiffView::new("Diff"),
             context_view: crate::ui::views::ContextView::default(),
-            diff_records: Vec::new(),
             tool_view: crate::ui::views::ToolView {
                 title: String::new(),
                 detail: String::new(),
@@ -605,7 +605,7 @@ impl App {
             }
             Msg::DraftEdited(draft) => {
                 // An empty file is a deliberate blank draft, not a cancel.
-                self.composer = draft.unwrap_or_default();
+                self.composer.set_text(draft.as_deref().unwrap_or_default());
                 true
             }
             Msg::Quit => {
@@ -706,7 +706,7 @@ impl App {
             Action::Submit => self.submit(),
             Action::QueueFollowUp => self.submit_follow_up(),
             Action::Send(text) => {
-                self.composer = text;
+                self.composer.set_text(&text);
                 self.submit()
             }
             Action::Interrupt => self.interrupt(),
@@ -820,7 +820,7 @@ impl App {
 
     /// Enter: send when idle, steer when a turn is running.
     fn submit(&mut self) -> bool {
-        let text = std::mem::take(&mut self.composer).trim_end().to_owned();
+        let text = self.composer.submit().trim_end().to_owned();
         if text.trim().is_empty() {
             return true;
         }
@@ -835,7 +835,7 @@ impl App {
 
     /// Alt+Enter: queue a follow-up; when idle it just sends.
     fn submit_follow_up(&mut self) -> bool {
-        let text = std::mem::take(&mut self.composer).trim_end().to_owned();
+        let text = self.composer.submit().trim_end().to_owned();
         if text.trim().is_empty() {
             return true;
         }
@@ -883,7 +883,7 @@ impl App {
 
     fn send(&mut self, text: String) {
         let Some(session) = self.session.as_mut() else {
-            self.composer = text;
+            self.composer.set_text(&text);
             self.notice(NoticeLevel::Error, "No session is open");
             return;
         };
@@ -908,11 +908,11 @@ impl App {
 
     fn steer(&mut self, text: String) {
         let Some(session) = self.session.as_mut() else {
-            self.composer = text;
+            self.composer.set_text(&text);
             return;
         };
         let Some(turn) = session.live.as_ref().map(|live| live.turn.clone()) else {
-            self.composer = text;
+            self.composer.set_text(&text);
             return;
         };
         session.queue.push(Queued {
@@ -1053,7 +1053,7 @@ impl App {
     /// the main loop, so this only files the request; the loop suspends the
     /// screen, runs the editor, and reports back through [`Msg::DraftEdited`].
     fn edit_draft(&mut self) {
-        let draft = std::mem::take(&mut self.composer);
+        let draft = self.composer.submit();
         self.edit_request = Some(draft);
     }
 
@@ -1127,7 +1127,7 @@ impl App {
             return;
         };
         if let Some(text) = session.take_follow_up() {
-            self.composer = text;
+            self.composer.set_text(&text);
         }
     }
 
@@ -2005,32 +2005,50 @@ impl App {
                 return true;
             }
         };
-        let files: Vec<crate::ui::views::DiffFile> = records
-            .iter()
-            .map(|record| crate::ui::views::DiffFile {
-                path: record.path.clone(),
-                kind: record.kind,
-                added: 0,
-                removed: 0,
-            })
-            .collect();
+        // One row per path: a turn can change the same file several times, and
+        // repeating the row would misreport how many files changed.
+        let mut files: Vec<crate::ui::views::DiffFile> = Vec::new();
+        for record in &records {
+            match files.iter_mut().find(|file| file.path == record.path) {
+                Some(file) => file.change_refs.push(record.change_ref.clone()),
+                None => files.push(crate::ui::views::DiffFile {
+                    path: record.path.clone(),
+                    kind: record.kind,
+                    added: 0,
+                    removed: 0,
+                    change_refs: vec![record.change_ref.clone()],
+                }),
+            }
+        }
         self.diff.set_files(files);
-        self.diff_records = records.clone();
         if self.diff.files.is_empty() {
             self.diff.status = "No file changes are recorded for this scope.".into();
-            self.diff_records.clear();
             return true;
         }
-        if let (Some(record), Some(session)) = (records.first(), self.session.as_ref()) {
-            tasks::load_diff(
-                self.client.clone(),
-                self.tx.clone(),
-                session.info.session_id.clone(),
-                record.change_ref.clone(),
-                record.path.clone(),
-            );
-        }
+        self.diff.status.clear();
+        self.load_selected_diff();
         true
+    }
+
+    /// Loads the selected file's records. Every record of that path is paged
+    /// in and merged, so the diff reflects the whole turn or session.
+    fn load_selected_diff(&mut self) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        let Some(file) = self.diff.files.get(self.diff.selected) else {
+            return;
+        };
+        if file.change_refs.is_empty() {
+            return;
+        }
+        tasks::load_diff(
+            self.client.clone(),
+            self.tx.clone(),
+            session.info.session_id.clone(),
+            file.path.clone(),
+            file.change_refs.clone(),
+        );
     }
 
     fn on_diff_file(
@@ -2044,7 +2062,13 @@ impl App {
                 let (added, removed) = count_hunks(&lines);
                 self.diff.hunks = lines;
                 self.diff.scroll = 0;
-                self.diff.status.clear();
+                // A record whose before and after content match has no hunks
+                // at all: say that, instead of implying there is a diff.
+                self.diff.status = if page.hunks.is_empty() && !page.binary {
+                    "No line changes in these records (content unchanged).".into()
+                } else {
+                    String::new()
+                };
                 if let Some(file) = self.diff.files.get_mut(self.diff.selected) {
                     file.added = added;
                     file.removed = removed;
@@ -2708,6 +2732,7 @@ fn collect_changed_files(
             kind: crate::protocol::ChangeKind::Modified,
             added: 0,
             removed: 0,
+            change_refs: Vec::new(),
         });
     }
     files
