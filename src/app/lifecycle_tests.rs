@@ -1995,3 +1995,155 @@ async fn r_in_the_context_view_asks_for_a_fresh_ledger() {
         "the view stays open"
     );
 }
+
+/// Selecting a row whose diff is not loaded yet must clear the pane at once:
+/// the previous file's hunks must never appear under the new title, not even
+/// for the duration of the read.
+#[tokio::test]
+async fn selecting_an_unmeasured_row_clears_the_pane_before_the_answer() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script(
+        "changes.list",
+        json!({"records": [
+            {"change_ref": "ra", "path": "a.py", "kind": "modified", "details_available": true},
+            {"change_ref": "rb", "path": "b.py", "kind": "modified", "details_available": true}
+        ]}),
+    );
+    fake.script_sequence_later(
+        "changes.diff",
+        vec![
+            (
+                json!({"path": "a.py", "hunks": [
+                    {"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 1,
+                     "lines": [{"kind": "added", "text": "a1", "line_complete": true}]}
+                ], "complete": true}),
+                std::time::Duration::ZERO,
+            ),
+            // b.py's read is held long enough for the test to look at the pane.
+            (
+                json!({"path": "b.py", "hunks": [
+                    {"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 1,
+                     "lines": [{"kind": "added", "text": "b1", "line_complete": true}]}
+                ], "complete": true}),
+                std::time::Duration::from_millis(600),
+            ),
+        ],
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.open_panel(crate::app::Panel::Diff(crate::app::DiffScope::Session));
+    pump(&mut app, &mut rx, |app| app.diff.files.len() == 2).await;
+    pump(&mut app, &mut rx, |app| !app.diff.hunks.is_empty()).await;
+    let first: String = app.diff.hunks.iter().map(|line| line.to_string()).collect();
+    assert!(first.contains("a1"), "a.py painted first: {first}");
+
+    // b.py is selected while its read is still in flight.
+    app.diff.select(1);
+    app.load_selected_diff();
+    assert_eq!(
+        app.diff.current().map(|file| file.path.as_str()),
+        Some("b.py")
+    );
+    let mid: String = app.diff.hunks.iter().map(|line| line.to_string()).collect();
+    assert!(
+        !mid.contains("a1"),
+        "the old file's hunks are gone the moment another row is selected: {mid}"
+    );
+
+    // The held answer then paints its own file.
+    pump(&mut app, &mut rx, |app| {
+        app.diff
+            .hunks
+            .iter()
+            .any(|line| line.to_string().contains("b1"))
+    })
+    .await;
+    let after: String = app.diff.hunks.iter().map(|line| line.to_string()).collect();
+    assert!(after.contains("b1"), "b.py painted: {after}");
+    assert!(!after.contains("a1"), "and only b.py: {after}");
+}
+
+/// A measured count belongs to the records it was measured from. A new record
+/// on the same path changes the diff, so the old count must not be reused.
+#[tokio::test]
+async fn a_new_record_on_the_same_path_invalidates_the_measured_count() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script_sequence(
+        "changes.list",
+        vec![
+            json!({"records": [
+                {"change_ref": "ra", "path": "a.py", "kind": "modified", "details_available": true}
+            ]}),
+            // The same path, changed again by a later turn: new record.
+            json!({"records": [
+                {"change_ref": "ra", "path": "a.py", "kind": "modified", "details_available": true},
+                {"change_ref": "ra2", "path": "a.py", "kind": "modified", "details_available": true}
+            ]}),
+        ],
+    );
+    // The re-read is held, so the window between the new listing and its count
+    // is observable: the row must be unknown there, not the old number.
+    fake.script_sequence_later(
+        "changes.diff",
+        vec![
+            (
+                json!({"path": "a.py", "hunks": [
+                    {"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 1,
+                     "lines": [{"kind": "added", "text": "first", "line_complete": true}]}
+                ], "complete": true}),
+                std::time::Duration::ZERO,
+            ),
+            (
+                json!({"path": "a.py", "hunks": [
+                    {"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 1,
+                     "lines": [{"kind": "added", "text": "second", "line_complete": true},
+                               {"kind": "removed", "text": "gone", "line_complete": true}],
+                     "line_complete": true}
+                ], "complete": true}),
+                std::time::Duration::from_millis(500),
+            ),
+        ],
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.open_panel(crate::app::Panel::Diff(crate::app::DiffScope::Session));
+    pump(&mut app, &mut rx, |app| {
+        app.diff
+            .files
+            .first()
+            .is_some_and(|file| file.lines.is_some())
+    })
+    .await;
+    assert_eq!(app.diff.files[0].lines, Some((1, 0)));
+
+    // A second listing brings a second record for the same path.
+    app.open_panel(crate::app::Panel::Diff(crate::app::DiffScope::Session));
+    pump(&mut app, &mut rx, |app| {
+        app.diff.files.len() == 1 && app.diff.files[0].change_refs.len() == 2
+    })
+    .await;
+    assert_eq!(
+        app.diff.files[0].lines, None,
+        "the old count described a different set of records"
+    );
+    pump(&mut app, &mut rx, |app| {
+        app.diff
+            .files
+            .first()
+            .is_some_and(|file| file.lines.is_some())
+    })
+    .await;
+    assert_eq!(
+        app.diff.files[0].lines,
+        Some((1, 1)),
+        "the re-read counts both records"
+    );
+}

@@ -101,10 +101,14 @@ impl DiffView {
         self.selected = self.selected.min(self.files.len().saturating_sub(1));
     }
 
+    /// Selects a row and drops the previous row's hunks at once: the pane must
+    /// never show one file's diff under another file's title, not even for the
+    /// moment a read takes.
     pub fn select(&mut self, index: usize) {
         if index < self.files.len() {
             self.selected = index;
             self.scroll = 0;
+            self.hunks.clear();
             self.status.clear();
         }
     }

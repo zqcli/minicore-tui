@@ -2038,21 +2038,24 @@ impl App {
             }
         };
         // One row per path: a turn can change the same file several times, and
-        // repeating the row would misreport how many files changed. A path that
-        // was measured for this scope keeps that measurement; only new or
-        // changed records are read again.
+        // repeating the row would misreport how many files changed. A row keeps
+        // its measurement only while its records are the same set: a new record
+        // on the same path changes the diff, so the old count would be stale.
         let previous = std::mem::take(&mut self.diff.files);
         let mut files: Vec<crate::ui::views::DiffFile> = Vec::new();
         for record in &records {
             match files.iter_mut().find(|file| file.path == record.path) {
                 Some(file) => file.change_refs.push(record.change_ref.clone()),
                 None => {
-                    let known = previous.iter().find(|file| file.path == record.path);
+                    let measured = previous
+                        .iter()
+                        .find(|file| file.path == record.path)
+                        .filter(|file| file.change_refs == [record.change_ref.clone()]);
                     files.push(crate::ui::views::DiffFile {
                         path: record.path.clone(),
                         kind: record.kind,
-                        lines: known.and_then(|file| file.lines),
-                        failed: known.is_some_and(|file| file.failed),
+                        lines: measured.and_then(|file| file.lines),
+                        failed: measured.is_some_and(|file| file.failed),
                         change_refs: vec![record.change_ref.clone()],
                     });
                 }
