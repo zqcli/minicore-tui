@@ -51,6 +51,25 @@ impl Screen {
         let index = row.checked_sub(self.top)? as usize;
         self.rows.get(index).map(String::as_str)
     }
+
+    /// Records the rows one frame drew, so the next drag copies them. The
+    /// renderer calls this right after painting the transcript.
+    pub fn record(&mut self, app: &mut crate::app::App, area: Rect, lines: &[ratatui::text::Line]) {
+        let rows = lines.iter().map(plain_text).collect();
+        self.set(area.y, rows);
+        app.transcript_area = Some(area);
+    }
+}
+
+/// A rendered line as plain text, the way the terminal shows it.
+pub fn plain_text(line: &ratatui::text::Line) -> String {
+    let mut text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    text.truncate(text.trim_end().len());
+    text
 }
 
 /// The visible text of `drag` inside `area`, joined with newlines.
@@ -191,6 +210,27 @@ mod tests {
             to: (39, 9),
         };
         assert_eq!(text(&screen, area(), drag), "only");
+    }
+
+    #[test]
+    fn a_recorded_frame_copies_the_rows_the_terminal_shows() {
+        let mut screen = Screen::default();
+        screen.set(3, vec!["first row".into(), "second".into()]);
+        let area = Rect::new(0, 3, 20, 2);
+        let drag = Drag {
+            from: (0, 3),
+            to: (20, 4),
+        };
+        assert_eq!(text(&screen, area, drag), "first row\nsecond");
+    }
+
+    #[test]
+    fn plain_text_joins_spans_and_drops_trailing_space() {
+        let line = ratatui::text::Line::from(vec![
+            ratatui::text::Span::raw("alpha"),
+            ratatui::text::Span::raw(" beta "),
+        ]);
+        assert_eq!(plain_text(&line), "alpha beta");
     }
 
     #[test]
