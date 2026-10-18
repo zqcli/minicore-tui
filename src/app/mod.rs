@@ -462,6 +462,9 @@ pub struct App {
     pub rendered: crate::ui::selection::Screen,
     /// A draft waiting for the external editor, handed over by the main loop.
     pub edit_request: Option<String>,
+    /// The transcript's line cache. Owned by the renderer; the reducer only
+    /// invalidates it through block revisions.
+    pub layout: crate::transcript::layout::Layout,
 }
 
 #[derive(Clone, Debug)]
@@ -523,6 +526,7 @@ impl App {
             transcript_area: None,
             rendered: crate::ui::selection::Screen::default(),
             edit_request: None,
+            layout: crate::transcript::layout::Layout::default(),
         }
     }
 
@@ -624,6 +628,12 @@ impl App {
 
     pub fn is_busy(&self) -> bool {
         self.session.as_ref().is_some_and(Session::is_busy)
+    }
+
+    pub fn has_interaction(&self) -> bool {
+        self.session
+            .as_ref()
+            .is_some_and(|session| session.interaction.is_some())
     }
 
     pub fn compacting(&self) -> bool {
@@ -2345,6 +2355,84 @@ impl App {
             },
             budget,
         }
+    }
+
+    /// Queue rows shown above the composer, at most three.
+    pub fn queue_lines(&self) -> Vec<String> {
+        let Some(session) = self.session.as_ref() else {
+            return Vec::new();
+        };
+        let mut lines: Vec<String> = session
+            .queue
+            .iter()
+            .take(3)
+            .map(|queued| {
+                format!(
+                    "{} {} · {}",
+                    if queued.kind == QueuedKind::Steer {
+                        "↳"
+                    } else {
+                        "⏵"
+                    },
+                    queued.label(),
+                    crate::ui::panel::truncate(&queued.text.replace('\n', " "), 60)
+                )
+            })
+            .collect();
+        if session.queue.len() > 3 {
+            lines.push(format!("+{} more", session.queue.len() - 3));
+        }
+        lines
+    }
+
+    pub fn queue_len(&self) -> usize {
+        self.session
+            .as_ref()
+            .map_or(0, |session| session.queue.len())
+    }
+
+    /// Reasoning levels the current model supports.
+    pub fn session_levels(&self) -> Vec<crate::protocol::Reasoning> {
+        self.session
+            .as_ref()
+            .and_then(|session| session.model(&self.models))
+            .map(|model| model.supported_reasoning.clone())
+            .filter(|levels| !levels.is_empty())
+            .unwrap_or_else(|| {
+                vec![
+                    crate::protocol::Reasoning::Auto,
+                    crate::protocol::Reasoning::Low,
+                    crate::protocol::Reasoning::Medium,
+                    crate::protocol::Reasoning::High,
+                ]
+            })
+    }
+
+    /// Rows of the interaction prompt.
+    pub fn interaction_lines(&self) -> Vec<String> {
+        let Some(interaction) = self
+            .session
+            .as_ref()
+            .and_then(|session| session.interaction.as_ref())
+        else {
+            return Vec::new();
+        };
+        let mut lines = vec![format!(
+            "{} wants to run {}",
+            interaction.tool_name, interaction.prompt
+        )];
+        if let Some(detail) = &interaction.detail {
+            lines.push(detail.clone());
+        }
+        for (index, option) in interaction.options().iter().enumerate() {
+            let marker = if index == self.interaction_choice {
+                "▶"
+            } else {
+                " "
+            };
+            lines.push(format!("{marker} {option}"));
+        }
+        lines
     }
 
     pub fn context_budget(&self) -> Option<&ContextBudget> {

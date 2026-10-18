@@ -142,8 +142,12 @@ impl Client {
             return Err(RpcError::closed(reason));
         }
         let id = RequestId(self.next_id.fetch_add(1, Ordering::Relaxed));
-        let params = serde_json::to_value(params)
+        let mut params = serde_json::to_value(params)
             .map_err(|error| RpcError::new(-32602, "invalid_params", error.to_string()))?;
+        // The Agent accepts omitted params or an object, never JSON null.
+        if params.is_null() {
+            params = Value::Object(Default::default());
+        }
         let line = encode_request(OutgoingRequest::new(id, method, params))?;
         let (tx, rx) = oneshot::channel();
         self.pending.lock().unwrap().insert(id, tx);

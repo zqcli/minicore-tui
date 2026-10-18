@@ -26,10 +26,55 @@ impl App {
                 _ => Input::Ignored,
             };
         }
+        if self.overlay.is_none() && self.has_interaction() {
+            return self.on_interaction_key(key);
+        }
         if !self.overlay.is_none() {
             return self.on_overlay_key(key);
         }
         self.on_composer_key(key)
+    }
+
+    /// Approval prompts own the keyboard until answered.
+    fn on_interaction_key(&mut self, key: KeyEvent) -> Input {
+        let options = self
+            .session
+            .as_ref()
+            .and_then(|session| session.interaction.as_ref())
+            .map_or(0, |interaction| interaction.options().len());
+        match key.code {
+            KeyCode::Char('y') => Input::Action(Action::Answer(super::Answer::Allow)),
+            KeyCode::Char('n') | KeyCode::Esc => Input::Action(Action::Answer(super::Answer::Deny)),
+            KeyCode::Enter => {
+                let choice = self.interaction_choice;
+                let is_approval = self
+                    .session
+                    .as_ref()
+                    .and_then(|session| session.interaction.as_ref())
+                    .is_some_and(|interaction| {
+                        matches!(interaction.kind, crate::app::InteractionKind::Approval)
+                    });
+                Input::Action(Action::Answer(if is_approval {
+                    if choice == 0 {
+                        super::Answer::Allow
+                    } else {
+                        super::Answer::Deny
+                    }
+                } else {
+                    super::Answer::Choice(choice)
+                }))
+            }
+            KeyCode::Up | KeyCode::Down => {
+                if options > 0 {
+                    let delta = if key.code == KeyCode::Up { -1 } else { 1 };
+                    let next =
+                        (self.interaction_choice as isize + delta).clamp(0, options as isize - 1);
+                    self.interaction_choice = next as usize;
+                }
+                Input::Consumed
+            }
+            _ => Input::Ignored,
+        }
     }
 
     fn on_overlay_key(&mut self, key: KeyEvent) -> Input {
