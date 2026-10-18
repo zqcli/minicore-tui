@@ -144,9 +144,11 @@ backoff.
 The handshake calls `agent.ping` and requires `protocol_version == 1` plus the
 capabilities actually used: `session.read`, `session.read.display`,
 `tool.read`, `tool.read.display`, `tool.output`, `turn.result`,
-`session.context`, `workspace.files`, `workspace.search`, `changes.list`,
-`changes.diff`. Shutdown sends `agent.shutdown`, waits up to 3 s, then kills a
-child that did not exit.
+`session.context`, `session.presentation`, `workspace.status`,
+`workspace.files`, `workspace.search`, `changes.list`, `changes.diff`. Every
+one is an entry in the Agent's advertised capability list, so this is a check
+of capability, not of method name. Shutdown sends `agent.shutdown`, waits up to
+3 s, then kills a child that did not exit.
 
 ## Domain model
 
@@ -214,6 +216,16 @@ are display hints.
    bodies directly. Then append the turn-end block, read `changes.list` once for
    the turn scope to fill the change summary, refresh `session.presentation`
    once, and send the next queued follow-up.
+
+   The `(+a −b)` counts in that summary are not in `changes.list`: a
+   `ChangeRecord` has only a kind, byte sizes and hashes. They are counted by
+   paging each changed file's `changes.diff` to exhaustion, inside the query
+   semaphore, with one retry on `-32019`/`-32020`, and only for the first 100
+   records of the turn's listing page. That cost is paid once per completed
+   turn, never per frame. If a record reports `details_available: false`, its
+   diff is binary, truncated or stale, or the listing page overflowed, the
+   summary omits the counts and shows only `N files changed`; an unknown count is
+   never rendered as zero.
 4. **`turn_finished`** only stops the spinner text early. Late deltas for that
    loop are ignored.
 5. **Interrupt.** `Esc` sends `turn.cancel`; the UI shows `Interrupting` until
@@ -246,10 +258,14 @@ invalidates the previous pin.
 ## Compaction
 
 The status line reports `Compacting context… <phase>` while the Agent reports a
-compaction in `session_state` or `session.context.current_operation`. On
-completion — from the event, the `session.compact` result, or the next context
-read — the TUI appends a marker block with the before and after token counts.
-Loaded blocks stay in the transcript; the marker is the only change.
+compaction in `session_state.compaction` or in `session.context.current_operation`.
+The Agent has no compaction-completed event, so completion is observed from the
+`session.compact` result of a compaction the TUI started, or from a
+`session.context` read that reports `last_result` / `automatic` for that
+operation. Both paths carry an operation id and are deduplicated by it, so a
+manual compaction followed by a context read appends exactly one marker. The
+marker records the before and after token counts. Loaded blocks stay in the
+transcript; the marker is the only change.
 
 ## Rendering and performance
 
@@ -264,6 +280,14 @@ Streaming assistant text is split into a stable prefix — everything up to the
 last blank line outside a code fence — and a tail. The prefix is rendered once
 and cached; each delta re-renders only the tail. Tool card bodies are bounded,
 so folded cards are cheap and expanded cards stop at 200 lines.
+
+A folded bash card shows the last output lines of the live turn, because the
+live stream delivers them. Display history items do not carry tool bodies —
+they expose only `output_line_count` and whether that count is exact — so after
+a reload a bash card shows the line count and `open full output` instead of a
+tail. The tail is fetched on demand through `tool.output` when the card is
+expanded or its full-output view is opened; it is never fetched for every
+visible card, which would cost one read per card after each reload.
 
 Selection hit-testing and copy use the visible window and block indices; they
 never scan all rows.
@@ -315,6 +339,17 @@ area and keep the footer, with a title row and a dim hint row.
 Approval and other interactions arrive as `interaction_requested`; the TUI
 shows the appropriate sheet (allow/deny, text input or choice list) and answers
 with `interaction.answer`. The status line shows `Waiting for approval`.
+
+The footer's model, reasoning and session id come from `SessionInfo`. The
+context percentage comes from `session.context`, which is read on open, after a
+turn and when the Context view is opened. The git branch is the one value that
+is not free: `session.presentation` only caches it, and the cache is empty until
+an explicit `workspace.status` fills it. The TUI therefore treats the branch as
+optional — `—` until the first `workspace.status` answer arrives — and refreshes
+it only on session open, on a workspace change and when the workspace has
+changed on disk at turn end, never on every frame or every event. That keeps the
+footer's refresh cost at one query per session open instead of one per turn
+event.
 
 On Agent exit or a protocol failure the TUI replaces the screen with a fatal
 message containing the reason, the exit status and the last 20 stderr lines;

@@ -51,13 +51,21 @@ config file, keys and commands are intentional.
 - One blank line between blocks, one rail style per block kind, tool cards
   folded by default with duration, exit code and change counts.
 - Reasoning folds to one line when a turn finishes and expands with `Ctrl+T`.
+- The turn-end change summary counts added and removed lines by paging each
+  changed file's `changes.diff`, once per finished turn. When a diff is
+  unavailable, binary, truncated or stale the counts are omitted rather than
+  shown as zero. A bash card shows its output tail while the turn is live; after
+  a reload it shows the line count instead and fetches the body on demand.
 
 ### Compaction
 
 - Compaction is shown as a status-line phase and leaves a one-line marker with
   before and after token counts. Loaded content is never removed from the
   transcript, so the answer being read survives a post-turn compaction.
-- `/compact` runs manual compaction and reports its result the same way.
+- `/compact` runs manual compaction and reports its result the same way. The
+  Agent has no compaction-completed event, so the marker comes from the
+  `session.compact` result or a `session.context` read and is deduplicated by
+  operation id.
 
 ### UI
 

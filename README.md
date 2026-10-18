@@ -70,7 +70,8 @@ editor = "vim"
 ```
 
 Command-line values take precedence. `/theme` writes the chosen palette back to
-this file. `Ctrl+G` uses `$VISUAL`/`$EDITOR` when `editor` is unset.
+this file. `Ctrl+G` opens `editor` from this file, falling back to `$VISUAL`
+then `$EDITOR`; there is no separate environment variable for it.
 
 ## Screen
 
@@ -90,8 +91,11 @@ shows the elapsed turn time and the interrupt key.
 
 The footer shows the workspace directory and git branch, the session title, the
 model and reasoning level, a state dot, token totals and the context percentage
-(`?` while unknown). Notices appear on one line under the status line; info
-notices hide after a few seconds, errors stay until the next key press.
+(`?` while unknown). The branch is `—` until the first `workspace.status` answer
+arrives: `session.presentation` only caches it, and the TUI refreshes that query
+on session open and when the workspace changed on disk at turn end, never on
+every frame. Notices appear on one line under the status line; info notices hide
+after a few seconds, errors stay until the next key press.
 
 ## Conversation
 
@@ -100,9 +104,10 @@ notices hide after a few seconds, errors stay until the next key press.
   Reasoning appears above the answer on a purple rail, folded while streaming
   and collapsed to `Thought for 42s` when finished.
 - **Tool cards** start folded: status glyph, tool name, target, duration and
-  exit code. Bash shows its last output lines, edits show the start of the
-  diff, `read` shows its line count. `Ctrl+O` expands or collapses all cards,
-  and clicking one toggles it.
+  exit code. Bash shows its last output lines live, edits show the start of the
+  diff, `read` shows its line count. After a reload a bash card shows its line
+  count and opens the full output on demand instead of replaying the tail.
+  `Ctrl+O` expands or collapses all cards, and clicking one toggles it.
 - **Turn end** is one dim line with outcome, duration, request and tool counts,
   and the change summary when the turn touched files. A failed or cancelled
   turn shows its reason.
@@ -161,8 +166,10 @@ fallback). `/copy` copies the last assistant answer as Markdown. `/export
 
 - `minicore-agent` 0.7.0 (`4102719`), Protocol v1, with the capabilities the TUI
   uses: `session.read`, `session.read.display`, `tool.read`, `tool.read.display`,
-  `tool.output`, `turn.result`, `session.context`, `workspace.files`,
-  `workspace.search`, `changes.list`, `changes.diff`.
+  `tool.output`, `turn.result`, `session.context`, `session.presentation`,
+  `workspace.status`, `workspace.files`, `workspace.search`, `changes.list`,
+  `changes.diff`. These are entries in the Agent's advertised capability list;
+  the handshake checks the list, not method names.
 - `minicore-runtime` 0.7.0 (`b93aea3`) is linked by the Agent, not by the TUI.
 - One Agent process per data directory. The TUI never reads the Agent store,
   workspace files, provider configuration or credentials.
