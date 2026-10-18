@@ -1754,7 +1754,7 @@ impl App {
                 if let Some(session) = self.session.as_mut() {
                     session.unsend_prompt(text);
                 }
-                self.composer = text.to_owned();
+                self.composer.set_text(text);
                 self.error(error);
                 true
             }

@@ -984,7 +984,7 @@ async fn the_turn_end_line_counts_real_added_and_removed_lines() {
     fake.script("changes.diff", diff_with(40, 7));
     open(&mut app, &mut rx, &fake, &tx).await;
 
-    app.composer = "change it".into();
+    app.composer.set_text("change it");
     app.on_action(Action::Submit);
     settle(&mut app, &mut rx).await;
 
@@ -1036,7 +1036,7 @@ async fn an_unknown_line_count_is_reported_rather_than_as_zero() {
     );
     open(&mut app, &mut rx, &fake, &tx).await;
 
-    app.composer = "change it".into();
+    app.composer.set_text("change it");
     app.on_action(Action::Submit);
     settle(&mut app, &mut rx).await;
 
@@ -1096,7 +1096,7 @@ async fn three_tool_calls_on_one_file_report_one_file_and_summed_lines() {
     fake.script("changes.diff", diff_with(2, 1));
     open(&mut app, &mut rx, &fake, &tx).await;
 
-    app.composer = "change it".into();
+    app.composer.set_text("change it");
     app.on_action(Action::Submit);
     settle(&mut app, &mut rx).await;
 
@@ -1274,7 +1274,7 @@ async fn reconciling_a_gapped_turn_keeps_the_history_loaded_before_it() {
         json!({"records": [], "total": 0, "complete": true}),
     );
     open(&mut app, &mut rx, &fake, &tx).await;
-    app.composer = "gapped prompt".into();
+    app.composer.set_text("gapped prompt");
     app.on_action(Action::Submit);
     settle(&mut app, &mut rx).await;
 
@@ -1378,7 +1378,7 @@ async fn a_refused_send_takes_back_its_prompt_and_queues_the_text() {
     );
     open(&mut app, &mut rx, &fake, &tx).await;
 
-    app.composer = "next thing".into();
+    app.composer.set_text("next thing");
     app.on_action(Action::Submit);
     settle(&mut app, &mut rx).await;
 
@@ -1419,11 +1419,11 @@ async fn a_send_refused_for_another_reason_returns_the_text_to_the_composer() {
     );
     open(&mut app, &mut rx, &fake, &tx).await;
 
-    app.composer = "too much".into();
+    app.composer.set_text("too much");
     app.on_action(Action::Submit);
     settle(&mut app, &mut rx).await;
 
-    assert_eq!(app.composer, "too much", "the draft comes back");
+    assert_eq!(app.composer.text(), "too much", "the draft comes back");
     let session = app.session.as_ref().unwrap();
     assert!(
         !session
@@ -1468,7 +1468,7 @@ async fn a_busy_then_busy_then_idle_session_retries_until_it_sends_once() {
 
     // The first send is refused: post-turn compaction still runs.
     fake.script_error("turn.send", -32003, "session busy", "session_busy");
-    app.composer = "the important text".into();
+    app.composer.set_text("the important text");
     app.on_action(Action::Submit);
     settle(&mut app, &mut rx).await;
     assert!(app.waiting_for_compaction, "the retry loop is running");
@@ -1581,7 +1581,7 @@ async fn a_capacity_refusal_on_turn_wait_is_retried() {
     );
     open(&mut app, &mut rx, &fake, &tx).await;
 
-    app.composer = "retry the wait".into();
+    app.composer.set_text("retry the wait");
     app.on_action(Action::Submit);
     // The refusal is a condition, not a verdict: the retry registers the wait
     // again and the turn then ends normally.
