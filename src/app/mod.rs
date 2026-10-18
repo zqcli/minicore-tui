@@ -1455,14 +1455,13 @@ impl App {
             Ok(page) => page,
             Err(error) => {
                 if error.code == crate::protocol::INVALID_STATE {
-                    // The prefix changed (a new compaction); reload the tail.
-                    if let Some(session) = self.session.as_ref() {
-                        tasks::load_tail(
-                            self.client.clone(),
-                            self.tx.clone(),
-                            session.info.session_id.clone(),
-                        );
-                    }
+                    // The task already retried once against a fresh pin, so the
+                    // prefix is beyond repair right now; keep what is loaded
+                    // instead of dropping the reader's view.
+                    self.notice(
+                        NoticeLevel::Info,
+                        "Could not load older history yet; try again in a moment",
+                    );
                 } else {
                     self.error(error);
                 }

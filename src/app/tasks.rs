@@ -360,25 +360,37 @@ async fn read_tail(client: &Client, session_id: &str) -> Result<History, protoco
 /// Reads the page immediately older than `before`.
 pub fn load_older(client: Arc<Client>, tx: Tx, session_id: String, before: usize) {
     tokio::spawn(async move {
-        let result = match probe(client.as_ref(), &session_id, "display").await {
-            Ok(probe) => {
-                let start = before
-                    .saturating_sub(protocol::PAGE_LIMIT)
-                    .max(probe.first_item);
-                read_window(
-                    client.as_ref(),
-                    &session_id,
-                    "display",
-                    probe,
-                    start,
-                    before,
-                )
-                .await
-            }
-            Err(error) => Err(error),
-        };
+        let result = older(client.as_ref(), &session_id, before).await;
         post(&tx, Some(&session_id), OpKind::Older(result));
     });
+}
+
+/// An older page, retried once with a fresh pin: a turn appending while the page
+/// is read moves the captured end, and a refused pin is the documented signal to
+/// probe again rather than to give up on what is already loaded.
+async fn older(
+    client: &Client,
+    session_id: &str,
+    before: usize,
+) -> Result<History, protocol::RpcError> {
+    match read_older(client, session_id, before).await {
+        Err(error) if error.code == protocol::INVALID_STATE => {
+            read_older(client, session_id, before).await
+        }
+        result => result,
+    }
+}
+
+async fn read_older(
+    client: &Client,
+    session_id: &str,
+    before: usize,
+) -> Result<History, protocol::RpcError> {
+    let probe = probe(client, session_id, "display").await?;
+    let start = before
+        .saturating_sub(protocol::PAGE_LIMIT)
+        .max(probe.first_item);
+    read_window(client, session_id, "display", probe, start, before).await
 }
 
 /// Reads the page immediately older than `before` in the canonical view: the

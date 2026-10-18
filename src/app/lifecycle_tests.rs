@@ -1888,3 +1888,129 @@ async fn ctrl_home_loads_the_earlier_page_the_marker_promises() {
         fake.methods()
     );
 }
+
+/// A page refused for a stale pin must not cost the reader what is already
+/// loaded: one retry against a fresh pin recovers the page, and if it cannot,
+/// the transcript stays as it was.
+#[tokio::test]
+async fn a_stale_older_page_retries_and_keeps_the_loaded_history() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(80, 0));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    // The reader is looking at something in the loaded window.
+    app.scroll = Scroll::Anchor {
+        block: 2,
+        offset: 1,
+    };
+    let before = app.session.as_ref().unwrap().transcript.blocks().to_vec();
+    assert!(!before.is_empty(), "the tail is on screen");
+
+    // The probe succeeds, the window read finds the pin stale, and the retry
+    // sees a fresh pin: the page arrives anyway. `script_error_then` answers with
+    // the refusal and then every later call with the page, which is the retry.
+    let page = json!({
+        "session": session_info("s1"),
+        "items": [crate::testing::chunk(0, json!({"type": "user", "data": {
+            "loop_id": "l0", "kind": "prompt", "input": {"text": "recovered item"},
+        }}))],
+        "next_cursor": null, "total": 80,
+        "history_revision": "h1", "captured_end": 1,
+        "projection": {"revision": "p1", "first_item": 0, "covered_item_count": 0},
+    });
+    // The probe is refused, then the retried probe and its window both succeed.
+    fake.script_sequence(
+        "session.read",
+        vec![
+            json!({"error": {"code": crate::protocol::INVALID_STATE,
+                             "message": "stale pin", "data": {"kind": "invalid_state"}}}),
+            page.clone(),
+            page,
+        ],
+    );
+    app.on_action(Action::LoadOlder);
+    pump(&mut app, &mut rx, |app| {
+        !app.session.as_ref().unwrap().loading_older
+    })
+    .await;
+
+    assert!(
+        !app.session.as_ref().unwrap().loading_older,
+        "the flag is released so paging can be tried again"
+    );
+    // The recovered item was prepended, so the reader's block sits one index
+    // later while still being the same thing on screen.
+    assert_eq!(
+        app.scroll,
+        Scroll::Anchor {
+            block: 3,
+            offset: 1
+        },
+        "the reader's anchor follows the block it was reading"
+    );
+    let text = format!("{:?}", app.session.as_ref().unwrap().transcript.blocks());
+    assert!(
+        text.contains("recovered item"),
+        "the retried page lands in the transcript: {text}"
+    );
+}
+
+/// With the retry spent, a still-stale page leaves the transcript alone and says
+/// so, instead of reloading the tail over the reader's position.
+#[tokio::test]
+async fn an_exhausted_stale_probe_keeps_the_transcript_and_notices() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(80, 0));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.scroll = Scroll::Anchor {
+        block: 1,
+        offset: 0,
+    };
+    let before = format!("{:?}", app.session.as_ref().unwrap().transcript.blocks());
+
+    fake.script_error(
+        "session.read",
+        crate::protocol::INVALID_STATE,
+        "stale pin",
+        "invalid_state",
+    );
+    let reads = fake.calls("session.read").len();
+    app.on_action(Action::LoadOlder);
+    pump(&mut app, &mut rx, |app| {
+        !app.session.as_ref().unwrap().loading_older
+    })
+    .await;
+
+    assert_eq!(
+        format!("{:?}", app.session.as_ref().unwrap().transcript.blocks()),
+        before,
+        "the loaded window is kept, not replaced by a tail reload"
+    );
+    assert_eq!(
+        app.scroll,
+        Scroll::Anchor {
+            block: 1,
+            offset: 0
+        }
+    );
+    assert_eq!(
+        fake.calls("session.read").len() - reads,
+        2,
+        "one probe and one retry, not an unbounded loop: {:?}",
+        fake.methods()
+    );
+    assert!(
+        app.notices
+            .iter()
+            .any(|notice| notice.text.contains("older history")),
+        "the reader is told why nothing came: {:?}",
+        app.notices.iter().map(|n| &n.text).collect::<Vec<_>>()
+    );
+}
