@@ -207,10 +207,13 @@ are display hints.
    gap.
 3. **Completion.** When `turn.wait` resolves the turn is over, always. If the
    outcome is not `completed` or the turn had a gap, fetch `turn.result` paged
-   and chunk-assembled and replace the turn's blocks with the durable items.
-   Append the turn-end block, read `changes.list` once for the turn scope to
-   fill the change summary, refresh `session.presentation` once, and send the
-   next queued follow-up.
+   and chunk-assembled and **reconcile** its canonical items into the existing
+   bounded card model: a canonical `tool_result` becomes the same `ToolCall`
+   card, with its full body kept out of the transcript. `turn.result` carries no
+   `tool_summaries`, so it is never a second render path and never adopts raw
+   bodies directly. Then append the turn-end block, read `changes.list` once for
+   the turn scope to fill the change summary, refresh `session.presentation`
+   once, and send the next queued follow-up.
 4. **`turn_finished`** only stops the spinner text early. Late deltas for that
    loop are ignored.
 5. **Interrupt.** `Esc` sends `turn.cancel`; the UI shows `Interrupting` until
@@ -219,17 +222,26 @@ are display hints.
 ## History
 
 Opening a session calls `session.open` when needed, then loads the tail in
-display view: a probe read with `limit: 1` to learn `total`, `first_item` and
-the pin, then the last ~60 items (or 512 KiB) from `max(first_item, total-60)`
-with that pin. Chunks are assembled per item in the task, so the reducer
-receives ready-made items.
+display view: a probe read at cursor `{0,0}` with `limit: 1` to learn `total`,
+`first_item` and the pin, then the last ~60 items (or 512 KiB) from
+`max(first_item, total-60)` with that pin. Chunks are assembled per item in the
+task, so the reducer receives ready-made items.
+
+The display floor is `first_item`: a read below it is rejected, and a read at
+`first_item` spends one limit slot on the summary item. No read ever asks for an
+item before `first_item`.
 
 Scrolling to the top loads the previous page with a fresh probe. Items are
-append-only, so merging by source index is safe. Below `first_item` the
-transcript shows the compaction summary as a block and an `EarlierHistory` row;
-activating it reads earlier items in canonical view, truncating raw bodies to
-the card bounds locally. A stale-pin error (`-32005`) restarts that one
-operation with a new probe; it never surfaces as a malformed-history error.
+append-only, so merging by source index is safe. At the floor the transcript
+shows the compaction summary as a block and an `EarlierHistory` row; activating
+it starts a canonical read with **its own** probe and pin, and raw bodies are
+truncated to the card bounds locally. A stale-pin error (`-32005`) restarts that
+one operation with a new probe; it never surfaces as a malformed-history error.
+
+Pins live only inside the operation that uses them: they are never stored on the
+session. Every continuation repeats the view, `projection_revision`,
+`history_revision` and `captured_end`, because an append or a new summary
+invalidates the previous pin.
 
 ## Compaction
 
