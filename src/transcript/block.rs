@@ -36,6 +36,9 @@ pub enum Block {
         operation_id: String,
         before: Option<u64>,
         after: Option<u64>,
+        /// Items the summary absorbed and items kept beside it. Reported when
+        /// the Agent gives no token figures, which is the usual automatic case.
+        coverage: Option<(usize, usize)>,
         summary: Option<String>,
     },
     Notice {
@@ -581,6 +584,7 @@ pub fn append_history_item(
                 operation_id: String::new(),
                 before: None,
                 after: None,
+                coverage: None,
                 summary: Some(summary.content.clone()),
             });
         }

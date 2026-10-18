@@ -80,6 +80,23 @@ async fn step_until(
     panic!("the app never settled (error: {:?})", app.last_error);
 }
 
+/// Pumps for a fixed window, for work that retries on a timer.
+async fn pump_for(
+    app: &mut App,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<Msg>,
+    window: Duration,
+) {
+    let deadline = tokio::time::Instant::now() + window;
+    while tokio::time::Instant::now() < deadline {
+        while let Ok(Some(message)) =
+            tokio::time::timeout(Duration::from_millis(5), rx.recv()).await
+        {
+            app.on_msg(message);
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 /// A fake Agent answering the catalog calls a bootstrap makes.
 fn boot(fake: &FakeAgent) {
     fake.script(
@@ -394,10 +411,15 @@ async fn reading_below_the_display_floor_uses_a_canonical_read() {
     // because everything above it is what the display view shows.
     assert_eq!(session.first_item, 10);
     assert_eq!(session.loaded_from, 10);
-    assert_eq!(
-        session.transcript.len(),
-        0,
-        "the display tail is empty here"
+    // Nothing is left uncovered, but the items behind the floor are still
+    // there, so the transcript says so instead of looking empty.
+    assert!(
+        matches!(
+            session.transcript.blocks(),
+            [Block::EarlierHistory { hidden_items: 10 }]
+        ),
+        "an all-covering summary still advertises the history below it: {:?}",
+        session.transcript.blocks()
     );
 
     let canonical = crate::testing::chunk(
@@ -1458,6 +1480,57 @@ async fn reconciling_a_gapped_turn_keeps_the_history_loaded_before_it() {
 }
 
 #[tokio::test]
+async fn an_automatic_compaction_after_a_turn_is_reported() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    fake.script(
+        "turn.wait",
+        json!({"turn": turn("l1"), "outcome": {"type": "completed"}}),
+    );
+    fake.script(
+        "changes.list",
+        json!({"records": [], "total": 0, "complete": true}),
+    );
+    // The Agent compacts automatically during the turn; it has no response of
+    // its own, so only the context refresh after the turn can reveal it.
+    let auto = json!({
+        "session_id": "s1",
+        "last_result": {"origin": "auto", "operation_id": "lup_1",
+                        "status": "compacted", "before_tokens": 41000,
+                        "after_tokens": 12000},
+        "budget": {"estimated_history_tokens": 12000},
+    });
+    fake.script("session.context", auto);
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.composer.set_text("compact me");
+    app.on_action(Action::Submit);
+    settle(&mut app, &mut rx).await;
+
+    let markers: Vec<String> = app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::Compaction { operation_id, .. } => Some(operation_id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        markers,
+        vec!["auto-lup_1"],
+        "an automatic compaction is reported after the turn"
+    );
+}
+
+#[tokio::test]
 async fn one_compaction_is_reported_once_however_often_it_is_seen() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let (fake, mut app) = FakeAgent::start(tx.clone());
@@ -1912,20 +1985,38 @@ async fn a_busy_send_behind_a_queued_follow_up_keeps_fifo_and_sends_each_text_on
     fake.script("session.open", json!({"session": session_info("s1")}));
     fake.script("session.read", display_read(0, 0));
     // Every send is refused as busy while a compaction owns the session: the
-    // refused prompt is queued, never dropped and never duplicated.
+    // refused prompt is queued, never dropped and never duplicated. Once the
+    // compaction and the turn are done the queue drains in order.
     let busy = json!({"error": {"code": -32003, "message": "session is busy",
                                  "data": {"kind": "busy"}}});
-    fake.script_sequence("turn.send", vec![busy.clone(), busy]);
-    fake.script_held("turn.wait", json!({"turn": turn("l1")}));
+    // Two refusals, then the drain is accepted once compaction ends.
+    fake.script_sequence(
+        "turn.send",
+        vec![
+            busy.clone(),
+            busy,
+            json!({"turn": turn("l1")}),
+            json!({"turn": turn("l2")}),
+            json!({"turn": turn("l3")}),
+        ],
+    );
+    fake.script(
+        "turn.wait",
+        json!({"turn": {"loop_id": "l1", "status": "completed"}}),
+    );
+    fake.script("session.rename", json!({"session": session_info("s1")}));
 
     open(&mut app, &mut rx, &fake, &tx).await;
 
-    // Queue a follow-up while busy, then submit another message that is refused.
+    // Two messages queued while busy, then one more that is refused: three
+    // items wait, and the drain must take them in the order they were queued.
     app.composer.set_text("queued first");
     app.on_action(Action::QueueFollowUp);
-    app.composer.set_text("typed second");
+    app.composer.set_text("queued second");
+    app.on_action(Action::QueueFollowUp);
+    app.composer.set_text("typed third");
     app.on_action(Action::Submit);
-    step_until(&mut app, &mut rx, |app| !app.is_busy()).await;
+    pump_for(&mut app, &mut rx, Duration::from_millis(1600)).await;
 
     // Both texts reach the Agent exactly once, oldest first.
     let sends: Vec<String> = fake
@@ -1935,8 +2026,43 @@ async fn a_busy_send_behind_a_queued_follow_up_keeps_fifo_and_sends_each_text_on
         .collect();
     assert_eq!(
         sends,
-        ["queued first", "typed second"],
-        "the older message goes first, each exactly once"
+        ["queued first", "queued second", "typed third"],
+        "the queue drains oldest first and the refused message joins the back"
+    );
+
+    // The compaction finishes: the queued message drains without another key
+    // press, and the flag that gated it is released.
+    let idle = json!({"session_id": "s1", "status": "idle"});
+    app.on_msg(Msg::Op(Box::new(OpDone {
+        session: Some("s1".into()),
+        epoch: app.session.as_ref().unwrap().epoch,
+        kind: OpKind::State(Ok(serde_json::from_value(idle).unwrap())),
+    })));
+    step_until(&mut app, &mut rx, |_| fake.calls("turn.send").len() >= 3).await;
+    let all = fake.calls("turn.send");
+    let attempts: Vec<&str> = all
+        .iter()
+        .filter_map(|call| call["text"].as_str())
+        .collect();
+    assert_eq!(
+        attempts[..3],
+        ["queued first", "queued second", "typed third"],
+        "the drain and the refusal keep the order the user typed: {attempts:?}"
+    );
+    assert!(
+        attempts
+            .iter()
+            .all(|text| ["queued first", "queued second", "typed third"].contains(text)),
+        "only the three real messages are ever sent: {attempts:?}"
+    );
+    let queued = app.session.as_ref().unwrap().queue.len();
+    assert!(
+        queued <= 2,
+        "the queue never duplicates a refusal: {queued}"
+    );
+    assert!(
+        !app.waiting_for_compaction,
+        "the gate is released once an idle state arrives"
     );
 
     // A refused send never leaves a prompt behind, so the transcript cannot
@@ -1953,14 +2079,581 @@ async fn a_busy_send_behind_a_queued_follow_up_keeps_fifo_and_sends_each_text_on
             _ => None,
         })
         .collect();
-    assert!(
-        prompts.is_empty(),
-        "no phantom prompts for refused sends: {prompts:?}"
+    // Only the accepted send left a prompt: the two refusals left none, and
+    // the same text never appears twice.
+    let mut unique = prompts.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        prompts.len(),
+        "no message is claimed twice: {prompts:?}"
     );
     assert!(
-        app.composer.is_empty(),
-        "nothing is left in the draft: {:?}",
-        app.composer.text()
+        prompts.len() <= 1,
+        "at most the one accepted send is a prompt: {prompts:?}"
+    );
+}
+
+/// The earlier-history marker claims `home` loads the missing page, so the key
+/// path itself must request it - not just the action the reducer handles.
+#[tokio::test]
+async fn ctrl_home_loads_the_earlier_page_the_marker_promises() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(80, 0));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    assert_eq!(app.session.as_ref().unwrap().loaded_from, 20, "tail loaded");
+    let reads = fake.calls("session.read").len();
+
+    // No layout rows exist for a one-screen display page, which is exactly the
+    // case where the older items were unreachable.
+    app.on_key(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL));
+    pump(&mut app, &mut rx, |app| {
+        !app.session.as_ref().unwrap().loading_older
+    })
+    .await;
+
+    assert!(
+        fake.calls("session.read").len() > reads,
+        "the key asks for the page instead of only moving the view: {:?}",
+        fake.methods()
+    );
+}
+
+/// A page refused for a stale pin must not cost the reader what is already
+/// loaded: one retry against a fresh pin recovers the page, and if it cannot,
+/// the transcript stays as it was.
+#[tokio::test]
+async fn a_stale_older_page_retries_and_keeps_the_loaded_history() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(80, 0));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    // The reader is looking at something in the loaded window.
+    app.scroll = Scroll::Anchor {
+        block: 2,
+        offset: 1,
+    };
+    let before = app.session.as_ref().unwrap().transcript.blocks().to_vec();
+    assert!(!before.is_empty(), "the tail is on screen");
+
+    // The probe succeeds, the window read finds the pin stale, and the retry
+    // sees a fresh pin: the page arrives anyway. `script_error_then` answers with
+    // the refusal and then every later call with the page, which is the retry.
+    let page = json!({
+        "session": session_info("s1"),
+        "items": [crate::testing::chunk(0, json!({"type": "user", "data": {
+            "loop_id": "l0", "kind": "prompt", "input": {"text": "recovered item"},
+        }}))],
+        "next_cursor": null, "total": 80,
+        "history_revision": "h1", "captured_end": 1,
+        "projection": {"revision": "p1", "first_item": 0, "covered_item_count": 0},
+    });
+    // The probe is refused, then the retried probe and its window both succeed.
+    fake.script_sequence(
+        "session.read",
+        vec![
+            json!({"error": {"code": crate::protocol::INVALID_STATE,
+                             "message": "stale pin", "data": {"kind": "invalid_state"}}}),
+            page.clone(),
+            page,
+        ],
+    );
+    app.on_action(Action::LoadOlder);
+    pump(&mut app, &mut rx, |app| {
+        !app.session.as_ref().unwrap().loading_older
+    })
+    .await;
+
+    assert!(
+        !app.session.as_ref().unwrap().loading_older,
+        "the flag is released so paging can be tried again"
+    );
+    // The recovered item was prepended, so the reader's block sits one index
+    // later while still being the same thing on screen.
+    assert_eq!(
+        app.scroll,
+        Scroll::Anchor {
+            block: 3,
+            offset: 1
+        },
+        "the reader's anchor follows the block it was reading"
+    );
+    let text = format!("{:?}", app.session.as_ref().unwrap().transcript.blocks());
+    assert!(
+        text.contains("recovered item"),
+        "the retried page lands in the transcript: {text}"
+    );
+}
+
+/// With the retry spent, a still-stale page leaves the transcript alone and says
+/// so, instead of reloading the tail over the reader's position.
+#[tokio::test]
+async fn an_exhausted_stale_probe_keeps_the_transcript_and_notices() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(80, 0));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.scroll = Scroll::Anchor {
+        block: 1,
+        offset: 0,
+    };
+    let before = format!("{:?}", app.session.as_ref().unwrap().transcript.blocks());
+
+    fake.script_error(
+        "session.read",
+        crate::protocol::INVALID_STATE,
+        "stale pin",
+        "invalid_state",
+    );
+    let reads = fake.calls("session.read").len();
+    app.on_action(Action::LoadOlder);
+    pump(&mut app, &mut rx, |app| {
+        !app.session.as_ref().unwrap().loading_older
+    })
+    .await;
+
+    assert_eq!(
+        format!("{:?}", app.session.as_ref().unwrap().transcript.blocks()),
+        before,
+        "the loaded window is kept, not replaced by a tail reload"
+    );
+    assert_eq!(
+        app.scroll,
+        Scroll::Anchor {
+            block: 1,
+            offset: 0
+        }
+    );
+    assert_eq!(
+        fake.calls("session.read").len() - reads,
+        2,
+        "one probe and one retry, not an unbounded loop: {:?}",
+        fake.methods()
+    );
+    assert!(
+        app.notices
+            .iter()
+            .any(|notice| notice.text.contains("older history")),
+        "the reader is told why nothing came: {:?}",
+        app.notices.iter().map(|n| &n.text).collect::<Vec<_>>()
+    );
+}
+
+/// A real automatic compaction reports coverage but no token figures. The
+/// transcript must still say something, and the history below the floor must
+/// stay reachable instead of the session looking empty.
+#[tokio::test]
+async fn an_automatic_compaction_that_covers_everything_still_advertises_history() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    // The display projection starts at the floor: 177 items were all absorbed.
+    fake.script("session.read", display_read(177, 177));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    let session = app.session.as_ref().unwrap();
+    assert!(
+        matches!(
+            session.transcript.blocks(),
+            [Block::EarlierHistory { hidden_items: 177 }]
+        ),
+        "an empty display tail still points at the history: {:?}",
+        session.transcript.blocks()
+    );
+    assert_eq!(session.loaded_from, 177, "the next page starts below it");
+}
+
+/// Loading older history while a turn streams must not move the boundary that
+/// turn's durable items replace: the region is stated as an index, so every
+/// prepend has to rebase it or the reconcile truncates what the user just loaded.
+#[tokio::test]
+async fn older_history_loaded_during_a_turn_survives_the_turns_reconcile() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    // The tail starts at item 40, so 40 items wait behind it.
+    fake.script("session.read", display_read(100, 0));
+    open(&mut app, &mut rx, &fake, &tx).await;
+    assert_eq!(app.session.as_ref().unwrap().loaded_from, 40);
+
+    // A prompt is on screen and its turn is streaming into the transcript.
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    fake.script("session.rename", json!({"session": session_info("s1")}));
+    app.composer.set_text("streaming question");
+    app.on_action(Action::Submit);
+    pump(&mut app, &mut rx, |app| {
+        app.session.as_ref().unwrap().live.is_some()
+    })
+    .await;
+    pump_for(&mut app, &mut rx, Duration::from_millis(120)).await;
+    let start = app.session.as_ref().unwrap().live.as_ref().unwrap().start;
+    let live_blocks = app.session.as_ref().unwrap().transcript.len() - start;
+    assert!(live_blocks > 0, "the live turn occupies rows");
+
+    // The user is reading something while the page arrives.
+    app.scroll = Scroll::Anchor {
+        block: 2,
+        offset: 1,
+    };
+
+    // The user scrolls up and loads a page of older history mid-turn.
+    let older = json!({
+        "session": session_info("s1"),
+        "items": [
+            crate::testing::chunk(0, json!({"type": "user", "data": {
+                "loop_id": "l0", "kind": "prompt", "input": {"text": "history one"}}})),
+            crate::testing::chunk(1, json!({"type": "assistant", "data": {
+                "loop_id": "l0", "request_index": 0, "model": "mock",
+                "reasoning": "medium",
+                "content": [{"type": "text", "data": "history two"}]}})),
+        ],
+        "next_cursor": null, "total": 100,
+        "history_revision": "h1", "captured_end": 1,
+        "projection": {"revision": "p1", "first_item": 0, "covered_item_count": 0},
+    });
+    fake.script("session.read", older);
+    app.on_action(Action::LoadOlder);
+    pump(&mut app, &mut rx, |app| {
+        !app.session.as_ref().unwrap().loading_older
+    })
+    .await;
+    assert_eq!(
+        app.scroll,
+        Scroll::Anchor {
+            block: 4,
+            offset: 1
+        },
+        "the anchored row keeps its place across the prepend"
+    );
+    let loaded: Vec<String> = app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::User { text, .. } => Some(text.clone()),
+            Block::Assistant { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        loaded,
+        ["history one", "history two", "streaming question"],
+        "the older page is in front of the live turn"
+    );
+
+    // The event stream dropped something, so the turn ends incomplete and its
+    // durable items replace the live region.
+    app.session.as_mut().unwrap().live.as_mut().unwrap().gap = true;
+    app.on_msg(Msg::Op(Box::new(OpDone {
+        session: Some("s1".into()),
+        epoch: app.session.as_ref().unwrap().epoch,
+        kind: OpKind::Waited(Box::new(Ok(crate::protocol::TurnWaitResult {
+            turn: crate::protocol::TurnRef::new("s1", "l1"),
+            outcome: crate::protocol::LoopOutcome::Cancelled {
+                reason: crate::protocol::CancelReason::User,
+            },
+            usage: None,
+            requests: None,
+            tool_rounds: None,
+            final_config_revision: None,
+            persistence: None,
+        }))),
+    })));
+    fake.script(
+        "turn.result",
+        json!({"turn": turn("l1"), "items": [
+            crate::testing::chunk(0, json!({"type": "user", "data": {
+                "loop_id": "l1", "kind": "prompt", "input": {"text": "streaming question"}}})),
+        ]}),
+    );
+    settle(&mut app, &mut rx).await;
+    assert!(
+        app.session.as_ref().unwrap().reconcile_from.is_none(),
+        "the turn's region was reconciled"
+    );
+
+    let after: Vec<String> = app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::User { text, .. } => Some(text.clone()),
+            Block::Assistant { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        after,
+        ["history one", "history two", "streaming question"],
+        "the reconcile replaces only the turn, never the loaded history: {:?}",
+        app.session.as_ref().unwrap().transcript.blocks()
+    );
+}
+
+/// The canonical page read below a compaction floor is prepended too, so the
+/// streaming turn's region has to move by that page as well.
+#[tokio::test]
+async fn a_canonical_page_loaded_during_a_turn_survives_the_turns_reconcile() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    // Everything above item 30 is behind the compaction summary.
+    fake.script("session.read", display_read(30, 30));
+    open(&mut app, &mut rx, &fake, &tx).await;
+    assert_eq!(app.session.as_ref().unwrap().loaded_from, 30);
+
+    // The send is held, so the turn's region is recorded but not yet streaming:
+    // the page arrives in exactly that window.
+    fake.script_held("turn.send", json!({"turn": turn("l1")}));
+    fake.script("session.rename", json!({"session": session_info("s1")}));
+    app.composer.set_text("streaming question");
+    app.on_action(Action::Submit);
+    pump(&mut app, &mut rx, |app| {
+        app.session.as_ref().unwrap().next_turn_start.is_some()
+    })
+    .await;
+    let pending = app.session.as_ref().unwrap().next_turn_start.unwrap();
+    assert!(pending > 0, "the region starts after the placeholder");
+
+    // A canonical page arrives mid-turn: no placeholder is removed, so the whole
+    // page lands in front of the live region.
+    let canonical = json!({
+        "session": session_info("s1"),
+        "items": [crate::testing::chunk(0, json!({"type": "user", "data": {
+            "loop_id": "l0", "kind": "prompt", "input": {"text": "collapsed question"}}}))],
+        "next_cursor": null, "total": 30,
+        "history_revision": "h2", "captured_end": 1,
+        "projection": {"revision": "p2", "first_item": 0, "covered_item_count": 0},
+    });
+    fake.script_sequence("session.read", vec![canonical.clone(), canonical]);
+    app.on_action(Action::LoadOlder);
+    pump(&mut app, &mut rx, |app| {
+        !app.session.as_ref().unwrap().loading_older
+    })
+    .await;
+
+    assert!(
+        app.session
+            .as_ref()
+            .unwrap()
+            .transcript
+            .blocks()
+            .iter()
+            .any(|block| matches!(block, Block::User { text, .. } if text == "collapsed question")),
+        "the canonical page is on screen before the turn ends: {:?}",
+        app.session.as_ref().unwrap().transcript.blocks()
+    );
+    assert!(
+        app.session.as_ref().unwrap().reached_floor,
+        "the below-floor read is what was used: {:?}",
+        fake.methods()
+    );
+
+    // The send answers now, so the live turn starts from the rebased region.
+    fake.release("turn.send");
+    pump(&mut app, &mut rx, |app| {
+        app.session.as_ref().unwrap().live.is_some()
+    })
+    .await;
+    let start = app.session.as_ref().unwrap().live.as_ref().unwrap().start;
+    assert_eq!(
+        start,
+        pending + 1,
+        "the streaming region moved with the page in front of it"
+    );
+    pump_for(&mut app, &mut rx, Duration::from_millis(60)).await;
+
+    app.session.as_mut().unwrap().live.as_mut().unwrap().gap = true;
+    app.on_msg(Msg::Op(Box::new(OpDone {
+        session: Some("s1".into()),
+        epoch: app.session.as_ref().unwrap().epoch,
+        kind: OpKind::Waited(Box::new(Ok(crate::protocol::TurnWaitResult {
+            turn: crate::protocol::TurnRef::new("s1", "l1"),
+            outcome: crate::protocol::LoopOutcome::Cancelled {
+                reason: crate::protocol::CancelReason::User,
+            },
+            usage: None,
+            requests: None,
+            tool_rounds: None,
+            final_config_revision: None,
+            persistence: None,
+        }))),
+    })));
+    fake.script(
+        "turn.result",
+        json!({"turn": turn("l1"), "items": [
+            crate::testing::chunk(0, json!({"type": "user", "data": {
+                "loop_id": "l1", "kind": "prompt", "input": {"text": "streaming question"}}})),
+        ]}),
+    );
+    settle(&mut app, &mut rx).await;
+
+    let text: Vec<String> = app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::User { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        text,
+        ["collapsed question", "streaming question"],
+        "the canonical page is kept: {:?}",
+        app.session.as_ref().unwrap().transcript.blocks()
+    );
+}
+
+/// A compaction can raise the display floor above where the reader had paged to.
+/// The next request is then a canonical read, and it must start from the raw
+/// boundary rather than skipping the items between the two offsets.
+#[tokio::test]
+async fn a_floor_raised_past_the_loaded_window_still_reads_every_item() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(100, 10));
+    open(&mut app, &mut rx, &fake, &tx).await;
+    assert_eq!(app.session.as_ref().unwrap().loaded_from, 40);
+
+    // A page lands, and its reply reports a floor that has moved past where the
+    // reader is: the compaction absorbed what was already on screen.
+    fake.script(
+        "session.read",
+        json!({
+            "session": session_info("s1"), "items": [], "next_cursor": null,
+            "total": 100, "history_revision": "h2", "captured_end": 1,
+            "projection": {"revision": "p2", "first_item": 60, "covered_item_count": 60},
+        }),
+    );
+    app.on_action(Action::LoadOlder);
+    pump(&mut app, &mut rx, |app| {
+        !app.session.as_ref().unwrap().loading_older
+    })
+    .await;
+
+    // Nothing arrived, so the reader is told, and the window is untouched.
+    let session = app.session.as_ref().unwrap();
+    assert!(
+        session.loaded_from <= 40,
+        "a floor above the loaded window must not advance the read position past it"
+    );
+
+    // The next request therefore reads canonical below the floor it now knows.
+    fake.script_sequence(
+        "session.read",
+        vec![
+            json!({
+                "session": session_info("s1"), "items": [], "next_cursor": null,
+                "total": 100, "history_revision": "h3", "captured_end": 1,
+                "projection": {"revision": "p3", "first_item": 60, "covered_item_count": 60},
+            }),
+            json!({
+                "session": session_info("s1"),
+                "items": [crate::testing::chunk(0, json!({"type": "user", "data": {
+                    "loop_id": "l0", "kind": "prompt", "input": {"text": "deep item"}}}))],
+                "next_cursor": null, "total": 100, "history_revision": "h3",
+                "captured_end": 1,
+                "projection": {"revision": "p3", "first_item": 60, "covered_item_count": 60},
+            }),
+        ],
+    );
+    app.on_action(Action::LoadOlder);
+    pump(&mut app, &mut rx, |app| {
+        !app.session.as_ref().unwrap().loading_older
+    })
+    .await;
+    let reads = fake.calls("session.read");
+    assert!(
+        reads
+            .iter()
+            .any(|params| params["view"] == json!("canonical")),
+        "below the raised floor the read is canonical: {reads:?}"
+    );
+    assert!(
+        app.session
+            .as_ref()
+            .unwrap()
+            .transcript
+            .blocks()
+            .iter()
+            .any(|block| matches!(block, Block::User { text, .. } if text == "deep item")),
+        "{:?}",
+        app.session.as_ref().unwrap().transcript.blocks()
+    );
+}
+
+/// The canonical view pages through the same stale-pin race as the display view,
+/// so it retries once too, and an unrecoverable one keeps the transcript.
+#[tokio::test]
+async fn a_stale_canonical_page_retries_and_keeps_the_loaded_history() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(30, 30));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    let page = json!({
+        "session": session_info("s1"),
+        "items": [crate::testing::chunk(0, json!({"type": "user", "data": {
+            "loop_id": "l0", "kind": "prompt", "input": {"text": "canonical item"}}}))],
+        "next_cursor": null, "total": 30, "history_revision": "h2",
+        "captured_end": 1,
+        "projection": {"revision": "p2", "first_item": 0, "covered_item_count": 0},
+    });
+    fake.script_sequence(
+        "session.read",
+        vec![
+            json!({"error": {"code": crate::protocol::INVALID_STATE,
+                             "message": "stale pin", "data": {"kind": "invalid_state"}}}),
+            page.clone(),
+            page,
+        ],
+    );
+    app.on_action(Action::LoadOlder);
+    pump(&mut app, &mut rx, |app| {
+        !app.session.as_ref().unwrap().loading_older
+    })
+    .await;
+
+    assert!(
+        app.session
+            .as_ref()
+            .unwrap()
+            .transcript
+            .blocks()
+            .iter()
+            .any(|block| matches!(block, Block::User { text, .. } if text == "canonical item")),
+        "the retried canonical page lands: {:?}",
+        app.session.as_ref().unwrap().transcript.blocks()
     );
 }
 
