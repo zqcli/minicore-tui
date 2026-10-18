@@ -340,6 +340,13 @@ impl Transcript {
         self.revisions.truncate(len);
     }
 
+    pub fn remove(&mut self, index: usize) {
+        if index < self.blocks.len() {
+            self.blocks.remove(index);
+            self.revisions.remove(index);
+        }
+    }
+
     pub fn remove_front(&mut self, count: usize) {
         let count = count.min(self.blocks.len());
         self.blocks.drain(..count);
@@ -762,5 +769,25 @@ mod tests {
             kind: UserKind::Prompt,
         });
         assert_eq!(transcript.last_answer(), None);
+    }
+}
+
+#[cfg(test)]
+mod append_tests {
+    use super::*;
+
+    #[test]
+    fn an_assistant_item_with_a_text_part_becomes_an_assistant_block() {
+        let raw = r#"{"item":{"type":"assistant","data":{"loop_id":"l0",
+            "request_index":0,"model":"mock","content":[
+            {"type":"text","data":"earlier answer"}]}}}"#;
+        let item = crate::protocol::read::decode_item(raw).unwrap();
+        let mut transcript = Transcript::default();
+        append_history_item(&mut transcript, &item, "s1");
+        assert!(
+            matches!(transcript.blocks(), [Block::Assistant { text, .. }] if text == "earlier answer"),
+            "{:?}",
+            transcript.blocks()
+        );
     }
 }

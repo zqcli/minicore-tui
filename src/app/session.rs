@@ -31,6 +31,12 @@ pub struct Session {
     pub hidden_items: usize,
     pub loading_older: bool,
     pub applied_steers: u64,
+    /// Where the finished turn's streamed blocks start, kept after `live` is
+    /// cleared so the durable items can replace exactly that region.
+    pub reconcile_from: Option<(String, usize)>,
+    /// Where the next turn's region starts, captured before the optimistic
+    /// prompt block is pushed so the durable items replace it too.
+    pub next_turn_start: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -192,6 +198,8 @@ impl Session {
             hidden_items: 0,
             loading_older: false,
             applied_steers: 0,
+            reconcile_from: None,
+            next_turn_start: None,
         }
     }
 
@@ -315,6 +323,40 @@ impl Session {
     /// it, keeping everything before it.
     pub fn drop_live_region(&mut self, start: usize) {
         self.transcript.truncate(start);
+    }
+
+    /// Replaces the region a finished turn streamed into with its durable
+    /// items. The turn-end line stays last, so it is lifted out first and put
+    /// back after the items. Returns whether a turn was waiting to reconcile.
+    pub fn reconcile_turn(
+        &mut self,
+        items: &[(usize, crate::protocol::read::RawHistoryItem)],
+    ) -> bool {
+        let Some((loop_id, start)) = self.reconcile_from.take() else {
+            return false;
+        };
+        let turn_end = self.take_turn_end(&loop_id);
+        self.drop_live_region(start);
+        for (_, item) in items {
+            crate::transcript::block::append_history_item(
+                &mut self.transcript,
+                item,
+                &self.info.session_id,
+            );
+        }
+        if let Some(turn_end) = turn_end {
+            self.transcript.push(turn_end);
+        }
+        true
+    }
+
+    fn take_turn_end(&mut self, loop_id: &str) -> Option<Block> {
+        let index = self.transcript.blocks().iter().position(
+            |block| matches!(block, Block::TurnEnd { loop_id: id, .. } if id == loop_id),
+        )?;
+        let block = self.transcript.blocks()[index].clone();
+        self.transcript.remove(index);
+        Some(block)
     }
 
     pub fn request_key(loop_id: &str, request_index: u32) -> RequestKey {

@@ -638,6 +638,9 @@ impl App {
             self.notice(NoticeLevel::Error, "No session is open");
             return;
         };
+        // The durable history echoes this prompt, so the turn's region starts
+        // before it: reconciliation replaces it rather than adding a second.
+        session.next_turn_start = Some(session.transcript.len());
         session.transcript.push(Block::User {
             text: text.clone(),
             kind: crate::protocol::read::UserKind::Prompt,
@@ -1177,13 +1180,9 @@ impl App {
         let Some(session) = self.session.as_mut() else {
             return false;
         };
-        let start = session
-            .live
-            .as_ref()
-            .map(|live| live.start)
-            .unwrap_or_default();
-        session.drop_live_region(start);
-        install_items(session, items);
+        if !session.reconcile_turn(items) {
+            return false;
+        }
         true
     }
 
@@ -1273,7 +1272,10 @@ impl App {
                 if let Some(session) = self.session.as_mut()
                     && session.live.is_none()
                 {
-                    let start = session.transcript.len();
+                    let start = session
+                        .next_turn_start
+                        .take()
+                        .unwrap_or_else(|| session.transcript.len());
                     session.live = Some(LiveTurn::new(turn.clone(), start));
                 }
                 true
@@ -1333,27 +1335,19 @@ impl App {
         session.live = None;
         session.abandon_unapplied_steers();
         session.finish_streaming();
-        if completed {
-            session.finish_turn(
-                &loop_id,
-                wait.outcome.clone(),
-                usage.clone(),
-                requests,
-                tool_rounds,
-                duration,
-            );
-        } else {
-            // Replace the streamed (possibly partial) turn with its durable
-            // items; the turn-end line is appended when they arrive.
-            session.drop_live_region(start);
-            session.finish_turn(
-                &loop_id,
-                wait.outcome.clone(),
-                usage.clone(),
-                requests,
-                tool_rounds,
-                duration,
-            );
+        session.finish_turn(
+            &loop_id,
+            wait.outcome.clone(),
+            usage.clone(),
+            requests,
+            tool_rounds,
+            duration,
+        );
+        if !completed {
+            // Events were dropped, so the streamed turn may be incomplete.
+            // Its durable items replace that region when they arrive; the
+            // region is remembered here because `live` is gone by then.
+            session.reconcile_from = Some((loop_id.clone(), start));
             let turn = wait.turn.clone();
             tasks::load_turn_result(self.client.clone(), self.tx.clone(), turn, epoch);
         }
@@ -1580,7 +1574,10 @@ impl App {
             }
             AgentEvent::TurnStarted { turn, .. } => {
                 if session.live.is_none() {
-                    let start = session.transcript.len();
+                    let start = session
+                        .next_turn_start
+                        .take()
+                        .unwrap_or_else(|| session.transcript.len());
                     session.live = Some(LiveTurn::new(turn, start));
                 }
                 true

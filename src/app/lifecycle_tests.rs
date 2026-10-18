@@ -921,3 +921,96 @@ async fn launch_flags_apply_to_an_opened_session_through_session_update() {
     assert_eq!(update["reasoning"], json!("max"));
     assert!(app.launch.is_empty(), "the flags apply once");
 }
+
+#[tokio::test]
+async fn reconciling_a_gapped_turn_keeps_the_history_loaded_before_it() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    // An already-loaded earlier turn that reconciliation must not touch. The
+    // probe asks with `limit:1`, the page asks for the window, so the fixture is
+    // a sequence: probe first, then the page.
+    fake.script_sequence(
+        "session.read",
+        vec![
+            display_read(2, 0),
+            json!({
+                "session": session_info("s1"),
+                "items": [
+                    crate::testing::chunk(0, json!({"type": "user", "data": {"loop_id": "l0",
+                        "kind": "prompt", "input": {"text": "earlier question"}}})),
+                    crate::testing::chunk(1, json!({"type": "assistant", "data": {"loop_id": "l0",
+                        "request_index": 0, "model": "mock", "reasoning": "medium",
+                        "content": [{"type": "text", "data": "earlier answer"}]}})),
+                ],
+                "next_cursor": null,
+                "total": 2,
+                "history_revision": "h1",
+                "captured_end": 2,
+                "projection": {"revision": "p1", "first_item": 0, "covered_item_count": 0},
+            }),
+        ],
+    );
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    fake.script(
+        "turn.wait",
+        json!({"turn": turn("l1"), "outcome": {"type": "failed", "kind": "model"}, "requests": 1}),
+    );
+    let item = json!({
+        "item": {"type": "user", "data": {"loop_id": "l1", "kind": "prompt",
+                                          "input": {"text": "gapped prompt"}}}
+    })
+    .to_string();
+    fake.script(
+        "turn.result",
+        json!({
+            "turn": turn("l1"),
+            "outcome": {"type": "failed", "kind": "model"},
+            "total": 1,
+            "items": [{"index": 2, "offset": 0, "total_bytes": item.len(),
+                       "encoding": "utf8_json", "data": item, "complete": true}],
+            "next_cursor": null,
+        }),
+    );
+    fake.script(
+        "changes.list",
+        json!({"records": [], "total": 0, "complete": true}),
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+    app.composer = "gapped prompt".into();
+    app.on_action(Action::Submit);
+    settle(&mut app, &mut rx).await;
+
+    let session = app.session.as_ref().unwrap();
+    let prompts: Vec<&str> = session
+        .transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        prompts,
+        vec!["earlier question", "gapped prompt"],
+        "reconciliation must replace only the finished turn's region"
+    );
+    let answers: Vec<&str> = session
+        .transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::Assistant { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(answers, vec!["earlier answer"], "loaded history is kept");
+    // The turn-end line belongs after the reconciled items.
+    let last = session.transcript.blocks().last().unwrap();
+    assert!(
+        matches!(last, Block::TurnEnd { loop_id, .. } if loop_id == "l1"),
+        "the turn ends last: {last:?}"
+    );
+}
