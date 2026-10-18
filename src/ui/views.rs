@@ -519,12 +519,24 @@ pub fn context_view(
             )));
         }
         if let Some(last) = &context.last_result {
+            let origin = match last.origin.as_deref() {
+                Some("automatic") => "automatic",
+                Some("manual") => "manual",
+                _ => "last",
+            };
             let mut summary = match (last.before_tokens, last.after_tokens) {
-                (Some(before), Some(after)) => format!(
-                    "Last compaction: {} → {} tokens",
-                    thousands(before),
-                    thousands(after)
-                ),
+                (Some(before), Some(after)) => match origin {
+                    "last" => format!(
+                        "Last compaction: {} → {} tokens",
+                        thousands(before),
+                        thousands(after)
+                    ),
+                    other => format!(
+                        "Last compaction ({other}): {} → {} tokens",
+                        thousands(before),
+                        thousands(after)
+                    ),
+                },
                 _ => format!("Last compaction: {}", compact_status(last.status)),
             };
             if let Some(covered) = last.covered_loop_count {
@@ -1071,6 +1083,33 @@ mod tests {
             text.iter()
                 .any(|line| line.contains("Estimates are byte-based")),
             "{text:?}"
+        );
+    }
+
+    #[test]
+    fn a_compaction_result_names_whether_it_was_automatic() {
+        let palette = Palette::dark();
+        let context: SessionContext = serde_json::from_value(json!({
+            "session_id": "ses_1",
+            "last_result": {"operation_id": "auto-1", "origin": "automatic", "status": "compacted",
+                            "before_tokens": 32100, "after_tokens": 2700}
+        }))
+        .unwrap();
+        let view = context_view("Context", Some(&context), None, &palette);
+        let text: String = view
+            .lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("Last compaction (automatic): 32.1k → 2.7k tokens"),
+            "{text}"
         );
     }
 
