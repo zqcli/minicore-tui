@@ -411,10 +411,15 @@ async fn reading_below_the_display_floor_uses_a_canonical_read() {
     // because everything above it is what the display view shows.
     assert_eq!(session.first_item, 10);
     assert_eq!(session.loaded_from, 10);
-    assert_eq!(
-        session.transcript.len(),
-        0,
-        "the display tail is empty here"
+    // Nothing is left uncovered, but the items behind the floor are still
+    // there, so the transcript says so instead of looking empty.
+    assert!(
+        matches!(
+            session.transcript.blocks(),
+            [Block::EarlierHistory { hidden_items: 10 }]
+        ),
+        "an all-covering summary still advertises the history below it: {:?}",
+        session.transcript.blocks()
     );
 
     let canonical = crate::testing::chunk(
@@ -2064,4 +2069,29 @@ async fn an_exhausted_stale_probe_keeps_the_transcript_and_notices() {
         "the reader is told why nothing came: {:?}",
         app.notices.iter().map(|n| &n.text).collect::<Vec<_>>()
     );
+}
+
+/// A real automatic compaction reports coverage but no token figures. The
+/// transcript must still say something, and the history below the floor must
+/// stay reachable instead of the session looking empty.
+#[tokio::test]
+async fn an_automatic_compaction_that_covers_everything_still_advertises_history() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    // The display projection starts at the floor: 177 items were all absorbed.
+    fake.script("session.read", display_read(177, 177));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    let session = app.session.as_ref().unwrap();
+    assert!(
+        matches!(
+            session.transcript.blocks(),
+            [Block::EarlierHistory { hidden_items: 177 }]
+        ),
+        "an empty display tail still points at the history: {:?}",
+        session.transcript.blocks()
+    );
+    assert_eq!(session.loaded_from, 177, "the next page starts below it");
 }

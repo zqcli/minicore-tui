@@ -1437,7 +1437,11 @@ impl App {
         session.loaded_from = page.from;
         session.hidden_items = page.from;
         install_items(session, &page.items);
-        if page.has_more {
+        // `from` is what is actually behind this window. `has_more` only speaks
+        // for the display projection, and an automatic compaction can cover
+        // every item, leaving a transcript that would otherwise claim there is
+        // nothing to read while the history is still there.
+        if page.from > 0 {
             session.transcript.insert(
                 0,
                 Block::EarlierHistory {
