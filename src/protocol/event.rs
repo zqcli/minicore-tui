@@ -77,6 +77,7 @@ pub enum AgentEvent {
         call: EventToolCall,
         attempt: u64,
         revision: u64,
+        tool_name: String,
         generated: bool,
         discarded: bool,
         display: ToolDisplay,
@@ -347,6 +348,8 @@ struct ToolPreviewData {
     request_index: u32,
     tool_call_id: String,
     #[serde(default)]
+    tool_name: String,
+    #[serde(default)]
     attempt: u64,
     #[serde(default)]
     revision: u64,
@@ -354,15 +357,19 @@ struct ToolPreviewData {
     state: String,
     display: ToolDisplay,
 }
+/// `{turn, data: <invocation record>, meta}`: the record is the payload.
 #[derive(Deserialize)]
 struct ToolInvocationData {
     meta: EventMeta,
-    data: ToolInvocation,
+    #[serde(flatten)]
+    invocation: ToolInvocation,
 }
+/// `{turn, data: <execution record>, meta}`: the record is the payload itself.
 #[derive(Deserialize)]
 struct ToolExecutionData {
     meta: EventMeta,
-    data: ToolExecution,
+    #[serde(flatten)]
+    execution: ToolExecution,
 }
 #[derive(Deserialize)]
 struct ToolProcessData {
@@ -408,8 +415,14 @@ struct TurnFinishedData {
 }
 
 impl AgentEvent {
+    /// Decodes one event. A known type whose payload does not match this
+    /// build degrades to [`AgentEvent::Unknown`]: the live turn reconciles from
+    /// `turn.wait`/`turn.result` anyway, so one unreadable event must never stop
+    /// the stream.
     pub fn decode(params: Value) -> Result<Self, serde_json::Error> {
-        let wire: Wire = serde_json::from_value(params)?;
+        let Ok(wire) = serde_json::from_value::<Wire>(params) else {
+            return Ok(Self::Unknown);
+        };
         Ok(match wire {
             Wire::SessionOpened { data } => Self::SessionOpened {
                 meta: data.meta,
@@ -465,6 +478,7 @@ impl AgentEvent {
                 display: data.display,
             },
             Wire::ToolArgumentsPreview { data } => Self::ToolArgumentsPreview {
+                tool_name: data.tool_name,
                 meta: data.meta,
                 call: EventToolCall {
                     turn: data.turn,
@@ -479,11 +493,11 @@ impl AgentEvent {
             },
             Wire::ToolInvocation { data } => Self::ToolInvocation {
                 meta: data.meta,
-                invocation: Box::new(data.data),
+                invocation: Box::new(data.invocation),
             },
             Wire::ToolExecution { data } => Self::ToolExecution {
                 meta: data.meta,
-                execution: Box::new(data.data),
+                execution: Box::new(data.execution),
             },
             Wire::ToolProcess { data } => Self::ToolProcess {
                 meta: data.meta,
@@ -616,5 +630,40 @@ mod tests {
         };
         assert!(!generated && !discarded);
         assert_eq!(revision, 4);
+    }
+}
+
+#[cfg(test)]
+mod decode_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_tool_execution_event_decodes_its_terminal_facts() {
+        let event = AgentEvent::decode(json!({
+            "type": "tool_execution",
+            "data": {
+                "tool_ref": {"session_id": "s", "loop_id": "l",
+                             "request_index": 0, "tool_call_id": "c"},
+                "name": "bash",
+                "state": "succeeded",
+                "result_truncated": false,
+                "meta": {"session_id": "s", "dropped_before": 0}
+            }
+        }))
+        .unwrap();
+        match event {
+            AgentEvent::ToolExecution { execution, .. } => {
+                assert_eq!(execution.tool_ref.tool_call_id, "c");
+            }
+            other => panic!("expected tool_execution, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_unreadable_known_event_degrades_to_unknown() {
+        // A payload shape this build does not know must not stop the stream.
+        let event = AgentEvent::decode(json!({"type": "turn_started", "data": 7})).unwrap();
+        assert!(matches!(event, AgentEvent::Unknown));
     }
 }

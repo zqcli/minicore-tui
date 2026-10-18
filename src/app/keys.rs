@@ -545,7 +545,10 @@ impl App {
     }
 
     fn scroll_pages(&mut self, direction: isize) -> Input {
-        self.scroll_by(direction * 10);
+        self.scroll_by(
+            direction * self.viewport_rows() as isize,
+            self.viewport_rows(),
+        );
         Input::Consumed
     }
 
@@ -572,7 +575,7 @@ impl App {
                 } else if matches!(self.overlay, Overlay::Tool(_)) {
                     self.scroll_tool(-3);
                 } else {
-                    self.scroll_by(-3);
+                    self.scroll_by(-3, self.viewport_rows());
                 }
                 Input::Consumed
             }
@@ -582,7 +585,7 @@ impl App {
                 } else if matches!(self.overlay, Overlay::Tool(_)) {
                     self.scroll_tool(3);
                 } else {
-                    self.scroll_by(3);
+                    self.scroll_by(3, self.viewport_rows());
                 }
                 Input::Consumed
             }
@@ -628,7 +631,7 @@ impl App {
     }
 
     fn scroll_diff(&mut self, delta: isize) {
-        let rows = self.transcript_rows();
+        let rows = self.viewport_rows();
         self.diff.scroll_by(delta * 3, rows);
         if let Overlay::Diff { scroll, .. } = &mut self.overlay {
             *scroll = self.diff.scroll.min(u16::MAX as usize) as u16;
@@ -636,7 +639,7 @@ impl App {
     }
 
     fn scroll_tool(&mut self, delta: isize) {
-        let rows = self.transcript_rows();
+        let rows = self.viewport_rows();
         self.tool_view.scroll_by(delta * 3, rows);
     }
 
