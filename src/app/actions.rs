@@ -19,6 +19,7 @@ pub enum Action {
     SetModel(String),
     SetReasoning(crate::protocol::Reasoning),
     SetTheme(crate::theme::ThemeKind),
+    ToggleTheme,
     Compact,
     CopyLastAnswer,
     Export(Option<String>),

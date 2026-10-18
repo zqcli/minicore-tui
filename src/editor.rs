@@ -32,6 +32,27 @@ pub async fn edit(command: &[String], draft: &str) -> Result<Option<String>, Str
     Ok(text)
 }
 
+/// Edits `draft` with the terminal handed to the editor: the alternate screen
+/// and raw mode are released first, then retaken. The app keeps running; the
+/// main loop simply skips drawing while this is in flight.
+pub async fn edit_in_terminal(
+    guard: &mut crate::terminal::Guard,
+    command: &[String],
+    draft: &str,
+) -> Result<Option<String>, String> {
+    guard
+        .suspend()
+        .map_err(|error| format!("cannot hand the terminal to the editor: {error}"))?;
+    let result = edit(command, draft).await;
+    // The editor may have written anything; always take the screen back.
+    let resumed = guard.resume();
+    match (result, resumed) {
+        (Ok(text), Ok(())) => Ok(text),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(format!("cannot restore the terminal: {error}")),
+    }
+}
+
 fn temp_path() -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

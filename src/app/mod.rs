@@ -19,7 +19,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::clipboard;
-use crate::editor;
 use crate::protocol::{
     AgentEvent, CompactionPhase, CompactionProgress, ContextBudget, LoopOutcome, ModelInfo,
     ProfileInfo, RpcError, SessionContext, SessionInfo, SessionPresentation, SessionState, ToolRef,
@@ -451,6 +450,8 @@ pub struct App {
     pub transcript_area: Option<ratatui::layout::Rect>,
     /// The rows the last frame drew, so selection copies what is on screen.
     pub rendered: crate::ui::selection::Screen,
+    /// A draft waiting for the external editor, handed over by the main loop.
+    pub edit_request: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -511,6 +512,7 @@ impl App {
             delete_pending: None,
             transcript_area: None,
             rendered: crate::ui::selection::Screen::default(),
+            edit_request: None,
         }
     }
 
@@ -725,13 +727,15 @@ impl App {
                 true
             }
             Action::SetTheme(kind) => {
-                let mut config = crate::config::Config::load();
-                config.theme = kind;
-                if let Err(error) = config.save() {
-                    self.notice(NoticeLevel::Error, error);
-                }
-                self.theme = kind;
-                self.palette = crate::theme::Palette::for_kind(kind);
+                self.apply_theme(kind);
+                true
+            }
+            Action::ToggleTheme => {
+                let next = match self.theme {
+                    ThemeKind::Dark => ThemeKind::Light,
+                    ThemeKind::Light => ThemeKind::Dark,
+                };
+                self.apply_theme(next);
                 true
             }
             Action::ReloadAgent => {
@@ -795,6 +799,26 @@ impl App {
             self.send(text);
             true
         }
+    }
+
+    /// Switches the palette and persists the choice, so `/theme` survives a
+    /// restart. A failed write is a notice, not a reason to keep the old theme.
+    fn apply_theme(&mut self, kind: ThemeKind) {
+        let mut config = crate::config::Config::load();
+        config.theme = kind;
+        if let Err(error) = config.save() {
+            self.notice(NoticeLevel::Error, error);
+        }
+        self.theme = kind;
+        self.palette = crate::theme::Palette::for_kind(kind);
+        self.context_view = crate::ui::views::context_view(
+            "Context",
+            None,
+            self.session
+                .as_ref()
+                .and_then(|session| session.presentation.as_ref()),
+            &self.palette,
+        );
     }
 
     fn remember_draft(&mut self, text: &str) {
@@ -964,25 +988,24 @@ impl App {
         self.copy(text);
     }
 
+    /// Ctrl+G: hand the draft to the external editor. The terminal is owned by
+    /// the main loop, so this only files the request; the loop suspends the
+    /// screen, runs the editor, and reports back through `Msg::DraftEdited`.
     fn edit_draft(&mut self) {
-        let tx = self.tx.clone();
         let draft = std::mem::take(&mut self.composer);
-        let config = crate::config::Config::load();
-        tokio::spawn(async move {
-            let command = config.editor();
-            let result = match command {
-                Some(command) => editor::edit(&command, &draft).await,
-                None => Err(
-                    "No editor configured: set `editor` in the TUI config or $VISUAL/$EDITOR"
-                        .to_owned(),
-                ),
-            };
-            let _ = tx.send(Msg::Op(Box::new(OpDone {
-                session: None,
-                epoch: 0,
-                kind: OpKind::Editor(result),
-            })));
-        });
+        self.edit_request = Some(draft);
+    }
+
+    /// Takes the draft the main loop must edit, if Ctrl+G asked for it.
+    pub fn take_edit_request(&mut self) -> Option<String> {
+        self.edit_request.take()
+    }
+
+    /// The editor command: config first, then `$VISUAL`/`$EDITOR`.
+    pub fn editor_command(&self) -> Result<Vec<String>, String> {
+        crate::config::Config::load().editor().ok_or_else(|| {
+            "No editor configured: set `editor` in the TUI config or $VISUAL/$EDITOR".to_owned()
+        })
     }
 
     fn answer(&mut self, answer: Answer) {
