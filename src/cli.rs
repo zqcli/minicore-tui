@@ -1,0 +1,193 @@
+//! Small hand-rolled argument parser: no clap, no subcommands, and every
+//! option has exactly one meaning.
+
+use std::path::PathBuf;
+
+use crate::protocol::Reasoning;
+use crate::theme::ThemeKind;
+
+pub const USAGE: &str = "\
+minicore-tui — a pi-style coding agent TUI for minicore-agent
+
+Usage: minicore-tui [OPTIONS]
+
+Options:
+  --agent <BIN>          minicore-agent executable [default: minicore-agent]
+  --config <PATH>        agent config file (required unless the TUI config sets it)
+  --workspace <DIR>      workspace for a new session [default: cwd]
+  --session <ID>         open this session
+  --continue             open the most recent session in this workspace
+  --profile <ID>         profile for a new session
+  --model <ID>           model for a new session
+  --reasoning <LEVEL>    auto|disabled|low|medium|high|xhigh|max|ultra
+  --theme <THEME>        dark|light
+  -h, --help             print this help
+  -V, --version          print the version
+";
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Args {
+    pub agent: Option<PathBuf>,
+    pub agent_config: Option<PathBuf>,
+    pub workspace: Option<PathBuf>,
+    pub session: Option<String>,
+    pub continue_recent: bool,
+    pub profile: Option<String>,
+    pub model: Option<String>,
+    pub reasoning: Option<Reasoning>,
+    pub theme: Option<ThemeKind>,
+    pub help: bool,
+    pub version: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ArgsError {
+    #[error("unknown option {0}")]
+    Unknown(String),
+    #[error("{0} requires a value")]
+    MissingValue(String),
+    #[error("invalid --reasoning value {0}")]
+    Reasoning(String),
+    #[error("invalid --theme value {0}")]
+    Theme(String),
+    #[error("--session and --continue cannot be combined")]
+    Conflict,
+    #[error("unexpected argument {0}")]
+    Unexpected(String),
+}
+
+impl Args {
+    pub fn parse<I, S>(arguments: I) -> Result<Self, ArgsError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let mut args = Self::default();
+        let mut arguments = arguments.into_iter().map(Into::into);
+        while let Some(argument) = arguments.next() {
+            let mut value = |name: &str| {
+                arguments
+                    .next()
+                    .ok_or_else(|| ArgsError::MissingValue(name.to_owned()))
+            };
+            match argument.as_str() {
+                "--agent" => args.agent = Some(PathBuf::from(value("--agent")?)),
+                "--config" => args.agent_config = Some(PathBuf::from(value("--config")?)),
+                "--workspace" => args.workspace = Some(PathBuf::from(value("--workspace")?)),
+                "--session" => args.session = Some(value("--session")?),
+                "--continue" => args.continue_recent = true,
+                "--profile" => args.profile = Some(value("--profile")?),
+                "--model" => args.model = Some(value("--model")?),
+                "--reasoning" => {
+                    let level = value("--reasoning")?;
+                    args.reasoning =
+                        Some(Reasoning::parse(&level).ok_or(ArgsError::Reasoning(level))?);
+                }
+                "--theme" => {
+                    let theme = value("--theme")?;
+                    args.theme = Some(ThemeKind::parse(&theme).ok_or(ArgsError::Theme(theme))?);
+                }
+                "-h" | "--help" => args.help = true,
+                "-V" | "--version" => args.version = true,
+                other if other.starts_with('-') => {
+                    return Err(ArgsError::Unknown(other.to_owned()));
+                }
+                other => return Err(ArgsError::Unexpected(other.to_owned())),
+            }
+        }
+        if args.session.is_some() && args.continue_recent {
+            return Err(ArgsError::Conflict);
+        }
+        Ok(args)
+    }
+
+    /// Fills the gaps the CLI left with config-file values.
+    pub fn with_config(mut self, config: crate::config::Config) -> Self {
+        if self.agent.is_none() {
+            self.agent = config.agent;
+        }
+        if self.agent_config.is_none() {
+            self.agent_config = config.agent_config;
+        }
+        if self.theme.is_none() {
+            self.theme = Some(config.theme);
+        }
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_every_documented_option() {
+        let args = Args::parse([
+            "--agent",
+            "/bin/agent",
+            "--config",
+            "/etc/agent.toml",
+            "--workspace",
+            "/w",
+            "--session",
+            "ses_1",
+            "--profile",
+            "coding",
+            "--model",
+            "deep",
+            "--reasoning",
+            "xhigh",
+            "--theme",
+            "light",
+        ])
+        .unwrap();
+        assert_eq!(
+            args.agent.as_deref(),
+            Some(std::path::Path::new("/bin/agent"))
+        );
+        assert_eq!(args.session.as_deref(), Some("ses_1"));
+        assert_eq!(args.reasoning, Some(Reasoning::XHigh));
+        assert_eq!(args.theme, Some(ThemeKind::Light));
+    }
+
+    #[test]
+    fn rejects_conflicts_missing_values_and_unknown_flags() {
+        assert_eq!(
+            Args::parse(["--session", "x", "--continue"]).unwrap_err(),
+            ArgsError::Conflict
+        );
+        assert!(matches!(
+            Args::parse(["--model"]).unwrap_err(),
+            ArgsError::MissingValue(_)
+        ));
+        assert!(matches!(
+            Args::parse(["--nope"]).unwrap_err(),
+            ArgsError::Unknown(_)
+        ));
+        assert!(matches!(
+            Args::parse(["--reasoning", "turbo"]).unwrap_err(),
+            ArgsError::Reasoning(_)
+        ));
+    }
+
+    #[test]
+    fn config_fills_only_the_gaps_the_cli_left() {
+        let args = Args::parse(["--agent", "/cli/agent"]).unwrap();
+        let config = crate::config::Config {
+            agent: Some(PathBuf::from("/config/agent")),
+            agent_config: Some(PathBuf::from("/config/agent.toml")),
+            theme: ThemeKind::Light,
+            editor: Vec::new(),
+        };
+        let merged = args.with_config(config);
+        assert_eq!(
+            merged.agent.as_deref(),
+            Some(std::path::Path::new("/cli/agent"))
+        );
+        assert_eq!(
+            merged.agent_config.as_deref(),
+            Some(std::path::Path::new("/config/agent.toml"))
+        );
+        assert_eq!(merged.theme, Some(ThemeKind::Light));
+    }
+}
