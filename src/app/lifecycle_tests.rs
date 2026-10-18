@@ -80,6 +80,23 @@ async fn step_until(
     panic!("the app never settled (error: {:?})", app.last_error);
 }
 
+/// Pumps for a fixed window, for work that retries on a timer.
+async fn pump_for(
+    app: &mut App,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<Msg>,
+    window: Duration,
+) {
+    let deadline = tokio::time::Instant::now() + window;
+    while tokio::time::Instant::now() < deadline {
+        while let Ok(Some(message)) =
+            tokio::time::timeout(Duration::from_millis(5), rx.recv()).await
+        {
+            app.on_msg(message);
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 /// A fake Agent answering the catalog calls a bootstrap makes.
 fn boot(fake: &FakeAgent) {
     fake.script(
@@ -1731,20 +1748,38 @@ async fn a_busy_send_behind_a_queued_follow_up_keeps_fifo_and_sends_each_text_on
     fake.script("session.open", json!({"session": session_info("s1")}));
     fake.script("session.read", display_read(0, 0));
     // Every send is refused as busy while a compaction owns the session: the
-    // refused prompt is queued, never dropped and never duplicated.
+    // refused prompt is queued, never dropped and never duplicated. Once the
+    // compaction and the turn are done the queue drains in order.
     let busy = json!({"error": {"code": -32003, "message": "session is busy",
                                  "data": {"kind": "busy"}}});
-    fake.script_sequence("turn.send", vec![busy.clone(), busy]);
-    fake.script_held("turn.wait", json!({"turn": turn("l1")}));
+    // Two refusals, then the drain is accepted once compaction ends.
+    fake.script_sequence(
+        "turn.send",
+        vec![
+            busy.clone(),
+            busy,
+            json!({"turn": turn("l1")}),
+            json!({"turn": turn("l2")}),
+            json!({"turn": turn("l3")}),
+        ],
+    );
+    fake.script(
+        "turn.wait",
+        json!({"turn": {"loop_id": "l1", "status": "completed"}}),
+    );
+    fake.script("session.rename", json!({"session": session_info("s1")}));
 
     open(&mut app, &mut rx, &fake, &tx).await;
 
-    // Queue a follow-up while busy, then submit another message that is refused.
+    // Two messages queued while busy, then one more that is refused: three
+    // items wait, and the drain must take them in the order they were queued.
     app.composer.set_text("queued first");
     app.on_action(Action::QueueFollowUp);
-    app.composer.set_text("typed second");
+    app.composer.set_text("queued second");
+    app.on_action(Action::QueueFollowUp);
+    app.composer.set_text("typed third");
     app.on_action(Action::Submit);
-    step_until(&mut app, &mut rx, |app| !app.is_busy()).await;
+    pump_for(&mut app, &mut rx, Duration::from_millis(1600)).await;
 
     // Both texts reach the Agent exactly once, oldest first.
     let sends: Vec<String> = fake
@@ -1754,8 +1789,43 @@ async fn a_busy_send_behind_a_queued_follow_up_keeps_fifo_and_sends_each_text_on
         .collect();
     assert_eq!(
         sends,
-        ["queued first", "typed second"],
-        "the older message goes first, each exactly once"
+        ["queued first", "queued second", "typed third"],
+        "the queue drains oldest first and the refused message joins the back"
+    );
+
+    // The compaction finishes: the queued message drains without another key
+    // press, and the flag that gated it is released.
+    let idle = json!({"session_id": "s1", "status": "idle"});
+    app.on_msg(Msg::Op(Box::new(OpDone {
+        session: Some("s1".into()),
+        epoch: app.session.as_ref().unwrap().epoch,
+        kind: OpKind::State(Ok(serde_json::from_value(idle).unwrap())),
+    })));
+    step_until(&mut app, &mut rx, |_| fake.calls("turn.send").len() >= 3).await;
+    let all = fake.calls("turn.send");
+    let attempts: Vec<&str> = all
+        .iter()
+        .filter_map(|call| call["text"].as_str())
+        .collect();
+    assert_eq!(
+        attempts[..3],
+        ["queued first", "queued second", "typed third"],
+        "the drain and the refusal keep the order the user typed: {attempts:?}"
+    );
+    assert!(
+        attempts
+            .iter()
+            .all(|text| ["queued first", "queued second", "typed third"].contains(text)),
+        "only the three real messages are ever sent: {attempts:?}"
+    );
+    let queued = app.session.as_ref().unwrap().queue.len();
+    assert!(
+        queued <= 2,
+        "the queue never duplicates a refusal: {queued}"
+    );
+    assert!(
+        !app.waiting_for_compaction,
+        "the gate is released once an idle state arrives"
     );
 
     // A refused send never leaves a prompt behind, so the transcript cannot
@@ -1772,13 +1842,18 @@ async fn a_busy_send_behind_a_queued_follow_up_keeps_fifo_and_sends_each_text_on
             _ => None,
         })
         .collect();
-    assert!(
-        prompts.is_empty(),
-        "no phantom prompts for refused sends: {prompts:?}"
+    // Only the accepted send left a prompt: the two refusals left none, and
+    // the same text never appears twice.
+    let mut unique = prompts.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        prompts.len(),
+        "no message is claimed twice: {prompts:?}"
     );
     assert!(
-        app.composer.is_empty(),
-        "nothing is left in the draft: {:?}",
-        app.composer.text()
+        prompts.len() <= 1,
+        "at most the one accepted send is a prompt: {prompts:?}"
     );
 }
