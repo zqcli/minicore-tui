@@ -1,55 +1,62 @@
-//! Terminal entry, restoration, suspension and the panic hook.
+//! Terminal lifecycle: raw mode, the alternate screen, bracketed paste, mouse
+//! capture, keyboard enhancement and a panic hook that restores the terminal
+//! before the previously installed hook runs.
 
-use std::io::{self, Stdout, Write};
+use std::io::{self, Write};
 
+use crossterm::cursor::{Hide, Show};
 use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
+use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use crossterm::{cursor, execute};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-pub type Term = Terminal<CrosstermBackend<Stdout>>;
+pub type Term = Terminal<CrosstermBackend<io::Stdout>>;
 
-/// Pushes the keyboard-enhancement flags so Shift+Enter and Alt+Enter carry
-/// distinct codes. Terminals without support simply report failure and the
-/// keys fall back to their plain forms.
-fn push_keyboard_flags(writer: &mut impl Write) -> io::Result<()> {
+/// Shift+Enter and Alt+Enter only reach us as distinct keys when the terminal
+/// speaks the kitty keyboard protocol. The push is unconditional: terminals
+/// without support ignore the sequence, and probing support costs a blocking
+/// round trip on startup.
+fn push_keyboard_flags<W: Write>(writer: &mut W) -> io::Result<()> {
     execute!(
         writer,
         PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
     )
 }
 
-fn enter_screen(writer: &mut impl Write) -> io::Result<()> {
+fn enter_screen<W: Write>(writer: &mut W) -> io::Result<()> {
     execute!(
         writer,
         EnterAlternateScreen,
         EnableBracketedPaste,
         EnableMouseCapture,
-        cursor::Hide
+        Hide
     )
 }
 
-fn leave_screen(writer: &mut impl Write) -> io::Result<()> {
+fn leave_screen<W: Write>(writer: &mut W) -> io::Result<()> {
     execute!(
         writer,
         DisableMouseCapture,
         DisableBracketedPaste,
         LeaveAlternateScreen,
-        cursor::Show
+        Show
     )
 }
 
-/// Owns the alternate screen. Restores it exactly once, and can hand it to a
-/// child process (the external editor) and take it back.
+/// Owns the fullscreen terminal and restores it on drop.
 pub struct Guard {
     terminal: Term,
+    /// False while the screen is handed to a child process (the editor) or
+    /// after a completed restore.
     active: bool,
+    /// Whether this process pushed the enhancement flags, so [`Self::restore`]
+    /// pops exactly what it pushed.
     enhanced_keys: bool,
 }
 
@@ -63,14 +70,19 @@ impl Guard {
             Terminal::new(CrosstermBackend::new(io::stdout())).inspect_err(|_| {
                 let mut stdout = io::stdout();
                 let _ = leave_screen(&mut stdout);
-                let _ = disable_raw_mode();
             })
         });
-        Ok(Self {
-            terminal: terminal?,
-            active: true,
-            enhanced_keys,
-        })
+        match terminal {
+            Ok(terminal) => Ok(Self {
+                terminal,
+                active: true,
+                enhanced_keys,
+            }),
+            Err(error) => {
+                let _ = disable_raw_mode();
+                Err(error)
+            }
+        }
     }
 
     pub fn terminal(&mut self) -> &mut Term {
@@ -110,6 +122,7 @@ impl Guard {
         let mut stdout = io::stdout();
         if self.enhanced_keys {
             let _ = execute!(stdout, PopKeyboardEnhancementFlags);
+            self.enhanced_keys = false;
         }
         leave_screen(&mut stdout)?;
         stdout.flush()?;
@@ -125,21 +138,56 @@ impl Drop for Guard {
     }
 }
 
-/// Installs a hook that restores the terminal before the previous hook runs, so
-/// a panic never leaves the shell in raw mode.
+/// Restores the terminal before the previous hook runs, so a panic never
+/// leaves the shell in raw mode on the alternate screen.
 pub fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = disable_raw_mode();
         let mut stdout = io::stdout();
-        let _ = execute!(
-            stdout,
-            PopKeyboardEnhancementFlags,
-            DisableMouseCapture,
-            DisableBracketedPaste,
-            LeaveAlternateScreen,
-            cursor::Show
-        );
+        let _ = leave_screen(&mut stdout);
+        let _ = stdout.flush();
+        let _ = disable_raw_mode();
         previous(info);
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bytes(run: impl FnOnce(&mut Vec<u8>) -> io::Result<()>) -> String {
+        let mut out = Vec::new();
+        run(&mut out).expect("writing to a Vec never fails");
+        String::from_utf8(out).expect("escape sequences are ASCII")
+    }
+
+    #[test]
+    fn entering_sets_every_mode_it_restores() {
+        let entered = bytes(|out| {
+            push_keyboard_flags(out)?;
+            enter_screen(out)
+        });
+        for sequence in [
+            "\x1b[>1u",    // push keyboard enhancement flags
+            "\x1b[?1049h", // alternate screen
+            "\x1b[?2004h", // bracketed paste
+            "\x1b[?1000h", // mouse capture
+            "\x1b[?25l",   // hide cursor
+        ] {
+            assert!(
+                entered.contains(sequence),
+                "missing {sequence:?} in {entered:?}"
+            );
+        }
+
+        let left = bytes(leave_screen);
+        for sequence in [
+            "\x1b[?1000l", // mouse capture off
+            "\x1b[?2004l", // bracketed paste off
+            "\x1b[?1049l", // alternate screen off
+            "\x1b[?25h",   // show cursor
+        ] {
+            assert!(left.contains(sequence), "missing {sequence:?} in {left:?}");
+        }
+    }
 }
