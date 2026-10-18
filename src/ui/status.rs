@@ -46,18 +46,7 @@ pub fn lines(app: &App, styles: Styles, width: u16) -> Vec<Line<'static>> {
             styles.subtle(),
         ));
     }
-    if app.has_interaction() {
-        for (index, row) in app.interaction_lines().into_iter().enumerate() {
-            let style = if index == 0 {
-                styles.warning()
-            } else if row.starts_with('▶') {
-                styles.selected(styles.text())
-            } else {
-                styles.text()
-            };
-            rows.push(Line::styled(row, style));
-        }
-    }
+    // The approval prompt is a bottom sheet (screens::sheet), not a band row.
     if let Some(notice) = app.notices.back() {
         let style = match notice.level {
             NoticeLevel::Error => styles.error(),

@@ -133,6 +133,10 @@ fn files_sheet(filter: &str, selected: usize) -> Sheet {
     .selected(Some(selected))
 }
 
+pub fn approval(app: &App, palette: &Palette) -> Sheet {
+    interaction_sheet(app, palette)
+}
+
 fn interaction_sheet(app: &App, palette: &Palette) -> Sheet {
     let Some(session) = app.session.as_ref() else {
         return Sheet::new("Approval", "esc closes");

@@ -83,7 +83,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         return;
     }
     let styles = Styles::of(app.palette);
-    let sheet = screens::sheet(app, &app.palette);
+    // An approval prompt is a sheet even though it does not open an overlay:
+    // it owns the keyboard until answered, so it must be visible.
+    let approval = app.overlay.is_none() && app.has_interaction();
+    let sheet = if approval {
+        Some(screens::approval(app, &app.palette))
+    } else {
+        screens::sheet(app, &app.palette)
+    };
     let sheet_rows = sheet.as_ref().map_or(0, |sheet| sheet.height());
     let bottom = (band_height(app, area.width) + sheet_rows)
         .min(area.height.saturating_sub(1))
@@ -163,12 +170,17 @@ fn draw_transcript(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles)
         fold,
     };
     let scroll = app.scroll;
+    let drag = app.selection_start.map(|from| self::selection::Drag {
+        from,
+        to: app.selection_end.unwrap_or(from),
+    });
     let lines = self::transcript::draw(
         &mut app.layout.cache,
         transcript,
         area,
         scroll,
         styles,
+        drag,
         |state, index, block| state.render(index, block, styles),
     );
     // The copy path reads exactly these rows, so a drag copies what is on
