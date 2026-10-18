@@ -60,6 +60,26 @@ async fn settle(app: &mut App, rx: &mut tokio::sync::mpsc::UnboundedReceiver<Msg
 /// How long the message channel must stay quiet to call the app settled.
 const QUIET: Duration = Duration::from_millis(120);
 
+/// Pumps until `check` holds, allowing for work that retries after a delay.
+async fn step_until(
+    app: &mut App,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<Msg>,
+    check: impl Fn(&App) -> bool,
+) {
+    for _ in 0..60 {
+        while let Ok(Some(message)) =
+            tokio::time::timeout(Duration::from_millis(5), rx.recv()).await
+        {
+            app.on_msg(message);
+        }
+        if check(app) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the app never settled (error: {:?})", app.last_error);
+}
+
 /// A fake Agent answering the catalog calls a bootstrap makes.
 fn boot(fake: &FakeAgent) {
     fake.script(
@@ -97,6 +117,7 @@ fn boot(fake: &FakeAgent) {
         "session.state",
         json!({"session_id": "s1", "status": "idle"}),
     );
+    fake.script("session.context", json!({"session_id": "s1"}));
 }
 
 #[tokio::test]
@@ -349,12 +370,12 @@ async fn older_pages_prepend_and_keep_the_anchor_block() {
             .is_some_and(|session| session.loaded_from == 0)
     })
     .await;
-    // Reaching the display floor labels the boundary: the page below it is the
-    // canonical history behind the compaction summary, reached with its own
-    // read rather than another display page.
+    // The projection reports its floor as 0 here, so this page was the oldest
+    // history; the boundary is exhausted rather than behind a summary.
     let session = app.session.as_ref().unwrap();
     assert_eq!(session.loaded_from, 0);
-    assert!(session.reached_floor);
+    assert_eq!(session.first_item, 0);
+    assert!(!session.reached_floor);
 }
 
 #[tokio::test]
@@ -369,6 +390,8 @@ async fn reading_below_the_display_floor_uses_a_canonical_read() {
 
     open(&mut app, &mut rx, &fake, &tx).await;
     let session = app.session.as_ref().unwrap();
+    // The floor is the projection's own boundary, and the tail starts at it
+    // because everything above it is what the display view shows.
     assert_eq!(session.first_item, 10);
     assert_eq!(session.loaded_from, 10);
     assert_eq!(
@@ -1563,40 +1586,6 @@ async fn a_refused_send_keeps_a_draft_typed_meanwhile() {
 }
 
 #[tokio::test]
-async fn a_recalled_follow_up_does_not_erase_a_draft() {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let (fake, mut app) = FakeAgent::start(tx.clone());
-    boot(&fake);
-    fake.script("session.open", json!({"session": session_info("s1")}));
-    fake.script("session.read", display_read(0, 0));
-    fake.script("turn.send", json!({"turn": turn("l1")}));
-    fake.script_held("turn.wait", json!({"turn": turn("l1")}));
-    open(&mut app, &mut rx, &fake, &tx).await;
-
-    app.composer.set_text("turn one");
-    app.on_action(Action::Submit);
-    pump(&mut app, &mut rx, |app| app.is_busy()).await;
-
-    app.composer.set_text("queued next");
-    app.on_action(Action::QueueFollowUp);
-    assert_eq!(app.composer.text(), "");
-
-    app.composer.set_text("work in progress");
-    app.on_action(Action::RecallQueued);
-    assert_eq!(
-        app.composer.text(),
-        "work in progress",
-        "recall never overwrites a real draft"
-    );
-    let session = app.session.as_ref().unwrap();
-    assert_eq!(
-        session.queue.len(),
-        1,
-        "the queued text stays queued when it cannot be recalled"
-    );
-}
-
-#[tokio::test]
 async fn a_send_refused_for_another_reason_returns_the_text_to_the_composer() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let (fake, mut app) = FakeAgent::start(tx.clone());
@@ -1625,4 +1614,352 @@ async fn a_send_refused_for_another_reason_returns_the_text_to_the_composer() {
             .any(|block| matches!(block, Block::User { .. }))
     );
     assert_eq!(app.last_error.as_deref(), Some("history too large"));
+}
+
+#[tokio::test]
+async fn a_busy_then_busy_then_idle_session_retries_until_it_sends_once() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    // Post-turn compaction owns the session for two polls, then frees it.
+    fake.script_sequence(
+        "session.state",
+        vec![
+            json!({"session_id": "s1", "status": "busy",
+                   "compaction": {"operation_id": "auto-l1", "phase": "summarizing",
+                                  "covered_item_count": 4, "retained_item_count": 1}}),
+            json!({"session_id": "s1", "status": "busy",
+                   "compaction": {"operation_id": "auto-l1", "phase": "committing",
+                                  "covered_item_count": 4, "retained_item_count": 1}}),
+            json!({"session_id": "s1", "status": "idle"}),
+        ],
+    );
+    fake.script("turn.send", json!({"turn": turn("l2")}));
+    fake.script(
+        "turn.wait",
+        json!({"turn": turn("l2"), "outcome": {"type": "completed"}}),
+    );
+    fake.script(
+        "changes.list",
+        json!({"records": [], "total": 0, "complete": true}),
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    // The first send is refused: post-turn compaction still runs.
+    fake.script_error("turn.send", -32003, "session busy", "session_busy");
+    app.composer.set_text("the important text");
+    app.on_action(Action::Submit);
+    settle(&mut app, &mut rx).await;
+    assert!(app.waiting_for_compaction, "the retry loop is running");
+
+    // The Agent frees the session; the queue must flush exactly once.
+    fake.script("turn.send", json!({"turn": turn("l2")}));
+    app.on_msg(Msg::Op(Box::new(OpDone {
+        session: Some("s1".into()),
+        epoch: app.session.as_ref().unwrap().epoch,
+        kind: OpKind::State(Ok(serde_json::from_value(json!({
+            "session_id": "s1", "status": "idle"
+        }))
+        .unwrap())),
+    })));
+    settle(&mut app, &mut rx).await;
+
+    let sends: Vec<Value> = fake.calls("turn.send");
+    let texts: Vec<&str> = sends
+        .iter()
+        .filter_map(|params| params["text"].as_str())
+        .collect();
+    assert_eq!(
+        texts,
+        vec!["the important text", "the important text"],
+        "one refused send, then exactly one real send"
+    );
+    assert!(!app.waiting_for_compaction, "the latch is released");
+    let session = app.session.as_ref().unwrap();
+    let prompts = session
+        .transcript
+        .blocks()
+        .iter()
+        .filter(|block| matches!(block, Block::User { .. }))
+        .count();
+    assert_eq!(prompts, 1, "one prompt for one turn, not a phantom");
+}
+
+#[tokio::test]
+async fn a_running_loop_is_adopted_from_state_and_ends_through_turn_wait() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    // The session was already running a loop when it was opened.
+    fake.script(
+        "session.state",
+        json!({"session_id": "s1", "status": "running",
+               "active_loop": {"loop_id": "l9", "request_index": 1}}),
+    );
+    fake.script(
+        "turn.wait",
+        json!({"turn": turn("l9"), "outcome": {"type": "completed"}, "requests": 2}),
+    );
+    fake.script(
+        "changes.list",
+        json!({"records": [], "total": 0, "complete": true}),
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    // A state refresh is what reveals the running loop on adopt.
+    app.on_msg(Msg::Op(Box::new(OpDone {
+        session: Some("s1".into()),
+        epoch: app.session.as_ref().unwrap().epoch,
+        kind: OpKind::State(Ok(serde_json::from_value(json!({
+            "session_id": "s1", "status": "running",
+            "active_loop": {"loop_id": "l9", "request_index": 1}
+        }))
+        .unwrap())),
+    })));
+    settle(&mut app, &mut rx).await;
+
+    assert!(
+        fake.calls("turn.wait")
+            .iter()
+            .any(|params| params["loop_id"] == json!("l9")),
+        "an adopted loop registers its own wait"
+    );
+    let session = app.session.as_ref().unwrap();
+    assert!(!session.is_busy(), "the adopted turn ended");
+    assert!(
+        matches!(
+            session.transcript.blocks().last(),
+            Some(Block::TurnEnd { loop_id, .. }) if loop_id == "l9"
+        ),
+        "{:?}",
+        session.transcript.blocks()
+    );
+}
+
+#[tokio::test]
+async fn a_capacity_refusal_on_turn_wait_is_retried() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    // Every deferred slot was taken when the wait was registered.
+    fake.script_error_then(
+        "turn.wait",
+        -32019,
+        "no deferred slot",
+        "resource_exhausted",
+        json!({"turn": turn("l1"), "outcome": {"type": "completed"}}),
+    );
+    fake.script(
+        "changes.list",
+        json!({"records": [], "total": 0, "complete": true}),
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.composer.set_text("retry the wait");
+    app.on_action(Action::Submit);
+    // The refusal is a condition, not a verdict: the retry registers the wait
+    // again and the turn then ends normally.
+    step_until(&mut app, &mut rx, |app| {
+        !app.session
+            .as_ref()
+            .is_some_and(|session| session.is_busy())
+    })
+    .await;
+    assert!(
+        fake.calls("turn.wait").len() >= 2,
+        "the wait was registered again"
+    );
+    let session = app.session.as_ref().unwrap();
+    assert!(matches!(
+        session.transcript.blocks().last(),
+        Some(Block::TurnEnd { loop_id, .. }) if loop_id == "l1"
+    ));
+}
+
+#[tokio::test]
+async fn a_stale_pin_during_the_tail_load_restarts_with_a_fresh_probe() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    // The probe succeeds; the page continuation is refused as stale, so the
+    // retry probes again and reads the window.
+    let error = json!({"error": {"code": -32005, "message": "stale pin",
+                                 "data": {"kind": "invalid_state"}}});
+    fake.script_sequence(
+        "session.read",
+        vec![
+            display_read(6, 0),
+            error,
+            display_read(6, 0),
+            json!({
+                "session": session_info("s1"),
+                "items": [crate::testing::chunk(0, json!({"type": "user", "data": {
+                    "loop_id": "l0", "kind": "prompt", "input": {"text": "recovered"},
+                }}))],
+                "next_cursor": null, "total": 6,
+                "history_revision": "h2", "captured_end": 2,
+                "projection": {"revision": "p2", "first_item": 0, "covered_item_count": 0},
+            }),
+        ],
+    );
+
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    assert_eq!(app.last_error, None, "a stale pin is never surfaced");
+    let reads = fake.calls("session.read");
+    assert_eq!(reads.len(), 4, "probe, refused page, fresh probe, page");
+    assert!(
+        reads[2].get("history_revision").is_none(),
+        "the retry probes again rather than reusing the stale pin: {reads:?}"
+    );
+    let session = app.session.as_ref().unwrap();
+    assert!(
+        session
+            .transcript
+            .blocks()
+            .iter()
+            .any(|block| matches!(block, Block::User { text, .. } if text == "recovered")),
+        "{:?}",
+        session.transcript.blocks()
+    );
+}
+
+#[tokio::test]
+async fn a_compaction_reported_while_idle_keeps_its_progress() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    // The Agent publishes `idle` while a post-turn compaction still owns the
+    // session; the progress must not be erased.
+    app.on_msg(Msg::Op(Box::new(OpDone {
+        session: Some("s1".into()),
+        epoch: app.session.as_ref().unwrap().epoch,
+        kind: OpKind::State(Ok(serde_json::from_value(json!({
+            "session_id": "s1", "status": "idle",
+            "compaction": {"operation_id": "auto-l1", "phase": "merging",
+                           "covered_item_count": 8, "retained_item_count": 2}
+        }))
+        .unwrap())),
+    })));
+
+    let session = app.session.as_ref().unwrap();
+    let progress = session.compaction.as_ref().expect("the progress is kept");
+    assert_eq!(progress.phase, crate::protocol::CompactionPhase::Merging);
+    assert_eq!(app.status_label(), Some("Compacting context"));
+}
+
+#[tokio::test]
+async fn recalling_a_queued_message_never_overwrites_the_draft() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    fake.script_held("turn.wait", json!({"turn": turn("l1")}));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.composer.set_text("first");
+    app.on_action(Action::Submit);
+    pump(&mut app, &mut rx, |app| app.is_busy()).await;
+
+    // Queue one message, then start a fresh draft.
+    app.composer.set_text("queued");
+    app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+    app.on_action(Action::QueueFollowUp);
+    app.composer.set_text("half-typed thought");
+
+    app.on_action(Action::RecallQueued);
+
+    assert_eq!(
+        app.composer.text(),
+        "half-typed thought",
+        "the draft is what the user is writing, not what the queue holds"
+    );
+    assert_eq!(
+        app.session.as_ref().unwrap().queue.len(),
+        1,
+        "the message stays queued for when there is room"
+    );
+    assert!(
+        app.notices
+            .iter()
+            .any(|notice| notice.text.contains("Clear the draft")),
+        "the refusal says why: {:?}",
+        app.notices
+    );
+}
+
+#[tokio::test]
+async fn a_busy_send_behind_a_queued_follow_up_keeps_fifo_and_sends_each_text_once() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    // Every send is refused as busy while a compaction owns the session: the
+    // refused prompt is queued, never dropped and never duplicated.
+    let busy = json!({"error": {"code": -32003, "message": "session is busy",
+                                 "data": {"kind": "busy"}}});
+    fake.script_sequence("turn.send", vec![busy.clone(), busy]);
+    fake.script_held("turn.wait", json!({"turn": turn("l1")}));
+
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    // Queue a follow-up while busy, then submit another message that is refused.
+    app.composer.set_text("queued first");
+    app.on_action(Action::QueueFollowUp);
+    app.composer.set_text("typed second");
+    app.on_action(Action::Submit);
+    step_until(&mut app, &mut rx, |app| !app.is_busy()).await;
+
+    // Both texts reach the Agent exactly once, oldest first.
+    let sends: Vec<String> = fake
+        .calls("turn.send")
+        .iter()
+        .filter_map(|call| call["text"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(
+        sends,
+        ["queued first", "typed second"],
+        "the older message goes first, each exactly once"
+    );
+
+    // A refused send never leaves a prompt behind, so the transcript cannot
+    // claim a turn the Agent did not accept.
+    let prompts: Vec<&str> = app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        prompts.is_empty(),
+        "no phantom prompts for refused sends: {prompts:?}"
+    );
+    assert!(
+        app.composer.is_empty(),
+        "nothing is left in the draft: {:?}",
+        app.composer.text()
+    );
 }

@@ -254,6 +254,8 @@ fn turn_end(
     styles: Styles,
     width: usize,
 ) -> Line<'static> {
+    // turn_end_line already appends the (+a −b) counts when every changed
+    // file's diff could be counted.
     let text = crate::app::turn_end_line(outcome, duration, requests, tool_rounds, changes);
     let labeled = format!("── {text} ──");
     let style = if outcome.is_completed() {

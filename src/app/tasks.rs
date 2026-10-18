@@ -33,6 +33,10 @@ pub struct History {
     pub items: Vec<(usize, protocol::read::RawHistoryItem)>,
     pub from: usize,
     pub to: usize,
+    /// The display projection's `first_item`: the boundary the Agent itself
+    /// reports, which is where the visible history starts. It is not the same
+    /// as `from`, the first item this page happens to contain.
+    pub floor: usize,
     pub has_more: bool,
 }
 
@@ -254,6 +258,11 @@ pub fn send_turn(client: Arc<Client>, tx: Tx, session_id: String, text: String, 
     });
 }
 
+/// Registers a `turn.wait` for a loop that was adopted rather than sent.
+pub fn wait_turn(client: Arc<Client>, tx: Tx, turn: TurnRef, epoch: u64) {
+    wait(client, tx, turn, epoch);
+}
+
 fn wait(client: Arc<Client>, tx: Tx, turn: TurnRef, epoch: u64) {
     tokio::spawn(async move {
         let session_id = turn.session_id.clone();
@@ -324,18 +333,28 @@ pub fn compact(client: Arc<Client>, tx: Tx, session_id: String, operation_id: St
 /// so a pin is never cached across operations.
 pub fn load_tail(client: Arc<Client>, tx: Tx, session_id: String) {
     tokio::spawn(async move {
-        let result = match probe(client.as_ref(), &session_id, "display").await {
-            Ok(probe) => {
-                let total = probe.total;
-                let start = total
-                    .saturating_sub(protocol::TAIL_ITEMS)
-                    .max(probe.first_item);
-                read_window(client.as_ref(), &session_id, "display", probe, start, total).await
-            }
-            Err(error) => Err(error),
-        };
+        let result = tail(client.as_ref(), &session_id).await;
         post(&tx, Some(&session_id), OpKind::History(result));
     });
+}
+
+/// The tail window, retried once with a fresh pin: a page continuation can be
+/// refused with a stale pin while the Agent is appending, and restarting with
+/// a new probe is the documented recovery.
+async fn tail(client: &Client, session_id: &str) -> Result<History, protocol::RpcError> {
+    match read_tail(client, session_id).await {
+        Err(error) if error.code == protocol::INVALID_STATE => read_tail(client, session_id).await,
+        result => result,
+    }
+}
+
+async fn read_tail(client: &Client, session_id: &str) -> Result<History, protocol::RpcError> {
+    let probe = probe(client, session_id, "display").await?;
+    let total = probe.total;
+    let start = total
+        .saturating_sub(protocol::TAIL_ITEMS)
+        .max(probe.first_item);
+    read_window(client, session_id, "display", probe, start, total).await
 }
 
 /// Reads the page immediately older than `before`.
@@ -477,6 +496,7 @@ async fn read_window(
     Ok(History {
         from: start,
         to: end,
+        floor: probe.first_item,
         has_more: start > probe.first_item,
         items,
     })
@@ -544,30 +564,6 @@ pub fn load_changes(client: Arc<Client>, tx: Tx, session_id: String, loop_id: St
     });
 }
 
-/// Lists the change records of one scope for the diff view. Files come first
-/// and hunks later, so a large workspace never blocks the panel from opening.
-pub fn list_changes(client: Arc<Client>, tx: Tx, session_id: String, scope: crate::app::DiffScope) {
-    tokio::spawn(async move {
-        let params = json!({
-            "session_id": session_id,
-            "scope": match scope {
-                crate::app::DiffScope::Turn | crate::app::DiffScope::Session => json!("session"),
-                crate::app::DiffScope::Workspace => json!("workspace"),
-            },
-            "limit": 200,
-            "max_bytes": protocol::PAGE_MAX_BYTES,
-        });
-        let result: Result<ChangeList, _> = client
-            .call::<Value, ChangeList>(protocol::METHOD_CHANGES_LIST, &params, true)
-            .await;
-        post(
-            &tx,
-            Some(&session_id),
-            OpKind::ChangeFiles(scope, result.map(|list| list.records)),
-        );
-    });
-}
-
 async fn session_changes(
     client: &Client,
     session_id: &str,
@@ -609,127 +605,6 @@ async fn session_changes(
         files,
         lines: Some((added, removed)),
     })
-}
-
-/// Pages every change record of one path and merges the hunks, so a file that
-/// a turn changed several times shows one combined diff.
-pub fn load_diff(
-    client: Arc<Client>,
-    tx: Tx,
-    session_id: String,
-    query: crate::app::DiffQuery,
-    change_refs: Vec<String>,
-) {
-    tokio::spawn(async move {
-        let mut merged: Option<protocol::changes::DiffPage> = None;
-        for change_ref in change_refs {
-            let page = match page_diff(client.as_ref(), &session_id, &change_ref).await {
-                Ok(page) => page,
-                Err(error) => {
-                    post(
-                        &tx,
-                        Some(&session_id),
-                        OpKind::DiffFile(query.clone(), Err(error)),
-                    );
-                    return;
-                }
-            };
-            match merged.as_mut() {
-                Some(merged) => {
-                    merged.hunks.extend(page.hunks);
-                    merged.binary |= page.binary;
-                    merged.complete &= page.complete;
-                }
-                None => merged = Some(page),
-            }
-        }
-        let page = merged.unwrap_or_else(|| protocol::changes::DiffPage {
-            change_ref: String::new(),
-            path: query.path.clone(),
-            hunks: Vec::new(),
-            next_cursor: None,
-            complete: true,
-            binary: false,
-            availability: None,
-            truncated: false,
-            stale: false,
-        });
-        post(&tx, Some(&session_id), OpKind::DiffFile(query, Ok(page)));
-    });
-}
-
-/// The rendered hunks of one record, paged to exhaustion. A capacity refusal
-/// is retried briefly: the Agent admits a bounded number of concurrent reads
-/// and other clients share that allowance.
-async fn page_diff(
-    client: &Client,
-    session_id: &str,
-    change_ref: &str,
-) -> Result<protocol::changes::DiffPage, protocol::RpcError> {
-    let mut merged: Option<protocol::changes::DiffPage> = None;
-    let mut cursor: Option<Value> = None;
-    loop {
-        let params = json!({
-            "session_id": session_id,
-            "change_ref": change_ref,
-            "cursor": cursor,
-            "max_bytes": protocol::PAGE_MAX_BYTES,
-        });
-        let mut attempt = 0;
-        let page = loop {
-            let result = client
-                .call::<Value, protocol::changes::DiffPage>(
-                    protocol::METHOD_CHANGES_DIFF,
-                    &params,
-                    true,
-                )
-                .await;
-            match result {
-                Ok(page) => break page,
-                Err(error) if error.is_capacity() && attempt < DIFF_RETRIES => {
-                    attempt += 1;
-                    tokio::time::sleep(BUSY_RETRY * attempt).await;
-                }
-                Err(error) => return Err(error),
-            }
-        };
-        cursor = page.next_cursor.clone();
-        match merged.as_mut() {
-            Some(merged) => merged.hunks.extend(page.hunks),
-            None => merged = Some(page),
-        }
-        if cursor.is_none() {
-            return Ok(merged.expect("at least one page was read"));
-        }
-    }
-}
-
-/// Fetches workspace paths for the `@` picker: one recursive `workspace.files`
-/// page filtered by the current query, capped by the Agent's own limits.
-pub fn list_files(client: Arc<Client>, tx: Tx, session_id: String, query: String) {
-    tokio::spawn(async move {
-        let params = json!({
-            "session_id": session_id,
-            "recursive": true,
-            "query": query,
-            "limit": 500,
-            "max_bytes": protocol::PAGE_MAX_BYTES,
-        });
-        let result: Result<protocol::FilesPage, _> = client
-            .call::<Value, protocol::FilesPage>(protocol::METHOD_WORKSPACE_FILES, &params, false)
-            .await;
-        post(
-            &tx,
-            Some(&session_id),
-            OpKind::Files(result.map(|page| {
-                page.entries
-                    .into_iter()
-                    .filter(|entry| entry.kind == protocol::FileKind::File)
-                    .map(|entry| entry.path)
-                    .collect()
-            })),
-        );
-    });
 }
 
 /// Counts one file's added and removed lines, paging its diff to exhaustion.
@@ -786,6 +661,139 @@ async fn read_diff(
 
 /// Attempts at one diff page before a capacity refusal is reported.
 const DIFF_RETRIES: u32 = 2;
+
+/// Lists the change records for one scope and, for the first file, its hunks.
+/// The diff view gets files first, then hunks, so a huge workspace never blocks
+/// the panel from opening.
+pub fn list_changes(client: Arc<Client>, tx: Tx, session_id: String, scope: crate::app::DiffScope) {
+    tokio::spawn(async move {
+        let params = json!({
+            "session_id": session_id,
+            "scope": match scope {
+                crate::app::DiffScope::Turn => json!("session"),
+                crate::app::DiffScope::Session => json!("session"),
+                crate::app::DiffScope::Workspace => json!("workspace"),
+            },
+            "limit": 200,
+            "max_bytes": 262_144,
+        });
+        let result: Result<ChangeList, _> = client
+            .call::<Value, ChangeList>(protocol::METHOD_CHANGES_LIST, &params, false)
+            .await;
+        post(
+            &tx,
+            Some(&session_id),
+            OpKind::ChangeFiles(scope, result.map(|list| list.records)),
+        );
+    });
+}
+
+/// Pages the hunks of one change record for the diff view.
+/// Pages every change record of one path and merges the hunks, so a file that
+/// a turn changed several times shows one combined diff.
+pub fn load_diff(
+    client: Arc<Client>,
+    tx: Tx,
+    session_id: String,
+    query: crate::app::DiffQuery,
+    change_refs: Vec<String>,
+) {
+    tokio::spawn(async move {
+        let mut merged: Option<protocol::changes::DiffPage> = None;
+        for change_ref in change_refs {
+            let page = match page_diff(&client, &session_id, change_ref).await {
+                Ok(page) => page,
+                Err(error) => {
+                    post(
+                        &tx,
+                        Some(&session_id),
+                        OpKind::DiffFile(query.clone(), Err(error)),
+                    );
+                    return;
+                }
+            };
+            match merged.as_mut() {
+                Some(merged) => {
+                    merged.hunks.extend(page.hunks);
+                    merged.binary |= page.binary;
+                    merged.complete &= page.complete;
+                }
+                None => merged = Some(page),
+            }
+        }
+        let page = merged.unwrap_or_else(|| protocol::changes::DiffPage {
+            change_ref: String::new(),
+            path: query.path.clone(),
+            hunks: Vec::new(),
+            next_cursor: None,
+            complete: true,
+            binary: false,
+            truncated: false,
+            availability: None,
+            stale: false,
+        });
+        post(&tx, Some(&session_id), OpKind::DiffFile(query, Ok(page)));
+    });
+}
+
+/// One record's hunks, following `next_cursor` to the end.
+async fn page_diff(
+    client: &Client,
+    session_id: &str,
+    change_ref: String,
+) -> Result<protocol::changes::DiffPage, protocol::RpcError> {
+    let mut hunks = Vec::new();
+    let mut cursor: Option<Value> = None;
+    loop {
+        let params = json!({
+            "session_id": session_id,
+            "change_ref": change_ref,
+            "cursor": cursor,
+            "max_bytes": 262_144,
+        });
+        let mut page: protocol::changes::DiffPage = client
+            .call::<Value, protocol::changes::DiffPage>(
+                protocol::METHOD_CHANGES_DIFF,
+                &params,
+                false,
+            )
+            .await?;
+        cursor.clone_from(&page.next_cursor);
+        hunks.append(&mut page.hunks);
+        if cursor.is_none() {
+            page.hunks = hunks;
+            return Ok(page);
+        }
+    }
+}
+
+/// Fetches workspace paths for the `@` picker: one recursive `workspace.files`
+/// page filtered by the current query, capped by the Agent's own limits.
+pub fn list_files(client: Arc<Client>, tx: Tx, session_id: String, query: String) {
+    tokio::spawn(async move {
+        let params = json!({
+            "session_id": session_id,
+            "recursive": true,
+            "query": query,
+            "limit": 500,
+            "max_bytes": 262_144,
+        });
+        let result: Result<protocol::FilesPage, _> = client
+            .call::<Value, protocol::FilesPage>(protocol::METHOD_WORKSPACE_FILES, &params, false)
+            .await;
+        post(
+            &tx,
+            Some(&session_id),
+            OpKind::Files(result.map(|page| {
+                page.entries
+                    .into_iter()
+                    .filter(|entry| entry.kind == protocol::FileKind::File)
+                    .map(|entry| entry.path)
+                    .collect()
+            })),
+        );
+    });
+}
 
 pub fn read_tool(client: Arc<Client>, tx: Tx, key: ToolRef) {
     tokio::spawn(async move {
