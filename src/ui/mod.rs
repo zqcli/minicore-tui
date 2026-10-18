@@ -2,6 +2,12 @@
 //! domain state; the only thing it owns is the layout cache.
 
 pub mod files;
+pub mod panel;
+pub mod picker;
+pub mod selection;
+pub mod sheets;
+pub mod views;
+pub mod wrap;
 
 use ratatui::Frame;
 
