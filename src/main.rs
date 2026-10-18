@@ -85,6 +85,11 @@ async fn run() -> i32 {
     };
 
     let mut app = App::new(client.clone(), msg_tx.clone(), workspace.clone());
+    app.launch = minicore_tui::app::LaunchSettings {
+        profile: args.profile.clone(),
+        model: args.model.clone(),
+        reasoning: args.reasoning,
+    };
     app.theme = theme;
     app.palette = Palette::for_kind(theme);
 
@@ -98,21 +103,25 @@ async fn run() -> i32 {
     let mut next_frame = tokio::time::Instant::now();
     let mut next_tick = tokio::time::Instant::now() + TICK;
     let mut open_selection = (args.session.clone(), args.continue_recent);
+    // A closed agent stays a closed agent: the channel is drained once and then
+    // left alone, so a `biased` select cannot spin on a permanently ready read.
+    let mut agent_open = true;
 
     loop {
         let tick_due = app.wants_tick();
         tokio::select! {
             biased;
-            incoming = incoming_rx.recv() => match incoming {
+            incoming = incoming_rx.recv(), if agent_open => match incoming {
                 Some(Incoming::Event(event)) => {
                     app.on_msg(Msg::Agent(event));
                     dirty = true;
                 }
                 Some(Incoming::Closed { status }) => {
                     app.on_msg(Msg::AgentClosed(status.unwrap_or_else(|| "agent closed".into())));
+                    agent_open = false;
                     dirty = true;
                 }
-                None => {}
+                None => agent_open = false,
             },
             message = msg_rx.recv() => {
                 if let Some(message) = message {
@@ -154,7 +163,31 @@ async fn run() -> i32 {
                 next_tick = tokio::time::Instant::now() + TICK;
                 dirty = true;
             }
-            _ = tokio::time::sleep_until(next_frame) => {}
+            // Frame pacing exists to wait out the rest of a frame, never to
+            // block an idle loop: with nothing to draw this branch must not be
+            // armed, or an already-expired deadline would spin the loop.
+            _ = tokio::time::sleep_until(next_frame), if dirty => {}
+        }
+
+        // Ctrl+G delegates the draft to an external editor. The terminal is the
+        // loop's, so the reducer only files the request.
+        if let Some(draft) = app.take_edit_request() {
+            let result = match app.editor_command() {
+                Ok(command) => {
+                    minicore_tui::editor::edit_in_terminal(&mut guard, &command, &draft).await
+                }
+                Err(error) => Err(error),
+            };
+            let edited = match result {
+                Ok(text) => text,
+                Err(error) => {
+                    app.notice(minicore_tui::transcript::NoticeLevel::Error, error);
+                    // A failed editor must not cost the user what they typed.
+                    Some(draft)
+                }
+            };
+            app.on_msg(Msg::DraftEdited(edited));
+            dirty = true;
         }
 
         // An open session request from the CLI is applied once, after bootstrap.
@@ -175,7 +208,7 @@ async fn run() -> i32 {
             dirty = true;
         }
 
-        if dirty && tokio::time::Instant::now() >= next_frame {
+        if dirty && guard.is_active() && tokio::time::Instant::now() >= next_frame {
             if let Err(error) = guard
                 .terminal()
                 .draw(|frame| minicore_tui::ui::draw(frame, &mut app))

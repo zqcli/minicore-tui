@@ -125,8 +125,7 @@ fn conversation(app: &mut App) {
         usage: Default::default(),
         changes: Some(ChangeSummary {
             files: 2,
-            added: 40,
-            removed: 7,
+            lines: Some((40, 7)),
         }),
     });
 }

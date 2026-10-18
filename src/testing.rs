@@ -31,6 +31,10 @@ struct Reply {
     hold: Option<Arc<Hold>>,
 }
 
+/// Reads are paged, so one method can need a different answer per call: the
+/// probe asks with `limit:1`, the page asks for a window.
+type Replies = std::collections::VecDeque<Reply>;
+
 /// A gate a deferred answer waits behind. Releasing it lets every waiter go.
 #[derive(Default)]
 struct Hold {
@@ -66,6 +70,8 @@ pub struct FakeAgent {
     pub client: Arc<Client>,
     calls: Arc<Mutex<Vec<Served>>>,
     script: Script,
+    /// Per-call answers for a method that is asked more than once.
+    sequences: Arc<Mutex<HashMap<String, Replies>>>,
     /// Frames the fake pushes to the client (events, and unreadable input).
     /// Taken on drop to close the pipe.
     outbox: Option<mpsc::UnboundedSender<Vec<u8>>>,
@@ -121,9 +127,11 @@ impl FakeAgent {
             }
         });
         let replies = outbox.clone();
+        let sequences = Arc::new(Mutex::new(HashMap::<String, Replies>::new()));
         let reader_task = {
             let calls = calls.clone();
             let script = script.clone();
+            let sequences = sequences.clone();
             tokio::spawn(async move {
                 let mut reader = BufReader::new(agent_reader);
                 let mut line = String::new();
@@ -141,12 +149,20 @@ impl FakeAgent {
                         method: method.clone(),
                         params: request["params"].clone(),
                     });
-                    let reply = script
-                        .lock()
-                        .unwrap()
-                        .get(&method)
-                        .cloned()
-                        .unwrap_or_else(|| Reply::result(json!({})));
+                    let reply = {
+                        let mut sequences = sequences.lock().unwrap();
+                        let from_sequence = sequences
+                            .get_mut(&method)
+                            .and_then(|queue| queue.pop_front());
+                        from_sequence.unwrap_or_else(|| {
+                            script
+                                .lock()
+                                .unwrap()
+                                .get(&method)
+                                .cloned()
+                                .unwrap_or_else(|| Reply::result(json!({})))
+                        })
+                    };
                     let mut frame = json!({"jsonrpc": "2.0", "id": request["id"]});
                     if let Value::Object(fields) = reply.frame {
                         for (key, value) in fields {
@@ -178,6 +194,7 @@ impl FakeAgent {
                 client,
                 calls,
                 script,
+                sequences,
                 outbox: Some(outbox),
                 responder,
             },
@@ -229,6 +246,17 @@ impl FakeAgent {
 
     /// Sets a result that arrives after `delay`, like a deferred call
     /// (`turn.wait`) or a slow read.
+    /// Answers `method` with each result in turn, one per call, then falls back
+    /// to the plain script. Paged reads need this: the probe and the page ask
+    /// the same method with different cursors.
+    pub fn script_sequence(&self, method: &str, results: Vec<Value>) {
+        let queue: Replies = results.into_iter().map(Reply::result).collect();
+        self.sequences
+            .lock()
+            .unwrap()
+            .insert(method.to_owned(), queue);
+    }
+
     pub fn script_later(&self, method: &str, result: Value, delay: Duration) {
         self.script.lock().unwrap().insert(
             method.to_owned(),
@@ -316,6 +344,20 @@ pub fn turn(loop_id: &str) -> Value {
 
 /// A `session.read` result: `total` items, the first `first_item` covered by a
 /// compaction summary.
+/// One history chunk as the Agent frames it: the item JSON lives in `data`, and
+/// a small item is a single complete chunk.
+pub fn chunk(index: usize, item: Value) -> Value {
+    let data = json!({"item": item}).to_string();
+    json!({
+        "index": index,
+        "offset": 0,
+        "total_bytes": data.len(),
+        "encoding": "utf8_json",
+        "data": data,
+        "complete": true,
+    })
+}
+
 pub fn display_read(total: usize, first_item: usize) -> Value {
     json!({
         "session": session_info("s1"),

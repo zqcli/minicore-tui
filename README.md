@@ -1,273 +1,206 @@
 # minicore-tui
 
-`minicore-tui` is an independent Rust terminal frontend for
-[`minicore-agent`]. It owns the fullscreen terminal UI and communicates with
-one Agent child process exclusively through stdio NDJSON JSON-RPC. It does not
-link the `minicore-agent` or `minicore-runtime` Rust crates.
+`minicore-tui` is the terminal frontend for [`minicore-agent`]. It owns one
+fullscreen "rail" UI — transcript, status line, composer, footer — and talks to
+a single Agent child process over stdio NDJSON JSON-RPC. It does not link the
+`minicore-agent` or `minicore-runtime` crates.
 
-The visual hierarchy and interaction style are inspired by Pi's fullscreen
-coding-agent TUI: a scrollable transcript, a fixed dock, compact status,
-composer, selectors, and overlays. This is not a Pi fork. It contains no Pi
-source code, logo, or brand assets.
+Version 0.4.0 is a rewrite of the frontend against Agent 0.7.0 (Protocol v1).
+The redesign targets long, large coding sessions: a turn ends exactly when the
+Agent's authoritative `turn.wait` resolves, streaming renders incrementally, the
+transcript is cached per block, and scrolling stays anchored to what you are
+reading. The UI is English-only with one visual system for every surface.
 
-## Install And Build
+## Requirements
 
-Requirements:
+- Rust 1.88 or newer (edition 2024; `rust-version` in `Cargo.toml`);
+- a `minicore-agent` 0.7.0 executable (or `--agent <path>`) with an Agent TOML
+  configuration;
+- a terminal with an alternate screen, raw mode and bracketed paste.
 
-- Rust 1.85.0 or newer;
-- a supported terminal on Linux, macOS, or Windows;
-- a compatible `minicore-agent` executable and Agent configuration.
-
-Build the locked release locally:
+## Build
 
 ```bash
 cargo build --locked --release
 ```
 
-The resulting binary is `target/release/minicore-tui` (or the platform
-executable equivalent). The package is one Cargo package, uses Edition 2024,
+The binary is `target/release/minicore-tui`. The package uses Rust edition 2024
 and forbids unsafe code.
 
-Since 0.2.7, Debug builds use `opt-level=1` for this package and level 2 for
-dependencies. Debug information and assertions remain enabled, but optimization
-can affect stepping and local-variable visibility. Terminal output batches small
-ANSI writes through a 64 KiB buffer; render rates are unchanged. The Release
-profile is unchanged. The current release line is **0.3.0**, paired with Agent
-**0.6.2** and Runtime **0.6.1** over Protocol v1; the fixed revisions are
-listed in [the backend contract](docs/backend.md). The older 0.2.x release
-notes remain historical and are not evidence for this release.
-
-For a macOS x86_64 cross-build, put LLVM's `clang` and `ld64.lld` on `PATH`,
-set `SDKROOT` to a macOS SDK, and run `scripts/build-macos-x86_64.sh`.
-The script uses Rust 1.85, fixes `MACOSX_DEPLOYMENT_TARGET=11.0`, clears external
-Cargo/Rust flag and target-directory overrides, and prints the ad-hoc-signed
-artifact path `target/x86_64-apple-darwin/release/minicore-tui`. Verify it with
-`scripts/verify-macos-binary.sh`; its `--self-test` mode provides portable parser
-checks. LLVM 19 was verified in 0.2.7; the previous Zig 0.13 link path failed a
-native standalone `catch_unwind` probe and is no longer used.
-
-## Usage
-
-A run requires `--agent-config`; `--help` and `--version` work without it.
-The TUI starts the child before entering the alternate screen, so missing
-configuration or spawn failures remain ordinary terminal errors.
+## Run
 
 ```bash
-minicore-tui \
-  --agent-bin minicore-agent \
-  --agent-config ./agent.toml \
-  --workspace .
+minicore-tui --agent minicore-agent --config ./agent.toml --workspace ./project
 ```
 
-For a release checkout without installing the binary:
-
-```bash
-cargo run --locked -- \
-  --agent-config ./agent.toml \
-  --workspace ./project \
-  --profile coding \
-  --model deep \
-  --reasoning high \
-  --theme dark
-```
-
-Startup opens a prompt immediately and creates one local session using the Agent's
-configured default profile, model, and reasoning. It does not call a model until
-you submit a message. Explicit `--profile`, `--model`, and `--reasoning` override
-only those fields; `--session` and `--continue` take precedence over creation.
-You can type while creation finishes; your draft and editing history are kept.
-Use `/new form` or `Ctrl+N` when you want the advanced session setup form.
-A new session's welcome/version block remains at the start of its conversation
-and scrolls naturally above later messages.
-
-Tool cards start folded, including short or still-unknown output. Click a card
-or press `Ctrl+O` to expand it explicitly. Folded Bash keeps its last five visual
-output rows; folded `write` keeps the first ten logical input lines, including
-after completion and when reopening retained history. Other folded success
-cards keep their compact summary. A visible restored write card may make one
-bounded, read-only display request to recover that preview; it does not execute
-the tool or page through output until expanded. The older Rail parity reports'
-20-line automatic-expansion policy is historical and no longer applies.
+Startup spawns the Agent before entering the alternate screen, so a missing
+binary or rejected configuration stays an ordinary terminal error. The TUI then
+opens a session and waits for the first message; it does not call a model until
+you submit one. A draft typed during startup is kept.
 
 ### CLI
 
 | Option | Meaning |
 |---|---|
-| `--config <PATH>` | Local TUI preferences; Agent credentials/catalogs are never loaded from it. |
-| `--agent-bin <PATH>` | Agent executable; defaults to `minicore-agent` on `PATH`. |
-| `--agent-config <PATH>` | Agent TOML configuration; required in run mode unless supplied by `--config`. |
-| `--workspace <PATH>` | Workspace string used by a new session; defaults to the current directory. |
-| `--continue` | Open the most recent session for the current workspace without prompting. |
-| `--session <ID>` | Open this exact session ID without guessing. |
+| `--agent <PATH>` | Agent executable. Defaults to `minicore-agent` on `PATH`. |
+| `--config <PATH>` | Agent TOML configuration. May also come from `agent_config` in the TUI config file. |
+| `--workspace <DIR>` | Workspace passed to a new session. Defaults to the current directory. |
+| `--session <ID>` | Open this exact session. |
+| `--continue` | Open the most recent session for the workspace. |
 | `--profile <ID>` | Default profile for a new session. |
 | `--model <ID>` | Default model for a new session. |
-| `--reasoning <LEVEL>` | `auto`, `disabled`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; default is Agent/profile selection. |
-| `--theme <dark\|light>` | Built-in palette; default is `dark`. |
-| `--debug` | Write a bounded local temporary log (200 lines, 4096 bytes/line) with request metadata (method, id, byte count, duration); never message or tool content. |
-| `--help`, `-h` | Print usage and exit. |
-| `--version`, `-V` | Print the TUI version and exit. |
+| `--reasoning <LEVEL>` | Default reasoning: `auto`, `disabled`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. |
+| `--theme <dark\|light>` | Palette for this run. |
+| `-h`, `--help` | Print usage. |
+| `-V`, `--version` | Print the version. |
 
-The TUI passes the Agent config path to `minicore-agent --config <path>
---stdio`. The Agent configuration owns provider URLs, credentials, profiles,
-models, tools, and `data_dir`; the TUI never reads those files or calls a
-provider directly. Keep one Agent process per `data_dir`; the Agent store does
-not provide a cross-process lock.
+`--session` and `--continue` take precedence over creating a session. Explicit
+`--profile`, `--model` and `--reasoning` override only those fields.
 
-## Sessions And Turns
+### TUI config
 
-Startup discovers the Agent, models, profiles, and sessions. `/new` quickly
-creates a session using the current defaults; `/new form` opens the advanced
-new-session form. `/resume` and `/sessions` open the existing-session selector. Workspace, profile, model, and reasoning are sent to
-`session.create` as appropriate.
+`~/.config/minicore-tui/config.toml` (or `$MINICORE_TUI_CONFIG`) holds local
+preferences only — never Agent credentials or provider catalogs:
 
-A session title is edited from the Session panel through `session.rename`; the
-TUI waits for the complete acknowledgement and never optimistically changes
-metadata. A session's model and reasoning can be updated with `session.update`;
-an active loop observes the new setting only at a later request boundary. Model A,
-tool work, and model B therefore remain separate request views. A turn sends
-`turn.send` and registers `turn.wait` immediately. If submitted while a loop
-is running, the composer routes the text to `turn.steer`. Agent events are
-best-effort live display data and may be dropped. `turn.wait`, `session.state`,
-and the paged `session.read` path are authoritative; `session.history` remains a
-compatibility/diagnostic method and is not the application history path.
+```toml
+agent = "minicore-agent"
+agent_config = "/path/to/agent.toml"
+theme = "dark"
+editor = "vim"
+```
 
-Durable turn history remains append-only. The Agent may summarize settled
-context before the first request or between completed assistant/tool exchanges,
-and may run independent post-turn compaction after successful persistence.
-`/compact` is idle-only. Request-boundary preparation belongs to the active turn;
-independent compaction has its own exact cancellation identity. The TUI observes
-these states and never runs summary policy or retries a prompt itself. Unsent steering text remains paused after
-a turn ends until explicitly retrieved into the composer.
+Command-line values take precedence. `/theme` writes the chosen palette back to
+this file. `Ctrl+G` opens `editor` from this file, falling back to `$VISUAL`
+then `$EDITOR`; there is no separate environment variable for it.
 
-Tools run automatically under the Agent. Bash is not sandboxed. The TUI supports
-mid-turn steering via `turn.steer`. Model-issued Bash commands show bounded live
-stdout/stderr previews. It does not add approval, interactive Bash PTY output,
-MCP, plugins, skills, subagents, session branching, or reconnect/restart behavior.
+## Screen
 
-## Keys And Commands
+```text
+ transcript (scrollable, pi-style rail)
+ …
+ ⠋ Thinking · 1m12s · request 7 · 12 tools · esc to interrupt
+ ↳ steer · focus on the parser first
+▎ composer (1–10 rows, grows with the draft)
+ minicore-tui@main · gpt-6-luna · max · ● working      ↑50.5k ↓1.8k · ctx 41%
+```
 
-The complete current keymap and slash-command semantics are in
-[docs/keybindings.md](docs/keybindings.md). The short list is:
+The status line appears only while a turn is busy and names the current phase:
+`Thinking`, `Writing`, `Running <tool> <detail>`, `Waiting for approval`,
+`Compacting context`, `Interrupting`, or `Waiting for compaction`. It always
+shows the elapsed turn time and the interrupt key.
 
-- `F1` opens Help; if your terminal intercepts `F1`, enter `/help` in the Composer instead;
-- `Ctrl+R` opens Sessions, `Ctrl+N` opens New Session, `Ctrl+L` opens Model, and `Shift+Tab` opens Reasoning;
-- In Sessions, `F2` renames, `F5` refreshes, `Ctrl+W` closes, and `Delete`/`Ctrl+D` deletes after the required confirmations;
-- `Ctrl+G` in Composer edits the current draft with the configured external editor; a read-only session keeps its explicit Continue action; `/editor` starts a blank draft;
-- `Ctrl+T` shows/hides reasoning and `Ctrl+O` expands/collapses tool previews, visible reasoning and compaction summaries;
-- `PageUp`/`PageDown` scroll with four rows of overlap; `Ctrl+Home`/`Ctrl+End` jump to the transcript ends;
-- mouse wheel moves one row, or five with Alt; the Pi-style scrollbar appears on scrolling/hover, supports live dragging, and hides after one second;
-- the bottom scroll-status hint overlays the transcript without consuming a row; see [scrollbar verification](docs/verification/scrollbar/README.md);
-- `Esc` closes a dock or cancels the exact running turn;
-- `Ctrl+C` clears non-empty input, then double-presses to quit; `/cancel` cancels the exact active loop, `/reload` reloads Agent configuration and safe read-only state, and `/quit` performs normal shutdown.
+The footer shows the workspace directory and git branch, the session title, the
+model and reasoning level, a state dot, token totals and the context percentage
+(`?` while unknown). The branch is `—` until the first `workspace.status` answer
+arrives: `session.presentation` only caches it, and the TUI refreshes that query
+on session open and when the workspace changed on disk at turn end, never on
+every frame. Notices appear on one line under the status line; info notices hide
+after a few seconds, errors stay until the next key press.
 
-The `/` menu shows one compact row per object: Model, Reasoning, Session,
-Workspace, Conversation and App, with an action or value dropdown. Search
-narrows these rows; `/ren` shows Session with `rename` selected. Enter opens a
-selected object's choices; Enter activates a selected action or value. Actions
-that need more input open their form or leave an editable argument draft. Tab
-only fills text. Ctrl+Space explicitly opens the chooser for an existing command
-or value. Esc clears a chooser filter, then returns to its parent; Esc at the
-root hides the menu without changing the draft or cancelling a turn.
-Direct aliases such as `/new` and `/files`, and qualified commands such as
-`/session list`, still execute normally. For `/model <id>` and
-`/reasoning <level>`, editor Enter validates what you typed without substituting
-a suggestion; Tab explicitly fills one. Model IDs are case-sensitive; supported
-reasoning names are case-insensitive. An empty argument opens the chooser.
+## Conversation
 
-Implemented local commands include `/new`, `/resume`, `/sessions`, `/model`,
-`/reasoning`, `/theme`, `/clear`, `/help`, `/logs`, `/cancel`, `/reload`,
-`/quit`, `/close`, `/delete`, `/rename`, `/tool`, `/files`, `/grep`, `/diff`,
-`/context`, `/compact`, `/refresh`, `/search`, `/prev`, `/next`, `/latest`,
-`/copy`, `/export`, `/settings`, and `/editor`. Unknown commands never reach
-the Agent. `/reload` sends empty `agent.reload` params, refreshes safe
-catalog/session reads and rereads a retained turn result once without duplicating
-an existing wait or replaying execution.
+- **User** messages are a tinted card with a blue rail.
+- **Assistant** answers render Markdown as they stream, at a one-column inset.
+  Reasoning appears above the answer on a purple rail, folded while streaming
+  and collapsed to `Thought for 42s` when finished.
+- **Tool cards** start folded: status glyph, tool name, target, duration and
+  exit code. Bash shows its last output lines live, edits show the start of the
+  diff, `read` shows its line count. After a reload a bash card shows its line
+  count and opens the full output on demand instead of replaying the tail.
+  `Ctrl+O` expands or collapses all cards, and clicking one toggles it.
+- **Turn end** is one dim line with outcome, duration, request and tool counts,
+  and the change summary when the turn touched files. A failed or cancelled
+  turn shows its reason.
+- **Compaction** inserts a one-line marker; the summary is available from it.
+  Content that is already loaded is never removed from the transcript.
 
-### Conversation display
+## Turns, steering, compaction
 
-User XML/HTML-like text is shown literally and safely instead of disappearing.
-Markdown replies render while streaming and support tables, with labeled cells at
-narrow widths. Live and saved replies share selection geometry. Code copying
-preserves hard newlines without including code frames or soft-wrap breaks. Table
-copying keeps cells in source order without grid borders, repeated narrow labels,
-or newlines introduced only by wrapping a cell.
+Enter sends while the session is idle. While a turn is running, Enter steers it
+and `Alt+Enter` queues a follow-up that is sent after the turn ends. The queue
+is shown above the composer; `Alt+Up` takes the last queued message back into
+the composer. If the Agent is still busy with post-turn compaction, a new
+message waits in the queue and the status line says `Waiting for compaction`.
 
-Collapsed tool cards retain the action, target, execution status and a short result.
-Loaded historical tool calls retain bounded command/file targets after reopening a session.
-Collapsed Bash cards keep the last five visual rows of the locally available
-output, with an earlier-row hint and explicit partial/unknown facts. Per-tool
-recorded timestamps provide Elapsed while running and Took after completion;
-missing or invalid timestamps do not invent a duration. After a real Bash
-process-start event, a single bounded metadata read can recover a missing
-recorded start without fetching tool output.
-Bash process exit codes remain visible, including a warning for nonzero exits;
-command completion alone does not imply exit zero. Hidden-row counts describe the
-actual display body. Reasoning folds according to its rendered height and completed
-hidden reasoning is labeled separately from active thinking. Expanding old content
-or resizing the terminal does not create a new-output notification.
+`Esc` interrupts a running turn. The turn ends when the Agent reports the
+cancelled outcome. Unsent steering text returns to the queue as a follow-up.
 
-## Backend Contract And Scope
+`/compact` runs manual compaction when the session is idle. Automatic
+compaction by the Agent is shown in the status line and leaves a marker in the
+transcript.
 
-The wire contract is pinned in [docs/rpc-contract.md](docs/rpc-contract.md),
-with the current source and backend revisions in [docs/backend.md](docs/backend.md).
-Historical r2 and E3 verification records remain linked from the acceptance
-matrix. `persisted` acknowledges appending the process's durable items, not
-transaction/fsync/crash durability. A failed append blocks the Session while
-retaining its in-process completion.
+## Keys and commands
 
-- Agent 0.6.2 commit `6f12a22c246ce2689493e359607aa2da9c5cbdde`;
-- Runtime 0.6.1 commit `666d5a15ac08c614ce75dd90337f95f10ec29f80`;
-- TUI 0.3.0 uses the current checkout and fixed-backend CI pins; historical
-  closeout provenance remains in [its report](docs/verification/v03-closeout/README.md);
-- RPC Protocol v1 with the required capability set;
-- NDJSON over stdio, with one TUI writer, one stdout reader, one stderr reader,
-  bounded frames (up to 32 MiB), request IDs, response/event interleaving, and no event replay.
+The full map is in [docs/keybindings.md](docs/keybindings.md). The essentials:
 
-The Agent executes native stateless `subagent` single/parallel/chain calls;
-the TUI displays their ordinary Tool results. Persistent subagent orchestration,
-manager/tree UI, approval UI, interactive Bash/PTY output, MCP, plugins, skills,
-remote agents and image input remain outside this delivery. The TUI supports
-bounded tool details, workspace file/search and preview views, read-only Changes/
-Diff and Context views, local settings, and a direct external-editor draft
-workflow. OSC52 copy remains outside the release boundary.
+- `Enter` send/steer, `Alt+Enter` newline or queued follow-up, `Esc` close or
+  interrupt, `Ctrl+C` clear / quit, `Ctrl+D` quit;
+- `Ctrl+R` sessions, `Ctrl+L` models, `Shift+Tab` reasoning, `Ctrl+O` tool
+  cards, `Ctrl+T` reasoning, `Ctrl+F` find, `F1` help;
+- `PageUp`/`PageDown`, `Ctrl+Home`/`Ctrl+End`, the wheel and `Ctrl+↑`/`Ctrl+↓`
+  navigate the transcript;
+- `/` opens the command palette and `@` the workspace file picker;
+- commands: `/new`, `/sessions` (`/resume`), `/rename`, `/model`, `/reasoning`,
+  `/compact`, `/diff`, `/context`, `/copy`, `/export`, `/theme`, `/reload`,
+  `/help`, `/quit`.
 
-## Platform And Troubleshooting
+## Views
 
-The intended platform matrix is Linux, macOS, and Windows with Rust 1.85+.
-The terminal uses Crossterm alternate-screen/raw mode, bracketed paste, mouse
-capture, and a real hardware cursor. A small terminal shows a safe-size hint.
-Terminal restoration is attempted on normal, error, child-exit, shutdown-timeout,
-and panic paths.
+A bottom sheet above the composer hosts pickers and approval prompts. The diff,
+tool-output, context and help views replace the transcript area and keep the
+footer; `Esc` returns.
 
-Common errors:
+The diff view lists changed files next to a colored unified diff and toggles
+its scope (turn, session, workspace). The tool view shows a tool's full output
+and its input. The context view explains the context budget, the last
+compaction and what the summary covers. The help view lists keys and commands.
 
-- **`--agent-config` is required**: supply the Agent TOML path; help/version do not need it.
-- **Agent executable not found**: set `--agent-bin` or put `minicore-agent` on `PATH`.
-- **Bootstrap failed**: inspect the Agent config/profile/model and the Help/Logs panel; the TUI does not auto-retry.
-- **Session waiting for unsupported interaction**: use an Agent profile with automatic tool behavior; this TUI has no approval UI.
-- **`Disconnected` or a fatal overlay**: the child or RPC stream ended; press `q` after reviewing the safe status/log tail.
-- **Terminal too small**: enlarge it to at least 60×16.
-- **Another Agent already uses the data directory**: stop the other Agent process before retrying.
+## Copy and export
+
+Drag in the transcript to copy the selection (native clipboard, OSC 52
+fallback). `/copy` copies the last assistant answer as Markdown. `/export
+[path]` writes the whole conversation as Markdown, defaulting to
+`./minicore-<session>-<date>.md`.
+
+## Backend contract
+
+- `minicore-agent` 0.7.0 (`4102719`), Protocol v1, with the capabilities the TUI
+  uses: `session.read`, `session.read.display`, `tool.read`, `tool.read.display`,
+  `tool.output`, `turn.result`, `session.context`, `session.presentation`,
+  `workspace.status`, `workspace.files`, `workspace.search`, `changes.list`,
+  `changes.diff`. These are entries in the Agent's advertised capability list;
+  the handshake checks the list, not method names.
+- `minicore-runtime` 0.7.0 (`b93aea3`) is linked by the Agent, not by the TUI.
+- One Agent process per data directory. The TUI never reads the Agent store,
+  workspace files, provider configuration or credentials.
+- Shutdown sends `agent.shutdown`, waits briefly, then terminates the child.
+- The Agent executes tools; the TUI adds no permission layer beyond the profile
+  the Agent configuration selects.
+
+## Troubleshooting
+
+- **Agent not found** — set `--agent` or put `minicore-agent` on `PATH`.
+- **Fatal screen** — the Agent exited or the protocol failed. The screen shows
+  the reason, exit status and the last lines of Agent stderr; `q` quits.
+- **`session_busy`** — a post-turn compaction is still running. Keep the draft;
+  it is queued and sent when the session is idle.
+- **`invalid_state` on a history read** — the TUI repeats the read once with a
+  fresh probe. If it persists, reopen the session.
 
 ## Testing
 
-The default suite is offline and uses protocol fixtures, a production-driven
-fake Agent harness, app-flow tests, TestBackend snapshots, and terminal
-lifecycle tests. See [docs/testing.md](docs/testing.md) for the Rust 1.85/stable
-commands, snapshot inventory, platform matrix, and E2E procedure. The current
-refactor matrix is [docs/refactor-acceptance.md](docs/refactor-acceptance.md);
-[docs/acceptance.md](docs/acceptance.md) is the historical v0.2 migration matrix.
+```bash
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test --locked
+```
 
-A real-Agent E2E is ignored by default and must use the pinned Agent binary plus
-a loopback mock endpoint; it does not require or permit access to a real
-provider. See [the closeout report](docs/verification/v03-closeout/README.md)
-for exact-source remote Rust 1.85/stable quality gates, pinned-backend E2E,
-performance, Linux kernel-PTY and hosted CI evidence. Linux PTY checks are not
-manual iTerm2/IME or native desktop clipboard acceptance; mock-provider checks
-are not real-provider acceptance. The earlier 830-test, 34-E2E F-review results
-remain [historical evidence](docs/verification/v03-f/README.md), not results for
-the current source. Do not put secrets or real user data in fixtures, logs,
-E2E config, or snapshots.
+The suite covers pure logic (wrapping, markdown and its incremental path,
+composer editing, chunk assembly, event application, scroll anchoring, layout
+caching), `TestBackend` render snapshots for the main screen states, and one
+fake-Agent process test that drives startup, send, stream, wait and turn end
+over the real transport. Real-model end-to-end runs use the external tmux
+harness; they are not part of the default suite.
 
 ## License
 
@@ -275,44 +208,3 @@ Licensed under either the Apache License, Version 2.0 or the MIT license, at
 your option.
 
 [`minicore-agent`]: https://github.com/zqcli/minicore-agent
-
-### Context and usage observations
-
-Context estimates describe the last prepared request and the history tail
-(excluding any summary), not a live total of the current conversation.
-Compaction before/after values are projections, not the latest request; recovery
-before/after values describe full requests. The latest authoritative
-`session.context.last_result` takes precedence over a cached manual result.
-Context reads are one-shot, triggered by relevant events, operation/completion
-responses, known gaps and opening or refreshing the Context view. There is no
-periodic context polling. Existing model-start events refresh cached or in-flight
-automatic-preparation observations with a newer generation; stale snapshots
-cannot restore the Preparing state. Recovery details are a latest-read snapshot rather
-than a live status; use F5/Refresh in Context to update them. If a final best-effort
-compaction event is lost and the session stays silent, the next trigger or
-explicit refresh is needed to discover the result.
-Newer Agents identify manual/automatic origin explicitly; older automatic IDs
-use the reserved `auto-` prefix, while unrecognized origins remain unknown.
-
-The conversation shows the Agent's actual latest display summary as a purple-rail
-card, collapsed to one content line by default. Click toggles only that summary;
-`Ctrl+O` toggles it together with tool/reasoning details. A new display projection
-starts collapsed, including when the raw archive revision is unchanged.
-Successful compaction refreshes the existing display-history chain once; result
-metadata never becomes summary text. Past success results no longer stack below
-new turns. Current unknown-write and blocked states remain visible and gated.
-If the read fails, return to the ordinary conversation and use `/refresh` to
-retry history; inside Context or another detail view it refreshes that view.
-Manual `/compact` requires a settled, safe session, but does not require loading
-an unvisited archive prefix. Partial large items and pending reconciliations
-still block admission; the Agent retains compaction policy and authority.
-A local context-budget failure shows the Agent's estimate and input budget when
-available, with `/compact` or a larger-context model as recovery options.
-
-Usage fields keep the Agent/Runtime normalization: input excludes cache reads
-and writes; output excludes reasoning; reasoning, cache counts and provider total
-remain separate fields. Provider total is not recomputed from displayed counts.
-Missing fields stay unknown, including cache writes; they do not become zero.
-Restored history and persisted loop totals replace overlapping request evidence
-instead of counting it twice. Compaction utility usage is separate from ordinary
-loop usage. Provider replay data is never rendered as conversation text.

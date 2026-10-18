@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::app::{Action, App, Msg, OpDone, OpKind, Overlay, Scroll};
 use crate::protocol::read::UserKind;
@@ -126,7 +126,10 @@ async fn a_turn_streams_through_to_its_turn_end_line() {
             "completed_at": "2024-01-01T00:00:09Z",
         }),
     );
-    fake.script("changes.list", json!({"changes": [], "count": 0}));
+    fake.script(
+        "changes.list",
+        json!({"records": [], "total": 0, "complete": true}),
+    );
 
     crate::app::tasks::bootstrap(fake.client.clone(), tx.clone()).await;
     pump(&mut app, &mut rx, |app| app.ready).await;
@@ -280,7 +283,10 @@ async fn a_gapped_turn_reconciles_against_turn_result() {
             "next_cursor": null,
         }),
     );
-    fake.script("changes.list", json!({"changes": [], "count": 0}));
+    fake.script(
+        "changes.list",
+        json!({"records": [], "total": 0, "complete": true}),
+    );
 
     open(&mut app, &mut rx, &fake, &tx).await;
 
@@ -343,11 +349,82 @@ async fn older_pages_prepend_and_keep_the_anchor_block() {
             .is_some_and(|session| session.loaded_from == 0)
     })
     .await;
+    // Reaching the display floor labels the boundary: the page below it is the
+    // canonical history behind the compaction summary, reached with its own
+    // read rather than another display page.
     let session = app.session.as_ref().unwrap();
-    assert!(!matches!(
-        session.transcript.blocks().first(),
-        Some(Block::EarlierHistory { .. })
-    ));
+    assert_eq!(session.loaded_from, 0);
+    assert!(session.reached_floor);
+}
+
+#[tokio::test]
+async fn reading_below_the_display_floor_uses_a_canonical_read() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    // The display view starts at item 10: everything below it was collapsed
+    // into a compaction summary and is only reachable in the canonical view.
+    fake.script("session.read", display_read(30, 10));
+
+    open(&mut app, &mut rx, &fake, &tx).await;
+    let session = app.session.as_ref().unwrap();
+    assert_eq!(session.first_item, 10);
+    assert_eq!(session.loaded_from, 10);
+    assert_eq!(
+        session.transcript.len(),
+        0,
+        "the display tail is empty here"
+    );
+
+    let canonical = crate::testing::chunk(
+        9,
+        json!({"type": "user", "data": {"loop_id": "l0", "kind": "prompt",
+                                        "input": {"text": "collapsed question"}}}),
+    );
+    fake.script_sequence(
+        "session.read",
+        vec![
+            // The canonical probe learns the raw boundary.
+            json!({
+                "session": session_info("s1"), "items": [], "next_cursor": null,
+                "total": 12, "history_revision": "h2", "captured_end": 1,
+                "projection": {"revision": "p2", "first_item": 0, "covered_item_count": 0},
+            }),
+            json!({
+                "session": session_info("s1"),
+                "items": [canonical], "next_cursor": null, "total": 12,
+                "history_revision": "h2", "captured_end": 1,
+                "projection": {"revision": "p2", "first_item": 0, "covered_item_count": 0},
+            }),
+        ],
+    );
+    app.on_action(Action::LoadOlder);
+    settle(&mut app, &mut rx).await;
+
+    let reads = fake.calls("session.read");
+    assert!(
+        app.session
+            .as_ref()
+            .is_some_and(|session| session.reached_floor),
+        "the display floor was passed"
+    );
+    assert!(
+        reads
+            .iter()
+            .any(|params| params["view"] == json!("canonical")),
+        "a page below the floor is read in the canonical view: {reads:?}"
+    );
+    let session = app.session.as_ref().unwrap();
+    assert!(
+        session
+            .transcript
+            .blocks()
+            .iter()
+            .any(|block| matches!(block, Block::User { text, .. } if text == "collapsed question")),
+        "{:?}",
+        session.transcript.blocks()
+    );
 }
 
 #[tokio::test]
@@ -831,4 +908,506 @@ async fn an_op_for_another_session_is_ignored() {
         ))),
     })));
     assert!(app.last_error.is_none());
+}
+
+/// A turn-scope change list with one record and a countable diff.
+fn one_changed_file() -> Value {
+    json!({
+        "records": [{
+            "change_ref": "tool:abc", "path": "app.py", "kind": "modified",
+            "details_available": true,
+        }],
+        "total": 1,
+        "complete": true,
+    })
+}
+
+fn diff_with(added: usize, removed: usize) -> Value {
+    let mut lines = Vec::new();
+    for index in 0..removed {
+        lines.push(
+            json!({"kind": "removed", "old_index": index, "new_index": index,
+                          "text": "-old", "line_complete": true}),
+        );
+    }
+    for index in 0..added {
+        lines.push(
+            json!({"kind": "added", "old_index": 100 + index, "new_index": index,
+                          "text": "+new", "line_complete": true}),
+        );
+    }
+    json!({
+        "change_ref": "tool:abc", "path": "app.py", "kind": "modified",
+        "availability": "available", "complete": true, "truncated": false,
+        "hunks": [{"old_start": 1, "old_count": removed, "new_start": 1,
+                   "new_count": added, "lines": lines}],
+        "next_cursor": null,
+    })
+}
+
+#[tokio::test]
+async fn the_turn_end_line_counts_real_added_and_removed_lines() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    fake.script(
+        "turn.wait",
+        json!({"turn": turn("l1"), "outcome": {"type": "completed"}}),
+    );
+    fake.script("changes.list", one_changed_file());
+    fake.script("changes.diff", diff_with(40, 7));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.composer.set_text("change it");
+    app.on_action(Action::Submit);
+    settle(&mut app, &mut rx).await;
+
+    let summary = app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .blocks()
+        .iter()
+        .find_map(|block| match block {
+            Block::TurnEnd { changes, .. } => *changes,
+            _ => None,
+        })
+        .expect("the turn has a change summary");
+    assert_eq!(summary.files, 1);
+    assert_eq!(summary.lines, Some((40, 7)));
+    let line = crate::app::turn_end_line(
+        &crate::protocol::LoopOutcome::Completed,
+        None,
+        1,
+        0,
+        Some(&summary),
+    );
+    assert!(line.contains("1 file changed (+40 −7)"), "{line}");
+}
+
+#[tokio::test]
+async fn an_unknown_line_count_is_reported_rather_than_as_zero() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    fake.script(
+        "turn.wait",
+        json!({"turn": turn("l1"), "outcome": {"type": "completed"}}),
+    );
+    // The record exists but its body is gone: the file count is known and the
+    // line counts are not.
+    fake.script(
+        "changes.list",
+        json!({
+            "records": [{"change_ref": "tool:gone", "path": "app.py",
+                         "kind": "modified", "details_available": false}],
+            "total": 1,
+        }),
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.composer.set_text("change it");
+    app.on_action(Action::Submit);
+    settle(&mut app, &mut rx).await;
+
+    let summary = app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .blocks()
+        .iter()
+        .find_map(|block| match block {
+            Block::TurnEnd { changes, .. } => *changes,
+            _ => None,
+        })
+        .expect("the turn has a change summary");
+    assert_eq!(summary.files, 1);
+    assert_eq!(summary.lines, None, "an unavailable diff has no count");
+    let line = crate::app::turn_end_line(
+        &crate::protocol::LoopOutcome::Completed,
+        None,
+        1,
+        0,
+        Some(&summary),
+    );
+    assert!(line.contains("1 file changed"), "{line}");
+    assert!(
+        !line.contains("+0 −0"),
+        "unknown counts are never printed: {line}"
+    );
+    assert!(!line.contains("(+"), "{line}");
+}
+
+#[tokio::test]
+async fn three_tool_calls_on_one_file_report_one_file_and_summed_lines() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    fake.script(
+        "turn.wait",
+        json!({"turn": turn("l1"), "outcome": {"type": "completed"}}),
+    );
+    // write + edit + apply_patch on one path: three records, one file.
+    fake.script(
+        "changes.list",
+        json!({
+            "records": [
+                {"change_ref": "tool:w", "path": "app.py", "details_available": true},
+                {"change_ref": "tool:e", "path": "app.py", "details_available": true},
+                {"change_ref": "tool:p", "path": "app.py", "details_available": true},
+            ],
+            "total": 3,
+        }),
+    );
+    fake.script("changes.diff", diff_with(2, 1));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.composer.set_text("change it");
+    app.on_action(Action::Submit);
+    settle(&mut app, &mut rx).await;
+
+    let summary = app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .blocks()
+        .iter()
+        .find_map(|block| match block {
+            Block::TurnEnd { changes, .. } => *changes,
+            _ => None,
+        })
+        .expect("the turn has a change summary");
+    assert_eq!(summary.files, 1, "one path, three calls");
+    assert_eq!(
+        summary.lines,
+        Some((6, 3)),
+        "each record's diff is counted on its own"
+    );
+}
+
+#[tokio::test]
+async fn a_new_session_leaves_the_profile_to_the_agent_default() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    // The catalog sorts profiles by id, so `profiles.first()` is not the
+    // configured default; a new session must not name one at all.
+    fake.script(
+        "profile.list",
+        json!({"profiles": [
+            {"id": "ask", "model": "mock", "reasoning": "medium"},
+            {"id": "coding", "model": "mock", "reasoning": "medium"},
+        ]}),
+    );
+    fake.script("session.create", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    crate::app::tasks::bootstrap(fake.client.clone(), tx.clone()).await;
+    pump(&mut app, &mut rx, |app| app.ready).await;
+    app.on_action(Action::NewSession);
+    pump(&mut app, &mut rx, |app| app.session.is_some()).await;
+
+    let create = fake
+        .calls("session.create")
+        .into_iter()
+        .next()
+        .expect("a session was created");
+    assert_eq!(
+        create["workspace"],
+        json!(app.workspace.display().to_string())
+    );
+    assert!(
+        create.get("profile").is_none(),
+        "no profile means the Agent's configured default: {create}"
+    );
+}
+
+#[tokio::test]
+async fn launch_flags_reach_the_new_session() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    app.launch = crate::app::LaunchSettings {
+        profile: Some("coding".into()),
+        model: Some("deep".into()),
+        reasoning: Some(crate::protocol::Reasoning::High),
+    };
+    fake.script("session.create", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    crate::app::tasks::bootstrap(fake.client.clone(), tx.clone()).await;
+    pump(&mut app, &mut rx, |app| app.ready).await;
+    app.on_action(Action::NewSession);
+    pump(&mut app, &mut rx, |app| app.session.is_some()).await;
+
+    let create = fake
+        .calls("session.create")
+        .into_iter()
+        .next()
+        .expect("a session was created");
+    assert_eq!(create["profile"], json!("coding"));
+    assert_eq!(create["model"], json!("deep"));
+    assert_eq!(create["reasoning"], json!("high"));
+}
+
+#[tokio::test]
+async fn launch_flags_apply_to_an_opened_session_through_session_update() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    app.launch = crate::app::LaunchSettings {
+        profile: None,
+        model: Some("deep".into()),
+        reasoning: Some(crate::protocol::Reasoning::Max),
+    };
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script(
+        "session.update",
+        json!({"session": {"session_id": "s1", "model": "deep", "reasoning": "max"},
+               "active_revision": null}),
+    );
+    crate::app::tasks::bootstrap(fake.client.clone(), tx.clone()).await;
+    pump(&mut app, &mut rx, |app| app.ready).await;
+    app.on_action(Action::OpenSession("s1".into()));
+    pump(&mut app, &mut rx, |app| {
+        app.session.as_ref().is_some_and(|s| s.info.model == "deep")
+    })
+    .await;
+
+    let update = fake
+        .calls("session.update")
+        .into_iter()
+        .next()
+        .expect("the flags were applied to the opened session");
+    assert_eq!(update["model"], json!("deep"));
+    assert_eq!(update["reasoning"], json!("max"));
+    assert!(app.launch.is_empty(), "the flags apply once");
+}
+
+#[tokio::test]
+async fn reconciling_a_gapped_turn_keeps_the_history_loaded_before_it() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    // An already-loaded earlier turn that reconciliation must not touch. The
+    // probe asks with `limit:1`, the page asks for the window, so the fixture is
+    // a sequence: probe first, then the page.
+    fake.script_sequence(
+        "session.read",
+        vec![
+            display_read(2, 0),
+            json!({
+                "session": session_info("s1"),
+                "items": [
+                    crate::testing::chunk(0, json!({"type": "user", "data": {"loop_id": "l0",
+                        "kind": "prompt", "input": {"text": "earlier question"}}})),
+                    crate::testing::chunk(1, json!({"type": "assistant", "data": {"loop_id": "l0",
+                        "request_index": 0, "model": "mock", "reasoning": "medium",
+                        "content": [{"type": "text", "data": "earlier answer"}]}})),
+                ],
+                "next_cursor": null,
+                "total": 2,
+                "history_revision": "h1",
+                "captured_end": 2,
+                "projection": {"revision": "p1", "first_item": 0, "covered_item_count": 0},
+            }),
+        ],
+    );
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    fake.script(
+        "turn.wait",
+        json!({"turn": turn("l1"), "outcome": {"type": "failed", "kind": "model"}, "requests": 1}),
+    );
+    let item = json!({
+        "item": {"type": "user", "data": {"loop_id": "l1", "kind": "prompt",
+                                          "input": {"text": "gapped prompt"}}}
+    })
+    .to_string();
+    fake.script(
+        "turn.result",
+        json!({
+            "turn": turn("l1"),
+            "outcome": {"type": "failed", "kind": "model"},
+            "total": 1,
+            "items": [{"index": 2, "offset": 0, "total_bytes": item.len(),
+                       "encoding": "utf8_json", "data": item, "complete": true}],
+            "next_cursor": null,
+        }),
+    );
+    fake.script(
+        "changes.list",
+        json!({"records": [], "total": 0, "complete": true}),
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+    app.composer.set_text("gapped prompt");
+    app.on_action(Action::Submit);
+    settle(&mut app, &mut rx).await;
+
+    let session = app.session.as_ref().unwrap();
+    let prompts: Vec<&str> = session
+        .transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        prompts,
+        vec!["earlier question", "gapped prompt"],
+        "reconciliation must replace only the finished turn's region"
+    );
+    let answers: Vec<&str> = session
+        .transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::Assistant { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(answers, vec!["earlier answer"], "loaded history is kept");
+    // The turn-end line belongs after the reconciled items.
+    let last = session.transcript.blocks().last().unwrap();
+    assert!(
+        matches!(last, Block::TurnEnd { loop_id, .. } if loop_id == "l1"),
+        "the turn ends last: {last:?}"
+    );
+}
+
+#[tokio::test]
+async fn one_compaction_is_reported_once_however_often_it_is_seen() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    let auto = json!({
+        "session_id": "s1",
+        "last_result": {"origin": "auto", "operation_id": "lup_1",
+                        "status": "compacted", "before_tokens": 41000,
+                        "after_tokens": 12000},
+        "budget": {"estimated_history_tokens": 12000},
+    });
+    fake.script("session.context", auto.clone());
+    fake.script(
+        "session.compact",
+        json!({
+            "origin": "manual", "operation_id": "tui-1", "status": "compacted",
+            "before_tokens": 12000, "after_tokens": 4000,
+        }),
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.on_action(Action::Compact);
+    settle(&mut app, &mut rx).await;
+    // A later refresh reports the same automatic compaction again.
+    app.on_msg(Msg::Op(Box::new(OpDone {
+        session: Some("s1".into()),
+        epoch: app.session.as_ref().unwrap().epoch,
+        kind: OpKind::Context(Ok(serde_json::from_value(auto).unwrap())),
+    })));
+
+    let markers: Vec<String> = app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::Compaction { operation_id, .. } => Some(operation_id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        markers,
+        vec!["auto-lup_1".to_owned(), "tui-1".to_owned()],
+        "one marker per compaction, manual before automatic on the same open"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_send_takes_back_its_prompt_and_queues_the_text() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    // Post-turn compaction still owns the session when the send arrives.
+    fake.script_error("turn.send", -32003, "session busy", "session_busy");
+    fake.script(
+        "session.state",
+        json!({"session_id": "s1", "status": "busy"}),
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.composer.set_text("next thing");
+    app.on_action(Action::Submit);
+    settle(&mut app, &mut rx).await;
+
+    let session = app.session.as_ref().unwrap();
+    assert!(
+        !session
+            .transcript
+            .blocks()
+            .iter()
+            .any(|block| matches!(block, Block::User { .. })),
+        "a refused send must not stay in the transcript: {:?}",
+        session.transcript.blocks()
+    );
+    assert_eq!(
+        session
+            .queue
+            .iter()
+            .map(|queued| queued.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["next thing"],
+        "the text is queued rather than lost"
+    );
+    assert!(app.waiting_for_compaction);
+}
+
+#[tokio::test]
+async fn a_send_refused_for_another_reason_returns_the_text_to_the_composer() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script_error(
+        "turn.send",
+        -32015,
+        "history too large",
+        "history_too_large",
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.composer.set_text("too much");
+    app.on_action(Action::Submit);
+    settle(&mut app, &mut rx).await;
+
+    assert_eq!(app.composer.text(), "too much", "the draft comes back");
+    let session = app.session.as_ref().unwrap();
+    assert!(
+        !session
+            .transcript
+            .blocks()
+            .iter()
+            .any(|block| matches!(block, Block::User { .. }))
+    );
+    assert_eq!(app.last_error.as_deref(), Some("history too large"));
 }

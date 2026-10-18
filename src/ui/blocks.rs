@@ -53,6 +53,7 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
             width,
         )],
         Block::Compaction {
+            operation_id: _,
             before,
             after,
             summary,
@@ -253,12 +254,7 @@ fn turn_end(
     styles: Styles,
     width: usize,
 ) -> Line<'static> {
-    let mut text = crate::app::turn_end_line(outcome, duration, requests, tool_rounds, changes);
-    if let Some(changes) = changes
-        && !changes.is_empty()
-    {
-        text.push_str(&format!(" (+{} −{})", changes.added, changes.removed));
-    }
+    let text = crate::app::turn_end_line(outcome, duration, requests, tool_rounds, changes);
     let labeled = format!("── {text} ──");
     let style = if outcome.is_completed() {
         styles.dim()
@@ -472,8 +468,7 @@ mod tests {
             usage: Default::default(),
             changes: Some(ChangeSummary {
                 files: 3,
-                added: 40,
-                removed: 7,
+                lines: Some((40, 7)),
             }),
         };
         let body = text(&render(&block, styles(), 100, fold()));
@@ -487,6 +482,7 @@ mod tests {
     #[test]
     fn a_compaction_marker_shows_what_it_saved() {
         let block = Block::Compaction {
+            operation_id: "tui-1".into(),
             before: Some(32_200),
             after: Some(2_700),
             summary: None,
