@@ -20,11 +20,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::clipboard;
-use crate::editor;
 use crate::protocol::{
     AgentEvent, CompactionPhase, CompactionProgress, ContextBudget, LoopOutcome, ModelInfo,
-    ProfileInfo, RpcError, SessionContext, SessionInfo, SessionPresentation, SessionState, ToolRef,
-    TurnRef,
+    ProfileInfo, Reasoning, RpcError, SessionContext, SessionInfo, SessionPresentation,
+    SessionState, ToolRef, TurnRef,
 };
 use crate::rpc::Client;
 use crate::theme::ThemeKind;
@@ -50,6 +49,21 @@ pub enum Msg {
     /// The external editor returned a draft.
     DraftEdited(Option<String>),
     Quit,
+}
+
+/// Session settings from the command line: profile and model apply when the
+/// session is created, model and reasoning also when an existing one is opened.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LaunchSettings {
+    pub profile: Option<String>,
+    pub model: Option<String>,
+    pub reasoning: Option<Reasoning>,
+}
+
+impl LaunchSettings {
+    pub fn is_empty(&self) -> bool {
+        self.profile.is_none() && self.model.is_none() && self.reasoning.is_none()
+    }
 }
 
 pub struct Ready {
@@ -93,7 +107,6 @@ pub enum OpKind {
     ToolOutput(ToolRef, String, Result<String, RpcError>),
     Copied(Result<(), String>),
     Exported(Result<String, String>),
-    Editor(Result<Option<String>, String>),
     /// `session.state` poll while waiting for post-turn compaction.
     IdleCheck(Result<bool, RpcError>),
 }
@@ -239,6 +252,10 @@ pub struct App {
     pub sessions: Vec<SessionInfo>,
     pub models: Vec<ModelInfo>,
     pub profiles: Vec<ProfileInfo>,
+    /// Session settings requested on the command line. A new session is created
+    /// with exactly these; opening an existing one applies them through
+    /// `session.update`, so a flag is never silently dropped.
+    pub launch: LaunchSettings,
     pub composer: String,
     pub draft_history: VecDeque<String>,
     pub draft_cursor: Option<usize>,
@@ -267,6 +284,9 @@ pub struct App {
     /// the reducer only invalidates it through block revisions.
     pub layout: crate::transcript::layout::Layout,
     pub viewport: usize,
+    /// A draft waiting for the main loop to run the external editor on it; the
+    /// terminal belongs to the loop, not to the reducer.
+    pub edit_request: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -289,6 +309,7 @@ impl App {
             sessions: Vec::new(),
             models: Vec::new(),
             profiles: Vec::new(),
+            launch: LaunchSettings::default(),
             composer: String::new(),
             draft_history: VecDeque::new(),
             draft_cursor: None,
@@ -311,6 +332,7 @@ impl App {
             selection_end: None,
             layout: crate::transcript::layout::Layout::default(),
             viewport: 1,
+            edit_request: None,
         }
     }
 
@@ -356,9 +378,8 @@ impl App {
                 true
             }
             Msg::DraftEdited(draft) => {
-                if let Some(draft) = draft {
-                    self.composer = draft;
-                }
+                // An empty file is a deliberate blank draft, not a cancel.
+                self.composer = draft.unwrap_or_default();
                 true
             }
             Msg::Quit => {
@@ -684,10 +705,17 @@ impl App {
     }
 
     fn create_session(&mut self) {
-        let profile = self.profiles.first().map(|profile| profile.id.clone());
+        // An absent profile means "the Agent's configured default". Choosing
+        // one here would override it with whatever sorts first.
         let mut params = serde_json::json!({ "workspace": self.workspace });
-        if let Some(profile) = profile {
+        if let Some(profile) = &self.launch.profile {
             params["profile"] = serde_json::json!(profile);
+        }
+        if let Some(model) = &self.launch.model {
+            params["model"] = serde_json::json!(model);
+        }
+        if let Some(reasoning) = self.launch.reasoning {
+            params["reasoning"] = serde_json::json!(reasoning);
         }
         tasks::create_session(self.client.clone(), self.tx.clone(), params);
     }
@@ -773,18 +801,24 @@ impl App {
         });
     }
 
+    /// Ctrl+G: hand the draft to the external editor. The terminal belongs to
+    /// the main loop, so this only files the request; the loop suspends the
+    /// screen, runs the editor, and reports back through [`Msg::DraftEdited`].
     fn edit_draft(&mut self) {
-        let tx = self.tx.clone();
         let draft = std::mem::take(&mut self.composer);
-        let config = crate::config::Config::load();
-        tokio::spawn(async move {
-            let result = editor::edit(&config, &draft).await;
-            let _ = tx.send(Msg::Op(Box::new(OpDone {
-                session: None,
-                epoch: 0,
-                kind: OpKind::Editor(result),
-            })));
-        });
+        self.edit_request = Some(draft);
+    }
+
+    /// Takes the draft the main loop must edit, if Ctrl+G asked for it.
+    pub fn take_edit_request(&mut self) -> Option<String> {
+        self.edit_request.take()
+    }
+
+    /// The editor command: config first, then `$VISUAL`/`$EDITOR`.
+    pub fn editor_command(&self) -> Result<Vec<String>, String> {
+        crate::config::Config::load().editor().ok_or_else(|| {
+            "No editor configured: set `editor` in the TUI config or $VISUAL/$EDITOR".to_owned()
+        })
     }
 
     fn answer(&mut self, answer: Answer) {
@@ -911,11 +945,6 @@ impl App {
                 Ok(()) => self.notice(NoticeLevel::Info, "Copied"),
                 Err(error) => self.notice(NoticeLevel::Error, error),
             },
-            OpKind::Editor(result) => match result {
-                Ok(Some(draft)) => self.composer = draft,
-                Ok(None) => {}
-                Err(error) => self.notice(NoticeLevel::Error, error),
-            },
             OpKind::Created(result) => self.on_created(result),
             OpKind::Deleted(id, result) => match result {
                 Ok(()) => {
@@ -986,7 +1015,6 @@ impl App {
                 }
             },
             OpKind::Copied(_)
-            | OpKind::Editor(_)
             | OpKind::Created(_)
             | OpKind::Deleted(..)
             | OpKind::Exported(_)
@@ -996,20 +1024,20 @@ impl App {
 
     fn on_opened(&mut self, result: Result<SessionInfo, RpcError>) {
         match result {
-            Ok(info) => self.adopt(info),
+            Ok(info) => self.adopt(info, None),
             Err(error) => self.error(error),
         }
     }
 
     fn on_created(&mut self, result: Result<SessionInfo, RpcError>) {
         match result {
-            Ok(info) => self.adopt(info),
+            Ok(info) => self.adopt(info, Some(())),
             Err(error) => self.error(error),
         }
     }
 
     /// Makes `info` the resident session and loads its tail.
-    fn adopt(&mut self, info: SessionInfo) {
+    fn adopt(&mut self, info: SessionInfo, created: Option<()>) {
         let mut session = Session::new(info);
         session.epoch = self.session.as_ref().map_or(0, |old| old.epoch) + 1;
         let epoch = session.epoch;
@@ -1027,6 +1055,13 @@ impl App {
         self.merge_session_info_into_list();
         tasks::load_tail(self.client.clone(), self.tx.clone(), session_id.clone());
         tasks::presentation(self.client.clone(), self.tx.clone(), session_id, epoch);
+        // A new session already carries its settings; an opened one needs them
+        // applied, because the flags describe how to run this session now.
+        let (model, reasoning) = (self.launch.model.clone(), self.launch.reasoning);
+        if created.is_none() && (model.is_some() || reasoning.is_some()) {
+            self.update_session(model, reasoning);
+        }
+        self.launch = LaunchSettings::default();
     }
 
     fn merge_session_info_into_list(&mut self) {

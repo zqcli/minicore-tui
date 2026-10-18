@@ -823,3 +823,101 @@ async fn three_tool_calls_on_one_file_report_one_file_and_summed_lines() {
         "each record's diff is counted on its own"
     );
 }
+
+#[tokio::test]
+async fn a_new_session_leaves_the_profile_to_the_agent_default() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    // The catalog sorts profiles by id, so `profiles.first()` is not the
+    // configured default; a new session must not name one at all.
+    fake.script(
+        "profile.list",
+        json!({"profiles": [
+            {"id": "ask", "model": "mock", "reasoning": "medium"},
+            {"id": "coding", "model": "mock", "reasoning": "medium"},
+        ]}),
+    );
+    fake.script("session.create", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    crate::app::tasks::bootstrap(fake.client.clone(), tx.clone()).await;
+    pump(&mut app, &mut rx, |app| app.ready).await;
+    app.on_action(Action::NewSession);
+    pump(&mut app, &mut rx, |app| app.session.is_some()).await;
+
+    let create = fake
+        .calls("session.create")
+        .into_iter()
+        .next()
+        .expect("a session was created");
+    assert_eq!(
+        create["workspace"],
+        json!(app.workspace.display().to_string())
+    );
+    assert!(
+        create.get("profile").is_none(),
+        "no profile means the Agent's configured default: {create}"
+    );
+}
+
+#[tokio::test]
+async fn launch_flags_reach_the_new_session() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    app.launch = crate::app::LaunchSettings {
+        profile: Some("coding".into()),
+        model: Some("deep".into()),
+        reasoning: Some(crate::protocol::Reasoning::High),
+    };
+    fake.script("session.create", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    crate::app::tasks::bootstrap(fake.client.clone(), tx.clone()).await;
+    pump(&mut app, &mut rx, |app| app.ready).await;
+    app.on_action(Action::NewSession);
+    pump(&mut app, &mut rx, |app| app.session.is_some()).await;
+
+    let create = fake
+        .calls("session.create")
+        .into_iter()
+        .next()
+        .expect("a session was created");
+    assert_eq!(create["profile"], json!("coding"));
+    assert_eq!(create["model"], json!("deep"));
+    assert_eq!(create["reasoning"], json!("high"));
+}
+
+#[tokio::test]
+async fn launch_flags_apply_to_an_opened_session_through_session_update() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    app.launch = crate::app::LaunchSettings {
+        profile: None,
+        model: Some("deep".into()),
+        reasoning: Some(crate::protocol::Reasoning::Max),
+    };
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script(
+        "session.update",
+        json!({"session": {"session_id": "s1", "model": "deep", "reasoning": "max"},
+               "active_revision": null}),
+    );
+    crate::app::tasks::bootstrap(fake.client.clone(), tx.clone()).await;
+    pump(&mut app, &mut rx, |app| app.ready).await;
+    app.on_action(Action::OpenSession("s1".into()));
+    pump(&mut app, &mut rx, |app| {
+        app.session.as_ref().is_some_and(|s| s.info.model == "deep")
+    })
+    .await;
+
+    let update = fake
+        .calls("session.update")
+        .into_iter()
+        .next()
+        .expect("the flags were applied to the opened session");
+    assert_eq!(update["model"], json!("deep"));
+    assert_eq!(update["reasoning"], json!("max"));
+    assert!(app.launch.is_empty(), "the flags apply once");
+}

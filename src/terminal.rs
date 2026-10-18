@@ -1,6 +1,6 @@
-//! Terminal entry, restoration and the panic hook.
+//! Terminal entry, restoration, suspension and the panic hook.
 
-use std::io::{self, Stdout};
+use std::io::{self, Stdout, Write};
 
 use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
@@ -15,10 +15,41 @@ use ratatui::backend::CrosstermBackend;
 
 pub type Term = Terminal<CrosstermBackend<Stdout>>;
 
-/// Owns the alternate screen and restores it exactly once.
+/// Pushes the keyboard-enhancement flags so Shift+Enter and Alt+Enter carry
+/// distinct codes. Terminals without support simply report failure and the
+/// keys fall back to their plain forms.
+fn push_keyboard_flags(writer: &mut impl Write) -> io::Result<()> {
+    execute!(
+        writer,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    )
+}
+
+fn enter_screen(writer: &mut impl Write) -> io::Result<()> {
+    execute!(
+        writer,
+        EnterAlternateScreen,
+        EnableBracketedPaste,
+        EnableMouseCapture,
+        cursor::Hide
+    )
+}
+
+fn leave_screen(writer: &mut impl Write) -> io::Result<()> {
+    execute!(
+        writer,
+        DisableMouseCapture,
+        DisableBracketedPaste,
+        LeaveAlternateScreen,
+        cursor::Show
+    )
+}
+
+/// Owns the alternate screen. Restores it exactly once, and can hand it to a
+/// child process (the external editor) and take it back.
 pub struct Guard {
     terminal: Term,
-    restored: bool,
+    active: bool,
     enhanced_keys: bool,
 }
 
@@ -26,24 +57,18 @@ impl Guard {
     pub fn enter() -> io::Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(
-            stdout,
-            EnterAlternateScreen,
-            EnableBracketedPaste,
-            EnableMouseCapture,
-            cursor::Hide
-        )?;
-        // Keyboard enhancement gives Shift+Enter and Alt+Enter distinct codes.
-        // Terminals that do not support it simply report `false`.
-        let enhanced_keys = execute!(
-            stdout,
-            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-        )
-        .is_ok();
-        let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
+        let enhanced_keys = push_keyboard_flags(&mut stdout).is_ok();
+        let screen = enter_screen(&mut stdout);
+        let terminal = screen.and_then(|()| {
+            Terminal::new(CrosstermBackend::new(io::stdout())).inspect_err(|_| {
+                let mut stdout = io::stdout();
+                let _ = leave_screen(&mut stdout);
+                let _ = disable_raw_mode();
+            })
+        });
         Ok(Self {
-            terminal,
-            restored: false,
+            terminal: terminal?,
+            active: true,
             enhanced_keys,
         })
     }
@@ -52,23 +77,44 @@ impl Guard {
         &mut self.terminal
     }
 
-    pub fn restore(&mut self) -> io::Result<()> {
-        if self.restored {
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
+    /// Hands the real terminal to a child process: an editor needs the normal
+    /// screen and cooked input. Drawing and input pause until [`Self::resume`].
+    pub fn suspend(&mut self) -> io::Result<()> {
+        if !self.active {
             return Ok(());
         }
-        disable_raw_mode()?;
+        self.restore()
+    }
+
+    /// Takes the alternate screen back after [`Self::suspend`].
+    pub fn resume(&mut self) -> io::Result<()> {
+        if self.active {
+            return Ok(());
+        }
+        enable_raw_mode()?;
+        let mut stdout = io::stdout();
+        self.enhanced_keys = push_keyboard_flags(&mut stdout).is_ok();
+        enter_screen(&mut stdout)?;
+        self.active = true;
+        self.terminal.clear()
+    }
+
+    pub fn restore(&mut self) -> io::Result<()> {
+        if !self.active {
+            return Ok(());
+        }
         let mut stdout = io::stdout();
         if self.enhanced_keys {
             let _ = execute!(stdout, PopKeyboardEnhancementFlags);
         }
-        execute!(
-            stdout,
-            DisableMouseCapture,
-            DisableBracketedPaste,
-            LeaveAlternateScreen,
-            cursor::Show
-        )?;
-        self.restored = true;
+        leave_screen(&mut stdout)?;
+        stdout.flush()?;
+        disable_raw_mode()?;
+        self.active = false;
         Ok(())
     }
 }
