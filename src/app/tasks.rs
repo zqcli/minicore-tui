@@ -727,7 +727,6 @@ pub fn load_diff(
             truncated: false,
             availability: None,
             stale: false,
-            truncated: false,
         });
         post(&tx, Some(&session_id), OpKind::DiffFile(path, Ok(page)));
     });
