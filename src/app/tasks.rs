@@ -128,6 +128,10 @@ pub fn create_session(client: Arc<Client>, tx: Tx, params: Value) {
     });
 }
 
+/// Closes (if the Agent still holds it) and deletes one stored session. The
+/// picker only deletes sessions the TUI is not running, so a close here is
+/// normally a no-op; it is what makes delete work for a session another client
+/// left loaded.
 pub fn delete_session(client: Arc<Client>, tx: Tx, session_id: String) {
     tokio::spawn(async move {
         let params = json!({ "session_id": session_id });
@@ -591,6 +595,34 @@ pub fn load_diff(
             }
         };
         post(&tx, Some(&session_id), OpKind::DiffFile(path, Ok(page)));
+    });
+}
+
+/// Fetches workspace paths for the `@` picker: one recursive `workspace.files`
+/// page filtered by the current query, capped by the Agent's own limits.
+pub fn list_files(client: Arc<Client>, tx: Tx, session_id: String, query: String) {
+    tokio::spawn(async move {
+        let params = json!({
+            "session_id": session_id,
+            "recursive": true,
+            "query": query,
+            "limit": 500,
+            "max_bytes": 262_144,
+        });
+        let result: Result<protocol::FilesPage, _> = client
+            .call::<Value, protocol::FilesPage>(protocol::METHOD_WORKSPACE_FILES, &params, false)
+            .await;
+        post(
+            &tx,
+            Some(&session_id),
+            OpKind::Files(result.map(|page| {
+                page.entries
+                    .into_iter()
+                    .filter(|entry| entry.kind == protocol::FileKind::File)
+                    .map(|entry| entry.path)
+                    .collect()
+            })),
+        );
     });
 }
 

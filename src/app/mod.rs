@@ -101,6 +101,8 @@ pub enum OpKind {
     ),
     /// The hunks of one change record.
     DiffFile(String, Result<crate::protocol::changes::DiffPage, RpcError>),
+    /// Workspace paths for the `@` picker.
+    Files(Result<Vec<String>, RpcError>),
 }
 
 #[derive(Clone, Debug)]
@@ -122,7 +124,6 @@ pub enum Overlay {
     Sessions {
         filter: String,
         selected: usize,
-        confirm_delete: bool,
     },
     Models {
         selected: usize,
@@ -191,15 +192,24 @@ impl App {
                 Overlay::Sessions {
                     filter: String::new(),
                     selected: 0,
-                    confirm_delete: false,
                 }
             }
             Panel::Models => Overlay::Models { selected: 0 },
             Panel::Reasoning => Overlay::Reasoning { selected: 0 },
-            Panel::Files => Overlay::Files {
-                filter: String::new(),
-                selected: 0,
-            },
+            Panel::Files => {
+                if let Some(session) = self.session.as_ref() {
+                    tasks::list_files(
+                        self.client.clone(),
+                        self.tx.clone(),
+                        session.info.session_id.clone(),
+                        String::new(),
+                    );
+                }
+                Overlay::Files {
+                    filter: String::new(),
+                    selected: 0,
+                }
+            }
             Panel::Context => {
                 if let Some(session) = self.session.as_ref() {
                     // A fresh report: the view must not show a stale ledger.
@@ -1274,6 +1284,7 @@ impl App {
                     true
                 }
             },
+            OpKind::Files(result) => self.on_files(result),
             OpKind::ChangeFiles(_, result) => self.on_change_files(result),
             OpKind::DiffFile(path, result) => self.on_diff_file(path, result),
             OpKind::Copied(_)
@@ -1737,6 +1748,26 @@ impl App {
                     session.info = info.clone();
                 }
                 self.merge_session_info_into_list();
+                true
+            }
+            Err(error) => {
+                self.error(error);
+                true
+            }
+        }
+    }
+
+    /// Installs the `@` picker's candidate paths and keeps the overlay's
+    /// selection valid for the new list.
+    fn on_files(&mut self, result: &Result<Vec<String>, RpcError>) -> bool {
+        match result {
+            Ok(paths) => {
+                crate::ui::files::set_candidates(paths.clone());
+                if let Overlay::Files { filter, selected } = &mut self.overlay {
+                    // A stale selection would point past the new list.
+                    *selected =
+                        (*selected).min(crate::ui::files::filter_count(filter).saturating_sub(1));
+                }
                 true
             }
             Err(error) => {

@@ -117,12 +117,20 @@ impl App {
         }
         if self.delete_pending.as_deref() == Some(id.as_str()) {
             self.delete_pending = None;
+            self.notice(
+                crate::transcript::block::NoticeLevel::Info,
+                "Deleting the session",
+            );
             self.on_action(Action::DeleteSession(id));
         } else {
+            let label = info
+                .title
+                .clone()
+                .unwrap_or_else(|| "this session".to_owned());
             self.delete_pending = Some(id);
             self.notice(
                 crate::transcript::block::NoticeLevel::Info,
-                "Press Ctrl+D again to delete",
+                format!("Press Ctrl+D again to delete \"{label}\" permanently"),
             );
         }
     }
