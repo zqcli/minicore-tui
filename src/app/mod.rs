@@ -8,6 +8,7 @@
 
 pub mod actions;
 pub mod commands;
+pub mod features;
 pub mod keys;
 pub mod session;
 pub mod tasks;
@@ -89,7 +90,7 @@ pub enum OpKind {
         Result<crate::protocol::tool::ToolReadResult, RpcError>,
     ),
     ToolOutput(ToolRef, String, Result<String, RpcError>),
-    Copied(Result<(), String>),
+    Copied(Result<crate::clipboard::Copied, String>),
     Exported(Result<String, String>),
     Editor(Result<Option<String>, String>),
     /// `session.state` poll while waiting for post-turn compaction.
@@ -750,7 +751,7 @@ impl App {
         };
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = clipboard::copy(text).await;
+            let result = clipboard::copy(&text).await;
             let _ = tx.send(Msg::Op(Box::new(OpDone {
                 session: None,
                 epoch: 0,
@@ -764,7 +765,14 @@ impl App {
         let draft = std::mem::take(&mut self.composer);
         let config = crate::config::Config::load();
         tokio::spawn(async move {
-            let result = editor::edit(&config, &draft).await;
+            let command = config.editor();
+            let result = match command {
+                Some(command) => editor::edit(&command, &draft).await,
+                None => Err(
+                    "No editor configured: set `editor` in the TUI config or $VISUAL/$EDITOR"
+                        .to_owned(),
+                ),
+            };
             let _ = tx.send(Msg::Op(Box::new(OpDone {
                 session: None,
                 epoch: 0,
@@ -889,7 +897,12 @@ impl App {
         // Results that are not tied to the resident session apply directly.
         match kind {
             OpKind::Copied(result) => match result {
-                Ok(()) => self.notice(NoticeLevel::Info, "Copied"),
+                Ok(crate::clipboard::Copied::Native) => {
+                    self.notice(NoticeLevel::Info, "Copied")
+                }
+                Ok(crate::clipboard::Copied::Osc52) => {
+                    self.notice(NoticeLevel::Info, "Copied with OSC 52")
+                }
                 Err(error) => self.notice(NoticeLevel::Error, error),
             },
             OpKind::Editor(result) => match result {
