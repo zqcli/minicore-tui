@@ -176,10 +176,14 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
         "context" => Executed::Panel(super::Panel::Context),
         "copy" => Executed::Action(Action::CopyLastAnswer),
         "export" => Executed::Action(Action::Export((!arg.is_empty()).then(|| arg.to_owned()))),
-        "theme" => Executed::Action(Action::SetTheme(match arg {
-            "light" => crate::theme::ThemeKind::Light,
-            _ => crate::theme::ThemeKind::Dark,
-        })),
+        // No argument toggles between the two palettes; an explicit argument
+        // wins. Parsing catches typos as `Noop` so the caller can say so.
+        "theme" => match arg {
+            "" => Executed::Action(Action::ToggleTheme),
+            "dark" => Executed::Action(Action::SetTheme(crate::theme::ThemeKind::Dark)),
+            "light" => Executed::Action(Action::SetTheme(crate::theme::ThemeKind::Light)),
+            _ => Executed::Noop,
+        },
         "reload" => Executed::Action(Action::ReloadAgent),
         "help" => Executed::Panel(super::Panel::Help),
         "quit" => Executed::Action(Action::Quit),
@@ -247,6 +251,59 @@ mod tests {
         let today = today();
         assert_eq!(today.len(), 10);
         assert!(today.starts_with("20"));
+    }
+
+    #[test]
+    fn theme_without_an_argument_toggles_and_an_explicit_one_wins() {
+        assert!(matches!(
+            execute("theme", ""),
+            Some(Executed::Action(crate::app::Action::ToggleTheme))
+        ));
+        assert!(matches!(
+            execute("theme", "light"),
+            Some(Executed::Action(crate::app::Action::SetTheme(
+                crate::theme::ThemeKind::Light
+            )))
+        ));
+        assert!(matches!(
+            execute("theme", "dark"),
+            Some(Executed::Action(_))
+        ));
+        assert!(matches!(execute("theme", "purple"), Some(Executed::Noop)));
+    }
+
+    #[test]
+    fn diff_scope_comes_from_the_argument() {
+        assert!(matches!(
+            execute("diff", "workspace"),
+            Some(Executed::Panel(crate::app::Panel::Diff(
+                crate::app::DiffScope::Workspace
+            )))
+        ));
+        assert!(matches!(
+            execute("diff", "session"),
+            Some(Executed::Panel(crate::app::Panel::Diff(
+                crate::app::DiffScope::Session
+            )))
+        ));
+        assert!(matches!(
+            execute("diff", ""),
+            Some(Executed::Panel(crate::app::Panel::Diff(
+                crate::app::DiffScope::Turn
+            )))
+        ));
+    }
+
+    #[test]
+    fn export_defaults_to_no_path_but_accepts_one() {
+        assert!(matches!(
+            execute("export", ""),
+            Some(Executed::Action(crate::app::Action::Export(None)))
+        ));
+        assert!(matches!(
+            execute("export", "out.md"),
+            Some(Executed::Action(crate::app::Action::Export(Some(_))))
+        ));
     }
 
     #[test]

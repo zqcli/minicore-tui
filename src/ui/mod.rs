@@ -1,14 +1,22 @@
 //! Rendering. `ui` draws from `&App` and never mutates domain state beyond the
-//! layout cache it owns (`App::layout`), so drawing stays a pure function of
-//! the app for everything else.
+//! layout cache it owns (`App::layout`) and the rows it records for copy.
+//!
+//! The composition is: the transcript window or a full-screen view, an optional
+//! bottom sheet, the status line, the queue, notices, the composer band and the
+//! footer. Rendering reads the app; the only mutable state is the transcript's
+//! layout cache and the copy buffer.
 
 pub mod blocks;
 pub mod composer;
 pub mod files;
 pub mod markdown;
 pub mod panel;
+pub mod picker;
 pub mod rails;
 pub mod render;
+pub mod screens;
+pub mod selection;
+pub mod sheets;
 #[cfg(test)]
 pub mod snapshots;
 pub mod status;
@@ -34,37 +42,74 @@ pub struct View {
     pub cache: crate::transcript::layout::Layout<RenderState>,
 }
 
-/// Draws one frame: transcript, then the bottom band (status, queue, notices,
-/// composer, footer). Fatal errors take the whole screen.
+impl View {
+    /// Rebuilds the cache. The plain closure shape keeps the reducer's test
+    /// fixtures (and any non-streaming caller) independent of the renderer
+    /// state the draw path threads through.
+    pub fn prepare<F>(
+        &mut self,
+        blocks: &[crate::transcript::Block],
+        revisions: &[u64],
+        width: u16,
+        fold: Fold,
+        mut render: F,
+    ) where
+        F: FnMut(usize, &crate::transcript::Block) -> Vec<Line<'static>>,
+    {
+        self.cache
+            .prepare(blocks, revisions, width, fold, |_, index, block| {
+                render(index, block)
+            });
+    }
+
+    pub fn total_rows(&self) -> usize {
+        self.cache.total_rows()
+    }
+
+    pub fn anchor(&self, top_row: usize) -> (usize, u16) {
+        self.cache.anchor(top_row)
+    }
+
+    pub fn anchor_row(&self, block: usize, offset: u16) -> usize {
+        self.cache.anchor_row(block, offset)
+    }
+}
+
+/// Draws one frame. Fatal errors take the whole screen.
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
-    let styles = Styles::of(app.palette);
     if let Some(fatal) = &app.fatal {
-        draw_fatal(frame, area, styles, fatal);
+        draw_fatal(frame, area, fatal);
         return;
     }
-    let sheet = panel::sheet(app);
-    let sheet_rows = sheet
-        .as_ref()
-        .map_or(0, |sheet| panel::rows(sheet, styles, area.width).len());
-    let bottom =
-        (bottom_height(app, area.width) + sheet_rows as u16).min(area.height.saturating_sub(1));
+    let styles = Styles::of(app.palette);
+    let sheet = screens::sheet(app, &app.palette);
+    let sheet_rows = sheet.as_ref().map_or(0, |sheet| sheet.height());
+    let bottom = (band_height(app, area.width) + sheet_rows)
+        .min(area.height.saturating_sub(1))
+        .max(1);
     let [transcript, bottom] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(bottom)]).areas(area);
-    if let Some(view) = views::frame(app) {
-        draw_view(frame, transcript, app, styles, view);
-    } else {
+    if !screens::draw_view(frame, transcript, app) {
         draw_transcript(frame, transcript, app, styles);
     }
-    let mut rows = Vec::with_capacity(bottom.height as usize);
-    if let Some(sheet) = sheet {
-        rows.extend(panel::rows(&sheet, styles, bottom.width));
-    }
-    rows.extend(status::lines(app, styles, bottom.width));
-    frame.render_widget(ratatui::widgets::Paragraph::new(rows), bottom);
-    if app.overlay.is_none() && !app.has_interaction() && app.fatal.is_none() {
-        let (row, column) = status::cursor(app, styles, bottom.width);
-        frame.set_cursor_position((bottom.x + column, bottom.y + row.min(bottom.height)));
+    let band = if let Some(sheet) = sheet {
+        let [sheet_area, band] =
+            Layout::vertical([Constraint::Length(sheet.height()), Constraint::Min(1)])
+                .areas(bottom);
+        panel::render(frame, sheet_area, &app.palette, &sheet);
+        band
+    } else {
+        bottom
+    };
+    let rows = status::lines(app, styles, band.width);
+    frame.render_widget(ratatui::widgets::Paragraph::new(rows), band);
+    if app.overlay.is_none() && !app.has_interaction() {
+        let (row, column) = status::cursor(app, styles, band.width);
+        frame.set_cursor_position((
+            band.x + column,
+            band.y + row.min(band.height.saturating_sub(1)),
+        ));
     }
 }
 
@@ -83,10 +128,10 @@ pub fn tokens(value: u64) -> String {
     }
 }
 
-/// Rows the composer, status line, notices and footer need at `width`. The
-/// composer wraps, so the band's height depends on the terminal width.
-pub fn bottom_height(app: &App, width: u16) -> u16 {
-    (status::lines(app, Styles::of(app.palette), width).len() as u16).max(1)
+/// Rows the status line, queue, notices, composer and footer need at `width`.
+/// The composer wraps, so the band's height depends on the terminal width.
+pub fn band_height(app: &App, width: u16) -> u16 {
+    status::lines(app, Styles::of(app.palette), width).len() as u16
 }
 
 fn draw_transcript(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
@@ -108,6 +153,7 @@ fn draw_transcript(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles)
         expanded_tools: app.tools_expanded,
         show_reasoning: app.show_reasoning,
     };
+    app.viewport = area.height as usize;
     let blocks = session.transcript.blocks();
     app.layout.cache.state.prepare(width, fold, blocks, styles);
     let transcript = self::transcript::Transcript {
@@ -125,33 +171,29 @@ fn draw_transcript(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles)
         styles,
         |state, index, block| state.render(index, block, styles),
     );
+    // The copy path reads exactly these rows, so a drag copies what is on
+    // screen even while a turn streams.
+    app.rendered
+        .set(area.y, lines.iter().map(|line| line.to_string()).collect());
+    app.transcript_area = Some(area);
     frame.render_widget(ratatui::widgets::Paragraph::new(lines), area);
 }
 
-/// A full-screen view replaces the transcript but keeps the bottom band.
-fn draw_view(frame: &mut Frame, area: Rect, app: &App, styles: Styles, view: views::Frame<'_>) {
-    let width = area.width.max(1);
-    let mut lines = view.rows(styles, width);
-    lines.push(Line::raw(""));
-    lines.extend(match &app.overlay {
-        crate::app::Overlay::Help => views::help(styles, width),
-        crate::app::Overlay::Context => views::context(app, styles, width),
-        _ => vec![Line::styled("This view is not connected yet", styles.dim())],
-    });
-    frame.render_widget(ratatui::widgets::Paragraph::new(lines), area);
-}
-
-fn draw_fatal(frame: &mut Frame, area: Rect, styles: Styles, fatal: &crate::app::Fatal) {
+fn draw_fatal(frame: &mut Frame, area: Rect, fatal: &crate::app::Fatal) {
+    let styles = Styles::of(crate::theme::Palette::dark());
     let mut lines = vec![
         Line::styled("Fatal error", styles.error()),
         Line::raw(""),
-        Line::raw(fatal.reason.clone()),
+        Line::styled(fatal.reason.clone(), styles.text()),
     ];
     if !fatal.stderr_tail.is_empty() {
         lines.push(Line::raw(""));
         lines.push(Line::styled("agent stderr (tail)", styles.dim()));
         for line in fatal.stderr_tail.iter().rev().take(20).rev() {
-            lines.push(Line::styled(line.clone(), styles.subtle()));
+            lines.push(Line::styled(
+                wrap::sanitize(line).into_owned(),
+                styles.subtle(),
+            ));
         }
     }
     lines.push(Line::raw(""));

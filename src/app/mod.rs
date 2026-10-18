@@ -8,7 +8,10 @@
 
 pub mod actions;
 pub mod commands;
+pub mod features;
 pub mod keys;
+#[cfg(test)]
+mod lifecycle_tests;
 pub mod session;
 pub mod tasks;
 
@@ -18,7 +21,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::clipboard;
-use crate::editor;
 use crate::protocol::{
     AgentEvent, CompactionPhase, CompactionProgress, ContextBudget, LoopOutcome, ModelInfo,
     ProfileInfo, RpcError, SessionContext, SessionInfo, SessionPresentation, SessionState, ToolRef,
@@ -89,11 +91,20 @@ pub enum OpKind {
         Result<crate::protocol::tool::ToolReadResult, RpcError>,
     ),
     ToolOutput(ToolRef, String, Result<String, RpcError>),
-    Copied(Result<(), String>),
+    Copied(Result<crate::clipboard::Copied, String>),
     Exported(Result<String, String>),
     Editor(Result<Option<String>, String>),
     /// `session.state` poll while waiting for post-turn compaction.
     IdleCheck(Result<bool, RpcError>),
+    /// The change records of one diff scope.
+    ChangeFiles(
+        DiffScope,
+        Result<Vec<crate::protocol::ChangeRecord>, RpcError>,
+    ),
+    /// The hunks of one change record.
+    DiffFile(String, Result<crate::protocol::changes::DiffPage, RpcError>),
+    /// Workspace paths for the `@` picker.
+    Files(Result<Vec<String>, RpcError>),
 }
 
 #[derive(Clone, Debug)]
@@ -115,7 +126,6 @@ pub enum Overlay {
     Sessions {
         filter: String,
         selected: usize,
-        confirm_delete: bool,
     },
     Models {
         selected: usize,
@@ -140,7 +150,7 @@ pub enum Overlay {
     /// Find in the transcript.
     Find {
         query: String,
-        matches: Vec<usize>,
+        matches: Vec<features::FindMatch>,
         current: usize,
     },
     /// An interaction prompt from the agent.
@@ -173,37 +183,207 @@ pub enum Panel {
 impl App {
     /// Opens a picker or view, seeding it from the current state.
     pub fn open_panel(&mut self, panel: Panel) {
+        self.delete_pending = None;
         self.overlay = match panel {
             Panel::Palette => Overlay::Palette {
                 filter: String::new(),
                 selected: 0,
             },
-            Panel::Sessions => Overlay::Sessions {
-                filter: String::new(),
-                selected: 0,
-                confirm_delete: false,
-            },
+            Panel::Sessions => {
+                self.reload_session_rows();
+                Overlay::Sessions {
+                    filter: String::new(),
+                    selected: 0,
+                }
+            }
             Panel::Models => Overlay::Models { selected: 0 },
             Panel::Reasoning => Overlay::Reasoning { selected: 0 },
-            Panel::Files => Overlay::Files {
-                filter: String::new(),
-                selected: 0,
-            },
-            Panel::Context => Overlay::Context,
-            Panel::Help => Overlay::Help,
-            Panel::Diff(scope) => Overlay::Diff {
-                scope,
-                file: 0,
-                scroll: 0,
-            },
+            Panel::Files => {
+                if let Some(session) = self.session.as_ref() {
+                    tasks::list_files(
+                        self.client.clone(),
+                        self.tx.clone(),
+                        session.info.session_id.clone(),
+                        String::new(),
+                    );
+                }
+                Overlay::Files {
+                    filter: String::new(),
+                    selected: 0,
+                }
+            }
+            Panel::Context => {
+                if let Some(session) = self.session.as_ref() {
+                    // A fresh report: the view must not show a stale ledger.
+                    tasks::context(
+                        self.client.clone(),
+                        self.tx.clone(),
+                        session.info.session_id.clone(),
+                    );
+                }
+                Overlay::Context
+            }
+            Panel::Help => {
+                self.help_scroll = 0;
+                Overlay::Help
+            }
+            Panel::Diff(scope) => {
+                self.open_diff(scope);
+                Overlay::Diff {
+                    scope,
+                    file: 0,
+                    scroll: 0,
+                }
+            }
             Panel::Find => Overlay::Find {
                 query: String::new(),
                 matches: Vec::new(),
                 current: 0,
             },
-            Panel::Tool(key) => Overlay::Tool(key),
+            Panel::Tool(key) => {
+                self.open_tool(key.clone());
+                Overlay::Tool(key)
+            }
             Panel::Interaction => Overlay::Interaction,
         };
+    }
+
+    /// Titles an untitled session from its first prompt, once, after the turn
+    /// was accepted. An explicit title always wins.
+    fn title_from_first_prompt(&mut self) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        if !features::needs_auto_title(&session.info) {
+            return;
+        }
+        let Some(prompt) = session
+            .transcript
+            .blocks()
+            .iter()
+            .find_map(|block| match block {
+                Block::User {
+                    text,
+                    kind: crate::protocol::read::UserKind::Prompt,
+                } => Some(text.as_str()),
+                _ => None,
+            })
+        else {
+            return;
+        };
+        let Some(title) = features::auto_title(prompt) else {
+            return;
+        };
+        let session_id = session.info.session_id.clone();
+        tasks::rename(self.client.clone(), self.tx.clone(), session_id, title);
+    }
+
+    /// Sessions picker rows matching `filter`, in display order.
+    pub fn filtered_sessions(&self, filter: &str) -> Vec<SessionInfo> {
+        let filter = filter.trim();
+        self.session_rows
+            .iter()
+            .filter(|info| {
+                filter.is_empty() || crate::ui::picker::fuzzy_match(&session_label(info), filter)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// The transcript blocks, or an empty slice when no session is open.
+    pub fn transcript_blocks(&self) -> &[Block] {
+        self.session
+            .as_ref()
+            .map_or(&[], |session| session.transcript.blocks())
+    }
+
+    /// Matches of the find bar's current query.
+    pub fn find_matches(&self, query: &str) -> Vec<features::FindMatch> {
+        self.session
+            .as_ref()
+            .map(|session| features::find_matches(session.transcript.blocks(), query))
+            .unwrap_or_default()
+    }
+
+    /// Rebuilds the sessions picker rows: the resident workspace first, then
+    /// newest first.
+    fn reload_session_rows(&mut self) {
+        let workspace = self.workspace.to_string_lossy().into_owned();
+        let mut rows = self.sessions.clone();
+        rows.sort_by(|left, right| {
+            let key = |info: &SessionInfo| (info.workspace != workspace, info.updated_at.clone());
+            key(right).cmp(&key(left))
+        });
+        self.session_rows = rows;
+    }
+
+    /// Rebuilds the diff view from the cards this session already holds. The
+    /// hunks appear when `changes.diff` answers.
+    fn open_diff(&mut self, scope: DiffScope) {
+        let Some(session) = self.session.as_ref() else {
+            self.diff = crate::ui::views::DiffView::new("Diff");
+            return;
+        };
+        let title = match scope {
+            DiffScope::Turn => "Diff · turn",
+            DiffScope::Session => "Diff · session",
+            DiffScope::Workspace => "Diff · workspace",
+        };
+        let mut view = crate::ui::views::DiffView::new(title);
+        if let Some(loop_id) = latest_loop(session) {
+            let files = collect_changed_files(&session.transcript, &loop_id);
+            view.set_files(files);
+        }
+        if view.files.is_empty() {
+            view.status = "No file changes are recorded for this scope.".into();
+        }
+        self.diff = view;
+        tasks::list_changes(
+            self.client.clone(),
+            self.tx.clone(),
+            session.info.session_id.clone(),
+            scope,
+        );
+    }
+
+    /// Fills the tool view from the card, then pages the full output.
+    fn open_tool(&mut self, key: ToolRef) {
+        let Some(call) = self
+            .session
+            .as_ref()
+            .and_then(|session| session.transcript.find_tool(&key))
+        else {
+            return;
+        };
+        let palette = self.palette;
+        self.tool_view = crate::ui::views::ToolView {
+            title: call.name.clone(),
+            detail: call.detail.clone(),
+            state: crate::ui::views::tool_state_label(call.state).to_owned(),
+            input: call
+                .expanded_input
+                .as_deref()
+                .map(|input| {
+                    input
+                        .lines()
+                        .map(|line| {
+                            ratatui::text::Line::styled(
+                                line.to_owned(),
+                                ratatui::style::Style::default().fg(palette.dim),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            output: call
+                .view_body()
+                .lines()
+                .map(|line| ratatui::text::Line::raw(line.to_owned()))
+                .collect(),
+            scroll: 0,
+            status: String::new(),
+        };
+        tasks::read_tool(self.client.clone(), self.tx.clone(), key);
     }
 }
 
@@ -261,9 +441,34 @@ pub struct App {
     /// Mouse selection: the cell the drag started at and where it is now.
     pub selection_start: Option<(u16, u16)>,
     pub selection_end: Option<(u16, u16)>,
-    /// The transcript's line cache. Owned by the renderer; the reducer only
-    /// invalidates it through block revisions.
+    /// The last assistant answer, so `/copy` works after a reopen.
+    pub last_answer: Option<String>,
+    /// The composed diff view, rebuilt when the overlay opens or its data
+    /// changes.
+    pub diff: crate::ui::views::DiffView,
+    /// The composed context view, refreshed from `session.context`.
+    pub context_view: crate::ui::views::ContextView,
+    /// The change record whose hunks the diff view is waiting for.
+    pub diff_pending: Option<crate::protocol::ChangeRecord>,
+    /// The tool-output view, rebuilt from the selected card.
+    pub tool_view: crate::ui::views::ToolView,
+    /// Scroll offset of the help view.
+    pub help_scroll: usize,
+    /// Sessions picker rows, in display order, refreshed when it opens.
+    pub session_rows: Vec<crate::protocol::SessionInfo>,
+    /// Confirm a delete with a second Ctrl+D before it runs.
+    pub delete_pending: Option<String>,
+    /// Where the transcript was drawn last frame, for mouse hit-testing.
+    pub transcript_area: Option<ratatui::layout::Rect>,
+    /// The rows the last frame drew, so selection copies what is on screen.
+    pub rendered: crate::ui::selection::Screen,
+    /// A draft waiting for the external editor, handed over by the main loop.
+    pub edit_request: Option<String>,
+    /// The transcript's line cache and viewport. Owned by the renderer; the
+    /// reducer only invalidates it through block revisions.
     pub layout: crate::ui::View,
+    /// Rows the transcript area had last frame, for paging.
+    pub viewport: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -306,7 +511,27 @@ impl App {
             palette: crate::theme::Palette::dark(),
             selection_start: None,
             selection_end: None,
+            last_answer: None,
+            diff: crate::ui::views::DiffView::new("Diff"),
+            context_view: crate::ui::views::ContextView::default(),
+            diff_pending: None,
+            tool_view: crate::ui::views::ToolView {
+                title: String::new(),
+                detail: String::new(),
+                state: String::new(),
+                input: Vec::new(),
+                output: Vec::new(),
+                scroll: 0,
+                status: String::new(),
+            },
+            help_scroll: 0,
+            session_rows: Vec::new(),
+            delete_pending: None,
+            transcript_area: None,
+            rendered: crate::ui::selection::Screen::default(),
+            edit_request: None,
             layout: crate::ui::View::default(),
+            viewport: 1,
         }
     }
 
@@ -499,6 +724,8 @@ impl App {
             }
             Action::Export(path) => {
                 if let Some(session) = self.session.as_ref() {
+                    let path =
+                        path.or_else(|| Some(features::export_path(&session.info.session_id)));
                     tasks::export(
                         self.client.clone(),
                         self.tx.clone(),
@@ -525,13 +752,15 @@ impl App {
                 true
             }
             Action::SetTheme(kind) => {
-                let mut config = crate::config::Config::load();
-                config.theme = kind;
-                if let Err(error) = config.save() {
-                    self.notice(NoticeLevel::Error, error);
-                }
-                self.theme = kind;
-                self.palette = crate::theme::Palette::for_kind(kind);
+                self.apply_theme(kind);
+                true
+            }
+            Action::ToggleTheme => {
+                let next = match self.theme {
+                    ThemeKind::Dark => ThemeKind::Light,
+                    ThemeKind::Light => ThemeKind::Dark,
+                };
+                self.apply_theme(next);
                 true
             }
             Action::ReloadAgent => {
@@ -595,6 +824,26 @@ impl App {
             self.send(text);
             true
         }
+    }
+
+    /// Switches the palette and persists the choice, so `/theme` survives a
+    /// restart. A failed write is a notice, not a reason to keep the old theme.
+    fn apply_theme(&mut self, kind: ThemeKind) {
+        let mut config = crate::config::Config::load();
+        config.theme = kind;
+        if let Err(error) = config.save() {
+            self.notice(NoticeLevel::Error, error);
+        }
+        self.theme = kind;
+        self.palette = crate::theme::Palette::for_kind(kind);
+        self.context_view = crate::ui::views::context_view(
+            "Context",
+            None,
+            self.session
+                .as_ref()
+                .and_then(|session| session.presentation.as_ref()),
+            &self.palette,
+        );
     }
 
     fn remember_draft(&mut self, text: &str) {
@@ -751,36 +1000,37 @@ impl App {
     }
 
     fn copy_last_answer(&mut self) {
-        let Some(session) = self.session.as_ref() else {
-            return;
-        };
-        let Some(text) = session.transcript.last_answer().map(str::to_owned) else {
+        let text = self
+            .session
+            .as_ref()
+            .and_then(|session| session.transcript.last_answer())
+            .map(str::to_owned)
+            .or_else(|| self.last_answer.clone());
+        let Some(text) = text else {
             self.notice(NoticeLevel::Error, "No answer to copy yet");
             return;
         };
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let result = clipboard::copy(text).await;
-            let _ = tx.send(Msg::Op(Box::new(OpDone {
-                session: None,
-                epoch: 0,
-                kind: OpKind::Copied(result),
-            })));
-        });
+        self.copy(text);
     }
 
+    /// Ctrl+G: hand the draft to the external editor. The terminal is owned by
+    /// the main loop, so this only files the request; the loop suspends the
+    /// screen, runs the editor, and reports back through `Msg::DraftEdited`.
     fn edit_draft(&mut self) {
-        let tx = self.tx.clone();
         let draft = std::mem::take(&mut self.composer);
-        let config = crate::config::Config::load();
-        tokio::spawn(async move {
-            let result = editor::edit(&config, &draft).await;
-            let _ = tx.send(Msg::Op(Box::new(OpDone {
-                session: None,
-                epoch: 0,
-                kind: OpKind::Editor(result),
-            })));
-        });
+        self.edit_request = Some(draft);
+    }
+
+    /// Takes the draft the main loop must edit, if Ctrl+G asked for it.
+    pub fn take_edit_request(&mut self) -> Option<String> {
+        self.edit_request.take()
+    }
+
+    /// The editor command: config first, then `$VISUAL`/`$EDITOR`.
+    pub fn editor_command(&self) -> Result<Vec<String>, String> {
+        crate::config::Config::load().editor().ok_or_else(|| {
+            "No editor configured: set `editor` in the TUI config or $VISUAL/$EDITOR".to_owned()
+        })
     }
 
     fn answer(&mut self, answer: Answer) {
@@ -853,8 +1103,10 @@ impl App {
     }
 
     /// Moves the transcript view by `delta` rows, switching to an anchored
-    /// position so new output cannot move what is being read.
-    pub fn scroll_by(&mut self, delta: isize) {
+    /// position so new output cannot move what is being read. `viewport` is the
+    /// transcript height the caller knows about; the layout's own record of the
+    /// last frame is used when it is taller.
+    pub fn scroll_by(&mut self, delta: isize, viewport: usize) {
         if self
             .session
             .as_ref()
@@ -865,22 +1117,92 @@ impl App {
         // The layout owns row addressing; the reducer only decides the anchor.
         let layout = &self.layout.cache;
         let total = layout.total_rows();
-        if total == 0 {
+        let height = layout.viewport.height.max(viewport).max(1);
+        if total <= height {
             return;
         }
-        let height = layout.viewport.height.max(1);
+        let max_top = total - height;
         let top = match self.scroll {
-            Scroll::Follow => total.saturating_sub(height),
-            Scroll::Anchor { block, offset } => layout.anchor_row(block, offset),
+            Scroll::Follow => max_top,
+            Scroll::Anchor { block, offset } => layout.anchor_row(block, offset).min(max_top),
         };
-        let last = total.saturating_sub(height);
-        let next = (top as isize + delta).clamp(0, last as isize) as usize;
-        if next >= last {
+        let next = (top as isize + delta).clamp(0, max_top as isize) as usize;
+        if next == max_top {
             self.scroll = Scroll::Follow;
             return;
         }
         let (block, offset) = layout.anchor(next);
         self.scroll = Scroll::Anchor { block, offset };
+    }
+
+    /// The drag as text, sliced from the rows the last frame actually drew.
+    /// The renderer stores those rows, so the copy matches what is on screen
+    /// even while a turn is streaming.
+    pub fn selected_text(&self, drag: crate::ui::selection::Drag) -> Option<String> {
+        let area = self.transcript_area?;
+        let text = crate::ui::selection::text(&self.rendered, area, drag);
+        (!text.is_empty()).then_some(text)
+    }
+
+    /// Copies whatever the open view shows: the diff, the tool output, the
+    /// conversation text.
+    pub fn copy_view(&mut self) -> crate::app::keys::Input {
+        let text = match &self.overlay {
+            Overlay::Diff { .. } => crate::ui::views::diff_text(&self.diff),
+            Overlay::Tool(_) => self.tool_view.text(),
+            Overlay::Context => view_text(&self.context_view.lines),
+            Overlay::Help => String::new(),
+            _ => self
+                .session
+                .as_ref()
+                .map(|session| view_text_blocks(session.transcript.blocks()))
+                .unwrap_or_default(),
+        };
+        if text.trim().is_empty() {
+            self.notice(NoticeLevel::Info, "Nothing to copy here");
+            return crate::app::keys::Input::Consumed;
+        }
+        self.copy(text);
+        crate::app::keys::Input::Consumed
+    }
+
+    /// Copies `text` through the clipboard task.
+    pub fn copy(&mut self, text: String) {
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = clipboard::copy(&text).await;
+            let _ = tx.send(Msg::Op(Box::new(OpDone {
+                session: None,
+                epoch: 0,
+                kind: OpKind::Copied(result),
+            })));
+        });
+    }
+
+    /// Tab in the diff view: turn -> session -> workspace -> turn.
+    pub fn diff_cycle_scope(&mut self) {
+        let Overlay::Diff {
+            scope,
+            file,
+            scroll,
+        } = &mut self.overlay
+        else {
+            return;
+        };
+        *scope = match scope {
+            DiffScope::Turn => DiffScope::Session,
+            DiffScope::Session => DiffScope::Workspace,
+            DiffScope::Workspace => DiffScope::Turn,
+        };
+        *file = 0;
+        *scroll = 0;
+        let scope = *scope;
+        self.open_diff(scope);
+    }
+
+    /// Rows the transcript occupies, as the last frame saw it.
+    pub fn viewport_rows(&self) -> usize {
+        self.viewport.max(1)
     }
 
     fn next_epoch(&mut self) -> u64 {
@@ -904,7 +1226,10 @@ impl App {
         // Results that are not tied to the resident session apply directly.
         match kind {
             OpKind::Copied(result) => match result {
-                Ok(()) => self.notice(NoticeLevel::Info, "Copied"),
+                Ok(crate::clipboard::Copied::Native) => self.notice(NoticeLevel::Info, "Copied"),
+                Ok(crate::clipboard::Copied::Osc52) => {
+                    self.notice(NoticeLevel::Info, "Copied with OSC 52")
+                }
                 Err(error) => self.notice(NoticeLevel::Error, error),
             },
             OpKind::Editor(result) => match result {
@@ -981,6 +1306,9 @@ impl App {
                     true
                 }
             },
+            OpKind::Files(result) => self.on_files(result),
+            OpKind::ChangeFiles(_, result) => self.on_change_files(result),
+            OpKind::DiffFile(path, result) => self.on_diff_file(path, result),
             OpKind::Copied(_)
             | OpKind::Editor(_)
             | OpKind::Created(_)
@@ -1100,8 +1428,16 @@ impl App {
             Some(Block::EarlierHistory { .. })
         ));
         session.transcript.remove_front(skip);
+        let added = blocks.len();
         for block in blocks.into_iter().rev() {
             session.transcript.insert(0, block);
+        }
+        // Prepending must not move what the user is reading: the anchor block
+        // keeps its identity, so its index shifts by what was inserted (minus
+        // the placeholder that was replaced).
+        if let Scroll::Anchor { block, offset } = self.scroll {
+            let block = block + added;
+            self.scroll = Scroll::Anchor { block, offset };
         }
         session.loaded_from = page.from;
         session.hidden_items = page.from;
@@ -1211,6 +1547,15 @@ impl App {
                         session.compaction = None;
                     }
                 }
+                let context = context.clone();
+                if let Some(session) = self.session.as_ref() {
+                    self.context_view = crate::ui::views::context_view(
+                        "Context",
+                        Some(&context),
+                        session.presentation.as_ref(),
+                        &self.palette,
+                    );
+                }
                 true
             }
             Err(error) => {
@@ -1229,6 +1574,7 @@ impl App {
                     let start = session.transcript.len();
                     session.live = Some(LiveTurn::new(turn.clone(), start));
                 }
+                self.title_from_first_prompt();
                 true
             }
             Err(error) if error.is_busy() => {
@@ -1310,6 +1656,13 @@ impl App {
             let turn = wait.turn.clone();
             tasks::load_turn_result(self.client.clone(), self.tx.clone(), turn, epoch);
         }
+        if let Some(answer) = self
+            .session
+            .as_ref()
+            .and_then(|session| session.transcript.last_answer())
+        {
+            self.last_answer = Some(answer.to_owned());
+        }
         if let Some(session) = self.session.as_ref() {
             tasks::load_changes(
                 self.client.clone(),
@@ -1381,16 +1734,18 @@ impl App {
                 use crate::protocol::CompactStatus;
                 match result.status {
                     CompactStatus::Compacted => {
+                        // The marker is added to what is already loaded. The
+                        // summary is a new snapshot beside the history, so the
+                        // blocks on screen stay: a reload would erase them.
                         if let Some(session) = self.session.as_mut() {
                             session.push_compaction_result(result);
                         }
-                        // The projection changed: reload the tail so the summary
-                        // and the retained window are consistent.
                         if let Some(session) = self.session.as_ref() {
-                            tasks::load_tail(
+                            tasks::presentation(
                                 self.client.clone(),
                                 self.tx.clone(),
                                 session.info.session_id.clone(),
+                                session.epoch,
                             );
                         }
                     }
@@ -1432,6 +1787,92 @@ impl App {
                 true
             }
         }
+    }
+
+    /// Installs the `@` picker's candidate paths and keeps the overlay's
+    /// selection valid for the new list.
+    fn on_files(&mut self, result: &Result<Vec<String>, RpcError>) -> bool {
+        match result {
+            Ok(paths) => {
+                crate::ui::files::set_candidates(paths.clone());
+                if let Overlay::Files { filter, selected } = &mut self.overlay {
+                    // A stale selection would point past the new list.
+                    *selected =
+                        (*selected).min(crate::ui::files::filter_count(filter).saturating_sub(1));
+                }
+                true
+            }
+            Err(error) => {
+                self.error(error);
+                true
+            }
+        }
+    }
+
+    /// Fill the diff view's file column, then ask for the selected file's
+    /// hunks.
+    fn on_change_files(
+        &mut self,
+        result: &Result<Vec<crate::protocol::ChangeRecord>, RpcError>,
+    ) -> bool {
+        let records = match result {
+            Ok(records) => records.clone(),
+            Err(error) => {
+                self.diff.status = error.message.clone();
+                return true;
+            }
+        };
+        let files: Vec<crate::ui::views::DiffFile> = records
+            .iter()
+            .map(|record| crate::ui::views::DiffFile {
+                path: record.path.clone(),
+                kind: record.kind,
+                added: 0,
+                removed: 0,
+            })
+            .collect();
+        self.diff.set_files(files);
+        if self.diff.files.is_empty() {
+            self.diff.status = "No file changes are recorded for this scope.".into();
+            self.diff_pending = None;
+            return true;
+        }
+        self.diff_pending = records.first().cloned();
+        if let (Some(record), Some(session)) = (records.first(), self.session.as_ref()) {
+            tasks::load_diff(
+                self.client.clone(),
+                self.tx.clone(),
+                session.info.session_id.clone(),
+                record.change_ref.clone(),
+                record.path.clone(),
+            );
+        }
+        true
+    }
+
+    fn on_diff_file(
+        &mut self,
+        _path: &str,
+        result: &Result<crate::protocol::changes::DiffPage, RpcError>,
+    ) -> bool {
+        match result {
+            Ok(page) => {
+                let lines = crate::ui::views::hunk_lines(page, &self.palette);
+                let (added, removed) = count_hunks(&lines);
+                self.diff.hunks = lines;
+                self.diff.scroll = 0;
+                self.diff.status.clear();
+                if let Some(file) = self.diff.files.get_mut(self.diff.selected) {
+                    file.added = added;
+                    file.removed = removed;
+                }
+            }
+            Err(error) => {
+                self.diff.hunks.clear();
+                self.diff.status = error.message.clone();
+            }
+        }
+        true
     }
 
     fn on_changes(&mut self, loop_id: &str, result: &Result<ChangeSummary, RpcError>) -> bool {
@@ -1660,6 +2101,7 @@ impl App {
             }
             AgentEvent::ToolArgumentsPreview {
                 call: identity,
+                tool_name,
                 generated,
                 discarded,
                 display,
@@ -1672,7 +2114,14 @@ impl App {
                 if let Some(call) = session.transcript.find_tool_mut(&key) {
                     call.apply_display(&display);
                 } else if !generated && !discarded {
-                    let mut call = ToolCall::new(key, "tool");
+                    // The preview may arrive before `tool_started`; the card is
+                    // created here so streaming arguments show as they generate.
+                    let name = if tool_name.is_empty() {
+                        "tool".to_owned()
+                    } else {
+                        tool_name
+                    };
+                    let mut call = ToolCall::new(key, name);
                     call.apply_display(&display);
                     session.transcript.push(Block::Tool(Box::new(call)));
                 }
@@ -1726,7 +2175,9 @@ impl App {
                     chunk.data.clone().into_bytes()
                 };
                 let text = String::from_utf8_lossy(&bytes).into_owned();
-                if let Some(call) = session.transcript.find_tool_mut(&data.tool_ref) {
+                if let Some(call) = session.transcript.find_tool_mut(&data.tool_ref)
+                    && let Some(text) = call.accept_chunk(chunk.stream, chunk, text)
+                {
                     call.push_output(&text);
                 }
                 true
@@ -1956,7 +2407,7 @@ impl App {
                         "⏵"
                     },
                     queued.label(),
-                    crate::ui::wrap::truncate(&queued.text.replace('\n', " "), 60)
+                    crate::ui::panel::truncate(&queued.text.replace('\n', " "), 60)
                 )
             })
             .collect();
@@ -2019,4 +2470,112 @@ impl App {
     pub fn context_budget(&self) -> Option<&ContextBudget> {
         self.session.as_ref().and_then(|s| s.context.as_ref())
     }
+}
+
+/// The loop id of the newest finished turn, for a turn-scoped diff.
+fn latest_loop(session: &Session) -> Option<String> {
+    session
+        .transcript
+        .blocks()
+        .iter()
+        .rev()
+        .find_map(|block| match block {
+            Block::TurnEnd { loop_id, .. } => Some(loop_id.clone()),
+            _ => None,
+        })
+}
+
+/// Files a turn touched, from the write/edit cards it holds, so the diff view
+/// can list something before `changes.list` answers.
+fn collect_changed_files(
+    transcript: &Transcript,
+    loop_id: &str,
+) -> Vec<crate::ui::views::DiffFile> {
+    let mut files: Vec<crate::ui::views::DiffFile> = Vec::new();
+    for block in transcript.blocks() {
+        let Block::Tool(call) = block else {
+            continue;
+        };
+        if call.key.loop_id != loop_id || !writes_files(&call.name) {
+            continue;
+        }
+        let path = call.detail.trim();
+        if path.is_empty() || files.iter().any(|file| file.path == path) {
+            continue;
+        }
+        files.push(crate::ui::views::DiffFile {
+            path: path.to_owned(),
+            kind: crate::protocol::ChangeKind::Modified,
+            added: 0,
+            removed: 0,
+        });
+    }
+    files
+}
+
+fn writes_files(name: &str) -> bool {
+    matches!(name, "write" | "edit" | "apply_patch" | "patch")
+}
+
+/// Added and removed line counts of a rendered diff.
+fn count_hunks(lines: &[ratatui::text::Line<'static>]) -> (usize, usize) {
+    let mut added = 0;
+    let mut removed = 0;
+    for line in lines {
+        let Some(span) = line.spans.first() else {
+            continue;
+        };
+        let text = span.content.as_ref();
+        if text.starts_with('+') {
+            added += 1;
+        } else if text.starts_with('-') {
+            removed += 1;
+        }
+    }
+    (added, removed)
+}
+
+/// What the sessions picker filters on: the title, or the id while untitled.
+fn session_label(info: &SessionInfo) -> String {
+    match info.title.as_deref() {
+        Some(title) if !title.trim().is_empty() => title.to_owned(),
+        _ => info.session_id.clone(),
+    }
+}
+
+/// Rendered lines back to text, for `/copy` in a view.
+fn view_text(lines: &[ratatui::text::Line<'static>]) -> String {
+    lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The readable text of a transcript, used by `/copy` when no view is open.
+fn view_text_blocks(blocks: &[Block]) -> String {
+    let mut out = String::new();
+    for block in blocks {
+        let text = match block {
+            Block::User { text, .. } => text,
+            Block::Assistant { text, .. } => text,
+            Block::Notice { text, .. } => text,
+            Block::Compaction { summary, .. } => summary.as_deref().unwrap_or_default(),
+            Block::Tool(call) => call.detail.as_str(),
+            Block::TurnEnd { .. } | Block::EarlierHistory { .. } => "",
+        };
+        if text.trim().is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(text);
+    }
+    out
 }

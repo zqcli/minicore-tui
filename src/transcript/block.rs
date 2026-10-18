@@ -107,6 +107,9 @@ pub struct ToolCall {
     pub output: Vec<String>,
     pub output_lines: Option<usize>,
     pub truncated: bool,
+    /// Next expected byte offset per stream. `None` until the first chunk, so
+    /// the first chunk establishes the cursor whatever its base offset is.
+    pub stream_offsets: [Option<u64>; 2],
     /// Full output fetched for the tool view, keyed by stream name.
     pub full_output: Option<(String, String)>,
 }
@@ -160,6 +163,7 @@ impl ToolCall {
             output: Vec::new(),
             output_lines: None,
             truncated: false,
+            stream_offsets: [None, None],
             full_output: None,
         }
     }
@@ -220,6 +224,37 @@ impl ToolCall {
             Some("succeeded") => ToolState::Succeeded,
             _ => self.state,
         };
+    }
+
+    /// Accepts one process chunk for `stream`. Returns the text to append, or
+    /// `None` when the chunk is a duplicate, out of order, or evicted: a gap is
+    /// marked instead of silently splicing unrelated bytes together.
+    pub fn accept_chunk(
+        &mut self,
+        stream: crate::protocol::event::ProcessStream,
+        chunk: &crate::protocol::event::ProcessChunk,
+        text: String,
+    ) -> Option<String> {
+        let slot = match stream {
+            crate::protocol::event::ProcessStream::Stdout => 0,
+            crate::protocol::event::ProcessStream::Stderr => 1,
+            crate::protocol::event::ProcessStream::Other => return Some(text),
+        };
+        if chunk.expired {
+            return None;
+        }
+        match self.stream_offsets[slot] {
+            Some(expected) if chunk.base_offset == expected => {}
+            Some(expected) if chunk.base_offset < expected => return None,
+            Some(_) => {
+                // The Agent dropped bytes: say so rather than joining halves.
+                self.stream_offsets[slot] = Some(chunk.next_offset);
+                return Some(format!("…\n{text}"));
+            }
+            None => {}
+        }
+        self.stream_offsets[slot] = Some(chunk.next_offset);
+        Some(text)
     }
 
     /// Appends a process-output chunk, keeping only the tail.
@@ -555,6 +590,7 @@ pub fn to_markdown(items: &[RawHistoryItem]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::event::{ProcessChunk, ProcessStream};
     use crate::protocol::read::decode_item;
     use serde_json::json;
 
@@ -577,6 +613,82 @@ mod tests {
         assert!(call.output.len() <= OUTPUT_TAIL_LINES + 1);
         assert_eq!(call.output.last().unwrap(), "");
         assert!(call.output.iter().any(|line| line == "line 419"));
+    }
+
+    fn chunk(stream: ProcessStream, base: u64, next: u64, expired: bool) -> ProcessChunk {
+        ProcessChunk {
+            stream,
+            encoding: "base64".into(),
+            data: String::new(),
+            base_offset: base,
+            next_offset: next,
+            dropped: false,
+            expired,
+        }
+    }
+
+    #[test]
+    fn stdout_and_stderr_keep_independent_cursors() {
+        let mut call = ToolCall::new(key("c"), "bash");
+        let out = ProcessStream::Stdout;
+        let err = ProcessStream::Stderr;
+        assert!(
+            call.accept_chunk(out, &chunk(out, 0, 10, false), "a".into())
+                .is_some()
+        );
+        // stderr starts at its own zero; the stdout cursor must not apply.
+        assert!(
+            call.accept_chunk(err, &chunk(err, 0, 4, false), "b".into())
+                .is_some()
+        );
+        assert!(
+            call.accept_chunk(out, &chunk(out, 10, 20, false), "c".into())
+                .is_some()
+        );
+        assert_eq!(call.stream_offsets, [Some(20), Some(4)]);
+    }
+
+    #[test]
+    fn a_replayed_chunk_is_ignored() {
+        let mut call = ToolCall::new(key("c"), "bash");
+        let out = ProcessStream::Stdout;
+        call.accept_chunk(out, &chunk(out, 0, 10, false), "a".into());
+        assert!(
+            call.accept_chunk(out, &chunk(out, 0, 10, false), "a".into())
+                .is_none()
+        );
+    }
+
+    /// Feeds one chunk exactly as the reducer does.
+    fn feed(call: &mut ToolCall, stream: ProcessStream, base: u64, next: u64, text: &str) {
+        if let Some(text) =
+            call.accept_chunk(stream, &chunk(stream, base, next, false), text.into())
+        {
+            call.push_output(&text);
+        }
+    }
+
+    #[test]
+    fn a_dropped_range_is_marked_instead_of_spliced() {
+        let mut call = ToolCall::new(key("c"), "bash");
+        let out = ProcessStream::Stdout;
+        feed(&mut call, out, 0, 10, "a");
+        // Bytes 10..30 were evicted: the cursor jumps and a gap is shown.
+        feed(&mut call, out, 30, 40, "c");
+        assert_eq!(call.output, vec!["a", "…", "c"]);
+        assert_eq!(call.stream_offsets, [Some(40), None]);
+    }
+
+    #[test]
+    fn an_expired_chunk_is_dropped() {
+        let mut call = ToolCall::new(key("c"), "bash");
+        let out = ProcessStream::Stdout;
+        assert!(
+            call.accept_chunk(out, &chunk(out, 0, 10, true), "a".into())
+                .is_none()
+        );
+        assert!(call.output.is_empty());
+        assert_eq!(call.stream_offsets, [None, None]);
     }
 
     #[test]
