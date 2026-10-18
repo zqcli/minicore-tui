@@ -65,6 +65,7 @@ fn draw_transcript(frame: &mut Frame, area: ratatui::layout::Rect, app: &mut App
         expanded_tools: app.tools_expanded,
         show_reasoning: app.show_reasoning,
     };
+    app.viewport = area.height as usize;
     let blocks = session.transcript.blocks();
     let revisions = session.transcript.revisions();
     app.layout

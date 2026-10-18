@@ -47,6 +47,7 @@ pub fn render(block: &Block, palette: Palette, width: u16, fold: Fold) -> Vec<Li
             },
         )],
         Block::Compaction {
+            operation_id: _,
             before,
             after,
             summary: _,
@@ -319,6 +320,7 @@ mod tests {
             output: vec!["OK".into()],
             output_lines: Some(12),
             truncated: false,
+            stream_offsets: [None, None],
             full_output: None,
         };
         let block = Block::Tool(Box::new(call));
@@ -372,8 +374,7 @@ mod tests {
             usage: Default::default(),
             changes: Some(crate::transcript::ChangeSummary {
                 files: 3,
-                added: 40,
-                removed: 7,
+                lines: Some((40, 7)),
             }),
         };
         let body = text(&render(&block, Palette::plain(), 100, fold()));
@@ -381,12 +382,13 @@ mod tests {
         assert!(line.contains("completed"));
         assert!(line.contains("3m07s"));
         assert!(line.contains("12 requests"));
-        assert!(line.contains("3 files changed"));
+        assert!(line.contains("3 files changed (+40 −7)"));
     }
 
     #[test]
     fn a_compaction_marker_shows_before_and_after() {
         let block = Block::Compaction {
+            operation_id: "tui-1".into(),
             before: Some(32_200),
             after: Some(2_700),
             summary: None,

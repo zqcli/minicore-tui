@@ -6,7 +6,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
-use super::{Msg, OpDone, OpKind};
+use super::{BUSY_RETRY, Msg, OpDone, OpKind};
 use crate::protocol::{
     self, CompactionResult, ModelListResult, OkResult, PingResult, ProfileListResult,
     ReadSessionResult, SessionContext, SessionInfo, SessionListResult, SessionPresentation,
@@ -225,6 +225,7 @@ pub fn update_session(client: Arc<Client>, tx: Tx, params: Value, session_id: St
 pub fn send_turn(client: Arc<Client>, tx: Tx, session_id: String, text: String, epoch: u64) {
     tokio::spawn(async move {
         let params = json!({"session_id": session_id, "text": text});
+        let sent_text = text;
         let result: Result<TurnSendResult, _> = client
             .call::<Value, TurnSendResult>(protocol::METHOD_TURN_SEND, &params, false)
             .await;
@@ -234,7 +235,7 @@ pub fn send_turn(client: Arc<Client>, tx: Tx, session_id: String, text: String, 
                 let _ = tx.send(Msg::Op(Box::new(OpDone {
                     session: Some(session_id),
                     epoch,
-                    kind: OpKind::Sent(Ok(turn.clone())),
+                    kind: OpKind::Sent(sent_text.clone(), Ok(turn.clone())),
                 })));
                 wait(client, tx, turn, epoch);
             }
@@ -242,7 +243,7 @@ pub fn send_turn(client: Arc<Client>, tx: Tx, session_id: String, text: String, 
                 let _ = tx.send(Msg::Op(Box::new(OpDone {
                     session: Some(session_id),
                     epoch,
-                    kind: OpKind::Sent(Err(error)),
+                    kind: OpKind::Sent(sent_text, Err(error)),
                 })));
             }
         }
@@ -319,13 +320,13 @@ pub fn compact(client: Arc<Client>, tx: Tx, session_id: String, operation_id: St
 /// so a pin is never cached across operations.
 pub fn load_tail(client: Arc<Client>, tx: Tx, session_id: String) {
     tokio::spawn(async move {
-        let result = match probe(client.as_ref(), &session_id).await {
+        let result = match probe(client.as_ref(), &session_id, "display").await {
             Ok(probe) => {
                 let total = probe.total;
                 let start = total
                     .saturating_sub(protocol::TAIL_ITEMS)
                     .max(probe.first_item);
-                read_window(client.as_ref(), &session_id, probe, start, total).await
+                read_window(client.as_ref(), &session_id, "display", probe, start, total).await
             }
             Err(error) => Err(error),
         };
@@ -336,16 +337,49 @@ pub fn load_tail(client: Arc<Client>, tx: Tx, session_id: String) {
 /// Reads the page immediately older than `before`.
 pub fn load_older(client: Arc<Client>, tx: Tx, session_id: String, before: usize) {
     tokio::spawn(async move {
-        let result = match probe(client.as_ref(), &session_id).await {
+        let result = match probe(client.as_ref(), &session_id, "display").await {
             Ok(probe) => {
                 let start = before
                     .saturating_sub(protocol::PAGE_LIMIT)
                     .max(probe.first_item);
-                read_window(client.as_ref(), &session_id, probe, start, before).await
+                read_window(
+                    client.as_ref(),
+                    &session_id,
+                    "display",
+                    probe,
+                    start,
+                    before,
+                )
+                .await
             }
             Err(error) => Err(error),
         };
         post(&tx, Some(&session_id), OpKind::Older(result));
+    });
+}
+
+/// Reads the page immediately older than `before` in the canonical view: the
+/// items the display projection collapsed into the compaction summary. A fresh
+/// pin with its own boundary is required, because the canonical history has
+/// items below the display `first_item`.
+pub fn load_canonical(client: Arc<Client>, tx: Tx, session_id: String, before: usize) {
+    tokio::spawn(async move {
+        let result = match probe(client.as_ref(), &session_id, "canonical").await {
+            Ok(probe) => {
+                let start = before.saturating_sub(protocol::PAGE_LIMIT);
+                read_window(
+                    client.as_ref(),
+                    &session_id,
+                    "canonical",
+                    probe,
+                    start,
+                    before,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        };
+        post(&tx, Some(&session_id), OpKind::Canonical(result));
     });
 }
 
@@ -357,12 +391,12 @@ struct Probe {
     first_item: usize,
 }
 
-async fn probe(client: &Client, session_id: &str) -> Result<Probe, protocol::RpcError> {
+async fn probe(client: &Client, session_id: &str, view: &str) -> Result<Probe, protocol::RpcError> {
     let params = json!({
         "session_id": session_id,
         "limit": protocol::PROBE_LIMIT,
         "max_bytes": protocol::PROBE_MAX_BYTES,
-        "view": "display",
+        "view": view,
     });
     let page: ReadSessionResult = client
         .call::<Value, ReadSessionResult>(protocol::METHOD_SESSION_READ, &params, true)
@@ -379,6 +413,7 @@ async fn probe(client: &Client, session_id: &str) -> Result<Probe, protocol::Rpc
 async fn read_window(
     client: &Client,
     session_id: &str,
+    view: &str,
     probe: Probe,
     start: usize,
     end: usize,
@@ -397,7 +432,7 @@ async fn read_window(
             "session_id": session_id,
             "limit": protocol::PAGE_LIMIT,
             "max_bytes": protocol::PAGE_MAX_BYTES,
-            "view": "display",
+            "view": view,
             "cursor": position.value(),
             "captured_end": probe.pin.captured_end,
             "history_revision": probe.pin.history_revision,
@@ -497,32 +532,111 @@ async fn read_turn_result(
     Ok(items)
 }
 
-/// One turn's change list for the turn-end summary line.
+/// One turn's change list and its line counts, for the turn-end summary line.
 pub fn load_changes(client: Arc<Client>, tx: Tx, session_id: String, loop_id: String) {
     tokio::spawn(async move {
-        let params = json!({
-            "session_id": session_id,
-            "scope": {"turn": {"loop_id": loop_id}},
-            "limit": 100,
-            "max_bytes": 65536,
-        });
-        let result: Result<ChangeList, _> = client
-            .call::<Value, ChangeList>(protocol::METHOD_CHANGES_LIST, &params, true)
-            .await;
-        post(
-            &tx,
-            Some(&session_id),
-            OpKind::Changes(
-                loop_id,
-                result.map(|list| ChangeSummary {
-                    files: list.count(),
-                    added: 0,
-                    removed: 0,
-                }),
-            ),
-        );
+        let result = session_changes(client.as_ref(), &session_id, &loop_id).await;
+        post(&tx, Some(&session_id), OpKind::Changes(loop_id, result));
     });
 }
+
+async fn session_changes(
+    client: &Client,
+    session_id: &str,
+    loop_id: &str,
+) -> Result<ChangeSummary, protocol::RpcError> {
+    let params = json!({
+        "session_id": session_id,
+        "scope": {"turn": {"loop_id": loop_id}},
+        "limit": 100,
+        "max_bytes": 65536,
+    });
+    let list: ChangeList = client
+        .call::<Value, ChangeList>(protocol::METHOD_CHANGES_LIST, &params, true)
+        .await?;
+    let files = list.files();
+    if files == 0 {
+        return Ok(ChangeSummary {
+            files: 0,
+            lines: Some((0, 0)),
+        });
+    }
+    // Line counts come from the per-file diffs. Each record is counted on its
+    // own, because line indexes are per file. One uncountable record makes the
+    // pair unknown: a partial sum would read as if only some files changed.
+    let (mut added, mut removed) = (0, 0);
+    for record in &list.records {
+        if !record.details_available {
+            return Ok(ChangeSummary { files, lines: None });
+        }
+        let Some((record_added, record_removed)) =
+            read_diff(client, session_id, &record.change_ref).await?
+        else {
+            return Ok(ChangeSummary { files, lines: None });
+        };
+        added += record_added;
+        removed += record_removed;
+    }
+    Ok(ChangeSummary {
+        files,
+        lines: Some((added, removed)),
+    })
+}
+
+/// Counts one file's added and removed lines, paging its diff to exhaustion.
+/// `None` means the diff exists but cannot be counted (unavailable, partial,
+/// truncated, stale or binary), which is reported as an unknown count rather
+/// than as zero. A capacity refusal is retried briefly: the Agent admits a
+/// bounded number of concurrent reads and other clients share that allowance.
+async fn read_diff(
+    client: &Client,
+    session_id: &str,
+    change_ref: &str,
+) -> Result<Option<(usize, usize)>, protocol::RpcError> {
+    let mut pages = Vec::new();
+    let mut cursor: Option<Value> = None;
+    loop {
+        let params = json!({
+            "session_id": session_id,
+            "change_ref": change_ref,
+            "cursor": cursor,
+            "max_bytes": protocol::PAGE_MAX_BYTES,
+        });
+        let mut attempt = 0;
+        let page = loop {
+            let result = client
+                .call::<Value, protocol::changes::DiffPage>(
+                    protocol::METHOD_CHANGES_DIFF,
+                    &params,
+                    true,
+                )
+                .await;
+            match result {
+                Ok(page) => break page,
+                Err(error) if error.is_capacity() && attempt < DIFF_RETRIES => {
+                    attempt += 1;
+                    tokio::time::sleep(BUSY_RETRY * attempt).await;
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        let unavailable = page
+            .availability
+            .as_deref()
+            .is_some_and(|state| state != "available");
+        if page.binary || unavailable || page.truncated || page.stale {
+            return Ok(None);
+        }
+        cursor = page.next_cursor.clone();
+        pages.push(page);
+        if cursor.is_none() {
+            return Ok(Some(protocol::changes::count_lines(&pages)));
+        }
+    }
+}
+
+/// Attempts at one diff page before a capacity refusal is reported.
+const DIFF_RETRIES: u32 = 2;
 
 pub fn read_tool(client: Arc<Client>, tx: Tx, key: ToolRef) {
     tokio::spawn(async move {

@@ -9,6 +9,8 @@
 pub mod actions;
 pub mod commands;
 pub mod keys;
+#[cfg(test)]
+mod lifecycle_tests;
 pub mod session;
 pub mod tasks;
 
@@ -18,11 +20,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::clipboard;
-use crate::editor;
 use crate::protocol::{
     AgentEvent, CompactionPhase, CompactionProgress, ContextBudget, LoopOutcome, ModelInfo,
-    ProfileInfo, RpcError, SessionContext, SessionInfo, SessionPresentation, SessionState, ToolRef,
-    TurnRef,
+    ProfileInfo, Reasoning, RpcError, SessionContext, SessionInfo, SessionPresentation,
+    SessionState, ToolRef, TurnRef,
 };
 use crate::rpc::Client;
 use crate::theme::ThemeKind;
@@ -50,6 +51,21 @@ pub enum Msg {
     Quit,
 }
 
+/// Session settings from the command line: profile and model apply when the
+/// session is created, model and reasoning also when an existing one is opened.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LaunchSettings {
+    pub profile: Option<String>,
+    pub model: Option<String>,
+    pub reasoning: Option<Reasoning>,
+}
+
+impl LaunchSettings {
+    pub fn is_empty(&self) -> bool {
+        self.profile.is_none() && self.model.is_none() && self.reasoning.is_none()
+    }
+}
+
 pub struct Ready {
     pub models: Vec<ModelInfo>,
     pub profiles: Vec<ProfileInfo>,
@@ -71,11 +87,14 @@ pub enum OpKind {
     Deleted(String, Result<(), RpcError>),
     History(Result<tasks::History, RpcError>),
     Older(Result<tasks::History, RpcError>),
+    Canonical(Result<tasks::History, RpcError>),
     TurnItems(Result<Vec<(usize, crate::protocol::read::RawHistoryItem)>, RpcError>),
     State(Result<SessionState, RpcError>),
     Presentation(Result<SessionPresentation, RpcError>),
     Context(Result<SessionContext, RpcError>),
-    Sent(Result<TurnRef, RpcError>),
+    /// The send response, with the text that was sent so a refusal can hand it
+    /// back instead of losing it.
+    Sent(String, Result<TurnRef, RpcError>),
     Waited(Box<Result<crate::protocol::TurnWaitResult, RpcError>>),
     Steered(Result<u64, RpcError>),
     Cancelled(Result<(), RpcError>),
@@ -91,7 +110,6 @@ pub enum OpKind {
     ToolOutput(ToolRef, String, Result<String, RpcError>),
     Copied(Result<(), String>),
     Exported(Result<String, String>),
-    Editor(Result<Option<String>, String>),
     /// `session.state` poll while waiting for post-turn compaction.
     IdleCheck(Result<bool, RpcError>),
 }
@@ -237,6 +255,10 @@ pub struct App {
     pub sessions: Vec<SessionInfo>,
     pub models: Vec<ModelInfo>,
     pub profiles: Vec<ProfileInfo>,
+    /// Session settings requested on the command line. A new session is created
+    /// with exactly these; opening an existing one applies them through
+    /// `session.update`, so a flag is never silently dropped.
+    pub launch: LaunchSettings,
     pub composer: String,
     pub draft_history: VecDeque<String>,
     pub draft_cursor: Option<usize>,
@@ -261,9 +283,13 @@ pub struct App {
     /// Mouse selection: the cell the drag started at and where it is now.
     pub selection_start: Option<(u16, u16)>,
     pub selection_end: Option<(u16, u16)>,
-    /// The transcript's line cache. Owned by the renderer; the reducer only
-    /// invalidates it through block revisions.
+    /// The transcript's line cache and viewport height. Owned by the renderer;
+    /// the reducer only invalidates it through block revisions.
     pub layout: crate::transcript::layout::Layout,
+    pub viewport: usize,
+    /// A draft waiting for the main loop to run the external editor on it; the
+    /// terminal belongs to the loop, not to the reducer.
+    pub edit_request: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -286,6 +312,7 @@ impl App {
             sessions: Vec::new(),
             models: Vec::new(),
             profiles: Vec::new(),
+            launch: LaunchSettings::default(),
             composer: String::new(),
             draft_history: VecDeque::new(),
             draft_cursor: None,
@@ -307,6 +334,8 @@ impl App {
             selection_start: None,
             selection_end: None,
             layout: crate::transcript::layout::Layout::default(),
+            viewport: 1,
+            edit_request: None,
         }
     }
 
@@ -352,9 +381,8 @@ impl App {
                 true
             }
             Msg::DraftEdited(draft) => {
-                if let Some(draft) = draft {
-                    self.composer = draft;
-                }
+                // An empty file is a deliberate blank draft, not a cancel.
+                self.composer = draft.unwrap_or_default();
                 true
             }
             Msg::Quit => {
@@ -613,6 +641,9 @@ impl App {
             self.notice(NoticeLevel::Error, "No session is open");
             return;
         };
+        // The durable history echoes this prompt, so the turn's region starts
+        // before it: reconciliation replaces it rather than adding a second.
+        session.next_turn_start = Some(session.transcript.len());
         session.transcript.push(Block::User {
             text: text.clone(),
             kind: crate::protocol::read::UserKind::Prompt,
@@ -680,10 +711,17 @@ impl App {
     }
 
     fn create_session(&mut self) {
-        let profile = self.profiles.first().map(|profile| profile.id.clone());
+        // An absent profile means "the Agent's configured default". Choosing
+        // one here would override it with whatever sorts first.
         let mut params = serde_json::json!({ "workspace": self.workspace });
-        if let Some(profile) = profile {
+        if let Some(profile) = &self.launch.profile {
             params["profile"] = serde_json::json!(profile);
+        }
+        if let Some(model) = &self.launch.model {
+            params["model"] = serde_json::json!(model);
+        }
+        if let Some(reasoning) = self.launch.reasoning {
+            params["reasoning"] = serde_json::json!(reasoning);
         }
         tasks::create_session(self.client.clone(), self.tx.clone(), params);
     }
@@ -769,18 +807,24 @@ impl App {
         });
     }
 
+    /// Ctrl+G: hand the draft to the external editor. The terminal belongs to
+    /// the main loop, so this only files the request; the loop suspends the
+    /// screen, runs the editor, and reports back through [`Msg::DraftEdited`].
     fn edit_draft(&mut self) {
-        let tx = self.tx.clone();
         let draft = std::mem::take(&mut self.composer);
-        let config = crate::config::Config::load();
-        tokio::spawn(async move {
-            let result = editor::edit(&config, &draft).await;
-            let _ = tx.send(Msg::Op(Box::new(OpDone {
-                session: None,
-                epoch: 0,
-                kind: OpKind::Editor(result),
-            })));
-        });
+        self.edit_request = Some(draft);
+    }
+
+    /// Takes the draft the main loop must edit, if Ctrl+G asked for it.
+    pub fn take_edit_request(&mut self) -> Option<String> {
+        self.edit_request.take()
+    }
+
+    /// The editor command: config first, then `$VISUAL`/`$EDITOR`.
+    pub fn editor_command(&self) -> Result<Vec<String>, String> {
+        crate::config::Config::load().editor().ok_or_else(|| {
+            "No editor configured: set `editor` in the TUI config or $VISUAL/$EDITOR".to_owned()
+        })
     }
 
     fn answer(&mut self, answer: Answer) {
@@ -822,12 +866,18 @@ impl App {
             return;
         }
         session.loading_older = true;
-        tasks::load_older(
-            self.client.clone(),
-            self.tx.clone(),
-            session.info.session_id.clone(),
-            session.loaded_from,
-        );
+        // Below the display floor the transcript continues in the canonical
+        // history, behind the compaction summary. That is a different read with
+        // its own boundary, so it must not be asked for as a display page.
+        let below_floor = session.loaded_from <= session.first_item;
+        let before = session.loaded_from;
+        let session_id = session.info.session_id.clone();
+        if below_floor {
+            session.reached_floor = true;
+            tasks::load_canonical(self.client.clone(), self.tx.clone(), session_id, before);
+        } else {
+            tasks::load_older(self.client.clone(), self.tx.clone(), session_id, before);
+        }
     }
 
     fn recall_queued(&mut self) {
@@ -853,29 +903,34 @@ impl App {
     }
 
     /// Moves the transcript view by `delta` rows, switching to an anchored
-    /// position so new output cannot move what is being read.
-    pub fn scroll_by(&mut self, delta: isize) {
-        let Some(session) = self.session.as_ref() else {
-            return;
-        };
-        let total = session.transcript.len();
-        if total == 0 {
+    /// position so new output cannot move what is being read. `viewport` is
+    /// the number of rows the transcript occupies on screen.
+    pub fn scroll_by(&mut self, delta: isize, viewport: usize) {
+        if self.session.is_none() {
             return;
         }
-        // Row addressing is the UI layer's job; a signed block step keeps the
-        // reducer dependency-free and is exact enough for wheel and PgUp.
-        let (block, offset) = match self.scroll {
-            Scroll::Follow => (total.saturating_sub(1), 0),
-            Scroll::Anchor { block, offset } => (block, offset as isize),
+        let total = self.layout.total_rows();
+        let viewport = viewport.max(1);
+        if total <= viewport {
+            return;
+        }
+        let max_top = total - viewport;
+        let current = match self.scroll {
+            Scroll::Follow => max_top,
+            Scroll::Anchor { block, offset } => self.layout.anchor_row(block, offset).min(max_top),
         };
-        let next = block as isize + delta;
-        if next >= total as isize - 1 && delta > 0 {
+        let next = (current as isize + delta).clamp(0, max_top as isize) as usize;
+        if next == max_top {
             self.scroll = Scroll::Follow;
             return;
         }
-        let block = next.clamp(0, total as isize - 1) as usize;
-        let offset = if next <= 0 { 0 } else { offset.max(0) as u16 };
+        let (block, offset) = self.layout.anchor(next);
         self.scroll = Scroll::Anchor { block, offset };
+    }
+
+    /// Rows the transcript occupies, as the last frame saw it.
+    pub fn viewport_rows(&self) -> usize {
+        self.viewport.max(1)
     }
 
     fn next_epoch(&mut self) -> u64 {
@@ -902,11 +957,6 @@ impl App {
                 Ok(()) => self.notice(NoticeLevel::Info, "Copied"),
                 Err(error) => self.notice(NoticeLevel::Error, error),
             },
-            OpKind::Editor(result) => match result {
-                Ok(Some(draft)) => self.composer = draft,
-                Ok(None) => {}
-                Err(error) => self.notice(NoticeLevel::Error, error),
-            },
             OpKind::Created(result) => self.on_created(result),
             OpKind::Deleted(id, result) => match result {
                 Ok(()) => {
@@ -928,7 +978,7 @@ impl App {
                     return false;
                 }
                 // A result produced before this session was reopened is stale.
-                if epoch != resident.epoch && matches!(kind, OpKind::Waited(_) | OpKind::Sent(_)) {
+                if epoch != resident.epoch && matches!(kind, OpKind::Waited(_) | OpKind::Sent(..)) {
                     return false;
                 }
                 return self.on_session_op(&kind);
@@ -941,12 +991,13 @@ impl App {
         match kind {
             OpKind::History(result) => self.on_history(result),
             OpKind::Older(result) => self.on_older(result),
+            OpKind::Canonical(result) => self.on_canonical(result),
             OpKind::TurnItems(result) => self.on_turn_items(result),
             OpKind::State(result) => self.on_state(result),
             OpKind::IdleCheck(result) => self.on_idle_check(result),
             OpKind::Presentation(result) => self.on_presentation(result),
             OpKind::Context(result) => self.on_context(result),
-            OpKind::Sent(result) => self.on_sent(result),
+            OpKind::Sent(text, result) => self.on_sent(text, result),
             OpKind::Waited(result) => self.on_waited(result),
             OpKind::Steered(result) => self.on_steered(result),
             OpKind::Cancelled(result) => self.on_cancelled(result),
@@ -977,7 +1028,6 @@ impl App {
                 }
             },
             OpKind::Copied(_)
-            | OpKind::Editor(_)
             | OpKind::Created(_)
             | OpKind::Deleted(..)
             | OpKind::Exported(_)
@@ -987,20 +1037,20 @@ impl App {
 
     fn on_opened(&mut self, result: Result<SessionInfo, RpcError>) {
         match result {
-            Ok(info) => self.adopt(info),
+            Ok(info) => self.adopt(info, None),
             Err(error) => self.error(error),
         }
     }
 
     fn on_created(&mut self, result: Result<SessionInfo, RpcError>) {
         match result {
-            Ok(info) => self.adopt(info),
+            Ok(info) => self.adopt(info, Some(())),
             Err(error) => self.error(error),
         }
     }
 
     /// Makes `info` the resident session and loads its tail.
-    fn adopt(&mut self, info: SessionInfo) {
+    fn adopt(&mut self, info: SessionInfo, created: Option<()>) {
         let mut session = Session::new(info);
         session.epoch = self.session.as_ref().map_or(0, |old| old.epoch) + 1;
         let epoch = session.epoch;
@@ -1017,7 +1067,20 @@ impl App {
         self.waiting_for_compaction = false;
         self.merge_session_info_into_list();
         tasks::load_tail(self.client.clone(), self.tx.clone(), session_id.clone());
-        tasks::presentation(self.client.clone(), self.tx.clone(), session_id, epoch);
+        tasks::presentation(
+            self.client.clone(),
+            self.tx.clone(),
+            session_id.clone(),
+            epoch,
+        );
+        tasks::context(self.client.clone(), self.tx.clone(), session_id);
+        // A new session already carries its settings; an opened one needs them
+        // applied, because the flags describe how to run this session now.
+        let (model, reasoning) = (self.launch.model.clone(), self.launch.reasoning);
+        if created.is_none() && (model.is_some() || reasoning.is_some()) {
+            self.update_session(model, reasoning);
+        }
+        self.launch = LaunchSettings::default();
     }
 
     fn merge_session_info_into_list(&mut self) {
@@ -1095,12 +1158,23 @@ impl App {
             Some(Block::EarlierHistory { .. })
         ));
         session.transcript.remove_front(skip);
+        let added = blocks.len();
         for block in blocks.into_iter().rev() {
             session.transcript.insert(0, block);
         }
+        // Prepending must not move what the user is reading: the anchor block
+        // keeps its identity, so its index shifts by what was inserted (minus
+        // the placeholder that was replaced).
+        if let Scroll::Anchor { block, offset } = self.scroll {
+            let block = block + added;
+            self.scroll = Scroll::Anchor { block, offset };
+        }
         session.loaded_from = page.from;
         session.hidden_items = page.from;
-        if page.has_more {
+        // A page reaching the display floor leaves the reader at the compaction
+        // summary with more history behind it; otherwise the label just states
+        // how much older history remains unloaded.
+        if page.has_more || session.loaded_from <= session.first_item {
             session.transcript.insert(
                 0,
                 Block::EarlierHistory {
@@ -1108,6 +1182,46 @@ impl App {
                 },
             );
         }
+        true
+    }
+
+    /// Prepends a canonical page read from below the display floor. The page is
+    /// raw history the display projection collapsed away, so the summary
+    /// placeholder stays and the items go below it.
+    fn on_canonical(&mut self, result: &Result<tasks::History, RpcError>) -> bool {
+        let page = match result {
+            Ok(page) => page,
+            Err(error) => {
+                if let Some(session) = self.session.as_mut() {
+                    session.loading_older = false;
+                }
+                self.error(error);
+                return true;
+            }
+        };
+        let Some(session) = self.session.as_mut() else {
+            return false;
+        };
+        session.loading_older = false;
+        let mut blocks = Vec::new();
+        install_items_into(&mut blocks, &page.items);
+        let added = blocks.len();
+        if added == 0 {
+            // Nothing older than this page: stop asking.
+            session.loaded_from = 0;
+            return true;
+        }
+        for block in blocks.into_iter().rev() {
+            session.transcript.insert(0, block);
+        }
+        if let Scroll::Anchor { block, offset } = self.scroll {
+            self.scroll = Scroll::Anchor {
+                block: block + added,
+                offset,
+            };
+        }
+        session.loaded_from = page.from;
+        session.hidden_items = page.from;
         true
     }
 
@@ -1125,13 +1239,9 @@ impl App {
         let Some(session) = self.session.as_mut() else {
             return false;
         };
-        let start = session
-            .live
-            .as_ref()
-            .map(|live| live.start)
-            .unwrap_or_default();
-        session.drop_live_region(start);
-        install_items(session, items);
+        if !session.reconcile_turn(items) {
+            return false;
+        }
         true
     }
 
@@ -1205,6 +1315,18 @@ impl App {
                     } else if session.compaction.is_some() {
                         session.compaction = None;
                     }
+                    // An automatic compaction has no response of its own: the
+                    // context view is where it is reported. Recording it here
+                    // makes it appear once, whether it was seen live or on open.
+                    if let Some(result) = &context.last_result {
+                        let operation_id = match &result.origin {
+                            Some(origin) if origin == "auto" => {
+                                format!("auto-{}", result.operation_id)
+                            }
+                            _ => result.operation_id.clone(),
+                        };
+                        session.push_compaction(&operation_id, result);
+                    }
                 }
                 true
             }
@@ -1215,25 +1337,39 @@ impl App {
         }
     }
 
-    fn on_sent(&mut self, result: &Result<TurnRef, RpcError>) -> bool {
+    fn on_sent(&mut self, text: &str, result: &Result<TurnRef, RpcError>) -> bool {
         match result {
             Ok(turn) => {
                 if let Some(session) = self.session.as_mut()
                     && session.live.is_none()
                 {
-                    let start = session.transcript.len();
+                    let start = session
+                        .next_turn_start
+                        .take()
+                        .unwrap_or_else(|| session.transcript.len());
                     session.live = Some(LiveTurn::new(turn.clone(), start));
                 }
                 true
             }
             Err(error) if error.is_busy() => {
-                // Post-turn compaction still owns the session. Keep the draft
-                // and poll until the Agent is idle again; never resend blindly.
+                // Post-turn compaction still owns the session, so this turn was
+                // refused, not sent. Take back the optimistic prompt and queue
+                // the text: it must neither look sent nor be lost. Poll until
+                // the Agent is idle; never resend blindly.
                 self.waiting_for_compaction = true;
+                if let Some(session) = self.session.as_mut() {
+                    session.unsend_prompt(text);
+                    session.push_follow_up(text.to_owned());
+                }
                 self.retry_when_idle();
                 true
             }
             Err(error) => {
+                // Any other refusal never reached the Agent.
+                if let Some(session) = self.session.as_mut() {
+                    session.unsend_prompt(text);
+                }
+                self.composer = text.to_owned();
                 self.error(error);
                 true
             }
@@ -1281,27 +1417,19 @@ impl App {
         session.live = None;
         session.abandon_unapplied_steers();
         session.finish_streaming();
-        if completed {
-            session.finish_turn(
-                &loop_id,
-                wait.outcome.clone(),
-                usage.clone(),
-                requests,
-                tool_rounds,
-                duration,
-            );
-        } else {
-            // Replace the streamed (possibly partial) turn with its durable
-            // items; the turn-end line is appended when they arrive.
-            session.drop_live_region(start);
-            session.finish_turn(
-                &loop_id,
-                wait.outcome.clone(),
-                usage.clone(),
-                requests,
-                tool_rounds,
-                duration,
-            );
+        session.finish_turn(
+            &loop_id,
+            wait.outcome.clone(),
+            usage.clone(),
+            requests,
+            tool_rounds,
+            duration,
+        );
+        if !completed {
+            // Events were dropped, so the streamed turn may be incomplete.
+            // Its durable items replace that region when they arrive; the
+            // region is remembered here because `live` is gone by then.
+            session.reconcile_from = Some((loop_id.clone(), start));
             let turn = wait.turn.clone();
             tasks::load_turn_result(self.client.clone(), self.tx.clone(), turn, epoch);
         }
@@ -1376,16 +1504,18 @@ impl App {
                 use crate::protocol::CompactStatus;
                 match result.status {
                     CompactStatus::Compacted => {
+                        // The marker is added to what is already loaded. The
+                        // summary is a new snapshot beside the history, so the
+                        // blocks on screen stay: a reload would erase them.
                         if let Some(session) = self.session.as_mut() {
-                            session.push_compaction_result(result);
+                            session.push_compaction(&result.operation_id.clone(), result);
                         }
-                        // The projection changed: reload the tail so the summary
-                        // and the retained window are consistent.
                         if let Some(session) = self.session.as_ref() {
-                            tasks::load_tail(
+                            tasks::presentation(
                                 self.client.clone(),
                                 self.tx.clone(),
                                 session.info.session_id.clone(),
+                                session.epoch,
                             );
                         }
                     }
@@ -1469,7 +1599,7 @@ impl App {
                         call.name = invocation.name.clone();
                     }
                     if let Some(execution) = &read.execution {
-                        call.state = ToolState::from_execution(execution.state);
+                        call.set_state(ToolState::from_execution(execution.state));
                         call.truncated = execution.result_truncated;
                         if let Some(command) = &execution.command {
                             call.exit_code = command.exit_code;
@@ -1526,7 +1656,10 @@ impl App {
             }
             AgentEvent::TurnStarted { turn, .. } => {
                 if session.live.is_none() {
-                    let start = session.transcript.len();
+                    let start = session
+                        .next_turn_start
+                        .take()
+                        .unwrap_or_else(|| session.transcript.len());
                     session.live = Some(LiveTurn::new(turn, start));
                 }
                 true
@@ -1655,6 +1788,7 @@ impl App {
             }
             AgentEvent::ToolArgumentsPreview {
                 call: identity,
+                tool_name,
                 generated,
                 discarded,
                 display,
@@ -1667,7 +1801,14 @@ impl App {
                 if let Some(call) = session.transcript.find_tool_mut(&key) {
                     call.apply_display(&display);
                 } else if !generated && !discarded {
-                    let mut call = ToolCall::new(key, "tool");
+                    // The preview may arrive before `tool_started`; the card is
+                    // created here so streaming arguments show as they generate.
+                    let name = if tool_name.is_empty() {
+                        "tool".to_owned()
+                    } else {
+                        tool_name
+                    };
+                    let mut call = ToolCall::new(key, name);
                     call.apply_display(&display);
                     session.transcript.push(Block::Tool(Box::new(call)));
                 }
@@ -1693,7 +1834,7 @@ impl App {
                 let state = ToolState::from_execution(execution.state);
                 let mut terminal = false;
                 if let Some(call) = session.transcript.find_tool_mut(&key) {
-                    call.state = state;
+                    call.set_state(state);
                     if let Some(count) = execution.output_line_count {
                         call.output_lines = Some(count);
                     }
@@ -1721,7 +1862,9 @@ impl App {
                     chunk.data.clone().into_bytes()
                 };
                 let text = String::from_utf8_lossy(&bytes).into_owned();
-                if let Some(call) = session.transcript.find_tool_mut(&data.tool_ref) {
+                if let Some(call) = session.transcript.find_tool_mut(&data.tool_ref)
+                    && let Some(text) = call.accept_chunk(chunk.stream, chunk, text)
+                {
                     call.push_output(&text);
                 }
                 true
@@ -1737,13 +1880,14 @@ impl App {
                 let key = identity.key();
                 session.finish_tool(&key);
                 if let Some(call) = session.transcript.find_tool_mut(&key) {
-                    call.state = match outcome {
+                    let state = match outcome {
                         ToolOutcome::Success => ToolState::Succeeded,
                         ToolOutcome::Failed => ToolState::Failed,
                         ToolOutcome::Denied => ToolState::Denied,
                         ToolOutcome::Cancelled => ToolState::Cancelled,
                         _ => call.state,
                     };
+                    call.set_state(state);
                     call.truncated |= content_truncated;
                     if call.output.is_empty()
                         && let Some(content) = content
@@ -1873,7 +2017,15 @@ pub fn turn_end_line(
     if let Some(changes) = changes
         && !changes.is_empty()
     {
-        parts.push(format!("{} files changed", changes.files));
+        let files = if changes.files == 1 {
+            "1 file changed".to_owned()
+        } else {
+            format!("{} files changed", changes.files)
+        };
+        match changes.lines {
+            Some((added, removed)) => parts.push(format!("{files} (+{added} −{removed})")),
+            None => parts.push(files),
+        }
     }
     parts.join(" · ")
 }
