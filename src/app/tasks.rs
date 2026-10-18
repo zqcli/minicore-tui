@@ -128,6 +128,10 @@ pub fn create_session(client: Arc<Client>, tx: Tx, params: Value) {
     });
 }
 
+/// Closes (if the Agent still holds it) and deletes one stored session. The
+/// picker only deletes sessions the TUI is not running, so a close here is
+/// normally a no-op; it is what makes delete work for a session another client
+/// left loaded.
 pub fn delete_session(client: Arc<Client>, tx: Tx, session_id: String) {
     tokio::spawn(async move {
         let params = json!({ "session_id": session_id });
@@ -637,6 +641,104 @@ async fn read_diff(
 
 /// Attempts at one diff page before a capacity refusal is reported.
 const DIFF_RETRIES: u32 = 2;
+
+/// Lists the change records for one scope and, for the first file, its hunks.
+/// The diff view gets files first, then hunks, so a huge workspace never blocks
+/// the panel from opening.
+pub fn list_changes(client: Arc<Client>, tx: Tx, session_id: String, scope: crate::app::DiffScope) {
+    tokio::spawn(async move {
+        let params = json!({
+            "session_id": session_id,
+            "scope": match scope {
+                crate::app::DiffScope::Turn => json!("session"),
+                crate::app::DiffScope::Session => json!("session"),
+                crate::app::DiffScope::Workspace => json!("workspace"),
+            },
+            "limit": 200,
+            "max_bytes": 262_144,
+        });
+        let result: Result<ChangeList, _> = client
+            .call::<Value, ChangeList>(protocol::METHOD_CHANGES_LIST, &params, false)
+            .await;
+        post(
+            &tx,
+            Some(&session_id),
+            OpKind::ChangeFiles(scope, result.map(|list| list.records)),
+        );
+    });
+}
+
+/// Pages the hunks of one change record for the diff view.
+pub fn load_diff(
+    client: Arc<Client>,
+    tx: Tx,
+    session_id: String,
+    change_ref: String,
+    path: String,
+) {
+    tokio::spawn(async move {
+        let mut hunks = Vec::new();
+        let mut cursor: Option<Value> = None;
+        let page = loop {
+            let params = json!({
+                "session_id": session_id,
+                "change_ref": change_ref,
+                "cursor": cursor,
+                "max_bytes": 262_144,
+            });
+            let next: Result<protocol::changes::DiffPage, _> = client
+                .call::<Value, protocol::changes::DiffPage>(
+                    protocol::METHOD_CHANGES_DIFF,
+                    &params,
+                    false,
+                )
+                .await;
+            match next {
+                Ok(mut result) => {
+                    cursor.clone_from(&result.next_cursor);
+                    hunks.append(&mut result.hunks);
+                    if cursor.is_none() {
+                        result.hunks = std::mem::take(&mut hunks);
+                        break result;
+                    }
+                }
+                Err(error) => {
+                    post(&tx, Some(&session_id), OpKind::DiffFile(path, Err(error)));
+                    return;
+                }
+            }
+        };
+        post(&tx, Some(&session_id), OpKind::DiffFile(path, Ok(page)));
+    });
+}
+
+/// Fetches workspace paths for the `@` picker: one recursive `workspace.files`
+/// page filtered by the current query, capped by the Agent's own limits.
+pub fn list_files(client: Arc<Client>, tx: Tx, session_id: String, query: String) {
+    tokio::spawn(async move {
+        let params = json!({
+            "session_id": session_id,
+            "recursive": true,
+            "query": query,
+            "limit": 500,
+            "max_bytes": 262_144,
+        });
+        let result: Result<protocol::FilesPage, _> = client
+            .call::<Value, protocol::FilesPage>(protocol::METHOD_WORKSPACE_FILES, &params, false)
+            .await;
+        post(
+            &tx,
+            Some(&session_id),
+            OpKind::Files(result.map(|page| {
+                page.entries
+                    .into_iter()
+                    .filter(|entry| entry.kind == protocol::FileKind::File)
+                    .map(|entry| entry.path)
+                    .collect()
+            })),
+        );
+    });
+}
 
 pub fn read_tool(client: Arc<Client>, tx: Tx, key: ToolRef) {
     tokio::spawn(async move {

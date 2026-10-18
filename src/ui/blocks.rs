@@ -1,27 +1,41 @@
-//! Block rendering: one function per block kind. These are the visual rules of
-//! design §5.5 and §7.2; the layout cache calls them once per change.
+//! Block rendering: one function per block kind, following the rail style of
+//! design §5.5 and §7.2. The layout cache calls these once per change and
+//! stores the returned lines, so a block never re-renders per frame.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use crate::theme::Palette;
+use super::markdown;
+use super::rails;
+use super::theme::Styles;
+use super::wrap;
+use crate::protocol::read::UserKind;
 use crate::transcript::block::{NoticeLevel, ToolState};
 use crate::transcript::layout::Fold;
 use crate::transcript::{Block, ToolCall};
 
-/// Renders one block at `width`. Always returns at least one line so the layout
-/// cache can rely on a block occupying a row.
-pub fn render(block: &Block, palette: Palette, width: u16, fold: Fold) -> Vec<Line<'static>> {
-    let content = width.saturating_sub(2) as usize;
-    let mut lines = match block {
-        Block::User { text, kind } => user(text, kind, palette, content),
+/// Columns the assistant's inset costs, including the rail.
+pub const INSET: usize = 2;
+
+/// Renders one block at `width`. Always returns at least one line so a block
+/// occupies a row even when it has no content of its own.
+pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line<'static>> {
+    if (width as usize) < MIN_WIDTH {
+        return vec![Line::styled(
+            wrap::truncate(&wrap::sanitize(&plain_text(block)), width as usize),
+            styles.dim(),
+        )];
+    }
+    let width = width as usize;
+    match block {
+        Block::User { text, kind } => user(text, *kind, styles, width),
         Block::Assistant {
             reasoning,
             text,
             streaming,
             ..
-        } => assistant(reasoning, text, *streaming, palette, content, fold),
-        Block::Tool(call) => tool(call, palette, content, fold.expanded_tools),
+        } => assistant(reasoning, text, *streaming, styles, width, fold),
+        Block::Tool(call) => tool(call, styles, width, fold.expanded_tools),
         Block::TurnEnd {
             outcome,
             duration,
@@ -29,84 +43,67 @@ pub fn render(block: &Block, palette: Palette, width: u16, fold: Fold) -> Vec<Li
             tool_rounds,
             changes,
             ..
-        } => vec![Line::styled(
-            format!(
-                "── {} ──",
-                crate::app::turn_end_line(
-                    outcome,
-                    *duration,
-                    *requests,
-                    *tool_rounds,
-                    changes.as_ref()
-                )
-            ),
-            if outcome.is_completed() {
-                palette.dim()
-            } else {
-                palette.warning()
-            },
+        } => vec![turn_end(
+            outcome,
+            *duration,
+            *requests,
+            *tool_rounds,
+            changes.as_ref(),
+            styles,
+            width,
         )],
         Block::Compaction {
             operation_id: _,
             before,
             after,
-            summary: _,
-        } => vec![Line::styled(
-            match (before, after) {
-                (Some(before), Some(after)) => format!(
-                    "─ Context compacted · {} → {} tokens ─",
-                    crate::app::format_tokens(*before),
-                    crate::app::format_tokens(*after)
-                ),
-                _ => "─ Context compacted ─".to_owned(),
-            },
-            palette.dim(),
-        )],
+            summary,
+        } => compaction(*before, *after, summary.as_deref(), styles, width, fold),
         Block::Notice { level, text } => {
             let style = match level {
-                NoticeLevel::Error => palette.failure(),
-                NoticeLevel::Info => palette.dim(),
+                NoticeLevel::Error => styles.error(),
+                NoticeLevel::Info => styles.dim(),
             };
-            wrap(text, style, content)
+            wrap::wrap(text, width)
+                .into_iter()
+                .map(|line| Line::styled(line, style))
+                .collect()
         }
         Block::EarlierHistory { hidden_items } => vec![Line::styled(
-            format!("↑ {hidden_items} earlier items · PgUp to load"),
-            palette.faint(),
+            format!("↑ {hidden_items} earlier items · home to load"),
+            styles.subtle(),
         )],
-    };
-    if !matches!(
-        block,
-        Block::User { .. } | Block::Assistant { .. } | Block::Tool(_)
-    ) {
-        lines.push(Line::raw(""));
     }
-    if lines.is_empty() {
-        lines.push(Line::raw(""));
-    }
-    lines
 }
 
-fn wrap(text: &str, style: Style, width: usize) -> Vec<Line<'static>> {
-    crate::ui::wrap::wrap(text, width)
-        .into_iter()
-        .map(|line| Line::styled(line, style))
-        .collect()
+/// The text of a block without styles, for degenerate widths and `/copy`.
+pub fn plain_text(block: &Block) -> String {
+    match block {
+        Block::User { text, .. } | Block::Assistant { text, .. } => text.clone(),
+        Block::Tool(call) => format!("{}{}", call.name, call.detail),
+        Block::Notice { text, .. } => text.clone(),
+        Block::Compaction { summary, .. } => summary.clone().unwrap_or_default(),
+        _ => String::new(),
+    }
 }
 
-fn user(
-    text: &str,
-    kind: &crate::protocol::read::UserKind,
-    palette: Palette,
-    width: usize,
-) -> Vec<Line<'static>> {
+/// Widths below this cannot hold a rail, a card border and one glyph. Such a
+/// frame is a degenerate terminal; the block then draws as clipped plain text.
+pub const MIN_WIDTH: usize = 8;
+
+fn user(text: &str, kind: UserKind, styles: Styles, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    if matches!(kind, crate::protocol::read::UserKind::Steering) {
-        lines.push(Line::styled("↳ steering", palette.dim()));
+    if kind == UserKind::Steering {
+        lines.push(Line::styled("↳ steering", styles.dim()));
     }
-    for line in wrap(text, palette.text(), width.saturating_sub(2)) {
-        lines.push(rail(line, "▎ ", palette.user_rail));
+    let body = markdown::render(text, width.saturating_sub(INSET), &styles, styles.text());
+    let mut body: Vec<Line<'static>> = body
+        .into_iter()
+        .map(|line| rails::user_rail(line, styles))
+        .collect();
+    if body.is_empty() {
+        body.push(rails::user_rail(Line::raw(""), styles));
     }
-    lines.push(Line::raw(""));
+    lines.extend(body);
     lines
 }
 
@@ -114,65 +111,57 @@ fn assistant(
     reasoning: &str,
     text: &str,
     streaming: bool,
-    palette: Palette,
+    styles: Styles,
     width: usize,
     fold: Fold,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    let thinking = reasoning.trim();
+    let thinking = reasoning.trim_end();
     if !thinking.is_empty() {
         if fold.show_reasoning {
-            for line in wrap(thinking, palette.italic_dim(), width.saturating_sub(2)) {
-                lines.push(rail(line, "▏ ", palette.thinking_rail));
+            for line in
+                markdown::render(thinking, width.saturating_sub(INSET), &styles, styles.dim())
+            {
+                lines.push(rails::reasoning_rail(line, styles));
             }
         } else if streaming {
+            // While a message streams, the live reasoning tail is the useful
+            // part; the folded summary replaces it once the message ends.
             let tail: Vec<&str> = thinking.lines().rev().take(3).collect();
             let tail: Vec<&str> = tail.into_iter().rev().collect();
-            for line in wrap(
+            for line in markdown::render(
                 &tail.join("\n"),
-                palette.italic_dim(),
-                width.saturating_sub(2),
+                width.saturating_sub(INSET),
+                &styles,
+                styles.dim(),
             ) {
-                lines.push(rail(line, "▏ ", palette.thinking_rail));
+                lines.push(rails::reasoning_rail(line, styles));
             }
         } else {
+            let rows = thinking.lines().count().max(1);
             lines.push(Line::styled(
-                "thought · Ctrl+T to show",
-                palette.italic_dim(),
+                format!("thought for {rows} lines · Ctrl+T to show"),
+                styles.dim().add_modifier(ratatui::style::Modifier::ITALIC),
             ));
         }
     }
     if !text.trim().is_empty() {
-        for line in wrap(text, palette.text(), width.saturating_sub(2)) {
-            lines.push(rail(line, "  ", palette.text));
+        for line in markdown::render(text, width.saturating_sub(INSET), &styles, styles.text()) {
+            lines.push(rails::rail(line, styles));
         }
     }
-    lines.push(Line::raw(""));
     lines
 }
 
-/// Puts a styled rail in front of an already-styled line.
-fn rail(line: Line<'static>, rail: &str, rail_color: ratatui::style::Color) -> Line<'static> {
-    let style = line.style;
-    let mut spans = vec![Span::styled(
-        rail.to_owned(),
-        Style::default().fg(rail_color),
-    )];
-    spans.extend(line.spans);
-    Line {
-        style,
-        spans,
-        alignment: None,
-    }
-}
-
-fn tool(call: &ToolCall, palette: Palette, width: usize, expanded: bool) -> Vec<Line<'static>> {
-    let (glyph, style) = match call.state {
-        ToolState::Pending => ("·", palette.dim()),
-        ToolState::Running => ("⠋", palette.accent()),
-        ToolState::Succeeded => ("✓", palette.success()),
-        ToolState::Failed => ("✗", palette.failure()),
-        ToolState::Denied | ToolState::Cancelled => ("⊘", palette.warning()),
+fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Line<'static>> {
+    let (glyph, state_style, band) = match call.state {
+        ToolState::Pending => ("·", styles.dim(), styles.theme.tool_bg),
+        ToolState::Running => ("⠋", styles.accent(), styles.theme.tool_bg),
+        ToolState::Succeeded => ("✓", styles.success(), styles.theme.tool_success_bg),
+        ToolState::Failed => ("✗", styles.error(), styles.theme.tool_error_bg),
+        ToolState::Denied | ToolState::Cancelled => {
+            ("⊘", styles.warning(), styles.theme.tool_error_bg)
+        }
     };
     let mut meta = String::new();
     if let Some(duration) = call.duration {
@@ -191,33 +180,116 @@ fn tool(call: &ToolCall, palette: Palette, width: usize, expanded: bool) -> Vec<
         meta.push_str("truncated");
     }
     let header = format!("{glyph} {}  {}", call.name, call.detail);
-    let mut lines = vec![Line::styled(
-        format!(
-            "▎ {}",
-            crate::ui::wrap::clip(&header, &meta, width.saturating_sub(2))
-        ),
-        style,
+    let mut lines = vec![card_row(
+        &wrap::clip(&header, &meta, width.saturating_sub(INSET)),
+        state_style,
+        styles,
+        band,
     )];
-    let limit = if expanded { 200 } else { 4 };
-    let body = call.body_preview(limit);
+    // Folded bodies follow §5.5: a few lines of what the tool actually did, so
+    // the reader can judge it without opening anything.
+    let limit = if expanded { 200 } else { call.folded_rows() };
+    let body: Vec<&str> = call.body_preview(limit);
     for line in &body {
-        lines.push(Line::styled(
-            format!("▎   {}", crate::ui::wrap::sanitize(line)),
-            palette.faint(),
+        let style = if call.is_patch() {
+            styles.patch(line)
+        } else {
+            styles.subtle()
+        };
+        lines.push(card_row(
+            &format!(
+                "  {}",
+                wrap::truncate(&wrap::sanitize(line), width.saturating_sub(INSET + 2))
+            ),
+            style,
+            styles,
+            band,
         ));
     }
     if let Some(total) = call.output_lines
         && total > body.len()
     {
-        lines.push(Line::styled(
-            format!(
-                "▎   … {} more lines · Enter for full output",
-                total - body.len()
+        lines.push(card_row(
+            &wrap::truncate(
+                &format!(
+                    "  … {} earlier lines · {}",
+                    total - body.len(),
+                    if expanded {
+                        "enter for full output"
+                    } else {
+                        "ctrl+o to expand"
+                    }
+                ),
+                width.saturating_sub(INSET),
             ),
-            palette.faint(),
+            styles.subtle(),
+            styles,
+            band,
         ));
     }
-    lines.push(Line::raw(""));
+    lines
+}
+
+/// One card row: rail, body, and the card's background band.
+fn card_row(
+    text: &str,
+    style: Style,
+    styles: Styles,
+    band: ratatui::style::Color,
+) -> Line<'static> {
+    let fill = if styles.color { style.bg(band) } else { style };
+    Line {
+        style: fill,
+        spans: vec![Span::styled(format!("▎ {text}"), fill)],
+        alignment: None,
+    }
+}
+
+fn turn_end(
+    outcome: &crate::protocol::LoopOutcome,
+    duration: Option<std::time::Duration>,
+    requests: u32,
+    tool_rounds: u64,
+    changes: Option<&crate::transcript::ChangeSummary>,
+    styles: Styles,
+    width: usize,
+) -> Line<'static> {
+    // turn_end_line already appends the (+a −b) counts when every changed
+    // file's diff could be counted.
+    let text = crate::app::turn_end_line(outcome, duration, requests, tool_rounds, changes);
+    let labeled = format!("── {text} ──");
+    let style = if outcome.is_completed() {
+        styles.dim()
+    } else {
+        styles.warning()
+    };
+    Line::styled(wrap::truncate(&labeled, width), style)
+}
+
+fn compaction(
+    before: Option<u64>,
+    after: Option<u64>,
+    summary: Option<&str>,
+    styles: Styles,
+    width: usize,
+    fold: Fold,
+) -> Vec<Line<'static>> {
+    let text = match (before, after) {
+        (Some(before), Some(after)) => format!(
+            "─ Context compacted · {} → {} tokens ─",
+            crate::ui::tokens(before),
+            crate::ui::tokens(after)
+        ),
+        _ => "─ Context compacted ─".to_owned(),
+    };
+    let mut lines = vec![Line::styled(wrap::truncate(&text, width), styles.dim())];
+    if fold.show_reasoning
+        && let Some(summary) = summary
+    {
+        for line in markdown::render(summary, width.saturating_sub(INSET), &styles, styles.dim()) {
+            lines.push(rails::rail(line, styles));
+        }
+    }
     lines
 }
 
@@ -226,7 +298,13 @@ mod tests {
     use super::*;
     use crate::protocol::read::UserKind;
     use crate::protocol::{LoopOutcome, ToolRef};
+    use crate::theme::{Palette, ThemeKind};
+    use crate::transcript::{ChangeSummary, RequestKey};
     use std::time::Duration;
+
+    fn styles() -> Styles {
+        Styles::new(Palette::for_kind(ThemeKind::Dark), false)
+    }
 
     fn fold() -> Fold {
         Fold {
@@ -236,26 +314,29 @@ mod tests {
     }
 
     fn text(lines: &[Line<'static>]) -> Vec<String> {
-        lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect()
+        lines.iter().map(Line::to_string).collect()
+    }
+
+    fn assistant(text: &str, reasoning: &str, streaming: bool) -> Block {
+        Block::Assistant {
+            key: RequestKey {
+                loop_id: "l".into(),
+                request_index: 0,
+            },
+            reasoning: reasoning.into(),
+            text: text.into(),
+            streaming,
+        }
     }
 
     #[test]
-    fn a_user_block_has_a_rail_and_a_trailing_blank() {
+    fn a_user_block_is_marked_by_its_rail() {
         let block = Block::User {
             text: "hello world".into(),
             kind: UserKind::Prompt,
         };
-        let lines = render(&block, Palette::plain(), 40, fold());
-        assert!(text(&lines)[0].starts_with('▎'));
-        assert_eq!(text(&lines).last().unwrap(), "");
+        let body = text(&render(&block, styles(), 40, fold()));
+        assert!(body[0].starts_with("▎ hello world"), "{body:?}");
     }
 
     #[test]
@@ -264,75 +345,54 @@ mod tests {
             text: "focus on tests".into(),
             kind: UserKind::Steering,
         };
-        let lines = render(&block, Palette::plain(), 40, fold());
-        assert!(text(&lines)[0].contains("steering"));
+        let body = text(&render(&block, styles(), 40, fold()));
+        assert!(body[0].contains("steering"));
     }
 
     #[test]
-    fn finished_reasoning_collapses_to_one_line() {
-        let block = Block::Assistant {
-            key: crate::transcript::RequestKey {
-                loop_id: "l".into(),
-                request_index: 0,
+    fn assistant_prose_is_markdown_not_raw_text() {
+        let block = assistant("## Title\n\nsome **bold** prose", "", false);
+        let body = text(&render(&block, styles(), 60, fold()));
+        assert!(body.iter().any(|line| line.contains("Title")));
+        assert!(body.iter().any(|line| line.contains("bold")));
+        assert!(
+            !body.iter().any(|line| line.contains("**")),
+            "markdown markers are not shown: {body:?}"
+        );
+    }
+
+    #[test]
+    fn finished_reasoning_collapses_and_ctrl_t_shows_it() {
+        let block = assistant("the answer", "one\ntwo\nthree", false);
+        let folded = text(&render(&block, styles(), 60, fold()));
+        assert!(folded.iter().any(|line| line.contains("Ctrl+T")));
+        assert!(folded.iter().any(|line| line.contains("the answer")));
+
+        let shown = text(&render(
+            &block,
+            styles(),
+            60,
+            Fold {
+                expanded_tools: false,
+                show_reasoning: true,
             },
-            reasoning: "a long chain of thought".into(),
-            text: "the answer".into(),
-            streaming: false,
-        };
-        let lines = render(&block, Palette::plain(), 60, fold());
-        let body = text(&lines);
-        assert!(body.iter().any(|line| line.contains("Ctrl+T")));
-        assert!(body.iter().any(|line| line.contains("the answer")));
+        ));
+        assert!(shown.iter().any(|line| line.contains("three")));
+        assert!(
+            shown[0].starts_with('▏'),
+            "reasoning rows carry the reasoning rail: {shown:?}"
+        );
     }
 
     #[test]
     fn streaming_reasoning_shows_only_the_tail() {
-        let block = Block::Assistant {
-            key: crate::transcript::RequestKey {
-                loop_id: "l".into(),
-                request_index: 0,
-            },
-            reasoning: "one\ntwo\nthree\nfour\nfive".into(),
-            text: String::new(),
-            streaming: true,
-        };
-        let lines = text(&render(&block, Palette::plain(), 60, fold()));
+        let block = assistant("", "one\ntwo\nthree\nfour\nfive", true);
+        let lines = text(&render(&block, styles(), 60, fold()));
         assert!(!lines.iter().any(|line| line.contains("one")));
         assert!(lines.iter().any(|line| line.contains("five")));
     }
 
-    #[test]
-    fn a_tool_card_reports_status_duration_and_exit_code() {
-        let call = ToolCall {
-            key: ToolRef {
-                session_id: "s".into(),
-                loop_id: "l".into(),
-                request_index: 0,
-                tool_call_id: "c".into(),
-            },
-            name: "bash".into(),
-            detail: "$ python3 -m unittest".into(),
-            expanded_input: None,
-            state: ToolState::Succeeded,
-            started_at: None,
-            duration: Some(Duration::from_millis(400)),
-            exit_code: Some(0),
-            output: vec!["OK".into()],
-            output_lines: Some(12),
-            truncated: false,
-            stream_offsets: [None, None],
-            full_output: None,
-        };
-        let block = Block::Tool(Box::new(call));
-        let body = text(&render(&block, Palette::plain(), 60, fold()));
-        assert!(body[0].contains("✓ bash"));
-        assert!(body[0].contains("0.4s"));
-        assert!(body[0].contains("exit 0"));
-        assert!(body.iter().any(|line| line.contains("more lines")));
-    }
-
-    #[test]
-    fn a_folded_card_caps_its_body_and_an_expanded_one_shows_more() {
+    fn call() -> ToolCall {
         let mut call = ToolCall::new(
             ToolRef {
                 session_id: "s".into(),
@@ -340,31 +400,67 @@ mod tests {
                 request_index: 0,
                 tool_call_id: "c".into(),
             },
-            "read",
+            "bash",
         );
+        call.detail = "$ python3 -m unittest".into();
         call.state = ToolState::Succeeded;
-        call.output = (0..50).map(|index| format!("line {index}")).collect();
-        let folded = render(
-            &Block::Tool(Box::new(call.clone())),
-            Palette::plain(),
-            60,
-            fold(),
-        );
+        call.duration = Some(Duration::from_millis(400));
+        call.exit_code = Some(0);
+        call.output = vec!["Ran 30 tests".into(), "OK".into()];
+        call.output_lines = Some(14);
+        call
+    }
+
+    #[test]
+    fn a_tool_card_reports_status_duration_and_exit_code() {
+        let block = Block::Tool(Box::new(call()));
+        let body = text(&render(&block, styles(), 60, fold()));
+        assert!(body[0].contains("✓ bash"));
+        assert!(body[0].contains("0.4s"));
+        assert!(body[0].contains("exit 0"));
+        assert!(body.iter().any(|line| line.contains("12 earlier lines")));
+    }
+
+    #[test]
+    fn a_folded_card_is_small_and_an_expanded_one_is_bounded() {
+        let mut card = call();
+        card.output = (0..400).map(|index| format!("line {index}")).collect();
+        let block = Block::Tool(Box::new(card));
+        let folded = render(&block, styles(), 60, fold());
         let expanded = render(
-            &Block::Tool(Box::new(call)),
-            Palette::plain(),
+            &block,
+            styles(),
             60,
             Fold {
                 expanded_tools: true,
                 show_reasoning: false,
             },
         );
+        assert!(folded.len() <= 8, "folded cards stay small");
         assert!(expanded.len() > folded.len());
-        assert!(expanded.len() <= 202);
+        assert!(expanded.len() <= 202, "expanded cards cap at 200 rows");
     }
 
     #[test]
-    fn a_turn_end_line_names_the_outcome() {
+    fn a_failed_card_uses_the_error_band() {
+        let mut card = call();
+        card.state = ToolState::Failed;
+        card.output = vec!["Traceback (most recent call last)".into()];
+        let lines = render(&Block::Tool(Box::new(card)), styles(), 60, fold());
+        assert_eq!(lines[0].style.bg, Some(styles().theme.tool_error_bg));
+    }
+
+    #[test]
+    fn tool_output_is_sanitized_before_it_reaches_the_terminal() {
+        let mut card = call();
+        card.output = vec!["\u{1b}[31mred\u{1b}[0m".into()];
+        let body = text(&render(&Block::Tool(Box::new(card)), styles(), 60, fold()));
+        assert!(body.iter().any(|line| line.contains("red")));
+        assert!(!body.iter().any(|line| line.contains('\u{1b}')));
+    }
+
+    #[test]
+    fn a_turn_end_line_names_the_outcome_and_the_change_size() {
         let block = Block::TurnEnd {
             loop_id: "l".into(),
             outcome: LoopOutcome::Completed,
@@ -372,28 +468,68 @@ mod tests {
             requests: 12,
             tool_rounds: 11,
             usage: Default::default(),
-            changes: Some(crate::transcript::ChangeSummary {
+            changes: Some(ChangeSummary {
                 files: 3,
                 lines: Some((40, 7)),
             }),
         };
-        let body = text(&render(&block, Palette::plain(), 100, fold()));
+        let body = text(&render(&block, styles(), 100, fold()));
         let line = &body[0];
-        assert!(line.contains("completed"));
-        assert!(line.contains("3m07s"));
-        assert!(line.contains("12 requests"));
-        assert!(line.contains("3 files changed (+40 −7)"));
+        assert!(line.contains("completed"), "{line}");
+        assert!(line.contains("3m07s"), "{line}");
+        assert!(line.contains("12 requests"), "{line}");
+        assert!(line.contains("3 files changed (+40 −7)"), "{line}");
     }
 
     #[test]
-    fn a_compaction_marker_shows_before_and_after() {
+    fn a_compaction_marker_shows_what_it_saved() {
         let block = Block::Compaction {
             operation_id: "tui-1".into(),
             before: Some(32_200),
             after: Some(2_700),
             summary: None,
         };
-        let body = text(&render(&block, Palette::plain(), 80, fold()));
-        assert!(body[0].contains("32.2k → 2.7k"));
+        let body = text(&render(&block, styles(), 80, fold()));
+        assert!(body[0].contains("32.2k → 2.7k"), "{body:?}");
+    }
+
+    #[test]
+    fn errors_are_red_and_archived_history_is_dim() {
+        let error = Block::Notice {
+            level: NoticeLevel::Error,
+            text: "turn failed".into(),
+        };
+        let lines = render(&error, styles(), 40, fold());
+        assert_eq!(lines[0].style.fg, Some(styles().theme.error));
+
+        let history = Block::EarlierHistory { hidden_items: 40 };
+        let body = text(&render(&history, styles(), 40, fold()));
+        assert!(body[0].contains("40 earlier items"));
+    }
+
+    #[test]
+    fn narrow_widths_never_overflow() {
+        for block in [
+            Block::User {
+                text: "a very long word without any break opportunity at all".into(),
+                kind: UserKind::Prompt,
+            },
+            assistant(
+                "```rust\nfn main() { println!(\"wide code\"); }\n```",
+                "",
+                false,
+            ),
+            Block::Tool(Box::new(call())),
+        ] {
+            for width in 3..12 {
+                for line in render(&block, styles(), width, fold()) {
+                    assert!(
+                        crate::ui::wrap::width(&line.to_string()) <= width as usize,
+                        "{:?} at width {width}: {line:?}",
+                        block.loop_id()
+                    );
+                }
+            }
+        }
     }
 }

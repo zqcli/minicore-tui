@@ -684,7 +684,11 @@ async fn scrolling_leaves_follow_mode_and_returns_to_it() {
         |_, _| vec![ratatui::text::Line::raw("row"); 10],
     );
     app.viewport = 5;
-    assert_eq!(app.layout.total_rows(), 100);
+    assert_eq!(
+        app.layout.total_rows(),
+        109,
+        "ten rows per block plus one separating row between blocks"
+    );
     app.scroll_by(-5, 5);
     assert_ne!(app.scroll, Scroll::Follow);
     app.scroll_by(100, 5);
