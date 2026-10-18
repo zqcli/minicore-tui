@@ -14,6 +14,7 @@ pub mod snapshots;
 pub mod status;
 pub mod theme;
 pub mod transcript;
+pub mod views;
 pub mod wrap;
 
 use ratatui::Frame;
@@ -50,7 +51,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         (bottom_height(app, area.width) + sheet_rows as u16).min(area.height.saturating_sub(1));
     let [transcript, bottom] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(bottom)]).areas(area);
-    draw_transcript(frame, transcript, app, styles);
+    if let Some(view) = views::frame(app) {
+        draw_view(frame, transcript, app, styles, view);
+    } else {
+        draw_transcript(frame, transcript, app, styles);
+    }
     let mut rows = Vec::with_capacity(bottom.height as usize);
     if let Some(sheet) = sheet {
         rows.extend(panel::rows(&sheet, styles, bottom.width));
@@ -105,6 +110,19 @@ fn draw_transcript(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles)
         styles,
         |state, index, block| state.render(index, block, styles),
     );
+    frame.render_widget(ratatui::widgets::Paragraph::new(lines), area);
+}
+
+/// A full-screen view replaces the transcript but keeps the bottom band.
+fn draw_view(frame: &mut Frame, area: Rect, app: &App, styles: Styles, view: views::Frame<'_>) {
+    let width = area.width.max(1);
+    let mut lines = view.rows(styles, width);
+    lines.push(Line::raw(""));
+    lines.extend(match &app.overlay {
+        crate::app::Overlay::Help => views::help(styles, width),
+        crate::app::Overlay::Context => views::context(app, styles, width),
+        _ => vec![Line::styled("This view is not connected yet", styles.dim())],
+    });
     frame.render_widget(ratatui::widgets::Paragraph::new(lines), area);
 }
 
