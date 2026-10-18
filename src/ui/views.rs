@@ -26,14 +26,36 @@ const MIN_SPLIT_HEIGHT: u16 = 12;
 pub struct DiffFile {
     pub path: String,
     pub kind: ChangeKind,
-    pub added: usize,
-    pub removed: usize,
+    /// Added and removed lines, once the path's hunks have been read. Unknown
+    /// until then: a row that has not been measured must not claim `0`.
+    pub lines: Option<(usize, usize)>,
+    /// Set when the read failed, so the row is not left looking unmeasured.
+    pub failed: bool,
     /// Change records that touched this path, oldest first. One row per path,
     /// because a turn can change the same file several times.
     pub change_refs: Vec<String>,
 }
 
+/// The change records of the row at `path`, for a caller that does not keep
+/// them (a preview row built from tool cards has none).
+pub fn row_refs(view: &DiffView, path: &str) -> Vec<String> {
+    view.files
+        .iter()
+        .find(|file| file.path == path)
+        .map(|file| file.change_refs.clone())
+        .unwrap_or_default()
+}
+
 impl DiffFile {
+    /// The row's line column: the measured total, or a marker while unknown.
+    fn count(&self) -> String {
+        match self.lines {
+            Some((added, removed)) => format!("{}", added + removed),
+            None if self.failed => "?".into(),
+            None => "·".into(),
+        }
+    }
+
     fn marker(&self) -> &'static str {
         match self.kind {
             ChangeKind::Added => "A",
@@ -50,6 +72,9 @@ impl DiffFile {
 #[derive(Clone, Debug)]
 pub struct DiffView {
     pub title: String,
+    /// The scope these records came from; a read from another scope must not
+    /// paint this list.
+    pub scope: crate::app::DiffScope,
     pub files: Vec<DiffFile>,
     pub selected: usize,
     pub scroll: usize,
@@ -62,6 +87,7 @@ impl DiffView {
     pub fn new(title: impl Into<String>) -> Self {
         Self {
             title: title.into(),
+            scope: crate::app::DiffScope::Session,
             files: Vec::new(),
             selected: 0,
             scroll: 0,
@@ -251,7 +277,7 @@ fn render_file_list(frame: &mut Frame, area: Rect, palette: &Palette, view: &Dif
         let label = format!(
             "{} {:>4} {}",
             file.marker(),
-            file.added + file.removed,
+            file.count(),
             truncate(&file.path, area.width as usize - 8)
         );
         let style = if selected {
@@ -276,16 +302,20 @@ fn render_file_list(frame: &mut Frame, area: Rect, palette: &Palette, view: &Dif
     if let Some(file) = view.current()
         && area.height > 1
     {
-        let counts = Line::from(vec![
-            Span::styled(
-                format!("+{} ", file.added),
-                Style::default().fg(palette.added),
+        let counts = match file.lines {
+            Some((added, removed)) => Line::from(vec![
+                Span::styled(format!("+{added} "), Style::default().fg(palette.added)),
+                Span::styled(format!("−{removed}"), Style::default().fg(palette.removed)),
+            ]),
+            None => dim(
+                if file.failed {
+                    "line counts unavailable"
+                } else {
+                    "reading…"
+                },
+                palette,
             ),
-            Span::styled(
-                format!("−{}", file.removed),
-                Style::default().fg(palette.removed),
-            ),
-        ]);
+        };
         frame
             .buffer_mut()
             .set_line(area.x, area.bottom() - 1, &counts, area.width);
@@ -950,15 +980,15 @@ mod tests {
             DiffFile {
                 path: "a.rs".into(),
                 kind: ChangeKind::Modified,
-                added: 3,
-                removed: 1,
+                lines: Some((3, 1)),
+                failed: false,
                 change_refs: Vec::new(),
             },
             DiffFile {
                 path: "b.rs".into(),
                 kind: ChangeKind::Added,
-                added: 9,
-                removed: 0,
+                lines: Some((9, 0)),
+                failed: false,
                 change_refs: Vec::new(),
             },
         ]);

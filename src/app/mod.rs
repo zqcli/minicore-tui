@@ -118,8 +118,11 @@ pub enum OpKind {
         DiffScope,
         Result<Vec<crate::protocol::ChangeRecord>, RpcError>,
     ),
-    /// The hunks of one change record.
-    DiffFile(String, Result<crate::protocol::changes::DiffPage, RpcError>),
+    /// The hunks of one changed path, read for one scope.
+    DiffFile(
+        DiffQuery,
+        Result<crate::protocol::changes::DiffPage, RpcError>,
+    ),
     /// Workspace paths for the `@` picker.
     Files(Result<Vec<String>, RpcError>),
 }
@@ -179,6 +182,14 @@ pub enum DiffScope {
     Turn,
     Session,
     Workspace,
+}
+
+/// Which path's hunks a diff read is for, and which scope asked. An answer is
+/// only allowed to paint the pane when it matches the diff that is open.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiffQuery {
+    pub scope: DiffScope,
+    pub path: String,
 }
 
 /// A picker or view a command or key opens.
@@ -347,6 +358,7 @@ impl App {
             DiffScope::Workspace => "Diff · workspace",
         };
         let mut view = crate::ui::views::DiffView::new(title);
+        view.scope = scope;
         if let Some(loop_id) = latest_loop(session) {
             let files = collect_changed_files(&session.transcript, &loop_id);
             view.set_files(files);
@@ -479,6 +491,11 @@ pub struct App {
     pub session_rows: Vec<crate::protocol::SessionInfo>,
     /// Confirm a delete with a second Ctrl+D before it runs.
     pub delete_pending: Option<String>,
+    /// Change records of each diff row that still needs its line counts, so a
+    /// row is measured once and a revisited row is not re-read.
+    pub diff_pending: Vec<(crate::app::DiffQuery, Vec<String>)>,
+    /// The one diff read in flight; a row is never read twice at once.
+    pub diff_in_flight: Option<crate::app::DiffQuery>,
     /// Where the transcript was drawn last frame, for mouse hit-testing.
     pub transcript_area: Option<ratatui::layout::Rect>,
     /// The rows the last frame drew, so selection copies what is on screen.
@@ -550,6 +567,8 @@ impl App {
             help_scroll: 0,
             session_rows: Vec::new(),
             delete_pending: None,
+            diff_pending: Vec::new(),
+            diff_in_flight: None,
             transcript_area: None,
             rendered: crate::ui::selection::Screen::default(),
             layout: crate::ui::View::default(),
@@ -1119,11 +1138,39 @@ impl App {
     }
 
     fn recall_queued(&mut self) {
-        let Some(session) = self.session.as_mut() else {
+        let Some(text) = self
+            .session
+            .as_ref()
+            .and_then(|session| {
+                session
+                    .queue
+                    .iter()
+                    .find(|queued| queued.kind == QueuedKind::Follow)
+            })
+            .map(|queued| queued.text.clone())
+        else {
             return;
         };
-        if let Some(text) = session.take_follow_up() {
-            self.composer.set_text(&text);
+        if !self.composer.is_empty() {
+            self.notice(
+                NoticeLevel::Info,
+                "Draft kept; clear it before recalling the queued prompt",
+            );
+            return;
+        }
+        if let Some(session) = self.session.as_mut() {
+            session.take_follow_up();
+        }
+        self.composer.set_text(&text);
+    }
+
+    /// Returns submitted text to the composer: appended to a draft the user
+    /// typed meanwhile rather than replacing it, and one undo step either way.
+    fn restore_draft(&mut self, text: &str) {
+        if self.composer.is_empty() {
+            self.composer.set_text(text);
+        } else {
+            self.composer.insert(text);
         }
     }
 
@@ -1341,7 +1388,7 @@ impl App {
                 }
             },
             OpKind::Files(result) => self.on_files(result),
-            OpKind::ChangeFiles(_, result) => self.on_change_files(result),
+            OpKind::ChangeFiles(scope, result) => self.on_change_files(*scope, result),
             OpKind::DiffFile(path, result) => self.on_diff_file(path, result),
             OpKind::Copied(_)
             | OpKind::Created(_)
@@ -1691,11 +1738,12 @@ impl App {
                 true
             }
             Err(error) => {
-                // Any other refusal never reached the Agent.
+                // Any other refusal never reached the Agent. The text goes back
+                // without erasing anything typed while the send was in flight.
                 if let Some(session) = self.session.as_mut() {
                     session.unsend_prompt(text);
                 }
-                self.composer.set_text(&text);
+                self.restore_draft(text);
                 self.error(error);
                 true
             }
@@ -1916,6 +1964,7 @@ impl App {
     /// hunks.
     fn on_change_files(
         &mut self,
+        scope: DiffScope,
         result: &Result<Vec<crate::protocol::ChangeRecord>, RpcError>,
     ) -> bool {
         let records = match result {
@@ -1926,18 +1975,24 @@ impl App {
             }
         };
         // One row per path: a turn can change the same file several times, and
-        // repeating the row would misreport how many files changed.
+        // repeating the row would misreport how many files changed. A path that
+        // was measured for this scope keeps that measurement; only new or
+        // changed records are read again.
+        let previous = std::mem::take(&mut self.diff.files);
         let mut files: Vec<crate::ui::views::DiffFile> = Vec::new();
         for record in &records {
             match files.iter_mut().find(|file| file.path == record.path) {
                 Some(file) => file.change_refs.push(record.change_ref.clone()),
-                None => files.push(crate::ui::views::DiffFile {
-                    path: record.path.clone(),
-                    kind: record.kind,
-                    added: 0,
-                    removed: 0,
-                    change_refs: vec![record.change_ref.clone()],
-                }),
+                None => {
+                    let known = previous.iter().find(|file| file.path == record.path);
+                    files.push(crate::ui::views::DiffFile {
+                        path: record.path.clone(),
+                        kind: record.kind,
+                        lines: known.and_then(|file| file.lines),
+                        failed: known.is_some_and(|file| file.failed),
+                        change_refs: vec![record.change_ref.clone()],
+                    });
+                }
             }
         }
         self.diff.set_files(files);
@@ -1946,57 +2001,138 @@ impl App {
             return true;
         }
         self.diff.status.clear();
-        self.load_selected_diff();
+        // A row that has never been read says so in its line column, so the
+        // list would carry unknowns until each is visited. Measure them all
+        // once; a row that comes back is not read again. The selected row is
+        // first in the queue, so its read paints the pane too.
+        self.diff_pending.clear();
+        self.diff_in_flight = None;
+        let needs_counts: Vec<(DiffQuery, Vec<String>)> = self
+            .diff
+            .files
+            .iter()
+            .filter(|file| file.lines.is_none() && !file.failed && !file.change_refs.is_empty())
+            .map(|file| {
+                (
+                    DiffQuery {
+                        scope,
+                        path: file.path.clone(),
+                    },
+                    file.change_refs.clone(),
+                )
+            })
+            .collect();
+        self.diff_pending = needs_counts;
+        self.measure_next_diff_row();
+        if self.diff_in_flight.is_none() {
+            // Every row was already measured: try to paint the selected one.
+            self.load_selected_diff();
+        }
         true
     }
 
-    /// Loads the selected file's records. Every record of that path is paged
-    /// in and merged, so the diff reflects the whole turn or session.
-    fn load_selected_diff(&mut self) {
-        let Some(session) = self.session.as_ref() else {
+    /// Starts the next unmeasured row's read, one at a time so the Agent's
+    /// query allowance is not spent all at once.
+    fn measure_next_diff_row(&mut self) {
+        if self.diff_in_flight.is_some() {
+            return;
+        }
+        let Some((query, refs)) = self.diff_pending.first().cloned() else {
             return;
         };
+        self.diff_pending.remove(0);
+        self.start_diff_read(query, refs);
+    }
+
+    /// Loads the selected file's records. Every record of that path is paged
+    /// in and merged, so the diff reflects the whole turn or session. When the
+    /// row still needs measuring, this read is its measurement too.
+    fn load_selected_diff(&mut self) {
         let Some(file) = self.diff.files.get(self.diff.selected) else {
             return;
         };
         if file.change_refs.is_empty() {
             return;
         }
+        let query = DiffQuery {
+            scope: self.diff.scope,
+            path: file.path.clone(),
+        };
+        if self.diff_in_flight.as_ref() == Some(&query) {
+            return;
+        }
+        let refs = file.change_refs.clone();
+        self.diff_pending.retain(|(pending, _)| *pending != query);
+        self.start_diff_read(query, refs);
+    }
+
+    /// Posts one diff read and remembers it, so nothing reads the same row on
+    /// top of itself.
+    fn start_diff_read(&mut self, query: DiffQuery, refs: Vec<String>) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        self.diff_in_flight = Some(query.clone());
         tasks::load_diff(
             self.client.clone(),
             self.tx.clone(),
             session.info.session_id.clone(),
-            file.path.clone(),
-            file.change_refs.clone(),
+            query,
+            refs,
         );
     }
 
     fn on_diff_file(
         &mut self,
-        _path: &str,
+        query: &DiffQuery,
         result: &Result<crate::protocol::changes::DiffPage, RpcError>,
     ) -> bool {
+        let shown = self.diff.scope == query.scope
+            && self
+                .diff
+                .current()
+                .is_some_and(|file| file.path == query.path);
+        let file = self
+            .diff
+            .files
+            .iter_mut()
+            .find(|file| file.path == query.path);
         match result {
             Ok(page) => {
                 let lines = crate::ui::views::hunk_lines(page, &self.palette);
                 let (added, removed) = count_hunks(&lines);
-                self.diff.hunks = lines;
-                self.diff.scroll = 0;
-                // A record whose before and after content match has no hunks
-                // at all: say that, instead of implying there is a diff.
-                self.diff.status = if page.hunks.is_empty() && !page.binary {
-                    "No line changes in these records (content unchanged).".into()
-                } else {
-                    String::new()
-                };
-                if let Some(file) = self.diff.files.get_mut(self.diff.selected) {
-                    file.added = added;
-                    file.removed = removed;
+                if let Some(file) = file {
+                    file.lines = Some((added, removed));
+                    file.failed = false;
+                }
+                if self.diff_in_flight.as_ref() == Some(query) {
+                    self.diff_in_flight = None;
+                }
+                self.measure_next_diff_row();
+                if shown {
+                    self.diff.hunks = lines;
+                    self.diff.scroll = 0;
+                    // A record whose before and after content match has no
+                    // hunks at all: say that instead of implying a diff.
+                    self.diff.status = if page.hunks.is_empty() && !page.binary {
+                        "No line changes in these records (content unchanged).".into()
+                    } else {
+                        String::new()
+                    };
                 }
             }
             Err(error) => {
-                self.diff.hunks.clear();
-                self.diff.status = error.message.clone();
+                if let Some(file) = file {
+                    file.failed = true;
+                }
+                if self.diff_in_flight.as_ref() == Some(query) {
+                    self.diff_in_flight = None;
+                }
+                self.measure_next_diff_row();
+                if shown {
+                    self.diff.hunks.clear();
+                    self.diff.status = error.message.clone();
+                }
             }
         }
         true
@@ -2645,8 +2781,8 @@ fn collect_changed_files(
         files.push(crate::ui::views::DiffFile {
             path: path.to_owned(),
             kind: crate::protocol::ChangeKind::Modified,
-            added: 0,
-            removed: 0,
+            lines: None,
+            failed: false,
             change_refs: Vec::new(),
         });
     }

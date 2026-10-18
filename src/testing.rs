@@ -257,6 +257,23 @@ impl FakeAgent {
             .insert(method.to_owned(), queue);
     }
 
+    /// Answers `method` with each (result, delay) pair in turn, so a test can
+    /// make a later request finish before an earlier one.
+    pub fn script_sequence_later(&self, method: &str, results: Vec<(Value, Duration)>) {
+        let queue: Replies = results
+            .into_iter()
+            .map(|(result, delay)| Reply {
+                frame: json!({"result": result}),
+                delay,
+                hold: None,
+            })
+            .collect();
+        self.sequences
+            .lock()
+            .unwrap()
+            .insert(method.to_owned(), queue);
+    }
+
     pub fn script_later(&self, method: &str, result: Value, delay: Duration) {
         self.script.lock().unwrap().insert(
             method.to_owned(),

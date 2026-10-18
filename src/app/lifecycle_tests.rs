@@ -748,6 +748,152 @@ async fn the_diff_view_lists_one_row_per_path_and_merges_its_records() {
     );
 }
 
+/// Rows count lines only once their hunks were read, and a late answer for a
+/// file the user has moved past must not paint the open pane.
+#[tokio::test]
+async fn a_late_diff_answer_cannot_paint_or_miscount_another_file() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script(
+        "changes.list",
+        json!({"records": [
+            {"change_ref": "ra", "path": "a.py", "kind": "modified", "details_available": true},
+            {"change_ref": "rb", "path": "b.py", "kind": "modified", "details_available": true}
+        ]}),
+    );
+    // Both rows are measured on open; a.py answers last and has to land on its
+    // own row while b.py is on screen.
+    fake.script_sequence_later(
+        "changes.diff",
+        vec![
+            (
+                json!({"path": "a.py", "hunks": [
+                    {"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 2,
+                     "lines": [{"kind": "added", "text": "a1", "line_complete": true},
+                               {"kind": "added", "text": "a2", "line_complete": true},
+                               {"kind": "removed", "text": "old", "line_complete": true}]}
+                ], "complete": true}),
+                std::time::Duration::from_millis(400),
+            ),
+            (
+                json!({"path": "b.py", "hunks": [
+                    {"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 1,
+                     "lines": [{"kind": "added", "text": "b1", "line_complete": true}]}
+                ], "complete": true}),
+                std::time::Duration::ZERO,
+            ),
+        ],
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.open_panel(crate::app::Panel::Diff(crate::app::DiffScope::Session));
+    pump(&mut app, &mut rx, |app| app.diff.files.len() == 2).await;
+    // Until its read lands a row must not claim a count.
+    assert_eq!(
+        app.diff.files[0].lines, None,
+        "an unmeasured row does not read as zero changed lines"
+    );
+
+    // The user moves to the other file before a.py's answer arrives.
+    app.diff.select(1);
+    app.load_selected_diff();
+    pump(&mut app, &mut rx, |app| app.diff.files[0].lines.is_some()).await;
+
+    assert_eq!(
+        app.diff.files[0].lines,
+        Some((2, 1)),
+        "a.py's own counts land on a.py's row"
+    );
+    assert_eq!(
+        app.diff.current().map(|file| file.path.as_str()),
+        Some("b.py"),
+        "the pane still belongs to the selected file"
+    );
+    let painted: String = app
+        .diff
+        .hunks
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !painted.contains("a1") && !painted.contains("old"),
+        "a late answer for another file never paints this pane: {painted}"
+    );
+}
+
+/// Every row is measured once when the list arrives, so the file column shows
+/// real counts without visiting each file; a second listing adds no reads.
+#[tokio::test]
+async fn each_diff_row_is_measured_once_without_visiting_it() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    let records = json!({"records": [
+        {"change_ref": "ra", "path": "a.py", "kind": "modified", "details_available": true},
+        {"change_ref": "rb", "path": "b.py", "kind": "added", "details_available": true}
+    ]});
+    fake.script("changes.list", records.clone());
+    fake.script_sequence(
+        "changes.diff",
+        vec![
+            json!({"path": "a.py", "hunks": [
+                {"old_start": 1, "old_lines": 1, "new_start": 1, "new_lines": 1,
+                 "lines": [{"kind": "added", "text": "x", "line_complete": true},
+                           {"kind": "removed", "text": "y", "line_complete": true}]}
+            ], "complete": true}),
+            json!({"path": "b.py", "hunks": [
+                {"old_start": 0, "old_lines": 0, "new_start": 1, "new_lines": 3,
+                 "lines": [{"kind": "added", "text": "1", "line_complete": true},
+                           {"kind": "added", "text": "2", "line_complete": true},
+                           {"kind": "added", "text": "3", "line_complete": true}]}
+            ], "complete": true}),
+        ],
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.open_panel(crate::app::Panel::Diff(crate::app::DiffScope::Session));
+    pump(&mut app, &mut rx, |app| {
+        app.diff.files.iter().all(|file| file.lines.is_some())
+    })
+    .await;
+
+    // The user has not selected b.py, but its row is already truthful.
+    assert_eq!(app.diff.files[0].lines, Some((1, 1)));
+    assert_eq!(app.diff.files[1].lines, Some((3, 0)));
+    assert_eq!(
+        app.diff.selected, 0,
+        "measuring does not move the selection"
+    );
+    assert_eq!(fake.calls("changes.diff").len(), 2, "one read per row");
+
+    // Reopening the scope lists the same records and measures nothing again.
+    app.diff_pending.clear();
+    app.on_op(crate::app::OpDone {
+        session: Some("s1".into()),
+        epoch: app.session.as_ref().unwrap().epoch,
+        kind: crate::app::OpKind::ChangeFiles(
+            crate::app::DiffScope::Session,
+            Ok(
+                serde_json::from_value::<crate::protocol::ChangeList>(records)
+                    .unwrap()
+                    .records,
+            ),
+        ),
+    });
+    settle(&mut app, &mut rx).await;
+    assert_eq!(
+        fake.calls("changes.diff").len(),
+        3,
+        "a fresh listing re-measures nothing: only the selected row is read again"
+    );
+}
+
 #[tokio::test]
 async fn a_closed_agent_shows_a_fatal_screen_with_its_stderr_tail() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1379,6 +1525,75 @@ async fn a_refused_send_takes_back_its_prompt_and_queues_the_text() {
         "the text is queued rather than lost"
     );
     assert!(app.waiting_for_compaction);
+}
+
+/// A refusal hands the text back without erasing a draft typed while the send
+/// was in flight, and does not disturb the successful-submit path.
+#[tokio::test]
+async fn a_refused_send_keeps_a_draft_typed_meanwhile() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    // The refusal arrives only when the test says so, after the user has typed.
+    fake.script_error(
+        "turn.send",
+        -32015,
+        "history too large",
+        "history_too_large",
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.composer.set_text("refused prompt");
+    app.on_action(Action::Submit);
+    // The composer is empty while the send is in flight; the user starts again.
+    assert_eq!(app.composer.text(), "");
+    app.composer.set_text("second thoughts");
+    settle(&mut app, &mut rx).await;
+
+    assert_eq!(
+        app.composer.text(),
+        "second thoughtsrefused prompt",
+        "the returned text is added, not pasted over the new draft"
+    );
+    // One undo step takes the returned text back out again.
+    assert!(app.composer.undo());
+    assert_eq!(app.composer.text(), "second thoughts");
+}
+
+#[tokio::test]
+async fn a_recalled_follow_up_does_not_erase_a_draft() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    fake.script_held("turn.wait", json!({"turn": turn("l1")}));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.composer.set_text("turn one");
+    app.on_action(Action::Submit);
+    pump(&mut app, &mut rx, |app| app.is_busy()).await;
+
+    app.composer.set_text("queued next");
+    app.on_action(Action::QueueFollowUp);
+    assert_eq!(app.composer.text(), "");
+
+    app.composer.set_text("work in progress");
+    app.on_action(Action::RecallQueued);
+    assert_eq!(
+        app.composer.text(),
+        "work in progress",
+        "recall never overwrites a real draft"
+    );
+    let session = app.session.as_ref().unwrap();
+    assert_eq!(
+        session.queue.len(),
+        1,
+        "the queued text stays queued when it cannot be recalled"
+    );
 }
 
 #[tokio::test]

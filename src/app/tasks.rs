@@ -617,7 +617,7 @@ pub fn load_diff(
     client: Arc<Client>,
     tx: Tx,
     session_id: String,
-    path: String,
+    query: crate::app::DiffQuery,
     change_refs: Vec<String>,
 ) {
     tokio::spawn(async move {
@@ -626,7 +626,11 @@ pub fn load_diff(
             let page = match page_diff(client.as_ref(), &session_id, &change_ref).await {
                 Ok(page) => page,
                 Err(error) => {
-                    post(&tx, Some(&session_id), OpKind::DiffFile(path, Err(error)));
+                    post(
+                        &tx,
+                        Some(&session_id),
+                        OpKind::DiffFile(query.clone(), Err(error)),
+                    );
                     return;
                 }
             };
@@ -641,7 +645,7 @@ pub fn load_diff(
         }
         let page = merged.unwrap_or_else(|| protocol::changes::DiffPage {
             change_ref: String::new(),
-            path: path.clone(),
+            path: query.path.clone(),
             hunks: Vec::new(),
             next_cursor: None,
             complete: true,
@@ -650,7 +654,7 @@ pub fn load_diff(
             truncated: false,
             stale: false,
         });
-        post(&tx, Some(&session_id), OpKind::DiffFile(path, Ok(page)));
+        post(&tx, Some(&session_id), OpKind::DiffFile(query, Ok(page)));
     });
 }
 

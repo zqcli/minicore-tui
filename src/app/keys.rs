@@ -196,36 +196,19 @@ impl App {
 
     /// Enter / Shift+Enter in the find bar: jump to the next or previous match.
     fn find_step(&mut self, forward: bool) {
-        let mut matches = Vec::new();
-        let mut current = 0usize;
-        if let Overlay::Find {
-            matches: found,
-            current: at,
-            ..
-        } = &self.overlay
-        {
-            matches = found.clone();
-            current = *at;
-        }
+        let Overlay::Find {
+            matches, current, ..
+        } = &mut self.overlay
+        else {
+            return;
+        };
         if matches.is_empty() {
             return;
         }
-        let next = super::features::step_match(current, matches.len(), forward);
-        if let Some(anchor) = matches.get(next) {
-            self.scroll = super::Scroll::Anchor {
-                block: anchor.block,
-                offset: 0,
-            };
-        }
-        if let Overlay::Find {
-            current: at,
-            matches: found,
-            ..
-        } = &mut self.overlay
-        {
-            *at = next;
-            found.clone_from(&matches);
-        }
+        let next = super::features::step_match(*current, matches.len(), forward);
+        *current = next;
+        let block = matches[next].block;
+        self.scroll = super::Scroll::Anchor { block, offset: 0 };
     }
 
     /// Moves the selected row of the active overlay by `delta`.
