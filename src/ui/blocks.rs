@@ -373,8 +373,7 @@ mod tests {
             usage: Default::default(),
             changes: Some(crate::transcript::ChangeSummary {
                 files: 3,
-                added: 40,
-                removed: 7,
+                lines: Some((40, 7)),
             }),
         };
         let body = text(&render(&block, Palette::plain(), 100, fold()));
@@ -382,7 +381,7 @@ mod tests {
         assert!(line.contains("completed"));
         assert!(line.contains("3m07s"));
         assert!(line.contains("12 requests"));
-        assert!(line.contains("3 files changed"));
+        assert!(line.contains("3 files changed (+40 −7)"));
     }
 
     #[test]

@@ -1902,7 +1902,15 @@ pub fn turn_end_line(
     if let Some(changes) = changes
         && !changes.is_empty()
     {
-        parts.push(format!("{} files changed", changes.files));
+        let files = if changes.files == 1 {
+            "1 file changed".to_owned()
+        } else {
+            format!("{} files changed", changes.files)
+        };
+        match changes.lines {
+            Some((added, removed)) => parts.push(format!("{files} (+{added} −{removed})")),
+            None => parts.push(files),
+        }
     }
     parts.join(" · ")
 }

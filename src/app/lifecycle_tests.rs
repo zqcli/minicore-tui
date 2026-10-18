@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::app::{Action, App, Msg, OpDone, OpKind, Overlay, Scroll};
 use crate::protocol::read::UserKind;
@@ -126,7 +126,10 @@ async fn a_turn_streams_through_to_its_turn_end_line() {
             "completed_at": "2024-01-01T00:00:09Z",
         }),
     );
-    fake.script("changes.list", json!({"changes": [], "count": 0}));
+    fake.script(
+        "changes.list",
+        json!({"records": [], "total": 0, "complete": true}),
+    );
 
     crate::app::tasks::bootstrap(fake.client.clone(), tx.clone()).await;
     pump(&mut app, &mut rx, |app| app.ready).await;
@@ -280,7 +283,10 @@ async fn a_gapped_turn_reconciles_against_turn_result() {
             "next_cursor": null,
         }),
     );
-    fake.script("changes.list", json!({"changes": [], "count": 0}));
+    fake.script(
+        "changes.list",
+        json!({"records": [], "total": 0, "complete": true}),
+    );
 
     open(&mut app, &mut rx, &fake, &tx).await;
 
@@ -629,4 +635,191 @@ async fn an_op_for_another_session_is_ignored() {
         ))),
     })));
     assert!(app.last_error.is_none());
+}
+
+/// A turn-scope change list with one record and a countable diff.
+fn one_changed_file() -> Value {
+    json!({
+        "records": [{
+            "change_ref": "tool:abc", "path": "app.py", "kind": "modified",
+            "details_available": true,
+        }],
+        "total": 1,
+        "complete": true,
+    })
+}
+
+fn diff_with(added: usize, removed: usize) -> Value {
+    let mut lines = Vec::new();
+    for index in 0..removed {
+        lines.push(
+            json!({"kind": "removed", "old_index": index, "new_index": index,
+                          "text": "-old", "line_complete": true}),
+        );
+    }
+    for index in 0..added {
+        lines.push(
+            json!({"kind": "added", "old_index": 100 + index, "new_index": index,
+                          "text": "+new", "line_complete": true}),
+        );
+    }
+    json!({
+        "change_ref": "tool:abc", "path": "app.py", "kind": "modified",
+        "availability": "available", "complete": true, "truncated": false,
+        "hunks": [{"old_start": 1, "old_count": removed, "new_start": 1,
+                   "new_count": added, "lines": lines}],
+        "next_cursor": null,
+    })
+}
+
+#[tokio::test]
+async fn the_turn_end_line_counts_real_added_and_removed_lines() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    fake.script(
+        "turn.wait",
+        json!({"turn": turn("l1"), "outcome": {"type": "completed"}}),
+    );
+    fake.script("changes.list", one_changed_file());
+    fake.script("changes.diff", diff_with(40, 7));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.composer = "change it".into();
+    app.on_action(Action::Submit);
+    settle(&mut app, &mut rx).await;
+
+    let summary = app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .blocks()
+        .iter()
+        .find_map(|block| match block {
+            Block::TurnEnd { changes, .. } => *changes,
+            _ => None,
+        })
+        .expect("the turn has a change summary");
+    assert_eq!(summary.files, 1);
+    assert_eq!(summary.lines, Some((40, 7)));
+    let line = crate::app::turn_end_line(
+        &crate::protocol::LoopOutcome::Completed,
+        None,
+        1,
+        0,
+        Some(&summary),
+    );
+    assert!(line.contains("1 file changed (+40 −7)"), "{line}");
+}
+
+#[tokio::test]
+async fn an_unknown_line_count_is_reported_rather_than_as_zero() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    fake.script(
+        "turn.wait",
+        json!({"turn": turn("l1"), "outcome": {"type": "completed"}}),
+    );
+    // The record exists but its body is gone: the file count is known and the
+    // line counts are not.
+    fake.script(
+        "changes.list",
+        json!({
+            "records": [{"change_ref": "tool:gone", "path": "app.py",
+                         "kind": "modified", "details_available": false}],
+            "total": 1,
+        }),
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.composer = "change it".into();
+    app.on_action(Action::Submit);
+    settle(&mut app, &mut rx).await;
+
+    let summary = app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .blocks()
+        .iter()
+        .find_map(|block| match block {
+            Block::TurnEnd { changes, .. } => *changes,
+            _ => None,
+        })
+        .expect("the turn has a change summary");
+    assert_eq!(summary.files, 1);
+    assert_eq!(summary.lines, None, "an unavailable diff has no count");
+    let line = crate::app::turn_end_line(
+        &crate::protocol::LoopOutcome::Completed,
+        None,
+        1,
+        0,
+        Some(&summary),
+    );
+    assert!(line.contains("1 file changed"), "{line}");
+    assert!(
+        !line.contains("+0 −0"),
+        "unknown counts are never printed: {line}"
+    );
+    assert!(!line.contains("(+"), "{line}");
+}
+
+#[tokio::test]
+async fn three_tool_calls_on_one_file_report_one_file_and_summed_lines() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    fake.script(
+        "turn.wait",
+        json!({"turn": turn("l1"), "outcome": {"type": "completed"}}),
+    );
+    // write + edit + apply_patch on one path: three records, one file.
+    fake.script(
+        "changes.list",
+        json!({
+            "records": [
+                {"change_ref": "tool:w", "path": "app.py", "details_available": true},
+                {"change_ref": "tool:e", "path": "app.py", "details_available": true},
+                {"change_ref": "tool:p", "path": "app.py", "details_available": true},
+            ],
+            "total": 3,
+        }),
+    );
+    fake.script("changes.diff", diff_with(2, 1));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.composer = "change it".into();
+    app.on_action(Action::Submit);
+    settle(&mut app, &mut rx).await;
+
+    let summary = app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .blocks()
+        .iter()
+        .find_map(|block| match block {
+            Block::TurnEnd { changes, .. } => *changes,
+            _ => None,
+        })
+        .expect("the turn has a change summary");
+    assert_eq!(summary.files, 1, "one path, three calls");
+    assert_eq!(
+        summary.lines,
+        Some((6, 3)),
+        "each record's diff is counted on its own"
+    );
 }

@@ -79,11 +79,16 @@ pub enum NoticeLevel {
     Error,
 }
 
+/// What one turn changed. The line counts are optional because they can be
+/// genuinely unknown: a record may carry no diff, or its diff may be
+/// unavailable, partial or truncated. Printing `+0 −0` for an unknown count
+/// would be a lie, so the counts are kept as an `Option` pair and an absent
+/// pair is simply not rendered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ChangeSummary {
     pub files: usize,
-    pub added: usize,
-    pub removed: usize,
+    /// Added and removed lines, when every file's diff was counted.
+    pub lines: Option<(usize, usize)>,
 }
 
 impl ChangeSummary {
