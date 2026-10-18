@@ -3,7 +3,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-use super::{Action, App, Overlay, features, tasks};
+use super::{Action, App, Overlay, features};
 use crate::app::commands::{self, Executed};
 
 /// What one input event resolved to.
@@ -35,16 +35,19 @@ impl App {
         self.on_composer_key(key)
     }
 
-    /// Approval prompts own the keyboard until answered.
+    /// Approval prompts own the keyboard until answered. Anything else is
+    /// swallowed rather than reaching the draft behind the prompt.
     fn on_interaction_key(&mut self, key: KeyEvent) -> Input {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let options = self
             .session
             .as_ref()
             .and_then(|session| session.interaction.as_ref())
             .map_or(0, |interaction| interaction.options().len());
         match key.code {
-            KeyCode::Char('y') => Input::Action(Action::Answer(super::Answer::Allow)),
-            KeyCode::Char('n') | KeyCode::Esc => Input::Action(Action::Answer(super::Answer::Deny)),
+            KeyCode::Char('y') if !ctrl => Input::Action(Action::Answer(super::Answer::Allow)),
+            KeyCode::Char('n') if !ctrl => Input::Action(Action::Answer(super::Answer::Deny)),
+            KeyCode::Esc => Input::Action(Action::Answer(super::Answer::Deny)),
             KeyCode::Enter => {
                 let choice = self.interaction_choice;
                 let is_approval = self
@@ -116,7 +119,7 @@ impl App {
                 Input::Consumed
             }
             KeyCode::Backspace if matches!(self.overlay, Overlay::Palette { .. }) => {
-                self.composer.pop();
+                self.composer.backspace();
                 self.refresh_palette();
                 Input::Edited
             }
@@ -141,7 +144,7 @@ impl App {
             KeyCode::Char(character)
                 if !ctrl && matches!(self.overlay, Overlay::Palette { .. }) =>
             {
-                self.composer.push(character);
+                self.composer.type_char(character);
                 self.refresh_palette();
                 Input::Edited
             }
@@ -259,17 +262,7 @@ impl App {
                     *scroll = 0;
                     self.diff.select(next);
                     // The hunks of the newly selected file are paged in.
-                    if let Some(record) = self.diff_records.get(next).cloned()
-                        && let Some(session) = self.session.as_ref()
-                    {
-                        tasks::load_diff(
-                            self.client.clone(),
-                            self.tx.clone(),
-                            session.info.session_id.clone(),
-                            record.change_ref,
-                            record.path,
-                        );
-                    }
+                    self.load_selected_diff();
                 }
             }
             Overlay::Help => {
@@ -348,7 +341,7 @@ impl App {
     /// Re-filters the command palette from the composer line and keeps the
     /// selection on the top row.
     fn refresh_palette(&mut self) {
-        let Some((name, _)) = commands::parse(&self.composer) else {
+        let Some((name, _)) = commands::parse(self.composer.text()) else {
             self.overlay = Overlay::None;
             return;
         };
@@ -370,7 +363,7 @@ impl App {
                 };
                 // The composer holds the whole command line, so an argument
                 // typed after the name reaches the command.
-                let arg = commands::parse(&self.composer)
+                let arg = commands::parse(self.composer.text())
                     .filter(|(name, _)| *name == command.name)
                     .map_or("", |(_, arg)| arg)
                     .to_owned();
@@ -416,7 +409,7 @@ impl App {
                 let path = crate::ui::files::filtered(&filter)
                     [selected.min(crate::ui::files::filter_count(&filter).saturating_sub(1))]
                 .clone();
-                self.composer.push_str(&path);
+                self.composer.insert(&path);
                 Input::Edited
             }
             Overlay::Interaction => {
@@ -452,12 +445,12 @@ impl App {
         match key.code {
             KeyCode::Enter if alt => Input::Action(Action::QueueFollowUp),
             KeyCode::Enter if shift => {
-                self.composer.push('\n');
+                self.composer.newline();
                 Input::Edited
             }
             KeyCode::Enter => self.submit_or_command(),
             KeyCode::Char('j') if ctrl => {
-                self.composer.push('\n');
+                self.composer.newline();
                 Input::Edited
             }
             KeyCode::Esc => {
@@ -488,6 +481,7 @@ impl App {
                 if self.composer.is_empty() {
                     Input::Action(Action::Quit)
                 } else {
+                    self.composer.delete();
                     Input::Edited
                 }
             }
@@ -512,13 +506,37 @@ impl App {
                 self.open_panel(super::Panel::Find);
                 Input::Consumed
             }
+            KeyCode::Char('a') if ctrl => {
+                self.composer.move_home();
+                Input::Edited
+            }
+            KeyCode::Char('e') if ctrl => {
+                self.composer.move_end();
+                Input::Edited
+            }
             KeyCode::Char('u') if ctrl => {
-                self.composer.clear();
+                self.composer.delete_to_line_start();
+                Input::Edited
+            }
+            KeyCode::Char('k') if ctrl => {
+                self.composer.delete_to_line_end();
+                Input::Edited
+            }
+            KeyCode::Char('w') if ctrl => {
+                self.composer.delete_word_left();
+                Input::Edited
+            }
+            KeyCode::Char('z') if ctrl => {
+                self.composer.undo();
+                Input::Edited
+            }
+            KeyCode::Char('y') if ctrl => {
+                self.composer.redo();
                 Input::Edited
             }
             KeyCode::BackTab => Input::Action(Action::SetReasoning(self.next_reasoning())),
             KeyCode::Char('@') => {
-                self.composer.push('@');
+                self.composer.type_char('@');
                 self.open_panel(super::Panel::Files);
                 Input::Edited
             }
@@ -527,21 +545,54 @@ impl App {
                 Input::Ignored
             }
             KeyCode::Char(character) => {
-                self.composer.push(character);
-                if commands::opens_palette(&self.composer, true) {
+                self.composer.type_char(character);
+                if commands::opens_palette(self.composer.text(), true) {
                     self.open_panel(super::Panel::Palette);
                 }
                 Input::Edited
             }
             KeyCode::Backspace => {
-                self.composer.pop();
+                self.composer.backspace();
                 Input::Edited
             }
-            KeyCode::Up | KeyCode::Down => self.browse_history(key.code == KeyCode::Up),
-            KeyCode::PageUp => self.scroll_pages(-1),
-            KeyCode::PageDown => self.scroll_pages(1),
+            KeyCode::Delete => {
+                self.composer.delete();
+                Input::Edited
+            }
+            KeyCode::Left if alt => {
+                self.composer.move_word_left();
+                Input::Edited
+            }
+            KeyCode::Right if alt => {
+                self.composer.move_word_right();
+                Input::Edited
+            }
+            KeyCode::Left => {
+                self.composer.move_left();
+                Input::Edited
+            }
+            KeyCode::Right => {
+                self.composer.move_right();
+                Input::Edited
+            }
+            // Arrows move inside a multi-line draft and only browse history at
+            // its first and last line.
+            KeyCode::Up if self.composer.move_up() => Input::Edited,
+            KeyCode::Up => self.browse_history(true),
+            KeyCode::Down if self.composer.move_down() => Input::Edited,
+            KeyCode::Down => self.browse_history(false),
             KeyCode::Home if ctrl => self.scroll_to_start(),
             KeyCode::End if ctrl => self.scroll_to_end(),
+            KeyCode::Home => {
+                self.composer.move_home();
+                Input::Edited
+            }
+            KeyCode::End => {
+                self.composer.move_end();
+                Input::Edited
+            }
+            KeyCode::PageUp => self.scroll_pages(-1),
+            KeyCode::PageDown => self.scroll_pages(1),
             KeyCode::F(1) => {
                 self.open_panel(super::Panel::Help);
                 Input::Consumed
@@ -550,8 +601,23 @@ impl App {
         }
     }
 
+    /// A terminal paste. The composer decides whether the payload becomes a
+    /// single token, and the palette follows immediately (`/` or `@` pasted
+    /// first opens the matching picker).
+    pub fn on_paste(&mut self, text: &str) {
+        if self.has_interaction() {
+            return;
+        }
+        self.composer.insert(text);
+        if commands::opens_palette(self.composer.text(), true)
+            && matches!(self.overlay, Overlay::None)
+        {
+            self.open_panel(super::Panel::Palette);
+        }
+    }
+
     fn submit_or_command(&mut self) -> Input {
-        if let Some((name, argument)) = commands::parse(&self.composer) {
+        if let Some((name, argument)) = commands::parse(self.composer.text()) {
             let argument = argument.to_owned();
             match commands::execute(name, &argument) {
                 Some(Executed::Action(action)) => {
@@ -585,25 +651,14 @@ impl App {
         Input::Action(Action::Submit)
     }
 
-    /// Prompt history browsing when the composer is single-line.
+    /// Prompt history browsing at the first or last line of the draft.
     fn browse_history(&mut self, up: bool) -> Input {
-        if self.draft_history.is_empty() {
-            return Input::Ignored;
-        }
-        let len = self.draft_history.len();
-        let next = match (self.draft_cursor, up) {
-            (None, true) => Some(len - 1),
-            (None, false) => None,
-            (Some(index), true) => Some(index.saturating_sub(1)),
-            (Some(index), false) if index + 1 >= len => None,
-            (Some(index), false) => Some(index + 1),
+        let moved = if up {
+            self.composer.history_prev()
+        } else {
+            self.composer.history_next()
         };
-        self.draft_cursor = next;
-        self.composer = match next {
-            Some(index) => self.draft_history[index].clone(),
-            None => String::new(),
-        };
-        Input::Edited
+        if moved { Input::Edited } else { Input::Ignored }
     }
 
     fn scroll_pages(&mut self, direction: isize) -> Input {

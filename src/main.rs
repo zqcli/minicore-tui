@@ -141,7 +141,7 @@ async fn run() -> i32 {
                         dirty = true;
                     }
                     Some(Ok(TermEvent::Paste(text))) => {
-                        app.composer.push_str(&text);
+                        app.on_paste(&text);
                         dirty = true;
                     }
                     Some(Ok(TermEvent::Resize(_, _))) => dirty = true,

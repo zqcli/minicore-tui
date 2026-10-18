@@ -231,10 +231,12 @@ fn an_anchored_view_does_not_move_when_content_grows() {
 #[test]
 fn the_composer_grows_with_its_content_and_caps_at_ten_rows() {
     let mut app = app();
-    app.composer = (0..20)
-        .map(|index| format!("line {index} of a long draft"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    app.composer.set_text(
+        &(0..20)
+            .map(|index| format!("line {index} of a long draft"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
     let rendered = render(&mut app, 60, 30);
     let composer_rows = rendered
         .lines()
@@ -249,7 +251,7 @@ fn the_composer_grows_with_its_content_and_caps_at_ten_rows() {
 #[test]
 fn the_footer_reports_the_state_and_context() {
     let mut app = app();
-    app.composer = "hello".into();
+    app.composer.set_text("hello");
     let rendered = render(&mut app, 80, 12);
     let footer = rendered.lines().last().unwrap_or_default();
     assert!(footer.contains("minicore-tui@-"), "{footer}");
@@ -324,7 +326,7 @@ fn typing_keeps_the_draft_visible_and_marked_with_the_rail() {
 #[test]
 fn an_open_overlay_is_not_drawn_over_the_composer() {
     let mut app = app();
-    app.composer = "draft".into();
+    app.composer.set_text("draft");
     app.overlay = Overlay::Help;
     let rendered = render(&mut app, 40, 10);
     assert!(
