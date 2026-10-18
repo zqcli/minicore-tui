@@ -1858,6 +1858,16 @@ impl App {
                 session.info.session_id.clone(),
                 epoch,
             );
+            // The Agent compacts automatically at the context trigger with no
+            // response of its own, and `session.context` is the only place that
+            // result is published. Reading it after the turn is what makes an
+            // automatic compaction visible as a marker and keeps the footer's
+            // context figure honest.
+            tasks::context(
+                self.client.clone(),
+                self.tx.clone(),
+                session.info.session_id.clone(),
+            );
         }
         self.scroll = Scroll::Follow;
         self.flush_queue();

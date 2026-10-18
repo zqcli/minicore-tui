@@ -1329,6 +1329,57 @@ async fn reconciling_a_gapped_turn_keeps_the_history_loaded_before_it() {
 }
 
 #[tokio::test]
+async fn an_automatic_compaction_after_a_turn_is_reported() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    fake.script(
+        "turn.wait",
+        json!({"turn": turn("l1"), "outcome": {"type": "completed"}}),
+    );
+    fake.script(
+        "changes.list",
+        json!({"records": [], "total": 0, "complete": true}),
+    );
+    // The Agent compacts automatically during the turn; it has no response of
+    // its own, so only the context refresh after the turn can reveal it.
+    let auto = json!({
+        "session_id": "s1",
+        "last_result": {"origin": "auto", "operation_id": "lup_1",
+                        "status": "compacted", "before_tokens": 41000,
+                        "after_tokens": 12000},
+        "budget": {"estimated_history_tokens": 12000},
+    });
+    fake.script("session.context", auto);
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.composer.set_text("compact me");
+    app.on_action(Action::Submit);
+    settle(&mut app, &mut rx).await;
+
+    let markers: Vec<String> = app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::Compaction { operation_id, .. } => Some(operation_id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        markers,
+        vec!["auto-lup_1"],
+        "an automatic compaction is reported after the turn"
+    );
+}
+
+#[tokio::test]
 async fn one_compaction_is_reported_once_however_often_it_is_seen() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let (fake, mut app) = FakeAgent::start(tx.clone());
