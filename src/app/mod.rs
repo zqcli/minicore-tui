@@ -10,10 +10,10 @@ pub mod actions;
 pub mod commands;
 pub mod find;
 pub mod keys;
-#[cfg(test)]
-mod lifecycle_tests;
 pub mod session;
 pub mod tasks;
+#[cfg(test)]
+mod tests;
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -133,7 +133,7 @@ pub enum OpKind {
 pub struct Notice {
     pub level: NoticeLevel,
     pub text: String,
-    pub at: Instant,
+    pub at: tokio::time::Instant,
 }
 
 /// The one bottom-sheet panel or full-screen view that owns input, if any.
@@ -730,7 +730,7 @@ impl App {
         self.notices.push_back(Notice {
             level,
             text,
-            at: Instant::now(),
+            at: tokio::time::Instant::now(),
         });
         while self.notices.len() > 2 {
             self.notices.pop_front();

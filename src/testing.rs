@@ -367,8 +367,9 @@ struct Responder {
     reader_task: tokio::task::JoinHandle<()>,
 }
 
-impl Drop for FakeAgent {
-    fn drop(&mut self) {
+impl FakeAgent {
+    /// Ends the Agent side of the pipe, the way a dying child process does.
+    pub fn close(&mut self) {
         if let Some(responder) = self.responder.take() {
             let _ = responder.stop.send(());
             responder.writer_task.abort();
@@ -377,6 +378,12 @@ impl Drop for FakeAgent {
             // only handle to the Agent side of the pipe.
             self.outbox.take();
         }
+    }
+}
+
+impl Drop for FakeAgent {
+    fn drop(&mut self) {
+        self.close();
     }
 }
 
