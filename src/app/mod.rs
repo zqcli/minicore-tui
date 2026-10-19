@@ -86,6 +86,8 @@ pub enum SessionOp {
     Info(Result<SessionInfo, RpcError>),
     Changes(String, Result<ChangeSummary, RpcError>),
     ToolRead(ToolRef, Result<ToolReadResult, RpcError>),
+    /// The facts of a card loaded without its detail; `None` when the read failed.
+    ToolHydrated(ToolRef, Option<ToolReadResult>),
     /// One stream of a tool call's full output, for the tool view.
     ToolOutput(ToolRef, String, Result<tasks::StreamText, RpcError>),
     Files(Result<Vec<String>, RpcError>),

@@ -310,6 +310,24 @@ pub fn assistant(index: usize, loop_id: &str, text: &str) -> Value {
     )
 }
 
+/// An assistant item that only calls the tool `call_id`.
+pub fn assistant_tool(index: usize, loop_id: &str, call_id: &str, name: &str) -> Value {
+    chunk(
+        index,
+        json!({"type": "assistant", "data": {"loop_id": loop_id, "request_index": 0,
+            "model": "mock", "content": [
+                {"type": "tool_call", "data": {"tool_call_id": call_id, "name": name}}]}}),
+    )
+}
+
+/// The compaction summary the display projection puts at the floor.
+pub fn summary(index: usize) -> Value {
+    chunk(
+        index,
+        json!({"type": "summary", "data": {"content": "what came before"}}),
+    )
+}
+
 /// A `turn.wait` answer for `loop_id`.
 pub fn waited(loop_id: &str, outcome: Value) -> Value {
     json!({"turn": turn(loop_id), "outcome": outcome})

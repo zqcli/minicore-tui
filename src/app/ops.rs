@@ -11,6 +11,9 @@ use crate::protocol::{
 };
 use crate::transcript::{Block, ChangeSummary, NoticeLevel};
 
+/// Pages read on open to reach the latest answer behind a compaction summary.
+const BACKFILL_PAGES: u8 = 4;
+
 impl App {
     pub(super) fn on_op(&mut self, op: SessionOp) {
         match op {
@@ -48,6 +51,14 @@ impl App {
             SessionOp::Changes(loop_id, result) => self.on_changes(&loop_id, result),
             SessionOp::ToolRead(key, result) => {
                 if let Some(read) = self.ok(result)
+                    && let Some(card) = self.session_mut().transcript.find_tool_mut(&key)
+                {
+                    card.apply_read(&read);
+                }
+            }
+            // A call the Agent no longer knows keeps its card as it is.
+            SessionOp::ToolHydrated(key, read) => {
+                if let Some(read) = read
                     && let Some(card) = self.session_mut().transcript.find_tool_mut(&key)
                 {
                     card.apply_read(&read);
@@ -112,8 +123,24 @@ impl App {
 
     fn on_tail(&mut self, result: Result<History, RpcError>) {
         if let Some(page) = self.ok(result) {
-            self.session_mut().install_tail(page);
+            let session = self.session_mut();
+            session.install_tail(page);
+            session.backfill = BACKFILL_PAGES;
             self.scroll = Scroll::Follow;
+            self.backfill();
+        }
+    }
+
+    /// Reads on behind the summary until the latest answer is loaded, so a
+    /// session that opens on its compaction marker does not look empty.
+    fn backfill(&mut self) {
+        let session = self.session_mut();
+        if session.transcript.last_answer().is_some() {
+            session.backfill = 0;
+        }
+        if let Some(left) = session.backfill.checked_sub(1) {
+            session.backfill = left;
+            self.load_older();
         }
     }
 
@@ -121,7 +148,9 @@ impl App {
         let page = match result {
             Ok(page) => page,
             Err(error) => {
-                self.session_mut().loading_older = false;
+                let session = self.session_mut();
+                session.loading_older = false;
+                session.backfill = 0;
                 // The read already restarted once on a fresh pin.
                 if error.is_stale_pin() {
                     self.notice(
@@ -134,11 +163,18 @@ impl App {
                 return;
             }
         };
-        let grown = self.session_mut().prepend_page(page);
+        let (grown, cards) = self.session_mut().prepend_page(page);
         if let Scroll::Anchor { block, offset } = self.scroll {
             let block = block.saturating_add_signed(grown);
             self.scroll = Scroll::Anchor { block, offset };
         }
+        for key in cards {
+            let hydrated = key.clone();
+            self.read_tool(&key, move |read| {
+                SessionOp::ToolHydrated(hydrated, read.ok())
+            });
+        }
+        self.backfill();
     }
 
     fn on_state(&mut self, result: Result<SessionState, RpcError>) {

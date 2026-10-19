@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super::tasks::StreamText;
 use super::{App, Overlay, Panel, Scroll, SessionOp, tasks};
-use crate::protocol::{self, ToolReadResult, ToolRef};
+use crate::protocol::{self, RpcError, ToolReadResult, ToolRef};
 use crate::transcript::{Block, NoticeLevel};
 use crate::ui::views::{self, ToolRow};
 
@@ -54,16 +54,8 @@ impl App {
         } else {
             &["output"]
         };
-        let fields = json!({
-            "loop_id": key.loop_id, "request_index": key.request_index,
-            "tool_call_id": key.tool_call_id, "display": true,
-        });
         let read_key = key.clone();
-        self.call(
-            protocol::METHOD_TOOL_READ,
-            fields,
-            move |result: Result<ToolReadResult, _>| SessionOp::ToolRead(read_key, result),
-        );
+        self.read_tool(&key, move |result| SessionOp::ToolRead(read_key, result));
         for stream in streams {
             let (client, key, stream) = (self.client.clone(), key.clone(), (*stream).to_owned());
             self.spawn(async move {
@@ -81,6 +73,20 @@ impl App {
             scroll: 0,
             key,
         })
+    }
+
+    /// `tool.read` with the display facts of the card `key`; `wrap` turns the
+    /// answer into the op to post.
+    pub(super) fn read_tool(
+        &self,
+        key: &ToolRef,
+        wrap: impl FnOnce(Result<ToolReadResult, RpcError>) -> SessionOp + Send + 'static,
+    ) {
+        let fields = json!({
+            "loop_id": key.loop_id, "request_index": key.request_index,
+            "tool_call_id": key.tool_call_id, "display": true,
+        });
+        self.call(protocol::METHOD_TOOL_READ, fields, wrap);
     }
 
     /// `[` / `]` in the tool view: the previous or next tool card.

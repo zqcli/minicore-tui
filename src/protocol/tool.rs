@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::event::CommandResult;
+use super::stamp::unix_millis;
 
 /// Full tool identity; a call is never addressed by name or path.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
@@ -58,9 +59,20 @@ pub enum ToolSubject {
 pub struct ToolExecution {
     pub tool_ref: ToolRef,
     pub state: ToolExecutionState,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
     pub output_line_count: Option<usize>,
     pub result_truncated: bool,
     pub command: Option<CommandResult>,
+}
+
+impl ToolExecution {
+    /// How long the tool ran, when the Agent recorded both ends.
+    pub fn duration(&self) -> Option<std::time::Duration> {
+        let start = unix_millis(self.started_at.as_deref()?)?;
+        let end = unix_millis(self.finished_at.as_deref()?)?;
+        Some(std::time::Duration::from_millis(end.saturating_sub(start)))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]

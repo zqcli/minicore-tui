@@ -323,8 +323,8 @@ impl App {
         session.loading_older = true;
         // Below the display floor the transcript continues in the canonical
         // history, behind the compaction summary.
-        let before = session.loaded_from;
-        let window = if before <= session.first_item {
+        let before = session.hidden_items();
+        let window = if session.loaded_from <= session.first_item {
             tasks::Window::CanonicalBefore(before)
         } else {
             tasks::Window::Before(before)

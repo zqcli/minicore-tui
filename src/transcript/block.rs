@@ -225,9 +225,10 @@ impl ToolCall {
         self.exit_code = command.exit_code.or(self.exit_code);
     }
 
-    /// An execution record: state, counts and the command's exit code.
+    /// An execution record: state, duration, counts and the command's exit code.
     pub fn apply_execution(&mut self, execution: &ToolExecution) {
         self.set_state(ToolState::from_execution(execution.state));
+        self.duration = execution.duration().or(self.duration);
         self.output_lines = execution.output_line_count.or(self.output_lines);
         self.truncated |= execution.result_truncated;
         if let Some(command) = &execution.command {
