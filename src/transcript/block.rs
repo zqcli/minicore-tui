@@ -986,9 +986,6 @@ mod tests {
         let record = |exit_code| CommandResult {
             status: CommandStatus::Exited,
             exit_code,
-            termination_confirmed: true,
-            output_complete: true,
-            output_truncated: false,
         };
         let mut call = ToolCall::new(key("c"), "bash");
         call.apply_command(&record(Some(2)));
@@ -1066,7 +1063,6 @@ mod tests {
             data: String::new(),
             base_offset: base,
             next_offset: next,
-            dropped: false,
             expired,
         }
     }

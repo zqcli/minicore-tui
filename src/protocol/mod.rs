@@ -261,9 +261,9 @@ pub fn parse_frame(line: &[u8]) -> Result<IncomingFrame, FrameError> {
             let params = envelope.params.ok_or_else(|| FrameError {
                 detail: "agent.event without params".into(),
             })?;
-            let event = AgentEvent::decode(params).map_err(|error| FrameError {
-                detail: format!("malformed agent.event: {error}"),
-            })?;
+            // Events are hints the turn reconciles anyway, so an unreadable one
+            // must not stop the stream.
+            let event = serde_json::from_value(params).unwrap_or(AgentEvent::Unknown);
             Ok(IncomingFrame::Event(event))
         }
         (None, Some(method)) => Ok(IncomingFrame::UnknownNotification(method.to_owned())),
@@ -740,15 +740,6 @@ pub enum CancelReason {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ModelError {
     pub kind: String,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum TurnPersistence {
-    Persisted,
-    Failed,
-    #[serde(other)]
-    Unknown,
 }
 
 /// The authoritative `turn.wait` result.

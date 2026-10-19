@@ -2652,8 +2652,7 @@ impl App {
             AgentEvent::ToolArgumentsPreview {
                 call: identity,
                 tool_name,
-                generated,
-                discarded,
+                state,
                 display,
                 ..
             } => {
@@ -2663,7 +2662,7 @@ impl App {
                 let key = identity.key();
                 if let Some(call) = session.transcript.find_tool_mut(&key) {
                     call.apply_display(&display);
-                } else if !generated && !discarded {
+                } else if state == crate::protocol::event::PreviewState::Generating {
                     // The preview may arrive before `tool_started`; the card is
                     // created here so streaming arguments show as they generate.
                     let name = if tool_name.is_empty() {
@@ -2736,16 +2735,14 @@ impl App {
             }
             AgentEvent::ToolFinished {
                 call: identity,
-                outcome,
-                content,
-                content_truncated,
+                result,
                 ..
             } => {
                 use crate::protocol::event::ToolOutcome;
                 let key = identity.key();
                 session.finish_tool(&key);
                 if let Some(call) = session.transcript.find_tool_mut(&key) {
-                    let state = match outcome {
+                    let state = match result.outcome {
                         ToolOutcome::Success => ToolState::Succeeded,
                         ToolOutcome::Failed => ToolState::Failed,
                         ToolOutcome::Denied => ToolState::Denied,
@@ -2753,8 +2750,8 @@ impl App {
                         _ => call.state,
                     };
                     call.set_state(state);
-                    call.truncated |= content_truncated;
-                    if let Some(content) = content {
+                    call.truncated |= result.content_truncated;
+                    if let Some(content) = result.content {
                         call.apply_result(&content);
                     }
                 }
