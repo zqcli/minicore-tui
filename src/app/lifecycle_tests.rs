@@ -2947,3 +2947,124 @@ async fn a_page_landing_before_the_reconcile_still_survives_it() {
         app.session.as_ref().unwrap().transcript.blocks()
     );
 }
+
+/// The palette is a subsequence filter, so `/res` lists `resume` and
+/// `reasoning`. Accepting the highlighted row must deliver the argument the
+/// user typed even when that row is not the name they typed.
+#[tokio::test]
+async fn a_fuzzy_palette_accept_still_delivers_the_typed_argument() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script(
+        "session.update",
+        json!({"session": {
+            "session_id": "s1", "title": null, "profile": "coding",
+            "workspace": "/work", "model": "mock", "reasoning": "max",
+            "loaded": true, "created_at": "", "updated_at": ""
+        }}),
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    // `/res max`: the rows are resume then reasoning. The typed name is `res`.
+    for ch in "/res max".chars() {
+        let code = if ch == '\n' {
+            KeyCode::Enter
+        } else {
+            KeyCode::Char(ch)
+        };
+        app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+    let Overlay::Palette { selected, filter } = &app.overlay else {
+        panic!("the palette is open: {:?}", app.overlay);
+    };
+    assert_eq!(filter, "res", "the filter is the typed name, not the line");
+    assert_eq!(*selected, 0, "the top row is highlighted");
+    let rows = crate::app::commands::filter("res");
+    let highlighted = rows[0].name;
+    assert_ne!(highlighted, "res", "the highlighted row is a fuzzy match");
+    assert_eq!(highlighted, "resume", "resume is the first fuzzy match");
+
+    // Move to the other fuzzy match and accept it. Its argument parses, so the
+    // deliverable is observable: with the argument dropped, `reasoning` falls
+    // back to opening the picker instead of setting the level.
+    app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    // `on_key` only files the action: the loop runs it, so the test does too.
+    let accepted = app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    if let crate::app::keys::Input::Action(action) = accepted {
+        app.on_action(action);
+    }
+    assert!(
+        app.composer.text().is_empty(),
+        "the command line is cleared once accepted: {:?}",
+        app.composer.text()
+    );
+    assert!(
+        !matches!(app.overlay, Overlay::Reasoning { .. }),
+        "the typed level was delivered instead of the picker opening: {:?}",
+        app.overlay
+    );
+    settle(&mut app, &mut rx).await;
+    let calls = fake.calls("session.update");
+    assert_eq!(calls.len(), 1, "the level was sent once: {calls:?}");
+    assert_eq!(
+        calls[0]["reasoning"],
+        json!("max"),
+        "the argument reached the accepted command"
+    );
+}
+
+/// A refused send returns the text to an empty composer. Restoring it must not
+/// wipe the undo history: the draft the user built before sending is still one
+/// Ctrl+Z away, which is the whole point of not losing a draft.
+#[tokio::test]
+async fn undo_after_a_refused_send_walks_back_the_presend_draft() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script_error(
+        "turn.send",
+        -32015,
+        "history too large",
+        "history_too_large",
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    // Typed, not pasted: two gestures, so undo has somewhere to go.
+    for ch in "ship it".chars() {
+        app.composer.type_char(ch);
+    }
+    app.composer.end_gesture();
+    app.composer.type_char('!');
+    assert_eq!(app.composer.text(), "ship it!");
+
+    app.on_action(Action::Submit);
+    settle(&mut app, &mut rx).await;
+    assert_eq!(
+        app.composer.text(),
+        "ship it!",
+        "the refused text is back in the composer"
+    );
+
+    // Ctrl+Z must now walk back through the draft that was there before the send.
+    app.on_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
+    assert_eq!(
+        app.composer.text(),
+        "ship it",
+        "undo reaches the pre-send draft instead of doing nothing"
+    );
+    // The earlier word was one gesture, so it goes as a whole.
+    app.on_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
+    assert_eq!(app.composer.text(), "");
+    // And redo still works from there.
+    app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
+    assert_eq!(app.composer.text(), "ship it");
+}

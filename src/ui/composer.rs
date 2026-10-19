@@ -215,6 +215,23 @@ impl Composer {
         self.recall = None;
     }
 
+    /// Puts text back in the draft without spending the history that produced
+    /// it: a refused send or an editor round trip is not a new edit, so the
+    /// next undo walks back through the user's own typing instead of landing on
+    /// an empty composer. Any live gesture is closed first, or the text being
+    /// replaced would be lost from the stack.
+    pub fn restore_text(&mut self, text: &str) {
+        let text = normalize(text);
+        if self.text == text {
+            return;
+        }
+        self.commit();
+        self.text = text;
+        self.cursor = self.text.len();
+        self.pastes.clear();
+        self.column = None;
+    }
+
     /// Clears the draft the way an edit would, so Ctrl+Z brings it back.
     pub fn clear(&mut self) {
         if self.text.is_empty() {

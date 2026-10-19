@@ -349,9 +349,11 @@ impl App {
                     return Input::Consumed;
                 };
                 // The composer holds the whole command line, so an argument
-                // typed after the name reaches the command.
+                // typed after the name reaches the command. The accepted row
+                // can be another fuzzy match than the typed name (`/res` lists
+                // resume and reasoning), but the argument is still the user's
+                // and belongs to whichever command they accepted.
                 let arg = commands::parse(self.composer.text())
-                    .filter(|(name, _)| *name == command.name)
                     .map_or("", |(_, arg)| arg)
                     .to_owned();
                 self.composer.clear();
