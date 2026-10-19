@@ -690,11 +690,7 @@ pub fn render(
     let total = width.max(3) as usize;
     let content = total - 2;
     let empty = text.is_empty();
-    let body = if empty {
-        styles.subtle()
-    } else {
-        styles.text()
-    };
+    let body = if empty { styles.faint() } else { styles.text() };
     // The draft is drawn sanitized so escapes cannot drive the terminal; the
     // caret is mapped into that copy to stay on the character it edits.
     let (shown, caret) = if empty {
@@ -1079,8 +1075,8 @@ mod tests {
         assert_eq!(c.text(), format!("> {payload}"));
     }
 
-    fn styles() -> super::super::theme::Styles {
-        super::super::theme::Styles::of(crate::theme::Palette::dark())
+    fn styles() -> Styles {
+        Styles::of(crate::ui::theme::Palette::dark())
     }
 
     fn drawn(text: &str, cursor: Option<usize>, width: u16) -> (Vec<String>, (u16, u16)) {

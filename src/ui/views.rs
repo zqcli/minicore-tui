@@ -5,19 +5,20 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use crate::app::Session;
+use crate::app::commands;
 use crate::app::diff::{DiffFile, DiffState};
 use crate::app::tasks::StreamText;
 use crate::app::tool::ToolState;
+use crate::app::{App, Overlay, Session};
 use crate::protocol::changes::{DiffLine, DiffPage, LineKind};
 use crate::protocol::{ChangeKind, SessionContext, SessionPresentation};
-use crate::theme::Palette;
 use crate::transcript::ToolCall;
 
 use super::panel::truncate;
+use super::theme::Styles;
 use super::wrap::{sanitize, width, wrap};
 
 /// File-list column width, as a fraction of the view when the terminal is wide
@@ -43,19 +44,19 @@ pub enum DiffRow {
 }
 
 impl DiffRow {
-    fn line(&self, palette: &Palette) -> Line<'static> {
+    fn line(&self, styles: Styles) -> Line<'static> {
         match self {
             Self::Blank => Line::from(""),
-            Self::Note(note) => dim(note, palette),
-            Self::Hunk(header) => styled(header, palette.hunk),
+            Self::Note(note) => styled(note, styles.dim()),
+            Self::Hunk(header) => styled(header, styles.hunk()),
             Self::Line { kind, gutter, text } => {
                 let style = match kind {
-                    LineKind::Added => Style::default().fg(palette.added),
-                    LineKind::Removed => Style::default().fg(palette.removed),
-                    LineKind::Context | LineKind::Unknown => Style::default().fg(palette.dim),
+                    LineKind::Added => styles.added(),
+                    LineKind::Removed => styles.removed(),
+                    LineKind::Context | LineKind::Unknown => styles.dim(),
                 };
                 Line::from(vec![
-                    Span::styled(gutter.clone(), Style::default().fg(palette.faint)),
+                    Span::styled(gutter.clone(), styles.faint()),
                     Span::styled(format!("{}{text}", sign(*kind)), style),
                 ])
             }
@@ -202,31 +203,22 @@ fn diff_row(line: &DiffLine, text: &str, digits: usize) -> DiffRow {
     }
 }
 
-fn dim(text: &str, palette: &Palette) -> Line<'static> {
-    styled(text, palette.dim)
-}
-
-/// One row in one color. The color sits on the span, which is what `set_line` paints.
-fn styled(text: &str, color: Color) -> Line<'static> {
-    Line::from(Span::styled(text.to_owned(), Style::default().fg(color)))
+/// One row in one style. The style sits on the span, which is what `set_line` paints.
+fn styled(text: &str, style: Style) -> Line<'static> {
+    Line::from(Span::styled(text.to_owned(), style))
 }
 
 /// Shared view chrome: the title row and the dim hint row.
-fn chrome(frame: &mut Frame, area: Rect, palette: &Palette, title: &str, hint: &str) {
+fn chrome(frame: &mut Frame, area: Rect, styles: Styles, title: &str, hint: &str) {
     let buffer = frame.buffer_mut();
-    buffer.set_line(
-        area.x,
-        area.y,
-        &Line::from(Span::styled(
-            title.to_owned(),
-            Style::default()
-                .fg(palette.accent)
-                .add_modifier(Modifier::BOLD),
-        )),
-        area.width,
-    );
+    buffer.set_line(area.x, area.y, &styled(title, styles.title()), area.width);
     if area.height > 1 {
-        buffer.set_line(area.x, area.bottom() - 1, &dim(hint, palette), area.width);
+        buffer.set_line(
+            area.x,
+            area.bottom() - 1,
+            &styled(hint, styles.dim()),
+            area.width,
+        );
     }
 }
 
@@ -252,7 +244,7 @@ fn split(area: Rect) -> (Option<Rect>, Rect) {
     (Some(list), hunks)
 }
 
-pub fn render_diff(frame: &mut Frame, area: Rect, palette: &Palette, diff: &DiffState) {
+pub fn render_diff(frame: &mut Frame, area: Rect, styles: Styles, diff: &DiffState) {
     let mut title = format!("← Diff · {}", diff.scope.label());
     if let Some(file) = diff.current() {
         title.push_str(" · ");
@@ -261,28 +253,28 @@ pub fn render_diff(frame: &mut Frame, area: Rect, palette: &Palette, diff: &Diff
     chrome(
         frame,
         area,
-        palette,
+        styles,
         &title,
         "tab scope · ↑↓ file · PgUp/PgDn scroll · c copy · esc back",
     );
     let (list, hunks) = split(area);
     if let Some(list) = list {
-        render_file_list(frame, list, palette, diff);
+        render_file_list(frame, list, styles, diff);
     }
-    render_hunks(frame, hunks, palette, diff);
+    render_hunks(frame, hunks, styles, diff);
 }
 
 /// The file's line column: `+a −b` once measured, `?` when the read failed and
 /// `·` while unknown.
-fn count_spans(file: &DiffFile, palette: &Palette) -> Vec<Span<'static>> {
+fn count_spans(file: &DiffFile, styles: Styles) -> Vec<Span<'static>> {
     match file.lines {
         Some((added, removed)) => vec![
-            Span::styled(format!("+{added}"), Style::default().fg(palette.added)),
+            Span::styled(format!("+{added}"), styles.added()),
             Span::raw(" "),
-            Span::styled(format!("−{removed}"), Style::default().fg(palette.removed)),
+            Span::styled(format!("−{removed}"), styles.removed()),
         ],
-        None if file.failed => vec![Span::styled("?", Style::default().fg(palette.dim))],
-        None => vec![Span::styled("·", Style::default().fg(palette.dim))],
+        None if file.failed => vec![Span::styled("?", styles.dim())],
+        None => vec![Span::styled("·", styles.dim())],
     }
 }
 
@@ -296,13 +288,13 @@ fn marker(kind: ChangeKind) -> &'static str {
     }
 }
 
-fn render_file_list(frame: &mut Frame, area: Rect, palette: &Palette, diff: &DiffState) {
+fn render_file_list(frame: &mut Frame, area: Rect, styles: Styles, diff: &DiffState) {
     let rows = area.height as usize;
     let first = diff.selected.saturating_sub(rows.saturating_sub(1));
     let counts: Vec<Vec<Span<'static>>> = diff
         .files
         .iter()
-        .map(|file| count_spans(file, palette))
+        .map(|file| count_spans(file, styles))
         .collect();
     let span_width = |spans: &[Span<'static>]| spans.iter().map(|span| width(&span.content)).sum();
     let column = counts
@@ -325,14 +317,10 @@ fn render_file_list(frame: &mut Frame, area: Rect, palette: &Palette, diff: &Dif
                 height: 1,
                 ..area
             };
-            frame
-                .buffer_mut()
-                .set_style(band, Style::default().bg(palette.selection_bg));
-            Style::default()
-                .fg(palette.text)
-                .add_modifier(Modifier::BOLD)
+            frame.buffer_mut().set_style(band, styles.highlight());
+            styles.bold()
         } else {
-            Style::default().fg(palette.dim)
+            styles.dim()
         };
         let count = &counts[index];
         let mut spans = vec![Span::styled(format!("{} ", marker(file.kind)), style)];
@@ -349,11 +337,11 @@ fn render_file_list(frame: &mut Frame, area: Rect, palette: &Palette, diff: &Dif
     {
         let counts = match file.lines {
             Some((added, removed)) => Line::from(vec![
-                Span::styled(format!("+{added} "), Style::default().fg(palette.added)),
-                Span::styled(format!("−{removed}"), Style::default().fg(palette.removed)),
+                Span::styled(format!("+{added} "), styles.added()),
+                Span::styled(format!("−{removed}"), styles.removed()),
             ]),
-            None if file.failed => dim("line counts unavailable", palette),
-            None => dim("reading…", palette),
+            None if file.failed => styled("line counts unavailable", styles.dim()),
+            None => styled("reading…", styles.dim()),
         };
         frame
             .buffer_mut()
@@ -361,7 +349,7 @@ fn render_file_list(frame: &mut Frame, area: Rect, palette: &Palette, diff: &Dif
     }
 }
 
-fn render_hunks(frame: &mut Frame, area: Rect, palette: &Palette, diff: &DiffState) {
+fn render_hunks(frame: &mut Frame, area: Rect, styles: Styles, diff: &DiffState) {
     if diff.rows.is_empty() {
         let message = if diff.status.is_empty() {
             "No changes to show."
@@ -370,7 +358,7 @@ fn render_hunks(frame: &mut Frame, area: Rect, palette: &Palette, diff: &DiffSta
         };
         frame
             .buffer_mut()
-            .set_line(area.x, area.y, &dim(message, palette), area.width);
+            .set_line(area.x, area.y, &styled(message, styles.dim()), area.width);
         return;
     }
     // The last span is the content and wraps; earlier spans are the gutter,
@@ -382,7 +370,7 @@ fn render_hunks(frame: &mut Frame, area: Rect, palette: &Palette, diff: &DiffSta
         .skip(diff.scroll)
         .take(area.height as usize)
     {
-        let line = row.line(palette);
+        let line = row.line(styles);
         let Some((body, gutter)) = line.spans.split_last() else {
             y += 1;
             continue;
@@ -437,18 +425,18 @@ impl ToolRow {
         }
     }
 
-    fn line(&self, palette: &Palette) -> Line<'static> {
+    fn line(&self, styles: Styles) -> Line<'static> {
         match self {
             Self::Text(text) => Line::raw(text.clone()),
             Self::Section(name) => {
-                let color = if name == "stderr" {
-                    palette.warning
+                let style = if name == "stderr" {
+                    styles.warning()
                 } else {
-                    palette.dim
+                    styles.dim()
                 };
-                styled(&self.text(), color)
+                styled(&self.text(), style)
             }
-            Self::Note(note) => dim(note, palette),
+            Self::Note(note) => styled(note, styles.dim()),
         }
     }
 }
@@ -521,7 +509,7 @@ pub fn tool_text(tool: &ToolState, session: Option<&Session>) -> String {
 pub fn render_tool(
     frame: &mut Frame,
     area: Rect,
-    palette: &Palette,
+    styles: Styles,
     tool: &ToolState,
     session: Option<&Session>,
 ) {
@@ -541,14 +529,14 @@ pub fn render_tool(
     chrome(
         frame,
         area,
-        palette,
+        styles,
         &title,
         "[ ] previous/next tool · ↑↓ PgUp/PgDn scroll · c copy · esc back",
     );
     let mut y = area.y + 1;
     let bottom = area.bottom().saturating_sub(1);
     if !call.detail.is_empty() {
-        let detail = styled(&sanitize(&call.detail), palette.dim);
+        let detail = styled(&sanitize(&call.detail), styles.dim());
         frame.buffer_mut().set_line(area.x, y, &detail, area.width);
         y += 1;
     }
@@ -556,7 +544,7 @@ pub fn render_tool(
         if y >= bottom {
             return;
         }
-        let line = styled(&sanitize(text), palette.dim);
+        let line = styled(&sanitize(text), styles.dim());
         frame.buffer_mut().set_line(area.x, y, &line, area.width);
         y += 1;
     }
@@ -575,28 +563,28 @@ pub fn render_tool(
         };
         frame
             .buffer_mut()
-            .set_line(area.x, y, &dim(message, palette), area.width);
+            .set_line(area.x, y, &styled(message, styles.dim()), area.width);
         return;
     }
     for (offset, row) in tool.rows.iter().skip(tool.scroll).take(rows).enumerate() {
         frame
             .buffer_mut()
-            .set_line(area.x, y + offset as u16, &row.line(palette), area.width);
+            .set_line(area.x, y + offset as u16, &row.line(styles), area.width);
     }
 }
 
 /// The context view's lines: one readable summary, not a ledger of numbers.
-pub fn context_lines(session: Option<&Session>, palette: &Palette) -> Vec<Line<'static>> {
+pub fn context_lines(session: Option<&Session>, styles: Styles) -> Vec<Line<'static>> {
     summary_lines(
         session.and_then(|session| session.context.as_ref()),
         session.and_then(|session| session.presentation.as_ref()),
-        palette,
+        styles,
     )
 }
 
 /// The context view as plain text, for `c`.
-pub fn context_text(session: Option<&Session>, palette: &Palette) -> String {
-    let lines = context_lines(session, palette);
+pub fn context_text(session: Option<&Session>, styles: Styles) -> String {
+    let lines = context_lines(session, styles);
     lines
         .iter()
         .map(Line::to_string)
@@ -635,7 +623,7 @@ pub fn context_percent(session: &Session) -> Option<f64> {
 fn summary_lines(
     context: Option<&SessionContext>,
     presentation: Option<&SessionPresentation>,
-    palette: &Palette,
+    styles: Styles,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let usage = presentation.and_then(|view| view.context.as_ref());
@@ -671,11 +659,8 @@ fn summary_lines(
         ))
     });
     match reported.or(estimated) {
-        Some(line) => lines.push(Line::from(Span::styled(
-            line,
-            Style::default().fg(palette.text),
-        ))),
-        None => lines.push(dim("Context usage is not reported yet.", palette)),
+        Some(line) => lines.push(styled(&line, styles.text())),
+        None => lines.push(styled("Context usage is not reported yet.", styles.dim())),
     }
 
     if let Some(budget) = budget {
@@ -685,7 +670,7 @@ fn summary_lines(
             } else {
                 String::new()
             };
-            lines.push(dim(
+            lines.push(styled(
                 &format!(
                     "Auto-compacts at {} tokens{percent}{}",
                     super::format_tokens(trigger),
@@ -694,23 +679,23 @@ fn summary_lines(
                         None => String::new(),
                     }
                 ),
-                palette,
+                styles.dim(),
             ));
         } else {
-            lines.push(dim("Automatic compaction is disabled.", palette));
+            lines.push(styled("Automatic compaction is disabled.", styles.dim()));
         }
     }
 
     if let Some(context) = context {
         if let Some(operation) = &context.current_operation {
-            lines.push(Line::from(Span::styled(
-                format!(
+            lines.push(styled(
+                &format!(
                     "Compacting now: {} · {}",
                     operation_label(&operation.phase),
                     phase_counts(operation)
                 ),
-                Style::default().fg(palette.warning),
-            )));
+                styles.warning(),
+            ));
         }
         if let Some(last) = &context.last_result {
             let origin = match last.origin.as_deref() {
@@ -741,35 +726,35 @@ fn summary_lines(
             {
                 summary.push_str(&format!(" · {items} items, {retained} kept"));
             }
-            lines.push(dim(&summary, palette));
+            lines.push(styled(&summary, styles.dim()));
         }
         if let Some(coverage) = &context.coverage {
-            lines.push(dim(
+            lines.push(styled(
                 &format!(
                     "Summary covers {} turns · {} items · {} kept",
                     coverage.covered_loop_count,
                     coverage.covered_item_count,
                     coverage.retained_item_count
                 ),
-                palette,
+                styles.dim(),
             ));
         }
         if let Some(failure) = &context.last_prepare_failure {
-            lines.push(Line::from(Span::styled(
-                format!("Last preparation failed: {failure}"),
-                Style::default().fg(palette.failure),
-            )));
+            lines.push(styled(
+                &format!("Last preparation failed: {failure}"),
+                styles.failure(),
+            ));
         }
     } else {
-        lines.push(dim(
+        lines.push(styled(
             "No context report is loaded for this session.",
-            palette,
+            styles.dim(),
         ));
     }
     lines.push(Line::from(""));
-    lines.push(dim(
+    lines.push(styled(
         "Estimates are byte-based and exclude the system prompt and tool schemas.",
-        palette,
+        styles.dim(),
     ));
 
     lines
@@ -802,8 +787,8 @@ fn compact_status(status: crate::protocol::CompactStatus) -> &'static str {
     }
 }
 
-pub fn render_context(frame: &mut Frame, area: Rect, palette: &Palette, lines: &[Line<'static>]) {
-    chrome(frame, area, palette, "← Context", "r refresh · esc back");
+pub fn render_context(frame: &mut Frame, area: Rect, styles: Styles, lines: &[Line<'static>]) {
+    chrome(frame, area, styles, "← Context", "r refresh · esc back");
     let bottom = area.bottom().saturating_sub(1);
     let mut y = area.y + 1;
     for line in lines {
@@ -931,27 +916,21 @@ pub const KEYS: &[KeyRow] = &[
     },
 ];
 
-pub fn help_view(commands: &[crate::app::commands::Command], palette: &Palette) -> HelpView {
+pub fn help_view(commands: &[crate::app::commands::Command], styles: Styles) -> HelpView {
     let mut lines = Vec::new();
-    lines.push(dim("Keys", palette));
+    lines.push(styled("Keys", styles.dim()));
     for row in KEYS {
         lines.push(Line::from(vec![
-            Span::styled(
-                format!("{:<26}", row.keys),
-                Style::default().fg(palette.accent),
-            ),
-            Span::styled(row.action, Style::default().fg(palette.text)),
+            Span::styled(format!("{:<26}", row.keys), styles.accent()),
+            Span::styled(row.action, styles.text()),
         ]));
     }
     lines.push(Line::from(""));
-    lines.push(dim("Commands", palette));
+    lines.push(styled("Commands", styles.dim()));
     for command in commands {
         lines.push(Line::from(vec![
-            Span::styled(
-                format!("/{:<25}", command.name),
-                Style::default().fg(palette.accent),
-            ),
-            Span::styled(command.description, Style::default().fg(palette.text)),
+            Span::styled(format!("/{:<25}", command.name), styles.accent()),
+            Span::styled(command.description, styles.text()),
         ]));
     }
     HelpView {
@@ -960,17 +939,11 @@ pub fn help_view(commands: &[crate::app::commands::Command], palette: &Palette) 
     }
 }
 
-pub fn render_help(
-    frame: &mut Frame,
-    area: Rect,
-    palette: &Palette,
-    view: &HelpView,
-    scroll: usize,
-) {
+pub fn render_help(frame: &mut Frame, area: Rect, styles: Styles, view: &HelpView, scroll: usize) {
     chrome(
         frame,
         area,
-        palette,
+        styles,
         &format!("← {}", view.title),
         "pgup/pgdn scroll · esc back",
     );
@@ -984,6 +957,24 @@ pub fn render_help(
     }
 }
 
+/// Draws whichever view owns the transcript area; false when none is open.
+pub fn draw(frame: &mut Frame, area: Rect, app: &App, styles: Styles) -> bool {
+    match &app.overlay {
+        Overlay::Diff(diff) => render_diff(frame, area, styles, diff),
+        Overlay::Tool(tool) => render_tool(frame, area, styles, tool, app.session.as_ref()),
+        Overlay::Context => {
+            let lines = context_lines(app.session.as_ref(), styles);
+            render_context(frame, area, styles, &lines);
+        }
+        Overlay::Help { scroll } => {
+            let help = help_view(commands::COMMANDS, styles);
+            render_help(frame, area, styles, &help, *scroll);
+        }
+        _ => return false,
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -992,6 +983,7 @@ mod tests {
     use serde_json::json;
 
     use crate::app::diff::DiffScope;
+    use crate::ui::theme::Palette;
 
     fn capture(draw: impl FnOnce(&mut Frame), width: u16, height: u16) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -1027,21 +1019,18 @@ mod tests {
         .unwrap()
     }
 
-    fn hunk_lines(page: &DiffPage, palette: &Palette) -> Vec<Line<'static>> {
-        hunk_rows(page)
-            .iter()
-            .map(|row| row.line(palette))
-            .collect()
+    fn hunk_lines(page: &DiffPage, styles: Styles) -> Vec<Line<'static>> {
+        hunk_rows(page).iter().map(|row| row.line(styles)).collect()
     }
 
     fn records_lines(
         pages: &[DiffPage],
         tools: &[Option<String>],
-        palette: &Palette,
+        styles: Styles,
     ) -> Vec<Line<'static>> {
         diff_rows(pages, tools)
             .iter()
-            .map(|row| row.line(palette))
+            .map(|row| row.line(styles))
             .collect()
     }
 
@@ -1055,7 +1044,7 @@ mod tests {
     #[test]
     fn hunk_lines_keep_the_diff_shape_and_colors() {
         let palette = Palette::dark();
-        let lines = hunk_lines(&page(), &palette);
+        let lines = hunk_lines(&page(), Styles::of(palette));
         let text: Vec<String> = lines.iter().map(row_text).collect();
         assert_eq!(
             text,
@@ -1076,7 +1065,7 @@ mod tests {
     /// first line, or the line before an empty range, as unified diff does.
     #[test]
     fn hunk_headers_use_unified_one_based_numbers() {
-        let palette = Palette::dark();
+        let styles = Styles::of(Palette::dark());
         let page: DiffPage = serde_json::from_value(json!({
             "binary": false, "stale": false, "truncated": false,
             "change_ref": "tool:a", "path": "a.py", "complete": true,
@@ -1086,13 +1075,13 @@ mod tests {
             ]
         }))
         .unwrap();
-        let text: Vec<String> = hunk_lines(&page, &palette).iter().map(row_text).collect();
+        let text: Vec<String> = hunk_lines(&page, styles).iter().map(row_text).collect();
         assert_eq!(text, ["@@ -1,2 +1,2 @@", "@@ -5,0 +6,1 @@"]);
     }
 
     #[test]
     fn a_line_split_into_fragments_is_one_row() {
-        let palette = Palette::dark();
+        let styles = Styles::of(Palette::dark());
         let page: DiffPage = serde_json::from_value(json!({
             "binary": false, "stale": false, "truncated": false,
             "change_ref": "tool:a", "path": "a.py", "complete": true,
@@ -1103,16 +1092,16 @@ mod tests {
                        ]}]
         }))
         .unwrap();
-        let text: Vec<String> = hunk_lines(&page, &palette).iter().map(row_text).collect();
+        let text: Vec<String> = hunk_lines(&page, styles).iter().map(row_text).collect();
         assert_eq!(text[1..], ["  1 +long line"]);
     }
 
     #[test]
     fn several_records_of_one_file_are_separated_and_named() {
-        let palette = Palette::dark();
+        let styles = Styles::of(Palette::dark());
         let pages = [page(), page(), page()];
         let tools = [Some("write".to_owned()), Some("edit".to_owned()), None];
-        let text: Vec<String> = records_lines(&pages, &tools, &palette)
+        let text: Vec<String> = records_lines(&pages, &tools, styles)
             .iter()
             .map(row_text)
             .collect();
@@ -1126,7 +1115,7 @@ mod tests {
             ]
         );
         // A single record needs no separator.
-        let single: Vec<String> = records_lines(&pages[..1], &tools[..1], &palette)
+        let single: Vec<String> = records_lines(&pages[..1], &tools[..1], styles)
             .iter()
             .map(row_text)
             .collect();
@@ -1138,7 +1127,7 @@ mod tests {
 
     #[test]
     fn diff_text_never_leaks_the_original_line_terminator() {
-        let palette = Palette::dark();
+        let styles = Styles::of(Palette::dark());
         let page: DiffPage = serde_json::from_value(json!({
             "binary": false, "stale": false, "truncated": false,
             "change_ref": "tool:abc", "path": "a.rs", "complete": true,
@@ -1149,7 +1138,7 @@ mod tests {
                        ]}]
         }))
         .unwrap();
-        let lines = hunk_lines(&page, &palette);
+        let lines = hunk_lines(&page, styles);
         let text: Vec<String> = lines
             .iter()
             .map(|line| line.spans.last().unwrap().content.to_string())
@@ -1161,7 +1150,7 @@ mod tests {
 
     #[test]
     fn an_empty_page_explains_itself_instead_of_drawing_nothing() {
-        let palette = Palette::dark();
+        let styles = Styles::of(Palette::dark());
         let page = |binary: bool| -> DiffPage {
             serde_json::from_value(json!({
                 "hunks": [], "complete": false, "binary": binary, "stale": false, "truncated": false
@@ -1169,8 +1158,8 @@ mod tests {
             .unwrap()
         };
         let (empty, binary) = (page(false), page(true));
-        assert_eq!(hunk_lines(&empty, &palette).len(), 1);
-        let text: String = hunk_lines(&binary, &palette)[0]
+        assert_eq!(hunk_lines(&empty, styles).len(), 1);
+        let text: String = hunk_lines(&binary, styles)[0]
             .spans
             .iter()
             .map(|span| span.content.as_ref())
@@ -1201,11 +1190,11 @@ mod tests {
 
     #[test]
     fn the_diff_view_shows_a_file_column_and_the_hunks() {
-        let palette = Palette::dark();
+        let styles = Styles::of(Palette::dark());
         let mut view = view();
         view.rows = hunk_rows(&page());
         let text = capture(
-            |frame| render_diff(frame, frame.area(), &palette, &view),
+            |frame| render_diff(frame, frame.area(), styles, &view),
             100,
             20,
         );
@@ -1231,11 +1220,11 @@ mod tests {
 
     #[test]
     fn an_unmeasured_file_row_shows_a_dot_instead_of_a_number() {
-        let palette = Palette::dark();
+        let styles = Styles::of(Palette::dark());
         let mut view = view();
         view.files[1].lines = None;
         let text = capture(
-            |frame| render_diff(frame, frame.area(), &palette, &view),
+            |frame| render_diff(frame, frame.area(), styles, &view),
             100,
             20,
         );
@@ -1247,11 +1236,11 @@ mod tests {
 
     #[test]
     fn a_narrow_terminal_drops_the_file_column_instead_of_wrapping_it() {
-        let palette = Palette::dark();
+        let styles = Styles::of(Palette::dark());
         let mut view = view();
         view.rows = hunk_rows(&page());
         let text = capture(
-            |frame| render_diff(frame, frame.area(), &palette, &view),
+            |frame| render_diff(frame, frame.area(), styles, &view),
             60,
             16,
         );
@@ -1274,7 +1263,7 @@ mod tests {
 
     #[test]
     fn the_context_view_prefers_reported_numbers_and_labels_estimates() {
-        let palette = Palette::dark();
+        let styles = Styles::of(Palette::dark());
         let presentation: SessionPresentation = serde_json::from_value(json!({
             "session_id": "ses_1",
             "context": {"tokens": 31200, "window": 40000, "percent": 78.0, "kind": "reported"}
@@ -1289,7 +1278,7 @@ mod tests {
                             "before_tokens": 4200, "after_tokens": 900, "covered_loop_count": 6}
         }))
         .unwrap();
-        let lines = summary_lines(Some(&context), Some(&presentation), &palette);
+        let lines = summary_lines(Some(&context), Some(&presentation), styles);
         let text: Vec<String> = lines
             .iter()
             .map(|line| {
@@ -1320,13 +1309,13 @@ mod tests {
 
     #[test]
     fn the_context_view_falls_back_to_estimates_and_says_so() {
-        let palette = Palette::dark();
+        let styles = Styles::of(Palette::dark());
         let context: SessionContext = serde_json::from_value(json!({
             "session_id": "ses_1",
             "budget": {"estimated_history_tokens": 1000, "input_budget_tokens": 4000}
         }))
         .unwrap();
-        let lines = summary_lines(Some(&context), None, &palette);
+        let lines = summary_lines(Some(&context), None, styles);
         let text: Vec<String> = lines
             .iter()
             .map(|line| {
@@ -1350,14 +1339,14 @@ mod tests {
 
     #[test]
     fn a_compaction_result_names_whether_it_was_automatic() {
-        let palette = Palette::dark();
+        let styles = Styles::of(Palette::dark());
         let context: SessionContext = serde_json::from_value(json!({
             "session_id": "ses_1",
             "last_result": {"operation_id": "auto-1", "origin": "automatic", "status": "compacted",
                             "before_tokens": 32100, "after_tokens": 2700}
         }))
         .unwrap();
-        let lines = summary_lines(Some(&context), None, &palette);
+        let lines = summary_lines(Some(&context), None, styles);
         let text: String = lines
             .iter()
             .map(|line| {
@@ -1376,14 +1365,14 @@ mod tests {
 
     #[test]
     fn the_context_view_never_prints_zero_for_unknown_numbers() {
-        let palette = Palette::dark();
+        let styles = Styles::of(Palette::dark());
         let context: SessionContext = serde_json::from_value(json!({
             "session_id": "ses_1",
             "budget": {"input_budget_tokens": 40000},
             "automatic": {}
         }))
         .unwrap();
-        let lines = summary_lines(Some(&context), None, &palette);
+        let lines = summary_lines(Some(&context), None, styles);
         let text: String = lines
             .iter()
             .map(|line| {
@@ -1400,14 +1389,14 @@ mod tests {
 
     #[test]
     fn a_current_operation_is_shown_as_compacting_now() {
-        let palette = Palette::dark();
+        let styles = Styles::of(Palette::dark());
         let context: SessionContext = serde_json::from_value(json!({
             "session_id": "ses_1",
             "current_operation": {"operation_id": "auto-1", "phase": "summarizing",
                                   "covered_item_count": 12, "retained_item_count": 0}
         }))
         .unwrap();
-        let lines = summary_lines(Some(&context), None, &palette);
+        let lines = summary_lines(Some(&context), None, styles);
         let text: String = lines
             .iter()
             .map(|line| {
@@ -1423,8 +1412,8 @@ mod tests {
 
     #[test]
     fn help_lists_every_key_row_and_command() {
-        let palette = Palette::dark();
-        let view = help_view(crate::app::commands::COMMANDS, &palette);
+        let styles = Styles::of(Palette::dark());
+        let view = help_view(crate::app::commands::COMMANDS, styles);
         let text: String = view
             .lines
             .iter()
@@ -1443,10 +1432,10 @@ mod tests {
 
     #[test]
     fn help_scrolling_shows_a_later_window() {
-        let palette = Palette::dark();
-        let view = help_view(&[], &palette);
+        let styles = Styles::of(Palette::dark());
+        let view = help_view(&[], styles);
         let text = capture(
-            |frame| render_help(frame, frame.area(), &palette, &view, 5),
+            |frame| render_help(frame, frame.area(), styles, &view, 5),
             80,
             10,
         );
@@ -1456,7 +1445,7 @@ mod tests {
 
     #[test]
     fn long_diff_lines_wrap_instead_of_overflowing() {
-        let palette = Palette::dark();
+        let styles = Styles::of(Palette::dark());
         let mut view = view();
         view.rows = vec![DiffRow::Line {
             kind: LineKind::Added,
@@ -1464,7 +1453,7 @@ mod tests {
             text: "x".repeat(120),
         }];
         let text = capture(
-            |frame| render_diff(frame, frame.area(), &palette, &view),
+            |frame| render_diff(frame, frame.area(), styles, &view),
             60,
             12,
         );
@@ -1478,12 +1467,13 @@ mod tests {
     #[test]
     fn a_failed_context_line_is_red() {
         let palette = Palette::dark();
+        let styles = Styles::of(palette);
         let context: SessionContext = serde_json::from_value(json!({
             "session_id": "ses_1",
             "last_prepare_failure": "context_uncompressible"
         }))
         .unwrap();
-        let lines = summary_lines(Some(&context), None, &palette);
+        let lines = summary_lines(Some(&context), None, styles);
         let failure = lines
             .iter()
             .find(|line| {
@@ -1497,13 +1487,13 @@ mod tests {
 
     #[test]
     fn an_automatic_last_observation_without_numbers_does_not_panic() {
-        let palette = Palette::dark();
+        let styles = Styles::of(Palette::dark());
         let context: SessionContext = serde_json::from_value(json!({
             "session_id": "ses_1",
             "last_result": {"operation_id": "auto-1", "status": "failed", "failure_kind": "no_progress"}
         }))
         .unwrap();
-        let lines = summary_lines(Some(&context), None, &palette);
+        let lines = summary_lines(Some(&context), None, styles);
         let text: String = lines
             .iter()
             .map(|line| {

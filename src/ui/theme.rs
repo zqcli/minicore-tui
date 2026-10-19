@@ -1,309 +1,280 @@
-//! Role styles for the renderers. The colors themselves live in
-//! [`crate::theme::Palette`]; this module only decides which role each renderer
-//! asks for, and applies `NO_COLOR` by dropping color while keeping attributes.
+//! The one theme layer: a `Palette` holds a theme's colors, `Styles` turns them
+//! into the role styles the renderers ask for. `NO_COLOR` is a palette with no
+//! colors, so every role keeps its attributes and drops its color.
 
 use ratatui::style::{Color, Modifier, Style};
 
-use crate::theme::Palette;
+use crate::config::ThemeKind;
 
-/// The named colors a renderer uses.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Theme {
+/// The colors of one theme; `Color::Reset` means the terminal's own.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Palette {
     pub text: Color,
+    /// Secondary text: hints, durations, metadata.
     pub dim: Color,
-    pub subtle: Color,
+    /// Faint text inside cards and markers.
+    pub faint: Color,
     pub accent: Color,
-    pub success: Color,
-    pub error: Color,
-    pub warning: Color,
     pub user_rail: Color,
-    pub reasoning_rail: Color,
+    pub thinking_rail: Color,
     pub composer_bg: Color,
-    pub user_bg: Color,
-    pub band: Color,
-    pub band_selected: Color,
-    pub tool_bg: Color,
-    pub tool_success_bg: Color,
-    pub tool_error_bg: Color,
-    pub code_bg: Color,
-    pub code_border: Color,
-    pub link: Color,
-    pub heading: Color,
-    pub diff_add: Color,
-    pub diff_del: Color,
     pub selection_bg: Color,
     pub selection_fg: Color,
+    pub success: Color,
+    pub failure: Color,
+    pub warning: Color,
+    pub added: Color,
+    pub removed: Color,
+    pub hunk: Color,
+    /// Tool card bands: a faint tint of the card's state over the page.
+    pub card_bg: Color,
+    pub card_success_bg: Color,
+    pub card_failure_bg: Color,
 }
 
-impl Theme {
-    pub fn of(palette: Palette) -> Self {
-        let (text, selection_fg) = if palette.no_color {
-            (Color::Reset, Color::Reset)
-        } else {
-            (palette.text, Color::Rgb(0xf5, 0xf7, 0xfa))
-        };
+impl Palette {
+    pub fn dark() -> Self {
         Self {
-            text,
-            dim: palette.dim,
-            subtle: palette.faint,
-            accent: palette.accent,
-            success: palette.success,
-            error: palette.failure,
-            warning: palette.warning,
-            user_rail: palette.user_rail,
-            reasoning_rail: palette.thinking_rail,
-            composer_bg: palette.composer_bg,
-            user_bg: palette.composer_bg,
-            band: palette.composer_bg,
-            band_selected: palette.selection_bg,
-            tool_bg: palette.card_bg,
-            tool_success_bg: palette.card_success_bg,
-            tool_error_bg: palette.card_failure_bg,
-            code_bg: palette.faint,
-            code_border: palette.dim,
-            link: palette.accent,
-            heading: palette.text,
-            diff_add: palette.added,
-            diff_del: palette.removed,
-            selection_bg: palette.selection_bg,
-            selection_fg,
+            text: Color::Rgb(0xdc, 0xdf, 0xe4),
+            dim: Color::Rgb(0x9a, 0x9f, 0xab),
+            faint: Color::Rgb(0x6b, 0x70, 0x7b),
+            accent: Color::Rgb(0x7a, 0xa2, 0xf7),
+            user_rail: Color::Rgb(0x4f, 0x8a, 0xe8),
+            thinking_rail: Color::Rgb(0xa7, 0x8b, 0xe8),
+            composer_bg: Color::Rgb(0x40, 0x42, 0x56),
+            selection_bg: Color::Rgb(0x3a, 0x45, 0x66),
+            selection_fg: Color::Rgb(0xf5, 0xf7, 0xfa),
+            success: Color::Rgb(0x7a, 0xc0, 0x8a),
+            failure: Color::Rgb(0xe0, 0x6c, 0x75),
+            warning: Color::Rgb(0xe0, 0xb1, 0x62),
+            added: Color::Rgb(0x7a, 0xc0, 0x8a),
+            removed: Color::Rgb(0xe0, 0x6c, 0x75),
+            hunk: Color::Rgb(0x8a, 0x90, 0xa0),
+            card_bg: Color::Rgb(0x26, 0x28, 0x30),
+            card_success_bg: Color::Rgb(0x1f, 0x2b, 0x25),
+            card_failure_bg: Color::Rgb(0x31, 0x20, 0x24),
         }
+    }
+
+    pub fn light() -> Self {
+        Self {
+            text: Color::Rgb(0x2b, 0x2f, 0x38),
+            dim: Color::Rgb(0x5c, 0x63, 0x70),
+            faint: Color::Rgb(0x8a, 0x91, 0x9e),
+            accent: Color::Rgb(0x2f, 0x5d, 0xb8),
+            user_rail: Color::Rgb(0x2f, 0x5d, 0xb8),
+            thinking_rail: Color::Rgb(0x6f, 0x4f, 0xb8),
+            composer_bg: Color::Rgb(0xe4, 0xe6, 0xee),
+            selection_bg: Color::Rgb(0xd0, 0xda, 0xf0),
+            selection_fg: Color::Rgb(0xf5, 0xf7, 0xfa),
+            success: Color::Rgb(0x1f, 0x7a, 0x3a),
+            failure: Color::Rgb(0xb8, 0x2a, 0x35),
+            warning: Color::Rgb(0x9a, 0x6a, 0x00),
+            added: Color::Rgb(0x1f, 0x7a, 0x3a),
+            removed: Color::Rgb(0xb8, 0x2a, 0x35),
+            hunk: Color::Rgb(0x6b, 0x72, 0x80),
+            card_bg: Color::Rgb(0xee, 0xf0, 0xf4),
+            card_success_bg: Color::Rgb(0xe5, 0xf2, 0xe8),
+            card_failure_bg: Color::Rgb(0xf8, 0xe6, 0xe8),
+        }
+    }
+
+    /// No colors at all, per `NO_COLOR`.
+    pub fn plain() -> Self {
+        Self::default()
+    }
+
+    /// The palette for `kind`, or the plain one when `NO_COLOR` is set.
+    pub fn for_kind(kind: ThemeKind) -> Self {
+        if std::env::var_os("NO_COLOR").is_some() {
+            return Self::plain();
+        }
+        match kind {
+            ThemeKind::Dark => Self::dark(),
+            ThemeKind::Light => Self::light(),
+        }
+    }
+}
+
+fn fg(color: Color) -> Style {
+    if color == Color::Reset {
+        Style::new()
+    } else {
+        Style::new().fg(color)
+    }
+}
+
+fn bg(color: Color) -> Style {
+    if color == Color::Reset {
+        Style::new()
+    } else {
+        Style::new().bg(color)
     }
 }
 
 /// The styles the UI asks for by role, so no renderer names a raw color.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Styles {
-    pub theme: Theme,
-    /// False under `NO_COLOR`: keep layout and attributes, drop color.
-    pub color: bool,
+    palette: Palette,
 }
 
 impl Styles {
-    pub fn new(palette: Palette, no_color: bool) -> Self {
-        Self {
-            theme: Theme::of(palette),
-            color: !no_color && !palette.no_color,
-        }
-    }
-
-    /// The styles for the app's current theme.
     pub fn of(palette: Palette) -> Self {
-        Self::new(palette, false)
-    }
-
-    /// A tinted role: the text color on a background band, both dropped when
-    /// the terminal asks for no color.
-    fn tint(&self, background: Color, foreground: Color) -> Style {
-        if self.color {
-            Style::new().bg(background).fg(foreground)
-        } else {
-            Style::new()
-        }
-    }
-
-    fn paint(&self, color: Color) -> Style {
-        if self.color {
-            Style::new().fg(color)
-        } else {
-            Style::new()
-        }
-    }
-
-    fn fill(&self, color: Color) -> Style {
-        if self.color {
-            Style::new().bg(color)
-        } else {
-            Style::new()
-        }
+        Self { palette }
     }
 
     pub fn text(&self) -> Style {
-        self.paint(self.theme.text)
+        fg(self.palette.text)
     }
 
     pub fn dim(&self) -> Style {
-        self.paint(self.theme.dim)
+        fg(self.palette.dim)
     }
 
-    pub fn subtle(&self) -> Style {
-        self.paint(self.theme.subtle)
+    pub fn faint(&self) -> Style {
+        fg(self.palette.faint)
     }
 
     pub fn accent(&self) -> Style {
-        self.paint(self.theme.accent)
+        fg(self.palette.accent)
     }
 
     pub fn success(&self) -> Style {
-        self.paint(self.theme.success)
+        fg(self.palette.success)
     }
 
-    pub fn error(&self) -> Style {
-        self.paint(self.theme.error)
+    pub fn failure(&self) -> Style {
+        fg(self.palette.failure)
     }
 
     pub fn warning(&self) -> Style {
-        self.paint(self.theme.warning)
+        fg(self.palette.warning)
     }
 
-    pub fn link(&self) -> Style {
-        self.paint(self.theme.link)
-            .add_modifier(Modifier::UNDERLINED)
+    pub fn added(&self) -> Style {
+        fg(self.palette.added)
     }
 
-    pub fn heading(&self) -> Style {
-        self.paint(self.theme.heading).add_modifier(Modifier::BOLD)
+    pub fn removed(&self) -> Style {
+        fg(self.palette.removed)
     }
 
-    pub fn italic(&self) -> Style {
-        self.paint(self.theme.text).add_modifier(Modifier::ITALIC)
+    pub fn hunk(&self) -> Style {
+        fg(self.palette.hunk)
     }
 
     pub fn bold(&self) -> Style {
-        self.paint(self.theme.text).add_modifier(Modifier::BOLD)
+        self.text().add_modifier(Modifier::BOLD)
     }
 
-    pub fn strikethrough(&self) -> Style {
-        self.paint(self.theme.dim)
-            .add_modifier(Modifier::CROSSED_OUT)
+    /// Titles of views and sheets.
+    pub fn title(&self) -> Style {
+        self.accent().add_modifier(Modifier::BOLD)
+    }
+
+    pub fn link(&self) -> Style {
+        self.accent().add_modifier(Modifier::UNDERLINED)
     }
 
     pub fn user_rail(&self) -> Style {
-        self.paint(self.theme.user_rail)
+        fg(self.palette.user_rail)
     }
 
-    pub fn user(&self) -> Style {
-        self.fill(self.theme.user_bg)
-    }
-
-    pub fn reasoning(&self) -> Style {
-        self.paint(self.theme.reasoning_rail)
+    pub fn reasoning_rail(&self) -> Style {
+        fg(self.palette.thinking_rail)
     }
 
     pub fn code(&self) -> Style {
-        self.tint(self.theme.code_bg, self.theme.text)
-    }
-
-    /// An inline code span: the same role, so a NO_COLOR terminal keeps the
-    /// code delimiter and drops only the tint.
-    pub fn inline_code(&self) -> Style {
-        self.code()
-    }
-
-    pub fn code_border(&self) -> Style {
-        self.paint(self.theme.code_border)
-    }
-
-    pub fn selection(&self) -> Style {
-        if self.color {
-            Style::new()
-                .bg(self.theme.selection_bg)
-                .fg(self.theme.selection_fg)
-        } else {
-            Style::new().add_modifier(Modifier::REVERSED)
-        }
-    }
-
-    pub fn band(&self, selected: bool) -> Style {
-        self.fill(if selected {
-            self.theme.band_selected
-        } else {
-            self.theme.band
-        })
+        bg(self.palette.faint).patch(self.text())
     }
 
     pub fn composer(&self) -> Style {
-        self.fill(self.theme.composer_bg)
+        bg(self.palette.composer_bg)
     }
 
-    pub fn diff_add(&self) -> Style {
-        self.paint(self.theme.diff_add)
+    /// The tool card band for a state that is neither done nor failed.
+    pub fn card(&self) -> Style {
+        bg(self.palette.card_bg)
     }
 
-    pub fn diff_del(&self) -> Style {
-        self.paint(self.theme.diff_del)
+    pub fn card_success(&self) -> Style {
+        bg(self.palette.card_success_bg)
     }
 
+    pub fn card_failure(&self) -> Style {
+        bg(self.palette.card_failure_bg)
+    }
+
+    /// Mouse selection; reverse video when the palette has no colors.
+    pub fn selection(&self) -> Style {
+        if self.palette.selection_bg == Color::Reset {
+            Style::new().add_modifier(Modifier::REVERSED)
+        } else {
+            bg(self.palette.selection_bg).patch(fg(self.palette.selection_fg))
+        }
+    }
+
+    /// The band behind the highlighted row of a list.
+    pub fn highlight(&self) -> Style {
+        bg(self.palette.selection_bg)
+    }
+
+    /// A unified-diff line, colored by its first character.
     pub fn patch(&self, line: &str) -> Style {
         match line.chars().next() {
-            Some('+') => self.diff_add(),
-            Some('-') => self.diff_del(),
+            Some('+') => self.added(),
+            Some('-') => self.removed(),
             Some('@') => self.dim(),
             _ => self.text(),
         }
-    }
-
-    /// Applies the selection background on top of an existing style.
-    pub fn selected(&self, style: Style) -> Style {
-        let selection = self.selection();
-        let mut merged = style.bg(selection.bg.unwrap_or(Color::Reset));
-        if let Some(fg) = selection.fg {
-            merged = merged.fg(fg);
-        }
-        merged
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::{Palette, ThemeKind};
-
-    fn dark() -> Palette {
-        Palette::for_kind(ThemeKind::Dark)
-    }
-
-    fn plain() -> Palette {
-        Palette::plain()
-    }
 
     #[test]
-    fn no_color_drops_every_color_but_keeps_attributes() {
-        let styles = Styles::new(plain(), true);
+    fn the_plain_palette_drops_every_color_but_keeps_attributes() {
+        let styles = Styles::of(Palette::plain());
         for style in [
             styles.text(),
             styles.dim(),
             styles.accent(),
-            styles.user(),
-            styles.band(true),
+            styles.user_rail(),
             styles.composer(),
+            styles.card(),
+            styles.card_failure(),
+            styles.highlight(),
             styles.selection(),
-            styles.diff_add(),
+            styles.added(),
             styles.code(),
-            styles.inline_code(),
+            styles.patch("+added"),
         ] {
             assert_eq!(style.fg, None, "{style:?}");
             assert_eq!(style.bg, None, "{style:?}");
         }
         assert!(styles.bold().add_modifier.contains(Modifier::BOLD));
-        assert!(styles.italic().add_modifier.contains(Modifier::ITALIC));
+        assert!(styles.title().add_modifier.contains(Modifier::BOLD));
         assert!(styles.selection().add_modifier.contains(Modifier::REVERSED));
     }
 
     #[test]
     fn palettes_keep_their_own_roles() {
-        let dark_styles = Styles::new(dark(), false);
-        let light_styles = Styles::new(Palette::for_kind(ThemeKind::Light), false);
-        assert_ne!(dark_styles.text().fg, light_styles.text().fg);
-        assert_ne!(dark_styles.composer().bg, light_styles.composer().bg);
-        assert_eq!(dark_styles.theme.user_rail, dark().user_rail);
+        let dark = Styles::of(Palette::dark());
+        let light = Styles::of(Palette::light());
+        assert_ne!(dark.text().fg, light.text().fg);
+        assert_ne!(dark.composer().bg, light.composer().bg);
+        assert_eq!(dark.user_rail().fg, Some(Palette::dark().user_rail));
     }
 
     #[test]
     fn diff_lines_are_colored_by_their_prefix() {
-        let palette = dark();
-        let styles = Styles::new(palette, false);
+        let palette = Palette::dark();
+        let styles = Styles::of(palette);
         assert_eq!(styles.patch("+added").fg, Some(palette.added));
         assert_eq!(styles.patch("-removed").fg, Some(palette.removed));
         assert_eq!(styles.patch("@@ hunk @@").fg, Some(palette.dim));
         assert_eq!(styles.patch(" context").fg, Some(palette.text));
-    }
-
-    #[test]
-    fn selected_keeps_the_selection_background() {
-        let palette = dark();
-        let styles = Styles::new(palette, false);
-        let merged = styles.selected(styles.diff_add());
-        assert_eq!(merged.bg, Some(palette.selection_bg));
     }
 }

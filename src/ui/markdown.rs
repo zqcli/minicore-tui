@@ -105,7 +105,7 @@ impl Builder<'_> {
                     // geometry, so keep the content and drop the styling.
                     self.text(&text);
                 } else {
-                    let style = self.decorate(self.styles.inline_code());
+                    let style = self.decorate(self.styles.code());
                     self.spans.push(Span::styled(format!("`{text}`"), style));
                 }
             }
@@ -128,7 +128,7 @@ impl Builder<'_> {
                 self.blank();
                 let rule = "─".repeat(self.width);
                 self.out
-                    .push(Line::from(Span::styled(rule, self.styles.subtle())));
+                    .push(Line::from(Span::styled(rule, self.styles.faint())));
             }
             Event::Html(html) | Event::InlineHtml(html) => {
                 let text = strip_tags(&html);
@@ -305,8 +305,8 @@ impl Builder<'_> {
             return;
         }
         let style = match self.heading {
-            Some(level) if level <= HeadingLevel::H2 => self.styles.heading(),
-            Some(_) => self.styles.heading().remove_modifier(Modifier::BOLD),
+            Some(level) if level <= HeadingLevel::H2 => self.styles.bold(),
+            Some(_) => self.styles.bold().remove_modifier(Modifier::BOLD),
             None => self.base,
         };
         let style = self.decorate(style);
@@ -342,8 +342,8 @@ impl Builder<'_> {
         let mut lead = Vec::new();
         let mut cont = Vec::new();
         for _ in 0..self.quote {
-            lead.push(Span::styled("▍ ", self.styles.subtle()));
-            cont.push(Span::styled("▍ ", self.styles.subtle()));
+            lead.push(Span::styled("▍ ", self.styles.faint()));
+            cont.push(Span::styled("▍ ", self.styles.faint()));
         }
         let last = self.lists.len().saturating_sub(1);
         for (index, list) in self.lists.iter().enumerate() {
@@ -374,7 +374,7 @@ impl Builder<'_> {
 
     fn code_block(&mut self, code: &CodeBuf) {
         let inner = self.width.saturating_sub(2).max(1);
-        let border = self.styles.code_border();
+        let border = self.styles.dim();
         let content = self.styles.code();
         let label = format!(" {} ", code.lang);
         if code.lang.is_empty() || wrap::width(&label) + 3 > inner {
@@ -480,7 +480,7 @@ impl Builder<'_> {
                 let mut spans = Vec::new();
                 for (column, cell) in row.iter().enumerate() {
                     if column > 0 {
-                        spans.push(Span::styled(" │ ", self.styles.subtle()));
+                        spans.push(Span::styled(" │ ", self.styles.faint()));
                     }
                     let text = cell.get(line_index).map(String::as_str).unwrap_or_default();
                     let pad = " ".repeat(widths[column].saturating_sub(wrap::width(text)));
@@ -500,7 +500,7 @@ impl Builder<'_> {
                     .collect::<Vec<_>>()
                     .join("─┼─");
                 self.out
-                    .push(Line::from(Span::styled(rule, self.styles.subtle())));
+                    .push(Line::from(Span::styled(rule, self.styles.faint())));
             }
         }
     }
@@ -788,10 +788,10 @@ fn is_list_marker(trimmed: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::{Palette, ThemeKind};
+    use crate::ui::theme::Palette;
 
     fn styles() -> Styles {
-        Styles::new(Palette::for_kind(ThemeKind::Dark), false)
+        Styles::of(Palette::dark())
     }
 
     fn plain(text: &str, width: usize) -> Vec<String> {
@@ -842,7 +842,7 @@ mod tests {
             rendered[0].spans[0]
                 .style
                 .fg
-                .is_some_and(|color| color == styles().theme.heading)
+                .is_some_and(|color| color == Palette::dark().text)
         );
     }
 

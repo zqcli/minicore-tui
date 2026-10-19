@@ -92,7 +92,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
             vec![
                 Line::styled("No session yet", styles.dim()),
                 Line::raw(""),
-                Line::styled("Press Enter to start one", styles.subtle()),
+                Line::styled("Press Enter to start one", styles.faint()),
             ]
         } else {
             vec![Line::styled("Connecting to minicore-agent…", styles.dim())]

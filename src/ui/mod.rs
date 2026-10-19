@@ -8,7 +8,6 @@ pub mod markdown;
 pub mod panel;
 pub mod picker;
 pub mod rails;
-pub mod screens;
 pub mod selection;
 pub mod sheets;
 #[cfg(test)]
@@ -34,8 +33,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_fatal(frame, area, fatal);
         return;
     }
-    let styles = Styles::of(app.palette);
-    let sheet = screens::sheet(app, &app.palette);
+    let styles = app.styles;
+    let sheet = sheets::sheet(app, styles);
     let (rows, cursor) = status::band(app, styles, area.width);
     let sheet_rows = sheet.as_ref().map_or(0, panel::Sheet::height);
     // One blank row keeps the last transcript line off the stack below it,
@@ -50,14 +49,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Constraint::Length(bottom),
     ])
     .areas(area);
-    if !screens::draw_view(frame, main, app) {
+    if !views::draw(frame, main, app, styles) {
         transcript::draw(frame, main, app, styles);
     }
     let band = if let Some(sheet) = sheet {
         let [sheet_area, band] =
             Layout::vertical([Constraint::Length(sheet.height()), Constraint::Min(1)])
                 .areas(bottom);
-        panel::render(frame, sheet_area, &app.palette, &sheet);
+        panel::render(frame, sheet_area, styles, &sheet);
         band
     } else {
         bottom
@@ -102,9 +101,9 @@ pub fn format_tokens(value: u64) -> String {
 }
 
 fn draw_fatal(frame: &mut Frame, area: Rect, fatal: &crate::app::Fatal) {
-    let styles = Styles::of(crate::theme::Palette::dark());
+    let styles = Styles::of(theme::Palette::dark());
     let mut lines = vec![
-        Line::styled("Fatal error", styles.error()),
+        Line::styled("Fatal error", styles.failure()),
         Line::raw(""),
         Line::styled(fatal.reason.clone(), styles.text()),
     ];
@@ -114,7 +113,7 @@ fn draw_fatal(frame: &mut Frame, area: Rect, fatal: &crate::app::Fatal) {
         for line in fatal.stderr_tail.iter().rev().take(20).rev() {
             lines.push(Line::styled(
                 wrap::sanitize(line).into_owned(),
-                styles.subtle(),
+                styles.faint(),
             ));
         }
     }
