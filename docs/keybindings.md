@@ -58,7 +58,7 @@ tail. While anchored, a `↓ new output` pill appears when content is appended.
 | `Ctrl+F` | Find in the transcript. |
 | `F1` | Help. |
 | `Esc` | Close the frontmost surface. |
-| `q` | Quit from the help view or the fatal screen. |
+| `q` | Quit from the fatal screen. |
 
 ## Pickers and Panels
 
@@ -98,9 +98,9 @@ inserts the selected path into the draft.
 | View | Keys |
 |---|---|
 | Diff | `Tab` cycles turn / session / workspace scope; `↑`/`↓` select a file; `PageUp`/`PageDown` scroll the diff; `c` copies the diff. |
-| Tool output | `PageUp`/`PageDown` scroll; `Esc` returns. |
+| Tool output | `[` / `]` show the previous or next tool call; `PageUp`/`PageDown` scroll; `c` copies the output; `Esc` returns. |
 | Context | `r` re-reads the context; `Esc` returns. It also re-reads each time it opens. |
-| Help | `Esc` or `q` returns. |
+| Help | `PageUp`/`PageDown` scroll; `Esc` returns. |
 
 ## Interaction Prompts
 
@@ -109,7 +109,6 @@ An approval or other interaction request opens a sheet above the composer.
 | Kind | Keys |
 |---|---|
 | Approval | `y` allows once, `n` denies, or select and press `Enter`. |
-| Text | Type the answer, `Enter` submits, `Esc` leaves the request open. |
 | Choice | `↑`/`↓` select, `Enter` submits. |
 
 ## Commands
