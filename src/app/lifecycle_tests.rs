@@ -199,19 +199,22 @@ async fn a_turn_streams_through_to_its_turn_end_line() {
     .await;
     fake.emit(json!({
         "type": "tool_execution",
-        "data": {"tool_ref": {"session_id": "s1", "loop_id": "l1",
-                              "request_index": 0, "tool_call_id": "c1"},
-                 "name": "bash",
-                 "state": "succeeded",
-                 "result_truncated": false,
+        "data": {"turn": turn("l1"),
+                 "data": {"tool_ref": {"session_id": "s1", "loop_id": "l1",
+                                       "request_index": 0, "tool_call_id": "c1"},
+                          "name": "bash",
+                          "state": "succeeded",
+                          "result_truncated": false,
+                          "command": {"status": "exited", "exit_code": 1,
+                                      "termination_confirmed": true}},
                  "meta": {"session_id": "s1", "dropped_before": 0}}
     }))
     .await;
     pump(&mut app, &mut rx, |app| {
         app.transcript().is_some_and(|transcript| {
-            transcript
-                .find_tool_by_call_id("c1")
-                .is_some_and(|call| call.state == crate::transcript::ToolState::Succeeded)
+            transcript.find_tool_by_call_id("c1").is_some_and(|call| {
+                call.state == crate::transcript::ToolState::Succeeded && call.exit_code == Some(1)
+            })
         })
     })
     .await;
