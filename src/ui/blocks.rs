@@ -1,6 +1,6 @@
-//! Block rendering: one function per block kind, following the rail style of
-//! design §5.5 and §7.2. The layout cache calls these once per change and
-//! stores the returned lines, so a block never re-renders per frame.
+//! Block rendering: one function per block kind, in the rail style. The layout
+//! cache calls these once per change and stores the returned lines, so a block
+//! never re-renders per frame.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -17,8 +17,7 @@ use crate::transcript::{Block, ToolCall};
 /// Columns the assistant's inset costs, including the rail.
 pub const INSET: usize = 2;
 
-/// The end of an expanded card's hint row. Clicking that row opens the tool
-/// view.
+/// The end of a card's hint row that opens the tool view when clicked.
 pub const FULL_OUTPUT_HINT: &str = "click for full output";
 
 /// Renders one block at `width`. Always returns at least one line so a block
@@ -214,13 +213,18 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
         lines.push(body_row(line, style));
     }
     if body.hidden > 0 || (expanded && call.truncated) {
+        // A card from display history knows its size but holds no lines.
+        let unloaded = body.lines.is_empty() && body.hidden > 0;
         let mut hint = "… ".to_owned();
         if body.hidden > 0 {
-            let which = if body.tail { "earlier" } else { "more" };
-            let noun = format!("{which} line");
-            hint.push_str(&format!("{} · ", plural(body.hidden as u64, &noun)));
+            let noun = match (unloaded, body.tail) {
+                (true, _) => "line",
+                (false, true) => "earlier line",
+                (false, false) => "more line",
+            };
+            hint.push_str(&format!("{} · ", plural(body.hidden as u64, noun)));
         }
-        hint.push_str(if expanded {
+        hint.push_str(if expanded || unloaded {
             FULL_OUTPUT_HINT
         } else {
             "ctrl+o to expand"
@@ -230,8 +234,8 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
     lines
 }
 
-/// Body rows of a folded card, by kind (design §5.5), and of an expanded one;
-/// the tool view has the rest.
+/// Body rows of a folded card, by kind, and of an expanded one; the tool view
+/// has the rest.
 const FOLDED_PATCH_ROWS: usize = 8;
 const FOLDED_WRITE_ROWS: usize = 6;
 const FOLDED_OUTPUT_ROWS: usize = 4;
@@ -255,8 +259,13 @@ fn card_body(call: &ToolCall, expanded: bool) -> Body<'_> {
     if call.name == "bash" {
         let output = call.output_content();
         let shown = rows(FOLDED_OUTPUT_ROWS).min(output.len());
+        let hidden = if output.is_empty() {
+            call.output_lines.unwrap_or(0)
+        } else {
+            call.output_dropped + output.len() - shown
+        };
         return Body {
-            hidden: call.output_dropped + output.len() - shown,
+            hidden,
             lines: output[output.len() - shown..].to_vec(),
             tail: true,
             patch: false,
@@ -832,6 +841,19 @@ mod tests {
                 "▎   … 1997 more lines · ctrl+o to expand",
             ]
         );
+    }
+
+    #[test]
+    fn a_card_from_history_shows_its_size_and_opens_the_tool_view() {
+        for name in ["bash", "read"] {
+            let mut card = call();
+            card.name = name.into();
+            card.output = Vec::new();
+            card.output_lines = Some(42);
+            let body = text(&render(&Block::Tool(Box::new(card)), styles(), 60, fold()));
+            assert_eq!(body.len(), 2, "{body:?}");
+            assert_eq!(body[1], "▎   … 42 lines · click for full output");
+        }
     }
 
     #[test]
