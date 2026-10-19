@@ -2231,15 +2231,24 @@ async fn a_stale_older_page_retries_and_keeps_the_loaded_history() {
         !app.session.as_ref().unwrap().loading_older,
         "the flag is released so paging can be tried again"
     );
-    // The recovered item was prepended, so the reader's block sits one index
-    // later while still being the same thing on screen.
+    // The recovered item was prepended and it was the last one, so no marker
+    // goes above it: the row that was replaced and the row that arrived cancel
+    // out, and the reader's block is still the third one on screen.
     assert_eq!(
         app.scroll,
         Scroll::Anchor {
-            block: 3,
+            block: 2,
             offset: 1
         },
         "the reader's anchor follows the block it was reading"
+    );
+    assert!(
+        !matches!(
+            app.session.as_ref().unwrap().transcript.blocks().first(),
+            Some(Block::EarlierHistory { .. })
+        ),
+        "nothing is left behind the window, so nothing claims to be: {:?}",
+        app.session.as_ref().unwrap().transcript.blocks()
     );
     let text = format!("{:?}", app.session.as_ref().unwrap().transcript.blocks());
     assert!(
@@ -3273,4 +3282,106 @@ async fn undo_after_a_refused_send_walks_back_the_presend_draft() {
     // And redo still works from there.
     app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
     assert_eq!(app.composer.text(), "ship it");
+}
+
+/// The bottom of history is not an affordance: with nothing older to load, a
+/// marker would say "0 earlier items, home to load", offering a key that cannot
+/// do anything. The reader has the earliest turn and that is the whole story.
+#[tokio::test]
+async fn the_earliest_turn_does_not_claim_earlier_items() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    // The tail starts at 30, so two pages of twenty are left behind it.
+    fake.script("session.read", display_read(90, 0));
+    open(&mut app, &mut rx, &fake, &tx).await;
+    assert_eq!(app.session.as_ref().unwrap().loaded_from, 30);
+
+    // A real page between the tail and the start: the label must state the
+    // boundary the next read starts from, not the one it just passed.
+    fake.script_sequence(
+        "session.read",
+        vec![
+            json!({
+                "session": session_info("s1"), "items": [], "next_cursor": null,
+                "total": 90, "history_revision": "h1", "captured_end": 1,
+                "projection": {"revision": "p1", "first_item": 0, "covered_item_count": 0},
+            }),
+            json!({
+                "session": session_info("s1"),
+                "items": [crate::testing::chunk(10, json!({"type": "user", "data": {
+                    "loop_id": "l0", "kind": "prompt",
+                    "input": {"text": "a middle question"}}}))],
+                "next_cursor": null, "total": 90, "history_revision": "h1",
+                "captured_end": 1,
+                "projection": {"revision": "p1", "first_item": 0, "covered_item_count": 0},
+            }),
+        ],
+    );
+    app.on_action(Action::LoadOlder);
+    pump(&mut app, &mut rx, |app| {
+        !app.session.as_ref().unwrap().loading_older
+    })
+    .await;
+    let session = app.session.as_ref().unwrap();
+    assert_eq!(session.loaded_from, 10, "ten items are still behind it");
+    let label = session
+        .transcript
+        .blocks()
+        .first()
+        .and_then(|block| match block {
+            Block::EarlierHistory { hidden_items } => Some(*hidden_items),
+            _ => None,
+        });
+    assert_eq!(
+        label,
+        Some(session.loaded_from),
+        "the label equals the read position on a real page: {:?}",
+        session.transcript.blocks()
+    );
+
+    // The last page reaches item zero: nothing is older and no key can help.
+    fake.script_sequence(
+        "session.read",
+        vec![
+            json!({
+                "session": session_info("s1"), "items": [], "next_cursor": null,
+                "total": 90, "history_revision": "h1", "captured_end": 1,
+                "projection": {"revision": "p1", "first_item": 0, "covered_item_count": 0},
+            }),
+            json!({
+                "session": session_info("s1"),
+                "items": [crate::testing::chunk(0, json!({"type": "user", "data": {
+                    "loop_id": "l0", "kind": "prompt",
+                    "input": {"text": "the earliest question"}}}))],
+                "next_cursor": null, "total": 90, "history_revision": "h1",
+                "captured_end": 1,
+                "projection": {"revision": "p1", "first_item": 0, "covered_item_count": 0},
+            }),
+        ],
+    );
+    app.on_action(Action::LoadOlder);
+    pump(&mut app, &mut rx, |app| {
+        app.session
+            .as_ref()
+            .is_some_and(|session| session.loaded_from == 0)
+    })
+    .await;
+
+    let session = app.session.as_ref().unwrap();
+    assert_eq!(session.loaded_from, 0, "the window reached the start");
+    let blocks = session.transcript.blocks();
+    assert!(
+        !blocks
+            .iter()
+            .any(|block| matches!(block, Block::EarlierHistory { .. })),
+        "no marker remains at the bottom of history: {blocks:?}"
+    );
+    assert!(
+        blocks.iter().any(
+            |block| matches!(block, Block::User { text, .. } if text == "the earliest question")
+        ),
+        "the earliest turn is on screen: {blocks:?}"
+    );
 }

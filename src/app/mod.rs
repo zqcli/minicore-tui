@@ -1550,8 +1550,11 @@ impl App {
         // A page reaching the display floor leaves the reader at the compaction
         // summary with more history behind it; otherwise the label just states
         // how much older history remains unloaded. The marker counts what is
-        // behind the window, which is the read position itself.
-        let marker = page.has_more || session.loaded_from <= session.first_item;
+        // behind the window, which is the read position itself, so there is
+        // nothing to announce once that reaches zero: the reader is at the
+        // earliest turn and there is no earlier item to load.
+        let marker =
+            session.loaded_from > 0 && (page.has_more || session.loaded_from <= session.first_item);
         if marker {
             session.transcript.insert(
                 0,
