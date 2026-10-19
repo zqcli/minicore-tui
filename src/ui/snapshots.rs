@@ -95,7 +95,7 @@ fn tool() -> ToolCall {
     call.duration = Some(std::time::Duration::from_millis(4200));
     call.exit_code = Some(0);
     call.output = vec!["running 131 tests".into(), "test result: ok".into()];
-    call.output_lines = Some(16);
+    call.output_dropped = 14;
     call
 }
 

@@ -2332,14 +2332,13 @@ impl App {
                         call.apply_display(display);
                     }
                     if let Some(invocation) = &read.invocation {
-                        call.detail = invocation.detail();
-                        call.name = invocation.name.clone();
+                        call.apply_invocation(invocation);
                     }
                     if let Some(execution) = &read.execution {
                         call.set_state(ToolState::from_execution(execution.state));
-                        call.truncated = execution.result_truncated;
+                        call.truncated |= execution.result_truncated;
                         if let Some(command) = &execution.command {
-                            call.exit_code = command.exit_code;
+                            call.apply_command(command);
                         }
                     }
                 }
@@ -2488,6 +2487,10 @@ impl App {
                     call.state = ToolState::Running;
                     call.started_at = Some(Instant::now());
                     session.transcript.push(Block::Tool(Box::new(call)));
+                } else if let Some(call) = session.transcript.find_tool_mut(&key) {
+                    // A preview or the invocation created the card; the call
+                    // runs from here.
+                    call.started_at.get_or_insert_with(Instant::now);
                 }
                 if let Some(live) = session.live.as_mut() {
                     live.phase = Phase::Thinking;
@@ -2559,10 +2562,7 @@ impl App {
             AgentEvent::ToolInvocation { invocation, .. } => {
                 let key = invocation.tool_ref.clone();
                 match session.transcript.find_tool_mut(&key) {
-                    Some(call) => {
-                        call.detail = invocation.detail();
-                        call.name = invocation.name.clone();
-                    }
+                    Some(call) => call.apply_invocation(&invocation),
                     None => {
                         let mut call = ToolCall::new(key, invocation.name.clone());
                         call.detail = invocation.detail();
@@ -2580,9 +2580,9 @@ impl App {
                     if let Some(count) = execution.output_line_count {
                         call.output_lines = Some(count);
                     }
-                    call.truncated = execution.result_truncated;
+                    call.truncated |= execution.result_truncated;
                     if let Some(command) = &execution.command {
-                        call.exit_code = command.exit_code;
+                        call.apply_command(command);
                     }
                     terminal = state.is_terminal();
                 }
@@ -2592,8 +2592,13 @@ impl App {
                 true
             }
             AgentEvent::ToolProcess { data, .. } => {
+                if let Some(command) = &data.command
+                    && let Some(call) = session.transcript.find_tool_mut(&data.tool_ref)
+                {
+                    call.apply_command(command);
+                }
                 let Some(chunk) = &data.chunk else {
-                    return false;
+                    return data.command.is_some();
                 };
                 let bytes = if chunk.encoding == "base64" {
                     use base64::Engine;
@@ -2631,10 +2636,8 @@ impl App {
                     };
                     call.set_state(state);
                     call.truncated |= content_truncated;
-                    if call.output.is_empty()
-                        && let Some(content) = content
-                    {
-                        call.push_output(&content);
+                    if let Some(content) = content {
+                        call.apply_result(&content);
                     }
                 }
                 true

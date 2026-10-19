@@ -380,6 +380,17 @@ impl Session {
             return false;
         };
         let turn_end = self.take_turn_end(&loop_id);
+        let live: Vec<crate::transcript::ToolCall> = self
+            .transcript
+            .blocks()
+            .get(start..)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|block| match block {
+                Block::Tool(call) => Some(call.as_ref().clone()),
+                _ => None,
+            })
+            .collect();
         self.drop_live_region(start);
         for (_, item) in items {
             crate::transcript::block::append_history_item(
@@ -387,6 +398,17 @@ impl Session {
                 item,
                 &self.info.session_id,
             );
+        }
+        for index in start..self.transcript.len() {
+            let Some(Block::Tool(call)) = self.transcript.blocks().get(index) else {
+                continue;
+            };
+            let Some(live) = live.iter().find(|live| live.key == call.key) else {
+                continue;
+            };
+            if let Some(Block::Tool(call)) = self.transcript.block_mut(index) {
+                call.keep_live_facts(live);
+            }
         }
         if let Some(turn_end) = turn_end {
             self.transcript.push(turn_end);
