@@ -118,10 +118,11 @@ pub enum OpKind {
         DiffScope,
         Result<Vec<crate::protocol::ChangeRecord>, RpcError>,
     ),
-    /// The hunks of one changed path, read for one scope.
+    /// The pages of one changed path, one per change record, read for one
+    /// scope.
     DiffFile(
         DiffQuery,
-        Result<crate::protocol::changes::DiffPage, RpcError>,
+        Result<Vec<crate::protocol::changes::DiffPage>, RpcError>,
     ),
     /// Workspace paths for the `@` picker.
     Files(Result<Vec<String>, RpcError>),
@@ -352,10 +353,21 @@ impl App {
         };
         let mut view = crate::ui::views::DiffView::new(title);
         view.scope = scope;
-        if let Some(loop_id) = latest_loop(session) {
-            let files = collect_changed_files(&session.transcript, &loop_id);
-            view.set_files(files);
-        }
+        let latest = latest_loop(session);
+        let wire = match (scope, latest) {
+            (DiffScope::Turn, Some(loop_id)) => {
+                // The cards preview the turn's files until the list answers.
+                view.set_files(collect_changed_files(&session.transcript, &loop_id));
+                crate::protocol::ChangeScope::Turn(loop_id)
+            }
+            (DiffScope::Turn, None) => {
+                view.status = "No turn has finished yet; tab shows the session.".into();
+                self.diff = view;
+                return;
+            }
+            (DiffScope::Session, _) => crate::protocol::ChangeScope::Session,
+            (DiffScope::Workspace, _) => crate::protocol::ChangeScope::Workspace,
+        };
         if view.files.is_empty() {
             view.status = "No file changes are recorded for this scope.".into();
         }
@@ -365,6 +377,7 @@ impl App {
             self.tx.clone(),
             session.info.session_id.clone(),
             scope,
+            wire,
         );
     }
 
@@ -2243,7 +2256,7 @@ impl App {
     fn on_diff_file(
         &mut self,
         query: &DiffQuery,
-        result: &Result<crate::protocol::changes::DiffPage, RpcError>,
+        result: &Result<Vec<crate::protocol::changes::DiffPage>, RpcError>,
     ) -> bool {
         let shown = self.diff.scope == query.scope
             && self
@@ -2256,9 +2269,13 @@ impl App {
             .iter_mut()
             .find(|file| file.path == query.path);
         match result {
-            Ok(page) => {
-                let lines = crate::ui::views::hunk_lines(page, &self.palette);
-                let (added, removed) = count_hunks(&lines);
+            Ok(pages) => {
+                // Each record is counted on its own: fragments are deduplicated
+                // by line index, which only identifies a line within a record.
+                let (added, removed) = pages
+                    .iter()
+                    .map(|page| crate::protocol::changes::count_lines(std::slice::from_ref(page)))
+                    .fold((0, 0), |sum, count| (sum.0 + count.0, sum.1 + count.1));
                 if let Some(file) = file {
                     file.lines = Some((added, removed));
                     file.failed = false;
@@ -2268,11 +2285,22 @@ impl App {
                 }
                 self.measure_next_diff_row();
                 if shown {
-                    self.diff.hunks = lines;
+                    let tools: Vec<Option<String>> = pages
+                        .iter()
+                        .map(|page| {
+                            let key = page.tool_ref.as_ref()?;
+                            let call = self.session.as_ref()?.transcript.find_tool(key)?;
+                            Some(call.name.clone())
+                        })
+                        .collect();
+                    self.diff.hunks = crate::ui::views::records_lines(pages, &tools, &self.palette);
                     self.diff.scroll = 0;
                     // A record whose before and after content match has no
                     // hunks at all: say that instead of implying a diff.
-                    self.diff.status = if page.hunks.is_empty() && !page.binary {
+                    let unchanged = pages
+                        .iter()
+                        .all(|page| page.hunks.is_empty() && !page.binary);
+                    self.diff.status = if unchanged {
                         "No line changes in these records (content unchanged).".into()
                     } else {
                         String::new()
@@ -2969,24 +2997,6 @@ fn collect_changed_files(
 
 fn writes_files(name: &str) -> bool {
     matches!(name, "write" | "edit" | "apply_patch" | "patch")
-}
-
-/// Added and removed line counts of a rendered diff.
-fn count_hunks(lines: &[ratatui::text::Line<'static>]) -> (usize, usize) {
-    let mut added = 0;
-    let mut removed = 0;
-    for line in lines {
-        let Some(span) = line.spans.first() else {
-            continue;
-        };
-        let text = span.content.as_ref();
-        if text.starts_with('+') {
-            added += 1;
-        } else if text.starts_with('-') {
-            removed += 1;
-        }
-    }
-    (added, removed)
 }
 
 /// What the sessions picker filters on: the title, or the id while untitled.

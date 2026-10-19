@@ -685,18 +685,20 @@ async fn read_diff(
 /// Attempts at one diff page before a capacity refusal is reported.
 const DIFF_RETRIES: u32 = 2;
 
-/// Lists the change records for one scope and, for the first file, its hunks.
-/// The diff view gets files first, then hunks, so a huge workspace never blocks
-/// the panel from opening.
-pub fn list_changes(client: Arc<Client>, tx: Tx, session_id: String, scope: crate::app::DiffScope) {
+/// Lists the change records of one diff scope; `wire` is that scope as
+/// `changes.list` takes it. The diff view gets files first, then hunks, so a
+/// huge workspace never blocks the panel from opening.
+pub fn list_changes(
+    client: Arc<Client>,
+    tx: Tx,
+    session_id: String,
+    scope: crate::app::DiffScope,
+    wire: protocol::ChangeScope,
+) {
     tokio::spawn(async move {
         let params = json!({
             "session_id": session_id,
-            "scope": match scope {
-                crate::app::DiffScope::Turn => json!("session"),
-                crate::app::DiffScope::Session => json!("session"),
-                crate::app::DiffScope::Workspace => json!("workspace"),
-            },
+            "scope": wire.value(),
             "limit": 200,
             "max_bytes": 262_144,
         });
@@ -711,9 +713,9 @@ pub fn list_changes(client: Arc<Client>, tx: Tx, session_id: String, scope: crat
     });
 }
 
-/// Pages the hunks of one change record for the diff view.
-/// Pages every change record of one path and merges the hunks, so a file that
-/// a turn changed several times shows one combined diff.
+/// Pages every change record of one path for the diff view, one page per
+/// record in list order. The records stay separate: each one is its own
+/// before/after comparison, so their hunks do not form one diff.
 pub fn load_diff(
     client: Arc<Client>,
     tx: Tx,
@@ -722,10 +724,10 @@ pub fn load_diff(
     change_refs: Vec<String>,
 ) {
     tokio::spawn(async move {
-        let mut merged: Option<protocol::changes::DiffPage> = None;
+        let mut pages = Vec::with_capacity(change_refs.len());
         for change_ref in change_refs {
-            let page = match page_diff(&client, &session_id, change_ref).await {
-                Ok(page) => page,
+            match page_diff(&client, &session_id, change_ref).await {
+                Ok(page) => pages.push(page),
                 Err(error) => {
                     post(
                         &tx,
@@ -734,28 +736,9 @@ pub fn load_diff(
                     );
                     return;
                 }
-            };
-            match merged.as_mut() {
-                Some(merged) => {
-                    merged.hunks.extend(page.hunks);
-                    merged.binary |= page.binary;
-                    merged.complete &= page.complete;
-                }
-                None => merged = Some(page),
             }
         }
-        let page = merged.unwrap_or_else(|| protocol::changes::DiffPage {
-            change_ref: String::new(),
-            path: query.path.clone(),
-            hunks: Vec::new(),
-            next_cursor: None,
-            complete: true,
-            binary: false,
-            truncated: false,
-            availability: None,
-            stale: false,
-        });
-        post(&tx, Some(&session_id), OpKind::DiffFile(query, Ok(page)));
+        post(&tx, Some(&session_id), OpKind::DiffFile(query, Ok(pages)));
     });
 }
 

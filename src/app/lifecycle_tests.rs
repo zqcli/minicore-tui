@@ -3386,6 +3386,76 @@ async fn the_earliest_turn_does_not_claim_earlier_items() {
     );
 }
 
+fn tool_card(id: &str, name: &str) -> Block {
+    Block::Tool(Box::new(crate::transcript::ToolCall::new(
+        crate::protocol::ToolRef {
+            session_id: "s1".into(),
+            loop_id: "l1".into(),
+            request_index: 0,
+            tool_call_id: id.into(),
+        },
+        name,
+    )))
+}
+
+/// Several records of one file are separate comparisons: each gets a
+/// separator, hunk headers are 1-based, and the row counts every record.
+#[tokio::test]
+async fn a_file_changed_twice_shows_each_record_under_its_own_separator() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script(
+        "changes.list",
+        json!({"records": [
+            {"change_ref": "r1", "path": "app.py", "kind": "modified", "details_available": true},
+            {"change_ref": "r2", "path": "app.py", "kind": "modified", "details_available": true}
+        ]}),
+    );
+    fake.script_sequence(
+        "changes.diff",
+        vec![
+            json!({"path": "app.py", "complete": true,
+                   "tool_ref": {"session_id": "s1", "loop_id": "l1", "request_index": 0,
+                                "tool_call_id": "c1"},
+                   "hunks": [{"old_start": 0, "old_count": 1, "new_start": 0, "new_count": 1,
+                              "lines": [
+                                {"kind": "removed", "old_index": 0, "text": "old\n", "line_complete": true},
+                                {"kind": "added", "new_index": 0, "text": "new\n", "line_complete": true}]}]}),
+            json!({"path": "app.py", "complete": true,
+                   "hunks": [{"old_start": 1, "old_count": 0, "new_start": 1, "new_count": 1,
+                              "lines": [
+                                {"kind": "added", "new_index": 1, "text": "more\n", "line_complete": true}]}]}),
+        ],
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+    app.session
+        .as_mut()
+        .unwrap()
+        .transcript
+        .push(tool_card("c1", "edit"));
+
+    app.open_panel(crate::app::Panel::Diff(crate::app::DiffScope::Session));
+    pump(&mut app, &mut rx, |app| !app.diff.hunks.is_empty()).await;
+    let rows: Vec<String> = app.diff.hunks.iter().map(|line| line.to_string()).collect();
+    assert_eq!(
+        rows,
+        [
+            "── edit · change 1 of 2 ──",
+            "@@ -1,1 +1,1 @@",
+            "1   -old",
+            "  1 +new",
+            "",
+            "── change 2 of 2 ──",
+            "@@ -1,0 +2,1 @@",
+            "  2 +more",
+        ]
+    );
+    assert_eq!(app.diff.files[0].lines, Some((2, 1)), "both records count");
+}
+
 #[test]
 fn turn_end_lines_read_as_sentences_and_count_correctly() {
     let failed: crate::protocol::LoopOutcome = serde_json::from_value(json!({
@@ -3414,4 +3484,48 @@ fn turn_end_lines_read_as_sentences_and_count_correctly() {
         crate::app::turn_end_line(&crate::protocol::LoopOutcome::Completed, None, 8, 7, None),
         "completed · 8 requests · 7 tools"
     );
+}
+
+/// `/diff` defaults to the turn scope: it lists the newest finished turn's
+/// records, not the whole session's.
+#[tokio::test]
+async fn the_turn_diff_lists_only_the_newest_turn() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script("changes.list", json!({"records": []}));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    app.open_panel(crate::app::Panel::Diff(crate::app::DiffScope::Turn));
+    settle(&mut app, &mut rx).await;
+    assert!(
+        fake.calls("changes.list").is_empty(),
+        "no finished turn, nothing to ask for"
+    );
+    assert!(
+        app.diff.status.contains("No turn has finished"),
+        "{}",
+        app.diff.status
+    );
+
+    app.session
+        .as_mut()
+        .unwrap()
+        .transcript
+        .push(Block::TurnEnd {
+            loop_id: "l7".into(),
+            outcome: crate::protocol::LoopOutcome::Completed,
+            duration: None,
+            requests: 1,
+            tool_rounds: 0,
+            usage: Default::default(),
+            changes: None,
+        });
+    app.open_panel(crate::app::Panel::Diff(crate::app::DiffScope::Turn));
+    settle(&mut app, &mut rx).await;
+    let calls = fake.calls("changes.list");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["scope"], json!({"turn": {"loop_id": "l7"}}));
 }
