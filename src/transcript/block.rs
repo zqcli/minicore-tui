@@ -38,8 +38,7 @@ pub enum Block {
         operation_id: String,
         before: Option<u64>,
         after: Option<u64>,
-        /// Items the summary covered and items it kept, each when reported;
-        /// shown when there are no token figures (the usual automatic case).
+        /// Items covered and kept, each when reported; shown when there are no token figures.
         coverage: Option<(Option<usize>, Option<usize>)>,
         summary: Option<String>,
     },
@@ -90,8 +89,7 @@ pub enum NoticeLevel {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ChangeSummary {
     pub files: usize,
-    /// Added and removed lines, only when every file's diff was counted: an
-    /// unknown count is not shown rather than shown as `+0 −0`.
+    /// Added and removed lines; `None` unless every file's diff was counted.
     pub lines: Option<(usize, usize)>,
 }
 
@@ -101,8 +99,7 @@ impl ChangeSummary {
     }
 }
 
-/// One tool call card. Output is a bounded tail: full output lives behind
-/// `tool.output` in the tool view.
+/// One tool call card; its output is a bounded tail, the rest is behind `tool.output`.
 #[derive(Clone, Debug)]
 pub struct ToolCall {
     pub key: ToolRef,
@@ -117,8 +114,7 @@ pub struct ToolCall {
     pub started_at: Option<Instant>,
     pub duration: Option<Duration>,
     pub exit_code: Option<i64>,
-    /// The output tail. The last entry is the line still being written, so a
-    /// chunk that ends mid-line continues it instead of starting a new one.
+    /// The output tail; the last entry is the line still being written.
     pub output: Vec<String>,
     /// Lines dropped from the front of `output` to keep it bounded.
     pub output_dropped: usize,
@@ -127,8 +123,7 @@ pub struct ToolCall {
     pub truncated: bool,
     /// The reader's per-card fold; `None` follows the global Ctrl+O.
     pub expanded: Option<bool>,
-    /// Next expected byte offset per stream. `None` until the first chunk, so
-    /// the first chunk establishes the cursor whatever its base offset is.
+    /// Next expected byte offset per stream; `None` until the first chunk sets it.
     pub stream_offsets: [Option<u64>; 2],
 }
 
@@ -188,8 +183,7 @@ impl ToolCall {
         }
     }
 
-    /// Advances the state. A tool that already reached a terminal state stays
-    /// there: late or replayed non-terminal updates must not reopen it.
+    /// Advances the state; a terminal state is not reopened by a late or replayed update.
     pub fn set_state(&mut self, state: ToolState) {
         if self.state.is_terminal() && !state.is_terminal() {
             return;
@@ -207,9 +201,8 @@ impl ToolCall {
         self.input_lines = display.input_line_count.or(self.input_lines);
     }
 
-    /// The invocation subject only fills a missing detail: the presentation
-    /// detail is the Agent's card summary (one line, with a read range), while
-    /// the subject is raw, a whole multi-line script for `bash`.
+    /// Fills only a missing detail: the display detail is the Agent's one-line
+    /// summary, the subject can be a whole script.
     pub fn apply_invocation(&mut self, invocation: &ToolInvocation) {
         if !invocation.name.is_empty() {
             self.name = invocation.name.clone();
@@ -219,8 +212,7 @@ impl ToolCall {
         }
     }
 
-    /// A command record. Its exit code is set only once really observed, so a
-    /// later record without one never erases it.
+    /// A command record; a later one without an exit code keeps the known one.
     pub fn apply_command(&mut self, command: &CommandResult) {
         self.exit_code = command.exit_code.or(self.exit_code);
     }
@@ -249,11 +241,8 @@ impl ToolCall {
         }
     }
 
-    /// The model-facing result text, from `tool_finished` or history. It only
-    /// fills an empty card: live process output is the better source. A `bash`
-    /// result is `exit_code: N`, `stdout:` and `stderr:` sections; the exit
-    /// code goes to the header, the labels are dropped and the tail is kept.
-    /// Any other result keeps its head, which is what its card shows.
+    /// The model-facing result: a `bash` result gives its exit code and keeps its
+    /// tail, any other keeps its head.
     pub fn apply_result(&mut self, content: &str) {
         let bash = (self.name == "bash")
             .then(|| split_bash_result(content))
@@ -261,6 +250,7 @@ impl ToolCall {
         if let Some((code, _, _)) = bash {
             self.exit_code = self.exit_code.or(code);
         }
+        // Live process output is the better source.
         if !self.output.is_empty() {
             return;
         }
@@ -273,9 +263,8 @@ impl ToolCall {
         }
     }
 
-    /// Stores the head of a whole result within the card bounds. The Agent's
-    /// cut marker is kept as the last line: it is counted in the Agent's line
-    /// total, and it says that the result was cut.
+    /// Stores the head of a result within the card bounds, keeping the Agent's
+    /// cut marker as the last line since its line total counts it.
     fn push_head(&mut self, content: &str) {
         let body = content.strip_suffix('\n').unwrap_or(content);
         let (body, cut) = match body.strip_suffix(TRUNCATED_MARKER) {
@@ -298,9 +287,7 @@ impl ToolCall {
         }
     }
 
-    /// Keeps what only live events knew when the durable record of the same
-    /// call replaces this card: history has no timing, exit code or raw process
-    /// output, and the reader's fold must survive.
+    /// Carries over what only live events knew when history replaces this card.
     pub fn keep_live_facts(&mut self, live: &ToolCall) {
         self.duration = self.duration.or(live.duration);
         self.exit_code = self.exit_code.or(live.exit_code);
@@ -317,15 +304,13 @@ impl ToolCall {
         self.expanded.unwrap_or(all_expanded)
     }
 
-    /// Flips this card. A card back in line with the global fold follows it
-    /// again, so Ctrl+O keeps working on it.
+    /// Flips this card; one back in line with the global fold follows it again.
     pub fn toggle_expanded(&mut self, all_expanded: bool) {
         let expanded = !self.is_expanded(all_expanded);
         self.expanded = (expanded != all_expanded).then_some(expanded);
     }
 
-    /// The header detail. The Agent's detail for an `apply_patch` call is a
-    /// placeholder (`tool apply_patch`), so the paths come from the patch.
+    /// The header detail; the paths of a patch replace the Agent's `tool apply_patch` placeholder.
     pub fn header_detail(&self) -> String {
         if !self.detail.is_empty() && !self.detail.starts_with("tool ") {
             return self.detail.clone();
@@ -402,8 +387,7 @@ impl ToolCall {
             .map_or(0, |total| total.saturating_sub(sent))
     }
 
-    /// The output lines worth showing: the open last line when empty and the
-    /// Agent's `[truncated]` markers are left out (the header says it).
+    /// The output lines worth showing, without an empty open line or the `[truncated]` marker.
     pub fn output_content(&self) -> Vec<&str> {
         let mut lines: Vec<&str> = self
             .output
@@ -430,9 +414,7 @@ impl ToolCall {
         };
     }
 
-    /// Accepts one process chunk for `stream`. Returns the text to append, or
-    /// `None` when the chunk is a duplicate, out of order, or evicted: a gap is
-    /// marked instead of silently splicing unrelated bytes together.
+    /// The text of a new chunk for `stream`, or `None` for a duplicate, stale or expired one.
     pub fn accept_chunk(
         &mut self,
         stream: ProcessStream,
@@ -471,10 +453,7 @@ impl ToolCall {
         self.output.push(String::new());
     }
 
-    /// Appends output text, keeping only the tail. The text continues the open
-    /// last line. Lines are the primary bound, but one line can be megabytes
-    /// long, so the tail is also capped by bytes: a card is a preview, and the
-    /// full text stays available through the tool view.
+    /// Appends to the open last line, keeping a tail bounded by lines and bytes.
     pub fn push_output(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -499,8 +478,8 @@ impl ToolCall {
 
     fn bound_output(&mut self) {
         let mut drop = self.output.len().saturating_sub(OUTPUT_TAIL_LINES);
-        // Drop from the front until the tail fits the byte budget, always
-        // keeping the newest line so a card never goes blank.
+        // One line can be megabytes long, so the byte budget bounds the tail
+        // too; the newest line stays so a card never goes blank.
         let mut bytes = self.output[drop..]
             .iter()
             .map(|line| line.len() + 1)
@@ -517,15 +496,14 @@ impl ToolCall {
     }
 }
 
-/// Lines of process output kept per card. The tool view pages the rest.
+/// Lines of process output kept per card; the tool view pages the rest.
 pub const OUTPUT_TAIL_LINES: usize = 400;
 /// Byte cap for a card's stored output tail.
 pub const OUTPUT_TAIL_BYTES: usize = 64 * 1024;
 /// The line the Agent's `read` and `bash` results end with when cut.
 pub const TRUNCATED_MARKER: &str = "[truncated]";
 
-/// Appends to one stored line, keeping its head within the byte cap; the tool
-/// view has the whole text. Returns whether anything was cut.
+/// Appends to one stored line within the byte cap; returns whether anything was cut.
 fn append_capped(line: &mut String, text: &str) -> bool {
     if line.len() >= OUTPUT_TAIL_BYTES && line.ends_with('…') {
         // Already cut and marked.
@@ -556,9 +534,7 @@ fn split_bash_result(content: &str) -> Option<(Option<i64>, &str, &str)> {
     Some((code.trim().parse().ok(), stdout, stderr))
 }
 
-/// Ordered blocks with a revision per block. The revision is bumped on every
-/// mutation and is the layout cache key, so the cache never guesses from
-/// content.
+/// Ordered blocks, each with a revision that changes on every mutation and keys the layout cache.
 #[derive(Clone, Debug, Default)]
 pub struct Transcript {
     blocks: Vec<Block>,
@@ -575,7 +551,7 @@ impl Transcript {
         &self.revisions
     }
 
-    /// Mutable access to every block; each one is marked as changed.
+    /// Mutable access to every block, all marked as changed.
     pub fn blocks_mut(&mut self) -> &mut [Block] {
         for revision in &mut self.revisions {
             self.next_revision += 1;
@@ -667,7 +643,7 @@ impl Transcript {
         }
     }
 
-    /// One block for an in-place change; it is marked as changed.
+    /// One block for an in-place change, marked as changed.
     pub fn block_mut(&mut self, index: usize) -> Option<&mut Block> {
         self.bump(index);
         self.blocks.get_mut(index)
@@ -877,8 +853,7 @@ mod tests {
         call.set_state(ToolState::Succeeded);
         call.set_state(ToolState::Running);
         assert_eq!(call.state, ToolState::Succeeded);
-        // A later terminal state is still allowed: the outcome is corrected,
-        // for example a cancelled run finishing as failed.
+        // A terminal state can still be corrected, e.g. cancelled then failed.
         call.set_state(ToolState::Failed);
         assert_eq!(call.state, ToolState::Failed);
     }

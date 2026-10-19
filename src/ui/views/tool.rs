@@ -65,8 +65,7 @@ pub fn text_rows(text: &str) -> Vec<ToolRow> {
         .collect()
 }
 
-/// The output of the answered streams; a stream with nothing to show is
-/// skipped, and several streams each get a heading.
+/// The rows of the answered streams, each under a heading when there are several.
 pub fn stream_rows(streams: &[(String, Option<StreamText>)]) -> Vec<ToolRow> {
     let sections = streams.len() > 1;
     let mut rows = Vec::new();
@@ -97,8 +96,7 @@ pub fn stream_rows(streams: &[(String, Option<StreamText>)]) -> Vec<ToolRow> {
     rows
 }
 
-/// The call's input as the view shows it: a one-line input that is the detail
-/// already (a bash command) is not repeated.
+/// The call's input, empty when it only repeats the detail (a bash command).
 fn tool_input(call: &ToolCall) -> &str {
     call.expanded_input
         .as_deref()

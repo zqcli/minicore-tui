@@ -12,7 +12,7 @@ use crate::ui::format_tokens;
 use crate::ui::theme::Styles;
 use crate::ui::wrap::wrap;
 
-/// The context view's lines: one readable summary, not a ledger of numbers.
+/// The summary lines of the context view.
 pub fn lines(session: Option<&Session>, styles: Styles) -> Vec<Line<'static>> {
     summary_lines(
         session.and_then(|session| session.context.as_ref()),
@@ -57,8 +57,7 @@ pub fn percent(session: &Session) -> Option<f64> {
     Some(tokens as f64 / limit as f64 * 100.0)
 }
 
-/// Builds the summary from the two authoritative views, labelling estimates
-/// as estimates and keeping unknowns as `?` instead of zero.
+/// Labels estimates as estimates and never prints an unknown number as zero.
 fn summary_lines(
     context: Option<&SessionContext>,
     presentation: Option<&SessionPresentation>,

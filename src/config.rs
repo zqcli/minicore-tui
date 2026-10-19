@@ -55,8 +55,7 @@ fn config_path() -> Option<PathBuf> {
 }
 
 impl Config {
-    /// Loads the config file, falling back to defaults. A malformed file is
-    /// reported by the caller through `load_error`.
+    /// Loads the config file; a missing or malformed one gives the defaults.
     pub fn load() -> Self {
         Self::load_from(config_path().as_deref()).unwrap_or_default()
     }

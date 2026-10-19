@@ -13,9 +13,9 @@ use crate::ui::panel::truncate;
 use crate::ui::theme::Styles;
 use crate::ui::wrap::{sanitize, width, wrap};
 
-/// File-list column width, as a fraction of the view when the terminal is wide
-/// enough for a side-by-side layout.
+/// Width in cells of the file list beside the hunks.
 const FILE_COLUMN: u16 = 30;
+/// Smaller terminals drop the file list.
 const MIN_SPLIT_WIDTH: u16 = 80;
 const MIN_SPLIT_HEIGHT: u16 = 12;
 
@@ -87,8 +87,7 @@ pub fn text(diff: &DiffState) -> String {
     out
 }
 
-/// Rows for every change record of one file; each record is its own
-/// comparison, so several are told apart by a separator naming the tool.
+/// Rows for every change record of one file, told apart by a separator naming the tool.
 pub fn rows(pages: &[DiffPage], tools: &[Option<String>]) -> Vec<DiffRow> {
     if pages.len() <= 1 {
         return match pages.first() {
@@ -112,8 +111,7 @@ pub fn rows(pages: &[DiffPage], tools: &[Option<String>]) -> Vec<DiffRow> {
     rows
 }
 
-/// Turns one `changes.diff` page into rows. Header numbers are unified-diff
-/// 1-based; the Agent's starts are 0-based line indexes.
+/// Turns one `changes.diff` page into rows.
 fn hunk_rows(page: &DiffPage) -> Vec<DiffRow> {
     if page.binary {
         return vec![DiffRow::Note("Binary file: the diff is not shown.".into())];
@@ -489,7 +487,6 @@ mod tests {
                 "── change 3 of 3 ──"
             ]
         );
-        // A single record needs no separator.
         let single: Vec<String> = records_lines(&pages[..1], &tools[..1], styles)
             .iter()
             .map(row_text)

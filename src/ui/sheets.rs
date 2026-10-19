@@ -13,8 +13,7 @@ use super::panel::{Row, Sheet, Tone, body_lines, truncate};
 use super::picker::fuzzy_match;
 use super::theme::Styles;
 
-/// The sheet for the current overlay, or `None` when no sheet is open. A
-/// pending interaction is a sheet too: it owns the keyboard until answered.
+/// The sheet for the current overlay; a pending interaction is one too, as it owns the keyboard.
 pub fn sheet(app: &App, styles: Styles) -> Option<Sheet> {
     Some(match &app.overlay {
         Overlay::None => return interaction_sheet(app, styles),
@@ -88,7 +87,7 @@ fn sessions_sheet(
         .selected(Some(selected))
 }
 
-/// The typed filter, shown after a picker's title so it is visible somewhere.
+/// The typed filter, shown after the title.
 fn filter_subtitle(filter: &str) -> Option<String> {
     (!filter.is_empty()).then(|| filter.to_owned())
 }

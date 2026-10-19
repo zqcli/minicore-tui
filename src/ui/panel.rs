@@ -57,8 +57,7 @@ impl Row {
     }
 }
 
-/// Everything a sheet draws. The sheet owns its text, so a picker can build one
-/// from freshly formatted rows every frame without borrowing app state.
+/// Everything a sheet draws; it owns its text, so a picker can rebuild it every frame.
 pub struct Sheet {
     pub title: String,
     /// Filter text shown after the title, or a status such as `3 of 12`.
@@ -231,8 +230,7 @@ pub fn truncate(text: &str, cells: usize) -> String {
     wrap::truncate(&sanitize(text), cells)
 }
 
-/// Wraps one message into sheet body lines, so a long approval prompt still
-/// fits the sheet instead of being cut.
+/// Wraps one message into sheet body lines.
 pub fn body_lines(text: &str, cells: usize, style: Style) -> Vec<Line<'static>> {
     wrap(&clean(text), cells)
         .into_iter()
