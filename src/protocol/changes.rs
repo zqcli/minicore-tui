@@ -65,8 +65,7 @@ pub struct DiffHunk {
 #[derive(Clone, Debug, Deserialize)]
 pub struct DiffLine {
     pub kind: LineKind,
-    /// Source line numbers. They identify a logical line across the fragments a
-    /// long line is split into.
+    /// Source line numbers, shared by every fragment of one long line.
     pub old_index: Option<u64>,
     pub new_index: Option<u64>,
     pub text: String,
@@ -74,14 +73,14 @@ pub struct DiffLine {
 }
 
 /// Counts added and removed logical lines across every page of one diff.
-// A long line arrives as fragments sharing one `(old_index, new_index)` pair
-// and only the last is `line_complete`, so complete fragments are deduplicated.
 pub fn count_lines(pages: &[DiffPage]) -> (usize, usize) {
     let mut seen: HashSet<(u64, u64)> = HashSet::new();
     let (mut added, mut removed) = (0, 0);
     for page in pages {
         for hunk in &page.hunks {
             for line in &hunk.lines {
+                // Only the last fragment of a long line is complete, and a page
+                // may repeat it, so complete fragments are deduplicated.
                 if !line.line_complete {
                     continue;
                 }

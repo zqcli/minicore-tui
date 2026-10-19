@@ -5,8 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::event::CommandResult;
 
-/// Full tool identity. A tool name or path never addresses a call: all four
-/// fields are required on the wire.
+/// Full tool identity; a call is never addressed by name or path.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 pub struct ToolRef {
     pub session_id: String,

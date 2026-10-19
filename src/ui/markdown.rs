@@ -1,17 +1,6 @@
-//! Markdown to styled lines.
-//!
-//! A small adapter over `pulldown-cmark`: it keeps the inline styling the
-//! transcript needs (headings, emphasis, code, lists, quotes, tables, links)
-//! and renders straight into pre-wrapped [`Line`]s, so the layout cache stores
-//! exactly the rows that get drawn.
-//!
-//! [`StreamRenderer`] is the streaming path. An assistant message grows one
-//! token at a time, and re-parsing the whole message on every delta would be
-//! quadratic. The renderer cuts the text at its last *stable* boundary, caches
-//! the lines of everything before it, and re-renders only the tail. A stable
-//! boundary is a place where the following text cannot change how the previous
-//! block renders, so the incremental result is identical to rendering the whole
-//! text in one pass.
+//! Markdown to pre-wrapped styled lines, over `pulldown-cmark`. A growing message
+//! renders through [`StreamRenderer`], which caches everything before the last
+//! boundary later text cannot change, so a delta re-parses only the tail.
 
 use std::sync::Arc;
 
@@ -636,13 +625,8 @@ impl StreamRenderer {
     }
 }
 
-/// Finds the last byte offset that ends a complete block that later text
-/// cannot change.
-///
-/// The scan is incremental: each line is consumed once, and a candidate cut at
-/// a blank line is only committed when the next non-blank line proves it does
-/// not continue the block before it (lists, quotes and tables can span blank
-/// lines). Anything else stays in the re-rendered tail.
+/// Finds, one line at a time, the last offset later text cannot re-render; a cut
+/// at a blank line waits for the next line to prove a list, quote or table ended.
 #[derive(Default)]
 struct Scan {
     /// Bytes consumed so far; always a line boundary.
@@ -684,9 +668,8 @@ impl Scan {
     fn line(&mut self, line: &str, start: usize, end: usize) {
         let content = line.trim_end();
         let trimmed = content.trim_start();
-        // Fences and their closers share one indentation rule (up to three
-        // spaces, as CommonMark allows), so a fence nested in a list closes on
-        // a nested line and the cut advances instead of stalling.
+        // Fences and closers share CommonMark's three-space indent rule, so a
+        // fence nested in a list closes and the cut advances instead of stalling.
         let indent = content.len() - trimmed.len();
         if let Some((marker, len)) = self.fence {
             let closed = indent <= 3

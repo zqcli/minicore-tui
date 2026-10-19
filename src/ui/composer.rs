@@ -1,14 +1,6 @@
-//! The composer: a grapheme-safe text buffer with a cursor, undo history,
-//! prompt history and paste tokens.
-//!
-//! The buffer stores the real text, including paste payloads. What the user
-//! sees is a projection in which each large paste is one `[pasted 120 lines]`
-//! token, and a paste is atomic there: the cursor can sit before or after it,
-//! never inside it. [`Projection`] is the only place that converts between the
-//! two coordinate systems.
-//!
-//! A cursor is a byte offset at a grapheme boundary, so edits never split a
-//! grapheme or a paste.
+//! The composer: a grapheme-safe draft with undo, prompt history and paste
+//! tokens. The buffer holds the real text; the user sees each large paste as one
+//! atomic `[pasted N lines]` token, and [`Projection`] maps between the two.
 
 use std::collections::VecDeque;
 use std::ops::Range;
@@ -100,9 +92,8 @@ impl<'a> Projection<'a> {
             }
             shown += head;
             let token = paste.label().len();
-            // Strictly inside the token snaps to its payload; the cell right
-            // after it is the position after the token, so typing there does
-            // not land inside the payload.
+            // Inside the token snaps to its payload; the cell right after it is
+            // after the token, so typing there never lands inside the payload.
             if display < shown + token {
                 return paste.range.start;
             }
@@ -120,9 +111,8 @@ struct Snapshot {
     pastes: Vec<Paste>,
 }
 
-/// Text from a paste, an editor or a file is not typing: CRLF and lone CR
-/// become line breaks, tabs become four spaces and other control bytes are
-/// dropped, so nothing but real newlines reaches the Agent.
+/// Text from a paste, an editor or a file: line endings become `\n`, tabs four
+/// spaces, and other control bytes are dropped before they reach the Agent.
 fn normalize(text: &str) -> String {
     let mut text = text.replace("\r\n", "\n").replace('\r', "\n");
     if text.contains('\t') {
@@ -215,11 +205,8 @@ impl Composer {
         self.recall = None;
     }
 
-    /// Puts text back in the draft without spending the history that produced
-    /// it: a refused send or an editor round trip is not a new edit, so the
-    /// next undo walks back through the user's own typing instead of landing on
-    /// an empty composer. Any live gesture is closed first, or the text being
-    /// replaced would be lost from the stack.
+    /// Puts text back without an undo step of its own (a refused send, an editor
+    /// round trip), so the next undo walks back through the user's typing.
     pub fn restore_text(&mut self, text: &str) {
         let text = normalize(text);
         if self.text == text {
@@ -273,9 +260,8 @@ impl Composer {
     // ---- undo ---------------------------------------------------------
 
     fn snapshot(&mut self) {
-        // A new edit leaves the redo branch behind, so it is dropped here
-        // rather than at commit: otherwise typing between undo and redo would
-        // keep the abandoned text reachable and Ctrl+Y would mix it back in.
+        // Dropped here, not at commit: typing between undo and redo would
+        // otherwise let Ctrl+Y mix the abandoned branch back in.
         if self.gesture.is_none() {
             self.redo.clear();
         }
@@ -634,9 +620,8 @@ impl Composer {
         true
     }
 
-    /// Swaps in a recalled draft. The recalled text is not an edit step of its
-    /// own, but the typing before it must not merge with what follows, so the
-    /// live gesture is committed first.
+    /// Swaps in a recalled draft, first committing the live gesture so earlier
+    /// typing does not merge with what follows.
     fn load(&mut self, text: String) {
         self.commit();
         self.gesture = None;
@@ -694,10 +679,8 @@ impl Composer {
     }
 }
 
-/// Renders the composer band: a rail plus the wrapped draft. Returns the rows
-/// and the cursor position relative to the first row.
-///
-/// The rail is two cells wide, so the draft wraps to `width - 2`.
+/// The composer rows (a two-cell rail plus the draft wrapped to `width - 2`) and
+/// the cursor relative to the first row.
 pub fn render(
     text: &str,
     cursor: Option<usize>,
@@ -712,9 +695,8 @@ pub fn render(
     } else {
         styles.text()
     };
-    // Escapes and control characters would drive the terminal, so the draft is
-    // drawn from a sanitized copy; `caret` is mapped into it so the cursor
-    // keeps pointing at the same character it edits.
+    // The draft is drawn sanitized so escapes cannot drive the terminal; the
+    // caret is mapped into that copy to stay on the character it edits.
     let (shown, caret) = if empty {
         ("Ask anything · / commands · @ files".to_owned(), 0)
     } else {
@@ -765,10 +747,8 @@ pub fn render(
     )
 }
 
-/// Sanitizes the draft and maps `caret` into the sanitized text. Sanitizing
-/// the prefix on its own keeps multi-character sequences (`ESC [ 31 m`) whole,
-/// which a per-character pass would break; a caret inside such a sequence maps
-/// to the cell before it.
+/// Sanitizes the draft and maps `caret` into it; sanitizing the prefix keeps an
+/// escape sequence whole, and a caret inside one maps to the cell before it.
 fn sanitize_to_caret(text: &str, caret: usize) -> (String, usize) {
     let head = wrap::sanitize(&text[..caret]);
     let shown = wrap::sanitize(text).into_owned();

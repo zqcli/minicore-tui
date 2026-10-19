@@ -114,10 +114,8 @@ fn status_line(app: &App, styles: Styles, label: &str) -> Line<'static> {
     Line::styled(text, styles.accent())
 }
 
-/// Footer: `dir@branch · title · model · reasoning · ● state`, with the token
-/// totals and context percent right-aligned. Unknown facts are left out
-/// rather than shown as placeholders. When space is short the title goes
-/// first, then the token totals; the context percent stays.
+/// `dir@branch · title · model · reasoning · ● state` with tokens and context
+/// right-aligned; when short of room the title goes first, then the tokens.
 fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     let workspace = app
         .workspace

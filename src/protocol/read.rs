@@ -68,7 +68,7 @@ pub struct SnapshotPin {
     pub first_item: usize,
 }
 
-/// A cursor is opaque: shape and meaning belong to the Agent.
+/// A read position: an item index and a byte offset inside that item.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReadCursor {
     pub item: usize,
@@ -84,8 +84,7 @@ impl ReadCursor {
         serde_json::json!({"item": self.item, "offset": self.offset})
     }
 
-    /// Reads a cursor the Agent handed back. Unreadable cursors mean the
-    /// response cannot be continued, which the caller surfaces as an error.
+    /// Reads a cursor the Agent handed back; `None` means the read cannot go on.
     pub fn from_value(value: &Value) -> Option<Self> {
         Some(Self {
             item: value.get("item")?.as_u64()? as usize,
@@ -123,8 +122,8 @@ pub enum ReadError {
     Cursor(Value),
 }
 
-/// Reassembles one item at a time from `session.read`/`turn.result` chunks.
-/// A single item may span pages, so the buffer outlives a page.
+/// Reassembles items from read chunks; one item may span pages, so the buffer
+/// outlives a page.
 #[derive(Debug, Default)]
 pub struct ChunkAssembler {
     index: usize,

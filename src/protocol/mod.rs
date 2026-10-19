@@ -1,8 +1,6 @@
-//! Wire DTOs for minicore-agent 0.7.0 (Protocol v1) over stdio JSON-RPC.
-//!
-//! Responses ignore unknown fields so a patch release can add read-only data.
-//! Enums that the Agent documents as non-exhaustive carry an `Unknown` arm so a
-//! future value degrades instead of failing a frame.
+//! Wire DTOs for minicore-agent 0.7.0 (Protocol v1). Unknown fields are
+//! ignored, and enums the Agent documents as non-exhaustive decode future values
+//! to `Unknown` instead of failing the frame.
 
 pub mod changes;
 pub mod event;

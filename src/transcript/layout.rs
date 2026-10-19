@@ -97,9 +97,8 @@ impl<S> Layout<S> {
                 continue;
             }
             let lines = render_block(&mut self.state, index, block);
-            // One blank row separates blocks. It belongs to the block below so
-            // the last block does not leave a trailing gap, and a block that
-            // renders nothing still occupies its row.
+            // The separator row belongs to the block below, so the last block
+            // leaves no trailing gap; an empty block still occupies a row.
             let mut lines: Vec<Line<'static>> = if index == 0 {
                 lines
             } else {
@@ -219,9 +218,8 @@ impl<S> Layout<S> {
         (row < self.total_rows()).then_some(row)
     }
 
-    /// The block under an absolute screen cell and the index of the clicked
-    /// row among the block's own lines. `None` off the drawn window and on the
-    /// blank row that separates a block from the one above it.
+    /// The block under a screen cell and the clicked line within it; `None` off
+    /// the window and on a block's separator row.
     pub fn hit(&self, column: u16, row: u16) -> Option<(usize, usize)> {
         let (block, offset) = self.line_at(self.row_at(column, row)?)?;
         let line = if block == 0 {

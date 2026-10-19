@@ -32,9 +32,8 @@ pub struct Row {
     pub label: String,
     pub detail: String,
     pub tone: Tone,
-    /// A marker column before the label: `Some(true)` draws an accent `●` for
-    /// the current item (the loaded session, the active model), `Some(false)`
-    /// keeps the column blank so labels stay aligned.
+    /// `Some(true)` marks the current item with an accent `●`; `Some(false)`
+    /// keeps the marker column blank so labels stay aligned.
     pub mark: Option<bool>,
 }
 

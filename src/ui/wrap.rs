@@ -1,11 +1,6 @@
-//! Word wrapping, display width and terminal-safe text.
-//!
-//! Everything that reaches the terminal passes through [`sanitize`] first:
-//! ANSI sequences are removed and control characters become visible pictures,
-//! so agent or tool output can never move the cursor or recolor the frame.
-//!
-//! Wrapping breaks at whitespace, between wide (CJK) characters and inside
-//! overlong tokens, and never splits a grapheme.
+//! Word wrapping, display width and terminal-safe text. Everything drawn passes
+//! through [`sanitize`], so agent output can never move the cursor or recolor
+//! the frame; wrapping never splits a grapheme.
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -40,9 +35,8 @@ pub fn char_breaks(line: &str, cell_limit: usize) -> Vec<Range<usize>> {
     out
 }
 
-/// Visual line ranges (byte offsets) of one logical line wrapped at `width`
-/// cells. Whitespace that a break lands on is left at the end of the range;
-/// [`wrap_line`] trims it.
+/// Byte ranges of one logical line wrapped at `cell_limit` cells; whitespace at
+/// a break stays at the range end for [`wrap_line`] to trim.
 pub fn breaks(line: &str, cell_limit: usize) -> Vec<Range<usize>> {
     let limit = cell_limit.max(1);
     if line.is_empty() {
