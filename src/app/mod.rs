@@ -280,25 +280,30 @@ impl App {
         if !features::needs_auto_title(&session.info) {
             return;
         }
-        let Some(prompt) = session
-            .transcript
-            .blocks()
-            .iter()
-            .find_map(|block| match block {
-                Block::User {
-                    text,
-                    kind: crate::protocol::read::UserKind::Prompt,
-                } => Some(text.as_str()),
-                _ => None,
-            })
-        else {
-            return;
-        };
-        let Some(title) = features::auto_title(prompt) else {
+        let Some(title) = first_prompt(&session.transcript).and_then(features::auto_title) else {
             return;
         };
         let session_id = session.info.session_id.clone();
         tasks::rename(self.client.clone(), self.tx.clone(), session_id, title);
+    }
+
+    /// A session's name in the picker: its title, else (for the loaded session)
+    /// its first prompt, else its short id. A closed session cannot be read, so
+    /// it has no prompt to borrow.
+    pub fn session_label(&self, info: &SessionInfo) -> String {
+        if let Some(title) = info
+            .title
+            .as_deref()
+            .filter(|title| !title.trim().is_empty())
+        {
+            return title.to_owned();
+        }
+        self.session
+            .as_ref()
+            .filter(|session| session.info.session_id == info.session_id)
+            .and_then(|session| first_prompt(&session.transcript))
+            .and_then(features::auto_title)
+            .unwrap_or_else(|| short_session_id(&info.session_id).to_owned())
     }
 
     /// Sessions picker rows matching `filter`, in display order.
@@ -307,7 +312,8 @@ impl App {
         self.session_rows
             .iter()
             .filter(|info| {
-                filter.is_empty() || crate::ui::picker::fuzzy_match(&session_label(info), filter)
+                filter.is_empty()
+                    || crate::ui::picker::fuzzy_match(&self.session_label(info), filter)
             })
             .cloned()
             .collect()
@@ -3083,14 +3089,15 @@ fn writes_files(name: &str) -> bool {
     matches!(name, "write" | "edit" | "apply_patch" | "patch")
 }
 
-/// What the sessions picker filters on: the title, or the id while untitled.
-fn session_label(info: &SessionInfo) -> String {
-    match info.title.as_deref() {
-        Some(title) if !title.trim().is_empty() => title.to_owned(),
-        // Untitled sessions get their short id, never the 32-hex one: a closed
-        // session cannot be read, so there is no first prompt to borrow.
-        _ => short_session_id(&info.session_id).to_owned(),
-    }
+/// The first prompt the user typed in a transcript.
+fn first_prompt(transcript: &Transcript) -> Option<&str> {
+    transcript.blocks().iter().find_map(|block| match block {
+        Block::User {
+            text,
+            kind: crate::protocol::read::UserKind::Prompt,
+        } => Some(text.as_str()),
+        _ => None,
+    })
 }
 
 /// `ses_8ca3c4cf...` → `ses_8ca3c4`, enough to tell sessions apart in a row.

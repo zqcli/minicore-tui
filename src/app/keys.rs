@@ -195,10 +195,11 @@ impl App {
     /// Ctrl+D in the sessions picker: the first press arms the delete, the
     /// second deletes the selected session.
     fn delete_confirm(&mut self) {
-        let Overlay::Sessions { selected, .. } = &self.overlay else {
+        let Overlay::Sessions { selected, filter } = &self.overlay else {
             return;
         };
-        let Some(info) = self.session_rows.get(*selected) else {
+        // The selection indexes the filtered rows the sheet shows.
+        let Some(info) = self.filtered_sessions(filter).get(*selected).cloned() else {
             return;
         };
         let id = info.session_id.clone();
@@ -213,10 +214,7 @@ impl App {
                 "Open another session before deleting this one",
             ),
             features::DeleteStep::Arm => {
-                let label = info
-                    .title
-                    .clone()
-                    .unwrap_or_else(|| "this session".to_owned());
+                let label = self.session_label(&info);
                 self.delete_pending = Some(id);
                 self.notice(
                     crate::transcript::block::NoticeLevel::Info,

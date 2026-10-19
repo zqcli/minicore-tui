@@ -3599,6 +3599,58 @@ async fn a_file_changed_twice_shows_each_record_under_its_own_separator() {
     assert_eq!(app.diff.files[0].lines, Some((2, 1)), "both records count");
 }
 
+/// The loaded session is named by its first prompt until it has a title; the
+/// filter matches that name too.
+#[tokio::test]
+async fn the_sessions_picker_names_the_untitled_loaded_session_by_its_prompt() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    open(&mut app, &mut rx, &fake, &tx).await;
+    app.session.as_mut().unwrap().transcript.push(Block::User {
+        text: "fix the greeting\nand run the tests".into(),
+        kind: UserKind::Prompt,
+    });
+
+    app.open_panel(crate::app::Panel::Sessions);
+    let sheet = crate::ui::screens::sheet(&app, &app.palette).expect("sessions sheet");
+    assert_eq!(sheet.rows[0].label, "fix the greeting");
+    assert_eq!(
+        sheet.rows[0].mark,
+        Some(true),
+        "the loaded session is marked"
+    );
+    assert_eq!(app.filtered_sessions("greet").len(), 1);
+
+    // Another, closed and untitled session can only show its short id.
+    let mut other: crate::protocol::SessionInfo =
+        serde_json::from_value(session_info("ses_abcdef0123456789")).unwrap();
+    other.loaded = false;
+    assert_eq!(app.session_label(&other), "ses_abcdef");
+}
+
+/// Ctrl+D acts on the row the filtered sheet shows, not on the unfiltered
+/// list's row at the same index.
+#[tokio::test]
+async fn deleting_from_a_filtered_picker_targets_the_shown_row() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let (_fake, mut app) = FakeAgent::start(tx);
+    let mut alpha: crate::protocol::SessionInfo =
+        serde_json::from_value(session_info("s_alpha")).unwrap();
+    alpha.title = Some("alpha".into());
+    let mut beta = alpha.clone();
+    beta.session_id = "s_beta".into();
+    beta.title = Some("beta".into());
+    app.sessions = vec![alpha, beta];
+    app.open_panel(crate::app::Panel::Sessions);
+    type_text(&mut app, "beta");
+    app.on_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+    assert_eq!(app.delete_pending.as_deref(), Some("s_beta"));
+}
+
 #[test]
 fn turn_end_lines_read_as_sentences_and_count_correctly() {
     let failed: crate::protocol::LoopOutcome = serde_json::from_value(json!({

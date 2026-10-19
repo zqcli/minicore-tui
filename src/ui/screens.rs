@@ -61,7 +61,10 @@ fn sessions_sheet(app: &App, filter: &str, selected: usize) -> Sheet {
     let rows = app
         .filtered_sessions(filter)
         .iter()
-        .map(|info| sheets::session_row(info, resident == Some(info.session_id.as_str()), now))
+        .map(|info| {
+            let current = resident == Some(info.session_id.as_str());
+            sheets::session_row(info, app.session_label(info), current, now)
+        })
         .collect();
     let hint = if app.delete_pending.is_some() {
         "ctrl+d again deletes · esc cancels"
@@ -88,18 +91,14 @@ fn models_sheet(app: &App, selected: usize) -> Sheet {
         .models
         .iter()
         .map(|model| {
-            let mark = if Some(&model.id) == current.as_ref() {
-                "● "
-            } else {
-                "  "
-            };
             Row::new(
-                format!("{mark}{}", model.id),
+                model.id.clone(),
                 match model.supported_reasoning.len() {
                     0 => String::new(),
                     count => format!("{count} reasoning levels"),
                 },
             )
+            .mark(Some(&model.id) == current.as_ref())
         })
         .collect();
     Sheet::new("Model", "enter switch · esc close")
@@ -112,14 +111,7 @@ fn reasoning_sheet(app: &App, selected: usize) -> Sheet {
     let current = app.session.as_ref().map(|session| session.info.reasoning);
     let rows = levels
         .iter()
-        .map(|level| {
-            let mark = if Some(*level) == current {
-                "● "
-            } else {
-                "  "
-            };
-            Row::new(format!("{mark}{}", level.label()), String::new())
-        })
+        .map(|level| Row::new(level.label(), String::new()).mark(Some(*level) == current))
         .collect();
     Sheet::new("Reasoning", "enter apply · shift+tab cycles · esc close")
         .rows(rows)

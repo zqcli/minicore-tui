@@ -63,18 +63,21 @@ pub fn find_title(query: &str) -> String {
     }
 }
 
-/// One sessions-picker row: the title (or the first prompt), marked when it is
-/// the resident session, with model and age on the right.
-pub fn session_row(info: &crate::protocol::SessionInfo, resident: bool, now_seconds: u64) -> Row {
-    let title = info
-        .title
-        .clone()
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or_else(|| crate::app::short_session_id(&info.session_id).to_owned());
-    let label = format!("{}{}", if resident { "● " } else { "  " }, title);
+/// One sessions-picker row: `label` (the title, or the first prompt), marked
+/// when it is the resident session, with model and age on the right.
+pub fn session_row(
+    info: &crate::protocol::SessionInfo,
+    label: String,
+    resident: bool,
+    now_seconds: u64,
+) -> Row {
     let age = age_label(&info.updated_at, now_seconds);
-    let detail = format!("{} · {age}", info.model);
-    Row::new(label, detail)
+    let detail = if age.is_empty() {
+        info.model.clone()
+    } else {
+        format!("{} · {age}", info.model)
+    };
+    Row::new(label, detail).mark(resident)
 }
 
 /// `3h ago`, `2d ago`, or the empty string when the timestamp is not RFC 3339.
@@ -201,24 +204,33 @@ mod tests {
 
     #[test]
     fn a_session_row_marks_the_resident_session_and_shows_its_age() {
-        let row = session_row(&info(), true, now());
-        assert!(row.label.starts_with("● Fix the parser"), "{:?}", row.label);
+        let row = session_row(&info(), "Fix the parser".into(), true, now());
+        assert_eq!(row.label, "Fix the parser");
+        assert_eq!(row.mark, Some(true));
         assert_eq!(row.detail, "gpt-6-luna · 3h ago");
-        let row = session_row(&info(), false, now());
-        assert!(row.label.starts_with("  Fix the parser"), "{:?}", row.label);
+        let row = session_row(&info(), "Fix the parser".into(), false, now());
+        assert_eq!(row.mark, Some(false));
     }
 
     #[test]
-    fn an_untitled_session_falls_back_to_its_short_id() {
-        let mut info = info();
-        info.title = None;
-        let row = session_row(&info, false, now());
-        assert_eq!(row.label, "  ses_1acdef", "{:?}", row.label);
-        assert!(
-            !row.label.contains("0123456789"),
-            "a 32-hex id is unreadable as a row label: {:?}",
-            row.label
-        );
+    fn the_resident_row_draws_an_accent_dot_and_others_stay_aligned() {
+        let palette = Palette::dark();
+        let sheet = Sheet::new("Sessions", "hint")
+            .rows(vec![
+                session_row(&info(), "Fix the parser".into(), true, now()),
+                session_row(&info(), "Other".into(), false, now()),
+            ])
+            .selected(Some(1));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 4)).unwrap();
+        terminal
+            .draw(|frame| super::super::panel::render(frame, frame.area(), &palette, &sheet))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = |y: u16| -> String { (0..60).map(|x| buffer[(x, y)].symbol()).collect() };
+        assert!(row(1).starts_with(" ● Fix the parser"), "{:?}", row(1));
+        assert!(row(2).starts_with("   Other"), "{:?}", row(2));
+        assert_eq!(buffer[(1u16, 1u16)].fg, palette.accent);
     }
 
     #[test]
