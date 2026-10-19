@@ -45,7 +45,8 @@ keys and commands changed incompatibly. Requires Rust 1.88 or newer.
   view, and a `↓ new output` pill shows when you are above the bottom.
 - Tool cards are folded by default and bounded: duration, exit code, line
   changes, the output tail of a live `bash` call, and a tool view with the full
-  stdout and stderr. After a reload a `bash` card shows only its header.
+  stdout and stderr. After a reload a card shows its line count and a
+  `click for full output` row.
 - Reasoning folds to `Thought · N lines` when finished; `Ctrl+T` shows it.
 - Compaction shows as a status phase and a one-line marker with token counts.
   Loaded content is never removed.
