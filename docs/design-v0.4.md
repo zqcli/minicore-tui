@@ -1,6 +1,24 @@
 # minicore-tui v0.4 — Rewrite Design
 
-Status: authoritative plan for the v0.4 rewrite on branch `refactor/v0.4`.
+> **Design record.** This is the plan the v0.4 rewrite started from. The
+> implementation is described in [architecture.md](architecture.md) and the keys
+> in [keybindings.md](keybindings.md); where they differ, those and the code win.
+> The module tree in §3, the `/tmp` inputs and the build harness in §11 are
+> historical. Known departures from this plan:
+>
+> - The handshake requires ten capabilities; `workspace.search` is not used
+>   (§4, §7.3). The `@` picker lists files with `workspace.files` and filters locally.
+> - Switching sessions asks no confirmation (§5.1).
+> - Alt+Enter sends when idle instead of inserting a newline; Esc interrupts a
+>   running turn, else clears the draft; Ctrl+Shift+Z and Ctrl+←/→ word motion are
+>   not bound (§7.3). There is no text-input prompt: only approval and choice lists (§7.6).
+> - Reasoning folds to `Thought · N lines`, not `Thought for 42s` (§7.2).
+> - A reloaded `bash` card shows only its header; `read` cards show their first
+>   lines, not a line count (§5.5).
+> - The footer context figure is the Agent-reported value only, `ctx ?` when
+>   unknown (§7.1). `session.state` is polled every 700 ms (§5.3).
+
+Status: plan for the v0.4 rewrite on branch `refactor/v0.4`.
 Breaking changes are accepted (CLI, config, keys, commands, internal APIs).
 Backend: minicore-agent 0.7.0 (`4102719`, Protocol v1), Runtime 0.7.0 (`b93aea3`).
 
@@ -137,7 +155,7 @@ reopened). Do not add other generation counters.
   `workspace.*`, `changes.*`) are ordinary awaits. Respect the Agent caps
   (4 concurrent queries, 32 deferred): a small semaphore for query methods;
   retry `-32019`/`-32020` with a short backoff only in the few call sites that
-  need it (history paging, tool output).
+  need it (implemented for `turn.wait` and `changes.diff`).
 - Handshake: `agent.ping`, require `protocol_version == 1` and the capabilities
   actually used (`session.read`, `session.read.display`, `tool.read`,
   `tool.read.display`, `tool.output`, `turn.result`, `session.context`,
