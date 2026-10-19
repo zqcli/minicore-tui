@@ -163,14 +163,6 @@ fn interaction_sheet(app: &App, palette: &Palette) -> Sheet {
     )
 }
 
-/// Records the transcript rows one frame drew, so a drag selection copies
-/// exactly what is on screen. Call after painting the transcript.
-pub fn record_transcript(app: &mut App, area: ratatui::layout::Rect, rows: &[ratatui::text::Line]) {
-    let mut screen = std::mem::take(&mut app.rendered);
-    screen.record(app, area, rows);
-    app.rendered = screen;
-}
-
 /// Draws whichever full-screen view owns the transcript area. Returns false
 /// when no view is open, so the caller draws the transcript instead.
 pub fn draw_view(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, app: &App) -> bool {

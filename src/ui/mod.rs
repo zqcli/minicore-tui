@@ -96,7 +96,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
 /// A token count for the UI: `950`, `12.3k`, `200k`, `1.8M`. Whole thousands and
 /// millions drop the `.0` so a budget reads as `200k`, not `200.0k`.
-pub fn tokens(value: u64) -> String {
+pub fn format_tokens(value: u64) -> String {
     fn scaled(value: f64, suffix: &str) -> String {
         let text = format!("{value:.1}");
         let text = text.strip_suffix(".0").unwrap_or(&text);
@@ -133,13 +133,13 @@ fn draw_fatal(frame: &mut Frame, area: Rect, fatal: &crate::app::Fatal) {
 
 #[cfg(test)]
 mod tests {
-    use super::tokens;
+    use super::format_tokens;
 
     #[test]
     fn token_counts_drop_a_trailing_zero() {
-        assert_eq!(tokens(950), "950");
-        assert_eq!(tokens(12_300), "12.3k");
-        assert_eq!(tokens(200_000), "200k");
-        assert_eq!(tokens(1_800_000), "1.8M");
+        assert_eq!(format_tokens(950), "950");
+        assert_eq!(format_tokens(12_300), "12.3k");
+        assert_eq!(format_tokens(200_000), "200k");
+        assert_eq!(format_tokens(1_800_000), "1.8M");
     }
 }

@@ -164,11 +164,11 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
         if usage.input + usage.output > 0 {
             text.push_str(&format!(
                 "↑{} ↓{} ",
-                crate::ui::tokens(usage.input),
-                crate::ui::tokens(usage.output)
+                crate::ui::format_tokens(usage.input),
+                crate::ui::format_tokens(usage.output)
             ));
             if usage.cached > 0 {
-                text.push_str(&format!("R{} ", crate::ui::tokens(usage.cached)));
+                text.push_str(&format!("R{} ", crate::ui::format_tokens(usage.cached)));
             }
             text.push_str("· ");
         }

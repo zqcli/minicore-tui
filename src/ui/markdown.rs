@@ -58,18 +58,6 @@ pub fn render(text: &str, width: usize, styles: &Styles, base: Style) -> Vec<Lin
     out
 }
 
-/// Renders markdown and returns the visible text of each produced line.
-pub fn render_with_text(
-    text: &str,
-    width: usize,
-    styles: &Styles,
-    base: Style,
-) -> (Vec<Line<'static>>, Vec<String>) {
-    let lines = render(text, width, styles, base);
-    let text = lines.iter().map(Line::to_string).collect();
-    (lines, text)
-}
-
 #[derive(Clone, Debug)]
 enum Open {
     Bold,

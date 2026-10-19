@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 
 use crate::theme::Palette;
 
-use super::wrap::{sanitize, width, wrap};
+use super::wrap::{self, sanitize, width, wrap};
 
 /// A sheet never shows more than this many list rows; the rest scroll.
 pub const MAX_ROWS: usize = 12;
@@ -139,7 +139,7 @@ pub fn render(frame: &mut Frame, area: Rect, palette: &Palette, sheet: &Sheet) {
         if y >= bottom {
             return;
         }
-        draw_line(frame, area, y, palette, line.clone());
+        draw_line(frame, area, y, line.clone());
         y += 1;
     }
 
@@ -166,7 +166,6 @@ pub fn render(frame: &mut Frame, area: Rect, palette: &Palette, sheet: &Sheet) {
             frame,
             area,
             y,
-            palette,
             Line::from(Span::styled(
                 clean(&sheet.hint),
                 Style::default().fg(palette.faint),
@@ -189,7 +188,7 @@ fn render_title(frame: &mut Frame, area: Rect, palette: &Palette, sheet: &Sheet)
             Style::default().fg(palette.dim),
         ));
     }
-    draw_line(frame, area, area.y, palette, Line::from(spans));
+    draw_line(frame, area, area.y, Line::from(spans));
 }
 
 fn render_row(frame: &mut Frame, area: Rect, palette: &Palette, row: &Row, highlighted: bool) {
@@ -237,54 +236,21 @@ fn render_row(frame: &mut Frame, area: Rect, palette: &Palette, row: &Row, highl
         Span::styled(" ".repeat(gap), Style::default()),
         Span::styled(detail, detail_style),
     ]);
-    draw_line(frame, area, area.y, palette, line);
+    draw_line(frame, area, area.y, line);
 }
 
 /// Writes one line at `y`, clipped to `area`, over any band already painted.
-fn draw_line(frame: &mut Frame, area: Rect, y: u16, _palette: &Palette, line: Line<'_>) {
+fn draw_line(frame: &mut Frame, area: Rect, y: u16, line: Line<'_>) {
     frame.buffer_mut().set_line(area.x, y, &line, area.width);
 }
 
-/// Terminal-safe text, borrowing from either `sanitize` signature.
 fn clean(text: &str) -> String {
-    sanitize(text).to_string()
+    sanitize(text).into_owned()
 }
 
-/// Shortens `text` to `cells`, ending with `…` when it was cut.
+/// Sanitizes `text` and shortens it to `cells`, ending with `…` when cut.
 pub fn truncate(text: &str, cells: usize) -> String {
-    let text = clean(text);
-    if width(&text) <= cells {
-        return text;
-    }
-    if cells == 0 {
-        return String::new();
-    }
-    let mut out = String::new();
-    let mut used = 0;
-    for grapheme in unicode_segmentation::UnicodeSegmentation::graphemes(&*text, true) {
-        let cells_of = width(grapheme);
-        if used + cells_of > cells.saturating_sub(1) {
-            break;
-        }
-        out.push_str(grapheme);
-        used += cells_of;
-    }
-    out.push('…');
-    out
-}
-
-/// The row index under a pointer at `(column, row)` inside the sheet's `area`.
-pub fn row_at(area: Rect, sheet: &Sheet, column: u16, row: u16) -> Option<usize> {
-    if column < area.x || column >= area.right() || row < area.y || row >= area.bottom() {
-        return None;
-    }
-    let body_rows = sheet.body.len() as u16;
-    let list_top = area.y + 1 + body_rows;
-    if row < list_top {
-        return None;
-    }
-    let index = sheet.window().start + (row - list_top) as usize;
-    (index < sheet.window().end).then_some(index)
+    wrap::truncate(&sanitize(text), cells)
 }
 
 /// Wraps one message into sheet body lines, so a long approval prompt still
@@ -411,21 +377,6 @@ mod tests {
             "the selection is the last visible row: {:?}",
             text[MAX_ROWS]
         );
-    }
-
-    #[test]
-    fn row_hit_testing_skips_the_title_body_and_hint() {
-        let sheet = Sheet::new("Approval", "y allow")
-            .body(vec![Line::from("Write a.rs?")])
-            .rows(rows(2));
-        let area = Rect::new(0, 10, 40, sheet.height());
-        assert_eq!(row_at(area, &sheet, 3, 10), None, "title row");
-        assert_eq!(row_at(area, &sheet, 3, 11), None, "body row");
-        assert_eq!(row_at(area, &sheet, 3, 12), Some(0));
-        assert_eq!(row_at(area, &sheet, 3, 13), Some(1));
-        assert_eq!(row_at(area, &sheet, 3, 14), None, "hint row");
-        assert_eq!(row_at(area, &sheet, 3, 99), None, "outside the area");
-        assert_eq!(row_at(area, &sheet, 99, 12), None, "outside the columns");
     }
 
     #[test]

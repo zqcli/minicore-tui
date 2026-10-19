@@ -13,21 +13,11 @@ use std::ops::Range;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 /// Display width of `text` in terminal cells.
 pub fn width(text: &str) -> usize {
     UnicodeWidthStr::width(text)
-}
-
-/// Display width of the first `offset` bytes of `text`.
-pub fn width_upto(text: &str, offset: usize) -> usize {
-    UnicodeWidthStr::width(&text[..offset.min(text.len())])
-}
-
-/// True for characters that occupy two cells (CJK ideographs, most emoji).
-pub fn is_wide(ch: char) -> bool {
-    ch.width() == Some(2)
 }
 
 /// Splits a line into `width`-cell chunks, ignoring word boundaries. Used for
@@ -446,7 +436,6 @@ mod tests {
     fn width_counts_cells_not_chars() {
         assert_eq!(width("中文"), 4);
         assert_eq!(width("abc"), 3);
-        assert_eq!(width_upto("a中b", 4), 3);
     }
 
     #[test]

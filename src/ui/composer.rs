@@ -246,6 +246,7 @@ impl Composer {
     }
 
     /// Ends the current typing gesture so the next edit starts a new undo step.
+    #[cfg(test)]
     pub fn end_gesture(&mut self) {
         self.commit();
         self.column = None;
@@ -419,16 +420,6 @@ impl Composer {
             Some(paste) => paste.range.end,
             None => next_grapheme(&self.text, self.cursor),
         };
-        self.column = None;
-    }
-
-    pub fn move_document_start(&mut self) {
-        self.cursor = 0;
-        self.column = None;
-    }
-
-    pub fn move_document_end(&mut self) {
-        self.cursor = self.text.len();
         self.column = None;
     }
 
@@ -819,6 +810,11 @@ mod tests {
         composer
     }
 
+    fn move_to_start(composer: &mut Composer) {
+        while composer.move_up() {}
+        composer.move_home();
+    }
+
     fn big_paste(lines: usize) -> String {
         (0..lines).map(|i| format!("line {i}\n")).collect()
     }
@@ -899,7 +895,7 @@ mod tests {
     #[test]
     fn vertical_movement_keeps_the_display_column() {
         let mut c = composer("abcdef\nxyz\nabcdef");
-        c.move_document_start();
+        move_to_start(&mut c);
         c.move_right();
         c.move_right();
         assert_eq!(c.cursor(), 2);
@@ -914,7 +910,7 @@ mod tests {
     #[test]
     fn vertical_movement_clamps_to_short_lines_and_remembers_the_column() {
         let mut c = composer("abcdef\nxy\nabcdef");
-        c.move_document_start();
+        move_to_start(&mut c);
         c.move_right();
         c.move_right();
         c.move_right();
@@ -936,7 +932,7 @@ mod tests {
     #[test]
     fn word_motions_stop_at_word_boundaries() {
         let mut c = composer("alpha beta gamma");
-        c.move_document_start();
+        move_to_start(&mut c);
         c.move_word_right();
         assert_eq!(c.cursor(), 6);
         c.move_word_right();
@@ -1097,7 +1093,7 @@ mod tests {
         c.insert(&payload);
         let before = c.pastes()[0].range.clone();
         c.end_gesture();
-        c.move_document_start();
+        move_to_start(&mut c);
         c.insert("> ");
         assert_eq!(c.pastes()[0].range.start, before.start + 2);
         assert_eq!(c.text(), format!("> {payload}"));

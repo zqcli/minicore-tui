@@ -470,8 +470,8 @@ fn compaction(
     let text = match (before, after) {
         (Some(before), Some(after)) => format!(
             "─ Context compacted · {} → {} tokens ─",
-            crate::ui::tokens(before),
-            crate::ui::tokens(after)
+            crate::ui::format_tokens(before),
+            crate::ui::format_tokens(after)
         ),
         // An automatic compaction usually reports no token figures; the item
         // counts say what it did instead of leaving a bare marker.
