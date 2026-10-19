@@ -123,10 +123,11 @@ impl Queued {
 pub struct PendingInteraction {
     pub turn: TurnRef,
     pub interaction_id: String,
+    /// The call asking; its card says what would run (path, command, input).
+    pub tool_call_id: String,
     pub tool_name: String,
     pub prompt: String,
     pub kind: InteractionKind,
-    pub detail: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -137,11 +138,7 @@ pub enum InteractionKind {
 
 impl PendingInteraction {
     /// Builds the prompt from the wire `kind` object the Agent sent.
-    pub fn from_wire(
-        turn: TurnRef,
-        interaction: &crate::protocol::PendingInteraction,
-        detail: Option<String>,
-    ) -> Self {
+    pub fn from_wire(turn: TurnRef, interaction: &crate::protocol::PendingInteraction) -> Self {
         let data = interaction.kind.get("data");
         let field = |name: &str| data.and_then(|data| data.get(name));
         let prompt = field("prompt")
@@ -166,6 +163,7 @@ impl PendingInteraction {
         Self {
             turn,
             interaction_id: interaction.interaction_id.clone(),
+            tool_call_id: interaction.tool_call_id.clone(),
             tool_name: interaction.tool_name.clone(),
             prompt,
             kind: if is_approval || choices.is_empty() {
@@ -173,7 +171,6 @@ impl PendingInteraction {
             } else {
                 InteractionKind::Choice(choices)
             },
-            detail,
         }
     }
 

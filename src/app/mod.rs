@@ -2760,12 +2760,7 @@ impl App {
             AgentEvent::InteractionRequested {
                 turn, interaction, ..
             } => {
-                let detail = session
-                    .transcript
-                    .find_tool_by_call_id(&interaction.tool_call_id)
-                    .map(|call| call.detail.clone());
-                session.interaction =
-                    Some(PendingInteraction::from_wire(turn, &interaction, detail));
+                session.interaction = Some(PendingInteraction::from_wire(turn, &interaction));
                 self.interaction_choice = 0;
                 true
             }
@@ -3009,33 +3004,6 @@ impl App {
                     crate::protocol::Reasoning::High,
                 ]
             })
-    }
-
-    /// Rows of the interaction prompt.
-    pub fn interaction_lines(&self) -> Vec<String> {
-        let Some(interaction) = self
-            .session
-            .as_ref()
-            .and_then(|session| session.interaction.as_ref())
-        else {
-            return Vec::new();
-        };
-        let mut lines = vec![format!(
-            "{} wants to run {}",
-            interaction.tool_name, interaction.prompt
-        )];
-        if let Some(detail) = &interaction.detail {
-            lines.push(detail.clone());
-        }
-        for (index, option) in interaction.options().iter().enumerate() {
-            let marker = if index == self.interaction_choice {
-                "▶"
-            } else {
-                " "
-            };
-            lines.push(format!("{marker} {option}"));
-        }
-        lines
     }
 
     pub fn context_budget(&self) -> Option<&ContextBudget> {

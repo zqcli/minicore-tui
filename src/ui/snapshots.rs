@@ -462,3 +462,47 @@ fn a_running_turn_shows_the_status_line_with_elapsed_time() {
     assert!(rendered.contains("esc to interrupt"), "{rendered}");
     assert!(rendered.contains("● working"), "{rendered}");
 }
+
+/// The approval sheet says what would run, from the card, and the status line
+/// says what Esc does while it waits.
+#[test]
+fn an_approval_shows_the_tool_its_target_and_its_input() {
+    let mut app = app();
+    let session = app.session.as_mut().expect("session");
+    let turn = TurnRef {
+        session_id: "ses_0123456789abcdef".into(),
+        loop_id: "loop_9".into(),
+    };
+    session.live = Some(crate::app::LiveTurn::new(turn.clone(), 0));
+    let mut call = ToolCall::new(
+        ToolRef {
+            session_id: "ses_0123456789abcdef".into(),
+            loop_id: "loop_9".into(),
+            request_index: 0,
+            tool_call_id: "call_w".into(),
+        },
+        "write",
+    );
+    call.detail = "notes/approval.txt".into();
+    call.expanded_input = Some("Approval fixture executed.\nsecond line".into());
+    session.transcript.push(Block::Tool(Box::new(call)));
+    session.interaction = Some(crate::app::PendingInteraction {
+        turn,
+        interaction_id: "i1".into(),
+        tool_call_id: "call_w".into(),
+        tool_name: "write".into(),
+        prompt: "Allow tool `write` for this call?".into(),
+        kind: crate::app::InteractionKind::Approval,
+    });
+    let rendered = render(&mut app, 80, 24);
+    assert!(rendered.contains("write  notes/approval.txt"), "{rendered}");
+    assert!(
+        rendered.contains("  Approval fixture executed."),
+        "{rendered}"
+    );
+    assert!(rendered.contains("Allow once"), "{rendered}");
+    assert!(
+        rendered.contains("Waiting for approval") && rendered.contains("esc to deny"),
+        "{rendered}"
+    );
+}

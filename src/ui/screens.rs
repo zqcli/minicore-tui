@@ -144,9 +144,19 @@ fn interaction_sheet(app: &App, palette: &Palette) -> Sheet {
         return Sheet::new("Approval", "esc closes");
     };
     let options = interaction.options();
+    // The card is read at draw time: its detail and input can arrive after
+    // the prompt does.
+    let call = session
+        .transcript
+        .find_tool_by_call_id(&interaction.tool_call_id);
+    let subject = sheets::Subject {
+        tool: call.map_or(interaction.tool_name.as_str(), |call| call.name.as_str()),
+        detail: call.map_or("", |call| call.detail.as_str()),
+        input: call.and_then(|call| call.expanded_input.as_deref()),
+    };
     sheets::interaction_sheet(
         &interaction.prompt,
-        interaction.detail.as_deref(),
+        &subject,
         &options,
         app.interaction_choice,
         palette,
