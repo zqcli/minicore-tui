@@ -2773,18 +2773,61 @@ async fn the_earliest_turn_does_not_claim_earlier_items() {
     let (fake, mut app) = FakeAgent::start(tx.clone());
     boot(&fake);
     fake.script("session.open", json!({"session": session_info("s1")}));
-    // The last page of history: it starts at item 0 and has nothing behind it.
-    fake.script("session.read", display_read(80, 0));
+    // The tail starts at 30, so two pages of twenty are left behind it.
+    fake.script("session.read", display_read(90, 0));
     open(&mut app, &mut rx, &fake, &tx).await;
-    assert_eq!(app.session.as_ref().unwrap().loaded_from, 20);
+    assert_eq!(app.session.as_ref().unwrap().loaded_from, 30);
 
+    // A real page between the tail and the start: the label must state the
+    // boundary the next read starts from, not the one it just passed.
     fake.script_sequence(
         "session.read",
         vec![
-            // The probe reports the raw start of history.
             json!({
                 "session": session_info("s1"), "items": [], "next_cursor": null,
-                "total": 80, "history_revision": "h1", "captured_end": 1,
+                "total": 90, "history_revision": "h1", "captured_end": 1,
+                "projection": {"revision": "p1", "first_item": 0, "covered_item_count": 0},
+            }),
+            json!({
+                "session": session_info("s1"),
+                "items": [crate::testing::chunk(10, json!({"type": "user", "data": {
+                    "loop_id": "l0", "kind": "prompt",
+                    "input": {"text": "a middle question"}}}))],
+                "next_cursor": null, "total": 90, "history_revision": "h1",
+                "captured_end": 1,
+                "projection": {"revision": "p1", "first_item": 0, "covered_item_count": 0},
+            }),
+        ],
+    );
+    app.on_action(Action::LoadOlder);
+    pump(&mut app, &mut rx, |app| {
+        !app.session.as_ref().unwrap().loading_older
+    })
+    .await;
+    let session = app.session.as_ref().unwrap();
+    assert_eq!(session.loaded_from, 10, "ten items are still behind it");
+    let label = session
+        .transcript
+        .blocks()
+        .first()
+        .and_then(|block| match block {
+            Block::EarlierHistory { hidden_items } => Some(*hidden_items),
+            _ => None,
+        });
+    assert_eq!(
+        label,
+        Some(session.loaded_from),
+        "the label equals the read position on a real page: {:?}",
+        session.transcript.blocks()
+    );
+
+    // The last page reaches item zero: nothing is older and no key can help.
+    fake.script_sequence(
+        "session.read",
+        vec![
+            json!({
+                "session": session_info("s1"), "items": [], "next_cursor": null,
+                "total": 90, "history_revision": "h1", "captured_end": 1,
                 "projection": {"revision": "p1", "first_item": 0, "covered_item_count": 0},
             }),
             json!({
@@ -2792,7 +2835,7 @@ async fn the_earliest_turn_does_not_claim_earlier_items() {
                 "items": [crate::testing::chunk(0, json!({"type": "user", "data": {
                     "loop_id": "l0", "kind": "prompt",
                     "input": {"text": "the earliest question"}}}))],
-                "next_cursor": null, "total": 80, "history_revision": "h1",
+                "next_cursor": null, "total": 90, "history_revision": "h1",
                 "captured_end": 1,
                 "projection": {"revision": "p1", "first_item": 0, "covered_item_count": 0},
             }),
