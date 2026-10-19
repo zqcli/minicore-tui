@@ -1764,7 +1764,14 @@ impl App {
                             }
                             _ => result.operation_id.clone(),
                         };
-                        session.push_compaction(&operation_id, result);
+                        let coverage = context
+                            .coverage
+                            .as_ref()
+                            .filter(|coverage| coverage.covered_item_count > 0)
+                            .map(|coverage| {
+                                (coverage.covered_item_count, coverage.retained_item_count)
+                            });
+                        session.push_compaction(&operation_id, result, coverage);
                     }
                 }
                 let context = context.clone();
@@ -1996,7 +2003,7 @@ impl App {
                         // summary is a new snapshot beside the history, so the
                         // blocks on screen stay: a reload would erase them.
                         if let Some(session) = self.session.as_mut() {
-                            session.push_compaction(&result.operation_id.clone(), result);
+                            session.push_compaction(&result.operation_id.clone(), result, None);
                         }
                         if let Some(session) = self.session.as_ref() {
                             tasks::presentation(

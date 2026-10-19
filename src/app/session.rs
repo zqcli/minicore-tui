@@ -428,7 +428,12 @@ impl Session {
     /// Adds the one-line compaction marker. Loaded blocks are never removed,
     /// and one operation is reported once: the manual response, the auto
     /// report and a state refresh can all describe the same compaction.
-    pub fn push_compaction(&mut self, operation_id: &str, result: &CompactionResult) {
+    pub fn push_compaction(
+        &mut self,
+        operation_id: &str,
+        result: &CompactionResult,
+        coverage: Option<(usize, usize)>,
+    ) {
         if result.status != CompactStatus::Compacted {
             return;
         }
@@ -443,8 +448,13 @@ impl Session {
             operation_id: operation_id.to_owned(),
             before: result.before_tokens,
             after: result.after_tokens,
-            coverage: (result.covered_item_count.is_some() || result.retained_item_count.is_some())
-                .then_some((result.covered_item_count, result.retained_item_count)),
+            // The result's own counts are the most precise; `session.context`
+            // carries the durable totals when an automatic compaction reports
+            // no figures of its own.
+            coverage: result
+                .covered_item_count
+                .map(|covered| (Some(covered), result.retained_item_count))
+                .or_else(|| coverage.map(|(covered, kept)| (Some(covered), Some(kept)))),
             summary: None,
         });
     }
