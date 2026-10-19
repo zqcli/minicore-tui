@@ -44,21 +44,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         screens::sheet(app, &app.palette)
     };
-    let sheet_rows = sheet.as_ref().map_or(0, |sheet| sheet.height());
+    let (rows, cursor) = status::band(app, styles, area.width);
+    let sheet_rows = sheet.as_ref().map_or(0, panel::Sheet::height);
     // One blank row keeps the last transcript line off the stack below it,
     // when the terminal has the room.
     let gap = u16::from(area.height > 8);
-    let bottom = (band_height(app, area.width) + sheet_rows)
+    let bottom = (rows.len() as u16 + sheet_rows)
         .min(area.height.saturating_sub(1 + gap))
         .max(1);
-    let [transcript, _, bottom] = Layout::vertical([
+    let [main, _, bottom] = Layout::vertical([
         Constraint::Min(1),
         Constraint::Length(gap),
         Constraint::Length(bottom),
     ])
     .areas(area);
-    if !screens::draw_view(frame, transcript, app) {
-        transcript::draw(frame, transcript, app, styles);
+    if !screens::draw_view(frame, main, app) {
+        transcript::draw(frame, main, app, styles);
     }
     let band = if let Some(sheet) = sheet {
         let [sheet_area, band] =
@@ -69,7 +70,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         bottom
     };
-    let rows = status::lines(app, styles, band.width);
     // Row by row: a `Line` widget paints its style across the whole row, so
     // the composer's tint is a full-width band, not just the typed cells.
     for (index, line) in rows.iter().enumerate() {
@@ -87,10 +87,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         );
     }
     if app.overlay.is_none() && !app.has_interaction() {
-        let (row, column) = status::cursor(app, styles, band.width);
         frame.set_cursor_position((
-            band.x + column,
-            band.y + row.min(band.height.saturating_sub(1)),
+            band.x + cursor.1,
+            band.y + cursor.0.min(band.height.saturating_sub(1)),
         ));
     }
 }
@@ -108,12 +107,6 @@ pub fn tokens(value: u64) -> String {
         value if value < 1_000_000 => scaled(value as f64 / 1_000.0, "k"),
         value => scaled(value as f64 / 1_000_000.0, "M"),
     }
-}
-
-/// Rows the status line, queue, notices, composer and footer need at `width`.
-/// The composer wraps, so the band's height depends on the terminal width.
-pub fn band_height(app: &App, width: u16) -> u16 {
-    status::lines(app, Styles::of(app.palette), width).len() as u16
 }
 
 fn draw_fatal(frame: &mut Frame, area: Rect, fatal: &crate::app::Fatal) {
