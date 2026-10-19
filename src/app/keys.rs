@@ -82,6 +82,8 @@ impl App {
 
     fn on_overlay_key(&mut self, key: KeyEvent) -> Input {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let tool_view = matches!(self.overlay, Overlay::Tool(_));
+        let scrolling_view = tool_view || matches!(self.overlay, Overlay::Diff { .. });
         match key.code {
             KeyCode::Esc => {
                 self.delete_pending = None;
@@ -91,6 +93,32 @@ impl App {
                     _ => {}
                 }
                 Input::Consumed
+            }
+            KeyCode::Char('[') | KeyCode::Left if tool_view => {
+                self.step_tool(-1);
+                Input::Consumed
+            }
+            KeyCode::Char(']') | KeyCode::Right if tool_view => {
+                self.step_tool(1);
+                Input::Consumed
+            }
+            KeyCode::PageUp | KeyCode::PageDown if scrolling_view => {
+                self.page_view(if key.code == KeyCode::PageUp { -1 } else { 1 });
+                Input::Consumed
+            }
+            KeyCode::Home | KeyCode::End if scrolling_view => {
+                // Far enough to reach either end; scrolling clamps.
+                self.page_view(if key.code == KeyCode::Home {
+                    -isize::MAX
+                } else {
+                    isize::MAX
+                });
+                Input::Consumed
+            }
+            KeyCode::Char('c')
+                if !ctrl && (scrolling_view || matches!(self.overlay, Overlay::Context)) =>
+            {
+                self.copy_view()
             }
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.find_step(false);
@@ -234,6 +262,7 @@ impl App {
             Overlay::Sessions { filter, .. } => self.filtered_sessions(filter).len(),
             _ => self.session_rows.len(),
         };
+        let rows = self.viewport_rows();
         match &mut self.overlay {
             Overlay::Palette { selected, filter } => {
                 let len = commands::filter(filter).len();
@@ -259,6 +288,7 @@ impl App {
             Overlay::Help => {
                 self.help_scroll = self.help_scroll.saturating_add_signed(delta * 3);
             }
+            Overlay::Tool(_) => self.tool_view.scroll_by(delta, rows),
             Overlay::Find {
                 current, matches, ..
             } => {
@@ -272,6 +302,21 @@ impl App {
                     .map_or(0, |interaction| interaction.options().len());
                 self.interaction_choice = step(self.interaction_choice, options);
             }
+            _ => {}
+        }
+    }
+
+    /// PgUp/PgDn in the diff and tool views: scroll the content by a page.
+    fn page_view(&mut self, direction: isize) {
+        // The view's title and hint rows are not content.
+        let rows = self.viewport_rows().saturating_sub(2).max(1);
+        let delta = direction.saturating_mul(rows as isize);
+        match &mut self.overlay {
+            Overlay::Diff { scroll, .. } => {
+                self.diff.scroll_by(delta, rows);
+                *scroll = self.diff.scroll.min(u16::MAX as usize) as u16;
+            }
+            Overlay::Tool(_) => self.tool_view.scroll_by(delta, rows),
             _ => {}
         }
     }

@@ -108,7 +108,8 @@ pub enum OpKind {
         ToolRef,
         Result<crate::protocol::tool::ToolReadResult, RpcError>,
     ),
-    ToolOutput(ToolRef, String, Result<String, RpcError>),
+    /// One stream of a tool call's full output, for the tool view.
+    ToolOutput(ToolRef, String, Result<tasks::StreamText, RpcError>),
     Copied(Result<crate::clipboard::Copied, String>),
     Exported(Result<String, String>),
     /// `session.state` poll while waiting for post-turn compaction.
@@ -381,7 +382,8 @@ impl App {
         );
     }
 
-    /// Fills the tool view from the card, then pages the full output.
+    /// Fills the tool view from the card, then pages the full output of every
+    /// stream: stdout and stderr for bash, the result text otherwise.
     fn open_tool(&mut self, key: ToolRef) {
         let Some(call) = self
             .session
@@ -390,35 +392,116 @@ impl App {
         else {
             return;
         };
-        let palette = self.palette;
-        self.tool_view = crate::ui::views::ToolView {
-            title: call.name.clone(),
-            detail: call.detail.clone(),
-            state: crate::ui::views::tool_state_label(call.state).to_owned(),
-            input: call
-                .expanded_input
-                .as_deref()
-                .map(|input| {
-                    input
-                        .lines()
-                        .map(|line| {
-                            ratatui::text::Line::styled(
-                                line.to_owned(),
-                                ratatui::style::Style::default().fg(palette.dim),
-                            )
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-            output: call
-                .view_body()
-                .lines()
-                .map(|line| ratatui::text::Line::raw(line.to_owned()))
-                .collect(),
-            scroll: 0,
-            status: String::new(),
+        let streams: &[&str] = if call.name == "bash" {
+            &["stdout", "stderr"]
+        } else {
+            &["output"]
         };
-        tasks::read_tool(self.client.clone(), self.tx.clone(), key);
+        self.tool_view = crate::ui::views::ToolView {
+            key: Some(key.clone()),
+            output: crate::ui::views::ToolView::text_lines(&call.output.join("\n")),
+            streams: streams
+                .iter()
+                .map(|stream| ((*stream).to_owned(), None))
+                .collect(),
+            status: "loading the full output…".into(),
+            ..Default::default()
+        };
+        self.refresh_tool_header();
+        tasks::read_tool(self.client.clone(), self.tx.clone(), key.clone());
+        for stream in streams {
+            tasks::read_tool_output(
+                self.client.clone(),
+                self.tx.clone(),
+                key.clone(),
+                (*stream).to_owned(),
+            );
+        }
+    }
+
+    /// Copies the shown card's name, state, detail and input into the tool
+    /// view, which `tool.read` may have just refreshed.
+    fn refresh_tool_header(&mut self) {
+        let Some(key) = self.tool_view.key.clone() else {
+            return;
+        };
+        let keys = self.tool_keys();
+        let Some(call) = self
+            .session
+            .as_ref()
+            .and_then(|session| session.transcript.find_tool(&key))
+        else {
+            return;
+        };
+        let view = &mut self.tool_view;
+        view.title = call.name.clone();
+        view.detail = call.detail.clone();
+        view.state = crate::ui::views::tool_state_label(call.state).to_owned();
+        view.position = keys
+            .iter()
+            .position(|known| *known == key)
+            .map(|index| (index, keys.len()));
+        let dim = ratatui::style::Style::default().fg(self.palette.dim);
+        // A one-line input that is the detail (a bash command) is not repeated.
+        let input = call
+            .expanded_input
+            .as_deref()
+            .filter(|input| input.trim() != call.detail.trim())
+            .unwrap_or_default();
+        view.input = crate::ui::views::ToolView::text_lines(input)
+            .into_iter()
+            .map(|line| line.style(dim))
+            .collect();
+    }
+
+    /// Every tool card of the transcript, in order.
+    fn tool_keys(&self) -> Vec<ToolRef> {
+        self.transcript_blocks()
+            .iter()
+            .filter_map(|block| match block {
+                Block::Tool(call) => Some(call.key.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `[` / `]` in the tool view: show the previous or next tool card.
+    pub fn step_tool(&mut self, delta: isize) {
+        let Overlay::Tool(current) = &self.overlay else {
+            return;
+        };
+        let keys = self.tool_keys();
+        let Some(index) = keys.iter().position(|key| key == current) else {
+            return;
+        };
+        let next = index.saturating_add_signed(delta).min(keys.len() - 1);
+        if next != index {
+            self.open_panel(Panel::Tool(keys[next].clone()));
+        }
+    }
+
+    /// `/tool`: the card at the top of the viewport when scrolled, else the
+    /// newest one.
+    fn show_tool(&mut self) {
+        let blocks = self.transcript_blocks();
+        let is_tool = |block: &Block| matches!(block, Block::Tool(_));
+        let index = match self.scroll {
+            Scroll::Anchor { block, .. } => blocks
+                .iter()
+                .skip(block)
+                .position(is_tool)
+                .map(|offset| block + offset)
+                .or_else(|| blocks[..block.min(blocks.len())].iter().rposition(is_tool)),
+            Scroll::Follow => blocks.iter().rposition(is_tool),
+        };
+        let key = index.and_then(|index| match &blocks[index] {
+            Block::Tool(call) => Some(call.key.clone()),
+            _ => None,
+        });
+        match key {
+            Some(key) => self.open_panel(Panel::Tool(key)),
+            None => self.notice(NoticeLevel::Info, "No tool calls to show yet"),
+        }
     }
 }
 
@@ -560,15 +643,7 @@ impl App {
             last_answer: None,
             diff: crate::ui::views::DiffView::new("Diff"),
             context_view: crate::ui::views::ContextView::default(),
-            tool_view: crate::ui::views::ToolView {
-                title: String::new(),
-                detail: String::new(),
-                state: String::new(),
-                input: Vec::new(),
-                output: Vec::new(),
-                scroll: 0,
-                status: String::new(),
-            },
+            tool_view: crate::ui::views::ToolView::default(),
             help_scroll: 0,
             session_rows: Vec::new(),
             delete_pending: None,
@@ -792,6 +867,10 @@ impl App {
             }
             Action::LoadOlder => {
                 self.load_older();
+                true
+            }
+            Action::ShowTool => {
+                self.show_tool();
                 true
             }
             Action::RecallQueued => {
@@ -1373,22 +1452,24 @@ impl App {
             OpKind::Updated(result) | OpKind::Renamed(result) => self.on_session_info(result),
             OpKind::Changes(loop_id, result) => self.on_changes(loop_id, result),
             OpKind::ToolRead(key, result) => self.on_tool_read(key, result),
-            OpKind::ToolOutput(key, stream, result) => match result {
-                Ok(text) => {
-                    if let Some(call) = self
-                        .session
-                        .as_mut()
-                        .and_then(|session| session.transcript.find_tool_mut(key))
-                    {
-                        call.set_full_output(stream, text.clone());
+            OpKind::ToolOutput(key, stream, result) => {
+                // Pages for a call the view no longer shows are dropped.
+                if self.tool_view.key.as_ref() != Some(key) {
+                    return false;
+                }
+                match result {
+                    Ok(text) => self
+                        .tool_view
+                        .set_stream(stream, text.clone(), &self.palette),
+                    // The other streams still show; the view says what failed.
+                    Err(error) => {
+                        self.tool_view
+                            .set_stream(stream, Default::default(), &self.palette);
+                        self.tool_view.status = error.message.clone();
                     }
-                    true
                 }
-                Err(error) => {
-                    self.error(error);
-                    true
-                }
-            },
+                true
+            }
             OpKind::Files(result) => self.on_files(result),
             OpKind::ChangeFiles(scope, result) => self.on_change_files(*scope, result),
             OpKind::DiffFile(path, result) => self.on_diff_file(path, result),
@@ -2370,6 +2451,9 @@ impl App {
                             call.exit_code = command.exit_code;
                         }
                     }
+                }
+                if self.tool_view.key.as_ref() == Some(key) {
+                    self.refresh_tool_header();
                 }
                 true
             }

@@ -121,12 +121,15 @@ impl DiffView {
 
     pub fn scroll_by(&mut self, delta: isize, rows: usize) {
         let max = self.hunks.len().saturating_sub(rows);
-        let next = (self.scroll as isize + delta).clamp(0, max as isize);
+        let next = (self.scroll as isize)
+            .saturating_add(delta)
+            .clamp(0, max as isize);
         self.scroll = next as usize;
     }
 }
 
-/// The plain-text body `/copy` and the `c` key use.
+/// The plain-text body `/copy` and the `c` key use. A row's last span is its
+/// content; earlier spans are the line-number gutter, which is not copied.
 pub fn diff_text(view: &DiffView) -> String {
     let mut out = String::new();
     if let Some(file) = view.current() {
@@ -462,18 +465,95 @@ pub fn tool_state_label(state: crate::transcript::ToolState) -> &'static str {
 }
 
 /// The tool output view: the call's input on top, then the paged output.
-#[derive(Clone, Debug)]
+/// Until every stream's pages arrive the output is the card's bounded tail.
+#[derive(Clone, Debug, Default)]
 pub struct ToolView {
+    /// The call shown; a page for any other call is ignored.
+    pub key: Option<crate::protocol::ToolRef>,
     pub title: String,
     pub detail: String,
     pub state: String,
+    /// This call's place among the session's tool cards: `(index, count)`.
+    pub position: Option<(usize, usize)>,
     pub input: Vec<Line<'static>>,
     pub output: Vec<Line<'static>>,
+    /// Full output per stream, in display order; `None` while loading. Bash
+    /// has stdout and stderr, which carry no total order between them, so
+    /// they are shown as separate sections rather than interleaved.
+    pub streams: Vec<(String, Option<crate::app::tasks::StreamText>)>,
     pub scroll: usize,
     pub status: String,
 }
 
 impl ToolView {
+    /// Lines of a plain text body, made safe for the terminal.
+    pub fn text_lines(text: &str) -> Vec<Line<'static>> {
+        let text = text.strip_suffix('\n').unwrap_or(text);
+        if text.is_empty() {
+            return Vec::new();
+        }
+        text.split('\n')
+            .map(|line| Line::raw(clean(line.strip_suffix('\r').unwrap_or(line))))
+            .collect()
+    }
+
+    /// Records one stream's full text. The output is rebuilt once every stream
+    /// has answered, so the tail is not replaced by half of the result.
+    pub fn set_stream(
+        &mut self,
+        name: &str,
+        text: crate::app::tasks::StreamText,
+        palette: &Palette,
+    ) {
+        let Some(slot) = self.streams.iter_mut().find(|(stream, _)| stream == name) else {
+            return;
+        };
+        slot.1 = Some(text);
+        if self.streams.iter().all(|(_, text)| text.is_some()) {
+            self.output = self.stream_lines(palette);
+            self.status.clear();
+            self.scroll = self.scroll.min(self.output.len().saturating_sub(1));
+        }
+    }
+
+    fn stream_lines(&self, palette: &Palette) -> Vec<Line<'static>> {
+        let sections = self.streams.len() > 1;
+        let mut lines = Vec::new();
+        for (name, text) in &self.streams {
+            let Some(text) = text else { continue };
+            let body = Self::text_lines(&text.text);
+            let noted = text.dropped_head || text.expired || text.cut;
+            if body.is_empty() && !noted {
+                continue;
+            }
+            if sections {
+                if !lines.is_empty() {
+                    lines.push(Line::from(""));
+                }
+                let color = if name == "stderr" {
+                    palette.warning
+                } else {
+                    palette.dim
+                };
+                lines.push(Line::styled(
+                    format!("── {name} ──"),
+                    Style::default().fg(color),
+                ));
+            }
+            if text.dropped_head {
+                lines.push(dim("… earlier output is no longer retained", palette));
+            }
+            if text.expired && body.is_empty() {
+                lines.push(dim("… this output has expired from the agent", palette));
+            }
+            lines.extend(body);
+            if text.cut {
+                lines.push(dim("… cut at 1 MiB", palette));
+            }
+        }
+        lines
+    }
+
     pub fn visible_output(&self, rows: usize) -> &[Line<'static>] {
         let start = self.scroll.min(self.output.len());
         let end = (start + rows).min(self.output.len());
@@ -482,7 +562,9 @@ impl ToolView {
 
     pub fn scroll_by(&mut self, delta: isize, rows: usize) {
         let max = self.output.len().saturating_sub(rows);
-        self.scroll = (self.scroll as isize + delta).clamp(0, max as isize) as usize;
+        self.scroll = (self.scroll as isize)
+            .saturating_add(delta)
+            .clamp(0, max as isize) as usize;
     }
 
     /// `input` plus `output`, so `c` copies everything the user can see.
@@ -497,13 +579,19 @@ impl ToolView {
 }
 
 pub fn render_tool(frame: &mut Frame, area: Rect, palette: &Palette, view: &ToolView) {
-    let title = format!("← {} · {}", view.title, view.state);
+    let mut title = format!("← {} · {}", view.title, view.state);
+    if let Some((index, count)) = view.position {
+        title.push_str(&format!(" · tool {} of {count}", index + 1));
+    }
+    if !view.status.is_empty() && !view.output.is_empty() {
+        title.push_str(&format!(" · {}", view.status));
+    }
     chrome(
         frame,
         area,
         palette,
         &title,
-        "PgUp/PgDn scroll · c copy · esc back",
+        "[ ] previous/next tool · ↑↓ PgUp/PgDn scroll · c copy · esc back",
     );
     let mut y = area.y + 1;
     let bottom = area.bottom().saturating_sub(1);
@@ -1424,8 +1512,7 @@ mod tests {
             state: "succeeded".into(),
             input: vec![Line::from("$ python3 -m unittest")],
             output: vec![Line::from("OK"), Line::from("Ran 30 tests")],
-            scroll: 0,
-            status: String::new(),
+            ..ToolView::default()
         };
         assert_eq!(view.text(), "$ python3 -m unittest\nOK\nRan 30 tests\n");
     }
@@ -1434,18 +1521,79 @@ mod tests {
     fn the_tool_view_scrolls_within_the_output() {
         let mut view = ToolView {
             title: "bash".into(),
-            detail: String::new(),
             state: "succeeded".into(),
-            input: Vec::new(),
             output: (0..10).map(|index| Line::from(index.to_string())).collect(),
-            scroll: 0,
-            status: String::new(),
+            ..ToolView::default()
         };
         view.scroll_by(4, 5);
         assert_eq!(view.scroll, 4);
         assert_eq!(view.visible_output(5).len(), 5);
         view.scroll_by(99, 5);
         assert_eq!(view.scroll, 5);
+        // Home and End scroll by the largest step there is.
+        view.scroll_by(-isize::MAX, 5);
+        assert_eq!(view.scroll, 0);
+        view.scroll_by(isize::MAX, 5);
+        assert_eq!(view.scroll, 5);
+    }
+
+    fn stream(text: &str) -> crate::app::tasks::StreamText {
+        crate::app::tasks::StreamText {
+            text: text.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Bash streams have no total order, so they are separate sections, and
+    /// the card's tail stays until both have answered.
+    #[test]
+    fn bash_output_shows_stdout_and_stderr_sections_once_both_arrive() {
+        let palette = Palette::dark();
+        let mut view = ToolView {
+            output: vec![Line::from("tail")],
+            streams: vec![("stdout".into(), None), ("stderr".into(), None)],
+            status: "loading the full output…".into(),
+            ..ToolView::default()
+        };
+        view.set_stream("stdout", stream("ok 1\nok 2\n"), &palette);
+        assert_eq!(
+            view.text(),
+            "tail\n",
+            "half a result does not replace the tail"
+        );
+        view.set_stream("stderr", stream("warn\u{1b}[31m!\n"), &palette);
+        assert_eq!(
+            view.text(),
+            "── stdout ──\nok 1\nok 2\n\n── stderr ──\nwarn!\n"
+        );
+        assert!(view.status.is_empty());
+    }
+
+    #[test]
+    fn an_empty_stream_is_omitted_and_retention_is_explained() {
+        let palette = Palette::dark();
+        let mut view = ToolView {
+            streams: vec![("stdout".into(), None), ("stderr".into(), None)],
+            ..ToolView::default()
+        };
+        let mut stdout = stream("last line\n");
+        stdout.dropped_head = true;
+        view.set_stream("stdout", stdout, &palette);
+        view.set_stream("stderr", stream(""), &palette);
+        let text = view.text();
+        assert!(!text.contains("stderr"), "{text}");
+        assert!(text.contains("no longer retained\nlast line"), "{text}");
+
+        let mut view = ToolView {
+            streams: vec![("output".into(), None)],
+            ..ToolView::default()
+        };
+        view.set_stream("output", stream("result\n"), &palette);
+        assert_eq!(
+            view.text(),
+            "result\n",
+            "one stream needs no section header"
+        );
     }
 
     #[test]

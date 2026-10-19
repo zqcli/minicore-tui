@@ -3458,6 +3458,89 @@ fn tool_card(id: &str, name: &str) -> Block {
     )))
 }
 
+fn shown_tool(app: &App) -> Option<String> {
+    match &app.overlay {
+        Overlay::Tool(key) => Some(key.tool_call_id.clone()),
+        _ => None,
+    }
+}
+
+/// `/tool` opens the newest card, or the first one at the top of a scrolled
+/// view; `[` and `]` step between cards, and the view pages each stream.
+#[tokio::test]
+async fn slash_tool_opens_a_card_and_brackets_step_between_cards() {
+    use crossterm::event::KeyCode;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(0, 0));
+    fake.script(
+        "tool.output",
+        json!({"stream": "stdout", "encoding": "base64", "base_offset": 0,
+               "next_offset": 6, "observed_end": 6, "eof": true, "data": "aGVsbG8K"}),
+    );
+    open(&mut app, &mut rx, &fake, &tx).await;
+    {
+        let transcript = &mut app.session.as_mut().unwrap().transcript;
+        transcript.push(Block::User {
+            text: "go".into(),
+            kind: UserKind::Prompt,
+        });
+        transcript.push(tool_card("c1", "bash"));
+        transcript.push(tool_card("c2", "read"));
+    }
+
+    type_text(&mut app, "/tool");
+    let input = app.on_key(key(KeyCode::Enter));
+    assert_eq!(input, crate::app::keys::Input::Action(Action::ShowTool));
+    app.on_action(Action::ShowTool);
+    assert_eq!(shown_tool(&app).as_deref(), Some("c2"), "the newest card");
+    assert_eq!(app.tool_view.position, Some((1, 2)));
+    pump(&mut app, &mut rx, |app| {
+        app.tool_view.text().contains("hello")
+    })
+    .await;
+    assert_eq!(app.tool_view.text(), "hello\n", "one stream, no sections");
+
+    app.on_key(key(KeyCode::Char('[')));
+    assert_eq!(shown_tool(&app).as_deref(), Some("c1"));
+    pump(&mut app, &mut rx, |app| {
+        app.tool_view.text().contains("stderr")
+    })
+    .await;
+    assert_eq!(
+        app.tool_view.text(),
+        "── stdout ──\nhello\n\n── stderr ──\nhello\n",
+        "bash shows each stream as a section"
+    );
+    let streams: Vec<Value> = fake
+        .calls("tool.output")
+        .iter()
+        .map(|params| params["stream"].clone())
+        .collect();
+    for stream in ["output", "stdout", "stderr"] {
+        assert!(streams.contains(&json!(stream)), "{stream}: {streams:?}");
+    }
+    app.on_key(key(KeyCode::Char('[')));
+    assert_eq!(
+        shown_tool(&app).as_deref(),
+        Some("c1"),
+        "stops at the first"
+    );
+    app.on_key(key(KeyCode::Right));
+    assert_eq!(shown_tool(&app).as_deref(), Some("c2"));
+
+    // Scrolled up, `/tool` opens the first card at the top of the view.
+    app.on_key(key(KeyCode::Esc));
+    app.scroll = Scroll::Anchor {
+        block: 1,
+        offset: 0,
+    };
+    app.on_action(Action::ShowTool);
+    assert_eq!(shown_tool(&app).as_deref(), Some("c1"));
+}
+
 /// Several records of one file are separate comparisons: each gets a
 /// separator, hunk headers are 1-based, and the row counts every record.
 #[tokio::test]

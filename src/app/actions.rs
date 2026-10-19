@@ -28,6 +28,8 @@ pub enum Action {
     Answer(Answer),
     LoadOlder,
     RecallQueued,
+    /// `/tool`: open the full output of the tool card in view.
+    ShowTool,
     Quit,
 }
 
