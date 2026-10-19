@@ -1,6 +1,6 @@
 ▎ Why does the parser re-parse the whole message on every delta?
 
-thought for 1 lines · Ctrl+T to show
+▏ Thought · 1 line
   It does not any more. The streaming renderer keeps the stable prefix
   and re-renders only the tail, so a delta costs one small parse.
 

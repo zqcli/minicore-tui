@@ -155,10 +155,11 @@ fn assistant(
             }
         } else {
             let rows = thinking.lines().count().max(1);
-            lines.push(Line::styled(
-                format!("thought for {rows} lines · Ctrl+T to show"),
+            let summary = Line::styled(
+                format!("Thought · {rows} {}", plural(rows, "line")),
                 styles.dim().add_modifier(ratatui::style::Modifier::ITALIC),
-            ));
+            );
+            lines.push(rails::reasoning_rail(summary, styles));
         }
     }
     if !text.trim().is_empty() {
@@ -560,7 +561,7 @@ mod tests {
     fn finished_reasoning_collapses_and_ctrl_t_shows_it() {
         let block = assistant("the answer", "one\ntwo\nthree", false);
         let folded = text(&render(&block, styles(), 60, fold()));
-        assert!(folded.iter().any(|line| line.contains("Ctrl+T")));
+        assert_eq!(folded[0], "▏ Thought · 3 lines", "{folded:?}");
         assert!(folded.iter().any(|line| line.contains("the answer")));
 
         let shown = text(&render(
