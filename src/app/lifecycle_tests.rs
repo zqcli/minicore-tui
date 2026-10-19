@@ -2602,3 +2602,94 @@ async fn a_page_landing_before_the_reconcile_still_survives_it() {
         app.session.as_ref().unwrap().transcript.blocks()
     );
 }
+
+/// Each canonical page replaces the marker instead of stacking under it: the
+/// label states how much history is behind the window, so a page that lands
+/// below it has to bring the marker down too or the reader sees a count that
+/// no longer describes anything, sitting in the middle of the transcript.
+#[tokio::test]
+async fn every_canonical_page_refreshes_the_marker_at_the_top() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    // An all-covering compaction: the tail is empty and 60 items wait behind it.
+    fake.script("session.read", display_read(60, 60));
+    open(&mut app, &mut rx, &fake, &tx).await;
+    assert_eq!(app.session.as_ref().unwrap().loaded_from, 60);
+    assert!(
+        matches!(
+            app.session.as_ref().unwrap().transcript.blocks(),
+            [Block::EarlierHistory { hidden_items: 60 }]
+        ),
+        "the reopen advertises the history below the floor"
+    );
+
+    // The reader is looking at the marker itself when the first page lands.
+    app.scroll = Scroll::Anchor {
+        block: 0,
+        offset: 0,
+    };
+
+    for (step, (from, text)) in [(40, "page two"), (20, "page one"), (0, "page zero")]
+        .into_iter()
+        .enumerate()
+    {
+        let page = json!({
+            "session": session_info("s1"),
+            "items": [crate::testing::chunk(from, json!({"type": "user", "data": {
+                "loop_id": "l0", "kind": "prompt", "input": {"text": text}}}))],
+            "next_cursor": null, "total": 60, "history_revision": "h2",
+            "captured_end": 1,
+            "projection": {"revision": "p2", "first_item": 60, "covered_item_count": 60},
+        });
+        fake.script("session.read", page);
+        app.on_action(Action::LoadOlder);
+        pump(&mut app, &mut rx, |app| {
+            !app.session.as_ref().unwrap().loading_older
+        })
+        .await;
+
+        let session = app.session.as_ref().unwrap();
+        assert_eq!(
+            session.loaded_from, from,
+            "step {step}: the window moved down to {text}"
+        );
+        // One marker, at the top, counting the boundary the page just set.
+        let markers: Vec<usize> = session
+            .transcript
+            .blocks()
+            .iter()
+            .filter_map(|block| match block {
+                Block::EarlierHistory { hidden_items } => Some(*hidden_items),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            markers,
+            if from == 0 { vec![] } else { vec![from] },
+            "step {step}: exactly one marker, counting the new boundary: {:?}",
+            session.transcript.blocks()
+        );
+        if from > 0 {
+            assert!(
+                matches!(
+                    session.transcript.blocks().first(),
+                    Some(Block::EarlierHistory { hidden_items }) if *hidden_items == from
+                ),
+                "step {step}: the fresh marker sits at the top: {:?}",
+                session.transcript.blocks()
+            );
+        }
+        // The page itself is on screen, and the marker did not displace it.
+        assert!(
+            session
+                .transcript
+                .blocks()
+                .iter()
+                .any(|block| matches!(block, Block::User { text: t, .. } if t == text)),
+            "step {step}: the loaded page is kept: {:?}",
+            session.transcript.blocks()
+        );
+    }
+}
