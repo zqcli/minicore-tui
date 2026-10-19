@@ -2693,3 +2693,64 @@ async fn every_canonical_page_refreshes_the_marker_at_the_top() {
         );
     }
 }
+
+/// The marker is a row like any other, so a page that ends the history without
+/// bringing items still removes one: the turn's region has to move back with it
+/// instead of pointing one row past where it now starts.
+#[tokio::test]
+async fn an_exhausted_canonical_page_moves_the_turn_region_back_with_its_marker() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(60, 60));
+    open(&mut app, &mut rx, &fake, &tx).await;
+    assert!(
+        matches!(
+            app.session.as_ref().unwrap().transcript.blocks(),
+            [Block::EarlierHistory { hidden_items: 60 }]
+        ),
+        "the reopen put a marker above an empty tail"
+    );
+
+    // A turn is streaming while the reader pages below the floor.
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    fake.script("session.rename", json!({"session": session_info("s1")}));
+    app.composer.set_text("streaming question");
+    app.on_action(Action::Submit);
+    pump(&mut app, &mut rx, |app| {
+        app.session.as_ref().unwrap().live.is_some()
+    })
+    .await;
+    let started = app.session.as_ref().unwrap().live.as_ref().unwrap().start;
+
+    // The page comes back empty, which ends the history and drops the marker.
+    fake.script(
+        "session.read",
+        json!({
+            "session": session_info("s1"), "items": [], "next_cursor": null,
+            "total": 60, "history_revision": "h2", "captured_end": 1,
+            "projection": {"revision": "p2", "first_item": 60, "covered_item_count": 60},
+        }),
+    );
+    app.on_action(Action::LoadOlder);
+    pump(&mut app, &mut rx, |app| {
+        !app.session.as_ref().unwrap().loading_older
+    })
+    .await;
+
+    let session = app.session.as_ref().unwrap();
+    assert!(
+        !matches!(
+            session.transcript.blocks().first(),
+            Some(Block::EarlierHistory { .. })
+        ),
+        "nothing is left behind the window: {:?}",
+        session.transcript.blocks()
+    );
+    assert_eq!(
+        session.live.as_ref().unwrap().start,
+        started - 1,
+        "the turn moved back with the row that was removed"
+    );
+}
