@@ -419,9 +419,9 @@ impl App {
     /// `c` in a view: copies what the view shows.
     pub fn copy_view(&mut self) {
         let text = match &self.overlay {
-            Overlay::Diff(diff) => views::diff_text(diff),
-            Overlay::Tool(tool) => views::tool_text(tool, self.session.as_ref()),
-            _ => views::context_text(self.session.as_ref(), self.styles),
+            Overlay::Diff(diff) => views::diff::text(diff),
+            Overlay::Tool(tool) => views::tool::text(tool, self.session.as_ref()),
+            _ => views::context::text(self.session.as_ref(), self.styles),
         };
         if text.trim().is_empty() {
             self.notice(NoticeLevel::Info, "Nothing to copy here");

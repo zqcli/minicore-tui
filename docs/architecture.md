@@ -61,7 +61,7 @@ src/
     panel.rs       the single bottom-sheet panel style
     sheets.rs      bottom-sheet builders: commands, pickers, approval, find
     picker.rs      fuzzy filter
-    views.rs       diff, tool output, context and help views
+    views/         full-screen views: diff, tool output, context, help
   terminal.rs      alternate screen, raw mode, panic hook
   clipboard.rs     native clipboard with OSC 52 fallback
   editor.rs        external editor (Ctrl+G)

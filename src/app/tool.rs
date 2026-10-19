@@ -6,7 +6,7 @@ use super::tasks::StreamText;
 use super::{App, Overlay, Panel, Scroll, SessionOp, tasks};
 use crate::protocol::{self, RpcError, ToolReadResult, ToolRef};
 use crate::transcript::{Block, NoticeLevel};
-use crate::ui::views::{self, ToolRow};
+use crate::ui::views::{self, tool::ToolRow};
 
 /// The open tool view. Its header and input are read from the card when drawn;
 /// the output starts as the card's tail until the full streams arrive.
@@ -37,7 +37,7 @@ impl ToolState {
         };
         slot.1 = Some(text);
         if self.streams.iter().all(|(_, text)| text.is_some()) {
-            self.rows = views::stream_rows(&self.streams);
+            self.rows = views::tool::stream_rows(&self.streams);
             self.status.clear();
             self.scroll = self.scroll.min(self.rows.len().saturating_sub(1));
         }
@@ -64,7 +64,7 @@ impl App {
             });
         }
         Some(ToolState {
-            rows: views::text_rows(&call.output.join("\n")),
+            rows: views::tool::text_rows(&call.output.join("\n")),
             streams: streams
                 .iter()
                 .map(|stream| ((*stream).to_owned(), None))
@@ -165,7 +165,7 @@ mod tests {
     }
 
     fn shown(state: &ToolState) -> String {
-        views::tool_text(state, None)
+        views::tool::text(state, None)
     }
 
     #[test]

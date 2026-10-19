@@ -152,10 +152,12 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
             session.info.reasoning.label()
         )
     });
-    let context = session.and_then(super::views::context_percent).map_or_else(
-        || "ctx ?".to_owned(),
-        |percent| format!("ctx {percent:.0}%"),
-    );
+    let context = session
+        .and_then(super::views::context::percent)
+        .map_or_else(
+            || "ctx ?".to_owned(),
+            |percent| format!("ctx {percent:.0}%"),
+        );
     let totals = session.map(|session| {
         let usage = &session.usage;
         let mut text = String::new();

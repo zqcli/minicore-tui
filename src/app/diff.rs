@@ -6,7 +6,7 @@ use super::{App, Overlay, Panel, SessionOp, session::Session, tasks};
 use crate::protocol::changes::DiffPage;
 use crate::protocol::{self, ChangeKind, ChangeList, ChangeRecord, ChangeScope, RpcError};
 use crate::transcript::{Block, Transcript};
-use crate::ui::views::{self, DiffRow};
+use crate::ui::views::{self, diff::DiffRow};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiffScope {
@@ -306,7 +306,7 @@ impl App {
                             Some(call.name.clone())
                         })
                         .collect();
-                    diff.rows = views::diff_rows(&pages, &tools);
+                    diff.rows = views::diff::rows(&pages, &tools);
                     diff.scroll = 0;
                     // Records with equal before and after content have no hunks.
                     let unchanged = pages
