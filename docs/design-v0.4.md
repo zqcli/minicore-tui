@@ -231,7 +231,15 @@ for tool calls (`ToolKey` → index map).
   would go below `first_item` (compaction summary), show the summary as a
   `Compaction` block and an `EarlierHistory` block: Enter/click loads earlier
   items with `view:"canonical"` (raw bodies are truncated locally to the card
-  bounds).
+  bounds). The summary stands in for the item at `first_item`, so that item is
+  read first and the marker counts it as hidden (`first_item + 1`).
+- Opening a session whose tail holds no assistant answer (an automatic
+  compaction that covered every item) reads up to four canonical pages behind
+  the summary, stopping at the first answer, while the view keeps following the
+  bottom.
+- Canonical items carry no `tool_summaries`: each tool card of a canonical page
+  is read once with `tool.read {display:true}` for its detail, input, state,
+  exit code and duration. `-32021` leaves the card as it is.
 - A `-32005` stale pin at any point → restart that operation once with a new
   probe. Never surface "malformed history" for a stale pin.
 - Decoding happens in the task (off the main loop); the reducer receives

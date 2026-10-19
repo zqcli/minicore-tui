@@ -5,6 +5,7 @@
 pub mod changes;
 pub mod event;
 pub mod read;
+pub mod stamp;
 pub mod tool;
 pub mod workspace;
 

@@ -167,32 +167,9 @@ fn age_label(updated_at: &str, now: u64) -> String {
     }
 }
 
-/// Seconds since the Unix epoch for a `YYYY-MM-DDTHH:MM:SS(.fff)Z` stamp.
+/// Seconds since the Unix epoch for an RFC 3339 stamp.
 fn parse_unix_seconds(stamp: &str) -> Option<u64> {
-    let bytes = stamp.as_bytes();
-    if bytes.len() < 19 || bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b'T' {
-        return None;
-    }
-    let number = |range: std::ops::Range<usize>| stamp.get(range)?.parse::<i64>().ok();
-    let (year, month, day) = (number(0..4)?, number(5..7)?, number(8..10)?);
-    let (hour, minute, second) = (number(11..13)?, number(14..16)?, number(17..19)?);
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 {
-        return None;
-    }
-    let days = days_from_civil(year, month, day);
-    let seconds = days * 86_400 + hour * 3_600 + minute * 60 + second;
-    u64::try_from(seconds).ok()
-}
-
-/// Days since the Unix epoch for a civil date (Howard Hinnant's algorithm).
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let yoe = year - era * 400;
-    let adjusted_month = if month > 2 { month - 3 } else { month + 9 };
-    let doy = (153 * adjusted_month + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
+    crate::protocol::stamp::unix_millis(stamp).map(|millis| millis / 1000)
 }
 
 #[cfg(test)]
@@ -347,13 +324,5 @@ mod tests {
         assert_eq!(age_label("2026-01-02T03:04:05Z", base + 7200), "2h ago");
         assert_eq!(age_label("2026-01-02T03:04:05Z", base + 172_800), "2d ago");
         assert_eq!(age_label("not a timestamp", base), "");
-    }
-
-    #[test]
-    fn rfc3339_parsing_handles_the_agent_format() {
-        let seconds = parse_unix_seconds("2026-01-02T03:04:05.006Z").unwrap();
-        assert_eq!(seconds, 1_767_323_045);
-        assert_eq!(parse_unix_seconds("1767323045"), None);
-        assert_eq!(parse_unix_seconds("2026-13-02T03:04:05Z"), None);
     }
 }

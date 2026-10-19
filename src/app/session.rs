@@ -34,6 +34,8 @@ pub struct Session {
     /// The oldest source item loaded.
     pub loaded_from: usize,
     pub loading_older: bool,
+    /// Pages still to load behind the summary until the latest answer shows.
+    pub backfill: u8,
     pub applied_steers: u64,
     /// The finished turn whose durable items will replace its streamed region.
     pub reconcile_from: Option<(String, usize)>,
@@ -187,6 +189,7 @@ impl Session {
             first_item: 0,
             loaded_from: 0,
             loading_older: false,
+            backfill: 0,
             applied_steers: 0,
             reconcile_from: None,
             next_turn_start: None,
@@ -622,6 +625,12 @@ impl Session {
         }
     }
 
+    /// The source items not loaded as themselves. The summary stands in for
+    /// the item at the display floor, which still has to be read.
+    pub fn hidden_items(&self) -> usize {
+        self.loaded_from + usize::from(self.loaded_from == self.first_item)
+    }
+
     /// Replaces the transcript with the history tail.
     pub fn install_tail(&mut self, page: History) {
         self.transcript.clear();
@@ -636,23 +645,25 @@ impl Session {
         // `from` counts even when an automatic compaction covers the whole
         // display tail: the history behind it is still there to read.
         if page.from > 0 {
-            self.transcript.insert(
-                0,
-                Block::EarlierHistory {
-                    hidden_items: page.from,
-                },
-            );
+            let hidden_items = self.hidden_items();
+            self.transcript
+                .insert(0, Block::EarlierHistory { hidden_items });
         }
     }
 
     /// Puts an older page in front of the transcript in place of the marker;
-    /// returns how much the front grew, negative when the marker went alone.
-    pub fn prepend_page(&mut self, page: History) -> isize {
+    /// returns how much the front grew, negative when the marker went alone,
+    /// and the cards of a canonical page, which carry no detail of their own.
+    pub fn prepend_page(&mut self, page: History) -> (isize, Vec<ToolRef>) {
         self.loading_older = false;
         let mut scratch = Transcript::default();
         for item in &page.items {
             append_history_item(&mut scratch, item, &self.info.session_id);
         }
+        let bare_cards = match page.canonical {
+            true => scratch.tool_calls().map(|call| call.key.clone()).collect(),
+            false => Vec::new(),
+        };
         let blocks = scratch.into_blocks();
         let added = blocks.len();
         let replaced = usize::from(matches!(
@@ -676,16 +687,13 @@ impl Session {
         let marker = self.loaded_from > 0
             && (page.canonical || page.has_more || self.loaded_from <= self.first_item);
         if marker {
-            self.transcript.insert(
-                0,
-                Block::EarlierHistory {
-                    hidden_items: self.loaded_from,
-                },
-            );
+            let hidden_items = self.hidden_items();
+            self.transcript
+                .insert(0, Block::EarlierHistory { hidden_items });
         }
         let grown = added as isize - replaced as isize + isize::from(marker);
         self.rebase(grown);
-        grown
+        (grown, bare_cards)
     }
 
     /// Moves every boundary stated as a transcript index by `delta` blocks
