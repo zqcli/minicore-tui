@@ -347,18 +347,21 @@ impl Session {
     /// region may be recorded but not yet streaming, so every boundary that is an
     /// index moves, not only the live one. Left alone it would point into the
     /// freshly loaded history and delete it when the turn reconciles.
-    pub fn rebase_after_prepend(&mut self, delta: usize) {
+    pub fn rebase_after_prepend(&mut self, delta: isize) {
         if delta == 0 {
             return;
         }
+        let shifted = |index: &mut usize| {
+            *index = index.saturating_add_signed(delta);
+        };
         if let Some(live) = self.live.as_mut() {
-            live.start += delta;
+            shifted(&mut live.start);
         }
         if let Some(start) = self.next_turn_start.as_mut() {
-            *start += delta;
+            shifted(start);
         }
         if let Some((_, start)) = self.reconcile_from.as_mut() {
-            *start += delta;
+            shifted(start);
         }
     }
 
