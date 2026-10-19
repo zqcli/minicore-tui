@@ -3386,6 +3386,66 @@ async fn the_earliest_turn_does_not_claim_earlier_items() {
     );
 }
 
+fn key(code: crossterm::event::KeyCode) -> crossterm::event::KeyEvent {
+    crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE)
+}
+
+fn type_text(app: &mut App, text: &str) {
+    for character in text.chars() {
+        app.on_key(key(crossterm::event::KeyCode::Char(character)));
+    }
+}
+
+/// Esc on the palette takes the half-typed command with it, so the next
+/// command does not start with `//`.
+#[tokio::test]
+async fn escape_on_the_palette_discards_the_command_being_typed() {
+    use crossterm::event::KeyCode;
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let (_fake, mut app) = FakeAgent::start(tx);
+
+    type_text(&mut app, "/di");
+    assert!(matches!(app.overlay, Overlay::Palette { .. }));
+    app.on_key(key(KeyCode::Esc));
+    assert!(app.overlay.is_none());
+    assert_eq!(app.composer.text(), "", "the lone command is gone");
+
+    type_text(&mut app, "/");
+    assert_eq!(app.composer.text(), "/", "a fresh command, not `//`");
+    app.on_key(key(KeyCode::Esc));
+    assert_eq!(app.composer.text(), "");
+}
+
+/// Esc on the `@` picker removes the `@` token it was opened from and keeps
+/// the rest of the draft.
+#[tokio::test]
+async fn escape_on_the_file_picker_removes_only_the_mention() {
+    use crossterm::event::KeyCode;
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let (_fake, mut app) = FakeAgent::start(tx);
+
+    app.composer.set_text("fix the bug in ");
+    type_text(&mut app, "@ap");
+    assert!(matches!(app.overlay, Overlay::Files { .. }));
+    app.on_key(key(KeyCode::Esc));
+    assert!(app.overlay.is_none());
+    assert_eq!(app.composer.text(), "fix the bug in ");
+
+    // Accepting replaces the `@` it was opened from: one `@`, not `@@`. The
+    // candidate store is global, so this is the set the files tests use.
+    crate::ui::files::set_candidates(vec!["src/main.rs".into(), "README.md".into()]);
+    type_text(&mut app, "@zzz");
+    app.on_key(key(KeyCode::Enter));
+    assert!(
+        matches!(app.overlay, Overlay::Files { .. }),
+        "no match keeps the picker open"
+    );
+    app.on_key(key(KeyCode::Esc));
+    type_text(&mut app, "@main");
+    app.on_key(key(KeyCode::Enter));
+    assert_eq!(app.composer.text(), "fix the bug in @src/main.rs");
+}
+
 fn tool_card(id: &str, name: &str) -> Block {
     Block::Tool(Box::new(crate::transcript::ToolCall::new(
         crate::protocol::ToolRef {

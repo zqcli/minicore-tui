@@ -69,8 +69,14 @@ fn sessions_sheet(app: &App, filter: &str, selected: usize) -> Sheet {
         "enter open · type filter · ctrl+d delete · esc close"
     };
     Sheet::new("Sessions", hint)
+        .subtitle(filter_subtitle(filter))
         .rows(rows)
         .selected(Some(selected))
+}
+
+/// The typed filter, shown after a picker's title so it is visible somewhere.
+fn filter_subtitle(filter: &str) -> Option<String> {
+    (!filter.is_empty()).then(|| filter.to_owned())
 }
 
 fn models_sheet(app: &App, selected: usize) -> Sheet {
@@ -129,6 +135,7 @@ fn files_sheet(filter: &str, selected: usize) -> Sheet {
         "Files",
         "enter insert the path · type to filter · esc close",
     )
+    .subtitle(filter_subtitle(filter))
     .rows(rows)
     .selected(Some(selected))
 }

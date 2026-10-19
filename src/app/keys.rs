@@ -85,7 +85,11 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.delete_pending = None;
-                self.overlay = Overlay::None;
+                match std::mem::replace(&mut self.overlay, Overlay::None) {
+                    Overlay::Palette { .. } => self.discard_command_draft(),
+                    Overlay::Files { .. } => self.discard_mention(),
+                    _ => {}
+                }
                 Input::Consumed
             }
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
@@ -272,6 +276,34 @@ impl App {
         }
     }
 
+    /// Esc on the palette: a draft that is only the command being typed goes
+    /// with it, so the next `/` does not start `//`.
+    fn discard_command_draft(&mut self) {
+        if commands::opens_palette(self.composer.text(), true) {
+            self.composer.clear();
+        }
+    }
+
+    /// Esc on the `@` picker: the `@query` token it was opened from goes, the
+    /// rest of the draft stays.
+    fn discard_mention(&mut self) {
+        let head = &self.composer.text()[..self.composer.cursor()];
+        let start = head
+            .char_indices()
+            .rfind(|(_, ch)| ch.is_whitespace())
+            .map_or(0, |(at, ch)| at + ch.len_utf8());
+        if !head[start..].starts_with('@') {
+            return;
+        }
+        while self.composer.cursor() > start {
+            let before = self.composer.cursor();
+            self.composer.backspace();
+            if self.composer.cursor() >= before {
+                break;
+            }
+        }
+    }
+
     fn overlay_filter_push(&mut self, character: Option<char>) {
         if let Overlay::Find { query, .. } = &mut self.overlay {
             match character {
@@ -395,10 +427,16 @@ impl App {
                 Input::Action(Action::SetReasoning(*level))
             }
             Overlay::Files { filter, selected } => {
-                let path = crate::ui::files::filtered(&filter)
-                    [selected.min(crate::ui::files::filter_count(&filter).saturating_sub(1))]
-                .clone();
-                self.composer.insert(&path);
+                let paths = crate::ui::files::filtered(&filter);
+                // No match keeps the picker open rather than inserting nothing.
+                let Some(path) = paths.get(selected).or(paths.last()) else {
+                    self.overlay = Overlay::Files { filter, selected };
+                    return Input::Consumed;
+                };
+                // The row is `@path`; it replaces the `@` token it was opened
+                // from instead of following it.
+                self.discard_mention();
+                self.composer.insert(path);
                 Input::Edited
             }
             Overlay::Interaction => {
