@@ -357,7 +357,11 @@ impl App {
         );
     }
 
-    pub(super) fn refresh_presentation(&self) {
+    /// Asks for the footer's figures: model label, branch, context usage.
+    pub(super) fn refresh_presentation(&mut self) {
+        let session = self.session_mut();
+        session.presentation_asked = Some(tokio::time::Instant::now());
+        session.presentation_in_flight = true;
         self.call(
             protocol::METHOD_SESSION_PRESENTATION,
             json!({}),

@@ -1,6 +1,6 @@
 //! The resident session: transcript, live turn, queue, usage and status.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::protocol::event::{PreviewState, ToolOutcome};
 use crate::protocol::read::{RawHistoryItem, UserKind};
@@ -13,6 +13,9 @@ use crate::transcript::{Block, RequestKey, ToolCall, ToolState, Transcript};
 
 use super::tasks::History;
 
+/// How soon the footer's figures may be asked for again while a turn runs.
+const PRESENTATION_EVERY: Duration = Duration::from_secs(2);
+
 pub struct Session {
     pub info: SessionInfo,
     /// Identifies this residency; results posted for another one are stale.
@@ -22,6 +25,9 @@ pub struct Session {
     pub queue: Vec<Queued>,
     pub usage: UsageTotals,
     pub presentation: Option<SessionPresentation>,
+    /// When `presentation` was last asked for, and whether that answer is still due.
+    pub presentation_asked: Option<tokio::time::Instant>,
+    pub presentation_in_flight: bool,
     pub context: Option<SessionContext>,
     pub compaction: Option<CompactionProgress>,
     /// Coverage of the current summary from `session.context`; a summary
@@ -182,6 +188,8 @@ impl Session {
             queue: Vec::new(),
             usage: UsageTotals::default(),
             presentation: None,
+            presentation_asked: None,
+            presentation_in_flight: false,
             context: None,
             compaction: None,
             summary_coverage: None,
@@ -198,6 +206,15 @@ impl Session {
 
     pub fn is_busy(&self) -> bool {
         self.live.is_some()
+    }
+
+    /// Whether the footer's figures may be asked for again mid-turn: no answer
+    /// is on its way and the last ask is old enough.
+    pub fn presentation_due(&self) -> bool {
+        !self.presentation_in_flight
+            && self
+                .presentation_asked
+                .is_none_or(|asked| asked.elapsed() >= PRESENTATION_EVERY)
     }
 
     /// The status-line phase while a turn runs.
