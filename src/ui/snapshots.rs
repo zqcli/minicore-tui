@@ -75,7 +75,6 @@ fn info() -> SessionInfo {
         model: "gpt-6-luna".into(),
         reasoning: Reasoning::Max,
         loaded: true,
-        created_at: String::new(),
         updated_at: String::new(),
     }
 }

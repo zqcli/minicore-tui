@@ -520,7 +520,6 @@ mod tests {
             model: "mock".into(),
             reasoning: crate::protocol::Reasoning::Medium,
             loaded: true,
-            created_at: String::new(),
             updated_at: String::new(),
         })
     }
@@ -609,7 +608,6 @@ mod tests {
             session_id: "s".into(),
             status: SessionStatus::Idle,
             active_loop: None,
-            block_reason: None,
             compaction: None,
         });
         assert!(session.compaction.is_none());

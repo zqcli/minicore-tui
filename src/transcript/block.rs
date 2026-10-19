@@ -998,15 +998,13 @@ mod tests {
 
     #[test]
     fn an_invocation_does_not_override_the_card_detail() {
-        use crate::protocol::tool::{ToolInputPreview, ToolSubject};
+        use crate::protocol::tool::ToolSubject;
         let invocation = ToolInvocation {
             tool_ref: key("c"),
             name: "bash".into(),
             subject: ToolSubject::Command {
                 script: "make\nmake test".into(),
-                cwd: "/w".into(),
             },
-            input: ToolInputPreview::default(),
         };
         let mut call = ToolCall::new(key("c"), "bash");
         call.apply_invocation(&invocation);
@@ -1172,7 +1170,8 @@ mod tests {
             }}, "tool_summaries": [{
                 "tool_ref": {"session_id": "s", "loop_id": "l", "request_index": 1, "tool_call_id": "c1"},
                 "tool_call_id": "c1", "name": "bash",
-                "display": {"detail": "$ pytest", "truncated": false}
+                "display": {"detail": "$ pytest", "truncated": false},
+                "output_truncated": false
             }]})
             .to_string(),
         )

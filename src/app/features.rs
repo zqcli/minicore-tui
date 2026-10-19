@@ -228,7 +228,6 @@ mod tests {
             model: String::new(),
             reasoning: crate::protocol::Reasoning::Medium,
             loaded: true,
-            created_at: String::new(),
             updated_at: String::new(),
         };
         assert!(!needs_auto_title(&info));

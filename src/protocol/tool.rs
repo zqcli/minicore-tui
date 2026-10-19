@@ -19,29 +19,16 @@ pub struct ToolRef {
 /// and the history display projection.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct ToolDisplay {
-    #[serde(default)]
     pub detail: String,
-    #[serde(default)]
     pub expanded_input: Option<String>,
-    #[serde(default)]
     pub input_line_count: Option<usize>,
-    #[serde(default)]
-    pub hidden_line_count: Option<usize>,
-    #[serde(default)]
-    pub truncated: bool,
-    #[serde(default)]
-    pub body_truncated: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ToolInvocation {
     pub tool_ref: ToolRef,
-    #[serde(default)]
     pub name: String,
-    #[serde(default)]
     pub subject: ToolSubject,
-    #[serde(default)]
-    pub input: ToolInputPreview,
 }
 
 impl ToolInvocation {
@@ -49,61 +36,31 @@ impl ToolInvocation {
     pub fn detail(&self) -> String {
         match &self.subject {
             ToolSubject::File { path } => path.clone(),
-            ToolSubject::Command { script, .. } => format!("$ {script}"),
+            ToolSubject::Command { script } => format!("$ {script}"),
             ToolSubject::Other => String::new(),
         }
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolSubject {
     File {
-        #[serde(default)]
         path: String,
     },
     Command {
-        #[serde(default)]
         script: String,
-        #[serde(default)]
-        cwd: String,
     },
-    #[default]
     #[serde(other)]
     Other,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct ToolInputPreview {
-    #[serde(default)]
-    pub total_bytes: usize,
-    #[serde(default)]
-    pub preview: String,
-    #[serde(default)]
-    pub truncated: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ToolExecution {
     pub tool_ref: ToolRef,
-    #[serde(default)]
-    pub name: String,
     pub state: ToolExecutionState,
-    #[serde(default)]
-    pub outcome: Option<String>,
-    #[serde(default)]
-    pub started_at: Option<String>,
-    #[serde(default)]
-    pub finished_at: Option<String>,
-    #[serde(default)]
     pub output_line_count: Option<usize>,
-    #[serde(default)]
-    pub output_availability: Option<String>,
-    #[serde(default)]
-    pub result_bytes: usize,
-    #[serde(default)]
     pub result_truncated: bool,
-    #[serde(default)]
     pub command: Option<CommandResult>,
 }
 
@@ -123,36 +80,22 @@ pub enum ToolExecutionState {
     Unknown,
 }
 
-/// `tool.read` result. Only the display summary and the structured records are
-/// used by v0.4; raw arguments come from `tool.output{stream:"input"}`.
+/// `tool.read` result; raw arguments come from `tool.output{stream:"input"}`.
 #[derive(Clone, Debug, Deserialize)]
 pub struct ToolReadResult {
-    #[serde(default)]
     pub display: Option<ToolDisplay>,
-    #[serde(default)]
     pub invocation: Option<ToolInvocation>,
-    #[serde(default)]
     pub execution: Option<ToolExecution>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ToolOutputPage {
-    pub stream: String,
-    #[serde(default)]
     pub encoding: String,
-    #[serde(default)]
     pub base_offset: u64,
-    #[serde(default)]
     pub next_offset: u64,
-    #[serde(default)]
-    pub observed_end: u64,
-    #[serde(default)]
     pub eof: bool,
-    #[serde(default)]
     pub truncated: bool,
-    #[serde(default)]
     pub availability: Option<String>,
-    #[serde(default)]
     pub data: String,
 }
 
@@ -173,30 +116,11 @@ impl ToolOutputPage {
 /// Summary of one tool call as carried by the history display projection.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct ToolSummary {
-    pub tool_ref: ToolRef,
-    #[serde(default)]
     pub tool_call_id: String,
-    #[serde(default)]
-    pub name: String,
     pub display: ToolDisplay,
-    #[serde(default)]
     pub output_line_count: Option<usize>,
-    #[serde(default)]
     pub output_truncated: bool,
-    #[serde(default)]
     pub state: Option<String>,
-}
-
-/// One assistant tool call from a history item.
-#[derive(Clone, Debug, Deserialize)]
-pub struct ToolCallRecord {
-    pub tool_call_id: String,
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub call_index: u32,
-    #[serde(default)]
-    pub display: Option<ToolDisplay>,
 }
 
 #[cfg(test)]
@@ -205,32 +129,23 @@ mod tests {
 
     #[test]
     fn subject_detail_is_human_readable() {
-        let command: ToolSubject = serde_json::from_value(
-            serde_json::json!({"kind": "command", "script": "ls", "cwd": "/w"}),
-        )
+        let invocation: ToolInvocation = serde_json::from_value(serde_json::json!({
+            "tool_ref": {"session_id": "s", "loop_id": "l", "request_index": 0, "tool_call_id": "c"},
+            "name": "bash",
+            "subject": {"kind": "command", "script": "ls", "cwd": "/w"},
+            "subject_truncated": false,
+            "input": {"total_bytes": 2, "preview": "{}", "truncated": false, "encoding": "utf8_json"}
+        }))
         .unwrap();
-        assert_eq!(
-            ToolInvocation {
-                tool_ref: ToolRef {
-                    session_id: "s".into(),
-                    loop_id: "l".into(),
-                    request_index: 0,
-                    tool_call_id: "c".into(),
-                },
-                name: "bash".into(),
-                subject: command,
-                input: ToolInputPreview::default(),
-            }
-            .detail(),
-            "$ ls"
-        );
+        assert_eq!(invocation.detail(), "$ ls");
     }
 
     #[test]
     fn process_pages_decode_from_base64() {
         let page: ToolOutputPage = serde_json::from_value(serde_json::json!({
             "stream": "stdout", "encoding": "base64", "base_offset": 0,
-            "next_offset": 5, "observed_end": 5, "eof": true, "data": "aGVsbG8="
+            "next_offset": 5, "observed_end": 5, "eof": true, "truncated": false,
+            "availability": "available", "data": "aGVsbG8="
         }))
         .unwrap();
         assert_eq!(page.bytes(), b"hello");
@@ -241,7 +156,7 @@ mod tests {
     fn unknown_execution_state_degrades() {
         let execution: ToolExecution = serde_json::from_value(serde_json::json!({
             "tool_ref": {"session_id": "s", "loop_id": "l", "request_index": 0, "tool_call_id": "c"},
-            "state": "materializing"
+            "name": "bash", "state": "materializing", "result_truncated": false
         }))
         .unwrap();
         assert_eq!(execution.state, ToolExecutionState::Unknown);

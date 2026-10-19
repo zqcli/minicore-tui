@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{LoopOutcome, SessionInfo, ToolSummary, TurnPersistence, TurnRef, Usage};
+use super::ToolSummary;
 
 /// One canonical item body, complete and contiguous.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -17,7 +17,6 @@ pub struct ReadChunk {
     pub index: usize,
     pub offset: usize,
     pub total_bytes: usize,
-    #[serde(default)]
     pub encoding: String,
     pub data: String,
     pub complete: bool,
@@ -25,80 +24,19 @@ pub struct ReadChunk {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ReadSessionResult {
-    pub session: SessionInfo,
-    #[serde(default)]
     pub items: Vec<ReadChunk>,
-    #[serde(default)]
     pub next_cursor: Option<Value>,
     pub total: usize,
-    #[serde(default)]
-    pub records: Vec<TurnRecord>,
-    #[serde(default)]
     pub history_revision: String,
-    #[serde(default)]
     pub captured_end: u64,
-    #[serde(default)]
     pub projection: Option<DisplayProjection>,
-}
-
-#[derive(Clone, Debug)]
-pub struct TurnRecord {
-    pub loop_id: String,
-    pub outcome: LoopOutcome,
-    pub usage: Usage,
-    pub requests: u32,
-    pub tool_rounds: u64,
-    pub completed_at: Option<String>,
-}
-
-impl<'de> Deserialize<'de> for TurnRecord {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        struct Wire {
-            #[serde(default)]
-            loop_id: String,
-            outcome: LoopOutcome,
-            #[serde(default)]
-            usage: Usage,
-            #[serde(default)]
-            requests: u32,
-            #[serde(default)]
-            tool_rounds: u64,
-            #[serde(default)]
-            completed_at: Option<String>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Ok(Self {
-            loop_id: wire.loop_id,
-            outcome: wire.outcome,
-            usage: wire.usage,
-            requests: wire.requests,
-            tool_rounds: wire.tool_rounds,
-            completed_at: wire.completed_at,
-        })
-    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct DisplayProjection {
-    #[serde(default)]
     pub revision: String,
-    #[serde(default)]
     pub first_item: usize,
-    #[serde(default)]
     pub covered_item_count: usize,
-    #[serde(default)]
-    pub covered_usage: Option<CoveredUsage>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct CoveredUsage {
-    #[serde(default)]
-    pub usage: Usage,
-    #[serde(default)]
-    pub loop_count: usize,
-    #[serde(default)]
-    pub partial: bool,
 }
 
 impl ReadSessionResult {
@@ -213,12 +151,12 @@ impl ChunkAssembler {
         })
     }
 
-    pub fn discard(&mut self) {
+    fn discard(&mut self) {
         *self = Self::default();
     }
 
     pub fn push(&mut self, chunk: ReadChunk) -> Result<ChunkOutcome, ReadError> {
-        if !chunk.encoding.is_empty() && chunk.encoding != "utf8_json" {
+        if chunk.encoding != "utf8_json" {
             return Err(ReadError::Encoding(chunk.encoding));
         }
         let delivered = chunk.data.len();
@@ -291,10 +229,11 @@ impl ChunkAssembler {
 }
 
 /// One decoded Runtime history item, plus what the display projection added.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct RawHistoryItem {
     pub item: RuntimeItem,
-    pub timestamp: Option<String>,
+    /// Only display reads carry summaries.
+    #[serde(default)]
     pub tool_summaries: Vec<ToolSummary>,
 }
 
@@ -315,36 +254,20 @@ pub enum RuntimeItem {
     Summary(RuntimeSummary),
 }
 
-impl RuntimeItem {
-    pub fn loop_id(&self) -> Option<&str> {
-        match self {
-            Self::User(item) => Some(&item.loop_id),
-            Self::Assistant(item) => Some(&item.loop_id),
-            Self::ToolResult(item) => Some(&item.loop_id),
-            Self::Summary(_) => None,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct RuntimeUserItem {
-    #[serde(default)]
-    pub loop_id: String,
-    #[serde(default)]
     pub kind: UserKind,
     pub input: RuntimeUserInput,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct RuntimeUserInput {
-    #[serde(default)]
     pub text: String,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum UserKind {
-    #[default]
     Prompt,
     Steering,
     #[serde(other)]
@@ -353,22 +276,14 @@ pub enum UserKind {
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct RuntimeAssistantItem {
-    #[serde(default)]
     pub loop_id: String,
-    #[serde(default)]
     pub request_index: u32,
-    #[serde(default)]
-    pub model: String,
-    #[serde(default)]
     pub content: Vec<RuntimeAssistantPart>,
-    #[serde(default)]
-    pub finish_reason: String,
-    #[serde(default)]
-    pub usage: Usage,
 }
 
-/// A sanitized assistant part. Reasoning is a nested object on the wire.
-#[derive(Clone, Debug, PartialEq)]
+/// A sanitized assistant part; display reads carry no tool-call arguments.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum RuntimeAssistantPart {
     Text(String),
     Reasoning {
@@ -378,49 +293,7 @@ pub enum RuntimeAssistantPart {
     ToolCall {
         tool_call_id: String,
         name: String,
-        arguments: Value,
-        call_index: u32,
     },
-}
-
-impl<'de> Deserialize<'de> for RuntimeAssistantPart {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(tag = "type", content = "data", rename_all = "snake_case")]
-        enum Wire {
-            Text(String),
-            Reasoning {
-                #[serde(default)]
-                text: Option<String>,
-                #[serde(default)]
-                summary: Option<String>,
-            },
-            ToolCall {
-                tool_call_id: String,
-                #[serde(default)]
-                name: String,
-                #[serde(default)]
-                arguments: Value,
-                #[serde(default)]
-                call_index: u32,
-            },
-        }
-        Ok(match Wire::deserialize(deserializer)? {
-            Wire::Text(text) => Self::Text(text),
-            Wire::Reasoning { text, summary } => Self::Reasoning { text, summary },
-            Wire::ToolCall {
-                tool_call_id,
-                name,
-                arguments,
-                call_index,
-            } => Self::ToolCall {
-                tool_call_id,
-                name,
-                arguments,
-                call_index,
-            },
-        })
-    }
 }
 
 impl RuntimeAssistantPart {
@@ -435,74 +308,32 @@ impl RuntimeAssistantPart {
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct RuntimeToolResult {
-    #[serde(default)]
     pub loop_id: String,
-    #[serde(default)]
     pub request_index: u32,
-    #[serde(default)]
     pub call_id: String,
-    #[serde(default)]
-    pub tool_name: String,
-    #[serde(default)]
     pub outcome: String,
-    #[serde(default)]
+    /// Absent in display reads, which never carry raw tool bodies.
     pub output: Option<RuntimeToolOutput>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct RuntimeToolOutput {
-    #[serde(default)]
     pub content: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct RuntimeSummary {
-    #[serde(default)]
     pub content: String,
 }
 
-#[derive(Deserialize)]
-struct ItemEnvelope {
-    item: RuntimeItem,
-    #[serde(default)]
-    tool_summaries: Vec<ToolSummary>,
-    #[serde(default)]
-    timestamp: Option<String>,
-}
-
 pub fn decode_item(raw: &str) -> Result<RawHistoryItem, String> {
-    let envelope: ItemEnvelope =
-        serde_json::from_str(raw).map_err(|error| format!("item JSON: {error}"))?;
-    Ok(RawHistoryItem {
-        item: envelope.item,
-        timestamp: envelope.timestamp,
-        tool_summaries: envelope.tool_summaries,
-    })
+    serde_json::from_str(raw).map_err(|error| format!("item JSON: {error}"))
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct TurnResultPage {
-    pub turn: TurnRef,
-    #[serde(default)]
-    pub availability: Option<String>,
-    #[serde(default)]
-    pub outcome: Option<LoopOutcome>,
-    #[serde(default)]
-    pub persistence: Option<TurnPersistence>,
-    #[serde(default)]
-    pub usage: Option<Usage>,
-    #[serde(default)]
-    pub requests: Option<u32>,
-    #[serde(default)]
-    pub tool_rounds: Option<u64>,
-    #[serde(default)]
-    pub completed_at: Option<String>,
-    #[serde(default)]
     pub items: Vec<ReadChunk>,
-    #[serde(default)]
     pub next_cursor: Option<Value>,
-    #[serde(default)]
-    pub total: usize,
 }
 
 #[cfg(test)]
@@ -594,7 +425,9 @@ mod tests {
             "tool_summaries": [{
                 "tool_ref": {"session_id": "s", "loop_id": "l", "request_index": 1, "tool_call_id": "c"},
                 "tool_call_id": "c", "name": "read",
-                "display": {"detail": "a.rs", "truncated": false}
+                "display": {"detail": "a.rs", "truncated": false, "body_truncated": false},
+                "output_line_count": 3, "output_truncated": false, "count_state": "exact",
+                "state": "succeeded", "input_availability": null, "output_availability": null
             }]
         })
         .to_string();
