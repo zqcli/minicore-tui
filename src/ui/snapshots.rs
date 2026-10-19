@@ -15,9 +15,8 @@ use crate::theme::{Palette, ThemeKind};
 use crate::transcript::block::{ToolState, Transcript};
 use crate::transcript::{Block, ChangeSummary, RequestKey, ToolCall};
 
-/// A render fixture. The client needs a child process to exist, so it points at
-/// `/bin/sleep`: the child exits at once with an argument error, which a render
-/// never observes. Nothing is written, so parallel tests cannot race.
+/// A render fixture. The client needs a child process, so it runs `/bin/sleep`,
+/// which exits at once with an argument error no render observes.
 struct Fixture {
     app: App,
     _runtime: tokio::runtime::Runtime,
@@ -74,7 +73,6 @@ fn info() -> SessionInfo {
         model: "gpt-6-luna".into(),
         reasoning: Reasoning::Max,
         loaded: true,
-        created_at: String::new(),
         updated_at: String::new(),
     }
 }
@@ -148,9 +146,8 @@ fn render(app: &mut App, width: u16, height: u16) -> String {
     out
 }
 
-/// The checked-in frame. Snapshots live in the source so the expected output is
-/// reviewed with the code that produces it; `cargo test` diffs against it, and
-/// `UPDATE_SNAPSHOTS=1 cargo test` rewrites it.
+/// Checked-in frames, reviewed with the code that draws them;
+/// `UPDATE_SNAPSHOTS=1 cargo test` rewrites them.
 const IDLE: &str = include_str!("../../tests/snapshots/idle.txt");
 const STREAMING: &str = include_str!("../../tests/snapshots/streaming.txt");
 

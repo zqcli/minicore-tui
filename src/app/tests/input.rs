@@ -328,7 +328,8 @@ async fn slash_tool_opens_a_card_and_brackets_step_between_cards() {
     h.fake.script(
         "tool.output",
         json!({"stream": "stdout", "encoding": "base64", "base_offset": 0, "next_offset": 6,
-               "observed_end": 6, "eof": true, "data": "aGVsbG8K"}),
+               "observed_end": 6, "eof": true, "truncated": false, "availability": "available",
+               "data": "aGVsbG8K"}),
     );
     let transcript = &mut h.app.session.as_mut().unwrap().transcript;
     transcript.push(Block::User {

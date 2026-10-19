@@ -1012,6 +1012,7 @@ mod tests {
 
     fn page() -> DiffPage {
         serde_json::from_value(json!({
+            "binary": false, "stale": false, "truncated": false,
             "change_ref": "tool:abc", "path": "src/main.rs", "complete": true,
             "hunks": [{"old_start": 9, "old_count": 2, "new_start": 9, "new_count": 3,
                        "lines": [
@@ -1077,6 +1078,7 @@ mod tests {
     fn hunk_headers_use_unified_one_based_numbers() {
         let palette = Palette::dark();
         let page: DiffPage = serde_json::from_value(json!({
+            "binary": false, "stale": false, "truncated": false,
             "change_ref": "tool:a", "path": "a.py", "complete": true,
             "hunks": [
                 {"old_start": 0, "old_count": 2, "new_start": 0, "new_count": 2, "lines": []},
@@ -1092,6 +1094,7 @@ mod tests {
     fn a_line_split_into_fragments_is_one_row() {
         let palette = Palette::dark();
         let page: DiffPage = serde_json::from_value(json!({
+            "binary": false, "stale": false, "truncated": false,
             "change_ref": "tool:a", "path": "a.py", "complete": true,
             "hunks": [{"old_start": 0, "old_count": 0, "new_start": 0, "new_count": 1,
                        "lines": [
@@ -1137,6 +1140,7 @@ mod tests {
     fn diff_text_never_leaks_the_original_line_terminator() {
         let palette = Palette::dark();
         let page: DiffPage = serde_json::from_value(json!({
+            "binary": false, "stale": false, "truncated": false,
             "change_ref": "tool:abc", "path": "a.rs", "complete": true,
             "hunks": [{"old_start": 1, "old_count": 0, "new_start": 1, "new_count": 2,
                        "lines": [
@@ -1158,12 +1162,14 @@ mod tests {
     #[test]
     fn an_empty_page_explains_itself_instead_of_drawing_nothing() {
         let palette = Palette::dark();
-        let empty: DiffPage =
-            serde_json::from_value(json!({"change_ref": "tool:a", "path": "a"})).unwrap();
+        let page = |binary: bool| -> DiffPage {
+            serde_json::from_value(json!({
+                "hunks": [], "complete": false, "binary": binary, "stale": false, "truncated": false
+            }))
+            .unwrap()
+        };
+        let (empty, binary) = (page(false), page(true));
         assert_eq!(hunk_lines(&empty, &palette).len(), 1);
-        let binary: DiffPage =
-            serde_json::from_value(json!({"change_ref": "tool:a", "path": "a", "binary": true}))
-                .unwrap();
         let text: String = hunk_lines(&binary, &palette)[0]
             .spans
             .iter()

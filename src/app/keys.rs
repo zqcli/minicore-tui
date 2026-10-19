@@ -492,7 +492,7 @@ impl App {
     /// last one the view follows the tail again.
     fn jump_to_user_message(&mut self, forward: bool) {
         let blocks = self.transcript_blocks();
-        let layout = &self.layout.cache;
+        let layout = &self.layout;
         let (top, offset) = match self.scroll {
             Scroll::Anchor { block, offset } => (block, offset),
             Scroll::Follow if forward => return,
@@ -566,7 +566,7 @@ impl App {
         if !self.overlay.is_none() {
             return;
         }
-        let Some((index, line)) = self.layout.cache.hit(column, row) else {
+        let Some((index, line)) = self.layout.hit(column, row) else {
             return;
         };
         let all_expanded = self.tools_expanded;

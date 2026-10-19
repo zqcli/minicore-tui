@@ -1,25 +1,23 @@
-//! Agent event notifications. Events are hints: every field here is also
-//! available from an authoritative read, so ordering across the two Agent
-//! queues must never decide correctness.
+//! Agent event notifications. Events are hints: every fact here is also
+//! available from an authoritative read, so delivery order never decides
+//! correctness.
 
-use serde::Deserialize;
-use serde_json::Value;
+use serde::{Deserialize, Deserializer};
 
 use super::{
-    CompactionPhase, LoopOutcome, PendingInteraction, SessionInfo, SessionState, ToolDisplay,
-    ToolExecution, ToolInvocation, ToolRef, TurnPersistence, TurnRef, Usage,
+    PendingInteraction, SessionInfo, SessionState, ToolDisplay, ToolExecution, ToolInvocation,
+    ToolRef, TurnRef, Usage,
 };
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct EventMeta {
     pub session_id: String,
-    #[serde(default)]
-    pub loop_id: Option<String>,
-    #[serde(default)]
     pub dropped_before: u64,
 }
 
-#[derive(Clone, Debug)]
+/// One `agent.event` notification, decoded from its `{type, data}` envelope.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum AgentEvent {
     SessionOpened {
         meta: EventMeta,
@@ -51,6 +49,7 @@ pub enum AgentEvent {
         meta: EventMeta,
         turn: TurnRef,
         request_index: u32,
+        #[serde(rename = "channel", deserialize_with = "reasoning_channel")]
         reasoning: bool,
         delta: String,
     },
@@ -68,26 +67,27 @@ pub enum AgentEvent {
     },
     ToolPresentation {
         meta: EventMeta,
+        #[serde(flatten)]
         call: EventToolCall,
         tool_name: String,
         display: ToolDisplay,
     },
     ToolArgumentsPreview {
         meta: EventMeta,
+        #[serde(flatten)]
         call: EventToolCall,
-        attempt: u64,
-        revision: u64,
         tool_name: String,
-        generated: bool,
-        discarded: bool,
+        state: PreviewState,
         display: ToolDisplay,
     },
     ToolInvocation {
         meta: EventMeta,
+        #[serde(rename = "data")]
         invocation: Box<ToolInvocation>,
     },
     ToolExecution {
         meta: EventMeta,
+        #[serde(rename = "data")]
         execution: Box<ToolExecution>,
     },
     ToolProcess {
@@ -96,10 +96,9 @@ pub enum AgentEvent {
     },
     ToolFinished {
         meta: EventMeta,
+        #[serde(flatten)]
         call: EventToolCall,
-        outcome: ToolOutcome,
-        content: Option<String>,
-        content_truncated: bool,
+        result: ToolResult,
     },
     InteractionRequested {
         meta: EventMeta,
@@ -114,427 +113,17 @@ pub enum AgentEvent {
     TurnFinished {
         meta: EventMeta,
         turn: TurnRef,
-        outcome: LoopOutcome,
-        persistence: TurnPersistence,
     },
-    /// A notification this client does not model.
-    Unknown,
-}
-
-/// Identity of one tool call inside the running turn.
-#[derive(Clone, Debug, Deserialize)]
-pub struct EventToolCall {
-    pub turn: TurnRef,
-    pub request_index: u32,
-    pub tool_call_id: String,
-}
-
-impl EventToolCall {
-    pub fn key(&self) -> ToolRef {
-        ToolRef {
-            session_id: self.turn.session_id.clone(),
-            loop_id: self.turn.loop_id.clone(),
-            request_index: self.request_index,
-            tool_call_id: self.tool_call_id.clone(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolOutcome {
-    Success,
-    Failed,
-    Denied,
-    Cancelled,
-    InputProvided,
+    /// An event type this client does not model, or a payload it cannot read.
     #[serde(other)]
     Unknown,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct ToolProcess {
-    pub tool_ref: ToolRef,
-    #[serde(default)]
-    pub chunk: Option<ProcessChunk>,
-    #[serde(default)]
-    pub command: Option<CommandResult>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct ProcessChunk {
-    pub stream: ProcessStream,
-    pub encoding: String,
-    pub data: String,
-    pub base_offset: u64,
-    pub next_offset: u64,
-    #[serde(default)]
-    pub dropped: bool,
-    #[serde(default)]
-    pub expired: bool,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum ProcessStream {
-    Stdout,
-    Stderr,
-    #[serde(other)]
-    Other,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct CommandResult {
-    pub status: CommandStatus,
-    #[serde(default)]
-    pub exit_code: Option<i64>,
-    #[serde(default)]
-    pub termination_confirmed: bool,
-    #[serde(default)]
-    pub output_complete: bool,
-    #[serde(default)]
-    pub output_truncated: bool,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum CommandStatus {
-    Running,
-    Cancelling,
-    Exited,
-    Cancelled,
-    TimedOut,
-    SpawnFailed,
-    Failed,
-    #[serde(other)]
-    Unknown,
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum Wire {
-    SessionOpened {
-        data: SessionOpenedData,
-    },
-    SessionClosed {
-        data: MetaOnly,
-    },
-    SessionState {
-        data: SessionStateData,
-    },
-    TurnStarted {
-        data: TurnStartedData,
-    },
-    RequestStarted {
-        data: RequestStartedData,
-    },
-    RequestUsage {
-        data: RequestUsageData,
-    },
-    OutputDelta {
-        data: OutputDeltaData,
-    },
-    SteerProgress {
-        data: SteerProgressData,
-    },
-    ToolStarted {
-        data: ToolStartedData,
-    },
-    ToolPresentation {
-        data: ToolPresentationData,
-    },
-    ToolArgumentsPreview {
-        data: ToolPreviewData,
-    },
-    ToolInvocation {
-        data: ToolInvocationData,
-    },
-    ToolExecution {
-        data: ToolExecutionData,
-    },
-    ToolProcess {
-        data: ToolProcessData,
-    },
-    ToolFinished {
-        data: ToolFinishedData,
-    },
-    InteractionRequested {
-        data: InteractionRequestedData,
-    },
-    InteractionResolved {
-        data: InteractionResolvedData,
-    },
-    TurnFinished {
-        data: TurnFinishedData,
-    },
-    #[serde(other)]
-    Unknown,
-}
-
-#[derive(Deserialize)]
-struct MetaOnly {
-    meta: EventMeta,
-}
-#[derive(Deserialize)]
-struct SessionOpenedData {
-    meta: EventMeta,
-    session: SessionInfo,
-}
-#[derive(Deserialize)]
-struct SessionStateData {
-    meta: EventMeta,
-    state: SessionState,
-}
-#[derive(Deserialize)]
-struct TurnStartedData {
-    meta: EventMeta,
-    turn: TurnRef,
-}
-#[derive(Deserialize)]
-struct RequestStartedData {
-    meta: EventMeta,
-    turn: TurnRef,
-    #[serde(default)]
-    request_index: u32,
-    #[serde(default)]
-    model: String,
-}
-#[derive(Deserialize)]
-struct RequestUsageData {
-    meta: EventMeta,
-    turn: TurnRef,
-    #[serde(default)]
-    usage: Usage,
-}
-#[derive(Deserialize)]
-struct OutputDeltaData {
-    meta: EventMeta,
-    turn: TurnRef,
-    #[serde(default)]
-    request_index: u32,
-    channel: String,
-    delta: String,
-}
-#[derive(Deserialize)]
-struct SteerProgressData {
-    meta: EventMeta,
-    turn: TurnRef,
-    #[serde(default)]
-    applied_count: u64,
-}
-#[derive(Deserialize)]
-struct ToolStartedData {
-    meta: EventMeta,
-    turn: TurnRef,
-    #[serde(default)]
-    request_index: u32,
-    tool_call_id: String,
-    tool_name: String,
-}
-#[derive(Deserialize)]
-struct ToolPresentationData {
-    meta: EventMeta,
-    turn: TurnRef,
-    request_index: u32,
-    tool_call_id: String,
-    #[serde(default)]
-    tool_name: String,
-    display: ToolDisplay,
-}
-#[derive(Deserialize)]
-struct ToolPreviewData {
-    meta: EventMeta,
-    turn: TurnRef,
-    request_index: u32,
-    tool_call_id: String,
-    #[serde(default)]
-    tool_name: String,
-    #[serde(default)]
-    attempt: u64,
-    #[serde(default)]
-    revision: u64,
-    #[serde(default)]
-    state: String,
-    display: ToolDisplay,
-}
-/// `{turn, data: <invocation record>, meta}`: the record is nested under its
-/// own `data` key, beside the turn and meta.
-#[derive(Deserialize)]
-struct ToolInvocationData {
-    meta: EventMeta,
-    #[serde(rename = "data")]
-    invocation: ToolInvocation,
-}
-/// `{turn, data: <execution record>, meta}`, nested like the invocation.
-#[derive(Deserialize)]
-struct ToolExecutionData {
-    meta: EventMeta,
-    #[serde(rename = "data")]
-    execution: ToolExecution,
-}
-#[derive(Deserialize)]
-struct ToolProcessData {
-    meta: EventMeta,
-    data: ToolProcess,
-}
-#[derive(Deserialize)]
-struct ToolFinishedData {
-    meta: EventMeta,
-    turn: TurnRef,
-    #[serde(default)]
-    request_index: u32,
-    tool_call_id: String,
-    result: ToolFinishedResult,
-}
-#[derive(Deserialize)]
-struct ToolFinishedResult {
-    outcome: ToolOutcome,
-    #[serde(default)]
-    content: Option<String>,
-    #[serde(default)]
-    content_truncated: bool,
-}
-#[derive(Deserialize)]
-struct InteractionRequestedData {
-    meta: EventMeta,
-    turn: TurnRef,
-    interaction: PendingInteraction,
-}
-#[derive(Deserialize)]
-struct InteractionResolvedData {
-    meta: EventMeta,
-    turn: TurnRef,
-    interaction_id: String,
-}
-#[derive(Deserialize)]
-struct TurnFinishedData {
-    meta: EventMeta,
-    turn: TurnRef,
-    outcome: LoopOutcome,
-    #[serde(default)]
-    persistence: Option<TurnPersistence>,
+fn reasoning_channel<'de, D: Deserializer<'de>>(channel: D) -> Result<bool, D::Error> {
+    Ok(String::deserialize(channel)? == "reasoning")
 }
 
 impl AgentEvent {
-    /// Decodes one event. A known type whose payload does not match this
-    /// build degrades to [`AgentEvent::Unknown`]: the live turn reconciles from
-    /// `turn.wait`/`turn.result` anyway, so one unreadable event must never stop
-    /// the stream.
-    pub fn decode(params: Value) -> Result<Self, serde_json::Error> {
-        let Ok(wire) = serde_json::from_value::<Wire>(params) else {
-            return Ok(Self::Unknown);
-        };
-        Ok(match wire {
-            Wire::SessionOpened { data } => Self::SessionOpened {
-                meta: data.meta,
-                session: Box::new(data.session),
-            },
-            Wire::SessionClosed { data } => Self::SessionClosed { meta: data.meta },
-            Wire::SessionState { data } => Self::SessionState {
-                meta: data.meta,
-                state: Box::new(data.state),
-            },
-            Wire::TurnStarted { data } => Self::TurnStarted {
-                meta: data.meta,
-                turn: data.turn,
-            },
-            Wire::RequestStarted { data } => Self::RequestStarted {
-                meta: data.meta,
-                turn: data.turn,
-                request_index: data.request_index,
-                model: data.model,
-            },
-            Wire::RequestUsage { data } => Self::RequestUsage {
-                meta: data.meta,
-                turn: data.turn,
-                usage: Box::new(data.usage),
-            },
-            Wire::OutputDelta { data } => Self::OutputDelta {
-                meta: data.meta,
-                turn: data.turn,
-                request_index: data.request_index,
-                reasoning: data.channel != "text",
-                delta: data.delta,
-            },
-            Wire::SteerProgress { data } => Self::SteerProgress {
-                meta: data.meta,
-                turn: data.turn,
-                applied_count: data.applied_count,
-            },
-            Wire::ToolStarted { data } => Self::ToolStarted {
-                meta: data.meta,
-                turn: data.turn,
-                request_index: data.request_index,
-                tool_call_id: data.tool_call_id,
-                tool_name: data.tool_name,
-            },
-            Wire::ToolPresentation { data } => Self::ToolPresentation {
-                meta: data.meta,
-                call: EventToolCall {
-                    turn: data.turn,
-                    request_index: data.request_index,
-                    tool_call_id: data.tool_call_id,
-                },
-                tool_name: data.tool_name,
-                display: data.display,
-            },
-            Wire::ToolArgumentsPreview { data } => Self::ToolArgumentsPreview {
-                tool_name: data.tool_name,
-                meta: data.meta,
-                call: EventToolCall {
-                    turn: data.turn,
-                    request_index: data.request_index,
-                    tool_call_id: data.tool_call_id,
-                },
-                attempt: data.attempt,
-                revision: data.revision,
-                generated: data.state == "generated",
-                discarded: data.state == "discarded",
-                display: data.display,
-            },
-            Wire::ToolInvocation { data } => Self::ToolInvocation {
-                meta: data.meta,
-                invocation: Box::new(data.invocation),
-            },
-            Wire::ToolExecution { data } => Self::ToolExecution {
-                meta: data.meta,
-                execution: Box::new(data.execution),
-            },
-            Wire::ToolProcess { data } => Self::ToolProcess {
-                meta: data.meta,
-                data: Box::new(data.data),
-            },
-            Wire::ToolFinished { data } => Self::ToolFinished {
-                meta: data.meta,
-                call: EventToolCall {
-                    turn: data.turn,
-                    request_index: data.request_index,
-                    tool_call_id: data.tool_call_id,
-                },
-                outcome: data.result.outcome,
-                content: data.result.content,
-                content_truncated: data.result.content_truncated,
-            },
-            Wire::InteractionRequested { data } => Self::InteractionRequested {
-                meta: data.meta,
-                turn: data.turn,
-                interaction: Box::new(data.interaction),
-            },
-            Wire::InteractionResolved { data } => Self::InteractionResolved {
-                meta: data.meta,
-                turn: data.turn,
-                interaction_id: data.interaction_id,
-            },
-            Wire::TurnFinished { data } => Self::TurnFinished {
-                meta: data.meta,
-                turn: data.turn,
-                outcome: data.outcome,
-                persistence: data.persistence.unwrap_or(TurnPersistence::Unknown),
-            },
-            Wire::Unknown => Self::Unknown,
-        })
-    }
-
     pub fn meta(&self) -> Option<&EventMeta> {
         match self {
             Self::SessionOpened { meta, .. }
@@ -560,145 +149,224 @@ impl AgentEvent {
     }
 }
 
-/// Convenience for the compaction phase carried inside session state events.
-pub fn compaction_phase_label(phase: CompactionPhase) -> &'static str {
-    phase.label()
+/// Identity of one tool call inside the running turn.
+#[derive(Clone, Debug, Deserialize)]
+pub struct EventToolCall {
+    pub turn: TurnRef,
+    pub request_index: u32,
+    pub tool_call_id: String,
+}
+
+impl EventToolCall {
+    pub fn key(&self) -> ToolRef {
+        ToolRef {
+            session_id: self.turn.session_id.clone(),
+            loop_id: self.turn.loop_id.clone(),
+            request_index: self.request_index,
+            tool_call_id: self.tool_call_id.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewState {
+    Generating,
+    Generated,
+    Discarded,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ToolResult {
+    pub outcome: ToolOutcome,
+    pub content: Option<String>,
+    /// The Agent omits it when false.
+    #[serde(default)]
+    pub content_truncated: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolOutcome {
+    Success,
+    Failed,
+    Denied,
+    Cancelled,
+    InputProvided,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ToolProcess {
+    pub tool_ref: ToolRef,
+    pub chunk: Option<ProcessChunk>,
+    pub command: Option<CommandResult>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ProcessChunk {
+    pub stream: ProcessStream,
+    pub encoding: String,
+    pub data: String,
+    pub base_offset: u64,
+    pub next_offset: u64,
+    pub expired: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessStream {
+    Stdout,
+    Stderr,
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct CommandResult {
+    pub status: CommandStatus,
+    pub exit_code: Option<i64>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandStatus {
+    Running,
+    Cancelling,
+    Exited,
+    Cancelled,
+    TimedOut,
+    SpawnFailed,
+    Failed,
+    #[serde(other)]
+    Unknown,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
-    fn event(value: Value) -> AgentEvent {
-        AgentEvent::decode(json!({"type": value["type"], "data": value["data"]})).unwrap()
+    /// Every event type the Agent emits, verbatim from its
+    /// `src/event/events.jsonl` serialization fixture.
+    const AGENT_EVENTS: &str = include_str!("../../tests/fixtures/agent-events.jsonl");
+
+    fn decode(value: Value) -> AgentEvent {
+        let frame = json!({"jsonrpc": "2.0", "method": "agent.event", "params": value});
+        match super::super::parse_frame(frame.to_string().as_bytes()).unwrap() {
+            super::super::IncomingFrame::Event(event) => event,
+            other => panic!("expected an event, got {other:?}"),
+        }
     }
 
     #[test]
-    fn output_delta_maps_channel_to_reasoning_flag() {
-        let text = event(json!({"type": "output_delta", "data": {
-            "turn": {"session_id": "s", "loop_id": "l"}, "request_index": 1,
-            "channel": "text", "delta": "hi", "meta": {"session_id": "s", "dropped_before": 0}
-        }}));
-        let AgentEvent::OutputDelta {
+    fn every_agent_event_decodes() {
+        let events: Vec<AgentEvent> = AGENT_EVENTS
+            .lines()
+            .map(|line| decode(serde_json::from_str(line).unwrap()))
+            .collect();
+        assert_eq!(events.len(), 19);
+        let unknown: Vec<&str> = AGENT_EVENTS
+            .lines()
+            .zip(&events)
+            .filter(|(_, event)| matches!(event, AgentEvent::Unknown))
+            .map(|(line, _)| line.split('"').nth(3).unwrap())
+            .collect();
+        assert_eq!(unknown, ["tool_progress"], "only unmodeled types degrade");
+        for meta in events.iter().filter_map(AgentEvent::meta) {
+            assert_eq!(meta.dropped_before, 7);
+        }
+    }
+
+    #[test]
+    fn agent_events_carry_the_fields_the_reducer_reads() {
+        let events: Vec<AgentEvent> = AGENT_EVENTS
+            .lines()
+            .map(|line| decode(serde_json::from_str(line).unwrap()))
+            .collect();
+        let find = |wanted: fn(&AgentEvent) -> bool| events.iter().find(|event| wanted(event));
+        let Some(AgentEvent::OutputDelta {
             reasoning, delta, ..
-        } = text
+        }) = find(|event| matches!(event, AgentEvent::OutputDelta { .. }))
         else {
-            panic!("expected delta")
+            panic!("no output delta");
         };
         assert!(!reasoning);
-        assert_eq!(delta, "hi");
+        assert_eq!(delta, "hello\n\"world\"");
+        let Some(AgentEvent::ToolFinished { call, result, .. }) =
+            find(|event| matches!(event, AgentEvent::ToolFinished { .. }))
+        else {
+            panic!("no tool_finished");
+        };
+        assert_eq!(call.key().tool_call_id, "call_1");
+        assert_eq!(result.outcome, ToolOutcome::Success);
+        assert_eq!(result.content.as_deref(), Some("hello\n"));
+        assert!(!result.content_truncated);
+        let Some(AgentEvent::ToolArgumentsPreview { state, call, .. }) =
+            find(|event| matches!(event, AgentEvent::ToolArgumentsPreview { .. }))
+        else {
+            panic!("no preview");
+        };
+        assert_eq!(*state, PreviewState::Generated);
+        assert_eq!(call.request_index, 1);
+        let Some(AgentEvent::ToolProcess { data, .. }) =
+            find(|event| matches!(event, AgentEvent::ToolProcess { .. }))
+        else {
+            panic!("no tool_process");
+        };
+        let chunk = data.chunk.as_ref().unwrap();
+        assert_eq!(
+            (chunk.stream, chunk.next_offset),
+            (ProcessStream::Stdout, 2)
+        );
+    }
 
-        let thinking = event(json!({"type": "output_delta", "data": {
+    #[test]
+    fn a_reasoning_delta_is_flagged() {
+        let event = decode(json!({"type": "output_delta", "data": {
             "turn": {"session_id": "s", "loop_id": "l"}, "request_index": 1,
-            "channel": "reasoning", "delta": "hmm", "meta": {"session_id": "s", "dropped_before": 3}
+            "channel": "reasoning", "delta": "hmm",
+            "meta": {"session_id": "s", "loop_id": "l", "dropped_before": 3}
         }}));
         let AgentEvent::OutputDelta {
             reasoning, meta, ..
-        } = thinking
+        } = event
         else {
-            panic!("expected delta")
+            panic!("expected a delta, got {event:?}");
         };
         assert!(reasoning);
         assert_eq!(meta.dropped_before, 3);
     }
 
     #[test]
-    fn unknown_event_type_decodes_to_unknown() {
+    fn a_tool_execution_event_decodes_its_terminal_facts() {
+        let event = decode(json!({"type": "tool_execution", "data": {
+            "turn": {"session_id": "s", "loop_id": "l"},
+            "data": {
+                "tool_ref": {"session_id": "s", "loop_id": "l",
+                             "request_index": 0, "tool_call_id": "c"},
+                "name": "bash", "state": "succeeded", "result_truncated": false,
+                "command": {"status": "exited", "exit_code": 2, "termination_confirmed": true}
+            },
+            "meta": {"session_id": "s", "loop_id": "l", "dropped_before": 0}
+        }}));
+        let AgentEvent::ToolExecution { execution, .. } = event else {
+            panic!("expected tool_execution, got {event:?}");
+        };
+        assert_eq!(execution.tool_ref.tool_call_id, "c");
+        assert_eq!(execution.command.and_then(|c| c.exit_code), Some(2));
+    }
+
+    #[test]
+    fn unknown_or_unreadable_events_degrade_instead_of_stopping_the_stream() {
         assert!(matches!(
-            event(json!({"type": "hologram", "data": {}})),
+            decode(json!({"type": "hologram", "data": {}})),
             AgentEvent::Unknown
         ));
-    }
-
-    #[test]
-    fn tool_preview_state_is_reduced_to_flags() {
-        let preview = event(json!({"type": "tool_arguments_preview", "data": {
-            "turn": {"session_id": "s", "loop_id": "l"}, "request_index": 0,
-            "tool_call_id": "c", "tool_name": "write", "attempt": 1, "revision": 4,
-            "state": "generating", "partial": true,
-            "display": {"detail": "a.rs", "truncated": false},
-            "meta": {"session_id": "s", "dropped_before": 0}
-        }}));
-        let AgentEvent::ToolArgumentsPreview {
-            generated,
-            discarded,
-            revision,
-            ..
-        } = preview
-        else {
-            panic!("expected preview")
-        };
-        assert!(!generated && !discarded);
-        assert_eq!(revision, 4);
-    }
-}
-
-#[cfg(test)]
-mod decode_tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn a_tool_execution_event_decodes_its_terminal_facts() {
-        // The record is nested under `data.data`, as the Agent serializes it.
-        let event = AgentEvent::decode(json!({
-            "type": "tool_execution",
-            "data": {
-                "turn": {"session_id": "s", "loop_id": "l"},
-                "data": {
-                    "tool_ref": {"session_id": "s", "loop_id": "l",
-                                 "request_index": 0, "tool_call_id": "c"},
-                    "name": "bash",
-                    "state": "succeeded",
-                    "result_truncated": false,
-                    "command": {"status": "exited", "exit_code": 2,
-                                "termination_confirmed": true}
-                },
-                "meta": {"session_id": "s", "dropped_before": 0}
-            }
-        }))
-        .unwrap();
-        match event {
-            AgentEvent::ToolExecution { execution, .. } => {
-                assert_eq!(execution.tool_ref.tool_call_id, "c");
-                assert_eq!(execution.command.and_then(|c| c.exit_code), Some(2));
-            }
-            other => panic!("expected tool_execution, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn a_tool_invocation_event_decodes_its_nested_record() {
-        let event = AgentEvent::decode(json!({
-            "type": "tool_invocation",
-            "data": {
-                "turn": {"session_id": "s", "loop_id": "l"},
-                "data": {
-                    "tool_ref": {"session_id": "s", "loop_id": "l",
-                                 "request_index": 1, "tool_call_id": "c"},
-                    "name": "read",
-                    "subject": {"kind": "file", "path": "file.txt"},
-                    "subject_truncated": false,
-                    "input": {"total_bytes": 2, "preview": "{}", "truncated": false,
-                              "encoding": "utf8"}
-                },
-                "meta": {"session_id": "s", "dropped_before": 0}
-            }
-        }))
-        .unwrap();
-        match event {
-            AgentEvent::ToolInvocation { invocation, .. } => {
-                assert_eq!(invocation.detail(), "file.txt");
-            }
-            other => panic!("expected tool_invocation, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn an_unreadable_known_event_degrades_to_unknown() {
-        // A payload shape this build does not know must not stop the stream.
-        let event = AgentEvent::decode(json!({"type": "turn_started", "data": 7})).unwrap();
-        assert!(matches!(event, AgentEvent::Unknown));
+        assert!(matches!(
+            decode(json!({"type": "turn_started", "data": 7})),
+            AgentEvent::Unknown
+        ));
     }
 }

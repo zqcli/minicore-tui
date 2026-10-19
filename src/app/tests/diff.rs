@@ -27,7 +27,8 @@ fn diff(path: &str, lines: &[(char, &str)]) -> Value {
             }
         })
         .collect();
-    json!({"path": path, "complete": true, "hunks": [
+    json!({"path": path, "complete": true, "binary": false, "stale": false, "truncated": false,
+           "hunks": [
         {"old_start": 0, "old_count": old, "new_start": 0, "new_count": new, "lines": rows}]})
 }
 

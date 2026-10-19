@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use crate::protocol::event::ToolOutcome;
+use crate::protocol::event::{PreviewState, ToolOutcome};
 use crate::protocol::read::{RawHistoryItem, UserKind};
 use crate::protocol::{
     AgentEvent, CompactStatus, CompactionProgress, CompactionResult, ModelInfo, SessionContext,
@@ -346,8 +346,7 @@ impl Session {
             AgentEvent::ToolArgumentsPreview {
                 call,
                 tool_name,
-                generated,
-                discarded,
+                state,
                 display,
                 ..
             } if self.is_live(&call.turn) => {
@@ -356,7 +355,7 @@ impl Session {
                     Some(card) => card.apply_display(&display),
                     // The preview can come before `tool_started`; the card
                     // shows the arguments while they generate.
-                    None if !generated && !discarded => {
+                    None if state == PreviewState::Generating => {
                         let mut card = ToolCall::new(key, tool_name);
                         card.apply_display(&display);
                         self.transcript.push(Block::Tool(Box::new(card)));
@@ -404,25 +403,19 @@ impl Session {
                     }
                 }
             }
-            AgentEvent::ToolFinished {
-                call,
-                outcome,
-                content,
-                content_truncated,
-                ..
-            } => {
+            AgentEvent::ToolFinished { call, result, .. } => {
                 let key = call.key();
                 self.finish_tool(&key);
                 if let Some(card) = self.transcript.find_tool_mut(&key) {
-                    card.set_state(match outcome {
+                    card.set_state(match result.outcome {
                         ToolOutcome::Success => ToolState::Succeeded,
                         ToolOutcome::Failed => ToolState::Failed,
                         ToolOutcome::Denied => ToolState::Denied,
                         ToolOutcome::Cancelled => ToolState::Cancelled,
                         ToolOutcome::InputProvided | ToolOutcome::Unknown => card.state,
                     });
-                    card.truncated |= content_truncated;
-                    if let Some(content) = content {
+                    card.truncated |= result.content_truncated;
+                    if let Some(content) = result.content {
                         card.apply_result(&content);
                     }
                 }

@@ -1,62 +1,142 @@
-//! The transcript view: layout cache, viewport and scroll resolution.
-//!
-//! One frame renders only the visible window: the first visible block comes
-//! from a binary search over prefix heights and each row from the block's
-//! cached lines, so the cost of a frame does not depend on history length.
+//! The transcript pane: block rendering through the layout cache, scroll
+//! resolution and the drag highlight. A frame touches only the visible rows.
 
+use std::collections::HashMap;
+
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 use unicode_segmentation::UnicodeSegmentation;
 
-use super::render::RenderState;
-use super::selection;
+use super::markdown::StreamRenderer;
 use super::theme::Styles;
-use crate::app::Scroll;
+use super::{blocks, rails, selection};
+use crate::app::{App, Scroll};
 use crate::transcript::Block;
-use crate::transcript::layout::{Fold, Layout, Viewport};
+use crate::transcript::layout::{Fold, Viewport};
 
-/// Everything a transcript frame needs.
-pub struct Transcript<'a> {
-    pub blocks: &'a [Block],
-    pub revisions: &'a [u64],
-    pub width: u16,
-    pub fold: Fold,
+/// Streaming markdown renderers of live assistant blocks, by transcript
+/// position. Each caches its stable prefix, so a delta re-parses only the tail.
+#[derive(Default)]
+pub struct RenderState {
+    streams: HashMap<usize, Stream>,
+    /// What the streams were rendered for; any change restarts them.
+    key: Option<(u16, Fold, Styles)>,
 }
 
-/// Draws the transcript window and records where it landed. `drag` is the live
-/// mouse selection, if any; its cells are re-styled in place.
-pub fn draw<S>(
-    cache: &mut Layout<S>,
-    transcript: Transcript<'_>,
-    area: Rect,
-    scroll: Scroll,
-    styles: Styles,
-    drag: Option<selection::Drag>,
-    render: impl FnMut(&mut S, usize, &Block) -> Vec<Line<'static>>,
-) -> Vec<Line<'static>> {
-    cache.prepare(
-        transcript.blocks,
-        transcript.revisions,
-        transcript.width,
-        transcript.fold,
-        render,
+struct Stream {
+    text: StreamRenderer,
+    reasoning: StreamRenderer,
+}
+
+impl RenderState {
+    fn prepare(&mut self, key: (u16, Fold, Styles), blocks: &[Block]) {
+        if self.key != Some(key) {
+            self.key = Some(key);
+            self.streams.clear();
+        }
+        self.streams
+            .retain(|index, _| blocks.get(*index).is_some_and(Block::is_streaming));
+    }
+
+    fn render(
+        &mut self,
+        index: usize,
+        block: &Block,
+        (width, fold, styles): (u16, Fold, Styles),
+    ) -> Vec<Line<'static>> {
+        let Block::Assistant {
+            reasoning,
+            text,
+            streaming: true,
+            ..
+        } = block
+        else {
+            self.streams.remove(&index);
+            return blocks::render(block, styles, width, fold);
+        };
+        let inner = width as usize - blocks::INSET;
+        let stream = self.streams.entry(index).or_insert_with(|| Stream {
+            text: StreamRenderer::new(inner, styles.text()),
+            reasoning: StreamRenderer::new(inner, styles.dim()),
+        });
+        stream.text.reset(text);
+        stream.reasoning.reset(&blocks::reasoning_source(reasoning));
+        // Long reasoning must not push the answer off screen while it streams.
+        let reasoning = stream.reasoning.lines(&styles);
+        let shown = if fold.show_reasoning {
+            &reasoning[..]
+        } else {
+            &reasoning[reasoning.len().saturating_sub(3)..]
+        };
+        let mut lines: Vec<Line<'static>> = shown
+            .iter()
+            .map(|line| rails::reasoning_rail(line.clone(), styles))
+            .collect();
+        if !lines.is_empty() && !text.trim().is_empty() {
+            lines.push(Line::default());
+        }
+        for line in stream.text.lines(&styles).iter() {
+            lines.push(rails::rail(line.clone(), styles));
+        }
+        lines
+    }
+}
+
+/// Draws the transcript into `area` and records the drawn rows for copy.
+pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
+    let Some(session) = app.session.as_ref() else {
+        let lines = if app.ready {
+            vec![
+                Line::styled("No session yet", styles.dim()),
+                Line::raw(""),
+                Line::styled("Press Enter to start one", styles.subtle()),
+            ]
+        } else {
+            vec![Line::styled("Connecting to minicore-agent…", styles.dim())]
+        };
+        frame.render_widget(Paragraph::new(lines), area);
+        return;
+    };
+    // Block renderers subtract their inset from the width.
+    let width = area.width.max(blocks::INSET as u16 + 1);
+    let fold = Fold {
+        expanded_tools: app.tools_expanded,
+        show_reasoning: app.show_reasoning,
+    };
+    let key = (width, fold, styles);
+    let layout = &mut app.layout;
+    let blocks = session.transcript.blocks();
+    layout.state.prepare(key, blocks);
+    layout.prepare(
+        blocks,
+        session.transcript.revisions(),
+        width,
+        fold,
+        |state, index, block| state.render(index, block, key),
     );
-    let total = cache.total_rows();
+    let total = layout.total_rows();
     let height = area.height as usize;
-    let top = match scroll {
+    let top = match app.scroll {
         Scroll::Follow => total.saturating_sub(height),
-        // An anchored view must not move when content grows below it, so the
-        // stored anchor is resolved against the current layout.
-        Scroll::Anchor { block, offset } => cache.anchor_row(block, offset),
+        // An anchor is resolved against the current layout, so content growing
+        // below it does not move the view.
+        Scroll::Anchor { block, offset } => layout.anchor_row(block, offset),
     }
     .min(total.saturating_sub(1));
-    cache.viewport = Viewport {
+    layout.viewport = Viewport {
         top,
         height,
+        width: area.width,
         origin: (area.x, area.y),
     };
-    let mut lines = cache.visible(top, height);
+    let mut lines = layout.visible(top, height);
+    let drag = app.selection_start.map(|from| selection::Drag {
+        from,
+        to: app.selection_end.unwrap_or(from),
+    });
     if let Some(drag) = drag.filter(|drag| !drag.is_click()) {
         for (index, line) in lines.iter_mut().enumerate() {
             if let Some(span) = selection::row_span(area.y + index as u16, drag, area) {
@@ -64,32 +144,31 @@ pub fn draw<S>(
             }
         }
     }
-    // The pill replaces the last row while an anchored view has newer content
-    // below it; it disappears the moment the view is at the bottom again.
-    if scroll != Scroll::Follow
+    if app.scroll != Scroll::Follow
         && top + height < total
         && let Some(pill) = lines.last_mut()
     {
         *pill = Line::styled("↓ new output", styles.accent());
     }
-    lines
+    // Copy reads exactly these rows, so a drag copies what is on screen even
+    // while a turn streams.
+    app.rendered
+        .set(area.y, lines.iter().map(Line::to_string).collect());
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// Rewrites one row so the cells in `[from, to)` carry the selection style,
-/// splitting spans at the boundaries and leaving wide characters intact.
+/// Restyles cells `[from, to)` of one row, splitting spans at the boundaries;
+/// a wide character is selected whole when any of its cells is.
 fn highlight(line: &Line<'static>, from: u16, to: u16, style: Style) -> Line<'static> {
     let mut spans = Vec::with_capacity(line.spans.len() + 2);
     let mut column = 0u16;
     for span in &line.spans {
         let mut run = String::new();
         let mut run_selected: Option<bool> = None;
-        for grapheme in UnicodeSegmentation::graphemes(span.content.as_ref(), true) {
-            let cells = super::wrap::width(grapheme) as u16;
-            // A grapheme is selected when any of its cells is: wide characters
-            // are all or nothing.
-            let selected = column + cells.max(1) > from && column < to;
-            if run_selected.is_some_and(|current| current != selected) {
-                let picked = run_selected.unwrap_or(false);
+        for grapheme in span.content.graphemes(true) {
+            let cells = (super::wrap::width(grapheme) as u16).max(1);
+            let selected = column + cells > from && column < to;
+            if let Some(picked) = run_selected.filter(|current| *current != selected) {
                 spans.push(Span::styled(
                     std::mem::take(&mut run),
                     if picked { style } else { span.style },
@@ -97,23 +176,13 @@ fn highlight(line: &Line<'static>, from: u16, to: u16, style: Style) -> Line<'st
             }
             run_selected = Some(selected);
             run.push_str(grapheme);
-            column += cells.max(1);
+            column += cells;
         }
         if let Some(selected) = run_selected {
             spans.push(Span::styled(run, if selected { style } else { span.style }));
         }
     }
     Line::from(spans)
-}
-
-/// The default render callback: per-block rendering with streaming markdown.
-pub fn render_block(
-    state: &mut RenderState,
-    index: usize,
-    block: &Block,
-    styles: Styles,
-) -> Vec<Line<'static>> {
-    state.render(index, block, styles)
 }
 
 #[cfg(test)]

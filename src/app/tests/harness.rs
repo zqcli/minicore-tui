@@ -250,7 +250,7 @@ impl Harness {
 
     /// Rows the transcript showed in the last frame.
     pub fn viewport(&self) -> usize {
-        self.app.layout.cache.viewport.height
+        self.app.layout.viewport.height
     }
 
     /// The foreground of the first cell of `needle` on a 100x30 frame.

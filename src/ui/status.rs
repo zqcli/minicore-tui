@@ -1,8 +1,5 @@
-//! The status line, the queue, notices, the composer band and the footer.
-//!
-//! All of them are plain rows in one vertical list: the app renders the
-//! transcript above and this band below, so the composer can grow with its
-//! content without a second layout pass.
+//! The bottom band: status line, queue, notice, composer and footer, as plain
+//! rows so the composer can grow with its content.
 
 use ratatui::text::{Line, Span};
 
@@ -12,8 +9,9 @@ use super::wrap;
 use crate::app::{App, QueuedKind};
 use crate::transcript::block::NoticeLevel;
 
-/// Every row of the bottom band, top to bottom.
-pub fn lines(app: &App, styles: Styles, width: u16) -> Vec<Line<'static>> {
+/// Every row of the bottom band, top to bottom, and the composer cursor as
+/// (row, column) within them.
+pub fn band(app: &App, styles: Styles, width: u16) -> (Vec<Line<'static>>, (u16, u16)) {
     let mut rows = Vec::new();
     if let Some(label) = app.status_label() {
         rows.push(status_line(app, styles, label));
@@ -46,7 +44,6 @@ pub fn lines(app: &App, styles: Styles, width: u16) -> Vec<Line<'static>> {
             styles.subtle(),
         ));
     }
-    // The approval prompt is a bottom sheet (screens::sheet), not a band row.
     if let Some(notice) = app.notices.back() {
         let style = match notice.level {
             NoticeLevel::Error => styles.error(),
@@ -54,7 +51,8 @@ pub fn lines(app: &App, styles: Styles, width: u16) -> Vec<Line<'static>> {
         };
         rows.push(Line::styled(notice.text.clone(), style));
     }
-    let (draft, _) = composer::render(
+    let top = rows.len() as u16;
+    let (draft, cursor) = composer::render(
         app.composer.text(),
         Some(app.composer.display_cursor()),
         styles,
@@ -62,28 +60,7 @@ pub fn lines(app: &App, styles: Styles, width: u16) -> Vec<Line<'static>> {
     );
     rows.extend(draft);
     rows.push(footer(app, styles, width));
-    rows
-}
-
-/// Where the terminal cursor sits: absolute rows from the top of the band.
-pub fn cursor(app: &App, styles: Styles, width: u16) -> (u16, u16) {
-    let prefix = lines_before_composer(app);
-    let (_, cursor) = composer::render(
-        app.composer.text(),
-        Some(app.composer.display_cursor()),
-        styles,
-        width,
-    );
-    (prefix + cursor.0, cursor.1)
-}
-
-fn lines_before_composer(app: &App) -> u16 {
-    let status = u16::from(app.status_label().is_some());
-    let queue = app.session.as_ref().map_or(0, |session| {
-        session.queue.len().min(3) as u16 + u16::from(session.queue.len() > 3)
-    });
-    let notice = u16::from(!app.notices.is_empty());
-    status + queue + notice
+    (rows, (top + cursor.0, cursor.1))
 }
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -137,10 +114,8 @@ fn status_line(app: &App, styles: Styles, label: &str) -> Line<'static> {
     Line::styled(text, styles.accent())
 }
 
-/// Footer: `dir@branch · title · model · reasoning · ● state`, with the token
-/// totals and context percent right-aligned. Unknown facts are left out
-/// rather than shown as placeholders. When space is short the title goes
-/// first, then the token totals; the context percent stays.
+/// `dir@branch · title · model · reasoning · ● state` with tokens and context
+/// right-aligned; when short of room the title goes first, then the tokens.
 fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     let workspace = app
         .workspace

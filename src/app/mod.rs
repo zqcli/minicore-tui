@@ -33,7 +33,9 @@ use crate::protocol::{
 };
 use crate::rpc::Client;
 use crate::theme::ThemeKind;
+use crate::transcript::layout::Layout;
 use crate::transcript::{Block, ChangeSummary, NoticeLevel};
+use crate::ui::transcript::RenderState;
 use crate::ui::{sheets, views};
 
 pub use actions::{Action, Answer};
@@ -162,12 +164,10 @@ pub struct App {
     /// Mouse selection: the cell the drag started at and where it is now.
     pub selection_start: Option<(u16, u16)>,
     pub selection_end: Option<(u16, u16)>,
-    /// Where the transcript was drawn last frame, for mouse selection.
-    pub transcript_area: Option<ratatui::layout::Rect>,
     /// The rows the last frame drew, so selection copies what is on screen.
     pub rendered: crate::ui::selection::Screen,
     /// The transcript's line cache and viewport, owned by the renderer.
-    pub layout: crate::ui::View,
+    pub layout: Layout<RenderState>,
     /// A draft waiting for the main loop to run the external editor on it.
     pub edit_request: Option<String>,
     /// An open or create request is in flight, so no session yet means
@@ -213,9 +213,8 @@ impl App {
             palette: crate::theme::Palette::dark(),
             selection_start: None,
             selection_end: None,
-            transcript_area: None,
             rendered: crate::ui::selection::Screen::default(),
-            layout: crate::ui::View::default(),
+            layout: Layout::default(),
             edit_request: None,
             loading_session: false,
         }
@@ -372,13 +371,13 @@ impl App {
 
     /// Rows the transcript showed in the last frame.
     pub fn viewport_rows(&self) -> usize {
-        self.layout.cache.viewport.height
+        self.layout.viewport.height
     }
 
     /// Moves the transcript view by `delta` rows, switching to an anchored
     /// position so new output cannot move what is being read.
     pub fn scroll_by(&mut self, delta: isize) {
-        let layout = &self.layout.cache;
+        let layout = &self.layout;
         let total = layout.total_rows();
         let height = layout.viewport.height;
         if total <= height {
@@ -410,8 +409,7 @@ impl App {
 
     /// The drag as text, from the rows the last frame drew.
     pub fn selected_text(&self, drag: crate::ui::selection::Drag) -> Option<String> {
-        let area = self.transcript_area?;
-        let text = crate::ui::selection::text(&self.rendered, area, drag);
+        let text = crate::ui::selection::text(&self.rendered, self.layout.viewport.area(), drag);
         (!text.is_empty()).then_some(text)
     }
 

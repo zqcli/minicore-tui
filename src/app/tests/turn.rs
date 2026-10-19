@@ -313,7 +313,8 @@ fn diff_with(added: usize, removed: usize) -> Value {
         ))
         .collect();
     json!({"change_ref": "tool:a", "path": "app.py", "availability": "available",
-           "complete": true, "truncated": false, "next_cursor": null,
+           "complete": true, "binary": false, "stale": false, "truncated": false,
+           "next_cursor": null,
            "hunks": [{"old_start": 0, "old_count": removed, "new_start": 0,
                       "new_count": added, "lines": lines}]})
 }
