@@ -613,7 +613,8 @@ impl App {
             }
             Msg::DraftEdited(draft) => {
                 // An empty file is a deliberate blank draft, not a cancel.
-                self.composer.set_text(draft.as_deref().unwrap_or_default());
+                self.composer
+                    .restore_text(draft.as_deref().unwrap_or_default());
                 true
             }
             Msg::Quit => {
@@ -879,7 +880,7 @@ impl App {
 
     fn send(&mut self, text: String) {
         let Some(session) = self.session.as_mut() else {
-            self.composer.set_text(&text);
+            self.composer.restore_text(&text);
             self.notice(NoticeLevel::Error, "No session is open");
             return;
         };
@@ -904,11 +905,11 @@ impl App {
 
     fn steer(&mut self, text: String) {
         let Some(session) = self.session.as_mut() else {
-            self.composer.set_text(&text);
+            self.composer.restore_text(&text);
             return;
         };
         let Some(turn) = session.live.as_ref().map(|live| live.turn.clone()) else {
-            self.composer.set_text(&text);
+            self.composer.restore_text(&text);
             return;
         };
         session.queue.push(Queued {
@@ -1155,7 +1156,7 @@ impl App {
     /// typed meanwhile rather than replacing it, and one undo step either way.
     fn restore_draft(&mut self, text: &str) {
         if self.composer.is_empty() {
-            self.composer.set_text(text);
+            self.composer.restore_text(text);
         } else {
             self.composer.insert(text);
         }
