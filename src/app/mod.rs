@@ -1539,14 +1539,6 @@ impl App {
         for block in blocks.into_iter().rev() {
             session.transcript.insert(0, block);
         }
-        let mut prefix = added.saturating_sub(skip);
-        // Prepending must not move what the user is reading: the anchor block
-        // keeps its identity, so its index shifts by what was inserted (minus
-        // the placeholder that was replaced).
-        if let Scroll::Anchor { block, offset } = self.scroll {
-            let block = block + added;
-            self.scroll = Scroll::Anchor { block, offset };
-        }
         // A compaction can raise the floor above where the reader is. The rows on
         // screen still reach down to what was loaded, so the read position never
         // moves up past it: the next below-floor read would skip the items in
@@ -1558,14 +1550,22 @@ impl App {
         // summary with more history behind it; otherwise the label just states
         // how much older history remains unloaded. The marker counts what is
         // behind the window, which is the read position itself.
-        if page.has_more || session.loaded_from <= session.first_item {
+        let marker = page.has_more || session.loaded_from <= session.first_item;
+        if marker {
             session.transcript.insert(
                 0,
                 Block::EarlierHistory {
                     hidden_items: session.loaded_from,
                 },
             );
-            prefix += 1;
+        }
+        // The anchor block keeps its identity, so the view follows what actually
+        // ended up in front of it: the page, minus the marker it replaced, plus
+        // the fresh one when the history continues.
+        let prefix = added as isize - skip as isize + isize::from(marker);
+        if let Scroll::Anchor { block, offset } = self.scroll {
+            let block = block.saturating_add_signed(prefix);
+            self.scroll = Scroll::Anchor { block, offset };
         }
         session.rebase_after_prepend(prefix);
         // Blocks built from a page carry an empty session id; the tool views
@@ -1604,23 +1604,39 @@ impl App {
         let mut blocks = Vec::new();
         install_items_into(&mut blocks, &page.items);
         let added = blocks.len();
-        if added == 0 {
-            // Nothing older than this page: stop asking.
-            session.loaded_from = 0;
-            return true;
-        }
+        // The marker describes what is behind the window, so a page replaces it
+        // rather than being inserted below a stale one.
+        let replaced = usize::from(matches!(
+            session.transcript.blocks().first(),
+            Some(Block::EarlierHistory { .. })
+        ));
+        session.transcript.remove_front(replaced);
         for block in blocks.into_iter().rev() {
             session.transcript.insert(0, block);
         }
+        // An empty page means nothing is older: stop asking, and leave no marker
+        // claiming otherwise.
+        session.loaded_from = if added == 0 { 0 } else { page.from };
+        session.hidden_items = session.loaded_from;
+        let marker = session.loaded_from > 0;
+        if marker {
+            session.transcript.insert(
+                0,
+                Block::EarlierHistory {
+                    hidden_items: session.loaded_from,
+                },
+            );
+        }
+        // The anchor and the turn's region follow the net prefix, which can be
+        // negative when a page ends the history and its marker goes with it.
+        let prefix = added as isize - replaced as isize + isize::from(marker);
         if let Scroll::Anchor { block, offset } = self.scroll {
             self.scroll = Scroll::Anchor {
-                block: block + added,
+                block: block.saturating_add_signed(prefix),
                 offset,
             };
         }
-        session.rebase_after_prepend(added);
-        session.loaded_from = page.from;
-        session.hidden_items = page.from;
+        session.rebase_after_prepend(prefix);
         session.sync_session_id_into_tools();
         true
     }
