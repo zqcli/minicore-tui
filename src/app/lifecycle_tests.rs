@@ -2612,8 +2612,27 @@ async fn a_floor_raised_past_the_loaded_window_still_reads_every_item() {
     })
     .await;
 
-    // Nothing arrived, so the reader is told, and the window is untouched.
+    // Nothing arrived, so the reader is told, and the window is untouched. The
+    // marker counts what is behind the window, so it agrees with the position
+    // the next read starts from.
     let session = app.session.as_ref().unwrap();
+    assert_eq!(
+        session.hidden_items, session.loaded_from,
+        "the marker and the read position describe the same boundary"
+    );
+    let marker = session
+        .transcript
+        .blocks()
+        .first()
+        .and_then(|block| match block {
+            Block::EarlierHistory { hidden_items } => Some(*hidden_items),
+            _ => None,
+        });
+    assert_eq!(
+        marker,
+        Some(session.loaded_from),
+        "the rendered count is the read position"
+    );
     assert!(
         session.loaded_from <= 40,
         "a floor above the loaded window must not advance the read position past it"
@@ -2891,5 +2910,113 @@ async fn a_new_record_on_the_same_path_invalidates_the_measured_count() {
         app.diff.files[0].lines,
         Some((1, 1)),
         "the re-read counts both records"
+    );
+}
+
+/// The third window: a page can land after a gapped end has queued the turn's
+/// reconcile but before its durable items arrive. The queued region is an index
+/// too, so the prepend has to move it or the reconcile erases the page.
+#[tokio::test]
+async fn a_page_landing_before_the_reconcile_still_survives_it() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (fake, mut app) = FakeAgent::start(tx.clone());
+    boot(&fake);
+    fake.script("session.open", json!({"session": session_info("s1")}));
+    fake.script("session.read", display_read(100, 0));
+    open(&mut app, &mut rx, &fake, &tx).await;
+
+    fake.script("turn.send", json!({"turn": turn("l1")}));
+    fake.script("session.rename", json!({"session": session_info("s1")}));
+    app.composer.set_text("streaming question");
+    app.on_action(Action::Submit);
+    pump(&mut app, &mut rx, |app| {
+        app.session.as_ref().unwrap().live.is_some()
+    })
+    .await;
+
+    // The turn ends incomplete, so the region to replace is remembered now.
+    app.session.as_mut().unwrap().live.as_mut().unwrap().gap = true;
+    // The durable items are held: the read is in flight while the page arrives.
+    fake.script_held(
+        "turn.result",
+        json!({"turn": turn("l1"), "items": [
+            crate::testing::chunk(0, json!({"type": "user", "data": {
+                "loop_id": "l1", "kind": "prompt", "input": {"text": "streaming question"}}})),
+        ]}),
+    );
+    app.on_msg(Msg::Op(Box::new(OpDone {
+        session: Some("s1".into()),
+        epoch: app.session.as_ref().unwrap().epoch,
+        kind: OpKind::Waited(Box::new(Ok(crate::protocol::TurnWaitResult {
+            turn: crate::protocol::TurnRef::new("s1", "l1"),
+            outcome: crate::protocol::LoopOutcome::Cancelled {
+                reason: crate::protocol::CancelReason::User,
+            },
+            usage: None,
+            requests: None,
+            tool_rounds: None,
+            final_config_revision: None,
+            persistence: None,
+        }))),
+    })));
+    let queued = app.session.as_ref().unwrap().reconcile_from.clone();
+    assert!(queued.is_some(), "the reconcile is waiting for its items");
+
+    // A page arrives in that window.
+    let older = json!({
+        "session": session_info("s1"),
+        "items": [
+            crate::testing::chunk(0, json!({"type": "user", "data": {
+                "loop_id": "l0", "kind": "prompt", "input": {"text": "history one"}}})),
+            crate::testing::chunk(1, json!({"type": "assistant", "data": {
+                "loop_id": "l0", "request_index": 0, "model": "mock",
+                "reasoning": "medium",
+                "content": [{"type": "text", "data": "history two"}]}})),
+        ],
+        "next_cursor": null, "total": 100,
+        "history_revision": "h1", "captured_end": 1,
+        "projection": {"revision": "p1", "first_item": 0, "covered_item_count": 0},
+    });
+    fake.script("session.read", older);
+    app.on_action(Action::LoadOlder);
+    pump(&mut app, &mut rx, |app| {
+        !app.session.as_ref().unwrap().loading_older
+    })
+    .await;
+
+    // The queued region moved with whatever ended up in front of it: the two
+    // blocks, minus the placeholder they replaced, plus one if it came back.
+    let moved = app.session.as_ref().unwrap().reconcile_from.clone();
+    assert_eq!(
+        moved.as_ref().map(|(_, start)| *start),
+        queued.as_ref().map(|(_, start)| start + 2),
+        "the reconcile region followed the prepended blocks: {queued:?} -> {moved:?}"
+    );
+
+    // Now the durable items land: only the turn is replaced.
+    fake.release("turn.result");
+    pump(&mut app, &mut rx, |app| {
+        app.session.as_ref().unwrap().reconcile_from.is_none()
+    })
+    .await;
+
+    let text: Vec<String> = app
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::User { text, .. } => Some(text.clone()),
+            Block::Assistant { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        text,
+        ["history one", "history two", "streaming question"],
+        "the reconcile kept the page it landed behind: {:?}",
+        app.session.as_ref().unwrap().transcript.blocks()
     );
 }

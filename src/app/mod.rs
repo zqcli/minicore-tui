@@ -1548,22 +1548,21 @@ impl App {
             self.scroll = Scroll::Anchor { block, offset };
         }
         // A compaction can raise the floor above where the reader is. The rows on
-        // screen still reach down to what was loaded, so the read position stays
-        // there: moving it to the new floor would skip the items in between once
-        // the next below-floor read asks the canonical view.
-        // Rows on screen reach down to what was already loaded, so the read
-        // position never moves up past it.
+        // screen still reach down to what was loaded, so the read position never
+        // moves up past it: the next below-floor read would skip the items in
+        // between.
         session.loaded_from = page.from.min(session.loaded_from);
         session.first_item = page.floor;
         session.hidden_items = session.loaded_from;
         // A page reaching the display floor leaves the reader at the compaction
         // summary with more history behind it; otherwise the label just states
-        // how much older history remains unloaded.
+        // how much older history remains unloaded. The marker counts what is
+        // behind the window, which is the read position itself.
         if page.has_more || session.loaded_from <= session.first_item {
             session.transcript.insert(
                 0,
                 Block::EarlierHistory {
-                    hidden_items: page.from,
+                    hidden_items: session.loaded_from,
                 },
             );
             prefix += 1;
