@@ -1776,35 +1776,30 @@ impl App {
             self.retry_when_idle();
         }
         // A loop this process did not start has no `turn.wait` of its own.
-        if let Some(loop_id) = active_loop.map(|state| state.loop_id)
+        if let Some(active) = active_loop
             && let Some(session) = self.session.as_ref()
-            && !session
-                .live
-                .as_ref()
-                .is_some_and(|live| live.turn.loop_id == loop_id)
         {
-            self.adopt_loop(session.info.session_id.clone(), loop_id);
+            let turn = TurnRef::new(session.info.session_id.clone(), active.loop_id);
+            self.start_turn(turn);
         }
         true
     }
 
-    /// Attaches to a loop that is already running, so its events and its end
-    /// are observed through the same `turn.wait` path as one this app started.
-    fn adopt_loop(&mut self, session_id: String, loop_id: String) {
-        let epoch = self.session.as_ref().map_or(0, |session| session.epoch);
-        let turn = TurnRef {
-            session_id,
-            loop_id,
+    /// Makes `turn` the live turn and waits for its end. This is the only
+    /// place a `turn.wait` is registered, and only while no turn is live.
+    fn start_turn(&mut self, turn: TurnRef) {
+        let Some(session) = self.session.as_mut() else {
+            return;
         };
-        if let Some(session) = self.session.as_mut()
-            && session.live.is_none()
-        {
-            let start = session
-                .next_turn_start
-                .take()
-                .unwrap_or_else(|| session.transcript.len());
-            session.live = Some(LiveTurn::new(turn.clone(), start));
+        if session.live.is_some() {
+            return;
         }
+        let start = session
+            .next_turn_start
+            .take()
+            .unwrap_or_else(|| session.transcript.len());
+        session.live = Some(LiveTurn::new(turn.clone(), start));
+        let epoch = session.epoch;
         self.scroll = Scroll::Follow;
         tasks::wait_turn(self.client.clone(), self.tx.clone(), turn, epoch);
     }
@@ -1919,15 +1914,7 @@ impl App {
     fn on_sent(&mut self, text: &str, result: &Result<TurnRef, RpcError>) -> bool {
         match result {
             Ok(turn) => {
-                if let Some(session) = self.session.as_mut()
-                    && session.live.is_none()
-                {
-                    let start = session
-                        .next_turn_start
-                        .take()
-                        .unwrap_or_else(|| session.transcript.len());
-                    session.live = Some(LiveTurn::new(turn.clone(), start));
-                }
+                self.start_turn(turn.clone());
                 self.title_from_first_prompt();
                 true
             }
@@ -1974,27 +1961,6 @@ impl App {
     fn on_waited(&mut self, result: &Result<crate::protocol::TurnWaitResult, RpcError>) -> bool {
         let wait = match result {
             Ok(wait) => wait,
-            // The deferred-slot and busy refusals are conditions, not verdicts:
-            // the turn is still running, so register the wait again shortly
-            // instead of leaving a live turn nothing will ever close.
-            Err(error) if error.is_capacity() || error.is_busy() => {
-                let Some((turn, epoch)) = self.session.as_ref().and_then(|session| {
-                    session
-                        .live
-                        .as_ref()
-                        .map(|live| (live.turn.clone(), session.epoch))
-                }) else {
-                    self.error(error);
-                    return true;
-                };
-                let client = self.client.clone();
-                let tx = self.tx.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(BUSY_RETRY).await;
-                    tasks::wait_turn(client, tx, turn, epoch);
-                });
-                return true;
-            }
             Err(error) => {
                 self.error(error);
                 return true;
@@ -2004,7 +1970,11 @@ impl App {
             return false;
         };
         let loop_id = wait.turn.loop_id.clone();
-        let Some(live) = session.live.as_ref() else {
+        let Some(live) = session
+            .live
+            .as_ref()
+            .filter(|live| live.turn.loop_id == loop_id)
+        else {
             return false;
         };
         let epoch = session.epoch;
@@ -2485,18 +2455,7 @@ impl App {
                 true
             }
             AgentEvent::TurnStarted { turn, .. } => {
-                if session.live.is_none() {
-                    let start = session
-                        .next_turn_start
-                        .take()
-                        .unwrap_or_else(|| session.transcript.len());
-                    session.live = Some(LiveTurn::new(turn.clone(), start));
-                    // The event may describe a loop this app never sent, for
-                    // example after opening a running session. `turn.wait` is
-                    // the only thing that ends a turn, so register one.
-                    let epoch = session.epoch;
-                    tasks::wait_turn(self.client.clone(), self.tx.clone(), turn, epoch);
-                }
+                self.start_turn(turn);
                 true
             }
             AgentEvent::RequestStarted {

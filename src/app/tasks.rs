@@ -224,50 +224,39 @@ pub fn update_session(client: Arc<Client>, tx: Tx, params: Value, session_id: St
     });
 }
 
-/// Sends one turn and immediately registers its `turn.wait`: the response is
-/// the only thing that ends the turn.
 pub fn send_turn(client: Arc<Client>, tx: Tx, session_id: String, text: String, epoch: u64) {
     tokio::spawn(async move {
         let params = json!({"session_id": session_id, "text": text});
-        let sent_text = text;
-        let result: Result<TurnSendResult, _> = client
+        let result = client
             .call::<Value, TurnSendResult>(protocol::METHOD_TURN_SEND, &params)
-            .await;
-        match result {
-            Ok(sent) => {
-                let turn = sent.turn;
-                let _ = tx.send(Msg::Op(Box::new(OpDone {
-                    session: Some(session_id),
-                    epoch,
-                    kind: OpKind::Sent(sent_text.clone(), Ok(turn.clone())),
-                })));
-                wait(client, tx, turn, epoch);
-            }
-            Err(error) => {
-                let _ = tx.send(Msg::Op(Box::new(OpDone {
-                    session: Some(session_id),
-                    epoch,
-                    kind: OpKind::Sent(sent_text, Err(error)),
-                })));
-            }
-        }
+            .await
+            .map(|sent| sent.turn);
+        let _ = tx.send(Msg::Op(Box::new(OpDone {
+            session: Some(session_id),
+            epoch,
+            kind: OpKind::Sent(text, result),
+        })));
     });
 }
 
-/// Registers a `turn.wait` for a loop that was adopted rather than sent.
+/// Waits for the turn to end. A full deferred queue or a busy session is a
+/// condition, not an outcome, so the wait is registered again.
 pub fn wait_turn(client: Arc<Client>, tx: Tx, turn: TurnRef, epoch: u64) {
-    wait(client, tx, turn, epoch);
-}
-
-fn wait(client: Arc<Client>, tx: Tx, turn: TurnRef, epoch: u64) {
     tokio::spawn(async move {
-        let session_id = turn.session_id.clone();
         let params = json!({"session_id": turn.session_id, "loop_id": turn.loop_id});
-        let result: Result<TurnWaitResult, _> = client
-            .call::<Value, TurnWaitResult>(protocol::METHOD_TURN_WAIT, &params)
-            .await;
+        let result = loop {
+            match client
+                .call::<Value, TurnWaitResult>(protocol::METHOD_TURN_WAIT, &params)
+                .await
+            {
+                Err(error) if error.is_capacity() || error.is_busy() => {
+                    tokio::time::sleep(BUSY_RETRY).await;
+                }
+                result => break result,
+            }
+        };
         let _ = tx.send(Msg::Op(Box::new(OpDone {
-            session: Some(session_id),
+            session: Some(turn.session_id),
             epoch,
             kind: OpKind::Waited(Box::new(result)),
         })));
