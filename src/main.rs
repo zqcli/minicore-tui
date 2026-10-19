@@ -102,7 +102,7 @@ async fn run() -> i32 {
     let mut dirty = true;
     let mut next_frame = tokio::time::Instant::now();
     let mut next_tick = tokio::time::Instant::now() + TICK;
-    let mut open_selection = (args.session.clone(), args.continue_recent);
+    let mut startup = Some(args.session.clone());
     // A closed agent stays a closed agent: the channel is drained once and then
     // left alone, so a `biased` select cannot spin on a permanently ready read.
     let mut agent_open = true;
@@ -190,29 +190,21 @@ async fn run() -> i32 {
             dirty = true;
         }
 
-        // The CLI's session request is filed once, after bootstrap. Opening is
-        // asynchronous, so the loop must remember it asked, or it would see an
-        // empty app and start a new session over the one being opened.
-        if app.ready && !app.session_loading() {
-            if open_selection.0.is_some() || open_selection.1 {
-                if let Some(id) = open_selection.0.take() {
-                    app.on_action(minicore_tui::app::Action::OpenSession(id));
-                } else {
-                    open_selection.1 = false;
-                    match pick_recent(&app.sessions, &workspace) {
-                        Some(session) => {
-                            app.on_action(minicore_tui::app::Action::OpenSession(session.clone()));
-                        }
-                        None => {
-                            app.on_action(minicore_tui::app::Action::NewSession);
-                        }
-                    }
-                }
-                dirty = true;
-            } else if app.session.is_none() {
-                app.on_action(minicore_tui::app::Action::NewSession);
-                dirty = true;
-            }
+        // Startup opens or creates a session once; after a failure Enter or
+        // `/new` retries, so a bad flag cannot loop on `session.create`.
+        if app.ready
+            && let Some(session) = startup.take()
+        {
+            let recent = args
+                .continue_recent
+                .then(|| pick_recent(&app.sessions, &workspace))
+                .flatten();
+            let action = match session.or_else(|| recent.cloned()) {
+                Some(id) => minicore_tui::app::Action::OpenSession(id),
+                None => minicore_tui::app::Action::NewSession,
+            };
+            app.on_action(action);
+            dirty = true;
         }
 
         if dirty && guard.is_active() && tokio::time::Instant::now() >= next_frame {

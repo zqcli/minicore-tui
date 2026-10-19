@@ -916,8 +916,15 @@ impl App {
         }
     }
 
-    /// Enter: send when idle, steer when a turn is running.
+    /// Enter: send when idle, steer when a turn is running. Without a session
+    /// it starts one and keeps the draft.
     fn submit(&mut self) -> bool {
+        if self.session.is_none() {
+            if !self.loading_session {
+                self.create_session();
+            }
+            return true;
+        }
         let text = self.composer.submit().trim_end().to_owned();
         if text.trim().is_empty() {
             return true;
@@ -1496,11 +1503,6 @@ impl App {
                 self.error(error);
             }
         }
-    }
-
-    /// Whether a session request is still in flight.
-    pub fn session_loading(&self) -> bool {
-        self.loading_session
     }
 
     /// Makes `info` the resident session and loads its tail.
