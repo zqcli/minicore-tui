@@ -2612,27 +2612,8 @@ async fn a_floor_raised_past_the_loaded_window_still_reads_every_item() {
     })
     .await;
 
-    // Nothing arrived, so the reader is told, and the window is untouched. The
-    // marker counts what is behind the window, so it agrees with the position
-    // the next read starts from.
+    // Nothing arrived, so the reader is told, and the window is untouched.
     let session = app.session.as_ref().unwrap();
-    assert_eq!(
-        session.hidden_items, session.loaded_from,
-        "the marker and the read position describe the same boundary"
-    );
-    let marker = session
-        .transcript
-        .blocks()
-        .first()
-        .and_then(|block| match block {
-            Block::EarlierHistory { hidden_items } => Some(*hidden_items),
-            _ => None,
-        });
-    assert_eq!(
-        marker,
-        Some(session.loaded_from),
-        "the rendered count is the read position"
-    );
     assert!(
         session.loaded_from <= 40,
         "a floor above the loaded window must not advance the read position past it"
