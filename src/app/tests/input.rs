@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
 use serde_json::json;
 
 use super::harness::*;
-use crate::app::{Action, Scroll};
+use crate::app::{Action, Overlay, Scroll};
 use crate::protocol::ToolRef;
 use crate::protocol::read::UserKind;
 use crate::transcript::{Block, NoticeLevel, RequestKey, ToolCall};
@@ -170,6 +170,107 @@ async fn the_palette_delivers_the_typed_argument_to_the_accepted_command() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_slash_line_that_names_no_command_is_a_prompt() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script_held("turn.wait", waited("l1", completed()));
+    h.fake
+        .script("turn.steer", json!({"ok": true, "steer_index": 0}));
+
+    h.type_text("/usr/bin/env is broken");
+    h.press(KeyCode::Enter);
+    h.until(|app| app.is_busy()).await;
+    assert_eq!(h.sends(), ["/usr/bin/env is broken"]);
+    assert!(h.app.overlay.is_none());
+    assert!(h.notices().is_empty());
+
+    // Without the palette (a recalled or edited draft) the line still goes out.
+    h.app.composer.set_text("/var/log is huge");
+    h.press(KeyCode::Enter);
+    h.settle().await;
+    assert_eq!(h.calls("turn.steer")[0]["text"], "/var/log is huge");
+}
+
+#[tokio::test(start_paused = true)]
+async fn at_opens_the_file_picker_only_at_the_start_of_a_word() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.type_text("mail me@example.com");
+    assert!(h.app.overlay.is_none());
+    assert_eq!(h.app.composer.text(), "mail me@example.com");
+
+    h.type_text(" @");
+    assert!(matches!(h.app.overlay, Overlay::Files { .. }));
+    h.press(KeyCode::Esc);
+    h.app.composer.clear();
+    h.type_text("@");
+    assert!(matches!(h.app.overlay, Overlay::Files { .. }));
+}
+
+#[tokio::test(start_paused = true)]
+async fn ctrl_and_alt_move_and_delete_by_word() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    for modifier in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+        h.app.composer.set_text("one two three");
+        h.key(KeyCode::Left, modifier);
+        h.key(KeyCode::Left, modifier);
+        h.type_text("[");
+        h.key(KeyCode::Right, modifier);
+        h.type_text("]");
+        assert_eq!(h.app.composer.text(), "one [two ]three");
+
+        h.press(KeyCode::End);
+        h.key(KeyCode::Backspace, modifier);
+        assert_eq!(h.app.composer.text(), "one [two ");
+    }
+    h.app.composer.set_text("one two");
+    h.ctrl(KeyCode::Char('h'));
+    assert_eq!(h.app.composer.text(), "one ", "legacy terminals send ^H");
+    h.press(KeyCode::Backspace);
+    assert_eq!(h.app.composer.text(), "one");
+}
+
+fn wheel(h: &mut Harness, kind: MouseEventKind) {
+    h.app.on_mouse(MouseEvent {
+        kind,
+        column: 5,
+        row: 5,
+        modifiers: KeyModifiers::NONE,
+    });
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_wheel_scrolls_the_open_overlay_never_the_hidden_transcript() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    conversation(&mut h, 12);
+    h.screen(60, 24);
+
+    h.press(KeyCode::F(1));
+    wheel(&mut h, MouseEventKind::ScrollDown);
+    assert!(matches!(h.app.overlay, Overlay::Help { scroll: 3 }));
+    wheel(&mut h, MouseEventKind::ScrollUp);
+    assert!(matches!(h.app.overlay, Overlay::Help { scroll: 0 }));
+    h.press(KeyCode::Esc);
+
+    h.type_text("/");
+    wheel(&mut h, MouseEventKind::ScrollDown);
+    assert!(matches!(
+        h.app.overlay,
+        Overlay::Palette { selected: 1, .. }
+    ));
+    h.press(KeyCode::Esc);
+
+    h.type_text("/context");
+    h.press(KeyCode::Enter);
+    wheel(&mut h, MouseEventKind::ScrollUp);
+    assert!(matches!(h.app.overlay, Overlay::Context));
+    assert_eq!(h.app.scroll, Scroll::Follow, "the transcript did not move");
+
+    h.press(KeyCode::Esc);
+    wheel(&mut h, MouseEventKind::ScrollUp);
+    assert!(matches!(h.app.scroll, Scroll::Anchor { .. }));
+}
+
+#[tokio::test(start_paused = true)]
 async fn escape_closes_a_picker_and_takes_only_its_token() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script(
@@ -257,6 +358,10 @@ async fn the_find_bar_moves_the_view_with_every_step() {
     h.type_text("prompt 1");
     let screen = h.screen(60, 24);
     assert!(screen.contains("1 of 3"), "prompt 1, 10 and 11:\n{screen}");
+    assert!(
+        first_row(&mut h).ends_with("prompt 1"),
+        "typing shows match 1"
+    );
     h.press(KeyCode::Down);
     assert!(first_row(&mut h).ends_with("prompt 10"));
     h.press(KeyCode::Tab);
