@@ -8,7 +8,7 @@
 //! drawn.
 
 use crate::app::commands;
-use crate::app::{App, Overlay, Panel};
+use crate::app::{App, Overlay};
 use crate::theme::Palette;
 
 use super::files;
@@ -163,14 +163,6 @@ fn interaction_sheet(app: &App, palette: &Palette) -> Sheet {
     )
 }
 
-/// Records the transcript rows one frame drew, so a drag selection copies
-/// exactly what is on screen. Call after painting the transcript.
-pub fn record_transcript(app: &mut App, area: ratatui::layout::Rect, rows: &[ratatui::text::Line]) {
-    let mut screen = std::mem::take(&mut app.rendered);
-    screen.record(app, area, rows);
-    app.rendered = screen;
-}
-
 /// Draws whichever full-screen view owns the transcript area. Returns false
 /// when no view is open, so the caller draws the transcript instead.
 pub fn draw_view(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, app: &App) -> bool {
@@ -180,8 +172,7 @@ pub fn draw_view(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, app: &
         Overlay::Tool(_) => views::render_tool(frame, area, &palette, &app.tool_view),
         Overlay::Context => views::render_context(frame, area, &palette, &app.context_view),
         Overlay::Help => {
-            let commands = crate::app::features::command_rows();
-            let help = views::help_view(&commands, &palette);
+            let help = views::help_view(commands::COMMANDS, &palette);
             views::render_help(frame, area, &palette, &help, app.help_scroll);
         }
         _ => return false,
@@ -189,38 +180,9 @@ pub fn draw_view(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, app: &
     true
 }
 
-/// The sheet a panel would open, for key handlers that need to know whether a
-/// panel is a sheet or a view.
-pub fn is_sheet(panel: &Panel) -> bool {
-    !matches!(
-        panel,
-        Panel::Context | Panel::Help | Panel::Diff(_) | Panel::Tool(_)
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn sheets_are_only_the_overlays_that_do_not_replace_the_transcript() {
-        assert!(is_sheet(&Panel::Palette));
-        assert!(is_sheet(&Panel::Sessions));
-        assert!(is_sheet(&Panel::Models));
-        assert!(is_sheet(&Panel::Reasoning));
-        assert!(is_sheet(&Panel::Files));
-        assert!(is_sheet(&Panel::Find));
-        assert!(is_sheet(&Panel::Interaction));
-        assert!(!is_sheet(&Panel::Context));
-        assert!(!is_sheet(&Panel::Help));
-        assert!(!is_sheet(&Panel::Diff(crate::app::DiffScope::Turn)));
-        assert!(!is_sheet(&Panel::Tool(crate::protocol::ToolRef {
-            session_id: String::new(),
-            loop_id: String::new(),
-            request_index: 0,
-            tool_call_id: String::new(),
-        })));
-    }
 
     #[test]
     fn the_palette_lists_command_names_and_descriptions() {

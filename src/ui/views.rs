@@ -263,16 +263,11 @@ fn diff_row(line: &DiffLine, text: &str, digits: usize, palette: &Palette) -> Li
     );
     // Diff text carries the original line terminator; the row already ends,
     // so only the trailing newline is dropped.
-    let text = clean(text.trim_end_matches(['\n', '\r']));
+    let text = sanitize(text.trim_end_matches(['\n', '\r']));
     Line::from(vec![
         Span::styled(gutter, Style::default().fg(palette.faint)),
         Span::styled(format!("{sign}{text}"), style),
     ])
-}
-
-/// Terminal-safe text, borrowing from either `sanitize` signature.
-fn clean(text: &str) -> String {
-    sanitize(text).to_string()
 }
 
 fn dim(text: &str, palette: &Palette) -> Line<'static> {
@@ -493,7 +488,7 @@ impl ToolView {
             return Vec::new();
         }
         text.split('\n')
-            .map(|line| Line::raw(clean(line.strip_suffix('\r').unwrap_or(line))))
+            .map(|line| Line::raw(sanitize(line.strip_suffix('\r').unwrap_or(line)).into_owned()))
             .collect()
     }
 
@@ -599,7 +594,11 @@ pub fn render_tool(frame: &mut Frame, area: Rect, palette: &Palette, view: &Tool
         frame.buffer_mut().set_line(
             area.x,
             y,
-            &Span::styled(clean(&view.detail), Style::default().fg(palette.dim)).into(),
+            &Span::styled(
+                sanitize(&view.detail).into_owned(),
+                Style::default().fg(palette.dim),
+            )
+            .into(),
             area.width,
         );
         y += 1;
@@ -608,7 +607,7 @@ pub fn render_tool(frame: &mut Frame, area: Rect, palette: &Palette, view: &Tool
         if y >= bottom {
             return;
         }
-        draw_clipped(frame, area, y, palette, line);
+        frame.buffer_mut().set_line(area.x, y, line, area.width);
         y += 1;
     }
     if y < bottom {
@@ -630,12 +629,10 @@ pub fn render_tool(frame: &mut Frame, area: Rect, palette: &Palette, view: &Tool
         return;
     }
     for (row, line) in view.visible_output(rows).iter().enumerate() {
-        draw_clipped(frame, area, y + row as u16, palette, line);
+        frame
+            .buffer_mut()
+            .set_line(area.x, y + row as u16, line, area.width);
     }
-}
-
-fn draw_clipped(frame: &mut Frame, area: Rect, y: u16, _palette: &Palette, line: &Line<'static>) {
-    frame.buffer_mut().set_line(area.x, y, line, area.width);
 }
 
 /// The context view: one readable summary, not a ledger of twenty numbers.
@@ -663,8 +660,8 @@ pub fn context_view(
                 .unwrap_or(tokens as f64 / window as f64 * 100.0);
             Some(format!(
                 "Context: {} of {} tokens ({percent:.0}%) — reported by the last request",
-                thousands(tokens),
-                thousands(window)
+                super::tokens(tokens),
+                super::tokens(window)
             ))
         }
         _ => None,
@@ -682,8 +679,8 @@ pub fn context_view(
         };
         Some(format!(
             "History estimate: {} of {} input tokens{percent}",
-            thousands(used),
-            thousands(limit)
+            super::tokens(used),
+            super::tokens(limit)
         ))
     });
     match reported.or(estimated) {
@@ -704,9 +701,9 @@ pub fn context_view(
             lines.push(dim(
                 &format!(
                     "Auto-compacts at {} tokens{percent}{}",
-                    thousands(trigger),
+                    super::tokens(trigger),
                     match budget.target_tokens {
-                        Some(target) => format!(", keeping about {}", thousands(target)),
+                        Some(target) => format!(", keeping about {}", super::tokens(target)),
                         None => String::new(),
                     }
                 ),
@@ -738,13 +735,13 @@ pub fn context_view(
                 (Some(before), Some(after)) => match origin {
                     "last" => format!(
                         "Last compaction: {} → {} tokens",
-                        thousands(before),
-                        thousands(after)
+                        super::tokens(before),
+                        super::tokens(after)
                     ),
                     other => format!(
                         "Last compaction ({other}): {} → {} tokens",
-                        thousands(before),
-                        thousands(after)
+                        super::tokens(before),
+                        super::tokens(after)
                     ),
                 },
                 _ => format!("Last compaction: {}", compact_status(last.status)),
@@ -818,19 +815,6 @@ fn compact_status(status: crate::protocol::CompactStatus) -> &'static str {
         crate::protocol::CompactStatus::Failed => "failed",
         crate::protocol::CompactStatus::UnknownWrite => "write outcome unknown",
         crate::protocol::CompactStatus::Unknown => "unknown",
-    }
-}
-
-/// `32100` → `32.1k`, so a number fits a footer or a one-line marker.
-pub fn thousands(value: u64) -> String {
-    if value < 1_000 {
-        return value.to_string();
-    }
-    let tenths = value as f64 / 1_000.0;
-    if tenths < 100.0 {
-        format!("{tenths:.1}k")
-    } else {
-        format!("{:.0}k", tenths)
     }
 }
 
@@ -969,7 +953,7 @@ pub const KEYS: &[KeyRow] = &[
     },
 ];
 
-pub fn help_view(commands: &[(&'static str, &'static str)], palette: &Palette) -> HelpView {
+pub fn help_view(commands: &[crate::app::commands::Command], palette: &Palette) -> HelpView {
     let mut lines = Vec::new();
     lines.push(dim("Keys", palette));
     for row in KEYS {
@@ -983,10 +967,13 @@ pub fn help_view(commands: &[(&'static str, &'static str)], palette: &Palette) -
     }
     lines.push(Line::from(""));
     lines.push(dim("Commands", palette));
-    for (name, description) in commands {
+    for command in commands {
         lines.push(Line::from(vec![
-            Span::styled(format!("/{name:<25}"), Style::default().fg(palette.accent)),
-            Span::styled(*description, Style::default().fg(palette.text)),
+            Span::styled(
+                format!("/{:<25}", command.name),
+                Style::default().fg(palette.accent),
+            ),
+            Span::styled(command.description, Style::default().fg(palette.text)),
         ]));
     }
     HelpView {
@@ -1017,30 +1004,6 @@ pub fn render_help(
             .buffer_mut()
             .set_line(area.x, area.y + 1 + row as u16, line, area.width);
     }
-}
-
-/// Width of the longest label, for column alignment in a view.
-pub fn label_width(labels: impl Iterator<Item = usize>) -> usize {
-    labels.max().unwrap_or(0)
-}
-
-/// Trims a path to the last `cells` columns with a leading `…`.
-pub fn shorten_path(path: &str, cells: usize) -> String {
-    if width(path) <= cells {
-        return path.to_owned();
-    }
-    let mut tail = Vec::new();
-    let mut used = 1;
-    for ch in path.chars().rev() {
-        let cells_of = width(&ch.to_string());
-        if used + cells_of > cells {
-            break;
-        }
-        tail.push(ch);
-        used += cells_of;
-    }
-    tail.reverse();
-    std::iter::once('…').chain(tail).collect()
 }
 
 #[cfg(test)]
@@ -1358,11 +1321,11 @@ mod tests {
                     .collect()
             })
             .collect();
-        assert!(text[0].contains("31.2k of 40.0k tokens (78%)"), "{text:?}");
+        assert!(text[0].contains("31.2k of 40k tokens (78%)"), "{text:?}");
         assert!(text[0].contains("reported"), "{text:?}");
         assert!(
             text.iter()
-                .any(|line| line.contains("Auto-compacts at 32.0k tokens (80%)")),
+                .any(|line| line.contains("Auto-compacts at 32k tokens (80%)")),
             "{text:?}"
         );
         assert!(
@@ -1398,7 +1361,7 @@ mod tests {
             .collect();
         assert!(
             text.iter()
-                .any(|line| line.contains("History estimate: 1.0k of 4.0k")),
+                .any(|line| line.contains("History estimate: 1k of 4k")),
             "{text:?}"
         );
         assert!(
@@ -1482,26 +1445,6 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text.contains("Compacting now: summarizing"), "{text}");
-    }
-
-    #[test]
-    fn thousands_keeps_small_numbers_exact_and_large_ones_short() {
-        assert_eq!(thousands(0), "0");
-        assert_eq!(thousands(999), "999");
-        assert_eq!(thousands(1_000), "1.0k");
-        assert_eq!(thousands(32_200), "32.2k");
-        assert_eq!(thousands(123_456), "123k");
-    }
-
-    #[test]
-    fn paths_shorten_from_the_left_so_the_file_name_survives() {
-        assert_eq!(shorten_path("src/ui/panel.rs", 30), "src/ui/panel.rs");
-        assert_eq!(
-            shorten_path("a/very/long/path/to/panel.rs", 12),
-            "…to/panel.rs"
-        );
-        assert_eq!(shorten_path("src/ui/panel.rs", 8), "…anel.rs");
-        assert_eq!(shorten_path("中文/路径.rs", 6), "…径.rs");
     }
 
     #[test]
@@ -1599,7 +1542,7 @@ mod tests {
     #[test]
     fn help_lists_every_key_row_and_command() {
         let palette = Palette::dark();
-        let view = help_view(&[("compact", "Compact the context now")], &palette);
+        let view = help_view(crate::app::commands::COMMANDS, &palette);
         let text: String = view
             .lines
             .iter()

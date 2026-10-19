@@ -3,7 +3,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-use super::{Action, App, Overlay, features};
+use super::{Action, App, Overlay, find};
 use crate::app::commands::{self, Executed};
 
 /// What one input event resolved to.
@@ -207,24 +207,21 @@ impl App {
             .session
             .as_ref()
             .is_some_and(|session| session.info.session_id == id);
-        match features::delete_step(self.delete_pending.as_deref(), &id, resident) {
-            features::DeleteStep::Ignore => {}
-            features::DeleteStep::Resident => self.notice(
+        if resident {
+            self.notice(
                 crate::transcript::block::NoticeLevel::Error,
                 "Open another session before deleting this one",
-            ),
-            features::DeleteStep::Arm => {
-                let label = self.session_label(&info);
-                self.delete_pending = Some(id);
-                self.notice(
-                    crate::transcript::block::NoticeLevel::Info,
-                    format!("Press Ctrl+D again to delete \"{label}\" permanently"),
-                );
-            }
-            features::DeleteStep::Delete => {
-                self.delete_pending = None;
-                self.on_action(Action::DeleteSession(id));
-            }
+            );
+        } else if self.delete_pending.as_deref() == Some(id.as_str()) {
+            self.delete_pending = None;
+            self.on_action(Action::DeleteSession(id));
+        } else {
+            let label = self.session_label(&info);
+            self.delete_pending = Some(id);
+            self.notice(
+                crate::transcript::block::NoticeLevel::Info,
+                format!("Press Ctrl+D again to delete \"{label}\" permanently"),
+            );
         }
     }
 
@@ -239,7 +236,7 @@ impl App {
         if matches.is_empty() {
             return;
         }
-        let next = super::features::step_match(*current, matches.len(), forward);
+        let next = find::step_match(*current, matches.len(), forward);
         *current = next;
         let block = matches[next].block;
         self.scroll = super::Scroll::Anchor { block, offset: 0 };
@@ -290,7 +287,7 @@ impl App {
             Overlay::Find {
                 current, matches, ..
             } => {
-                *current = super::features::step_match(*current, matches.len(), delta > 0);
+                *current = find::step_match(*current, matches.len(), delta > 0);
             }
             Overlay::Interaction => {
                 let options = self
@@ -322,7 +319,7 @@ impl App {
     /// Esc on the palette: a draft that is only the command being typed goes
     /// with it, so the next `/` does not start `//`.
     fn discard_command_draft(&mut self) {
-        if commands::opens_palette(self.composer.text(), true) {
+        if commands::opens_palette(self.composer.text()) {
             self.composer.clear();
         }
     }
@@ -358,7 +355,7 @@ impl App {
             let trimmed = query.trim().to_owned();
             // Recompute outside the overlay borrow: the blocks live in the
             // session, which `self` still owns.
-            let found = features::find_matches(self.transcript_blocks(), &trimmed);
+            let found = find::find_matches(self.transcript_blocks(), &trimmed);
             if let Overlay::Find {
                 matches, current, ..
             } = &mut self.overlay
@@ -616,7 +613,7 @@ impl App {
             }
             KeyCode::Char(character) => {
                 self.composer.type_char(character);
-                if commands::opens_palette(self.composer.text(), true) {
+                if commands::opens_palette(self.composer.text()) {
                     self.open_panel(super::Panel::Palette);
                 }
                 Input::Edited
@@ -679,9 +676,7 @@ impl App {
             return;
         }
         self.composer.insert(text);
-        if commands::opens_palette(self.composer.text(), true)
-            && matches!(self.overlay, Overlay::None)
-        {
+        if commands::opens_palette(self.composer.text()) && matches!(self.overlay, Overlay::None) {
             self.open_panel(super::Panel::Palette);
         }
     }

@@ -148,8 +148,7 @@ fn parse_unix_seconds(stamp: &str) -> Option<u64> {
     u64::try_from(seconds).ok()
 }
 
-/// Howard Hinnant's days-from-civil, the inverse of the algorithm in
-/// [`super::super::app::commands::today`].
+/// Days since the Unix epoch for a civil date (Howard Hinnant's algorithm).
 fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };
     let era = if year >= 0 { year } else { year - 399 } / 400;
@@ -158,16 +157,6 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let doy = (153 * adjusted_month + 2) / 5 + day - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     era * 146_097 + doe - 719_468
-}
-
-/// `3m07s`, `1h02m`, `12s`. The status line and the turn-end line share this.
-pub fn duration_label(duration: std::time::Duration) -> String {
-    let seconds = duration.as_secs();
-    match seconds {
-        0..=59 => format!("{seconds}s"),
-        60..=3599 => format!("{}m{:02}s", seconds / 60, seconds % 60),
-        _ => format!("{}h{:02}m", seconds / 3600, (seconds % 3600) / 60),
-    }
 }
 
 #[cfg(test)]
@@ -339,13 +328,5 @@ mod tests {
         assert_eq!(seconds, 1_767_323_045);
         assert_eq!(parse_unix_seconds("1767323045"), None);
         assert_eq!(parse_unix_seconds("2026-13-02T03:04:05Z"), None);
-    }
-
-    #[test]
-    fn durations_switch_units_at_a_minute_and_an_hour() {
-        use std::time::Duration;
-        assert_eq!(duration_label(Duration::from_secs(12)), "12s");
-        assert_eq!(duration_label(Duration::from_secs(187)), "3m07s");
-        assert_eq!(duration_label(Duration::from_secs(3720)), "1h02m");
     }
 }

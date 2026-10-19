@@ -8,7 +8,7 @@
 
 pub mod actions;
 pub mod commands;
-pub mod features;
+pub mod find;
 pub mod keys;
 #[cfg(test)]
 mod lifecycle_tests;
@@ -172,7 +172,7 @@ pub enum Overlay {
     /// Find in the transcript.
     Find {
         query: String,
-        matches: Vec<features::FindMatch>,
+        matches: Vec<find::FindMatch>,
         current: usize,
     },
     /// An interaction prompt from the agent.
@@ -277,10 +277,7 @@ impl App {
         let Some(session) = self.session.as_ref() else {
             return;
         };
-        if !features::needs_auto_title(&session.info) {
-            return;
-        }
-        let Some(title) = first_prompt(&session.transcript).and_then(features::auto_title) else {
+        let Some(title) = session.auto_title() else {
             return;
         };
         let session_id = session.info.session_id.clone();
@@ -301,8 +298,8 @@ impl App {
         self.session
             .as_ref()
             .filter(|session| session.info.session_id == info.session_id)
-            .and_then(|session| first_prompt(&session.transcript))
-            .and_then(features::auto_title)
+            .and_then(Session::first_prompt)
+            .and_then(session::auto_title)
             .unwrap_or_else(|| short_session_id(&info.session_id).to_owned())
     }
 
@@ -327,11 +324,8 @@ impl App {
     }
 
     /// Matches of the find bar's current query.
-    pub fn find_matches(&self, query: &str) -> Vec<features::FindMatch> {
-        self.session
-            .as_ref()
-            .map(|session| features::find_matches(session.transcript.blocks(), query))
-            .unwrap_or_default()
+    pub fn find_matches(&self, query: &str) -> Vec<find::FindMatch> {
+        find::find_matches(self.transcript_blocks(), query)
     }
 
     /// Rebuilds the sessions picker rows: the resident workspace first, then
@@ -852,8 +846,6 @@ impl App {
             }
             Action::Export(path) => {
                 if let Some(session) = self.session.as_ref() {
-                    let path =
-                        path.or_else(|| Some(features::export_path(&session.info.session_id)));
                     tasks::export(
                         self.client.clone(),
                         self.tx.clone(),
@@ -2822,13 +2814,6 @@ fn install_items_into(
     blocks.extend(scratch.into_blocks());
 }
 
-/// Default `/export` path: `./minicore-<session>-<date>.md`.
-pub fn default_export_path(session_id: &str) -> String {
-    let short = session_id.strip_prefix("ses_").unwrap_or(session_id);
-    let short = &short[..short.len().min(8)];
-    format!("minicore-{short}-{}.md", crate::app::commands::today())
-}
-
 /// A short human duration: `0.4s`, `12s`, `3m07s`.
 pub fn format_duration(duration: Duration) -> String {
     let seconds = duration.as_secs_f64();
@@ -3057,17 +3042,6 @@ fn collect_changed_files(
 
 fn writes_files(name: &str) -> bool {
     matches!(name, "write" | "edit" | "apply_patch" | "patch")
-}
-
-/// The first prompt the user typed in a transcript.
-fn first_prompt(transcript: &Transcript) -> Option<&str> {
-    transcript.blocks().iter().find_map(|block| match block {
-        Block::User {
-            text,
-            kind: crate::protocol::read::UserKind::Prompt,
-        } => Some(text.as_str()),
-        _ => None,
-    })
 }
 
 /// `ses_8ca3c4cf...` → `ses_8ca3c4`, enough to tell sessions apart in a row.

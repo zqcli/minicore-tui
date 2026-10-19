@@ -129,8 +129,6 @@ pub struct ToolCall {
     /// Next expected byte offset per stream. `None` until the first chunk, so
     /// the first chunk establishes the cursor whatever its base offset is.
     pub stream_offsets: [Option<u64>; 2],
-    /// Full output fetched for the tool view, keyed by stream name.
-    pub full_output: Option<(String, String)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -186,7 +184,6 @@ impl ToolCall {
             truncated: false,
             expanded: None,
             stream_offsets: [None, None],
-            full_output: None,
         }
     }
 
@@ -197,19 +194,6 @@ impl ToolCall {
             return;
         }
         self.state = state;
-    }
-
-    /// Stores the paged full output of one stream for the tool view.
-    pub fn set_full_output(&mut self, stream: &str, text: String) {
-        self.full_output = Some((stream.to_owned(), text));
-    }
-
-    /// The body shown in the tool view: full output when loaded, else the tail.
-    pub fn view_body(&self) -> String {
-        match &self.full_output {
-            Some((_, text)) => text.clone(),
-            None => self.output.join("\n"),
-        }
     }
 
     pub fn apply_display(&mut self, display: &ToolDisplay) {
@@ -692,29 +676,10 @@ impl Transcript {
             _ => None,
         })
     }
-
-    /// The index of the newest live tool card.
-    pub fn last_tool_block(&self) -> Option<usize> {
-        self.blocks
-            .iter()
-            .rposition(|block| matches!(block, Block::Tool(_)))
-    }
-
-    pub fn live_turn_start(&self, loop_id: &str) -> Option<usize> {
-        self.blocks
-            .iter()
-            .position(|block| block.loop_id() == Some(loop_id))
-    }
 }
 
 /// Converts one decoded history item into blocks appended to the transcript.
-/// Returns how many blocks were appended.
-pub fn append_history_item(
-    transcript: &mut Transcript,
-    item: &RawHistoryItem,
-    session_id: &str,
-) -> usize {
-    let start = transcript.len();
+pub fn append_history_item(transcript: &mut Transcript, item: &RawHistoryItem, session_id: &str) {
     match &item.item {
         RuntimeItem::User(user) => {
             transcript.push(Block::User {
@@ -779,7 +744,7 @@ pub fn append_history_item(
                 }
                 _ => None,
             }) else {
-                return transcript.len() - start;
+                return;
             };
             call.state = match result.outcome.as_str() {
                 "success" => ToolState::Succeeded,
@@ -801,7 +766,6 @@ pub fn append_history_item(
             });
         }
     }
-    transcript.len() - start
 }
 
 /// Renders decoded canonical items as a Markdown conversation.
@@ -892,6 +856,18 @@ mod tests {
         call.set_state(ToolState::Pending);
         call.set_state(ToolState::Running);
         assert_eq!(call.state, ToolState::Running);
+    }
+
+    #[test]
+    fn execution_state_maps_to_card_state() {
+        assert_eq!(
+            ToolState::from_execution(ToolExecutionState::AwaitingPolicy),
+            ToolState::Running
+        );
+        assert_eq!(
+            ToolState::from_execution(ToolExecutionState::Denied),
+            ToolState::Denied
+        );
     }
 
     #[test]

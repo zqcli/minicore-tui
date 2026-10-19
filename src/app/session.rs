@@ -227,6 +227,30 @@ impl Session {
         models.iter().find(|model| model.id == self.info.model)
     }
 
+    /// The first prompt the user typed, as loaded.
+    pub fn first_prompt(&self) -> Option<&str> {
+        self.transcript
+            .blocks()
+            .iter()
+            .find_map(|block| match block {
+                Block::User {
+                    text,
+                    kind: crate::protocol::read::UserKind::Prompt,
+                } => Some(text.as_str()),
+                _ => None,
+            })
+    }
+
+    /// The title an untitled session gets from its first prompt.
+    pub fn auto_title(&self) -> Option<String> {
+        let untitled = self
+            .info
+            .title
+            .as_deref()
+            .is_none_or(|title| title.trim().is_empty());
+        untitled.then(|| self.first_prompt().and_then(auto_title))?
+    }
+
     /// Removes the optimistic prompt block a refused send left behind, so the
     /// transcript does not claim a turn the Agent never accepted.
     pub fn unsend_prompt(&mut self, text: &str) {
@@ -504,25 +528,45 @@ impl Session {
     }
 }
 
+/// The first meaningful line of a prompt, cut at a word boundary near 60
+/// cells.
+pub fn auto_title(prompt: &str) -> Option<String> {
+    let first = prompt.lines().find(|line| !line.trim().is_empty())?.trim();
+    let first = first.trim_start_matches(['#', '>', '-', '*', ' ']);
+    if first.is_empty() {
+        return None;
+    }
+    let mut title = String::new();
+    let mut cells = 0;
+    for word in first.split_whitespace() {
+        let width = unicode_width::UnicodeWidthStr::width(word) + usize::from(!title.is_empty());
+        if cells + width > 60 {
+            break;
+        }
+        if !title.is_empty() {
+            title.push(' ');
+        }
+        title.push_str(word);
+        cells += width;
+    }
+    Some(if title.is_empty() {
+        first.chars().take(60).collect()
+    } else if title == first {
+        title
+    } else {
+        format!("{title}…")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::SessionStatus;
     use crate::protocol::read::UserKind;
-    use crate::protocol::{SessionStatus, ToolExecutionState};
     use crate::transcript::{ToolCall, ToolState};
 
     fn session() -> Session {
-        Session::new(SessionInfo {
-            session_id: "s".into(),
-            title: None,
-            profile: "coding".into(),
-            workspace: "/w".into(),
-            model: "mock".into(),
-            reasoning: crate::protocol::Reasoning::Medium,
-            loaded: true,
-            created_at: String::new(),
-            updated_at: String::new(),
-        })
+        Session::new(serde_json::from_value(crate::testing::session_info("s")).unwrap())
     }
 
     fn key(call: &str) -> ToolRef {
@@ -616,14 +660,37 @@ mod tests {
     }
 
     #[test]
-    fn execution_state_maps_to_card_state() {
+    fn titles_take_the_first_meaningful_line() {
         assert_eq!(
-            ToolState::from_execution(ToolExecutionState::AwaitingPolicy),
-            ToolState::Running
+            auto_title("\n\n# Fix the parser\nand more"),
+            Some("Fix the parser".into())
         );
-        assert_eq!(
-            ToolState::from_execution(ToolExecutionState::Denied),
-            ToolState::Denied
-        );
+        assert_eq!(auto_title("   \n \n"), None);
+        assert_eq!(auto_title(&"a".repeat(200)).unwrap().chars().count(), 60);
+    }
+
+    #[test]
+    fn long_titles_cut_at_a_word_boundary() {
+        let title = auto_title(
+            "Refactor the parser so that it can recover from a missing brace and report the line",
+        )
+        .unwrap();
+        assert!(title.starts_with("Refactor the parser"), "{title:?}");
+        assert!(title.ends_with('…'), "{title:?}");
+        assert!(unicode_width::UnicodeWidthStr::width(title.as_str()) <= 61);
+    }
+
+    #[test]
+    fn only_an_untitled_session_gets_an_auto_title() {
+        let mut session = session();
+        session.transcript.push(Block::User {
+            text: "fix it".into(),
+            kind: UserKind::Prompt,
+        });
+        assert_eq!(session.auto_title().as_deref(), Some("fix it"));
+        session.info.title = Some("named".into());
+        assert_eq!(session.auto_title(), None);
+        session.info.title = Some("  ".into());
+        assert_eq!(session.auto_title().as_deref(), Some("fix it"));
     }
 }
