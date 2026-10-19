@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use super::harness::*;
 use crate::protocol::ToolRef;
 use crate::transcript::{Block, ToolCall};
+use crate::ui::theme::{Palette, Styles};
 
 fn record(change_ref: &str, path: &str, kind: &str) -> Value {
     json!({"change_ref": change_ref, "path": path, "kind": kind, "details_available": true})
@@ -222,11 +223,11 @@ async fn switching_the_theme_recolors_an_open_diff() {
     h.fake.script("changes.diff", diff("a.py", &[('+', "new")]));
     open_session_diff(&mut h);
     h.settle().await;
-    let dark = crate::theme::Palette::dark();
+    let dark = Palette::dark();
     assert_eq!(h.fg_of("+new"), dark.added);
 
-    let light = crate::theme::Palette::light();
-    h.app.palette = light;
+    let light = Palette::light();
+    h.app.styles = Styles::of(light);
     assert_eq!(h.fg_of("+new"), light.added);
     assert_ne!(dark.added, light.added);
 }
@@ -242,7 +243,7 @@ async fn switching_the_theme_keeps_the_context_view() {
     h.type_text("/context");
     h.press(KeyCode::Enter);
     h.settle().await;
-    h.app.palette = crate::theme::Palette::light();
+    h.app.styles = Styles::of(Palette::light());
     let screen = h.screen(100, 20);
     assert!(screen.contains("Summary covers 6 turns"), "{screen}");
 }

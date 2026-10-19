@@ -4,11 +4,12 @@
 use serde_json::{Value, json};
 
 use super::{App, InteractionKind, Msg, Queued, QueuedKind, Scroll, Session, SessionOp, tasks};
+use crate::config::ThemeKind;
 use crate::protocol::{
     self, CompactionPhase, CompactionProgress, Reasoning, SessionResult, TurnSendResult,
 };
-use crate::theme::ThemeKind;
 use crate::transcript::{Block, NoticeLevel};
+use crate::ui::theme::{Palette, Styles};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -273,7 +274,7 @@ impl App {
             self.notice(NoticeLevel::Error, error);
         }
         self.theme = kind;
-        self.palette = crate::theme::Palette::for_kind(kind);
+        self.styles = Styles::of(Palette::for_kind(kind));
     }
 
     /// The editor command: config first, then `$VISUAL`/`$EDITOR`.
@@ -356,7 +357,11 @@ impl App {
         );
     }
 
-    pub(super) fn refresh_presentation(&self) {
+    /// Asks for the footer's figures: model label, branch, context usage.
+    pub(super) fn refresh_presentation(&mut self) {
+        let session = self.session_mut();
+        session.presentation_asked = Some(tokio::time::Instant::now());
+        session.presentation_in_flight = true;
         self.call(
             protocol::METHOD_SESSION_PRESENTATION,
             json!({}),

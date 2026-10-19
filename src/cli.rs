@@ -3,8 +3,8 @@
 
 use std::path::PathBuf;
 
+use crate::config::ThemeKind;
 use crate::protocol::Reasoning;
-use crate::theme::ThemeKind;
 
 pub const USAGE: &str = "\
 minicore-tui — a pi-style coding agent TUI for minicore-agent

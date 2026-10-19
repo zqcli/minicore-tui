@@ -11,9 +11,9 @@ use tokio::sync::mpsc;
 use crate::app::{App, Msg, Overlay, Scroll, Session};
 use crate::protocol::read::UserKind;
 use crate::protocol::{LoopOutcome, Reasoning, SessionInfo, ToolRef, TurnRef};
-use crate::theme::{Palette, ThemeKind};
 use crate::transcript::block::{ToolState, Transcript};
 use crate::transcript::{Block, ChangeSummary, RequestKey, ToolCall};
+use crate::ui::theme::{Palette, Styles};
 
 /// A render fixture. The client needs a child process, so it runs `/bin/sleep`,
 /// which exits at once with an argument error no render observes.
@@ -53,7 +53,7 @@ fn app() -> Fixture {
         })
         .expect("client");
     let mut app = App::new(client, tx, PathBuf::from("/work/minicore-tui"));
-    app.palette = Palette::for_kind(ThemeKind::Dark);
+    app.styles = Styles::of(Palette::dark());
     app.ready = true;
     let mut session = Session::new(info(), 1);
     session.transcript = Transcript::default();
@@ -336,7 +336,7 @@ fn a_blank_row_separates_the_transcript_and_the_composer_band_is_full_width() {
     );
     assert_eq!(
         buffer[(49u16, composer)].bg,
-        app.palette.composer_bg,
+        Palette::dark().composer_bg,
         "the band reaches the last column"
     );
 }
@@ -379,7 +379,7 @@ fn no_color_renders_the_same_layout_without_color() {
     let mut app = app();
     conversation(&mut app);
     let colored = render(&mut app, 70, 20);
-    app.palette = Palette::plain();
+    app.styles = Styles::of(Palette::plain());
     let plain = render(&mut app, 70, 20);
     assert_eq!(colored, plain, "NO_COLOR changes colors, never layout");
 }

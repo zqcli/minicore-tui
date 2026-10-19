@@ -4,11 +4,10 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use crate::theme::Palette;
-
+use super::theme::Styles;
 use super::wrap::{self, sanitize, width, wrap};
 
 /// A sheet never shows more than this many list rows; the rest scroll.
@@ -58,8 +57,7 @@ impl Row {
     }
 }
 
-/// Everything a sheet draws. The sheet owns its text, so a picker can build one
-/// from freshly formatted rows every frame without borrowing app state.
+/// Everything a sheet draws; it owns its text, so a picker can rebuild it every frame.
 pub struct Sheet {
     pub title: String,
     /// Filter text shown after the title, or a status such as `3 of 12`.
@@ -124,14 +122,14 @@ impl Sheet {
 }
 
 /// Draws `sheet` into `area`, which must be at least [`Sheet::height`] rows.
-pub fn render(frame: &mut Frame, area: Rect, palette: &Palette, sheet: &Sheet) {
+pub fn render(frame: &mut Frame, area: Rect, styles: Styles, sheet: &Sheet) {
     if area.height == 0 || area.width == 0 {
         return;
     }
     let mut y = area.y;
     let bottom = area.bottom();
 
-    render_title(frame, Rect { height: 1, ..area }, palette, sheet);
+    render_title(frame, Rect { height: 1, ..area }, styles, sheet);
     y += 1;
 
     for line in &sheet.body {
@@ -156,7 +154,7 @@ pub fn render(frame: &mut Frame, area: Rect, palette: &Palette, sheet: &Sheet) {
             width: area.width,
             height: 1,
         };
-        render_row(frame, row_area, palette, row, highlighted);
+        render_row(frame, row_area, styles, row, highlighted);
         y += 1;
     }
 
@@ -165,51 +163,31 @@ pub fn render(frame: &mut Frame, area: Rect, palette: &Palette, sheet: &Sheet) {
             frame,
             area,
             y,
-            Line::from(Span::styled(
-                clean(&sheet.hint),
-                Style::default().fg(palette.faint),
-            )),
+            Line::from(Span::styled(clean(&sheet.hint), styles.faint())),
         );
     }
 }
 
-fn render_title(frame: &mut Frame, area: Rect, palette: &Palette, sheet: &Sheet) {
-    let mut spans = vec![Span::styled(
-        clean(&sheet.title),
-        Style::default()
-            .fg(palette.accent)
-            .add_modifier(Modifier::BOLD),
-    )];
+fn render_title(frame: &mut Frame, area: Rect, styles: Styles, sheet: &Sheet) {
+    let mut spans = vec![Span::styled(clean(&sheet.title), styles.title())];
     if let Some(subtitle) = &sheet.subtitle {
-        spans.push(Span::styled("  ", Style::default()));
-        spans.push(Span::styled(
-            clean(subtitle),
-            Style::default().fg(palette.dim),
-        ));
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(clean(subtitle), styles.dim()));
     }
     draw_line(frame, area, area.y, Line::from(spans));
 }
 
-fn render_row(frame: &mut Frame, area: Rect, palette: &Palette, row: &Row, highlighted: bool) {
-    let (background, label_style) = if highlighted {
-        (
-            Some(palette.selection_bg),
-            Style::default()
-                .fg(palette.text)
-                .add_modifier(Modifier::BOLD),
-        )
+fn render_row(frame: &mut Frame, area: Rect, styles: Styles, row: &Row, highlighted: bool) {
+    let label_style = if highlighted {
+        frame.buffer_mut().set_style(area, styles.highlight());
+        styles.bold()
     } else {
-        (None, Style::default().fg(palette.text))
+        styles.text()
     };
-    if let Some(background) = background {
-        frame
-            .buffer_mut()
-            .set_style(area, Style::default().bg(background));
-    }
 
     let detail = clean(&row.detail);
     let marker = match row.mark {
-        Some(true) => Span::styled("● ", Style::default().fg(palette.accent)),
+        Some(true) => Span::styled("● ", styles.accent()),
         Some(false) => Span::raw("  "),
         None => Span::raw(""),
     };
@@ -222,17 +200,17 @@ fn render_row(frame: &mut Frame, area: Rect, palette: &Palette, row: &Row, highl
         .saturating_sub(detail_width)
         .max(1);
 
-    let detail_style = Style::default().fg(match row.tone {
-        Tone::Plain => palette.faint,
-        Tone::Success => palette.success,
-        Tone::Failure => palette.failure,
-        Tone::Warning => palette.warning,
-    });
+    let detail_style = match row.tone {
+        Tone::Plain => styles.faint(),
+        Tone::Success => styles.success(),
+        Tone::Failure => styles.failure(),
+        Tone::Warning => styles.warning(),
+    };
     let line = Line::from(vec![
-        Span::styled(" ".repeat(PAD as usize), Style::default()),
+        Span::raw(" ".repeat(PAD as usize)),
         marker,
         Span::styled(label, label_style),
-        Span::styled(" ".repeat(gap), Style::default()),
+        Span::raw(" ".repeat(gap)),
         Span::styled(detail, detail_style),
     ]);
     draw_line(frame, area, area.y, line);
@@ -252,8 +230,7 @@ pub fn truncate(text: &str, cells: usize) -> String {
     wrap::truncate(&sanitize(text), cells)
 }
 
-/// Wraps one message into sheet body lines, so a long approval prompt still
-/// fits the sheet instead of being cut.
+/// Wraps one message into sheet body lines.
 pub fn body_lines(text: &str, cells: usize, style: Style) -> Vec<Line<'static>> {
     wrap(&clean(text), cells)
         .into_iter()
@@ -267,14 +244,15 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use super::*;
+    use crate::ui::theme::Palette;
 
     fn capture(sheet: &Sheet, width: u16, height: u16) -> Vec<String> {
-        let palette = Palette::dark();
+        let styles = Styles::of(Palette::dark());
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
             .draw(|frame| {
                 let area = frame.area();
-                render(frame, area, &palette, sheet);
+                render(frame, area, styles, sheet);
             })
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -308,6 +286,7 @@ mod tests {
     #[test]
     fn the_title_is_accent_and_the_hint_is_dim() {
         let palette = Palette::dark();
+        let styles = Styles::of(palette);
         let sheet = Sheet::new("Sessions", "enter open").rows(rows(1));
         let text = capture(&sheet, 40, 3);
         assert_eq!(text[0], "Sessions");
@@ -318,7 +297,7 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(40, 3)).unwrap();
         terminal
-            .draw(|frame| render(frame, frame.area(), &palette, &sheet))
+            .draw(|frame| render(frame, frame.area(), styles, &sheet))
             .unwrap();
         let buffer = terminal.backend().buffer();
         let title = &buffer[(0u16, 0u16)];
@@ -340,12 +319,13 @@ mod tests {
     #[test]
     fn the_selected_row_is_one_full_width_band() {
         let palette = Palette::dark();
+        let styles = Styles::of(palette);
         let sheet = Sheet::new("Commands", "enter run")
             .rows(rows(3))
             .selected(Some(1));
         let mut terminal = Terminal::new(TestBackend::new(20, 5)).unwrap();
         terminal
-            .draw(|frame| render(frame, frame.area(), &palette, &sheet))
+            .draw(|frame| render(frame, frame.area(), styles, &sheet))
             .unwrap();
         let buffer = terminal.backend().buffer();
         for column in 0..20 {

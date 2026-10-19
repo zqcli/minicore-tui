@@ -10,11 +10,11 @@ use tokio::sync::mpsc;
 
 use minicore_tui::app::{App, Msg};
 use minicore_tui::cli::{Args, USAGE};
-use minicore_tui::config::Config;
+use minicore_tui::config::{Config, ThemeKind};
 use minicore_tui::protocol::SessionInfo;
 use minicore_tui::rpc::{Client, Incoming};
 use minicore_tui::terminal;
-use minicore_tui::theme::{Palette, ThemeKind};
+use minicore_tui::ui::theme::{Palette, Styles};
 
 /// Frame cap: coalesce bursts instead of drawing on every event.
 const FRAME: Duration = Duration::from_millis(16);
@@ -90,7 +90,7 @@ async fn run() -> i32 {
         reasoning: args.reasoning,
     };
     app.theme = theme;
-    app.palette = Palette::for_kind(theme);
+    app.styles = Styles::of(Palette::for_kind(theme));
 
     let boot = {
         let client = client.clone();

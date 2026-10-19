@@ -314,17 +314,6 @@ impl FakeAgent {
         );
     }
 
-    pub fn script_later(&self, method: &str, result: Value, delay: Duration) {
-        self.script.lock().unwrap().insert(
-            method.to_owned(),
-            Reply {
-                frame: json!({"result": result}),
-                delay,
-                hold: None,
-            },
-        );
-    }
-
     /// Sends one Agent event on the same stream the Agent uses.
     pub async fn emit(&mut self, event: Value) {
         let frame = json!({"jsonrpc": "2.0", "method": "agent.event", "params": event});

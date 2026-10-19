@@ -5,7 +5,23 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::theme::ThemeKind;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeKind {
+    #[default]
+    Dark,
+    Light,
+}
+
+impl ThemeKind {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "dark" => Some(Self::Dark),
+            "light" => Some(Self::Light),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -39,8 +55,7 @@ fn config_path() -> Option<PathBuf> {
 }
 
 impl Config {
-    /// Loads the config file, falling back to defaults. A malformed file is
-    /// reported by the caller through `load_error`.
+    /// Loads the config file; a missing or malformed one gives the defaults.
     pub fn load() -> Self {
         Self::load_from(config_path().as_deref()).unwrap_or_default()
     }
@@ -92,6 +107,13 @@ mod tests {
         assert_eq!(config.theme, ThemeKind::Light);
         assert!(config.editor.is_empty());
         assert!(config.agent.is_none());
+    }
+
+    #[test]
+    fn theme_names_parse_and_unknown_ones_do_not() {
+        assert_eq!(ThemeKind::parse("dark"), Some(ThemeKind::Dark));
+        assert_eq!(ThemeKind::parse("light"), Some(ThemeKind::Light));
+        assert_eq!(ThemeKind::parse("sepia"), None);
     }
 
     #[test]

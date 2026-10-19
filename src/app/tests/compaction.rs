@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use serde_json::json;
 
 use super::harness::*;
@@ -95,4 +97,105 @@ async fn an_idle_state_with_a_compaction_still_shows_it() {
     assert_eq!(h.app.status_label(), Some("Compacting context"));
     h.state(json!({"session_id": "s1", "status": "idle"}));
     assert_eq!(h.app.status_label(), None);
+}
+
+fn presentation(percent: f64) -> serde_json::Value {
+    json!({"session_id": "s1",
+           "context": {"tokens": 1000, "window": 200000, "percent": percent, "kind": "reported"}})
+}
+
+fn footer_percent(h: &Harness) -> Option<f64> {
+    crate::ui::views::context::percent(h.app.session.as_ref().expect("a session"))
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_request_refreshes_the_footer_context_at_most_once_per_window() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    let usage = || json!({"turn": turn("l1"), "usage": {"input_tokens": 10}});
+    let asked = |h: &Harness| h.calls("session.presentation").len();
+    h.until(|app| !app.session.as_ref().unwrap().presentation_in_flight)
+        .await;
+    tokio::time::advance(Duration::from_secs(3)).await;
+    let opened = asked(&h);
+
+    h.fake.script("session.presentation", presentation(40.0));
+    h.emit("request_usage", usage()).await;
+    h.until(|app| {
+        app.session
+            .as_ref()
+            .unwrap()
+            .presentation
+            .as_ref()
+            .is_some_and(|presentation| {
+                presentation
+                    .context
+                    .as_ref()
+                    .and_then(|usage| usage.percent)
+                    == Some(40.0)
+            })
+    })
+    .await;
+    assert_eq!(asked(&h), opened + 1);
+
+    h.fake.script("session.presentation", presentation(50.0));
+    h.emit("request_usage", usage()).await;
+    h.run_for(Duration::from_millis(500)).await;
+    assert_eq!(
+        asked(&h),
+        opened + 1,
+        "a second request inside the window waits"
+    );
+    assert_eq!(footer_percent(&h), Some(40.0));
+
+    tokio::time::advance(Duration::from_secs(2)).await;
+    h.emit("request_usage", usage()).await;
+    h.until(|app| {
+        app.session
+            .as_ref()
+            .unwrap()
+            .presentation
+            .as_ref()
+            .is_some_and(|presentation| {
+                presentation
+                    .context
+                    .as_ref()
+                    .and_then(|usage| usage.percent)
+                    == Some(50.0)
+            })
+    })
+    .await;
+    assert_eq!(asked(&h), opened + 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_end_of_a_compaction_refreshes_the_footer_context_inside_the_window() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.settle().await;
+    let state = |compaction: serde_json::Value| json!({"state": {"session_id": "s1", "status": "idle", "compaction": compaction}});
+    let working = json!({"operation_id": "auto-l1", "phase": "merging",
+                         "covered_item_count": 8, "retained_item_count": 2});
+    h.emit("session_state", state(working)).await;
+    h.run_for(Duration::from_millis(100)).await;
+    let before = h.calls("session.presentation").len();
+
+    h.fake.script("session.presentation", presentation(7.0));
+    h.emit("session_state", state(serde_json::Value::Null))
+        .await;
+    h.until(|app| {
+        app.session
+            .as_ref()
+            .unwrap()
+            .presentation
+            .as_ref()
+            .is_some_and(|presentation| {
+                presentation
+                    .context
+                    .as_ref()
+                    .and_then(|usage| usage.percent)
+                    == Some(7.0)
+            })
+    })
+    .await;
+    assert_eq!(h.calls("session.presentation").len(), before + 1);
+    assert_eq!(footer_percent(&h), Some(7.0));
 }

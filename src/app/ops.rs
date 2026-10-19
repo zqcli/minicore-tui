@@ -26,6 +26,7 @@ impl App {
             }
             SessionOp::State(result) => self.on_state(result),
             SessionOp::Presentation(result) => {
+                self.session_mut().presentation_in_flight = false;
                 if let Some(presentation) = self.ok(result) {
                     self.session_mut().presentation = Some(presentation);
                 }
@@ -360,8 +361,18 @@ impl App {
             .as_ref()
             .is_some_and(|session| session.info.session_id == meta.session_id);
         if resident {
-            if let Some(turn) = self.session_mut().apply_event(event) {
+            let session = self.session_mut();
+            let was_compacting = session.compaction.is_some();
+            let usage = matches!(event, AgentEvent::RequestUsage { .. });
+            let started = session.apply_event(event);
+            let compaction_ended = was_compacting && session.compaction.is_none();
+            if let Some(turn) = started {
                 self.start_turn(turn);
+            }
+            // The footer's context figure moves with each request and each
+            // compaction, not only at the turn's end.
+            if compaction_ended || (usage && self.session_mut().presentation_due()) {
+                self.refresh_presentation();
             }
         } else if let AgentEvent::SessionOpened { session, .. } = event {
             self.merge_catalog_info(*session);

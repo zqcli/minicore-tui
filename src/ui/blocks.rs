@@ -2,7 +2,7 @@
 //! design §5.5 and §7.2. The layout cache calls these once per change and
 //! stores the returned lines, so a block never re-renders per frame.
 
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use super::markdown;
@@ -73,7 +73,7 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
         ),
         Block::Notice { level, text } => {
             let style = match level {
-                NoticeLevel::Error => styles.error(),
+                NoticeLevel::Error => styles.failure(),
                 NoticeLevel::Info => styles.dim(),
             };
             wrap::wrap(text, width)
@@ -83,7 +83,7 @@ pub fn render(block: &Block, styles: Styles, width: u16, fold: Fold) -> Vec<Line
         }
         Block::EarlierHistory { hidden_items } => vec![Line::styled(
             format!("↑ {hidden_items} earlier items · home to load"),
-            styles.subtle(),
+            styles.faint(),
         )],
     }
 }
@@ -179,17 +179,15 @@ pub fn reasoning_source(reasoning: &str) -> String {
 
 fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Line<'static>> {
     let (glyph, state_style, band) = match call.state {
-        ToolState::Pending => ("·", styles.dim(), styles.theme.tool_bg),
-        ToolState::Running => ("⠋", styles.accent(), styles.theme.tool_bg),
-        ToolState::Succeeded => ("✓", styles.success(), styles.theme.tool_success_bg),
-        ToolState::Failed => ("✗", styles.error(), styles.theme.tool_error_bg),
-        ToolState::Denied | ToolState::Cancelled => {
-            ("⊘", styles.warning(), styles.theme.tool_error_bg)
-        }
+        ToolState::Pending => ("·", styles.dim(), styles.card()),
+        ToolState::Running => ("⠋", styles.accent(), styles.card()),
+        ToolState::Succeeded => ("✓", styles.success(), styles.card_success()),
+        ToolState::Failed => ("✗", styles.failure(), styles.card_failure()),
+        ToolState::Denied | ToolState::Cancelled => ("⊘", styles.warning(), styles.card_failure()),
     };
     let inner = width.saturating_sub(INSET);
     let (header, clipped) = tool_header(call, glyph, state_style, styles, inner);
-    let row = |spans: Vec<Span<'static>>| card_row(spans, state_style, styles, band);
+    let row = |spans: Vec<Span<'static>>| card_row(spans, state_style, band);
     let mut lines = vec![row(header)];
     let body_row = |line: &str, style: Style| {
         let text = wrap::truncate(&wrap::sanitize(line), inner.saturating_sub(2));
@@ -207,7 +205,7 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
     let body = card_body(call, expanded);
     for line in &body.lines {
         let style = if !body.patch {
-            styles.subtle()
+            styles.faint()
         } else if is_patch_header(line) {
             styles.dim()
         } else {
@@ -227,7 +225,7 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
         } else {
             "ctrl+o to expand"
         });
-        lines.push(body_row(&hint, styles.subtle()));
+        lines.push(body_row(&hint, styles.faint()));
     }
     lines
 }
@@ -352,7 +350,7 @@ fn tool_header(
         let style = if code == 0 {
             styles.dim()
         } else {
-            styles.error()
+            styles.failure()
         };
         meta.push(vec![Span::styled(format!("exit {code}"), style)]);
     }
@@ -360,9 +358,9 @@ fn tool_header(
         && added + removed > 0
     {
         meta.push(vec![
-            Span::styled(format!("+{added}"), styles.diff_add()),
+            Span::styled(format!("+{added}"), styles.added()),
             Span::raw(" "),
-            Span::styled(format!("−{removed}"), styles.diff_del()),
+            Span::styled(format!("−{removed}"), styles.removed()),
         ]);
     }
     if call.truncated {
@@ -413,8 +411,8 @@ fn tool_header(
 
 /// One card row: the rail in the state's color, then the spans, all on the
 /// card's background band.
-fn card_row(spans: Vec<Span<'static>>, rail: Style, styles: Styles, band: Color) -> Line<'static> {
-    let paint = |style: Style| if styles.color { style.bg(band) } else { style };
+fn card_row(spans: Vec<Span<'static>>, rail: Style, band: Style) -> Line<'static> {
+    let paint = |style: Style| style.patch(band);
     let mut row = vec![Span::styled("▎ ", paint(rail))];
     row.extend(spans.into_iter().map(|span| {
         let style = paint(span.style);
@@ -495,7 +493,7 @@ fn turn_end(
     let labeled = format!("── {text} ──");
     let style = match outcome {
         crate::protocol::LoopOutcome::Completed => styles.dim(),
-        crate::protocol::LoopOutcome::Failed { .. } => styles.error(),
+        crate::protocol::LoopOutcome::Failed { .. } => styles.failure(),
         _ => styles.warning(),
     };
     Line::styled(wrap::truncate(&labeled, width), style)
@@ -544,12 +542,12 @@ mod tests {
     use super::*;
     use crate::protocol::read::UserKind;
     use crate::protocol::{LoopOutcome, ToolRef};
-    use crate::theme::{Palette, ThemeKind};
     use crate::transcript::{ChangeSummary, RequestKey};
+    use crate::ui::theme::Palette;
     use std::time::Duration;
 
     fn styles() -> Styles {
-        Styles::new(Palette::for_kind(ThemeKind::Dark), false)
+        Styles::of(Palette::dark())
     }
 
     fn fold() -> Fold {
@@ -750,7 +748,7 @@ mod tests {
             .iter()
             .find(|span| span.content == "exit 1")
             .expect("the exit code is in the header");
-        assert_eq!(exit.style.fg, Some(styles().theme.error));
+        assert_eq!(exit.style.fg, Some(Palette::dark().failure));
     }
 
     fn patch_card() -> ToolCall {
@@ -870,7 +868,7 @@ mod tests {
         card.state = ToolState::Failed;
         card.output = vec!["Traceback (most recent call last)".into()];
         let lines = render(&Block::Tool(Box::new(card)), styles(), 60, fold());
-        assert_eq!(lines[0].style.bg, Some(styles().theme.tool_error_bg));
+        assert_eq!(lines[0].style.bg, Some(Palette::dark().card_failure_bg));
     }
 
     #[test]
@@ -956,7 +954,7 @@ mod tests {
             text: "turn failed".into(),
         };
         let lines = render(&error, styles(), 40, fold());
-        assert_eq!(lines[0].style.fg, Some(styles().theme.error));
+        assert_eq!(lines[0].style.fg, Some(Palette::dark().failure));
 
         let history = Block::EarlierHistory { hidden_items: 40 };
         let body = text(&render(&history, styles(), 40, fold()));

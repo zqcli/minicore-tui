@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+use crate::config::ThemeKind;
 use crate::protocol::changes::DiffPage;
 use crate::protocol::read::RawHistoryItem;
 use crate::protocol::{
@@ -32,9 +33,9 @@ use crate::protocol::{
     TurnRef, TurnWaitResult,
 };
 use crate::rpc::Client;
-use crate::theme::ThemeKind;
 use crate::transcript::layout::Layout;
 use crate::transcript::{Block, ChangeSummary, NoticeLevel};
+use crate::ui::theme::{Palette, Styles};
 use crate::ui::transcript::RenderState;
 use crate::ui::{sheets, views};
 
@@ -162,7 +163,7 @@ pub struct App {
     pub op_seq: u64,
     pub theme: ThemeKind,
     pub overlay: Overlay,
-    pub palette: crate::theme::Palette,
+    pub styles: Styles,
     /// Mouse selection: the cell the drag started at and where it is now.
     pub selection_start: Option<(u16, u16)>,
     pub selection_end: Option<(u16, u16)>,
@@ -212,7 +213,7 @@ impl App {
             op_seq: 0,
             theme: ThemeKind::Dark,
             overlay: Overlay::None,
-            palette: crate::theme::Palette::dark(),
+            styles: Styles::of(Palette::dark()),
             selection_start: None,
             selection_end: None,
             rendered: crate::ui::selection::Screen::default(),
@@ -418,9 +419,9 @@ impl App {
     /// `c` in a view: copies what the view shows.
     pub fn copy_view(&mut self) {
         let text = match &self.overlay {
-            Overlay::Diff(diff) => views::diff_text(diff),
-            Overlay::Tool(tool) => views::tool_text(tool, self.session.as_ref()),
-            _ => views::context_text(self.session.as_ref(), &self.palette),
+            Overlay::Diff(diff) => views::diff::text(diff),
+            Overlay::Tool(tool) => views::tool::text(tool, self.session.as_ref()),
+            _ => views::context::text(self.session.as_ref(), self.styles),
         };
         if text.trim().is_empty() {
             self.notice(NoticeLevel::Info, "Nothing to copy here");

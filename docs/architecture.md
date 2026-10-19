@@ -35,7 +35,7 @@ local preferences.
 src/
   main.rs          parse CLI, load config, start the Agent, run the loop
   cli.rs           small flat argument parser
-  config.rs        TUI config file (agent, agent_config, theme, editor)
+  config.rs        TUI config file (agent, agent_config, theme, editor), ThemeKind
   rpc.rs           Agent child process and JSON-RPC client
   protocol/        serde DTOs only: methods, events, history items, tools,
                    changes, workspace; unknown enum values decode to Unknown
@@ -52,15 +52,16 @@ src/
     layout.rs      per-block line cache, prefix heights, viewport, anchor
   ui/
     mod.rs         draw(frame, &App)
-    theme.rs       dark and light palettes
+    theme.rs       Palette (colors; plain for NO_COLOR) and Styles (role styles)
     markdown.rs    Markdown to lines, incremental for streaming
     wrap.rs        word wrapping, width, control-character sanitizing
     blocks.rs      render each Block kind, including tool cards
     composer.rs    composer editing model and rendering
     status.rs      status line and footer
     panel.rs       the single bottom-sheet panel style
-    picker.rs      generic filterable list
-    views.rs       diff, tool output, context and help views
+    sheets.rs      bottom-sheet builders: commands, pickers, approval, find
+    picker.rs      fuzzy filter
+    views/         full-screen views: diff, tool output, context, help
   terminal.rs      alternate screen, raw mode, panic hook
   clipboard.rs     native clipboard with OSC 52 fallback
   editor.rs        external editor (Ctrl+G)

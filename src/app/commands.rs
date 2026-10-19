@@ -123,8 +123,8 @@ pub fn execute(name: &str, arg: &str) -> Option<Executed> {
         // wins. Parsing catches typos as `Noop` so the caller can say so.
         "theme" => match arg {
             "" => Executed::Action(Action::ToggleTheme),
-            "dark" => Executed::Action(Action::SetTheme(crate::theme::ThemeKind::Dark)),
-            "light" => Executed::Action(Action::SetTheme(crate::theme::ThemeKind::Light)),
+            "dark" => Executed::Action(Action::SetTheme(crate::config::ThemeKind::Dark)),
+            "light" => Executed::Action(Action::SetTheme(crate::config::ThemeKind::Light)),
             _ => Executed::Noop,
         },
         "reload" => Executed::Action(Action::ReloadAgent),
@@ -175,7 +175,7 @@ mod tests {
         assert!(matches!(
             execute("theme", "light"),
             Some(Executed::Action(crate::app::Action::SetTheme(
-                crate::theme::ThemeKind::Light
+                crate::config::ThemeKind::Light
             )))
         ));
         assert!(matches!(

@@ -41,12 +41,12 @@ pub fn band(app: &App, styles: Styles, width: u16) -> (Vec<Line<'static>>, (u16,
     {
         rows.push(Line::styled(
             format!("  +{} more queued", session.queue.len() - 3),
-            styles.subtle(),
+            styles.faint(),
         ));
     }
     if let Some(notice) = app.notices.back() {
         let style = match notice.level {
-            NoticeLevel::Error => styles.error(),
+            NoticeLevel::Error => styles.failure(),
             NoticeLevel::Info => styles.dim(),
         };
         rows.push(Line::styled(notice.text.clone(), style));
@@ -152,10 +152,12 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
             session.info.reasoning.label()
         )
     });
-    let context = session.and_then(super::views::context_percent).map_or_else(
-        || "ctx ?".to_owned(),
-        |percent| format!("ctx {percent:.0}%"),
-    );
+    let context = session
+        .and_then(super::views::context::percent)
+        .map_or_else(
+            || "ctx ?".to_owned(),
+            |percent| format!("ctx {percent:.0}%"),
+        );
     let totals = session.map(|session| {
         let usage = &session.usage;
         let mut text = String::new();
@@ -188,27 +190,27 @@ fn footer(app: &App, styles: Styles, width: u16) -> Line<'static> {
     let title =
         title.filter(|title| fits(right.as_deref().unwrap_or_default(), wrap::width(title) + 3));
 
-    let mut spans = vec![Span::styled(format!("{place} · "), styles.subtle())];
+    let mut spans = vec![Span::styled(format!("{place} · "), styles.faint())];
     if let Some(title) = title {
         spans.push(Span::styled(title, styles.dim()));
-        spans.push(Span::styled(" · ", styles.subtle()));
+        spans.push(Span::styled(" · ", styles.faint()));
     }
     if let Some(settings) = settings {
-        spans.push(Span::styled(settings, styles.subtle()));
+        spans.push(Span::styled(settings, styles.faint()));
     }
     spans.push(Span::styled(
         state,
         if app.is_busy() {
             styles.accent()
         } else {
-            styles.subtle()
+            styles.faint()
         },
     ));
     if let Some(right) = right {
         let used: usize = spans.iter().map(|span| wrap::width(&span.content)).sum();
         let gap = width.saturating_sub(used + wrap::width(&right)).max(2);
         spans.push(Span::raw(" ".repeat(gap)));
-        spans.push(Span::styled(right, styles.subtle()));
+        spans.push(Span::styled(right, styles.faint()));
     }
     Line::from(spans)
 }

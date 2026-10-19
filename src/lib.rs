@@ -13,7 +13,6 @@ pub mod rpc;
 pub mod terminal;
 #[cfg(test)]
 pub mod testing;
-pub mod theme;
 pub mod transcript;
 pub mod ui;
 
