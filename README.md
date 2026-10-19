@@ -91,10 +91,10 @@ shows the elapsed turn time and the interrupt key.
 
 The footer shows the workspace directory and git branch, the session title, the
 model and reasoning level, a state dot, token totals and the context percentage
-(`?` while unknown). The branch is `—` until the first `workspace.status` answer
-arrives: `session.presentation` only caches it, and the TUI refreshes that query
-on session open and when the workspace changed on disk at turn end, never on
-every frame. Notices appear on one line under the status line; info notices hide
+(`?` while unknown). The branch comes from `session.presentation.git_branch`,
+which is read on session open and refreshed after every turn; it is `—` until
+that first answer, and the TUI never asks `workspace.status` for it. Notices
+appear on one line under the status line; info notices hide
 after a few seconds, errors stay until the next key press.
 
 ## Conversation
@@ -166,10 +166,11 @@ fallback). `/copy` copies the last assistant answer as Markdown. `/export
 
 - `minicore-agent` 0.7.0 (`4102719`), Protocol v1, with the capabilities the TUI
   uses: `session.read`, `session.read.display`, `tool.read`, `tool.read.display`,
-  `tool.output`, `turn.result`, `session.context`, `session.presentation`,
-  `workspace.status`, `workspace.files`, `workspace.search`, `changes.list`,
-  `changes.diff`. These are entries in the Agent's advertised capability list;
-  the handshake checks the list, not method names.
+  `tool.output`, `turn.result`, `session.context`, `workspace.status`,
+  `workspace.files`, `workspace.search`, `changes.list`, `changes.diff`.
+  These are entries in the Agent's advertised capability list; the handshake
+  checks the list, not method names. `session.presentation` is a method with no
+  capability string, so it is called unconditionally rather than gated.
 - `minicore-runtime` 0.7.0 (`b93aea3`) is linked by the Agent, not by the TUI.
 - One Agent process per data directory. The TUI never reads the Agent store,
   workspace files, provider configuration or credentials.

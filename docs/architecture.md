@@ -143,8 +143,8 @@ backoff.
 
 The handshake calls `agent.ping` and requires `protocol_version == 1` plus the
 twelve capabilities actually used: `session.read`, `session.read.display`,
-`tool.read`, `tool.read.display`, `tool.output`, `turn.result`,
-`session.context`, `workspace.status`, `workspace.files`, `workspace.search`,
+`session.context`, `turn.result`, `tool.read`, `tool.read.display`,
+`tool.output`, `workspace.files`, `workspace.search`, `workspace.status`,
 `changes.list`, `changes.diff`. Every one is an entry in the Agent's advertised
 capability list, so this is a check of capability, not of method name.
 `session.presentation` is a method with no capability string, so it is called
@@ -344,13 +344,13 @@ with `interaction.answer`. The status line shows `Waiting for approval`.
 The footer's model, reasoning and session id come from `SessionInfo`. The
 context percentage comes from `session.context`, which is read on open, after a
 turn and when the Context view is opened. The git branch is the one value that
-is not free: `session.presentation` only caches it, and the cache is empty until
-an explicit `workspace.status` fills it. The TUI therefore treats the branch as
-optional — `—` until the first `workspace.status` answer arrives — and refreshes
-it only on session open, on a workspace change and when the workspace has
-changed on disk at turn end, never on every frame or every event. That keeps the
-footer's refresh cost at one query per session open instead of one per turn
-event.
+is not free, because it costs a workspace query on the Agent side; the TUI takes
+it from `session.presentation`, whose `git_branch` caches that answer, and reads
+that query on session open and after every turn — never on every frame or every
+event. It treats the branch as optional, so the footer shows `—` until the first
+answer arrives. The TUI never calls `workspace.status`: `session.presentation`
+already reports the branch, and a second source for the same fact would only
+invite them to disagree.
 
 On Agent exit or a protocol failure the TUI replaces the screen with a fatal
 message containing the reason, the exit status and the last 20 stderr lines;
