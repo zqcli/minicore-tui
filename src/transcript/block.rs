@@ -38,7 +38,9 @@ pub enum Block {
         after: Option<u64>,
         /// Items the summary absorbed and items kept beside it. Reported when
         /// the Agent gives no token figures, which is the usual automatic case.
-        coverage: Option<(usize, usize)>,
+        /// Either count can be missing, so each is optional: an automatic
+        /// result commonly reports what it covered but not what it kept.
+        coverage: Option<(Option<usize>, Option<usize>)>,
         summary: Option<String>,
     },
     Notice {

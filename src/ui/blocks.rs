@@ -278,7 +278,7 @@ fn turn_end(
 fn compaction(
     before: Option<u64>,
     after: Option<u64>,
-    coverage: Option<(usize, usize)>,
+    coverage: Option<(Option<usize>, Option<usize>)>,
     summary: Option<&str>,
     styles: Styles,
     width: usize,
@@ -294,7 +294,10 @@ fn compaction(
         // counts say what it did instead of leaving a bare marker.
         _ => match coverage {
             Some((covered, kept)) => {
-                format!("─ Context compacted · {covered} items · {kept} kept ─")
+                let items = covered.map(|n| format!("{n} items"));
+                let kept = kept.map(|n| format!("{n} kept"));
+                let parts: Vec<String> = items.into_iter().chain(kept).collect();
+                format!("─ Context compacted · {} ─", parts.join(" · "))
             }
             None => "─ Context compacted ─".to_owned(),
         },
@@ -519,12 +522,28 @@ mod tests {
             operation_id: "auto-lup_1".into(),
             before: None,
             after: None,
-            coverage: Some((177, 0)),
+            coverage: Some((Some(177), Some(0))),
             summary: None,
         };
         let body = text(&render(&block, styles(), 80, fold()));
         assert!(body[0].contains("177 items"), "{body:?}");
         assert!(body[0].contains("0 kept"), "{body:?}");
+    }
+
+    /// An automatic result commonly reports what it covered but not what it
+    /// kept; the count that exists must still be shown.
+    #[test]
+    fn a_compaction_with_only_a_covered_count_still_reports_it() {
+        let block = Block::Compaction {
+            operation_id: "auto-lup_2".into(),
+            before: None,
+            after: None,
+            coverage: Some((Some(332), None)),
+            summary: None,
+        };
+        let body = text(&render(&block, styles(), 80, fold()));
+        assert!(body[0].contains("332 items"), "{body:?}");
+        assert!(!body[0].contains("kept"), "{body:?}");
     }
 
     #[test]

@@ -443,7 +443,8 @@ impl Session {
             operation_id: operation_id.to_owned(),
             before: result.before_tokens,
             after: result.after_tokens,
-            coverage: result.covered_item_count.zip(result.retained_item_count),
+            coverage: (result.covered_item_count.is_some() || result.retained_item_count.is_some())
+                .then_some((result.covered_item_count, result.retained_item_count)),
             summary: None,
         });
     }
