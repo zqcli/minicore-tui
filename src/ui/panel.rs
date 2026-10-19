@@ -11,7 +11,7 @@ use crate::theme::Palette;
 
 use super::wrap::{sanitize, width, wrap};
 
-/// A sheet never covers more than this many list rows; the rest scroll.
+/// A sheet never shows more than this many list rows; the rest scroll.
 pub const MAX_ROWS: usize = 12;
 /// One cell of padding on each side of every row.
 const PAD: u16 = 1;
@@ -70,7 +70,6 @@ pub struct Sheet {
     pub body: Vec<Line<'static>>,
     pub rows: Vec<Row>,
     pub selected: Option<usize>,
-    pub offset: usize,
     pub hint: String,
 }
 
@@ -82,7 +81,6 @@ impl Sheet {
             body: Vec::new(),
             rows: Vec::new(),
             selected: None,
-            offset: 0,
             hint: hint.into(),
         }
     }
@@ -94,11 +92,6 @@ impl Sheet {
 
     pub fn selected(mut self, selected: Option<usize>) -> Self {
         self.selected = selected;
-        self
-    }
-
-    pub fn offset(mut self, offset: usize) -> Self {
-        self.offset = offset;
         self
     }
 
@@ -121,13 +114,13 @@ impl Sheet {
         1 + self.body.len() as u16 + self.visible_rows() as u16 + 1
     }
 
-    /// The window of rows actually drawn, from the scroll offset.
+    /// The rows drawn: the first `MAX_ROWS`, scrolled just enough to keep the
+    /// selection on screen.
     fn window(&self) -> std::ops::Range<usize> {
-        let visible = self.visible_rows();
         let start = self
-            .offset
-            .min(self.rows.len().saturating_sub(visible.min(self.rows.len())));
-        start..(start + visible).min(self.rows.len())
+            .selected
+            .map_or(0, |selected| (selected + 1).saturating_sub(MAX_ROWS));
+        start..(start + MAX_ROWS).min(self.rows.len())
     }
 }
 
@@ -401,26 +394,21 @@ mod tests {
     }
 
     #[test]
-    fn the_list_scrolls_to_the_offset_and_stops_at_the_row_cap() {
-        let sheet = Sheet::new("Sessions", "hint").rows(rows(20)).offset(6);
+    fn the_list_stops_at_the_row_cap_and_scrolls_with_the_selection() {
+        let sheet = Sheet::new("Sessions", "hint").rows(rows(20));
         assert_eq!(sheet.height(), 1 + MAX_ROWS as u16 + 1);
-        let text = capture(&sheet, 30, sheet.height());
-        assert!(text[1].starts_with(" row 06"), "{:?}", text[1]);
-        assert!(text[1].ends_with("06"), "{:?}", text[1]);
-        assert!(
-            text[MAX_ROWS].starts_with(" row 17"),
-            "{:?}",
-            text[MAX_ROWS]
-        );
-    }
+        let top = capture(&sheet.selected(Some(MAX_ROWS - 1)), 30, 14);
+        assert!(top[1].starts_with(" row 00"), "{:?}", top[1]);
+        assert!(top[MAX_ROWS].starts_with(" row 11"), "{:?}", top[MAX_ROWS]);
 
-    #[test]
-    fn an_offset_past_the_end_is_clamped_so_the_last_row_stays_visible() {
-        let sheet = Sheet::new("Sessions", "hint").rows(rows(20)).offset(99);
+        let sheet = Sheet::new("Sessions", "hint")
+            .rows(rows(20))
+            .selected(Some(15));
         let text = capture(&sheet, 30, sheet.height());
+        assert!(text[1].starts_with(" row 04"), "{:?}", text[1]);
         assert!(
-            text[MAX_ROWS].starts_with(" row 19"),
-            "{:?}",
+            text[MAX_ROWS].starts_with(" row 15"),
+            "the selection is the last visible row: {:?}",
             text[MAX_ROWS]
         );
     }
