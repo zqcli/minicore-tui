@@ -903,7 +903,6 @@ impl App {
                         .call::<serde_json::Value, crate::protocol::OkResult>(
                             crate::protocol::METHOD_RELOAD,
                             &serde_json::Value::Null,
-                            false,
                         )
                         .await;
                     match result {

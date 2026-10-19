@@ -44,7 +44,7 @@ pub struct History {
 /// `Msg::AgentClosed` when the backend cannot be used.
 pub async fn bootstrap(client: Arc<Client>, tx: Tx) {
     let ping = match client
-        .call::<Value, PingResult>(protocol::METHOD_PING, &Value::Null, false)
+        .call::<Value, PingResult>(protocol::METHOD_PING, &Value::Null)
         .await
     {
         Ok(ping) => ping,
@@ -54,14 +54,14 @@ pub async fn bootstrap(client: Arc<Client>, tx: Tx) {
         return closed(&tx, error.to_string());
     }
     let models = match client
-        .call::<Value, ModelListResult>(protocol::METHOD_MODELS, &Value::Null, false)
+        .call::<Value, ModelListResult>(protocol::METHOD_MODELS, &Value::Null)
         .await
     {
         Ok(list) => list.models,
         Err(error) => return closed(&tx, error.message),
     };
     let profiles = match client
-        .call::<Value, ProfileListResult>(protocol::METHOD_PROFILES, &Value::Null, false)
+        .call::<Value, ProfileListResult>(protocol::METHOD_PROFILES, &Value::Null)
         .await
     {
         Ok(list) => list.profiles,
@@ -84,7 +84,7 @@ fn closed(tx: &Tx, reason: String) {
 
 pub async fn list_sessions(client: &Client) -> Result<Vec<SessionInfo>, protocol::RpcError> {
     let list: SessionListResult = client
-        .call::<Value, SessionListResult>(protocol::METHOD_SESSION_LIST, &Value::Null, false)
+        .call::<Value, SessionListResult>(protocol::METHOD_SESSION_LIST, &Value::Null)
         .await?;
     Ok(list.sessions)
 }
@@ -109,7 +109,7 @@ pub fn open_session(client: Arc<Client>, tx: Tx, session_id: String) {
     tokio::spawn(async move {
         let params = json!({ "session_id": session_id });
         let result: Result<SessionResult, _> = client
-            .call::<Value, SessionResult>(protocol::METHOD_SESSION_OPEN, &params, false)
+            .call::<Value, SessionResult>(protocol::METHOD_SESSION_OPEN, &params)
             .await;
         post(
             &tx,
@@ -122,7 +122,7 @@ pub fn open_session(client: Arc<Client>, tx: Tx, session_id: String) {
 pub fn create_session(client: Arc<Client>, tx: Tx, params: Value) {
     tokio::spawn(async move {
         let result: Result<SessionResult, _> = client
-            .call::<Value, SessionResult>(protocol::METHOD_SESSION_CREATE, &params, false)
+            .call::<Value, SessionResult>(protocol::METHOD_SESSION_CREATE, &params)
             .await;
         post(
             &tx,
@@ -141,7 +141,7 @@ pub fn delete_session(client: Arc<Client>, tx: Tx, session_id: String) {
         let params = json!({ "session_id": session_id });
         let result = async {
             match client
-                .call::<Value, OkResult>(protocol::METHOD_SESSION_CLOSE, &params, false)
+                .call::<Value, OkResult>(protocol::METHOD_SESSION_CLOSE, &params)
                 .await
             {
                 // A closed row is what the picker deletes, so this is normal.
@@ -150,7 +150,7 @@ pub fn delete_session(client: Arc<Client>, tx: Tx, session_id: String) {
                 Err(error) => return Err(error),
             }
             client
-                .call::<Value, OkResult>(protocol::METHOD_SESSION_DELETE, &params, false)
+                .call::<Value, OkResult>(protocol::METHOD_SESSION_DELETE, &params)
                 .await
                 .map(|_| ())
         }
@@ -163,7 +163,7 @@ pub fn session_state(client: Arc<Client>, tx: Tx, session_id: String, epoch: u64
     tokio::spawn(async move {
         let params = json!({ "session_id": session_id });
         let result = client
-            .call::<Value, SessionState>(protocol::METHOD_SESSION_STATE, &params, false)
+            .call::<Value, SessionState>(protocol::METHOD_SESSION_STATE, &params)
             .await;
         let _ = tx.send(Msg::Op(Box::new(OpDone {
             session: Some(session_id),
@@ -177,11 +177,7 @@ pub fn presentation(client: Arc<Client>, tx: Tx, session_id: String, epoch: u64)
     tokio::spawn(async move {
         let params = json!({ "session_id": session_id });
         let result = client
-            .call::<Value, SessionPresentation>(
-                protocol::METHOD_SESSION_PRESENTATION,
-                &params,
-                false,
-            )
+            .call::<Value, SessionPresentation>(protocol::METHOD_SESSION_PRESENTATION, &params)
             .await;
         let _ = tx.send(Msg::Op(Box::new(OpDone {
             session: Some(session_id),
@@ -195,7 +191,7 @@ pub fn context(client: Arc<Client>, tx: Tx, session_id: String) {
     tokio::spawn(async move {
         let params = json!({ "session_id": session_id });
         let result = client
-            .call::<Value, SessionContext>(protocol::METHOD_SESSION_CONTEXT, &params, false)
+            .call::<Value, SessionContext>(protocol::METHOD_SESSION_CONTEXT, &params)
             .await;
         post(&tx, Some(&session_id), OpKind::Context(result));
     });
@@ -205,7 +201,7 @@ pub fn rename(client: Arc<Client>, tx: Tx, session_id: String, title: String) {
     tokio::spawn(async move {
         let params = json!({"session_id": session_id, "title": title});
         let result: Result<SessionResult, _> = client
-            .call::<Value, SessionResult>(protocol::METHOD_SESSION_RENAME, &params, false)
+            .call::<Value, SessionResult>(protocol::METHOD_SESSION_RENAME, &params)
             .await;
         post(
             &tx,
@@ -218,7 +214,7 @@ pub fn rename(client: Arc<Client>, tx: Tx, session_id: String, title: String) {
 pub fn update_session(client: Arc<Client>, tx: Tx, params: Value, session_id: String) {
     tokio::spawn(async move {
         let result: Result<SessionUpdateResult, _> = client
-            .call::<Value, SessionUpdateResult>(protocol::METHOD_SESSION_UPDATE, &params, false)
+            .call::<Value, SessionUpdateResult>(protocol::METHOD_SESSION_UPDATE, &params)
             .await;
         post(
             &tx,
@@ -235,7 +231,7 @@ pub fn send_turn(client: Arc<Client>, tx: Tx, session_id: String, text: String, 
         let params = json!({"session_id": session_id, "text": text});
         let sent_text = text;
         let result: Result<TurnSendResult, _> = client
-            .call::<Value, TurnSendResult>(protocol::METHOD_TURN_SEND, &params, false)
+            .call::<Value, TurnSendResult>(protocol::METHOD_TURN_SEND, &params)
             .await;
         match result {
             Ok(sent) => {
@@ -268,7 +264,7 @@ fn wait(client: Arc<Client>, tx: Tx, turn: TurnRef, epoch: u64) {
         let session_id = turn.session_id.clone();
         let params = json!({"session_id": turn.session_id, "loop_id": turn.loop_id});
         let result: Result<TurnWaitResult, _> = client
-            .call::<Value, TurnWaitResult>(protocol::METHOD_TURN_WAIT, &params, false)
+            .call::<Value, TurnWaitResult>(protocol::METHOD_TURN_WAIT, &params)
             .await;
         let _ = tx.send(Msg::Op(Box::new(OpDone {
             session: Some(session_id),
@@ -286,7 +282,7 @@ pub fn steer(client: Arc<Client>, tx: Tx, turn: TurnRef, text: String) {
             "text": text,
         });
         let result: Result<SteerResult, _> = client
-            .call::<Value, SteerResult>(protocol::METHOD_TURN_STEER, &params, false)
+            .call::<Value, SteerResult>(protocol::METHOD_TURN_STEER, &params)
             .await;
         let _ = tx.send(Msg::Op(Box::new(OpDone {
             session: Some(turn.session_id),
@@ -300,7 +296,7 @@ pub fn cancel_turn(client: Arc<Client>, tx: Tx, turn: TurnRef) {
     tokio::spawn(async move {
         let params = json!({"session_id": turn.session_id, "loop_id": turn.loop_id});
         let result: Result<protocol::CancelledResult, _> = client
-            .call::<Value, protocol::CancelledResult>(protocol::METHOD_TURN_CANCEL, &params, false)
+            .call::<Value, protocol::CancelledResult>(protocol::METHOD_TURN_CANCEL, &params)
             .await;
         let _ = tx.send(Msg::Op(Box::new(OpDone {
             session: Some(turn.session_id),
@@ -313,7 +309,7 @@ pub fn cancel_turn(client: Arc<Client>, tx: Tx, turn: TurnRef) {
 pub fn answer(client: Arc<Client>, tx: Tx, params: Value, session_id: String) {
     tokio::spawn(async move {
         let result: Result<OkResult, _> = client
-            .call::<Value, OkResult>(protocol::METHOD_INTERACTION_ANSWER, &params, false)
+            .call::<Value, OkResult>(protocol::METHOD_INTERACTION_ANSWER, &params)
             .await;
         post(&tx, Some(&session_id), OpKind::Answered(result.map(|_| ())));
     });
@@ -323,7 +319,7 @@ pub fn compact(client: Arc<Client>, tx: Tx, session_id: String, operation_id: St
     tokio::spawn(async move {
         let params = json!({"session_id": session_id, "operation_id": operation_id});
         let result: Result<CompactionResult, _> = client
-            .call::<Value, CompactionResult>(protocol::METHOD_SESSION_COMPACT, &params, false)
+            .call::<Value, CompactionResult>(protocol::METHOD_SESSION_COMPACT, &params)
             .await;
         post(&tx, Some(&session_id), OpKind::Compacted(result));
     });
@@ -445,7 +441,7 @@ async fn probe(client: &Client, session_id: &str, view: &str) -> Result<Probe, p
         "view": view,
     });
     let page: ReadSessionResult = client
-        .call::<Value, ReadSessionResult>(protocol::METHOD_SESSION_READ, &params, true)
+        .call::<Value, ReadSessionResult>(protocol::METHOD_SESSION_READ, &params)
         .await?;
     let pin = page.pin();
     Ok(Probe {
@@ -487,7 +483,7 @@ async fn read_window(
             params["projection_revision"] = json!(projection);
         }
         let page: ReadSessionResult = client
-            .call::<Value, ReadSessionResult>(protocol::METHOD_SESSION_READ, &params, true)
+            .call::<Value, ReadSessionResult>(protocol::METHOD_SESSION_READ, &params)
             .await?;
         let mut advanced = false;
         for chunk in page.items {
@@ -557,7 +553,7 @@ async fn read_turn_result(
             params["cursor"] = cursor;
         }
         let page: TurnResultPage = client
-            .call::<Value, TurnResultPage>(protocol::METHOD_TURN_RESULT, &params, true)
+            .call::<Value, TurnResultPage>(protocol::METHOD_TURN_RESULT, &params)
             .await?;
         for chunk in page.items {
             let index = chunk.index;
@@ -599,7 +595,7 @@ async fn session_changes(
         "max_bytes": 65536,
     });
     let list: ChangeList = client
-        .call::<Value, ChangeList>(protocol::METHOD_CHANGES_LIST, &params, true)
+        .call::<Value, ChangeList>(protocol::METHOD_CHANGES_LIST, &params)
         .await?;
     let files = list.files();
     if files == 0 {
@@ -652,11 +648,7 @@ async fn read_diff(
         let mut attempt = 0;
         let page = loop {
             let result = client
-                .call::<Value, protocol::changes::DiffPage>(
-                    protocol::METHOD_CHANGES_DIFF,
-                    &params,
-                    true,
-                )
+                .call::<Value, protocol::changes::DiffPage>(protocol::METHOD_CHANGES_DIFF, &params)
                 .await;
             match result {
                 Ok(page) => break page,
@@ -703,7 +695,7 @@ pub fn list_changes(
             "max_bytes": 262_144,
         });
         let result: Result<ChangeList, _> = client
-            .call::<Value, ChangeList>(protocol::METHOD_CHANGES_LIST, &params, false)
+            .call::<Value, ChangeList>(protocol::METHOD_CHANGES_LIST, &params)
             .await;
         post(
             &tx,
@@ -758,11 +750,7 @@ async fn page_diff(
             "max_bytes": 262_144,
         });
         let mut page: protocol::changes::DiffPage = client
-            .call::<Value, protocol::changes::DiffPage>(
-                protocol::METHOD_CHANGES_DIFF,
-                &params,
-                false,
-            )
+            .call::<Value, protocol::changes::DiffPage>(protocol::METHOD_CHANGES_DIFF, &params)
             .await?;
         cursor.clone_from(&page.next_cursor);
         hunks.append(&mut page.hunks);
@@ -785,7 +773,7 @@ pub fn list_files(client: Arc<Client>, tx: Tx, session_id: String, query: String
             "max_bytes": 262_144,
         });
         let result: Result<protocol::FilesPage, _> = client
-            .call::<Value, protocol::FilesPage>(protocol::METHOD_WORKSPACE_FILES, &params, false)
+            .call::<Value, protocol::FilesPage>(protocol::METHOD_WORKSPACE_FILES, &params)
             .await;
         post(
             &tx,
@@ -811,7 +799,7 @@ pub fn read_tool(client: Arc<Client>, tx: Tx, key: ToolRef) {
             "display": true,
         });
         let result: Result<ToolReadResult, _> = client
-            .call::<Value, ToolReadResult>(protocol::METHOD_TOOL_READ, &params, true)
+            .call::<Value, ToolReadResult>(protocol::METHOD_TOOL_READ, &params)
             .await;
         let session_id = key.session_id.clone();
         post(&tx, Some(&session_id), OpKind::ToolRead(key, result));
@@ -850,7 +838,7 @@ async fn read_output(
             "max_bytes": 262144,
         });
         let page: ToolOutputPage = client
-            .call::<Value, ToolOutputPage>(protocol::METHOD_TOOL_OUTPUT, &params, true)
+            .call::<Value, ToolOutputPage>(protocol::METHOD_TOOL_OUTPUT, &params)
             .await?;
         // The Agent keeps a bounded tail: a first page that starts past zero
         // means the head of the stream is gone.
@@ -910,7 +898,6 @@ async fn export_markdown(
                 "limit": protocol::PROBE_LIMIT,
                 "max_bytes": protocol::PROBE_MAX_BYTES,
             }),
-            true,
         )
         .await
         .map_err(|error| error.message)?;
@@ -928,7 +915,7 @@ async fn export_markdown(
             "history_revision": pin.history_revision,
         });
         let page: ReadSessionResult = client
-            .call::<Value, ReadSessionResult>(protocol::METHOD_SESSION_READ, &params, true)
+            .call::<Value, ReadSessionResult>(protocol::METHOD_SESSION_READ, &params)
             .await
             .map_err(|error| error.message)?;
         for chunk in page.items {

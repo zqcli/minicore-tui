@@ -443,15 +443,10 @@ mod tests {
         fake.script_held("waiting", json!({"done": true}));
         let client = fake.client.clone();
         let quick =
-            tokio::spawn(
-                async move { client.call::<Value, Value>("echo", &json!({}), false).await },
-            );
+            tokio::spawn(async move { client.call::<Value, Value>("echo", &json!({})).await });
         let client = fake.client.clone();
-        let slow = tokio::spawn(async move {
-            client
-                .call::<Value, Value>("waiting", &json!({}), false)
-                .await
-        });
+        let slow =
+            tokio::spawn(async move { client.call::<Value, Value>("waiting", &json!({})).await });
         let quick = tokio::time::timeout(Duration::from_secs(1), quick)
             .await
             .expect("the quick call is not blocked by the held one")
