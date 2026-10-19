@@ -147,7 +147,8 @@ async fn run() -> i32 {
                         dirty = true;
                     }
                     Some(Ok(TermEvent::Resize(_, _))) => dirty = true,
-                    Some(Err(_)) | None => {}
+                    // The terminal is gone; polling it again would spin.
+                    None => app.quit = true,
                     _ => {}
                 }
             }
