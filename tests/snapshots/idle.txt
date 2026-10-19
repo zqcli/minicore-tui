@@ -9,7 +9,7 @@ thought for 1 lines · Ctrl+T to show
 ▎   test result: ok
 ▎   … 14 earlier lines · ctrl+o to expand
 
-── completed · in 12s · 2 requests · 1 tools · 2 files changed (+40 −…
+── completed in 12s · 2 requests · 1 tool · 2 files changed (+40 −7) …
 
 
 

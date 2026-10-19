@@ -2737,7 +2737,19 @@ pub fn format_tokens(tokens: u64) -> String {
     }
 }
 
-/// Turn-end summary: outcome, duration, request/tool counts and changes.
+/// `1 request`, `2 requests`.
+pub fn plural(count: impl Into<u64>, noun: &str) -> String {
+    let count = count.into();
+    if count == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{count} {noun}s")
+    }
+}
+
+/// Turn-end summary: `completed in 3m07s · 12 requests · 11 tools · 3 files
+/// changed (+40 −7)`, or for a turn that did not complete its reason first:
+/// `failed · model error: provider unavailable · 0.4s`.
 pub fn turn_end_line(
     outcome: &LoopOutcome,
     duration: Option<Duration>,
@@ -2745,25 +2757,28 @@ pub fn turn_end_line(
     tool_rounds: u64,
     changes: Option<&ChangeSummary>,
 ) -> String {
+    let completed = outcome.is_completed();
     let mut parts: Vec<String> = Vec::new();
-    parts.push(outcome.label());
-    if let Some(duration) = duration {
-        parts.push(format!("in {}", format_duration(duration)));
+    match (completed, duration) {
+        (true, Some(duration)) => parts.push(format!("completed in {}", format_duration(duration))),
+        (true, None) => parts.push("completed".into()),
+        (false, duration) => {
+            parts.push(outcome.label());
+            parts.extend(duration.map(format_duration));
+        }
     }
-    if requests > 0 {
-        parts.push(format!("{requests} requests"));
+    // The request count describes how a finished turn went; for one that
+    // stopped, the reason is what matters.
+    if completed && requests > 0 {
+        parts.push(plural(requests, "request"));
     }
     if tool_rounds > 0 {
-        parts.push(format!("{tool_rounds} tools"));
+        parts.push(plural(tool_rounds, "tool"));
     }
     if let Some(changes) = changes
         && !changes.is_empty()
     {
-        let files = if changes.files == 1 {
-            "1 file changed".to_owned()
-        } else {
-            format!("{} files changed", changes.files)
-        };
+        let files = format!("{} changed", plural(changes.files as u64, "file"));
         match changes.lines {
             Some((added, removed)) => parts.push(format!("{files} (+{added} −{removed})")),
             None => parts.push(files),

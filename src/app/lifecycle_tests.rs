@@ -3385,3 +3385,33 @@ async fn the_earliest_turn_does_not_claim_earlier_items() {
         "the earliest turn is on screen: {blocks:?}"
     );
 }
+
+#[test]
+fn turn_end_lines_read_as_sentences_and_count_correctly() {
+    let failed: crate::protocol::LoopOutcome = serde_json::from_value(json!({
+        "type": "failed", "kind": "model", "model_error": {"kind": "provider_unavailable"}
+    }))
+    .unwrap();
+    assert_eq!(
+        crate::app::turn_end_line(&failed, Some(Duration::from_millis(20)), 1, 0, None),
+        "failed · model error: provider unavailable · 0.0s"
+    );
+    let changes = crate::transcript::ChangeSummary {
+        files: 1,
+        lines: Some((2, 1)),
+    };
+    assert_eq!(
+        crate::app::turn_end_line(
+            &crate::protocol::LoopOutcome::Completed,
+            Some(Duration::from_secs(5)),
+            1,
+            1,
+            Some(&changes),
+        ),
+        "completed in 5.0s · 1 request · 1 tool · 1 file changed (+2 −1)"
+    );
+    assert_eq!(
+        crate::app::turn_end_line(&crate::protocol::LoopOutcome::Completed, None, 8, 7, None),
+        "completed · 8 requests · 7 tools"
+    );
+}
