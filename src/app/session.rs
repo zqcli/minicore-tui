@@ -280,6 +280,15 @@ impl Session {
         Some(self.queue.remove(index).text)
     }
 
+    /// The newest follow-up, taken back out of the queue.
+    pub fn recall_follow_up(&mut self) -> Option<String> {
+        let index = self
+            .queue
+            .iter()
+            .rposition(|queued| queued.kind == QueuedKind::Follow)?;
+        Some(self.queue.remove(index).text)
+    }
+
     /// A turn ended: unapplied steering becomes a follow-up, because the Agent
     /// discards unapplied steers.
     pub fn abandon_unapplied_steers(&mut self) {

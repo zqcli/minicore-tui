@@ -41,7 +41,6 @@ between logical lines; soft wraps do not change where the cursor stops.
 | Click an expanded card's `click for full output` row | Open the tool view. |
 | Click a turn-end line | Open the diff view scoped to that turn. |
 | Drag | Select transcript text; release copies it. |
-| Drag the scrollbar | Scroll. |
 
 Any upward scroll anchors the view to the content you are reading; new output
 does not move it. `Ctrl+End` or scrolling to the bottom resumes following the

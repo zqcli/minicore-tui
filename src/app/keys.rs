@@ -285,11 +285,7 @@ impl App {
                 self.help_scroll = self.help_scroll.saturating_add_signed(delta * 3);
             }
             Overlay::Tool(_) => self.tool_view.scroll_by(delta, rows),
-            Overlay::Find {
-                current, matches, ..
-            } => {
-                *current = find::step_match(*current, matches.len(), delta > 0);
-            }
+            Overlay::Find { .. } => self.find_step(delta > 0),
             Overlay::Interaction => {
                 let options = self
                     .session
@@ -645,6 +641,9 @@ impl App {
             }
             // Arrows move inside a multi-line draft and only browse history at
             // its first and last line.
+            KeyCode::Up if alt => Input::Action(Action::RecallQueued),
+            KeyCode::Up if ctrl => self.jump_to_user_message(false),
+            KeyCode::Down if ctrl => self.jump_to_user_message(true),
             KeyCode::Up if self.composer.move_up() => Input::Edited,
             KeyCode::Up => self.browse_history(true),
             KeyCode::Down if self.composer.move_down() => Input::Edited,
@@ -727,11 +726,44 @@ impl App {
         if moved { Input::Edited } else { Input::Ignored }
     }
 
+    /// PageUp/PageDown keep two rows of the previous page in view.
     fn scroll_pages(&mut self, direction: isize) -> Input {
-        self.scroll_by(
-            direction * self.viewport_rows() as isize,
-            self.viewport_rows(),
-        );
+        let rows = self.viewport_rows();
+        self.scroll_by(direction * rows.saturating_sub(2).max(1) as isize, rows);
+        Input::Consumed
+    }
+
+    /// Ctrl+↑/↓: puts the previous or next user message at the top. Past the
+    /// last one the view follows the tail again.
+    fn jump_to_user_message(&mut self, forward: bool) -> Input {
+        let blocks = self.transcript_blocks();
+        let layout = &self.layout.cache;
+        let (top, offset) = match self.scroll {
+            super::Scroll::Anchor { block, offset } => (block, offset),
+            super::Scroll::Follow => {
+                let max_top = layout.total_rows().saturating_sub(layout.viewport.height);
+                layout.anchor(max_top)
+            }
+        };
+        let is_user = |block: &crate::transcript::Block| {
+            matches!(block, crate::transcript::Block::User { .. })
+        };
+        let target = if forward {
+            blocks
+                .iter()
+                .enumerate()
+                .skip(top + 1)
+                .find(|(_, block)| is_user(block))
+                .map(|(index, _)| index)
+        } else {
+            let end = if offset > 0 { top + 1 } else { top };
+            blocks[..end.min(blocks.len())].iter().rposition(is_user)
+        };
+        self.scroll = match target {
+            Some(block) => super::Scroll::Anchor { block, offset: 0 },
+            None if forward => super::Scroll::Follow,
+            None => self.scroll,
+        };
         Input::Consumed
     }
 

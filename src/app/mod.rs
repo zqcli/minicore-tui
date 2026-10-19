@@ -1217,9 +1217,7 @@ impl App {
         );
     }
 
-    /// Puts the oldest queued follow-up back in the composer. A draft already
-    /// in the composer is never overwritten: the queue item stays where it is
-    /// until there is room for it.
+    /// Alt+↑: the newest queued follow-up goes back to an empty composer.
     fn recall_queued(&mut self) {
         if !self.composer.is_empty() {
             self.notice(
@@ -1228,11 +1226,7 @@ impl App {
             );
             return;
         }
-        let Some(text) = self
-            .session
-            .as_mut()
-            .and_then(|session| session.take_follow_up())
-        else {
+        let Some(text) = self.session.as_mut().and_then(Session::recall_follow_up) else {
             return;
         };
         self.composer.set_text(&text);
