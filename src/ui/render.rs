@@ -75,7 +75,7 @@ impl RenderState {
         stream.text.set_width(inner);
         stream.reasoning.set_width(inner);
         stream.text.reset(text);
-        stream.reasoning.reset(reasoning);
+        stream.reasoning.reset(&blocks::reasoning_source(reasoning));
         let mut lines = reasoning_lines(&mut stream.reasoning, styles, fold);
         if !lines.is_empty() && !text.trim().is_empty() {
             lines.push(Line::default());

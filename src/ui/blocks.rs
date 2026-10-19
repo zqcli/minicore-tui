@@ -129,7 +129,8 @@ fn assistant(
     fold: Fold,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    let thinking = reasoning.trim_end();
+    let source = reasoning_source(reasoning);
+    let thinking = source.trim_end();
     if !thinking.is_empty() {
         if fold.show_reasoning {
             for line in
@@ -168,6 +169,12 @@ fn assistant(
         }
     }
     lines
+}
+
+/// Reasoning arrives as one short heading or sentence per line; markdown would
+/// fold those lines into one paragraph, so every newline is a hard break.
+pub fn reasoning_source(reasoning: &str) -> String {
+    reasoning.replace('\n', "  \n")
 }
 
 fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Line<'static>> {
@@ -578,6 +585,22 @@ mod tests {
             shown[0].starts_with('▏'),
             "reasoning rows carry the reasoning rail: {shown:?}"
         );
+    }
+
+    #[test]
+    fn reasoning_lines_are_not_folded_into_one_paragraph() {
+        let block = assistant("", "**Reading the tests**\n**Running the suite**", false);
+        let shown = text(&render(
+            &block,
+            styles(),
+            60,
+            Fold {
+                expanded_tools: false,
+                show_reasoning: true,
+            },
+        ));
+        assert_eq!(shown.len(), 2, "{shown:?}");
+        assert!(shown[1].contains("Running the suite"));
     }
 
     #[test]
