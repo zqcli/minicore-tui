@@ -17,9 +17,6 @@ use crate::transcript::{Block, ToolCall};
 /// Columns the assistant's inset costs, including the rail.
 pub const INSET: usize = 2;
 
-/// Body rows an expanded card shows; the tool view has the rest.
-pub const EXPANDED_ROWS: usize = 200;
-
 /// The end of an expanded card's hint row. Clicking that row opens the tool
 /// view.
 pub const FULL_OUTPUT_HINT: &str = "click for full output";
@@ -225,11 +222,13 @@ fn tool(call: &ToolCall, styles: Styles, width: usize, expanded: bool) -> Vec<Li
     lines
 }
 
-/// Body rows of a folded card, by kind (design §5.5).
+/// Body rows of a folded card, by kind (design §5.5), and of an expanded one;
+/// the tool view has the rest.
 const FOLDED_PATCH_ROWS: usize = 8;
 const FOLDED_WRITE_ROWS: usize = 6;
 const FOLDED_OUTPUT_ROWS: usize = 4;
 const FOLDED_SHORT_ROWS: usize = 3;
+const EXPANDED_ROWS: usize = 200;
 
 /// What a card shows under its header.
 struct Body<'a> {
@@ -439,8 +438,6 @@ fn turn_end(
     styles: Styles,
     width: usize,
 ) -> Line<'static> {
-    // turn_end_line already appends the (+a −b) counts when every changed
-    // file's diff could be counted.
     let text = crate::app::turn_end_line(outcome, duration, requests, tool_rounds, changes);
     let labeled = format!("── {text} ──");
     let style = if outcome.is_completed() {

@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::protocol::event::CommandResult;
+use crate::protocol::event::{CommandResult, ProcessChunk, ProcessStream};
 use crate::protocol::{
     LoopOutcome, ToolDisplay, ToolExecutionState, ToolInvocation, ToolRef, ToolSummary, Usage,
     read::RawHistoryItem, read::RuntimeAssistantPart, read::RuntimeItem, read::UserKind,
@@ -37,10 +37,8 @@ pub enum Block {
         operation_id: String,
         before: Option<u64>,
         after: Option<u64>,
-        /// Items the summary absorbed and items kept beside it. Reported when
-        /// the Agent gives no token figures, which is the usual automatic case.
-        /// Either count can be missing, so each is optional: an automatic
-        /// result commonly reports what it covered but not what it kept.
+        /// Items the summary covered and items it kept, each when reported;
+        /// shown when there are no token figures (the usual automatic case).
         coverage: Option<(Option<usize>, Option<usize>)>,
         summary: Option<String>,
     },
@@ -87,15 +85,12 @@ pub enum NoticeLevel {
     Error,
 }
 
-/// What one turn changed. The line counts are optional because they can be
-/// genuinely unknown: a record may carry no diff, or its diff may be
-/// unavailable, partial or truncated. Printing `+0 −0` for an unknown count
-/// would be a lie, so the counts are kept as an `Option` pair and an absent
-/// pair is simply not rendered.
+/// What one turn changed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ChangeSummary {
     pub files: usize,
-    /// Added and removed lines, when every file's diff was counted.
+    /// Added and removed lines, only when every file's diff was counted: an
+    /// unknown count is not shown rather than shown as `+0 −0`.
     pub lines: Option<(usize, usize)>,
 }
 
@@ -431,14 +426,14 @@ impl ToolCall {
     /// marked instead of silently splicing unrelated bytes together.
     pub fn accept_chunk(
         &mut self,
-        stream: crate::protocol::event::ProcessStream,
-        chunk: &crate::protocol::event::ProcessChunk,
+        stream: ProcessStream,
+        chunk: &ProcessChunk,
         text: String,
     ) -> Option<String> {
         let slot = match stream {
-            crate::protocol::event::ProcessStream::Stdout => 0,
-            crate::protocol::event::ProcessStream::Stderr => 1,
-            crate::protocol::event::ProcessStream::Other => return Some(text),
+            ProcessStream::Stdout => 0,
+            ProcessStream::Stderr => 1,
+            ProcessStream::Other => return Some(text),
         };
         if chunk.expired {
             return None;
