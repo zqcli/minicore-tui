@@ -12,22 +12,22 @@ the kitty keyboard protocol; `Ctrl+J` always inserts a newline.
 
 | Key | Action |
 |---|---|
-| `Enter` | Send when the session is idle; steer the running turn when it is busy. A draft that starts with `/` is a command line. |
+| `Enter` | Send when the session is idle; steer the running turn when it is busy. A draft whose first word names a command (`/model`, `/rename x`) runs it; any other draft, `/usr/bin/env is broken` included, is a prompt. |
 | `Alt+Enter` | Queue the draft as a follow-up while a turn runs; send it when idle. |
 | `Shift+Enter`, `Ctrl+J` | Newline. |
-| `Esc` | Interrupt the running turn; when idle, clear the draft. |
+| `Esc` | Interrupt the running turn; when idle, clear the draft. Closes an open picker or view first. |
 | `Ctrl+C` | Clear a non-empty draft; on an empty draft press twice to quit. |
 | `Ctrl+D` | Quit when the draft is empty; otherwise delete the character after the cursor. |
 | `↑` / `↓` | Move between lines of a multi-line draft; on the first or last line, browse prompt history (100 kept). |
 | `Alt+↑` | Take the newest queued follow-up back into an empty draft. |
 | `Ctrl+G` | Edit the draft in the `editor` from the TUI config, else `$VISUAL`, else `$EDITOR`. |
-| `/` at the start of the draft | Open the command palette. |
-| `@` | Open the workspace file picker. |
+| `/` at the start of the draft | Open the command palette. `Enter` runs the highlighted command; with no match it sends the line as a prompt. |
+| `@` at the start of a word | Open the workspace file picker. In the middle of a word (`me@example.com`) it is plain text. |
 | `Home` / `End`, `Ctrl+A` / `Ctrl+E` | Start or end of the current line. |
-| `←` / `→` | Move by character (`Ctrl+←` / `Ctrl+→` do the same). |
-| `Alt+←` / `Alt+→` | Move by word. |
+| `←` / `→` | Move by character. |
+| `Ctrl+←` / `Ctrl+→`, `Alt+←` / `Alt+→` | Move by word. |
 | `Backspace` / `Delete` | Delete before or after the cursor. |
-| `Ctrl+W` | Delete the previous word. |
+| `Ctrl+W`, `Ctrl+Backspace` (terminals that send it as `Ctrl+H` too), `Alt+Backspace` | Delete the previous word. |
 | `Ctrl+U` / `Ctrl+K` | Delete to the start or end of the line. |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo (200 steps). |
 | Paste | Insert as one edit. A paste of more than 3 lines or 400 bytes shows as a `[pasted N lines]` (or `[pasted N chars]`) token and expands on send. |
@@ -59,9 +59,9 @@ bottom. `Ctrl+End` or scrolling to the bottom resumes following the tail.
 
 | Gesture | Action |
 |---|---|
-| Wheel | Scroll three rows (the diff or tool view when one is open). |
+| Wheel | Scroll three rows. With a view open it scrolls that view (help, diff, tool output; the context view does not scroll); over a picker it moves the selection. It never scrolls the transcript behind them. |
 | Click a tool card's header row | Toggle that card. |
-| Click an expanded card's `click for full output` row | Open the tool view. |
+| Click a card's `click for full output` row | Open the tool view. Expanded cards end in this row; so does a card reloaded from history, whose row reads `… N lines · click for full output`. |
 | Click a turn-end line | Open the diff view for that turn. |
 | Drag | Select transcript text; releasing copies it. |
 
@@ -79,7 +79,7 @@ without changing anything. Moving the selection works with `↑` / `↓`, `Tab`,
 | Sessions | Type to filter by title. `Enter` opens the session. `Ctrl+D` twice deletes the selected one; the open session cannot be deleted. Sessions of this workspace come first, newest first; the open one is marked. |
 | Model, Reasoning | `Enter` applies the highlighted entry. There is no text filter. |
 | Files (`@`) | Type to filter by path substring (up to 500 workspace files). `Enter` replaces the `@` token with `@path`; with no match the picker stays open. `Esc` removes the `@` token. |
-| Find | Type to search (case-insensitive, one match per block: messages, notices, tool details, compaction summaries). `Enter`, `↓`, `Tab` go to the next match; `Shift+Enter`, `↑` to the previous. `Esc` closes and leaves the view where it is. |
+| Find | Type to search (case-insensitive, one match per block: messages, notices, tool details, compaction summaries); the view shows match 1 as you type. `Enter`, `↓`, `Tab` go to the next match; `Shift+Enter`, `↑` to the previous. `Esc` closes and leaves the view where it is. |
 
 ## Approval and choice prompts
 

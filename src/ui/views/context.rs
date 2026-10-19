@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 
 use crate::app::Session;
-use crate::protocol::{SessionContext, SessionPresentation};
+use crate::protocol::{CompactStatus, SessionContext, SessionPresentation};
 
 use super::{chrome, styled};
 use crate::ui::format_tokens;
@@ -125,34 +125,27 @@ fn summary_lines(
         }
         if let Some(last) = &context.last_result {
             let origin = match last.origin.as_deref() {
-                Some("automatic") => "automatic",
-                Some("manual") => "manual",
-                _ => "last",
+                Some(origin @ ("automatic" | "manual")) => format!(" ({origin})"),
+                _ => String::new(),
             };
-            let mut summary = match (last.before_tokens, last.after_tokens) {
-                (Some(before), Some(after)) => match origin {
-                    "last" => format!(
-                        "Last compaction: {} → {} tokens",
+            // Coverage is the Summary line's; equal figures say nothing.
+            let detail = match (last.before_tokens, last.after_tokens) {
+                (Some(before), Some(after))
+                    if last.status == CompactStatus::Compacted
+                        && format_tokens(before) != format_tokens(after) =>
+                {
+                    format!(
+                        "{} → {} tokens",
                         format_tokens(before),
                         format_tokens(after)
-                    ),
-                    other => format!(
-                        "Last compaction ({other}): {} → {} tokens",
-                        format_tokens(before),
-                        format_tokens(after)
-                    ),
-                },
-                _ => format!("Last compaction: {}", compact_status(last.status)),
+                    )
+                }
+                _ => compact_status(last.status).to_owned(),
             };
-            if let Some(covered) = last.covered_loop_count {
-                summary.push_str(&format!(" · covers {covered} turns"));
-            }
-            if let (Some(items), Some(retained)) =
-                (last.covered_item_count, last.retained_item_count)
-            {
-                summary.push_str(&format!(" · {items} items, {retained} kept"));
-            }
-            lines.push(styled(&summary, styles.dim()));
+            lines.push(styled(
+                &format!("Last compaction{origin}: {detail}"),
+                styles.dim(),
+            ));
         }
         if let Some(coverage) = &context.coverage {
             lines.push(styled(
@@ -352,6 +345,34 @@ mod tests {
         assert!(
             text.contains("Last compaction (automatic): 32.1k → 2.7k tokens"),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn a_compaction_that_changed_nothing_shows_its_status_not_coverage() {
+        let styles = Styles::of(Palette::dark());
+        let context: SessionContext = serde_json::from_value(json!({
+            "session_id": "ses_1",
+            "coverage": {"covered_loop_count": 6, "covered_item_count": 379, "retained_item_count": 0},
+            "last_result": {"operation_id": "auto-1", "origin": "automatic", "status": "compacted",
+                            "before_tokens": 14812, "after_tokens": 14790,
+                            "covered_loop_count": 0, "covered_item_count": 379,
+                            "retained_item_count": 0}
+        }))
+        .unwrap();
+        let text: Vec<String> = summary_lines(Some(&context), None, styles)
+            .iter()
+            .map(Line::to_string)
+            .collect();
+        assert!(
+            text.contains(&"Last compaction (automatic): compacted".to_owned()),
+            "{text:?}"
+        );
+        assert!(text.iter().all(|line| !line.contains('→')), "{text:?}");
+        assert!(
+            text.iter()
+                .any(|line| line == "Summary covers 6 turns · 379 items · 0 kept"),
+            "{text:?}"
         );
     }
 

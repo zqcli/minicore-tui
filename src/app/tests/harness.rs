@@ -174,7 +174,8 @@ impl Harness {
         )));
     }
 
-    fn op(&mut self, op: SessionOp) {
+    /// A result arriving for the open session.
+    pub fn op(&mut self, op: SessionOp) {
         let epoch = self.app.session.as_ref().map_or(0, |session| session.epoch);
         self.app.on_msg(Msg::Session(epoch, Box::new(op)));
     }

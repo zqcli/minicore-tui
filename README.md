@@ -113,7 +113,8 @@ and is left out until known.
   token counts; loaded content is never removed. `/compact` runs it manually.
 - **History.** Opening a session loads the latest items; scrolling to the top
   loads older pages, including the history behind a compaction summary.
-  A reloaded `bash` card shows its header only; use `/tool` for its output.
+  A reloaded `bash` card shows its line count and a `click for full output` row;
+  `/tool` opens the same view.
 - **Views** replace the transcript and keep the footer: diff (turn, session or
   workspace scope), tool output, context budget and help. `Esc` returns.
 - **Pickers** in a bottom sheet: command palette (`/`), sessions with delete

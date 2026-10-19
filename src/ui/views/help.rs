@@ -21,7 +21,7 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "alt+enter",
-        action: "queue a follow-up / newline",
+        action: "queue a follow-up (sends when idle)",
     },
     KeyRow {
         keys: "shift+enter, ctrl+j",
@@ -29,7 +29,7 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "esc",
-        action: "close panel or view · clear selection · interrupt",
+        action: "close view · interrupt turn · clear draft",
     },
     KeyRow {
         keys: "ctrl+c",
@@ -49,15 +49,23 @@ const KEYS: &[KeyRow] = &[
     },
     KeyRow {
         keys: "ctrl+g",
-        action: "edit the draft in $VISUAL/$EDITOR",
+        action: "edit the draft in `editor`, $VISUAL or $EDITOR",
+    },
+    KeyRow {
+        keys: "ctrl+←/→, alt+←/→",
+        action: "move by word",
+    },
+    KeyRow {
+        keys: "ctrl+w, ctrl/alt+backspace",
+        action: "delete the previous word",
     },
     KeyRow {
         keys: "/",
-        action: "command palette",
+        action: "command palette (at draft start)",
     },
     KeyRow {
         keys: "@",
-        action: "file picker",
+        action: "file picker (at word start)",
     },
     KeyRow {
         keys: "ctrl+r",
@@ -103,7 +111,7 @@ pub fn lines(commands: &[Command], styles: Styles) -> Vec<Line<'static>> {
     lines.push(styled("Keys", styles.dim()));
     for row in KEYS {
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<26}", row.keys), styles.accent()),
+            Span::styled(format!("{:<28}", row.keys), styles.accent()),
             Span::styled(row.action, styles.text()),
         ]));
     }
@@ -111,7 +119,7 @@ pub fn lines(commands: &[Command], styles: Styles) -> Vec<Line<'static>> {
     lines.push(styled("Commands", styles.dim()));
     for command in commands {
         lines.push(Line::from(vec![
-            Span::styled(format!("/{:<25}", command.name), styles.accent()),
+            Span::styled(format!("/{:<27}", command.name), styles.accent()),
             Span::styled(command.description, styles.text()),
         ]));
     }

@@ -4,9 +4,9 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use serde_json::{Value, json};
 
 use super::harness::*;
-use crate::app::Action;
+use crate::app::{Action, SessionOp};
 use crate::protocol::read::UserKind;
-use crate::transcript::{Block, ToolState};
+use crate::transcript::{Block, ChangeSummary, ToolState};
 
 fn turn_ends(h: &Harness) -> Vec<String> {
     h.blocks()
@@ -297,6 +297,24 @@ async fn a_running_loop_is_adopted_from_state_and_ends_through_its_wait() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn opening_a_session_mid_turn_adopts_the_running_loop() {
+    let mut h = Harness::new();
+    h.fake.script(
+        "session.state",
+        json!({"session_id": "s1", "status": "running", "active_loop": {"loop_id": "l9"}}),
+    );
+    h.fake.script_held("turn.wait", waited("l9", completed()));
+    h.open().await;
+    assert!(h.is_busy());
+    assert_eq!(h.calls("turn.wait").len(), 1);
+
+    h.fake.release("turn.wait");
+    h.settle().await;
+    assert!(!h.is_busy());
+    assert_eq!(turn_ends(&h), ["l9"]);
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_capacity_refusal_on_turn_wait_is_retried() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script("turn.send", json!({"turn": turn("l1")}));
@@ -369,6 +387,37 @@ async fn the_turn_end_line_counts_changed_files_and_lines() {
         let screen = h.screen(100, 12);
         assert!(screen.contains(expected), "{expected}:\n{screen}");
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn late_changes_invalidate_only_the_turn_end_block() {
+    let mut h = Harness::opened(display_read(0, 0)).await;
+    h.fake.script("turn.send", json!({"turn": turn("l1")}));
+    h.fake.script("turn.wait", waited("l1", completed()));
+    h.submit("go");
+    h.settle().await;
+    let revisions = |h: &Harness| {
+        h.app
+            .session
+            .as_ref()
+            .unwrap()
+            .transcript
+            .revisions()
+            .to_vec()
+    };
+    let before = revisions(&h);
+
+    let summary = ChangeSummary {
+        files: 3,
+        lines: None,
+    };
+    h.op(SessionOp::Changes("l1".into(), Ok(summary)));
+    let after = revisions(&h);
+    let changed: Vec<usize> = (0..before.len())
+        .filter(|&at| before[at] != after[at])
+        .collect();
+    assert_eq!(changed, [before.len() - 1]);
+    assert!(h.screen(100, 12).contains("3 files changed"));
 }
 
 #[tokio::test(start_paused = true)]

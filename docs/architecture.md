@@ -119,7 +119,9 @@ hints.
 1. **Submit.** The user block is appended at once, then `turn.send`. On success
    `start_turn` creates the `LiveTurn` and spawns `turn.wait`. It is the only
    place a wait is registered and does nothing while a turn is live, so a turn
-   adopted from `turn_started` or `session.state` is never waited on twice. On
+   adopted from `turn_started` or `session.state` is never waited on twice.
+   Opening a session reads `session.state` once its tail is installed, so a turn
+   still running in the Agent is adopted and waited on. On
    `session_busy` (post-turn compaction) the prompt block is removed, the text
    becomes a queued follow-up, the status line says `Waiting for compaction`, and
    `session.state` is polled every 700 ms until the session accepts a turn. Any
@@ -199,15 +201,14 @@ the tail, shown under its marker with `Ctrl+T`.
 ## Rendering
 
 A frame touches only what is visible, and cost follows the changed block, not
-the history length. One known exception: `on_changes` goes through
-`Transcript::blocks_mut`, which marks every block changed once per turn.
+the history length.
 
 - **Block cache.** `Transcript` keeps a revision per block, bumped on every
   mutation. `Layout::prepare` re-renders a block only when its revision changed,
   and drops everything when the width or the fold flags (`expanded_tools`,
   `show_reasoning`) change; a theme change clears it explicitly. Prefix heights
-  are rebuilt from the first changed block. Blocks and tool calls are found by
-  index and by scan; there is no key map.
+  are rebuilt from the first changed block. Tool cards and assistant blocks are
+  found by a scan from the end, where live blocks sit; there is no key map.
 - **Viewport.** A frame binary-searches the prefix heights and copies only the
   visible rows (`Layout::visible`). The rows drawn are kept in `App::rendered`;
   drag-to-copy and click hit-testing read those and the viewport, never all rows.
@@ -220,7 +221,8 @@ the history length. One known exception: `on_changes` goes through
 - **Cards.** Tool output is a bounded tail (400 lines, 64 KiB). Folded bodies
   take 3 to 8 rows by kind, expanded ones stop at 200; the rest is in the tool
   view. Live `bash` cards show the output tail. Display history has no bodies,
-  so a reloaded `bash` card shows its header only; `/tool` opens its full output.
+  so a reloaded card shows `… N lines · click for full output` from the line
+  count in its summary; that row (or `/tool`) opens the full output.
 - **Scroll anchoring.** `Scroll` is `Follow` (stick to the bottom) or
   `Anchor { block, offset }`. Any upward scroll turns the position into an
   anchor, resolved against the current layout each frame, so growth below it

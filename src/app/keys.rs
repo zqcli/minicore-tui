@@ -146,12 +146,22 @@ impl App {
         else {
             return;
         };
-        if matches.is_empty() {
-            return;
-        }
         *current = find::step_match(*current, matches.len(), forward);
-        let block = matches[*current].block;
-        self.scroll = Scroll::Anchor { block, offset: 0 };
+        self.show_match();
+    }
+
+    /// Puts the find bar's current match at the top of the view.
+    fn show_match(&mut self) {
+        if let Overlay::Find {
+            matches, current, ..
+        } = &self.overlay
+            && let Some(found) = matches.get(*current)
+        {
+            self.scroll = Scroll::Anchor {
+                block: found.block,
+                offset: 0,
+            };
+        }
     }
 
     /// Moves the selected row of the active overlay by `delta`.
@@ -212,16 +222,20 @@ impl App {
     /// Esc on the `@` picker: the `@query` token it was opened from goes, the
     /// rest of the draft stays.
     fn discard_mention(&mut self) {
-        let head = &self.composer.text()[..self.composer.cursor()];
-        let start = head
-            .char_indices()
-            .rfind(|(_, ch)| ch.is_whitespace())
-            .map_or(0, |(at, ch)| at + ch.len_utf8());
-        if head[start..].starts_with('@') {
+        let start = self.word_start();
+        if self.composer.text()[start..].starts_with('@') {
             while self.composer.cursor() > start {
                 self.composer.backspace();
             }
         }
+    }
+
+    /// Where the whitespace-delimited word before the cursor begins.
+    fn word_start(&self) -> usize {
+        self.composer.text()[..self.composer.cursor()]
+            .char_indices()
+            .rfind(|(_, ch)| ch.is_whitespace())
+            .map_or(0, |(at, ch)| at + ch.len_utf8())
     }
 
     /// Types `character` into the overlay's filter, or deletes the last one.
@@ -258,6 +272,7 @@ impl App {
             }
             _ => {}
         }
+        self.show_match();
     }
 
     /// Re-filters the command palette from the composer line and keeps the
@@ -276,14 +291,17 @@ impl App {
     fn on_overlay_accept(&mut self) -> Option<Action> {
         match std::mem::replace(&mut self.overlay, Overlay::None) {
             Overlay::Palette { selected, filter } => {
-                let command = commands::filter(&filter).get(selected).copied();
+                // Without a match the line was never a command: it is a prompt.
+                let Some(command) = commands::filter(&filter).get(selected).copied() else {
+                    return Some(Action::Submit);
+                };
                 // The argument typed after the name goes to the command accepted,
                 // which can be another fuzzy match than the typed name.
                 let arg = commands::parse(self.composer.text())
                     .map_or("", |(_, arg)| arg)
                     .to_owned();
                 self.composer.clear();
-                match commands::execute(command?.name, &arg) {
+                match commands::execute(command.name, &arg) {
                     Some(Executed::Action(action)) => Some(action),
                     Some(Executed::Panel(panel)) => {
                         self.open_panel(panel);
@@ -384,7 +402,8 @@ impl App {
             KeyCode::Char('e') if ctrl => self.composer.move_end(),
             KeyCode::Char('u') if ctrl => self.composer.delete_to_line_start(),
             KeyCode::Char('k') if ctrl => self.composer.delete_to_line_end(),
-            KeyCode::Char('w') if ctrl => self.composer.delete_word_left(),
+            // Many terminals send Ctrl+Backspace as ^H.
+            KeyCode::Char('w' | 'h') if ctrl => self.composer.delete_word_left(),
             KeyCode::Char('z') if ctrl => {
                 self.composer.undo();
             }
@@ -392,7 +411,8 @@ impl App {
                 self.composer.redo();
             }
             KeyCode::BackTab => return self.next_reasoning().map(Action::SetReasoning),
-            KeyCode::Char('@') => {
+            // Mid-word `@` is text, as in an address.
+            KeyCode::Char('@') if self.word_start() == self.composer.cursor() => {
                 self.composer.type_char('@');
                 self.open_panel(Panel::Files);
             }
@@ -403,10 +423,11 @@ impl App {
                     self.open_panel(Panel::Palette);
                 }
             }
+            KeyCode::Backspace if ctrl || alt => self.composer.delete_word_left(),
             KeyCode::Backspace => self.composer.backspace(),
             KeyCode::Delete => self.composer.delete(),
-            KeyCode::Left if alt => self.composer.move_word_left(),
-            KeyCode::Right if alt => self.composer.move_word_right(),
+            KeyCode::Left if ctrl || alt => self.composer.move_word_left(),
+            KeyCode::Right if ctrl || alt => self.composer.move_word_right(),
             KeyCode::Left => self.composer.move_left(),
             KeyCode::Right => self.composer.move_right(),
             // Arrows move inside a multi-line draft and only browse history at
@@ -456,11 +477,12 @@ impl App {
         }
     }
 
+    /// A draft is a command only when its first word names one; anything else
+    /// starting with `/` (a path, say) is a prompt.
     fn submit_or_command(&mut self) -> Option<Action> {
-        let Some((name, argument)) = commands::parse(self.composer.text()) else {
-            return Some(Action::Submit);
-        };
-        match commands::execute(name, argument) {
+        let executed = commands::parse(self.composer.text())
+            .and_then(|(name, argument)| commands::execute(name, argument));
+        match executed {
             Some(Executed::Action(action)) => {
                 self.composer.clear();
                 Some(action)
@@ -474,13 +496,7 @@ impl App {
                 self.notice(NoticeLevel::Error, "Missing argument");
                 None
             }
-            None => {
-                if !name.is_empty() {
-                    let message = format!("Unknown command /{name}");
-                    self.notice(NoticeLevel::Error, message);
-                }
-                None
-            }
+            None => Some(Action::Submit),
         }
     }
 
@@ -530,10 +546,11 @@ impl App {
                 } else {
                     3
                 };
-                if matches!(self.overlay, Overlay::Diff(_) | Overlay::Tool(_)) {
-                    self.scroll_view(delta);
-                } else {
-                    self.scroll_by(delta);
+                // The transcript scrolls only while it is the visible surface.
+                match self.overlay {
+                    Overlay::None | Overlay::Find { .. } => self.scroll_by(delta),
+                    Overlay::Diff(_) | Overlay::Tool(_) => self.scroll_view(delta),
+                    _ => self.overlay_move(delta.signum()),
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
