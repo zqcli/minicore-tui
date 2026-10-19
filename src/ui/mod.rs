@@ -1,10 +1,6 @@
-//! Rendering. `ui` draws from `&App` and never mutates domain state beyond the
-//! layout cache it owns (`App::layout`) and the rows it records for copy.
-//!
-//! The composition is: the transcript window or a full-screen view, an optional
-//! bottom sheet, the status line, the queue, notices, the composer band and the
-//! footer. Rendering reads the app; the only mutable state is the transcript's
-//! layout cache and the copy buffer.
+//! Rendering from `&App`: the transcript or a full-screen view, an optional
+//! bottom sheet, then the status band. Only the transcript's layout cache and
+//! the rows recorded for copy are written.
 
 pub mod blocks;
 pub mod composer;
@@ -13,7 +9,6 @@ pub mod markdown;
 pub mod panel;
 pub mod picker;
 pub mod rails;
-pub mod render;
 pub mod screens;
 pub mod selection;
 pub mod sheets;
@@ -30,50 +25,8 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::Line;
 
 use crate::app::App;
-use crate::transcript::layout::Fold;
 
-use self::render::RenderState;
 use self::theme::Styles;
-
-/// The transcript cache plus the streaming renderers it feeds, kept together
-/// so the draw path can borrow them without splitting `App`.
-#[derive(Default)]
-pub struct View {
-    pub cache: crate::transcript::layout::Layout<RenderState>,
-}
-
-impl View {
-    /// Rebuilds the cache. The plain closure shape keeps the reducer's test
-    /// fixtures (and any non-streaming caller) independent of the renderer
-    /// state the draw path threads through.
-    pub fn prepare<F>(
-        &mut self,
-        blocks: &[crate::transcript::Block],
-        revisions: &[u64],
-        width: u16,
-        fold: Fold,
-        mut render: F,
-    ) where
-        F: FnMut(usize, &crate::transcript::Block) -> Vec<Line<'static>>,
-    {
-        self.cache
-            .prepare(blocks, revisions, width, fold, |_, index, block| {
-                render(index, block)
-            });
-    }
-
-    pub fn total_rows(&self) -> usize {
-        self.cache.total_rows()
-    }
-
-    pub fn anchor(&self, top_row: usize) -> (usize, u16) {
-        self.cache.anchor(top_row)
-    }
-
-    pub fn anchor_row(&self, block: usize, offset: u16) -> usize {
-        self.cache.anchor_row(block, offset)
-    }
-}
 
 /// Draws one frame. Fatal errors take the whole screen.
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -105,7 +58,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     ])
     .areas(area);
     if !screens::draw_view(frame, transcript, app) {
-        draw_transcript(frame, transcript, app, styles);
+        transcript::draw(frame, transcript, app, styles);
     }
     let band = if let Some(sheet) = sheet {
         let [sheet_area, band] =
@@ -161,56 +114,6 @@ pub fn tokens(value: u64) -> String {
 /// The composer wraps, so the band's height depends on the terminal width.
 pub fn band_height(app: &App, width: u16) -> u16 {
     status::lines(app, Styles::of(app.palette), width).len() as u16
-}
-
-fn draw_transcript(frame: &mut Frame, area: Rect, app: &mut App, styles: Styles) {
-    let width = area.width.max(1);
-    let Some(session) = app.session.as_ref() else {
-        let lines = if app.ready {
-            vec![
-                Line::styled("No session yet", styles.dim()),
-                Line::raw(""),
-                Line::styled("Press Enter to start one", styles.subtle()),
-            ]
-        } else {
-            vec![Line::styled("Connecting to minicore-agent…", styles.dim())]
-        };
-        frame.render_widget(ratatui::widgets::Paragraph::new(lines), area);
-        return;
-    };
-    let fold = Fold {
-        expanded_tools: app.tools_expanded,
-        show_reasoning: app.show_reasoning,
-    };
-    app.viewport = area.height as usize;
-    let blocks = session.transcript.blocks();
-    app.layout.cache.state.prepare(width, fold, blocks, styles);
-    let transcript = self::transcript::Transcript {
-        blocks,
-        revisions: session.transcript.revisions(),
-        width,
-        fold,
-    };
-    let scroll = app.scroll;
-    let drag = app.selection_start.map(|from| self::selection::Drag {
-        from,
-        to: app.selection_end.unwrap_or(from),
-    });
-    let lines = self::transcript::draw(
-        &mut app.layout.cache,
-        transcript,
-        area,
-        scroll,
-        styles,
-        drag,
-        |state, index, block| state.render(index, block, styles),
-    );
-    // The copy path reads exactly these rows, so a drag copies what is on
-    // screen even while a turn streams.
-    app.rendered
-        .set(area.y, lines.iter().map(|line| line.to_string()).collect());
-    app.transcript_area = Some(area);
-    frame.render_widget(ratatui::widgets::Paragraph::new(lines), area);
 }
 
 fn draw_fatal(frame: &mut Frame, area: Rect, fatal: &crate::app::Fatal) {

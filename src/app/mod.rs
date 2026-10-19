@@ -595,7 +595,7 @@ pub struct App {
     pub rendered: crate::ui::selection::Screen,
     /// The transcript's line cache and viewport. Owned by the renderer; the
     /// reducer only invalidates it through block revisions.
-    pub layout: crate::ui::View,
+    pub layout: crate::transcript::layout::Layout<crate::ui::transcript::RenderState>,
     /// Rows the transcript area had last frame, for paging.
     pub viewport: usize,
     /// A draft waiting for the main loop to run the external editor on it; the
@@ -659,7 +659,7 @@ impl App {
             rendered: crate::ui::selection::Screen::default(),
             edit_request: None,
             loading_session: false,
-            layout: crate::ui::View::default(),
+            layout: Default::default(),
             viewport: 1,
         }
     }
@@ -1286,7 +1286,7 @@ impl App {
             return;
         }
         // The layout owns row addressing; the reducer only decides the anchor.
-        let layout = &self.layout.cache;
+        let layout = &self.layout;
         let total = layout.total_rows();
         let height = layout.viewport.height.max(viewport).max(1);
         if total <= height {

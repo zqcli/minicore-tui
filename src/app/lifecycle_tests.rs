@@ -1012,7 +1012,7 @@ async fn scrolling_leaves_follow_mode_and_returns_to_it() {
             expanded_tools: false,
             show_reasoning: false,
         },
-        |_, _| vec![ratatui::text::Line::raw("row"); 10],
+        |_, _, _| vec![ratatui::text::Line::raw("row"); 10],
     );
     app.viewport = 5;
     assert_eq!(

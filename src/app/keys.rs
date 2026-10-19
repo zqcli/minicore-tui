@@ -813,7 +813,7 @@ impl App {
         if !self.overlay.is_none() {
             return;
         }
-        let Some((index, line)) = self.layout.cache.hit(column, row) else {
+        let Some((index, line)) = self.layout.hit(column, row) else {
             return;
         };
         let all_expanded = self.tools_expanded;

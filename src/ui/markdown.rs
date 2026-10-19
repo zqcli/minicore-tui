@@ -602,23 +602,6 @@ impl StreamRenderer {
         self.scan.cached
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.text.is_empty()
-    }
-
-    pub fn width(&self) -> usize {
-        self.width
-    }
-
-    pub fn set_width(&mut self, width: usize) {
-        if width != self.width {
-            self.width = width;
-            self.prefix = Arc::from(Vec::new());
-            self.current = None;
-            self.scan.cached = 0;
-        }
-    }
-
     /// Renders the current text, re-rendering only what changed.
     pub fn lines(&mut self, styles: &Styles) -> Arc<[Line<'static>]> {
         if let Some(current) = &self.current {
@@ -1196,26 +1179,6 @@ mod tests {
             Arc::ptr_eq(&second, &third),
             "an idle frame allocates nothing"
         );
-    }
-
-    #[test]
-    fn width_changes_reset_the_cached_prefix() {
-        let styles = styles();
-        let mut renderer = StreamRenderer::new(40, Style::default());
-        renderer.push("first paragraph\n\nsecond paragraph\n");
-        assert_eq!(renderer.lines(&styles).len(), 3);
-        renderer.set_width(10);
-        let narrow = renderer.lines(&styles);
-        assert_eq!(
-            narrow.len(),
-            5,
-            "{:?}",
-            narrow.iter().map(Line::to_string).collect::<Vec<_>>()
-        );
-        assert_eq!(narrow[0].to_string(), "first");
-        assert_eq!(narrow[1].to_string(), "paragraph");
-        assert_eq!(narrow[2].to_string(), "");
-        assert_eq!(narrow[3].to_string(), "second");
     }
 
     #[test]
