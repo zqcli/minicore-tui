@@ -337,16 +337,14 @@ impl App {
         let Ok(summary) = result else {
             return;
         };
-        for block in self.session_mut().transcript.blocks_mut() {
-            if let Block::TurnEnd {
-                loop_id: id,
-                changes,
-                ..
-            } = block
-                && id == loop_id
-            {
-                *changes = Some(summary);
-            }
+        let transcript = &mut self.session_mut().transcript;
+        let end = transcript.blocks().iter().rposition(
+            |block| matches!(block, Block::TurnEnd { loop_id: id, .. } if id == loop_id),
+        );
+        if let Some(end) = end
+            && let Some(Block::TurnEnd { changes, .. }) = transcript.block_mut(end)
+        {
+            *changes = Some(summary);
         }
     }
 

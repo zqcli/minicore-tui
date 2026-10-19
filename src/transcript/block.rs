@@ -551,15 +551,6 @@ impl Transcript {
         &self.revisions
     }
 
-    /// Mutable access to every block, all marked as changed.
-    pub fn blocks_mut(&mut self) -> &mut [Block] {
-        for revision in &mut self.revisions {
-            self.next_revision += 1;
-            *revision = self.next_revision;
-        }
-        &mut self.blocks
-    }
-
     fn bump(&mut self, index: usize) {
         self.next_revision += 1;
         if let Some(revision) = self.revisions.get_mut(index) {
@@ -624,8 +615,10 @@ impl Transcript {
         })
     }
 
+    // Lookups scan from the end: live blocks sit there, so the cost does not
+    // grow with the history.
     pub fn find_tool_by_call_id(&self, tool_call_id: &str) -> Option<&ToolCall> {
-        self.blocks.iter().find_map(|block| match block {
+        self.blocks.iter().rev().find_map(|block| match block {
             Block::Tool(call) if call.key.tool_call_id == tool_call_id => Some(call.as_ref()),
             _ => None,
         })
@@ -635,7 +628,7 @@ impl Transcript {
         let index = self
             .blocks
             .iter()
-            .position(|block| matches!(block, Block::Tool(call) if &call.key == key))?;
+            .rposition(|block| matches!(block, Block::Tool(call) if &call.key == key))?;
         self.bump(index);
         match &mut self.blocks[index] {
             Block::Tool(call) => Some(call.as_mut()),
@@ -650,7 +643,7 @@ impl Transcript {
     }
 
     pub fn find_tool(&self, key: &ToolRef) -> Option<&ToolCall> {
-        self.blocks.iter().find_map(|block| match block {
+        self.blocks.iter().rev().find_map(|block| match block {
             Block::Tool(call) if &call.key == key => Some(call.as_ref()),
             _ => None,
         })
@@ -658,7 +651,7 @@ impl Transcript {
 
     /// The assistant block for one request, created if the stream is late.
     pub fn assistant_mut(&mut self, key: &RequestKey) -> &mut Block {
-        let index = match self.blocks.iter().position(
+        let index = match self.blocks.iter().rposition(
             |block| matches!(block, Block::Assistant { key: existing, .. } if existing == key),
         ) {
             Some(index) => index,
