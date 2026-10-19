@@ -1473,6 +1473,11 @@ impl App {
         session.loaded_from = page.from;
         session.hidden_items = page.from;
         install_items(session, &page.items);
+        // A summary replayed from the store carries no figures; the counts come
+        // from `session.context`, which may have arrived before this page.
+        if let Some(coverage) = session.summary_coverage {
+            session.cover_replayed_compaction(coverage);
+        }
         // `from` is what is actually behind this window. `has_more` only speaks
         // for the display projection, and an automatic compaction can cover
         // every item, leaving a transcript that would otherwise claim there is
