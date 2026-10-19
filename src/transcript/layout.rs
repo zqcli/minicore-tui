@@ -240,6 +240,19 @@ impl<S> Layout<S> {
         (row < self.total_rows()).then_some(row)
     }
 
+    /// The block under an absolute screen cell and the index of the clicked
+    /// row among the block's own lines. `None` off the drawn window and on the
+    /// blank row that separates a block from the one above it.
+    pub fn hit(&self, column: u16, row: u16) -> Option<(usize, usize)> {
+        let (block, offset) = self.line_at(self.row_at(column, row)?)?;
+        let line = if block == 0 {
+            offset
+        } else {
+            offset.checked_sub(1)?
+        };
+        Some((block, line))
+    }
+
     /// Cell column of an absolute screen column inside a layout row.
     pub fn cell_at(&self, column: u16) -> usize {
         column.saturating_sub(self.viewport.origin.0) as usize
@@ -523,6 +536,24 @@ mod tests {
             "hello",
             "a single-row selection stops at the release column"
         );
+    }
+
+    #[test]
+    fn a_click_maps_to_the_block_row_it_landed_on() {
+        let mut layout = Layout::<()>::default();
+        let blocks = [user("a"), user("b")];
+        layout.prepare(&blocks, &[1, 2], 40, fold(), |_, _, _| lines(2));
+        layout.viewport = Viewport {
+            top: 1,
+            height: 4,
+            origin: (0, 10),
+        };
+        assert_eq!(layout.hit(5, 10), Some((0, 1)));
+        assert_eq!(layout.hit(5, 11), None, "the separator belongs to no row");
+        assert_eq!(layout.hit(5, 12), Some((1, 0)), "the first row of block 1");
+        assert_eq!(layout.hit(5, 13), Some((1, 1)));
+        assert_eq!(layout.hit(5, 9), None, "above the window");
+        assert_eq!(layout.hit(5, 14), None, "below the window");
     }
 
     #[test]

@@ -357,18 +357,19 @@ struct ToolPreviewData {
     state: String,
     display: ToolDisplay,
 }
-/// `{turn, data: <invocation record>, meta}`: the record is the payload.
+/// `{turn, data: <invocation record>, meta}`: the record is nested under its
+/// own `data` key, beside the turn and meta.
 #[derive(Deserialize)]
 struct ToolInvocationData {
     meta: EventMeta,
-    #[serde(flatten)]
+    #[serde(rename = "data")]
     invocation: ToolInvocation,
 }
-/// `{turn, data: <execution record>, meta}`: the record is the payload itself.
+/// `{turn, data: <execution record>, meta}`, nested like the invocation.
 #[derive(Deserialize)]
 struct ToolExecutionData {
     meta: EventMeta,
-    #[serde(flatten)]
+    #[serde(rename = "data")]
     execution: ToolExecution,
 }
 #[derive(Deserialize)]
@@ -640,14 +641,20 @@ mod decode_tests {
 
     #[test]
     fn a_tool_execution_event_decodes_its_terminal_facts() {
+        // The record is nested under `data.data`, as the Agent serializes it.
         let event = AgentEvent::decode(json!({
             "type": "tool_execution",
             "data": {
-                "tool_ref": {"session_id": "s", "loop_id": "l",
-                             "request_index": 0, "tool_call_id": "c"},
-                "name": "bash",
-                "state": "succeeded",
-                "result_truncated": false,
+                "turn": {"session_id": "s", "loop_id": "l"},
+                "data": {
+                    "tool_ref": {"session_id": "s", "loop_id": "l",
+                                 "request_index": 0, "tool_call_id": "c"},
+                    "name": "bash",
+                    "state": "succeeded",
+                    "result_truncated": false,
+                    "command": {"status": "exited", "exit_code": 2,
+                                "termination_confirmed": true}
+                },
                 "meta": {"session_id": "s", "dropped_before": 0}
             }
         }))
@@ -655,8 +662,36 @@ mod decode_tests {
         match event {
             AgentEvent::ToolExecution { execution, .. } => {
                 assert_eq!(execution.tool_ref.tool_call_id, "c");
+                assert_eq!(execution.command.and_then(|c| c.exit_code), Some(2));
             }
             other => panic!("expected tool_execution, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_tool_invocation_event_decodes_its_nested_record() {
+        let event = AgentEvent::decode(json!({
+            "type": "tool_invocation",
+            "data": {
+                "turn": {"session_id": "s", "loop_id": "l"},
+                "data": {
+                    "tool_ref": {"session_id": "s", "loop_id": "l",
+                                 "request_index": 1, "tool_call_id": "c"},
+                    "name": "read",
+                    "subject": {"kind": "file", "path": "file.txt"},
+                    "subject_truncated": false,
+                    "input": {"total_bytes": 2, "preview": "{}", "truncated": false,
+                              "encoding": "utf8"}
+                },
+                "meta": {"session_id": "s", "dropped_before": 0}
+            }
+        }))
+        .unwrap();
+        match event {
+            AgentEvent::ToolInvocation { invocation, .. } => {
+                assert_eq!(invocation.detail(), "file.txt");
+            }
+            other => panic!("expected tool_invocation, got {other:?}"),
         }
     }
 

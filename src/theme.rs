@@ -49,6 +49,10 @@ pub struct Palette {
     pub added: Color,
     pub removed: Color,
     pub hunk: Color,
+    /// Tool card bands: a faint tint of the card's state over the page.
+    pub card_bg: Color,
+    pub card_success_bg: Color,
+    pub card_failure_bg: Color,
     pub no_color: bool,
 }
 
@@ -71,6 +75,9 @@ impl Palette {
             added: Color::Rgb(0x7a, 0xc0, 0x8a),
             removed: Color::Rgb(0xe0, 0x6c, 0x75),
             hunk: Color::Rgb(0x8a, 0x90, 0xa0),
+            card_bg: Color::Rgb(0x26, 0x28, 0x30),
+            card_success_bg: Color::Rgb(0x1f, 0x2b, 0x25),
+            card_failure_bg: Color::Rgb(0x31, 0x20, 0x24),
             no_color: false,
         }
     }
@@ -91,6 +98,9 @@ impl Palette {
             added: Color::Rgb(0x1f, 0x7a, 0x3a),
             removed: Color::Rgb(0xb8, 0x2a, 0x35),
             hunk: Color::Rgb(0x6b, 0x72, 0x80),
+            card_bg: Color::Rgb(0xee, 0xf0, 0xf4),
+            card_success_bg: Color::Rgb(0xe5, 0xf2, 0xe8),
+            card_failure_bg: Color::Rgb(0xf8, 0xe6, 0xe8),
             no_color: false,
         }
     }
@@ -114,6 +124,9 @@ impl Palette {
             &mut palette.added,
             &mut palette.removed,
             &mut palette.hunk,
+            &mut palette.card_bg,
+            &mut palette.card_success_bg,
+            &mut palette.card_failure_bg,
         ] {
             *color = Color::Reset;
         }

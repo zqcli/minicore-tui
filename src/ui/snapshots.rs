@@ -95,7 +95,7 @@ fn tool() -> ToolCall {
     call.duration = Some(std::time::Duration::from_millis(4200));
     call.exit_code = Some(0);
     call.output = vec!["running 131 tests".into(), "test result: ok".into()];
-    call.output_lines = Some(16);
+    call.output_dropped = 14;
     call
 }
 
@@ -367,4 +367,101 @@ fn a_running_turn_shows_the_status_line_with_elapsed_time() {
     assert!(rendered.contains("Thinking"), "{rendered}");
     assert!(rendered.contains("esc to interrupt"), "{rendered}");
     assert!(rendered.contains("● working"), "{rendered}");
+}
+
+/// A left press and release on one cell: a click, not a drag.
+fn click(app: &mut App, column: u16, row: u16) {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        app.on_mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+}
+
+fn row_of(screen: &str, prefix: &str) -> u16 {
+    screen
+        .lines()
+        .position(|line| line.starts_with(prefix))
+        .unwrap_or_else(|| panic!("no row starts with {prefix:?}:\n{screen}")) as u16
+}
+
+#[test]
+fn clicking_a_card_header_toggles_that_card_and_its_hint_opens_the_tool_view() {
+    let mut fixture = app();
+    // Opening a view starts a read; it only needs a runtime to be queued on.
+    let _runtime = fixture._runtime.enter();
+    let app = &mut fixture.app;
+    conversation(app);
+    let folded = render(app, 70, 20);
+    let header = row_of(&folded, "▎ ✓ bash");
+    click(app, 10, header);
+    let expanded = render(app, 70, 20);
+    assert!(
+        expanded.contains("… 14 earlier lines · click for full output"),
+        "{expanded}"
+    );
+    assert!(!app.tools_expanded, "only that card changed");
+
+    click(app, 10, row_of(&expanded, "▎   … 14 earlier lines"));
+    assert!(matches!(app.overlay, Overlay::Tool(_)), "{:?}", app.overlay);
+
+    app.overlay = Overlay::None;
+    render(app, 70, 20);
+    click(app, 10, header);
+    let refolded = render(app, 70, 20);
+    assert!(refolded.contains("ctrl+o to expand"), "{refolded}");
+}
+
+#[test]
+fn clicking_a_turn_end_line_opens_the_turn_diff() {
+    let mut fixture = app();
+    let _runtime = fixture._runtime.enter();
+    let app = &mut fixture.app;
+    conversation(app);
+    let screen = render(app, 70, 20);
+    click(app, 5, row_of(&screen, "── completed"));
+    assert!(
+        matches!(
+            app.overlay,
+            Overlay::Diff {
+                scope: crate::app::DiffScope::Turn,
+                ..
+            }
+        ),
+        "{:?}",
+        app.overlay
+    );
+}
+
+#[test]
+fn a_drag_over_a_card_header_selects_instead_of_toggling() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    let mut fixture = app();
+    // The copy is queued on the runtime and never runs.
+    let _runtime = fixture._runtime.enter();
+    let app = &mut fixture.app;
+    conversation(app);
+    let screen = render(app, 70, 20);
+    let header = row_of(&screen, "▎ ✓ bash");
+    for (kind, column) in [
+        (MouseEventKind::Down(MouseButton::Left), 2),
+        (MouseEventKind::Drag(MouseButton::Left), 8),
+        (MouseEventKind::Up(MouseButton::Left), 8),
+    ] {
+        app.on_mouse(MouseEvent {
+            kind,
+            column,
+            row: header,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+    let after = render(app, 70, 20);
+    assert!(after.contains("ctrl+o to expand"), "still folded:\n{after}");
 }
