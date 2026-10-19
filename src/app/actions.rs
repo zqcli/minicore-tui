@@ -358,6 +358,11 @@ impl App {
         );
     }
 
+    /// Asks whether the session is mid-turn or compacting.
+    pub(super) fn read_state(&self) {
+        self.call(protocol::METHOD_SESSION_STATE, json!({}), SessionOp::State);
+    }
+
     /// Asks for the footer's figures: model label, branch, context usage.
     pub(super) fn refresh_presentation(&mut self) {
         let session = self.session_mut();

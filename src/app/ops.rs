@@ -128,6 +128,8 @@ impl App {
             session.install_tail(page);
             session.backfill = BACKFILL_PAGES;
             self.scroll = Scroll::Follow;
+            // After the tail: a turn already running takes its place at the end.
+            self.read_state();
             self.backfill();
         }
     }

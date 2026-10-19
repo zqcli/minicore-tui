@@ -297,6 +297,24 @@ async fn a_running_loop_is_adopted_from_state_and_ends_through_its_wait() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn opening_a_session_mid_turn_adopts_the_running_loop() {
+    let mut h = Harness::new();
+    h.fake.script(
+        "session.state",
+        json!({"session_id": "s1", "status": "running", "active_loop": {"loop_id": "l9"}}),
+    );
+    h.fake.script_held("turn.wait", waited("l9", completed()));
+    h.open().await;
+    assert!(h.is_busy());
+    assert_eq!(h.calls("turn.wait").len(), 1);
+
+    h.fake.release("turn.wait");
+    h.settle().await;
+    assert!(!h.is_busy());
+    assert_eq!(turn_ends(&h), ["l9"]);
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_capacity_refusal_on_turn_wait_is_retried() {
     let mut h = Harness::opened(display_read(0, 0)).await;
     h.fake.script("turn.send", json!({"turn": turn("l1")}));
